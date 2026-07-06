@@ -1,0 +1,12 @@
+{
+  "slice": "phase-3", "title": "G3 Platform CRUD domains", "status": "passed", "gate": "G3",
+  "greenCondition": {"met": true, "evidence": "cross-org adversarial suite + in-org sharing + activation admission + schema-coverage gate (deliberate red proven); 38 tests"},
+  "test": {"status": "passed", "evidence": "38 api tests; ci:lane + e2e + security exit 0"},
+  "review": {"status": "passed", "by": "claude", "note": "module-direction gate caught routes->data/, fixed via service layer"},
+  "adversarialReview": {"status": "passed", "by": "codex", "verdict": "approve-post-fix", "findings": 2, "resolution": "settings org-scoped; token-epoch invalidation on deactivate+role-change"},
+  "adversarialTest": {"status": "passed", "note": "cross-org suite + in-org sharing + 2 regression tests are the independent functional checks"},
+  "designAudit": {"status": "skipped", "reason": "no UI"},
+  "video": {"status": "verified", "kind": "asciinema", "path": "slices/phase-3/g3-crossorg.cast"},
+  "commit": {"tag": "gate-3", "message": "checkpoint: G3 platform-crud-domains"},
+  "at": "2026-07-06T20:50:00Z"
+}

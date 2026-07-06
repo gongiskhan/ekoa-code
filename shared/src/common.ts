@@ -33,6 +33,15 @@ export const Visibility = z.enum(['private', 'org']);
 export const Role = z.enum(['super-admin', 'org-admin', 'builder']);
 export type Role = z.infer<typeof Role>;
 
+/** The per-request actor context derived from the verified JWT. A plain type (no wire
+ *  schema) placed here so every api tier — data/, auth/, routes/, services/ — can name it
+ *  without crossing an import boundary. */
+export interface Actor {
+  userId: string;
+  orgId: string;
+  role: Role;
+}
+
 /** Reference to a staged upload by opaque id (ch03 §3.4). */
 export const UploadRef = z.object({
   uploadId: z.string(),

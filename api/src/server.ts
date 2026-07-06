@@ -18,6 +18,13 @@ import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
 import { authRouter } from './routes/auth.js';
+import { usersRouter } from './routes/users.js';
+import { orgRouter, orgsRouter } from './routes/org.js';
+import { settingsRouter } from './routes/settings.js';
+import { sessionsRouter } from './routes/sessions.js';
+import { memoriesRouter } from './routes/memories.js';
+import { registoRouter } from './routes/registo.js';
+import { billingRouter } from './routes/billing.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -45,6 +52,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
 
   // Domain routers (mounted as their build phases land — G2 auth onward).
   app.use('/api/v1/auth', authRouter(deps));
+  // G3 — platform CRUD domains.
+  app.use('/api/v1/users', usersRouter(deps));
+  app.use('/api/v1/org', orgRouter(deps));
+  app.use('/api/v1/orgs', orgsRouter(deps));
+  app.use('/api/v1/settings', settingsRouter(deps));
+  app.use('/api/v1/sessions', sessionsRouter(deps));
+  app.use('/api/v1/memories', memoriesRouter(deps));
+  app.use('/api/v1/registo', registoRouter(deps));
+  app.use('/api/v1/billing', billingRouter(deps));
 
   return app;
 }

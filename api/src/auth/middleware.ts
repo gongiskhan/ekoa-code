@@ -40,6 +40,11 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
   // cache miss: an unknown subject is a stale/forged token, never treated as active.
   const act = getActivation(claims.sub);
   if (!act || !act.active) return fail(res, 'ACCOUNT_DISABLED', 'A sua conta está bloqueada. Contacte o suporte.');
+  // Token-epoch check: a token issued before the user's current epoch is invalid (its role/
+  // active state is stale — e.g. an admin demoted after this token was minted). ch09 §9.6.
+  if (claims.iat !== undefined && claims.iat < act.tokenEpoch) {
+    return fail(res, 'UNAUTHENTICATED', 'Sessão expirada. Inicie sessão novamente.');
+  }
   if (act.billingLocked) return fail(res, 'BILLING_LOCKED', 'A sua conta tem um problema de faturação. Contacte o suporte.');
   req.user = claims;
   next();

@@ -48,6 +48,15 @@
         "kind": "asciinema"
       },
       "at": "2026-07-06T20:15:00Z"
+    },
+    "phase-3": {
+      "status": "passed",
+      "gate": "G3",
+      "video": {
+        "status": "verified",
+        "kind": "asciinema"
+      },
+      "at": "2026-07-06T20:50:00Z"
     }
   },
   "globalGate": {

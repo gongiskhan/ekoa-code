@@ -94,9 +94,14 @@ export async function setUserActive(
   const cur = getActivation(userId);
   // MAP FIRST, synchronously (ch09 §9.7.1: the toggle updates the map synchronously so the
   // effect is immediate) — this closes the TOCTOU window where a concurrent login between
-  // the store write and the cache update could mint a token off the stale cache. The store
-  // write and token revocation follow; on a store failure the map is reconciled at next boot.
-  setActivation(userId, { active, billingLocked: cur?.billingLocked ?? false });
+  // the store write and the cache update could mint a token off the stale cache. On
+  // deactivation the token epoch is bumped so EVERY outstanding token is invalidated at once
+  // (no per-user jti index needed); any explicitly-known jtis are additionally revoked.
+  // The token epoch shares the JWT `iat` clock (real seconds), strictly after any token
+  // minted this second, so every outstanding token is invalidated. deps.now drives stored
+  // record timestamps; the epoch must track real time to align with jsonwebtoken's iat.
+  const epochSec = Math.floor(Date.now() / 1000) + 1;
+  setActivation(userId, { active, billingLocked: cur?.billingLocked ?? false, tokenEpoch: active ? cur?.tokenEpoch ?? 0 : epochSec });
   if (!active) {
     for (const t of jtisToRevoke) await revoke(t.jti, userId, t.expiresAtSec, deps.now());
   }

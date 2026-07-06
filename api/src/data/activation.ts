@@ -9,19 +9,31 @@
 export interface ActivationState {
   active: boolean;
   billingLocked: boolean;
+  /** Tokens issued before this epoch (unix seconds) are invalid. Bumped on deactivation and
+   *  on role change, so those changes revoke ALL of the user's outstanding tokens at once —
+   *  a demoted admin cannot keep a stale privileged JWT (ch09 §9.6, no per-user jti index). */
+  tokenEpoch: number;
 }
 
 const map = new Map<string, ActivationState>();
 
 /** Boot-load the map from the users store (called at boot; TTL refresh is a safety net only). */
-export function loadActivation(entries: Array<{ userId: string; active: boolean; billingLocked?: boolean }>): void {
+export function loadActivation(entries: Array<{ userId: string; active: boolean; billingLocked?: boolean; tokenEpoch?: number }>): void {
   map.clear();
-  for (const e of entries) map.set(e.userId, { active: e.active, billingLocked: e.billingLocked ?? false });
+  for (const e of entries) map.set(e.userId, { active: e.active, billingLocked: e.billingLocked ?? false, tokenEpoch: e.tokenEpoch ?? 0 });
 }
 
-/** Write-through: called in the SAME operation as the store write for `active`/billing lock. */
-export function setActivation(userId: string, state: ActivationState): void {
-  map.set(userId, state);
+/** Bump the user's token epoch to `epochSec`, invalidating every token issued earlier. */
+export function bumpTokenEpoch(userId: string, epochSec: number): void {
+  const cur = map.get(userId) ?? { active: true, billingLocked: false, tokenEpoch: 0 };
+  map.set(userId, { ...cur, tokenEpoch: epochSec });
+}
+
+/** Write-through: called in the SAME operation as the store write for `active`/billing lock.
+ *  `tokenEpoch` is preserved from the existing entry unless explicitly provided. */
+export function setActivation(userId: string, state: { active: boolean; billingLocked: boolean; tokenEpoch?: number }): void {
+  const prev = map.get(userId);
+  map.set(userId, { active: state.active, billingLocked: state.billingLocked, tokenEpoch: state.tokenEpoch ?? prev?.tokenEpoch ?? 0 });
 }
 
 /**
