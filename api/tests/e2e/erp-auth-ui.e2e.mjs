@@ -25,7 +25,9 @@ import { chromium } from 'playwright';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PORT = readFileSync(join(REPO_ROOT, 'backend.port'), 'utf-8').trim();
 const BASE = `http://localhost:${PORT}`;
-const APP_ID = process.env.ERP_APP_ID || '729831a7-53c6-46dc-8323-b65370850556';
+// Adapted for the rebuild (test-audit 5.1, helper-level only): the old default was a
+// machine-local fork UUID; the deterministic target is the seeded featured app id.
+const APP_ID = process.env.ERP_APP_ID || 'erp-imobiliario';
 const COLL = 'utilizadores';
 const TEST_EMAIL = 'e2e.login@brasilsalomao.pt';
 const TEST_PW = 'e2e-pw-123456';
