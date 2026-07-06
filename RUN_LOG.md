@@ -96,3 +96,18 @@ Passages: ch03 §3.6 ("Each stream opens with a `ready` event" — all four stre
 - **Diagrams (gate item 5):** no structural change — the scaffold IMPLEMENTS the structure already depicted by diagrams 02-module-map and 03-request-crud; no diagram edit required (built to the existing normative diagrams).
 - **Evidence:** asciinema `slices/phase-0/g0-ci-lane.cast` (+ .gif) records the full green lane + security gates.
 - **Checkpoint (gate item 6):** commit `checkpoint: G0 scaffold-ci-shared-contract` + tag `gate-0`.
+
+### GATE — 2026-07-06T19:40:00Z — Phase 1 — G1 PASSED
+
+- **Green condition (§14.4 Phase 1):** the suite-ledger runner collects exactly 55 Playwright specs and 14 node drivers (census check, plus 17 frontend unit files); a full harness run completes with zero failures — every artifact skips with a ledger reason (`skipped (awaiting G<N>)`), since no API/web exists yet; one deliberate ledger violation (marking the 37 band-3 served-app specs due at G1) demonstrably fails the run and is reverted.
+- **Green evidence:** `node scripts/suite-ledger-run.mjs` → census 55/14/17 all match, 86 artifacts awaiting, exit 0. `npm run ci:lane` = 0, `npm run e2e` (ledger-gated) = 0, `npm run gate:ledger` = 0, security gates (sast/secrets/audit) = 0.
+- **Ported estate (reference-access rule c, from ../ekoa-dev):** 55 surviving Playwright specs → `web/e2e/` (2 retired specs pruned: chat-fixes, chat-preview-resolution); 17 frontend unit files → `web/__tests__/` (1 retired pruned: artifacts-page-wiring); `test-client.ts` + 14 node drivers → `api/tests/e2e/`; 3 mock provider servers → `api/tests/helpers/`; citius HTML fixtures → `api/tests/e2e/fixtures/`. The ported estate is committed but ledger-scoped (imports the un-migrated frontend/API; runs when its gate arrives). web vitest excludes `web/__tests__/` from the default run (vitest.config.ts); Playwright's native collection isn't the census authority (specs import the un-migrated frontend until G9) — the suite-ledger runner is (§14.2.5).
+- **Deliberate red (§14.4 G1):** band-3 targetGate set to G1 → runner runs the specs → red (no stack) → exit 1; reverted → exit 0. Also proven: unit-file drift (extra `.test.ts`) caught by the two-way census.
+- **CI lane (gate item 2):** exit 0.
+- **Review verdicts (gate item 3):**
+  - Claude review: focused on the runner logic. Clean beyond the Codex findings below.
+  - Adversarial Codex review (`codex exec`, serialized): 4 false-green risks in `scripts/suite-ledger-run.mjs`, all ADDRESSED — (1) module/contract test groups untracked → documented as `npm test`-enforced (they travel with modules, red fails CI directly), scope made explicit in the runner; (2) due unit files never executed → added web-vitest execution for due units; (3) `detectGateFromTags` silent G-P fallback hiding regressions → replaced with a committed `ledger.currentGate` (deterministic, git-independent) + a fail-safe G13 (all-due) default when no gate is resolvable; (4) unit-count drift uncensused → added a two-way unit census (disk count == ledger count). Re-verified: violation still fails, drift now caught. APPROVE (post-fix).
+- **Ledger (gate item 4):** SUITE_LEDGER.json populated with per-artifact target gates + committed `currentGate: G1`; ratchet active; census enforced.
+- **Diagrams (gate item 5):** no structural change (test-estate port; the QA pipeline is depicted by diagram 09-qa-pipeline, unchanged).
+- **Evidence:** asciinema `slices/phase-1/g1-ledger.cast` (census + the ledger-violation-fails proof).
+- **Checkpoint (gate item 6):** commit `checkpoint: G1 test-estate-port` + tag `gate-1`.

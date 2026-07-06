@@ -6,13 +6,15 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@ekoa/shared": "*",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^20.17.6"
+    "@types/node": "^20.17.6",
+    "@playwright/test": "^1.48.2"
   }
 }

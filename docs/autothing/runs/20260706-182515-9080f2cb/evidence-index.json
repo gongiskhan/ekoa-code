@@ -30,6 +30,15 @@
         "kind": "asciinema"
       },
       "at": "2026-07-06T19:15:00Z"
+    },
+    "phase-1": {
+      "status": "passed",
+      "gate": "G1",
+      "video": {
+        "status": "verified",
+        "kind": "asciinema"
+      },
+      "at": "2026-07-06T19:40:00Z"
     }
   },
   "globalGate": {

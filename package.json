@@ -17,14 +17,15 @@
     "lint": "eslint .",
     "test": "npm run test --workspaces --if-present",
     "test:contract": "npm run test:contract --workspace api --if-present",
-    "e2e": "npm run e2e --workspace web --if-present",
+    "e2e": "node scripts/suite-ledger-run.mjs --run",
     "gate:chokepoint": "bash scripts/chokepoint-grep.sh",
     "gate:encryption-key": "bash scripts/encryption-key-grep.sh",
     "gate:garrison": "bash scripts/garrison-grep.sh",
     "gate:sast": "semgrep --config scripts/semgrep.yml --error --quiet api/src shared/src",
     "gate:secrets": "gitleaks detect --no-banner --redact -c scripts/gitleaks.toml",
     "gate:audit": "npm audit --audit-level=high",
-    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && npm run build"
+    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && npm run build",
+    "gate:ledger": "node scripts/suite-ledger-run.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.15.0",

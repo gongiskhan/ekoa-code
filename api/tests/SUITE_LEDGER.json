@@ -2,106 +2,369 @@
   "$comment": "Suite ledger (chapter 14 §14.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
   "version": 1,
   "runId": "20260706-182515-9080f2cb",
+  "currentGate": "G1",
   "playwright": {
     "band1_zero_change": {
       "targetGate": "G9",
       "source": "ekoa-dev/ekoa/e2e/",
-      "specs": ["ui-foundation", "shell-nav", "coherence-locale", "pages-core", "pages-flagship", "pages-manage", "integrations-sections", "integrations-pipedream", "integration-session-automations", "legal-knowledge", "demos", "legal-shared-drift", "simuladores-trabalho"]
+      "specs": [
+        "ui-foundation",
+        "shell-nav",
+        "coherence-locale",
+        "pages-core",
+        "pages-flagship",
+        "pages-manage",
+        "integrations-sections",
+        "integrations-pipedream",
+        "integration-session-automations",
+        "legal-knowledge",
+        "demos",
+        "legal-shared-drift",
+        "simuladores-trabalho"
+      ]
     },
     "band2_fixture_swap": {
       "targetGate": "G9",
       "note": "assertions unchanged; seeding-helper bodies rewritten to ch03 REST; onboarding also swaps one POST /api/v1/chat/runs stub",
-      "specs": ["onboarding", "vertical-profile", "artifacts-apps-section", "update-from-bundle", "artifact-backend-panel"]
+      "specs": [
+        "onboarding",
+        "vertical-profile",
+        "artifacts-apps-section",
+        "update-from-bundle",
+        "artifact-backend-panel"
+      ]
     },
     "band3_served_app": {
       "targetGate": "G6",
       "note": "37 specs run UNMODIFIED against api/ alone; a failure is a byte-compat defect in the served-app plane, never a reason to edit the spec. legal-dossie also stubs /api/app-sso/me + /api/app-sso/m365/**",
-      "specs": ["legal-nucleo", "legal-dossie", "legal-prazos", "legal-citius", "legal-agenda", "legal-kanban", "legal-tempos", "legal-recursos", "legal-pecas", "legal-pesquisa", "legal-apoio", "legal-honorarios", "legal-financas", "legal-cobrancas", "legal-contratos", "legal-contratos-gerar", "legal-modelos", "legal-forms", "legal-correio", "legal-portal", "legal-conflitos", "legal-kyc", "legal-calculos", "legal-assinatura", "legal-injuncoes", "legal-transcricao", "legal-rcbe", "legal-insolvencias", "legal-jurimetria", "legal-ret-cons", "legal-dropdown-persistence", "legal-launcher", "legal-cadeia-audiencia", "legal-cadeia-credito", "legal-suite", "legal-suite-journey", "demo-spine"]
+      "specs": [
+        "legal-nucleo",
+        "legal-dossie",
+        "legal-prazos",
+        "legal-citius",
+        "legal-agenda",
+        "legal-kanban",
+        "legal-tempos",
+        "legal-recursos",
+        "legal-pecas",
+        "legal-pesquisa",
+        "legal-apoio",
+        "legal-honorarios",
+        "legal-financas",
+        "legal-cobrancas",
+        "legal-contratos",
+        "legal-contratos-gerar",
+        "legal-modelos",
+        "legal-forms",
+        "legal-correio",
+        "legal-portal",
+        "legal-conflitos",
+        "legal-kyc",
+        "legal-calculos",
+        "legal-assinatura",
+        "legal-injuncoes",
+        "legal-transcricao",
+        "legal-rcbe",
+        "legal-insolvencias",
+        "legal-jurimetria",
+        "legal-ret-cons",
+        "legal-dropdown-persistence",
+        "legal-launcher",
+        "legal-cadeia-audiencia",
+        "legal-cadeia-credito",
+        "legal-suite",
+        "legal-suite-journey",
+        "demo-spine"
+      ]
     },
     "retired": {
       "note": "behaviors re-covered by store-level unit halves + new schema-validated-stub specs at G9",
-      "specs": ["chat-fixes", "chat-preview-resolution"]
+      "specs": [
+        "chat-fixes",
+        "chat-preview-resolution"
+      ]
     }
   },
   "frontend_unit": {
     "targetGate": "G9",
     "source": "ekoa-dev/ekoa/__tests__/ (+ ekoa/lib/)",
-    "surviving": ["conversation-types", "execute-skip-user-message", "navigation", "orchestration-hydrate-reconcile", "orchestration-queue-stop", "verticals", "components/data-backups-panel", "components/no-mode-picker", "ui/badge", "ui/button", "ui/confirm-dialog", "ui/dialog", "ui/input", "ui/tabs", "ui/textarea", "ui/toast", "lib/artifact-bundle"],
-    "mock_update_needed": ["orchestration-hydrate-reconcile", "components/data-backups-panel", "orchestration-queue-stop"],
-    "retired_as_static_audit": ["artifacts-page-wiring"]
+    "surviving": [
+      "conversation-types",
+      "execute-skip-user-message",
+      "navigation",
+      "orchestration-hydrate-reconcile",
+      "orchestration-queue-stop",
+      "verticals",
+      "components/data-backups-panel",
+      "components/no-mode-picker",
+      "ui/badge",
+      "ui/button",
+      "ui/confirm-dialog",
+      "ui/dialog",
+      "ui/input",
+      "ui/tabs",
+      "ui/textarea",
+      "ui/toast",
+      "lib/artifact-bundle"
+    ],
+    "mock_update_needed": [
+      "orchestration-hydrate-reconcile",
+      "components/data-backups-panel",
+      "orchestration-queue-stop"
+    ],
+    "retired_as_static_audit": [
+      "artifacts-page-wiring"
+    ]
   },
   "node_drivers": {
     "source": "ekoa-dev/cortex/tests/e2e/",
-    "test_client": {"file": "helpers/test-client.ts", "targetGate": "G1", "note": "ported first to the ch03 REST surface; the 14 drivers re-seed on it"},
+    "test_client": {
+      "file": "helpers/test-client.ts",
+      "targetGate": "G1",
+      "note": "ported first to the ch03 REST surface; the 14 drivers re-seed on it"
+    },
     "drivers": [
-      {"name": "app-auth", "targetGate": "G6"},
-      {"name": "app-files-upload", "targetGate": "G6"},
-      {"name": "citius-integration", "targetGate": "G6"},
-      {"name": "erp-auth-ui", "targetGate": "G6"},
-      {"name": "erp-crm-persistence", "targetGate": "G6"},
-      {"name": "erp-kyc", "targetGate": "G6"},
-      {"name": "erp-ops-persistence", "targetGate": "G6"},
-      {"name": "ifthenpay", "targetGate": "G4"},
-      {"name": "invoicexpress", "targetGate": "G4"},
-      {"name": "pipedream", "targetGate": "G4"},
-      {"name": "integration-automation", "targetGate": "G8"},
-      {"name": "legal-research", "targetGate": "G6"},
-      {"name": "onboarding", "targetGate": "G7B", "note": "SKIP-gated on /health claudeAuth"},
-      {"name": "whatsapp-inbound", "targetGate": "G8", "note": "queue-acceptance at G5, full delivery at G8"}
+      {
+        "name": "app-auth",
+        "targetGate": "G6"
+      },
+      {
+        "name": "app-files-upload",
+        "targetGate": "G6"
+      },
+      {
+        "name": "citius-integration",
+        "targetGate": "G6"
+      },
+      {
+        "name": "erp-auth-ui",
+        "targetGate": "G6"
+      },
+      {
+        "name": "erp-crm-persistence",
+        "targetGate": "G6"
+      },
+      {
+        "name": "erp-kyc",
+        "targetGate": "G6"
+      },
+      {
+        "name": "erp-ops-persistence",
+        "targetGate": "G6"
+      },
+      {
+        "name": "ifthenpay",
+        "targetGate": "G4"
+      },
+      {
+        "name": "invoicexpress",
+        "targetGate": "G4"
+      },
+      {
+        "name": "pipedream",
+        "targetGate": "G4"
+      },
+      {
+        "name": "integration-automation",
+        "targetGate": "G8"
+      },
+      {
+        "name": "legal-research",
+        "targetGate": "G6"
+      },
+      {
+        "name": "onboarding",
+        "targetGate": "G7B",
+        "note": "SKIP-gated on /health claudeAuth"
+      },
+      {
+        "name": "whatsapp-inbound",
+        "targetGate": "G8",
+        "note": "queue-acceptance at G5, full delivery at G8"
+      }
     ]
   },
   "contract_tests_from_ruleset": {
     "note": "23 direct-handler rule-set files rewritten as REST contract tests at their domain gates; mapping recorded in api/tests/contract/README.md",
     "targetGatesByDomain": {
-      "G2": ["auth-device", "settings-defaults", "phase2/user-isolation-settings"],
-      "G3": ["memory-handler", "memory-consolidation", "phase2/user-isolation-integrations", "sessions-onboarding-singleton", "phase2/admin-usage-page"],
-      "G4": ["integrations-session-intents"],
-      "G5": ["event-sourcing/trigger-target", "event-sourcing/ifthenpay-callback"],
-      "G6": ["app-data-backups-handler", "update-from-bundle-intent", "featured/featured-update", "featured/list-instances", "featured/seeder", "featured/set-featured-authz", "artifact-backend/handler", "artifact-backend/delete-teardown"],
-      "G7": ["phase2/specialist-removal"],
-      "G8": ["automation/handler"],
-      "G4_knowledge": ["knowledge/knowledge-handler", "knowledge/knowledge-sources"]
+      "G2": [
+        "auth-device",
+        "settings-defaults",
+        "phase2/user-isolation-settings"
+      ],
+      "G3": [
+        "memory-handler",
+        "memory-consolidation",
+        "phase2/user-isolation-integrations",
+        "sessions-onboarding-singleton",
+        "phase2/admin-usage-page"
+      ],
+      "G4": [
+        "integrations-session-intents"
+      ],
+      "G5": [
+        "event-sourcing/trigger-target",
+        "event-sourcing/ifthenpay-callback"
+      ],
+      "G6": [
+        "app-data-backups-handler",
+        "update-from-bundle-intent",
+        "featured/featured-update",
+        "featured/list-instances",
+        "featured/seeder",
+        "featured/set-featured-authz",
+        "artifact-backend/handler",
+        "artifact-backend/delete-teardown"
+      ],
+      "G7": [
+        "phase2/specialist-removal"
+      ],
+      "G8": [
+        "automation/handler"
+      ],
+      "G4_knowledge": [
+        "knowledge/knowledge-handler",
+        "knowledge/knowledge-sources"
+      ]
     }
   },
   "module_tests_146": {
     "note": "carryover module tests travel with their module port (module-travels-with-tests rule). Group -> target gate.",
     "groups": [
-      {"group": "legal engines/golden/spine", "count": 20, "targetGate": "G6"},
-      {"group": "knowledge subsystem", "count": 12, "targetGate": "G4"},
-      {"group": "automation subsystem", "count": 12, "targetGate": "G8"},
-      {"group": "memory", "count": 9, "targetGate": "G3"},
-      {"group": "services long tail", "count": 33, "targetGate": "G6", "note": "spread G4-G6 by service; SSRF/sanitizer/browser-pool land with first consumer"},
-      {"group": "persistence parity gates", "count": 6, "targetGate": "G2"},
-      {"group": "event queue + delivery", "count": 8, "targetGate": "G5"},
-      {"group": "crypto/jwt/git/device-auth", "count": 4, "targetGate": "G2"},
-      {"group": "auth/infra root (managed OAuth, sanitizer, cancel, tokens, bases, Adobe)", "count": 12, "targetGate": "G7", "note": "claude-auth-* with llm/ at G7; error-sanitizer at G5; base-loader at G6"},
-      {"group": "branding token gates", "count": 4, "targetGate": "G6"},
-      {"group": "phase-2 rule files (billing hard cap, slugs, branding, site)", "count": 11, "targetGate": "G6", "note": "billing-hard-cap at G7"},
-      {"group": "share/fork link contracts", "count": 3, "targetGate": "G6"},
-      {"group": "app pipeline", "count": 4, "targetGate": "G6"},
-      {"group": "artifact-backend runtime", "count": 5, "targetGate": "G6"},
-      {"group": "locale audits (move to web/)", "count": 3, "targetGate": "G9"}
+      {
+        "group": "legal engines/golden/spine",
+        "count": 20,
+        "targetGate": "G6"
+      },
+      {
+        "group": "knowledge subsystem",
+        "count": 12,
+        "targetGate": "G4"
+      },
+      {
+        "group": "automation subsystem",
+        "count": 12,
+        "targetGate": "G8"
+      },
+      {
+        "group": "memory",
+        "count": 9,
+        "targetGate": "G3"
+      },
+      {
+        "group": "services long tail",
+        "count": 33,
+        "targetGate": "G6",
+        "note": "spread G4-G6 by service; SSRF/sanitizer/browser-pool land with first consumer"
+      },
+      {
+        "group": "persistence parity gates",
+        "count": 6,
+        "targetGate": "G2"
+      },
+      {
+        "group": "event queue + delivery",
+        "count": 8,
+        "targetGate": "G5"
+      },
+      {
+        "group": "crypto/jwt/git/device-auth",
+        "count": 4,
+        "targetGate": "G2"
+      },
+      {
+        "group": "auth/infra root (managed OAuth, sanitizer, cancel, tokens, bases, Adobe)",
+        "count": 12,
+        "targetGate": "G7",
+        "note": "claude-auth-* with llm/ at G7; error-sanitizer at G5; base-loader at G6"
+      },
+      {
+        "group": "branding token gates",
+        "count": 4,
+        "targetGate": "G6"
+      },
+      {
+        "group": "phase-2 rule files (billing hard cap, slugs, branding, site)",
+        "count": 11,
+        "targetGate": "G6",
+        "note": "billing-hard-cap at G7"
+      },
+      {
+        "group": "share/fork link contracts",
+        "count": 3,
+        "targetGate": "G6"
+      },
+      {
+        "group": "app pipeline",
+        "count": 4,
+        "targetGate": "G6"
+      },
+      {
+        "group": "artifact-backend runtime",
+        "count": 5,
+        "targetGate": "G6"
+      },
+      {
+        "group": "locale audits (move to web/)",
+        "count": 3,
+        "targetGate": "G9"
+      }
     ]
   },
   "conditional_carryover_20": {
     "note": "port with their subsystems",
     "groups": [
-      {"group": "live-browser streaming (4)", "targetGate": "G8", "note": "unconditional per Q-01"},
-      {"group": "llm gateway (2)", "targetGate": "G7"},
-      {"group": "agent-runtime adapters (4)", "targetGate": "G7B"},
-      {"group": "llm-router (1)", "targetGate": "G7"},
-      {"group": "knowledge agent wiring (2)", "targetGate": "G7B"},
-      {"group": "local daemon bridge / agent-face TUI (7, safety gates verbatim)", "targetGate": "G8A"}
+      {
+        "group": "live-browser streaming (4)",
+        "targetGate": "G8",
+        "note": "unconditional per Q-01"
+      },
+      {
+        "group": "llm gateway (2)",
+        "targetGate": "G7"
+      },
+      {
+        "group": "agent-runtime adapters (4)",
+        "targetGate": "G7B"
+      },
+      {
+        "group": "llm-router (1)",
+        "targetGate": "G7"
+      },
+      {
+        "group": "knowledge agent wiring (2)",
+        "targetGate": "G7B"
+      },
+      {
+        "group": "local daemon bridge / agent-face TUI (7, safety gates verbatim)",
+        "targetGate": "G8A"
+      }
     ]
   },
   "retired_by_design": {
-    "content_machinery_14": {"note": "retire with FIXED-4/FIXED-6 architecture; not re-covered"},
-    "sse_wire_internals_3": {"note": "sanitize-at-send re-pinned as new unit test (G5); phase-event + SSEManager unit retire"}
+    "content_machinery_14": {
+      "note": "retire with FIXED-4/FIXED-6 architecture; not re-covered"
+    },
+    "sse_wire_internals_3": {
+      "note": "sanitize-at-send re-pinned as new unit test (G5); phase-event + SSEManager unit retire"
+    }
   },
   "mock_servers_and_fixtures": {
     "source": "ekoa-dev/cortex/tests/helpers/ + fixtures/",
-    "mock_servers": ["mock-ifthenpay-server.mjs", "mock-invoicexpress-server.mjs", "mock-pipedream-server.mjs"],
-    "fixtures": ["ekoa/e2e/fixtures/audiencia-2vozes.wav", "cortex/tests/services/fixtures/citius-consulta.html", "cortex/tests/services/fixtures/citius-consulta-latin1.html", "cortex/tests/fixtures/citius/consulta-distribuicao.html"],
-    "helpers": ["ekoa/e2e/helpers/legal.ts", "cortex/tests/e2e/helpers/test-client.ts"]
+    "mock_servers": [
+      "mock-ifthenpay-server.mjs",
+      "mock-invoicexpress-server.mjs",
+      "mock-pipedream-server.mjs"
+    ],
+    "fixtures": [
+      "ekoa/e2e/fixtures/audiencia-2vozes.wav",
+      "cortex/tests/services/fixtures/citius-consulta.html",
+      "cortex/tests/services/fixtures/citius-consulta-latin1.html",
+      "cortex/tests/fixtures/citius/consulta-distribuicao.html"
+    ],
+    "helpers": [
+      "ekoa/e2e/helpers/legal.ts",
+      "cortex/tests/e2e/helpers/test-client.ts"
+    ]
   }
 }

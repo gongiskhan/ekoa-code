@@ -25,10 +25,12 @@ jobs:
       - run: npm test
       # 5. build web + api
       - run: npm run build
-      # 6. playwright e2e — added at G1+ (skips cleanly until the stack exists)
-      - run: npm run e2e --if-present
-      # 7. suite-ledger check — enforced from G1
-      - run: npm run gate:ledger --if-present
+      # 6+7. ledger-gated e2e: the suite-ledger runner is the single authority for which
+      # ported specs/drivers run at the current gate (from the latest gate-* tag). Not-yet-due
+      # artifacts report `skipped (awaiting G<N>)`; due artifacts run and must be green; the
+      # census (55 specs / 14 drivers) and the ratchet are enforced here (ch14 §14.2.5).
+      - run: npm run e2e
+      - run: npm run gate:ledger
 
   # Security CI gates (security addendum D.4): Semgrep SAST, gitleaks, npm audit.
   security-gates:
