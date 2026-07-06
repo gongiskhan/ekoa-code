@@ -31,6 +31,8 @@ import { triggersRouter } from './routes/triggers.js';
 import { hooksRouter } from './routes/hooks.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
+import { servedDataRouter } from './apps/served-data.js';
+import { artifactsRouter } from './routes/artifacts.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -78,6 +80,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G5 — push infrastructure + triggers.
   app.use('/api/v1/triggers', triggersRouter(deps));
   app.use('/api/v1/notifications', notificationsRouter());
+  // G6 — artifacts (platform) + the byte-compatible served-app data plane (outside /api/v1).
+  app.use('/api/v1/artifacts', artifactsRouter(deps));
+  app.use('/api', servedDataRouter(deps));
 
   return app;
 }

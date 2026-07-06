@@ -176,3 +176,14 @@ Passages: ch03 §3.6 ("Each stream opens with a `ready` event" — all four stre
 - **Diagrams (gate item 5):** no structural change (events/ is an existing module; the four SSE streams are depicted by diagram 04-agent-job).
 - **Evidence:** asciinema `slices/phase-5/g5.cast`.
 - **Checkpoint (gate item 6):** commit `checkpoint: G5 push-infra-triggers` + tag `gate-5`.
+
+### PROGRESS (in-phase, not a gate) — 2026-07-06T21:55:00Z — Phase 6 — served-app data-plane core built
+
+Phase 6 (G6) is the run's largest phase (size 14). Its gate is the 37 served-app Playwright specs green byte-compatibly against `api/` alone, which additionally requires the esbuild pipeline, static serving with `window.__ekoa` context injection, artifact bundle/backend runtime, and the legal vertical. This intermediate commit lands the **data-plane core** of that surface, genuinely built and tested (not the full gate):
+- `apps/registry.ts` — served-app scope resolution from `X-Ekoa-App-Id` (slug→canonical id).
+- `apps/served-data.ts` — the byte-compatible `/api/app-data/*` + `/api/app-shared/*` CRUD over the collections engine (header-scoped, bare-item shape, `_rev` never on the wire, reserved-prefix + charset guards, per-app scoping isolation).
+- `apps/artifacts-service.ts` + `routes/artifacts.ts` — artifact CRUD, visibility (private|org) scoping, deterministic slug generation (no model call, stop-words stripped, collision suffix via the `slugs` reservation collection).
+- Tests: `tests/contract/served-app.test.ts` (data-plane byte-compat + scoping isolation + reserved/usr. guards + artifact visibility 404/403 + deterministic slug). 83 api tests total; full CI lane + security gates green.
+- Test infra: `api/vitest.config.ts` (single-fork serial + 30s timeout) — bcrypt cost 12 (ch09 §9.7, unchanged) makes multi-login contract tests slow under parallel forks; serial execution + a longer timeout keeps them green without weakening security.
+
+**G6 is NOT marked passed** — the 37-spec byte-compat gate, the esbuild/serving/injection pipeline, and the legal vertical remain to build. G6 status stays `in_progress`. This is an intermediate checkpoint commit (free-form per §14.2.2), NOT a tagged gate commit; `gate-6` is created only when the full G6 gate is green. DECISION: minor deviation noted — a convenience `POST /api/v1/artifacts` create was added for data-plane testing; the spec's canonical artifact-creation path is the build job (G7B), so this create route is provisional and will reconcile when the build pipeline lands.

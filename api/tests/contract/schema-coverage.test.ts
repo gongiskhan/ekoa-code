@@ -26,12 +26,16 @@ const COVERED = new Set<string>([
   // G5 — triggers + webhook ingress + notifications SSE
   'triggers.list', 'triggers.create', 'triggers.delete', 'triggers.webhookIngressPost', 'triggers.webhookIngressGet',
   'notifications.events',
+  // G6 (data-plane core) — artifacts CRUD + the byte-compatible served-app data plane
+  'artifacts.list', 'artifacts.get', 'artifacts.patch', 'artifacts.remove',
+  'servedApp.appDataList', 'servedApp.appDataGet', 'servedApp.appDataCreate', 'servedApp.appDataUpsert', 'servedApp.appDataDelete',
+  'servedApp.appSharedList', 'servedApp.appSharedGet', 'servedApp.appSharedCreate', 'servedApp.appSharedUpsert', 'servedApp.appSharedDelete',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
 // "every descriptor endpoint not in COVERED" here, but pinned by an expected-count assertion so
 // a NEW endpoint added to shared/ without being COVERED bumps the count and fails the gate.
-const EXPECTED_PENDING_COUNT = 162;
+const EXPECTED_PENDING_COUNT = 148;
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {
