@@ -4,6 +4,8 @@ This chapter fixes the layer that stands between the LLM chokepoint and Anthropi
 
 Amendment record: this chapter is new, added 2026-07-06 per founder resolutions and the anonymisation/local-file-access amendment (docs/ekoa-code-spec-amendment-brief.md).
 
+Amended again 2026-07-06 per the consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md): swept tenant to org throughout - the deny-list is per-org and its key org-scoped (17.4 (b)), the service interface takes `orgConfig: OrgRuleset` (17.7), debug payload capture is org-opt-in (17.6), and the origins/Garrison-line prose reads org; added to the pipeline (17.3 step 1) the explicit statement that resolver-re-injected memories are model-bound text that tokenizes with the current session's vault (the three-posture egress rule, Amendment 2 Part 2); and resolved P-27 (17.10, 17.11) as detector-at-persist with irreversible redaction of detected spans, never session tokens, folding the recommendation/alternative to recorded history and flipping the register arithmetic to zero pending.
+
 ## 17.1 Purpose, provenance, and placement
 
 **What changed, and why it is FIXED.** The founder's original FIXED-8 carried "anonymisation chokepoint on egress (Presidio integration point) preserved" - a seam, an interface point, nothing built behind it. The amendment (docs/ekoa-code-spec-amendment-brief.md, Part 3) replaces that clause. FIXED-8 as amended reads: **anonymisation layer built in this run as part of the egress module (chapter 17)**. The seam becomes a mechanism. This chapter is the specification of that mechanism.
@@ -31,7 +33,7 @@ This layer is the enforcement of Boundary 2. Its supporting invariants, carried 
 
 **Origins covered.** The layer sits at the point every origin already converges on, so it covers all of them uniformly:
 
-- **Web-UI chat** - user and tenant data in prompts and message history.
+- **Web-UI chat** - user and org data in prompts and message history.
 - **Integration-sourced content** - SharePoint, Drive, database rows entering agent context.
 - **Bridge provider requests** - the local Pi loop (including the TUI) calling Cortex-as-provider over the bridge; these carry the file excerpts of Boundary 1 and are the reason the layer exists at all (chapter 18).
 - **Internal / platform AI calls** - covered by the same stage for completeness, but **the launch posture has none at runtime**: chapter 06 section 6.4.3 eliminates all six platform-attributed call sites, and the runtime platform-call counter reads zero at launch. The stage covers this origin so that any future platform call added later cannot bypass it; it is not a live origin at cutover.
@@ -42,7 +44,7 @@ The full 27-site accounting is chapter 06 section 6.4; this chapter does not res
 
 For every request the chokepoint is about to send to Anthropic, and for every response and streamed delta it receives, the pipeline runs the following steps. They are faithful to v2 A3.2; the numbered contract is normative.
 
-1. **Collect** all model-bound text in the outbound request: system-prompt segments that contain user or tenant data, the message-history delta (new turn only, see 17.5), tool definitions if they embed data, tool results re-entering from the previous turn, and attached or extracted document text.
+1. **Collect** all model-bound text in the outbound request: system-prompt segments that contain user or org data, resolved memories re-injected by the memory resolver (they are model-bound text and tokenize with the current session's vault automatically - the egress rule of the three-posture policy; chapter 09; Amendment 2 Part 2), the message-history delta (new turn only, see 17.5), tool definitions if they embed data, tool results re-entering from the previous turn, and attached or extracted document text.
 2. **Detect** sensitive spans (17.4) on the **delta only** - never on the already-tokenized prefix (17.5 explains why this preserves prompt caching).
 3. **Tokenize** - replace each detected span with a deterministic, format-preserving token, and record the value-to-token mapping in the session vault (17.5).
 4. **Forward** the tokenized request to Anthropic, tagged with the per-request correlation id (17.6).
@@ -57,7 +59,7 @@ Detection is layered, recall-biased, and has no human in the loop (v2 A3.3). All
 
 **(a) PT structured-ID recognizers - regex + checksum, near-certain.** NIF / NIPC (check digit), NISS, número de utente, Cartão de Cidadão, IBAN PT, and CITIUS / processo references. Each is a regex followed by the class's checksum or format validation, so precision is near-certain: a value that passes the check digit is treated as a real identifier.
 
-**(b) Per-tenant deny-list - certain-catch regardless of NER.** The firm's client, matter, and party names, loaded as tenant configuration (17.7). Matched literally, so a known party is caught whether or not the NER head recognises it as a name. The deny-list is itself **secret-material** - it is a list of the firm's clients and matters - and is treated as such (v2 A6 decision D3): **encrypted at rest with a tenant-scoped key, access-logged, and enumerated in the custody map**. It is never sent to Anthropic; it is an input to detection only.
+**(b) Per-org deny-list - certain-catch regardless of NER.** The firm's client, matter, and party names, loaded as org configuration (17.7). Matched literally, so a known party is caught whether or not the NER head recognises it as a name. The deny-list is itself **secret-material** - it is a list of the firm's clients and matters - and is treated as such (v2 A6 decision D3): **encrypted at rest with an org-scoped key, access-logged, and enumerated in the custody map**. It is never sent to Anthropic; it is an input to detection only.
 
 **(c) PT-PT NER - recall-biased, behind the same interface.** A named-entity recognition head for European Portuguese (Albertina-based, or the best available suitably-licensed PT-PT model), with its threshold tuned to **over-tokenize: when unsure, redact**. A false positive tokenizes a non-sensitive word, which costs nothing - the model reasons over a plausible fake and the caller sees the original restored on the way back. A false negative leaks real PII across Boundary 2, which is the one failure this layer exists to prevent, so the threshold is deliberately biased toward recall.
 
@@ -87,7 +89,7 @@ Detection is layered, recall-biased, and has no human in the loop (v2 A3.3). All
 
 **Folds into the Registo single write path (FIXED-8).** The audit is not a parallel log. It writes through the one activity/audit write function (chapter 09 Invariant 3; chapter 04 `activity_logs`) as an anonymisation category, so the single-writer, Registo-ready guarantee covers it too. Registo doubling as the compliance evidence engine (security addendum E.1) therefore includes the masking record with no second mechanism.
 
-**Payload capture for debugging is tenant-opt-in with a short TTL.** Because a captured body is cleartext-bearing, debug capture is off by default, enabled only per tenant, and expires on a short TTL. This is distinct from the test-mode payload capture of 17.8, which runs against synthetic data only.
+**Payload capture for debugging is org-opt-in with a short TTL.** Because a captured body is cleartext-bearing, debug capture is off by default, enabled only per org, and expires on a short TTL. This is distinct from the test-mode payload capture of 17.8, which runs against synthetic data only.
 
 **Correlation id.** The correlation id is **minted per provider request, here, at the chokepoint**, and propagated through delegation into the local loop so the daemon's egress ledger rows and these hosted audit records join on it (v2 I4; chapter 18 section S6). It is the join key of the trust chip (chapter 12) and the second half of the compliance story: the local ledger says what left the machine, the hosted audit says what was masked before the provider, and the correlation id stitches the two. Denials (fail-closed refusals, 17.3) are audited as well.
 
@@ -96,7 +98,7 @@ Detection is layered, recall-biased, and has no human in the loop (v2 A3.3). All
 **The interface (stable, location-agnostic).** The layer is a standalone service with two entry points:
 
 ```ts
-anonymize(payload: ModelBoundPayload, tenantConfig: TenantRuleset)
+anonymize(payload: ModelBoundPayload, orgConfig: OrgRuleset)
   : { tokenizedPayload: ModelBoundPayload; vaultHandle: VaultHandle };
 
 deanonymize(output: ModelOutput, vaultHandle: VaultHandle)
@@ -104,11 +106,11 @@ deanonymize(output: ModelOutput, vaultHandle: VaultHandle)
                    // a streaming variant restores text deltas with straddle buffering (17.3 step 6)
 ```
 
-Callers never depend on detector internals or on where the service runs. `tenantConfig` carries the loaded ruleset and deny-list; `vaultHandle` is an opaque reference to the in-memory session vault (17.5) and is never serialised into any payload.
+Callers never depend on detector internals or on where the service runs. `orgConfig` carries the loaded ruleset and deny-list; `vaultHandle` is an opaque reference to the in-memory session vault (17.5) and is never serialised into any payload.
 
 **Location-agnostic by design (v2 A3.6, A6 decision D6).** The interface is written so the same service can later run at the edge (on the client or bridge) without a call-site change. This run builds the **hosted** deployment only; the edge tier remains a later premium option. The interface is made ready for it; **nothing is built for the edge now**. Provider routing is first-class configuration on the same module - base URL, region, zero-retention posture - so EU-region processing and a zero-retention posture are adopted by config, never by code change (FIXED-13; D6; chapter 06 owns the provider-routing config surface).
 
-**Core versus composition (the Garrison line, FIXED-7).** The **mechanism** - the chokepoint placement, the pipeline, the vault, the audit, and this interface - is Ekoa core. The **PT-PT ruleset, the legal entity rules, and the per-tenant deny-lists** are a loaded ruleset and per-tenant configuration, not core. Portugal-legal specifics never bend the core (chapter 08's Garrison boundary): the structured-ID recognizers and the deny-list load as configuration exactly as the legal knowledge packages load as task-scoped content (chapter 08 slot 8, Q-09). A second jurisdiction's rules would be another loaded ruleset against the unchanged mechanism.
+**Core versus composition (the Garrison line, FIXED-7).** The **mechanism** - the chokepoint placement, the pipeline, the vault, the audit, and this interface - is Ekoa core. The **PT-PT ruleset, the legal entity rules, and the per-org deny-lists** are a loaded ruleset and per-org configuration, not core. Portugal-legal specifics never bend the core (chapter 08's Garrison boundary): the structured-ID recognizers and the deny-list load as configuration exactly as the legal knowledge packages load as task-scoped content (chapter 08 slot 8, Q-09). A second jurisdiction's rules would be another loaded ruleset against the unchanged mechanism.
 
 ## 17.8 Test data and the payload-capture harness
 
@@ -142,15 +144,19 @@ The v2 brief A1 claims list is the **ceiling of truth for every string in the pr
 
 **The ship-gate rule (mirror of v2 A7.4).** Copy that describes a mechanism **ships only after that mechanism's tests pass**. If a string says "every read is logged" the ledger must be passing its scenario first; if it says a class of entity is masked "with certainty", the detector for that class must be green in the payload-capture harness (17.8). This is the same discipline as chapter 10's cut-line rule: **never ship claims ahead of enforcement**. Chapter 12 carries the UI-side statement of this rule for the in-app trust surfaces (trust chip, settings "Privacidade e ponte local"); chapter 14 carries it as a gate; chapter 10 checks at cutover that the enabled claims text matches the coverage actually enforced (detectors (a)+(b) live at cutover; the NER (c) coverage per its verified state).
 
-## 17.10 PROPOSED P-27 - executor-face run-record retention (deferrable)
+## 17.10 RESOLVED (P-27) - executor-face run-record retention
 
-**PROPOSED P-27 (owner: this chapter; register of record: chapter 15).** Content-bearing executor-face run-record fields - file reads and command output captured inside automation runs - land in hosted run records by design, because visibility is the executor face's purpose (v2 A5). For file-heavy automations that turns run records into an at-rest copy of file content, which is exactly the quiet holding the privacy premise removes for the chat path.
+**RESOLVED (P-27) (owner: this chapter; register of record: chapter 15).** Content-bearing executor-face run-record fields - file reads and command output captured inside automation runs - land in hosted run records by design, because visibility is the executor face's purpose (v2 A5). For file-heavy automations that turns run records into an at-rest copy of file content, which is exactly the quiet holding the privacy premise removes for the chat path.
 
-- **Recommendation:** pass those content-bearing fields **through the detector at persist time**, reusing this anonymisation service. It keeps run records from becoming the quiet at-rest copy that violates the spirit of I1 for file-heavy automations, and reuses a mechanism already built rather than inventing a retention scheme.
-- **Alternative:** mark the content fields **ephemeral with a short TTL** instead of detecting them, accepting that they exist in cleartext for the TTL window.
-- **Deferrable; safe default = recommendation** (detector-at-persist). The criterion either option must satisfy (v2 A5): **run records must not become the quiet at-rest copy** that undermines I1.
+**Resolution (normative).** Content-bearing executor-face run-record fields pass through the detector at persist time, with **irreversible redaction** of the detected spans - **never session tokens**. This is the correct at-rest treatment because the vault is ephemeral (17.5) while a run record is permanent: a token written to a run record would be permanent noise pointing at a map that no longer exists, whereas irreversible redaction removes the sensitive span outright. It is the three-posture policy's rule for at-rest operational surfaces (Amendment 2 Part 2; chapter 09): logs and run records omit or irreversibly redact, they never carry session tokens. The redaction reuses this chapter's detection pipeline (17.4) at the persist boundary; it does not tokenize and it allocates no vault entry. Resolved: detector-at-persist with irreversible redaction of detected spans, never session tokens; founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md).
 
-Register arithmetic: P-27 is minted by this amendment (2026-07-06) and is the only pending entry in the register; it is deferrable and, if unmarked at launch, resolves by default to the recommendation. Chapter 15 carries the entry and the summary line.
+As recorded history, the options weighed when P-27 was first minted (the first amendment, 2026-07-06):
+
+- **Recommendation (adopted):** pass those content-bearing fields **through the detector at persist time**, reusing this anonymisation service. It keeps run records from becoming the quiet at-rest copy that violates the spirit of I1 for file-heavy automations, and reuses a mechanism already built rather than inventing a retention scheme.
+- **Alternative (not taken):** mark the content fields **ephemeral with a short TTL** instead of detecting them, accepting that they exist in cleartext for the TTL window.
+- The criterion either option had to satisfy (v2 A5): **run records must not become the quiet at-rest copy** that undermines I1 - met by the adopted resolution.
+
+Register arithmetic: P-27 was minted by the first amendment (2026-07-06) and is now resolved by Amendment 2; all 27 register entries are resolved, zero remain pending, and no live `PROPOSED P-nn` marker remains anywhere in the spec. Chapter 15 carries the entry, its `Re-resolved:` line, and the summary line.
 
 ## 17.11 Acceptance criteria (checkable without a human)
 
@@ -161,6 +167,6 @@ Register arithmetic: P-27 is minted by this amendment (2026-07-06) and is the on
 - **Audit metadata only.** A check asserts audit records carry entity classes, counts, correlation id, and payload hash - and never payload bodies and never the vault (17.6; D2) - and that they write through the single Registo audit path (chapter 09 Invariant 3).
 - **Payload-capture assertion green.** In test mode, every planted synthetic value appears tokenized, never cleartext, in every captured outbound Anthropic request across all scenarios including bridge/TUI (17.8; the chapter 14 anonymisation-phase gate).
 - **Claims ceiling holds.** A grep over product copy (docs, `web/` strings, settings and onboarding copy) finds none of the forbidden strings of 17.9, and no claims-bearing string is enabled ahead of its mechanism's passing test (the A7.4 ship-gate; chapter 12 / chapter 14).
-- **P-27 presented and registered.** The proposal appears in 17.10 with recommendation, alternative, and deferrable flag, and has a matching register entry in chapter 15.
+- **P-27 resolved and registered.** Section 17.10 presents P-27 as RESOLVED (detector-at-persist with irreversible redaction of detected spans, never session tokens), keeps the original recommendation and alternative as recorded history, and has a matching resolved register entry in chapter 15; the spec-wide grep for `PROPOSED P-nn` returns zero hits.
 
-Cross-references: chapter 02 (module placement, import boundaries, lint), chapter 06 (the chokepoint entry points, attribution and metering, the 27-site callsite table, provider-routing config, the section 6.10 gates - FIXED-13 makes this chapter and chapter 06 one module), chapter 04 (`activity_logs` single write path, `token_events`), chapter 08 (the Garrison line, PT ruleset and deny-lists as tenant configuration, legal packages at slot 8, Q-09), chapter 09 (Invariant 2 the provider-leak error-sanitiser as the complementary egress control, Invariant 3 the Registo single audit write path, FIXED-14 security baseline, the E.1 hash-chain adoption), chapter 10 (anonymisation go-live posture, claims-match-enforcement at cutover), chapter 12 (the in-app trust chip and settings copy that carry the claims of 17.9), chapter 14 (the anonymisation-layer build phase and its payload-capture gate), chapter 15 (P-27 register of record), chapter 18 (delegation, the bridge, session-identity propagation, correlation-id join S6, the fake-daemon harness that runs the payload-capture assertions for bridge/TUI traffic).
+Cross-references: chapter 02 (module placement, import boundaries, lint), chapter 06 (the chokepoint entry points, attribution and metering, the 27-site callsite table, provider-routing config, the section 6.10 gates - FIXED-13 makes this chapter and chapter 06 one module), chapter 04 (`activity_logs` single write path, `token_events`), chapter 08 (the Garrison line, PT ruleset and deny-lists as org configuration, legal packages at slot 8, Q-09), chapter 09 (Invariant 2 the provider-leak error-sanitiser as the complementary egress control, Invariant 3 the Registo single audit write path, FIXED-14 security baseline, the E.1 hash-chain adoption), chapter 10 (anonymisation go-live posture, claims-match-enforcement at cutover), chapter 12 (the in-app trust chip and settings copy that carry the claims of 17.9), chapter 14 (the anonymisation-layer build phase and its payload-capture gate), chapter 15 (P-27 register of record), chapter 18 (delegation, the bridge, session-identity propagation, correlation-id join S6, the fake-daemon harness that runs the payload-capture assertions for bridge/TUI traffic).

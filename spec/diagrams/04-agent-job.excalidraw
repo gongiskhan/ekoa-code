@@ -1522,7 +1522,12 @@
    "versionNonce": 700084,
    "isDeleted": false,
    "groupIds": [],
-   "boundElements": [],
+   "boundElements": [
+    {
+     "id": "j_verify",
+     "type": "arrow"
+    }
+   ],
    "link": null,
    "locked": false
   },
@@ -1701,6 +1706,148 @@
    "locked": false,
    "containerId": null,
    "lineHeight": 1.25
+  },
+  {
+   "type": "rectangle",
+   "id": "verify",
+   "x": 780,
+   "y": 488,
+   "width": 390,
+   "height": 126,
+   "strokeColor": "#6d28d9",
+   "backgroundColor": "#ddd6fe",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 710001,
+   "version": 1,
+   "versionNonce": 710002,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": [
+    {
+     "id": "j_verify",
+     "type": "arrow"
+    }
+   ],
+   "link": null,
+   "locked": false,
+   "roundness": {
+    "type": 3
+   }
+  },
+  {
+   "type": "text",
+   "id": "verify_title",
+   "x": 795,
+   "y": 500,
+   "width": 360,
+   "height": 18,
+   "text": "post-build verify (build jobs, default ON)",
+   "originalText": "post-build verify (build jobs, default ON)",
+   "fontSize": 14,
+   "fontFamily": 3,
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#6d28d9",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 1,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 710003,
+   "version": 1,
+   "versionNonce": 710004,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "containerId": null,
+   "lineHeight": 1.25
+  },
+  {
+   "type": "text",
+   "id": "verify_body",
+   "x": 795,
+   "y": 528,
+   "width": 366,
+   "height": 80,
+   "text": "runs after the artifact's version snapshot,\nbefore the job completes:\nplaywright-cli, medium depth, incremental;\nverifying agent fixes forward in-budget;\ncan't fix -> complete + honest visible note",
+   "originalText": "runs after the artifact's version snapshot,\nbefore the job completes:\nplaywright-cli, medium depth, incremental;\nverifying agent fixes forward in-budget;\ncan't fix -> complete + honest visible note",
+   "fontSize": 12,
+   "fontFamily": 3,
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#374151",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 1,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 710005,
+   "version": 1,
+   "versionNonce": 710006,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "containerId": null,
+   "lineHeight": 1.25
+  },
+  {
+   "type": "arrow",
+   "id": "j_verify",
+   "x": 1000,
+   "y": 614,
+   "width": 0,
+   "height": 20,
+   "strokeColor": "#6d28d9",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 710007,
+   "version": 1,
+   "versionNonce": 710008,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "startBinding": {
+    "elementId": "verify",
+    "focus": 0,
+    "gap": 2
+   },
+   "endBinding": {
+    "elementId": "tl3",
+    "focus": 0,
+    "gap": 2
+   },
+   "startArrowhead": null,
+   "endArrowhead": "arrow"
   }
  ]
 }

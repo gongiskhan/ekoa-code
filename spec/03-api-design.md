@@ -21,12 +21,14 @@ This chapter is the complete REST resource map for the rebuilt Cortex API. It de
 |---|---|---|
 | `public` | `POST /auth/login`, `POST /auth/device`, `POST /auth/device/poll`, `GET /health`, `/api/demos*`, static assets (3.8.23) | none |
 | `user` | default for all `/api/v1` resources | Bearer JWT; user-scoped data access enforced in the data layer (uniform not-found on ownership mismatch, chapter 04) |
-| `admin` / `super-admin` | marked per endpoint | Bearer JWT + role claim (roles and scope strings carried from reference/invisible-behaviors.md section 1.3) |
+| `super-admin` / `org-admin` | marked per endpoint | Bearer JWT + role claim. Three roles total: `super-admin` (platform-wide), `org-admin` (org administration), and `builder` (the default `user`-class member). JWT claim set is `{sub, role, scope, orgId, username}` (orgId replaces companyId); roles and scope strings carried from reference/invisible-behaviors.md section 1.3, remapped to the three-role model per Amendment 2 |
 | `token-query` | the four SSE endpoints (3.6) | `?token=<JWT>` because EventSource cannot set headers (carried behavior; CONV-1) |
 | `HMAC` | `POST/GET /hooks/:triggerId` | provider signature verification; disabled-check after signature (410 signed / 401 unsigned, reference/invisible-behaviors.md section 12.2) |
 | `header-scoped` | served-app data plane (3.9) | `X-Ekoa-App-Id` header and/or per-app SSO cookie; deliberately no platform JWT (reference/data-inventory.md section 3.3) |
 | `optional-JWT` | the `/api/integration/:key/*` credential-injection proxy in 3.9 | JWT validated if present (invalid gives 401), absent proceeds for same-origin served apps (reference/invisible-behaviors.md section 1.2) |
 | `app-id-gated` | the `/api/m365/*` workspace Graph proxy in 3.9 | **RESOLVED (Q-10):** requires and verifies `X-Ekoa-App-Id` (slug-resolved, charset-checked, app exists and is served) plus a per-app manifest opt-in flag; optional JWT still validated if present; gate owned by chapter 09 section 9.4 |
+
+Every authenticated `/api/v1` request additionally passes an activation check: immediately after JWT verification and the revocation-list check (3.2), the auth middleware consults the cached activation state (an in-memory map with write-through invalidation, kept current by the toggle write; chapter 09). A deactivated account fails `403 ACCOUNT_DISABLED` and a billing-locked account `402 BILLING_LOCKED` (3.3), on every authenticated surface. This middleware is the first of three admission planes that consult the same activation state: the second is the served-app plane gate (3.9), keyed on the artifact owner's activation; the third is the bridge pairing plane (chapter 18), keyed on the pairing owner's activation. (Amendment 2, Part 3: founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md).)
 
 Token lifecycle rules:
 
@@ -53,8 +55,8 @@ Status conventions and carried special cases:
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | zod issues in `details.issues` |
 | 401 | `UNAUTHENTICATED`, `TOKEN_EXPIRED` | PT copy example: `"Sessão expirada. Inicie sessão novamente."` |
-| 402 | `BILLING_BLOCKED` | pre-run billing gate refusal on synchronous request-response entries (chapter 06 section 6.6.3); asynchronous run-creating entries have already returned `202` and surface the block as a terminal `error` event with the same code (chapter 05 section 5.2); PT copy: `"Limite de utilização atingido. Fale com o administrador ou aguarde o início do próximo período."` |
-| 403 | `FORBIDDEN` | role/scope failures; served-app allowlist rejections keep their PT messages (reference/invisible-behaviors.md section 8.10) |
+| 402 | `BILLING_BLOCKED`, `BILLING_LOCKED` | `BILLING_BLOCKED`: pre-run billing gate refusal on synchronous request-response entries (chapter 06 section 6.6.3); asynchronous run-creating entries have already returned `202` and surface the block as a terminal `error` event with the same code (chapter 05 section 5.2); PT copy: `"Limite de utilização atingido. Fale com o administrador ou aguarde o início do próximo período."`. `BILLING_LOCKED` (Amendment 2): account-level billing lock raised at admission by the activation planes (3.2, 3.9, chapter 18), distinct from period-allowance exhaustion; PT copy: `"A sua conta tem um problema de faturação. Contacte o suporte."` |
+| 403 | `FORBIDDEN`, `ACCOUNT_DISABLED` | role/scope failures; served-app allowlist rejections keep their PT messages (reference/invisible-behaviors.md section 8.10); `ACCOUNT_DISABLED` (Amendment 2) raised at admission when the account - or, on the served-app plane, the artifact owner - has `active=false` (3.2, 3.9, chapter 18); PT copy: `"A sua conta está bloqueada. Contacte o suporte."` |
 | 404 | `NOT_FOUND` | also returned on cross-user ownership mismatch (uniform not-found, chapter 04) |
 | 409 | `DAEMON_NOT_CONNECTED`, `DUPLICATE_BUILD`, `SLUG_TAKEN`, `MANIFEST_ID_MISMATCH` | daemon-not-connected on agent-face runs is load-bearing (reference/invisible-behaviors.md section 7.5); bundle-update mismatch drives the client force-confirm dialog (reference/operations-inventory.md section 8) |
 | 410 | `TRIGGER_DISABLED` | disabled trigger with valid signature (reference/invisible-behaviors.md section 12.2) |
@@ -196,35 +198,44 @@ Logout is a server-side operation under RESOLVED (P-03): `POST /auth/logout` rev
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
-| GET `/users` | -> `{ items: AuthUser[] }` | admin | `ekoa.users/list` |
-| POST `/users` | `CreateUserRequest {username, password, role}` -> `AuthUser` | super-admin | `ekoa.auth/create-user`; created with `passwordChangeRequired: true` |
-| DELETE `/users/:id` | -> `{ ok }` | admin | `ekoa.users/delete` |
+| GET `/users` | -> `{ items: AuthUser[] }` | super-admin / org-admin | `ekoa.users/list`; super-admin lists all orgs, org-admin its own org only |
+| POST `/users` | `CreateUserRequest {username, password, role, orgId?}` -> `AuthUser` | super-admin | `ekoa.auth/create-user`; created with `passwordChangeRequired: true`; `orgId` is part of the create contract - supplied, it places the user in that org; omitted, it auto-creates a new org with this user as its org-admin (Part 4) |
+| PATCH `/users/:id` | `UserPatch { role?, active? }` -> `AuthUser` | super-admin / org-admin | activation and role change; super-admin anywhere, org-admin scoped to its own org (role toggle between `builder` and `org-admin`, and deactivate only). Setting `active: false` also pushes every token of the user into the P-03 revocation set in the same write and updates the write-through activation map (3.2; chapter 09) |
+| DELETE `/users/:id` | -> `{ ok }` | super-admin | `ekoa.users/delete` |
 | POST `/users/:id/password` | `{ newPassword }` -> `{ ok }` | super-admin | `ekoa.auth/reset-password`; re-flags `passwordChangeRequired` |
 
-### 3.8.3 Teams - `/api/v1/teams` (section 3)
+### 3.8.3 Teams - removed by Amendment 2 (section 3)
+
+Teams are deleted end to end by Amendment 2: the `/api/v1/teams` endpoints, the web pages, the stores, and the tests are all removed (chapter 12 FC-039; glossary chapter 11: "teams -> deleted; departments, if ever demanded, return as additive groups inside an org"). The four dropped endpoints (`GET /teams`, `POST /teams`, `PATCH /teams/:id`, `DELETE /teams/:id`) are recorded in Appendix A. The section number is retained as a tombstone so later section numbers do not move (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
+
+### 3.8.4 Org and branding - `/api/v1/org`, `/api/v1/orgs`, `/api/v1/branding` (section 4)
+
+The schema/API name is `org` (permanent); the PT-PT display label stays "Escritório" (vertical copy). The old `/api/v1/company` resource is replaced by `/api/v1/org` - the caller's own org record incl. branding - and the web client is re-pointed in chapter 12 (FC-040). `orgId` scopes every row: `GET /org` and `PATCH /org` act on the caller's org (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
-| GET `/teams` | -> `{ items: TeamWithMemberCount[] }` | user | `list` |
-| POST `/teams` | `TeamCreateRequest` -> `Team` | admin | `create` |
-| PATCH `/teams/:id` | `TeamUpdateRequest` -> `Team` | admin | `update` (store-level today, no page caller - kept as conventional REST) |
-| DELETE `/teams/:id` | -> `{ ok }` | admin | `delete` |
+| GET `/org` | -> `OrgConfig` | user | `ekoa.company/get`; the caller's org record incl. branding |
+| PATCH `/org` | `OrgUpdateRequest` -> `OrgConfig` | org-admin | `ekoa.company/update` (kept; the read-only legacy path the client worked around disappears with the rebuild - reference/frontend-cleanup-audit.md FC-040) |
+| PUT `/branding` | `BrandingSaveRequest {branding, displayName?}` -> `OrgConfig` | org-admin | `save-branding`; org-scoped; logo rides as data URL in payload |
+| POST `/branding/research` | `{ websiteUrl }` -> `202 { jobId }` | org-admin | `start-research`; org-scoped - research overwrites only the caller's org record; progress via `GET /jobs/:id` + `/jobs/:id/events` (3.5); the client keeps its 3-minute silence watchdog, re-armed by typed events and stream reconnect (3.6; reference/frontend-cleanup-audit.md FC-034) |
 
-### 3.8.4 Company and branding - `/api/v1/company`, `/api/v1/branding` (section 4)
+Org management (super-admin, across orgs):
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
-| GET `/company` | -> `CompanyConfig` | user | `ekoa.company/get` |
-| PATCH `/company` | `CompanyUpdateRequest` -> `CompanyConfig` | admin | `ekoa.company/update` (kept; the read-only legacy path the client worked around disappears with the rebuild - reference/frontend-cleanup-audit.md FC-040) |
-| PUT `/branding` | `BrandingSaveRequest {branding, displayName?}` -> `CompanyConfig` | admin | `save-branding`; logo rides as data URL in payload |
-| POST `/branding/research` | `{ websiteUrl }` -> `202 { jobId }` | admin | `start-research`; progress via `GET /jobs/:id` + `/jobs/:id/events` (3.5); the client keeps its 3-minute silence watchdog, re-armed by typed events and stream reconnect (3.6; reference/frontend-cleanup-audit.md FC-034) |
+| POST `/orgs` | `OrgCreateRequest { name, displayName? }` -> `OrgConfig` | super-admin | create an org (Part 4); new; also created implicitly by a `POST /users` with an omitted `orgId` (3.8.2) |
+| GET `/orgs` | -> `{ items: OrgConfig[] }` | super-admin | list all orgs; new |
+| PATCH `/orgs/:id` | `OrgPatch { name?, displayName?, settings? }` -> `OrgConfig` | super-admin | rename / settings; new |
 
 ### 3.8.5 Settings - `/api/v1/settings` (section 5)
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
-| GET `/settings` | -> `PlatformSettings` | user | `get` |
-| PATCH `/settings` | deep-partial `PlatformSettingsPatch` -> `PlatformSettings` | admin | `update`; `integration.pipedreamEnabled` becomes a declared schema field (fixes the type drift recorded in ops-inventory section 5) |
+| GET `/settings` | -> `PlatformSettings` | user | `get`; merged view - org settings plus the caller's per-user toggles (ch04 `user_settings`) |
+| PATCH `/settings` | deep-partial `PlatformSettingsPatch` -> `PlatformSettings` | org-admin | `update` (org settings); `integration.pipedreamEnabled` becomes a declared schema field (fixes the type drift recorded in ops-inventory section 5) |
+| PATCH `/settings/me` | `UserSettingsPatch` -> `PlatformSettings` | user | new (Amendment 2); carries only per-user fields; writes the caller's `user_settings` record (ch04) and returns the merged view |
+
+Two per-user toggles ride the per-user settings store (chapter 04 `user_settings`), not org settings: `build.verifyBuilds` (default on; set once by the first-ever-build ask-once dialog, chapter 12 and Part 6) and `memory.autoExtract` (default on; P-12 re-resolved, 3.8.19). Both surface in the merged `GET /settings` view and are written only via `PATCH /settings/me`; `PATCH /settings` never touches them (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 ### 3.8.6 Sessions - `/api/v1/sessions` (section 6)
 
@@ -263,10 +274,10 @@ Logout is a server-side operation under RESOLVED (P-03): `POST /auth/logout` rev
 |---|---|---|---|
 | GET `/artifacts` | -> `ArtifactListResponse { items: Artifact[], featured: Artifact[] }` | user | `list-instances`; single shape (landmine 7) |
 | GET `/artifacts/:id` | -> `Artifact` | user | `get-instance` |
-| PATCH `/artifacts/:id` | `ArtifactPatch {name?, slug?, shareable?, data?}` -> `Artifact` | user | `update-instance`; slug validated, `409 SLUG_TAKEN` on collision |
+| PATCH `/artifacts/:id` | `ArtifactPatch {name?, slug?, shareable?, data?, visibility?: 'private' \| 'org'}` -> `Artifact` | user | `update-instance`; slug validated, `409 SLUG_TAKEN` on collision; `visibility` promotes/demotes org sharing (see below) |
 | DELETE `/artifacts/:id` | -> `{ ok }` | user | `delete-instance` |
 | POST `/artifacts/:id/fork` | `{ name? }` -> `{ id, slug }` | user | `fork-instance`; the popup-safe navigation stays client-side |
-| PUT `/artifacts/:id/featured` | `{ featured, featuredRank? }` -> `Artifact` | admin | `set-featured` |
+| PUT `/artifacts/:id/featured` | `{ featured, featuredRank? }` -> `Artifact` | super-admin | `set-featured`; featured-gallery curation is platform-wide (Amendment 2 role remap) |
 | GET `/artifacts/:id/export` | -> `ArtifactBundle` | user | `export-instance` |
 | POST `/artifacts/import` | `{ bundle }` -> `Artifact` | user | `import-instance` |
 | POST `/artifacts/:id/bundle-update` | `{ bundle, force? }` -> `{ artifact, safetyNetSnapshotId, preUpdateVersionId }` | user | `update-from-bundle`; `409 MANIFEST_ID_MISMATCH` without `force` |
@@ -279,6 +290,8 @@ Logout is a server-side operation under RESOLVED (P-03): `POST /auth/logout` rev
 | PUT `/artifacts/:id/file` | `{ path, content }` -> `{ path, size }` | user | `write-file`; commit-on-save path preserved |
 | GET `/artifacts/:id/download` | -> zip stream; `422 SECRET_GUARD_BLOCKED` | user | raw `GET /api/v1/artifacts/:id/download` (section 23) |
 | GET `/artifacts/:id/pdf` | -> `302` redirect to the rendered PDF under `/artifact-pdfs/` (3.8.23) | user | raw `GET /api/v1/artifacts/:instanceId/pdf` (reference/invisible-behaviors.md section 8.8); id charset-guarded because it becomes the output basename; rendering pipeline owned by chapter 07 section 7.12. The old route was registered without auth and has no client caller; the rebuild puts it under the default `/api/v1` JWT gate (3.2) - the app-facing export path stays `POST /api/app-pdf` (3.9), so served apps are unaffected |
+
+**Sharing semantics (`visibility`, Amendment 2).** `visibility: 'private' | 'org'` (default `private`) governs org sharing. An org-shared artifact is visible AND editable by every member of the owner's org - safe because git version snapshots + restore (the versions rows above) and the Registo (3.8.24) cover every mutation, so any edit is attributable and reversible. A private artifact is owner-only and invisible to org admins too: a read by anyone else returns a uniform `404 NOT_FOUND` (ownership-mismatch parity, chapter 04) and a write attempt returns `403 FORBIDDEN`. Promotion to `org` and demotion back to `private` are manual `PATCH /artifacts/:id { visibility }` calls by the owner (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 ### 3.8.10 App-data backups - `/api/v1/artifacts/:id/backups` (section 10)
 
@@ -325,10 +338,12 @@ One normalized param name (`artifactId`), fixing the inconsistency recorded in r
 | POST `/integrations/configs` | `{ integrationKey, configValues }` -> `IntegrationConfigSummary` | user | `create-config`; encrypted at rest (chapter 09) |
 | PATCH `/integrations/configs/:integrationKey` | `{ enabled?, configValues? }` -> `IntegrationConfigSummary` | user | `update-config` |
 | DELETE `/integrations/:key` | -> `{ ok }` | user | `delete-skill` |
-| POST `/integrations/refresh` | -> `{ count, keys: string[] }` | admin | `refresh-registry` (reload definitions from disk) |
+| POST `/integrations/refresh` | -> `{ count, keys: string[] }` | org-admin | `refresh-registry` (reload definitions from disk) |
 | GET `/integrations/:key/session` | -> `SessionCaptureStatus` | user | `session-status`; client polls every 2 s while `waiting_login` (stays polling per ops-inventory section 0.3) |
 | POST `/integrations/:key/session` | -> `{ started, session }` | user | `connect-session` (browser-session capture; prod gating message carried) |
 | POST `/integrations/:key/provision-automations` | -> `{ provisioned, created, updated, actions }` | user | `provision-automations` |
+
+**Org scoping (Amendment 2).** Integration configs and captured workspace credentials - including the Q-10 M365 workspace token (3.9) - are org-scoped: the old "`ownerUserId` undefined means global/admin-authored" nuance becomes org-scoped and org-admin-authored, held on the owner's org (Part 4). Registry refresh stays an org-admin operation (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 ### 3.8.14 Integration builder - `/api/v1/integration-builder` (section 13)
 
@@ -345,8 +360,8 @@ One normalized param name (`artifactId`), fixing the inconsistency recorded in r
 |---|---|---|---|
 | GET `/platform-integrations` | -> `{ items: [{provider, connected, email?}] }` | user | `list` |
 | GET `/platform-integrations/:provider` | -> `{ connected, email?, expiresAt? }` | user | `status` |
-| POST `/platform-integrations/:provider/connect` | -> `{ authUrl, state }` | admin | `connect`; opens the OAuth popup |
-| DELETE `/platform-integrations/:provider` | -> `{ ok }` | admin | `disconnect` |
+| POST `/platform-integrations/:provider/connect` | -> `{ authUrl, state }` | org-admin | `connect`; opens the OAuth popup; the workspace connection is org-scoped (Amendment 2) |
+| DELETE `/platform-integrations/:provider` | -> `{ ok }` | org-admin | `disconnect` |
 | GET `/api/v1/oauth/:provider/callback` | server-rendered page that `window.postMessage`s `{type: 'oauth-callback', provider, success}` to the opener | public (state-validated) | OAuth completion; **paths kept verbatim** - they are registered redirect URIs in the Google/Azure/Adobe consoles (section 14) |
 
 ### 3.8.16 Pipedream - `/api/v1/pipedream` (section 15)
@@ -355,8 +370,8 @@ One normalized param name (`artifactId`), fixing the inconsistency recorded in r
 |---|---|---|---|
 | GET `/pipedream` | -> `{ configured, enabled, accountCount }` | user | `status` |
 | GET `/pipedream/accounts` | -> `{ items: PipedreamAccount[] }` | user | `list-accounts` |
-| PUT `/pipedream/config` | `{ clientId, clientSecret, projectId, environment }` -> `{ id, configured }` | admin | `configure` |
-| DELETE `/pipedream/config` | -> `{ ok }` | admin | `remove-config` |
+| PUT `/pipedream/config` | `{ clientId, clientSecret, projectId, environment }` -> `{ id, configured }` | org-admin | `configure`; org-scoped integration credential (Amendment 2) |
+| DELETE `/pipedream/config` | -> `{ ok }` | org-admin | `remove-config` |
 | POST `/pipedream/connect-token` | -> `{ token, connectLinkUrl, expiresAt }` | user | `connect-token` |
 | DELETE `/pipedream/accounts/:accountId` | -> `{ ok }` | user | `disconnect-account` |
 
@@ -378,7 +393,7 @@ The enable/disable toggle rides `PATCH /settings` (`integration.pipedreamEnabled
 |---|---|---|---|
 | GET `/automations` | -> `{ items: Automation[] }` | user | `list` |
 | GET `/automations/:id` | -> `Automation` | user | `get` |
-| POST `/automations` | `AutomationCreateRequest` -> `Automation` | user | `create` |
+| POST `/automations` | `AutomationCreateRequest` -> `Automation` | org-admin* | `create`; *org-admin-only is a flippable org-setting default - when the org enables builder authoring, `builder` may create too (Part 4) |
 | PATCH `/automations/:id` | `AutomationPatch` -> `Automation` | user | `update` |
 | DELETE `/automations/:id` | -> `{ ok }` | user | `delete` |
 | POST `/automations/plan` | `{ goal, name?, automationId?, language? }` -> `PlanResponse { plan, automation?, runId?, rehearsing? }` | user | `plan-from-goal`. Carries `language?` per 3.4 - the plan text is user-visible model output (chapter 12 section 12.2.3 flags this request for the language interceptor). **Landmine 9 made explicit:** this call persists the automation AND starts a rehearsal run; the response names both side effects (`automation`, `runId`), and the run streams at `/automations/runs/:id/events`. `awaiting_integration` plan status carried |
@@ -394,18 +409,20 @@ The enable/disable toggle rides `PATCH /settings` (`integration.pipedreamEnabled
 | GET `/automations/approved-commands` | -> `{ items: ApprovedCommand[] }` | user | `list-approved-commands` |
 | POST `/automations/approved-commands/revoke` | `{ shape }` -> `{ revoked, remaining }` | user | `revoke-approved-command` (shapes are free strings, so revoke-by-body rather than a path param) |
 
+**Org scoping (Amendment 2).** Automations, their triggers, and their runs are org-scoped and owned by their creator; a run is visible to its owner and to the org's admins (the Registo read surface, 3.8.24). Automation creation is org-admin-only by default, a flippable org setting (Part 4; founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
+
 The `/settings/bridge` page is linked into the settings navigation and extended into a "Privacidade e ponte local" surface (bridge status/pairing, active grants with revoke, live local ledger viewer, masking summary, and the absorbed approved-commands list); chapter 12 owns that UI (RESOLVED (Q-07)). The approved-commands endpoints above stay on this resource - the settings page consumes `GET /automations/approved-commands` and `POST /automations/approved-commands/revoke` rather than owning a parallel surface, and the bridge status/pairing rows it renders read the ekoa-local surfaces of 3.10 and chapter 18.
 
 ### 3.8.19 Memories - `/api/v1/memories` (section 18)
 
-Scope note: v1 memory surface is CRUD + resolver injection; auto-extract ships off by default (**RESOLVED (P-12)**, owned by chapter 05).
+Scope note: the v1 memory surface is CRUD + resolver injection, with a `visibility: 'private' | 'org'` field (default `private`): the resolver injects the caller's own memories plus the org-shared ones; promotion/demotion is a manual owner toggle via `PATCH /memories/:id` (below). **RESOLVED (P-12), re-resolved 2026-07-06:** automatic memory extraction ships ON - asynchronous post-run (never adds turn latency), FAST tier (Haiku-class), batched one call per run, attributed `user_work` with agentType `memory-extract` billed to the run's user, hosted agent runs only, and it always writes `visibility: 'private'` (sharedness is never inferred). The per-user toggle `memory.autoExtract` defaults ON (3.8.5). Every automatic write is visible: a Registo entry (3.8.24) plus a UI affordance (chapter 12). Chapter 05 owns the extraction mechanics (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
 | GET `/memories?type&scope&visibility&tags&search&limit&offset&sortBy&sortOrder` | -> `{ items: Memory[], total }` | user | `list` |
 | GET `/memories/:id` | -> `Memory` | user | `get` (uncalled client fn today; kept as conventional resource read per FIXED-10) |
 | POST `/memories` | `MemoryCreateRequest` -> `Memory` | user | `create` (incl. guardrail creation: `{type: 'preference', tier: 'core', tags: ['guardrail']}`) |
-| PATCH `/memories/:id` | `MemoryPatch` (incl. `verified?`, `tier?`) -> `Memory` | user | `update` |
+| PATCH `/memories/:id` | `MemoryPatch` (incl. `verified?`, `tier?`, `visibility?: 'private' \| 'org'`) -> `Memory` | user | `update`; `visibility` promotes/demotes org sharing (scope note above) |
 | DELETE `/memories/:id` | -> `{ ok }` | user | `delete` |
 | POST `/memories/bulk-delete` | `{ ids }` -> `{ ok }` | user | `bulk-delete` |
 | POST `/memories/signals` | `{ runId, signal: 'positive'\|'negative' }` -> `{ affectedMemories, adjustedScores }` | user | `submit-signal` (keyed by run id) |
@@ -415,6 +432,8 @@ Scope note: v1 memory surface is CRUD + resolver injection; auto-extract ships o
 ### 3.8.20 Knowledge - `/api/v1/knowledge` (section 19)
 
 No human search endpoint by design; agents consume search/read via in-process tools, not REST (chapter 05/08; reference/operations-inventory.md C3).
+
+**Org partitioning (Amendment 2).** The knowledge base is org-partitioned - vault and lexical index alike - so a firm's documents never pool across orgs (Part 4); the CRUD rows below act within the caller's org, and the admin heal operations are org-admin (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 | Method + path | Request -> Response | Auth | Replaces / notes |
 |---|---|---|---|
@@ -432,8 +451,8 @@ No human search endpoint by design; agents consume search/read via in-process to
 | GET `/knowledge/uploads` | -> `{ items: UploadDoc[] }` | user | `list-uploads` |
 | POST `/knowledge/uploads` | raw file body + `X-Filename`, `X-Collection` -> `{ uploadId, ... }` | user | raw `POST /api/v1/knowledge/upload`; 50 MB default limit, path-scoped 413 with PT message |
 | DELETE `/knowledge/uploads/:id` | -> `{ removed, docsRemoved }` | user | `unindex-document` |
-| POST `/knowledge/reindex` | -> `202 { started }` | admin | backend-only heal operation kept as an admin endpoint (C3) |
-| GET `/knowledge/index-status` | -> `IndexStatus` | admin | backend-only, kept for ops (C3) |
+| POST `/knowledge/reindex` | -> `202 { started }` | org-admin | backend-only heal operation kept as an org-admin endpoint (C3) |
+| GET `/knowledge/index-status` | -> `IndexStatus` | org-admin | backend-only, kept for ops (C3) |
 
 ### 3.8.21 Billing - `/api/v1/billing` (section 20)
 
@@ -444,10 +463,10 @@ No human search endpoint by design; agents consume search/read via in-process to
 | GET `/billing/breakdown` | -> `{ items: [{agentType, tokens, percentage}] }` | super-admin | `get-breakdown` |
 | POST `/billing/credits` | `{ amountUsd }` -> `{ success, newBalance }` | user | `purchase-credits` |
 | PUT `/billing/overage` | `{ enabled }` -> `{ overageEnabled }` | user | `toggle-overage` |
-| PUT `/billing/admin/overage` | `{ enabled }` -> `{ globalOverageEnabled }` | admin | `admin-global-overage` |
-| GET `/billing/admin/usage` | -> `{ items: AdminUsageRow[] }` | admin | `admin-list-usage` |
-| POST `/billing/admin/usage/:userId/reset` | -> `{ userId, tokensUsed }` | admin | `admin-reset-usage` |
-| PUT `/billing/admin/limits/:userId` | `{ tokenLimit: number \| null }` -> `{ userId, tokenLimit }` | admin | `admin-set-limit` |
+| PUT `/billing/admin/overage` | `{ enabled }` -> `{ globalOverageEnabled }` | super-admin | `admin-global-overage`; platform billing administration (Amendment 2 role remap) |
+| GET `/billing/admin/usage` | -> `{ items: AdminUsageRow[] }` | super-admin | `admin-list-usage` |
+| POST `/billing/admin/usage/:userId/reset` | -> `{ userId, tokensUsed }` | super-admin | `admin-reset-usage` |
+| PUT `/billing/admin/limits/:userId` | `{ tokenLimit: number \| null }` -> `{ userId, tokenLimit }` | super-admin | `admin-set-limit` |
 
 ### 3.8.22 Uploads - `/api/v1/uploads` (section 23)
 
@@ -464,11 +483,21 @@ No human search endpoint by design; agents consume search/read via in-process to
 | GET `/brand-assets/:filename` | public | header logo and research-cached brand images |
 | GET `/artifact-screenshots/*`, `/automation-screenshots/*`, `/template-screenshots/*` | public | static images with CORS + cache headers (reference/frontend-cleanup-audit.md FC-065) |
 | GET `/artifact-pdfs/*` | public | rendered artifact PDF exports, served statically with CORS + 1 h cache (reference/invisible-behaviors.md section 8.8); written by the render pipeline (chapter 07 section 7.12); retention decided with P-09 (chapter 04) |
-| GET `/api/design-tokens.css` | public | brand tokens stylesheet; every served app links it before its bundle - a product contract with its own test gate (reference/test-audit.md section 5.3) |
+| GET `/api/design-tokens.css` | public | brand tokens stylesheet; every served app links it before its bundle - a product contract with its own test gate (reference/test-audit.md section 5.3). The org is resolved server-side from the app's slug: the org's brand tokens are served when brand research exists, the platform default design system otherwise (never the vendor's brand); the URL and byte-contract are unchanged, so the 37 legal e2e specs do not move (Amendment 2, Part 4) |
+
+### 3.8.24 Registo - `/api/v1/registo` (org activity read surface, Amendment 2)
+
+The Registo is the org-scoped activity read surface un-deferred by Amendment 2: a minimal read over the single audit write path (chapter 09 invariant 3), returning metadata rows only - who did what, when, and usage per user - and never chat or message bodies (content-level oversight is an explicit future decision, not a default).
+
+| Method + path | Request -> Response | Auth | Notes |
+|---|---|---|---|
+| GET `/registo?userId&type&from&to&limit&offset` | -> `{ items: RegistoEntry[], total }` | org-admin / super-admin | org-admin reads its own org; super-admin may pass `?orgId=` to read across orgs (omitted = all). `RegistoEntry` carries actor, action type, timestamp, target ids, and usage counts - metadata only, never message content |
+
+This un-defers only the minimal read surface over the existing audit write path; the single write path is unchanged (FIXED-8, chapter 09 invariant 3). Registo reads are themselves access-logged (founder, 2026-07-06 (amendment 2, consolidated ledger, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md)).
 
 ## 3.9 Served-app data plane (byte-compatible, paths outside `/api/v1`)
 
-**FIXED (FIXED-5 for the data engine; FIXED-9 for scope):** every route in the table below is preserved **byte-compatibly** - same paths, same headers, same cookie names and paths, same response shapes, and the same `window.__ekoa` / `__EKOA_APP_ID` context injection into served HTML. The 37-spec legal Playwright suite and all featured apps drive these surfaces directly with no frontend and no JWT; if any shape changes, that entire suite and every built app breaks (reference/test-audit.md section 2.4). Chapter 04 owns the collections engine behind `/api/app-data`; chapter 07 owns serving/injection. This chapter fixes the wire surface. One deliberate deviation from byte-compatibility: the `/api/m365/*` workspace Graph proxy now requires an `X-Ekoa-App-Id` header and a per-app manifest opt-in flag (RESOLVED (Q-10)); the sweep of which existing served apps must add the header before the gate flips on is a cutover checklist item (chapter 10).
+**FIXED (FIXED-5 for the data engine; FIXED-9 for scope):** every route in the table below is preserved **byte-compatibly** - same paths, same headers, same cookie names and paths, same response shapes, and the same `window.__ekoa` / `__EKOA_APP_ID` context injection into served HTML. The 37-spec legal Playwright suite and all featured apps drive these surfaces directly with no frontend and no JWT; if any shape changes, that entire suite and every built app breaks (reference/test-audit.md section 2.4). Chapter 04 owns the collections engine behind `/api/app-data`; chapter 07 owns serving/injection. This chapter fixes the wire surface. One deliberate deviation from byte-compatibility: the `/api/m365/*` workspace Graph proxy now requires an `X-Ekoa-App-Id` header and a per-app manifest opt-in flag (RESOLVED (Q-10)); the sweep of which existing served apps must add the header before the gate flips on is a cutover checklist item (chapter 10). One further admission check is layered on without changing any wire shape: this plane (the second of the three admission planes, 3.2) consults the artifact owner's activation state, so a deactivated owner's apps refuse service with the CONV-2 error envelope (`403 ACCOUNT_DISABLED` or `402 BILLING_LOCKED`, 3.3); byte-compatibility of the routes themselves is otherwise untouched (Amendment 2, Part 3).
 
 | Surface | Routes | Gate | Reference |
 |---|---|---|---|
@@ -509,7 +538,7 @@ These serve the ekoa-local daemon and TUI, not the web frontend. FIXED-1 keeps e
 
 **RESOLVED (P-18): agent-face event delivery channel.** Agent-face results surface as SSE events on a compatibility stream at `GET /api/v1/events?token=` that serves **only** agent-face/TUI traffic (run events for the caller's agent-face runs plus the connection ack); the web client never uses it, and ekoa-local is left untouched (its client code is out of scope, FIXED-1). This is the single surviving use of the old global `/api/v1/events` path, scoped to TUI traffic and documented here rather than in the web protocol (3.6); it does not count against the four-SSE-endpoint rule (CONV-4), which governs web clients. Rejected alternative: migrate ekoa-local to per-run streams (`GET /api/v1/agent-face/runs/:id/events`, mirroring 3.6.1) and delete the legacy endpoint - cleaner, but it requires coordinated ekoa-local changes that FIXED-1 declares out of scope. Resolved: ACCEPT (recommendation final - TUI-only compatibility SSE channel `GET /api/v1/events`), founder, 2026-07-06 (amendment brief, docs/ekoa-code-spec-amendment-brief.md).
 
-**Daemon-side surfaces owned by chapter 18.** Two daemon-facing surfaces are named on this plane but specified in chapter 18. The **bridge channel** (the single outbound WebSocket the ekoa-local daemon dials to Cortex - carve-out 1 in 3.7 and the `/api/v1/bridge/*` row above) is daemon-to-Cortex transport, explicitly outside this chapter's frontend-to-API protocol rules; its pairing-token auth, presence heartbeat, tenant-scoped pairing registry, and revoke kill switch are specified in chapter 18 section 18.3. The **Anthropic-compatible provider endpoint** that carries bridge traffic routes through the LLM chokepoint with session-identity propagation and pairing-bound auth; it is specified in chapter 18 section 18.4. Both sit OUTSIDE the four SSE streams and the REST resource surface of this chapter (CONV-4 unchanged): they are neither web-client REST resources nor one of the four typed SSE endpoints, and no frontend protocol rule here governs them.
+**Daemon-side surfaces owned by chapter 18.** Two daemon-facing surfaces are named on this plane but specified in chapter 18. The **bridge channel** (the single outbound WebSocket the ekoa-local daemon dials to Cortex - carve-out 1 in 3.7 and the `/api/v1/bridge/*` row above) is daemon-to-Cortex transport, explicitly outside this chapter's frontend-to-API protocol rules; its pairing-token auth, presence heartbeat, org-scoped pairing registry, and revoke kill switch are specified in chapter 18 section 18.3. The **Anthropic-compatible provider endpoint** that carries bridge traffic routes through the LLM chokepoint with session-identity propagation and pairing-bound auth; it is specified in chapter 18 section 18.4. Both sit OUTSIDE the four SSE streams and the REST resource surface of this chapter (CONV-4 unchanged): they are neither web-client REST resources nor one of the four typed SSE endpoints, and no frontend protocol rule here governs them.
 
 ## 3.11 Landmine register (reference/operations-inventory.md section 25, addressed)
 
@@ -538,6 +567,9 @@ These serve the ekoa-local daemon and TUI, not the web frontend. FIXED-1 keeps e
 6. The served-app plane passes the ported 37-spec legal suite unchanged at the helper level (reference/test-audit.md section 2.4).
 7. Every non-2xx response body validates against the shared error envelope schema.
 8. No occurrence of the retired transport endpoints (`/api/v1/action`, `/api/v1/request`, `/api/v1/request/cancel`) in the implementation, except the RESOLVED (P-18) TUI compatibility channel at `/api/v1/events`.
+9. No `teams` route exists in the implementation (route census; the four `/teams` operations appear only in Appendix A), and the Amendment 2 routes `GET`/`PATCH /org`, `POST`/`GET /orgs`, `PATCH /orgs/:id`, `GET /registo`, and `PATCH /settings/me` (3.8.4, 3.8.24, 3.8.5) are present.
+10. The two Amendment 2 error codes `ACCOUNT_DISABLED` (403) and `BILLING_LOCKED` (402) appear both in the 3.3 status table and in `shared/errors.ts`.
+11. `visibility` (`'private' | 'org'`) is present in the shared memory and artifact schemas (`Memory`/`MemoryPatch`, `Artifact`/`ArtifactPatch`), and no auth cell in 3.8 carries a bare `admin` class (every one resolves to `user`, `org-admin`, or `super-admin`).
 
 ## Appendix A. Dropped operations
 
@@ -587,6 +619,17 @@ Expected drops are the orphans and dead client surface recorded in reference/ope
 | `POST /api/apps/:appId/compile` | machinery of the retired runtime-interpreted layer; nothing to recompile in the rebuild (FIXED-4) |
 | `GET /api/v1/upload/test` | dev-only write probe; replaced by boot-time upload-dir validation |
 
+**Deleted by Amendment 2 (docs/ekoa-code-spec-amendment-2-consolidated-ledger.md):**
+
+| Operation | Reason |
+|---|---|
+| `list` (`GET /teams`) | teams deleted end to end by Amendment 2; departments, if ever demanded, return as additive groups inside an org (glossary chapter 11) |
+| `create` (`POST /teams`) | teams deleted end to end by Amendment 2; departments, if ever demanded, return as additive groups inside an org (glossary chapter 11) |
+| `update` (`PATCH /teams/:id`) | teams deleted end to end by Amendment 2; departments, if ever demanded, return as additive groups inside an org (glossary chapter 11) |
+| `delete` (`DELETE /teams/:id`) | teams deleted end to end by Amendment 2; departments, if ever demanded, return as additive groups inside an org (glossary chapter 11) |
+
 **Amendment record.** Amended 2026-07-06 per founder resolutions and the anonymisation/local-file-access amendment (docs/ekoa-code-spec-amendment-brief.md).
+
+Amended again 2026-07-06 per the consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md): the auth-class table adopts the three-role model (`super-admin`, `org-admin`, `builder`) with the JWT claim set `{sub, role, scope, orgId, username}`, and the auth middleware consults a cached activation state (write-through in-memory map) as the first of three admission planes (3.2); the error table gains `ACCOUNT_DISABLED` (403) and `BILLING_LOCKED` (402) (3.3); Users (3.8.2) gain a create-time `orgId`, a scoped `PATCH /users/:id { role?, active? }` (deactivation revokes tokens and updates the activation map), and super-admin/org-admin scoping; Teams (3.8.3) are removed to a tombstone with the four endpoints dropped to Appendix A; Company/branding (3.8.4) becomes Org/branding - `/company` -> `/org` plus the super-admin `/orgs` management surface; Settings (3.8.5) gain the per-user `PATCH /settings/me` and the two per-user toggles; artifact (3.8.9) and memory (3.8.19) patches gain `visibility: 'private' | 'org'` with sharing semantics, and P-12 is re-resolved to auto-extract ON; integrations (3.8.13), automations (3.8.18), and knowledge (3.8.20) are org-scoped; a new Registo read surface is added (3.8.24); `design-tokens.css` (3.8.23) resolves the org server-side from the app's slug; the served-app plane (3.9) consults the owner's activation, and the bridge pairing registry (3.10) is org-scoped; and every remaining bare `admin` auth class is remapped to `org-admin` (org-scoped resources: platform-integrations, pipedream, knowledge heal ops, integrations refresh) or `super-admin` (platform-wide: featured-gallery curation, billing administration).
 
 *End of chapter 03.*

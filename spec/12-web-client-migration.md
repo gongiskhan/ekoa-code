@@ -1,6 +1,6 @@
 # 12. Web client migration
 
-This chapter specifies how the existing Next.js frontend (`ekoa/`) moves into the new repository as `web/` (FIXED-1, FIXED-9): the migration approach (copy, then staged replacement), the design of the typed REST client and the event-stream client that replace the old transport layer, the complete replacement map for every wire-protocol touchpoint (FC-001..FC-069), and the disposition of every dead-code, legacy-assumption, and stale item (FC-100..FC-139, FC-200..FC-210, FC-300..FC-312). Ground truth is reference/frontend-cleanup-audit.md; endpoint names come from chapter 03. Every FC id in the audit receives exactly one fate here: 134 items in total (69 protocol touchpoints, 41 dead-code items, 11 legacy-backend-assumption items, 13 stale items). The UI is the functional contract, not the wire contract (FIXED-9): behavior is preserved except where a row below explicitly says otherwise. The 2026-07-06 amendment (founder resolutions and the anonymisation/local-file-access amendment, docs/ekoa-code-spec-amendment-brief.md) adds one net-new block on top of the audit: the local file access and privacy web surfaces of section 12.6 (FC-400..FC-412), which are built rather than migrated and are counted separately from the 134 audit items.
+This chapter specifies how the existing Next.js frontend (`ekoa/`) moves into the new repository as `web/` (FIXED-1, FIXED-9): the migration approach (copy, then staged replacement), the design of the typed REST client and the event-stream client that replace the old transport layer, the complete replacement map for every wire-protocol touchpoint (FC-001..FC-069), and the disposition of every dead-code, legacy-assumption, and stale item (FC-100..FC-139, FC-200..FC-210, FC-300..FC-312). Ground truth is reference/frontend-cleanup-audit.md; endpoint names come from chapter 03. Every FC id in the audit receives exactly one fate here: 134 items in total (69 protocol touchpoints, 41 dead-code items, 11 legacy-backend-assumption items, 13 stale items). The UI is the functional contract, not the wire contract (FIXED-9): behavior is preserved except where a row below explicitly says otherwise. The 2026-07-06 amendment (founder resolutions and the anonymisation/local-file-access amendment, docs/ekoa-code-spec-amendment-brief.md) adds one net-new block on top of the audit: the local file access and privacy web surfaces of section 12.6 (FC-400..FC-412), which are built rather than migrated and are counted separately from the 134 audit items. The consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md) adds a second net-new block - the org, activation, Registo, sharing, and verification surfaces of section 12.9 (FC-500..FC-509), likewise built rather than migrated and counted outside the 134 audit items - and flips FC-039 Teams from migrate to delete within the audit set.
 
 ## 12.1 Migration approach: copy, then staged replacement
 
@@ -47,14 +47,16 @@ export const authEndpoints = {
 
 ```ts
 export const api = createClient({
-  auth: authEndpoints, users: usersEndpoints, teams: teamsEndpoints, company: companyEndpoints,
+  auth: authEndpoints, users: usersEndpoints, org: orgEndpoints, orgs: orgsEndpoints,
   branding: brandingEndpoints, settings: settingsEndpoints, sessions: sessionsEndpoints,
   chat: chatEndpoints, jobs: jobsEndpoints, artifacts: artifactsEndpoints,
   companySpace: companySpaceEndpoints, integrations: integrationsEndpoints,
   integrationBuilder: integrationBuilderEndpoints, platformIntegrations: platformIntegrationsEndpoints,
   pipedream: pipedreamEndpoints, triggers: triggersEndpoints, automations: automationsEndpoints,
   memories: memoriesEndpoints, knowledge: knowledgeEndpoints, billing: billingEndpoints,
-  uploads: uploadsEndpoints, notifications: notificationsEndpoints, demos: demosEndpoints,
+  uploads: uploadsEndpoints, notifications: notificationsEndpoints, registo: registoEndpoints,
+  demos: demosEndpoints,
+  // teams removed end to end (Amendment 2); company -> org (renamed resource, 3.8.4)
 });
 // api.auth.login({...}): Promise<LoginResponse>  - fully typed from shared/
 ```
@@ -179,10 +181,10 @@ Coverage summary (auditable against reference/frontend-cleanup-audit.md section 
 |---|---|---|---|---|---|
 | 12.4.1 Core transport | FC-001..FC-025 | 25 | 10 | 12 | 3 |
 | 12.4.2 Stream consumers | FC-026..FC-036 | 11 | 5 | 2 | 4 |
-| 12.4.3 Domain calls | FC-037..FC-059 | 23 | 19 | 4 | 0 |
+| 12.4.3 Domain calls | FC-037..FC-059 | 23 | 18 | 4 | 1 |
 | 12.4.4 Raw HTTP | FC-060..FC-065 | 6 | 5 | 1 | 0 |
 | 12.4.5 Token and identity | FC-066..FC-069 | 4 | 1 | 3 | 0 |
-| Total | | 69 | 40 | 22 | 7 |
+| Total | | 69 | 39 | 22 | 8 |
 
 ### 12.4.1 Core transport (audit section 1.1)
 
@@ -236,9 +238,9 @@ Coverage summary (auditable against reference/frontend-cleanup-audit.md section 
 |---|---|---|---|
 | FC-037 | Auth calls (login, change-password, identity, device approve, admin create/reset) | migrate | 3.8.1 + 3.8.2 (`POST /auth/login`, `POST /auth/password`, `GET /auth/me`, `POST /auth/device/approve`, `POST /users`, `POST /users/:id/password`); sign-out gains a real server call - `POST /auth/logout` revokes the current token (RESOLVED (P-03), 3.8.1) before the accessor clears it; decided per the audit's sub-note: `login()` no longer sets the token as a side effect - the auth store calls `api.auth.login` then `setToken`, and the logout action calls `api.auth.logout` then `clearToken` |
 | FC-038 | Users list/delete | migrate | `GET /users`, `DELETE /users/:id` (3.8.2) |
-| FC-039 | Teams CRUD | migrate | `/teams` (3.8.3) |
-| FC-040 | Company get/update (legacy read-only write path bypassed) | clean | `GET /company`, `PATCH /company` (3.8.4); the workaround comment and bypass disappear - writes are first-class |
-| FC-041 | Branding save + research start | migrate | `PUT /branding`, `POST /branding/research` (3.8.4) |
+| FC-039 | Teams CRUD | delete | Teams deleted end to end by Amendment 2: the teams pages, store, client functions, locale sections, and tests are all removed; the `/teams` endpoints no longer exist (ch03 3.8.3 tombstone, Appendix A; glossary chapter 11). Grep gate at 12.8 criterion 17 |
+| FC-040 | Company get/update (legacy read-only write path bypassed) | clean | Re-pointed to the renamed `org` resource: `GET /org`, `PATCH /org` (3.8.4) via `api.org.get`/`api.org.update`; the UI label "Escritório" is unchanged; the workaround comment and bypass disappear - writes are first-class |
+| FC-041 | Branding save + research start | migrate | `PUT /branding`, `POST /branding/research` (3.8.4) via `api.branding.*`, org-scoped (org-admin) |
 | FC-042 | Integrations live subset (definitions, active catalog, configs, sessions, provisioning) | migrate | 3.8.13; the trigger picker reads `GET /integrations/active`; session-capture status stays client-polled every ~2 s (ch03 keeps it request-response); vocabulary decision under FC-207 |
 | FC-043 | Integration-builder chat/load/save/test with long timeouts | migrate | 3.8.14; timeouts become descriptor-level settings (300 s / 60 s, 3.4); save success arrives as `integration_ready` on the notifications stream |
 | FC-044 | Settings get/update + two debounce-bypassing writers | clean | `GET /settings`, `PATCH /settings` (3.8.5); decided: all settings writes go through the settings store's single debounced writer - the platform page's inline call and the pipedream store's cross-domain write are re-pointed to the store action (same wire effect, one write path; FIXED-9 behavior-preserving) |
@@ -247,7 +249,7 @@ Coverage summary (auditable against reference/frontend-cleanup-audit.md section 
 | FC-047 | App-data backups (status/download/preview/snapshot/restore) | migrate | `/artifacts/:id/backups` (3.8.10); keyed by artifact id, server resolves the data scope |
 | FC-048 | Artifact backend panel (status/logs/invocations/enable/sample) | migrate | `/artifacts/:id/backend` (3.8.11) |
 | FC-049 | Sessions live subset (create incl. onboarding type, list, messages, rename, touch, delete) | migrate | `/sessions` + `/sessions/:id/messages` (3.8.6); touch = empty `PATCH` stamping `updatedAt` (carried) |
-| FC-050 | Memory CRUD + thumbs signal + tags/stats | migrate | `/memories` (3.8.19); signals keyed by `runId` (3.8.19); scope per **P-12** (CRUD + resolver injection in v1); semantics assumption recorded at FC-209 |
+| FC-050 | Memory CRUD + thumbs signal + tags/stats | migrate | `/memories` (3.8.19); signals keyed by `runId` (3.8.19); scope per **P-12 as re-resolved 2026-07-06** - CRUD + resolver injection plus automatic extraction ON by default (async post-run, per-run, FAST tier, always writes `private`), with the per-user `memory.autoExtract` toggle (FC-504) and the `visibility` field (FC-503); semantics assumption recorded at FC-209 |
 | FC-051 | Automations surface (CRUD, plan-from-goal, runs, consent, feedback, catalog, approved commands) | migrate | 3.8.18; plan response names both side effects (`automation`, `runId`) so the store's rehearsal handling becomes explicit; run cancel/resume keyed by run id; approved-commands list/revoke carried (their page is FC-101/**Q-07**) |
 | FC-052 | Knowledge vault surface (collections, documents, sources, crawl, uploads, schedule) | migrate | 3.8.20; crawl status stays client-polled |
 | FC-053 | Billing user + admin surface | migrate | 3.8.21; backs the billing settings page and the hidden `/usage` admin page (FC-102) |
@@ -297,6 +299,7 @@ Decision register for this chapter (each decided item, for founder scan; none is
 | Keep the no-mode-picker guard test, simplified in the same pass as the locale deletion | 12.5.3 FC-306 | audit recommendation made concrete |
 | Accepted visible changes are exactly three: awaited run id on chat send (FC-013), usage gauge updates on completion only (FC-033), builder busy state instead of streamed prose (FC-035) | 12.4 | FIXED-9 escape hatch, named explicitly |
 | RESOLVED (Q-07, founder, 2026-07-06): `/settings/bridge` linked into settings navigation and absorbed into the "Privacidade e ponte local" surface; write-only demo-cards state deleted (final) | 12.5.1 FC-101/FC-120; 12.6 | amendment brief (docs/ekoa-code-spec-amendment-brief.md) |
+| Amendment 2 (founder, 2026-07-06): Teams deleted end to end (FC-039 flips migrate->delete); the company store and calls re-point to the renamed `org` resource (`api.org.*`, `GET /org`, `PATCH /org`; UI label "Escritório" unchanged) | 12.4.3 FC-039/FC-040; 12.9 | consolidated-ledger amendment (docs/ekoa-code-spec-amendment-2-consolidated-ledger.md) |
 
 ### 12.5.1 Dead code and UI (FC-100..FC-139)
 
@@ -435,16 +438,16 @@ The specific claim strings these sections render are the licensed A6 texts, carr
 | FC | Surface | Fate | Detail |
 |---|---|---|---|
 | FC-411 | First-time grant dialog | build | Shown at the point of consent when a Reference grant is first created. One line (verbatim, v2 A7.2): "Esta autorização permite ao agente ler [pasta/ficheiro] durante esta sessão. Pode revogar a qualquer momento em Definições → Privacidade e ponte local." ([pasta/ficheiro] is filled with the chosen target) |
-| FC-412 | One-time onboarding card (legal tenants) | build | For Ekoa Legal tenants, a single dismissible card on first use introduces the two-boundary model (diagram 10) in plain language; not a tour, one card; reachable again from the settings privacy surface (FC-404). Card copy is ceiling-bound to chapter 17 section 17.9's A1 lists and ship-gated |
+| FC-412 | One-time onboarding card (legal orgs) | build | For Ekoa Legal orgs, a single dismissible card on first use introduces the two-boundary model (diagram 10) in plain language; not a tour, one card; reachable again from the settings privacy surface (FC-404). Card copy is ceiling-bound to chapter 17 section 17.9's A1 lists and ship-gated |
 
 Not touched here (carried from v2 A7.2/A8): the automations/executor consent surfaces (`local_command` approvals) belong to a different track and are out of scope for this section; the same claims ladder should extend there eventually (noted, not built). Website surfaces are a separate brief.
 
 ## 12.7 Explicitly out of scope
 
-- **No visual redesign (FIXED-9).** Layout, styling, component structure, and copy are unchanged except where a row above names a visible consequence (FC-033 gauge timing, FC-035 builder busy state), a deletion removes a dead surface, or section 12.6 adds a net-new amendment surface (the local file access and privacy web surfaces are new components, not a redesign of existing ones). PT-PT copy is carried as-is.
-- **No route restructuring beyond the deletions in FC-100 and the Q-07 navigation link.** Live routes keep their paths; no pages move, merge, or split. The one navigation change (FC-101) is now decided, not a candidate: RESOLVED (Q-07) links `/settings/bridge` and absorbs it into the "Privacidade e ponte local" surface (12.6).
+- **No visual redesign (FIXED-9).** Layout, styling, component structure, and copy are unchanged except where a row above names a visible consequence (FC-033 gauge timing, FC-035 builder busy state), a deletion removes a dead surface, or sections 12.6 and 12.9 add net-new amendment surfaces (the local file access/privacy surfaces and the org/activation/Registo/sharing/verification surfaces are new components, not a redesign of existing ones - and the FC-505 verification banner is a new surface, not a changed behavior, so it is not in the accepted-visible-changes list). PT-PT copy is carried as-is.
+- **No route restructuring beyond the named changes.** Live routes keep their paths; no pages move, merge, or split, except: the FC-100 stub deletions; the Q-07 navigation link; the teams pages removed end to end (FC-039, Amendment 2); and the net-new Amendment 2 surfaces (the org management and Registo admin pages of section 12.9 and the privacy surface of section 12.6). The one navigation change (FC-101) is now decided, not a candidate: RESOLVED (Q-07) links `/settings/bridge` and absorbs it into the "Privacidade e ponte local" surface (12.6).
 - **No state-management rework.** Zustand stores keep their shapes and persistence keys except where a row above deletes dead state or re-points a transport call. No store is rewritten for its own sake.
-- **No new features beyond the amendment surfaces.** The migration itself adds no features; the one exception is the net-new local file access and privacy web surfaces of section 12.6, added by the 2026-07-06 amendment and in scope here. The gallery panel (rebuilding FC-120's reader) and streaming builder prose (P-04 rejected alternative) remain genuine follow-ups, not migration work; the Q-07 navigation link is done (12.6), not a follow-up.
+- **No new features beyond the amendment surfaces.** The migration itself adds no features; the exceptions are the net-new amendment surfaces - the local file access and privacy web surfaces of section 12.6 and the org/activation/Registo/sharing/verification surfaces of section 12.9 - added by the 2026-07-06 amendments and in scope here. The gallery panel (rebuilding FC-120's reader) and streaming builder prose (P-04 rejected alternative) remain genuine follow-ups, not migration work; the Q-07 navigation link is done (12.6), not a follow-up.
 - **No framework or tooling migration.** The app stays Next.js App Router; upgrades are not part of this program.
 - **ekoa-local UI surfaces.** The TUI and daemon are out of scope (FIXED-1); the P-18 compatibility channel (chapter 03 section 3.10) never appears in `web/`.
 
@@ -462,12 +465,57 @@ Not touched here (carried from v2 A7.2/A8): the automations/executor consent sur
 10. **Locales pruned coherently.** The dead sections (FC-138) are absent from all three locale files and the i18n store; the locale coherence e2e spec passes.
 11. **Behavior preserved.** The surviving e2e flows (login, chat, build, artifacts, automations, integrations, knowledge, billing) pass without assertion changes except where 12.4/12.5 rows name an accepted change (FC-013 awaited run id, FC-033, FC-035) - the list of permitted assertion edits is exactly those rows.
 12. **Boundary rule enforced.** The ESLint boundary configuration (chapter 02 section 2.9) is active in `web/` and CI fails on a `web/` import from `api/`.
-13. **Local file access surfaces present (12.6).** The attach affordance offers Upload and Reference (FC-400) with the three Reference states (FC-401); the trust chip (FC-402) and its "i" custody panel (FC-403) render on turns that touched local files; the "Privacidade e ponte local" settings surface (FC-404) is linked in navigation and contains bridge status/pairing, active grants with revoke, the daemon-served ledger viewer, the masking summary, the unified approved-commands list, and the grounded sections (FC-405..FC-410); the first-time grant dialog (FC-411) and the legal-tenant onboarding card (FC-412) exist. FC-400..FC-412 are net-new (built, not migrated) and outside the 134-item audit count.
+13. **Local file access surfaces present (12.6).** The attach affordance offers Upload and Reference (FC-400) with the three Reference states (FC-401); the trust chip (FC-402) and its "i" custody panel (FC-403) render on turns that touched local files; the "Privacidade e ponte local" settings surface (FC-404) is linked in navigation and contains bridge status/pairing, active grants with revoke, the daemon-served ledger viewer, the masking summary, the unified approved-commands list, and the grounded sections (FC-405..FC-410); the first-time grant dialog (FC-411) and the legal-org onboarding card (FC-412) exist. FC-400..FC-412 are net-new (built, not migrated) and outside the 134-item audit count.
 14. **Claims copy ship-gated and ceiling-bound (12.6).** Every claims-bearing string in 12.6 is present in the built surfaces but disabled until the mechanism it describes passes its chapter 14 / chapter 17 section 17.9 gate; no enabled string exceeds chapter 17 section 17.9's A1 claimable ceiling and no forbidden-list phrase appears in enabled copy (grep the forbidden strings -> zero in shipped copy). The Upload-vs-Reference micro-copy (FC-400) is exempt as a UX distinction.
 15. **Canvas WebSocket confined (12.3.1).** `new WebSocket(` appears only in the canvas module (`web/lib/api/canvas.ts`); it is the sole non-SSE transport in `web/`; `EventSource` remains confined to `web/lib/api/stream.ts` (criterion 6 unaffected). The pause-for-user canvas is present (RESOLVED (Q-01)), opened from the `streaming_available` automation event, honouring the 1000/4000 close-code contract.
+16. **Org/activation/Registo/sharing/verification surfaces present (12.9).** FC-500..FC-509 are present in `web/`: the users page has the org column, activate/deactivate, and the builder<->org-admin role toggle (FC-500); the super-admin org-management surface exists (FC-501); the Registo admin page renders the filtered table over `GET /api/v1/registo` (FC-502); the `visibility` toggle is surfaced on artifacts and memories (FC-503); auto-extract writes surface a UI affordance with the `memory.autoExtract` toggle (FC-504); the verification banner (FC-505), first-build ask-once dialog (FC-506), and `build.verifyBuilds` settings toggle (FC-507) exist; the `ACCOUNT_DISABLED`/`BILLING_LOCKED` copy renders on blocked states (FC-508); and the header falls back to the org display name under the default design system (FC-509). FC-500..FC-509 are net-new (built, not migrated) and outside the 134-item audit count.
+17. **Teams removed end to end (Amendment 2).** Grep over `web/` finds no teams surface: no teams page route, store, client function, `teamsEndpoints` descriptor, or teams locale section (FC-039); the `/teams` endpoints are absent from the client (ch03 3.8.3 tombstone, Appendix A).
 
 Cross-references: chapter 02 (repo layout, `web/` placement, lint enforcement), chapter 03 (every endpoint and event cited above; section 3.7 canvas carve-out), chapter 05 (run pipeline emitting the typed delegation events), chapter 10 (coexistence and cutover), chapter 13 (contract tests, e2e strategy), chapter 14 (build gates that control the 12.6 claims ship-gate), chapter 15 (P-03, P-04, P-11, P-12, P-13 register), chapter 16 (Q-01, Q-04, Q-05, Q-07), chapter 17 (anonymisation mechanism, audit log, and the section 17.9 claims-discipline ceiling for 12.6 copy), chapter 18 (local bridge, delegation `delegate_to_local`, and the security model S1-S6).
 
+## 12.9 Org, activation, Registo, sharing, and verification surfaces (Amendment 2)
+
+These web surfaces are net-new, added by the consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md); like section 12.6 they are built rather than migrated and are counted outside the 134 audit items, under their own id block FC-500..FC-509. They realise the org model (Part 4), the activation model (Part 3), the Registo read surface (Part 5), ownership x visibility sharing (Part 4.12), and per-build verification (Part 6). Chapter 03 owns every endpoint cited here; chapter 09 owns the activation cache and the audit write path the Registo reads; chapter 05 owns the verification and auto-extract mechanics.
+
+**All strings PT-PT (binding).** Every user-facing string in this section is PT-PT in the owner's conventions (formal register, no em-dash, "por omissão", "ecrã"). Live test-run streaming and click visualization for verification are parked post-launch (Part 6); this section builds the banner and the settings/ask-once controls, not a live viewer.
+
+### 12.9.1 Users and org management (FC-500, FC-501)
+
+| FC | Surface | Fate | Detail |
+|---|---|---|---|
+| FC-500 | Users page growth | build | The users page (FC-038 migrates the base CRUD) grows: an org-assignment column, an activate/deactivate control (`PATCH /users/:id { active }`, 3.8.2), and a role toggle between `builder` and `org-admin` (`PATCH /users/:id { role }`). Scope follows the role: an org-admin sees and manages only its own org (role toggle and deactivate only); a super-admin sees all orgs and may create users/orgs. The page absorbs the per-user usage figures the hidden `/usage` page (FC-102) surfaced where relevant. PT-PT strings |
+| FC-501 | Org management (super-admin) | build | A super-admin surface to create an org (`POST /orgs`), list orgs (`GET /orgs`), and rename an org (`PATCH /orgs/:id`) (3.8.4). PT-PT strings |
+
+### 12.9.2 Registo admin page (FC-502)
+
+| FC | Surface | Fate | Detail |
+|---|---|---|---|
+| FC-502 | Registo admin page | build | A table with filters (user, action type, date range) over `GET /api/v1/registo` (3.8.24): who built/ran/logged what, when, and usage per user. Metadata and artifacts only, never chat or message bodies (content-level oversight is an explicit future decision, Part 5). An org-admin sees its own org; a super-admin gets an org filter (`?orgId=`) across orgs. PT-PT strings |
+
+### 12.9.3 Sharing and memory-visibility surfaces (FC-503, FC-504)
+
+| FC | Surface | Fate | Detail |
+|---|---|---|---|
+| FC-503 | Sharing toggles | build | The `visibility` field (`'private' \| 'org'`, PT-PT labels e.g. "Privado" / "Partilhado com o escritório") is surfaced on artifacts and memories; promotion to `org` and demotion to `private` are manual owner actions (`PATCH /artifacts/:id`, `PATCH /memories/:id`, 3.8.9/3.8.19). Org-shared artifacts are editable by org members; the UI carries the git-snapshot safety note (every mutation is versioned, restorable, and in the Registo, so sharing is safe) |
+| FC-504 | Memory auto-extract visibility | build | Every automatic memory write surfaces a UI affordance (and has its Registo entry, 3.8.24); the per-user settings toggle `memory.autoExtract` (default ON, P-12 re-resolved) governs it (`PATCH /settings/me`, 3.8.5). Automatic writes are always `private` |
+
+### 12.9.4 Per-build verification surfaces (FC-505, FC-506, FC-507)
+
+| FC | Surface | Fate | Detail |
+|---|---|---|---|
+| FC-505 | Per-build verification banner | build | Shown while the verification stage runs, PT-PT verbatim: "A testar a aplicação. Isto melhora a qualidade do resultado, mas torna a construção mais demorada e com maior custo. Pode desativar este comportamento nas definições da plataforma." |
+| FC-506 | First-build ask-once dialog | build | On the user's first-ever build, one dialog asks whether to verify builds; the answer stores as the per-user setting `build.verifyBuilds` (`PATCH /settings/me`, 3.8.5). Agent questions stay reserved for app ambiguity, never process (Part 6) |
+| FC-507 | Settings toggle for verification | build | The per-user `build.verifyBuilds` toggle (default ON) on the settings surface, written via `PATCH /settings/me` (3.8.5) |
+
+### 12.9.5 Activation and branding-fallback surfaces (FC-508, FC-509)
+
+| FC | Surface | Fate | Detail |
+|---|---|---|---|
+| FC-508 | Activation error surfaces | build | The CONV-2 codes `ACCOUNT_DISABLED` (403) and `BILLING_LOCKED` (402) render their PT-PT copy on login and blocked states: "A sua conta está bloqueada. Contacte o suporte." and "A sua conta tem um problema de faturação. Contacte o suporte." (copy from ch03 3.3) |
+| FC-509 | Header no-logo fallback | build | With the default design system (no org logo), the header falls back to the org display name; never the vendor's brand (Part 4.13) |
+
 **Amendment record.** Amended 2026-07-06 per founder resolutions and the anonymisation/local-file-access amendment (docs/ekoa-code-spec-amendment-brief.md): RESOLVED (Q-01) pause-for-user live browser canvas (12.3.1); RESOLVED (Q-04) delete-on-both-sides finalised (FC-027/FC-030/FC-032); RESOLVED (Q-05) preview `?token=` default recorded (FC-024/FC-064/FC-068); RESOLVED (Q-07) `/settings/bridge` linked and absorbed into the "Privacidade e ponte local" surface, write-only demo-cards state deleted (FC-101/FC-120); RESOLVED (P-03) client logout call; RESOLVED (P-04)/(P-11)/(P-13) cross-references finalised; new section 12.6 local file access and privacy web surfaces (FC-400..FC-412).
+
+Amended again 2026-07-06 per the consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md): FC-039 Teams flips migrate->delete (teams pages, store, client functions, locale sections, and tests removed end to end; the `/teams` endpoints no longer exist), with the 12.4.3 count row adjusted (migrate 19->18, delete 0->1; totals 40->39 / 7->8) and a new grep gate (12.8 criterion 17); FC-040/FC-041 and the client factory re-point the company resource to the renamed `org` resource (`api.org.*`, `GET /org`, `PATCH /org`; UI label "Escritório" unchanged); the P-12 note (FC-050) is updated to auto-extract-ON; a decision-register row (12.5) records both resolutions; and a net-new section 12.9 (FC-500..FC-509, 12.8 criterion 16) adds the users/org-management, Registo admin, sharing/visibility, memory auto-extract affordance, per-build verification banner/dialog/toggle, activation-error, and header no-logo fallback surfaces - all PT-PT, built not migrated, and counted outside the 134 audit items.
 
 *End of chapter 12.*

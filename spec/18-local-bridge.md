@@ -26,6 +26,8 @@ This chapter therefore specifies **the contract the daemon implements against**,
 
 Amendment record: this chapter was authored 2026-07-06 per founder resolutions and the anonymisation/local-file-access amendment (docs/ekoa-code-spec-amendment-brief.md, Part 4).
 
+Amended again 2026-07-06 per the consolidated-ledger amendment (Amendment 2, docs/ekoa-code-spec-amendment-2-consolidated-ledger.md): swept tenant to org throughout - the S2 binding is `{org, user, session, pairing id, grant_refs, budget, expiry, nonce}`, the delegated-task shape's field is `org: string` (18.2.6), the pairing registry is org-scoped with an `org` column (18.3.4), the provider credential is scoped `{org, pairing}` with the verification chain `provider credential -> pairing -> org` (18.4.4), the vault key is `{org, conversation id}`, and every cross-tenant reference (18.4.4, 18.5 S2, 18.7.2, 18.7.4, 18.8) reads cross-org; rate limits are per-org/per-user. Added the bridge as the third admission plane consulting activation (18.3.2, 18.4.4, S4, and acceptance criterion 7): a deactivated owner's pairing refuses connect, delegated tasks, and provider-endpoint traffic with the CONV-2 `ACCOUNT_DISABLED`/`BILLING_LOCKED` codes (chapter 09 section 9.7.1).
+
 ## 18.2 Delegation
 
 ### 18.2.1 The hosted tool
@@ -74,7 +76,7 @@ Cortex mints a delegated task per `delegate_to_local` call and receives a derive
 // Minted hosted-side per delegation, signed by Cortex, sent over the bridge (18.3).
 interface DelegatedTask {
   taskId: string;      // server-minted id for this delegation
-  tenant: string;      // resolved from the pairing registry, never a request body (18.4.4)
+  org: string;         // resolved from the pairing registry, never a request body (18.4.4)
   user: string;        // the delegating user; owner of the pairing
   session: string;     // hosted conversation id; the anonymisation vault key (18.4.3)
   pairingId: string;   // the target pairing; must match the live socket
@@ -117,13 +119,15 @@ The daemon dials **out** to Cortex; Cortex is the WebSocket server. This is NAT-
 
 Authentication at connect is a pairing token, a bridge-token class distinct from the platform JWT. The carried mechanism: a short-lived token minted from the user's JWT via `POST /api/v1/bridge/token`, with audience `ekoa-bridge`, a `pairingId` claim (carried as `connectionId`), and a default TTL of 600 seconds (reference/invisible-behaviors.md section 1.5; chapter 03 section 3.10). The token is presented with a `Authorization: Bearer` header; `?token=` in the URL is accepted only as a transition fallback scheduled for removal, because URL tokens leak into proxy logs (reference/invisible-behaviors.md section 9.1; chapter 03 section 3.10). At connect, the pairing id claimed in the token must equal the pairing id in the URL path (`connection-mismatch` rejection otherwise), and an optional resolved owner must agree with the token's subject or the socket is rejected `ownership-mismatch` (reference/invisible-behaviors.md section 9.1).
 
+**Activation admission (Amendment 2).** Connect and delegation dispatch on a pairing additionally consult the owner's cached activation state (chapter 09 section 9.7.1): a deactivated owner (`active=false`) is refused - the connect Upgrade fails and any in-flight or new delegation on that pairing fails cleanly - with the CONV-2 `ACCOUNT_DISABLED` code, and a billing-locked owner with `BILLING_LOCKED`. This makes the bridge the **third admission plane** alongside the `/api/v1` JWT middleware and the served-app plane gate; deactivation also pushes the owner's tokens into the P-03 revocation set (chapter 09), so the pairing token itself stops verifying on its next refresh. The per-request consult for provider-endpoint traffic is stated in 18.4.4.
+
 ### 18.3.3 Presence heartbeat
 
 The WebSocket carries a presence heartbeat; the live/offline state of a pairing is exactly its heartbeat state. Presence is what the web surface reads to decide whether the Reference affordance is enabled, offline, or absent (18.6; the Ekoa Local v2 brief, docs/, A2.6). `GET /health` reports `bridgeConnections` separately from SSE `connections`, and external watchdogs depend on that field (reference/invisible-behaviors.md sections 6 and 9.3; chapter 03).
 
-### 18.3.4 Tenant-scoped pairing registry
+### 18.3.4 Org-scoped pairing registry
 
-Cortex holds a pairing registry, re-specified as tenant-scoped. Each row records: pairing id, tenant, user (owner), created-at, and revoked-at. The registry is keyed by pairing id with a secondary owner index; `getConnectionByOwner(ownerUserId)` returns the most-recently-registered live connection for that owner, and it is **multi-device aware** - an owner may have more than one paired machine, and resolution returns the live one (docs/ekoa-local-browser-session-addendum.md, section 0; reference/invisible-behaviors.md section 9.1). Redialing with the same pairing id retires the stale socket (`replaced`); a socket is unregistered on close (reference/invisible-behaviors.md section 9.1). Tenant scoping is structural: a pairing belongs to exactly one tenant, and resolution can never return a pairing from another tenant (this is the registry half of "cross-tenant addressing impossible by construction", 18.5 S2; the invariant home is chapter 09 invariant 5).
+Cortex holds a pairing registry, re-specified as org-scoped. Each row records: pairing id, org, user (owner), created-at, and revoked-at. The registry is keyed by pairing id with a secondary owner index; `getConnectionByOwner(ownerUserId)` returns the most-recently-registered live connection for that owner, and it is **multi-device aware** - an owner may have more than one paired machine, and resolution returns the live one (docs/ekoa-local-browser-session-addendum.md, section 0; reference/invisible-behaviors.md section 9.1). Redialing with the same pairing id retires the stale socket (`replaced`); a socket is unregistered on close (reference/invisible-behaviors.md section 9.1). Org scoping is structural: a pairing belongs to exactly one org, and resolution can never return a pairing from another org (this is the registry half of "cross-org addressing impossible by construction", 18.5 S2; the invariant home is chapter 09 invariant 5).
 
 ### 18.3.5 Revoke-pairing kill switch
 
@@ -140,7 +144,7 @@ Platform JWTs and bridge tokens are two token classes over one secret, never int
 
 ### 18.3.7 Outside FIXED-2's frontend rule (scoped)
 
-FIXED-2 governs the **frontend-to-Cortex** boundary: "No WebSockets between frontend and Cortex as API transport; one scoped exception exists for the live browser canvas media channel." The bridge is a different boundary entirely - it is **daemon-to-Cortex** transport, not frontend-to-Cortex. It is therefore neither the API-transport prohibition FIXED-2 states nor the canvas media-channel carve-out FIXED-2 admits; it falls outside FIXED-2's scope. This is stated explicitly per the amendment (amendment brief, docs/ekoa-code-spec-amendment-brief.md, Part 4: "This is daemon<->Cortex transport, outside FIXED-2's frontend rule; state that explicitly"). The bridge's own governing invariants are the token-class separation (18.3.6), the outbound-only and revocable-both-ends properties (18.5 S4), and the pairing registry's tenant scoping (18.3.4) - not FIXED-2.
+FIXED-2 governs the **frontend-to-Cortex** boundary: "No WebSockets between frontend and Cortex as API transport; one scoped exception exists for the live browser canvas media channel." The bridge is a different boundary entirely - it is **daemon-to-Cortex** transport, not frontend-to-Cortex. It is therefore neither the API-transport prohibition FIXED-2 states nor the canvas media-channel carve-out FIXED-2 admits; it falls outside FIXED-2's scope. This is stated explicitly per the amendment (amendment brief, docs/ekoa-code-spec-amendment-brief.md, Part 4: "This is daemon<->Cortex transport, outside FIXED-2's frontend rule; state that explicitly"). The bridge's own governing invariants are the token-class separation (18.3.6), the outbound-only and revocable-both-ends properties (18.5 S4), and the pairing registry's org scoping (18.3.4) - not FIXED-2.
 
 ### 18.3.8 Wire frames added for delegation
 
@@ -177,30 +181,32 @@ The endpoint serves every local-loop origin, not only chat delegation: the carri
 
 The delegated task carries the hosted conversation id (18.2). The local loop's provider requests carry that same conversation id back to Cortex. This is what makes chapter 17's vault **one per conversation across both faces**: the hosted turns of a conversation and the delegated local turns of the same conversation share one vault, so a token minted for a value on a hosted turn stays consistent when a local summary re-enters hosted context and later re-crosses the chokepoint (chapter 17 section 17.5; the Ekoa Local v2 brief, docs/, A3.5). Session identity is the join key for anonymisation determinism, and it flows hosted -> delegated task -> bridge provider request -> chokepoint.
 
-### 18.4.4 Pairing-bound auth and the cross-tenant guard
+### 18.4.4 Pairing-bound auth and the cross-org guard
 
-The provider credential presented on this endpoint is scoped to `{tenant, pairing}`. It is not a platform JWT and not a general bridge token; it authorises completions for one pairing, on behalf of one tenant, for the duration of that pairing.
+The provider credential presented on this endpoint is scoped to `{org, pairing}`. It is not a platform JWT and not a general bridge token; it authorises completions for one pairing, on behalf of one org, for the duration of that pairing.
 
-The verification that a stolen provider credential cannot reach another tenant's session or vault is checked **server-side, per request**, as a chain:
+The verification that a stolen provider credential cannot reach another org's session or vault is checked **server-side, per request**, as a chain:
 
 ```
-provider credential -> pairing -> tenant
+provider credential -> pairing -> org
 ```
 
 1. The credential resolves to exactly one pairing (18.3.4). A credential that resolves to no live, non-revoked pairing is rejected.
-2. The pairing resolves to exactly one tenant. The tenant is taken from the pairing registry, never from the request body - the request cannot assert its own tenant.
-3. The conversation id the request carries (18.4.3) must belong to that tenant. A request naming a conversation from another tenant is rejected before any model call.
-4. The vault the chokepoint uses is keyed by `{tenant, conversation id}` (chapter 17 section 17.5). Because tenant is derived from the pairing and not from the request, a credential for tenant A can never address tenant B's vault: there is no request field that would let it name one.
+2. The pairing resolves to exactly one org. The org is taken from the pairing registry, never from the request body - the request cannot assert its own org.
+3. The conversation id the request carries (18.4.3) must belong to that org. A request naming a conversation from another org is rejected before any model call.
+4. The vault the chokepoint uses is keyed by `{org, conversation id}` (chapter 17 section 17.5). Because org is derived from the pairing and not from the request, a credential for org A can never address org B's vault: there is no request field that would let it name one.
 
-A stolen provider credential can therefore, at worst, spend its own pairing's budget against its own tenant's sessions until the pairing is revoked (18.3.5) - it can never cross into another tenant's sessions or vault. This is the provider-endpoint expression of S2's "cross-tenant addressing impossible by construction" (18.5), and it is checked by the auth-binding test named in 18.8.
+A stolen provider credential can therefore, at worst, spend its own pairing's budget against its own org's sessions until the pairing is revoked (18.3.5) - it can never cross into another org's sessions or vault. This is the provider-endpoint expression of S2's "cross-org addressing impossible by construction" (18.5), and it is checked by the auth-binding test named in 18.8.
+
+**Activation admission (Amendment 2).** The chain above is joined by the activation plane: the owner's cached activation state (chapter 09 section 9.7.1) is consulted on every provider request, and a deactivated owner (`active=false`) is refused before any model call with the CONV-2 `ACCOUNT_DISABLED` code, a billing-locked owner with `BILLING_LOCKED`. This is the same third admission plane the connect path applies (18.3.2); because deactivation also pushes the owner's tokens into the P-03 revocation set (chapter 09), an in-flight pairing whose owner is deactivated fails on its next admission check.
 
 ### 18.4.5 A completion, end to end
 
 The lifecycle of one bridge completion, stated so the ordering is unambiguous:
 
 1. The local loop emits a `provider_request` frame (18.3.8) carrying the pairing-bound credential and the session (conversation) id, with an Anthropic-messages-shaped body containing the file excerpts it is reasoning over in cleartext (crossing Boundary 1; diagram 10).
-2. Cortex resolves the credential to its pairing and the pairing to its tenant (18.4.4), rejecting anything that does not resolve to a live, non-revoked pairing, and rejecting a session id that does not belong to that tenant.
-3. The chokepoint (`api/src/llm/`) mints a correlation id, runs the anonymisation pipeline (delta detection, deterministic per-session tokenization against the `{tenant, session}` vault - chapter 17 sections 17.3, 17.5), tags the call `user_work`, and applies the pre-run allowance if the delegation's budget has not yet been gated (chapter 06 sections 6.3, 6.6.3).
+2. Cortex resolves the credential to its pairing and the pairing to its org (18.4.4), rejecting anything that does not resolve to a live, non-revoked pairing, and rejecting a session id that does not belong to that org.
+3. The chokepoint (`api/src/llm/`) mints a correlation id, runs the anonymisation pipeline (delta detection, deterministic per-session tokenization against the `{org, session}` vault - chapter 17 sections 17.3, 17.5), tags the call `user_work`, and applies the pre-run allowance if the delegation's budget has not yet been gated (chapter 06 sections 6.3, 6.6.3).
 4. The tokenized body crosses Boundary 2 to Anthropic. Only tokens cross; the vault stays home (invariant I5).
 5. On response, the chokepoint de-tokenizes - including tool_use argument blocks (chapter 17 section 17.3) - records hosted audit metadata under the correlation id (chapter 17 section 17.6), meters the call (chapter 06 section 6.5.1), and returns a `provider_response` frame to the loop.
 6. The loop continues locally; each local read it performs is ledgered daemon-side under the same correlation id (18.5 S6), which is how the two audit halves join.
@@ -209,7 +215,7 @@ No step is skippable and none is reorderable across the chokepoint: there is no 
 
 ## 18.5 Security model (S1-S6)
 
-The security model rests on six principles, faithful to the amendment (amendment brief, docs/ekoa-code-spec-amendment-brief.md, Part 4) and the Ekoa Local v2 brief (docs/, A1-A5). The governing frame is mutual distrust across the bridge: **the daemon is the enforcement point for file access and treats every Cortex payload as untrusted input; Cortex is the enforcement point for tenant isolation, metering, and anonymisation and treats every daemon payload as untrusted input.** Each principle below states the property, its Cortex-side obligation (in scope, built this run), and its daemon-side obligation (out of scope, the contract the daemon implements). Diagram 11 draws the S1-S6 bindings.
+The security model rests on six principles, faithful to the amendment (amendment brief, docs/ekoa-code-spec-amendment-brief.md, Part 4) and the Ekoa Local v2 brief (docs/, A1-A5). The governing frame is mutual distrust across the bridge: **the daemon is the enforcement point for file access and treats every Cortex payload as untrusted input; Cortex is the enforcement point for org isolation, metering, and anonymisation and treats every daemon payload as untrusted input.** Each principle below states the property, its Cortex-side obligation (in scope, built this run), and its daemon-side obligation (out of scope, the contract the daemon implements). Diagram 11 draws the S1-S6 bindings.
 
 ### S1 - The daemon is the enforcement point; Cortex is untrusted input to it
 
@@ -221,11 +227,11 @@ No Cortex payload can widen a grant, bypass a confirmation, or escape a granted 
 
 ### S2 - Every delegated task binds and is verified
 
-Every delegated task binds `{tenant, user, session, pairing id, grant_refs, budget, expiry, nonce}`. The daemon verifies all of it; replays are rejected; cross-tenant addressing is impossible by construction.
+Every delegated task binds `{org, user, session, pairing id, grant_refs, budget, expiry, nonce}`. The daemon verifies all of it; replays are rejected; cross-org addressing is impossible by construction.
 
-- **Cortex-side obligation:** Cortex mints the task with the full binding, signs it, sets the expiry, and issues a fresh nonce per task; it resolves the pairing and tenant from the registry (never from a request body, 18.4.4) so the `tenant`/`pairing id` in the binding are authoritative; it never issues a task addressing a pairing outside the caller's tenant.
+- **Cortex-side obligation:** Cortex mints the task with the full binding, signs it, sets the expiry, and issues a fresh nonce per task; it resolves the pairing and org from the registry (never from a request body, 18.4.4) so the `org`/`pairing id` in the binding are authoritative; it never issues a task addressing a pairing outside the caller's org.
 - **Daemon-side obligation (contract):** the daemon verifies the signature, the nonce (against a replay cache), the expiry, and that every `grant_ref` names a grant the daemon holds **for this session**; it rejects unknown grants, expired tasks, forged tasks not bound to this pairing, replays, and tasks naming another session's grant, ledgering each denial (docs/ekoa-local-integration-brief.md, Phase 3 and Phase 5 binding scenarios).
-- **Test / enforcement:** the fake daemon rejects a replayed task, an expired task, a task naming another session's `grant_ref`, and a forged task not bound to this pairing; cross-tenant addressing is rejected both server-side (18.4.4, 18.3.4) and daemon-side (18.7).
+- **Test / enforcement:** the fake daemon rejects a replayed task, an expired task, a task naming another session's `grant_ref`, and a forged task not bound to this pairing; cross-org addressing is rejected both server-side (18.4.4, 18.3.4) and daemon-side (18.7).
 
 ### S3 - No arbitrary-command primitive on the chat path
 
@@ -237,7 +243,7 @@ Chat delegation runs the **fixed file-tool vocabulary** against granted roots (l
 
 ### S4 - The channel: outbound-only, authenticated, rate-limited, revocable both ends
 
-- **Cortex-side obligation:** the bridge is daemon-outbound-only (Cortex never dials the daemon; 18.3.1); connect is pairing-token authenticated (18.3.2); the provider endpoint and delegation dispatch are rate-limited per pairing/tenant at the chokepoint (chapter 09 FIXED-14 baseline: per-tenant/per-user rate limits and spend caps at the chokepoint); the server-side revoke kill switch disconnects and fails clean (18.3.5).
+- **Cortex-side obligation:** the bridge is daemon-outbound-only (Cortex never dials the daemon; 18.3.1); connect is pairing-token authenticated (18.3.2); the provider endpoint and delegation dispatch are rate-limited per pairing/org at the chokepoint (chapter 09 FIXED-14 baseline: per-org/per-user rate limits and spend caps at the chokepoint); admission additionally consults the owner's activation state (18.3.2, 18.4.4; a deactivated owner is refused connect, delegation, and provider traffic with the CONV-2 codes); the server-side revoke kill switch disconnects and fails clean (18.3.5).
 - **Daemon-side obligation (contract):** the daemon may unpair from its end with the same clean-failure semantics.
 - **Test / enforcement:** revoke-pairing mid-session disconnects the socket and fails subsequent delegations cleanly; unpair from the daemon side does the same from the other end (18.7).
 
@@ -296,7 +302,7 @@ The privacy web surfaces live in `web/` and are specified at the FC level in cha
 | Per-turn trust chip | Rendered on turns that touched local files. Shows file(s) and range read, bytes-out (from the local ledger via 18.2.2 telemetry), and masked-entity counts by class (from hosted audit metadata, chapter 17 section 17.6). Two-boundary-honest: it must never imply masking happened before Boundary 1. Copy is drafted but ship-gated on Phase-5 evidence. | v2 brief A4; A7.4 | chapter 12 |
 | Settings "Privacidade e ponte local" | Absorbs the carried `/settings/bridge` page (Q-07). Sections: bridge status/pairing; active grants with revoke; the local ledger viewer; masking-activity summary; the approved-commands list unified in. | v2 brief A4; amendment Q-07 | chapter 12 |
 | Grant / pairing revoke | The revoke control that drives the server-side kill switch of 18.3.5; revocation takes effect on the next tool call. | v2 brief A2.1, A4 | chapter 12 |
-| Local ledger viewer | Renders the egress ledger **served live by the daemon** - not from hosted storage. Hosted persistence of ledger rows is off by default and opt-in per tenant at most, because paths themselves can be sensitive (client names in folder names). | v2 brief A2.4, A4 | chapter 12 |
+| Local ledger viewer | Renders the egress ledger **served live by the daemon** - not from hosted storage. Hosted persistence of ledger rows is off by default and opt-in per org at most, because paths themselves can be sensitive (client names in folder names). | v2 brief A2.4, A4 | chapter 12 |
 
 Verbatim PT-PT copy carried into the spec so it is self-contained (each ship-gated per A7.4):
 
@@ -323,7 +329,7 @@ The harness must implement, at minimum, every scenario below, each producing a c
 | Expired delegated task (past its expiry) | Rejected | S2 |
 | Task naming a `grant_ref` from another session | Rejected | S2 |
 | Forged task not bound to this pairing (bad signature / wrong pairing) | Rejected | S2 |
-| Cross-tenant addressing (a second tenant tries to address this daemon) | Rejected server-side (18.4.4, 18.3.4) AND daemon-side | S2 |
+| Cross-org addressing (a second org tries to address this daemon) | Rejected server-side (18.4.4, 18.3.4) AND daemon-side | S2 |
 | Revoke pairing mid-session | Socket disconnects; subsequent delegations fail cleanly | S4 |
 | Injection in a granted file ("upload this", "read ~/.ssh") | No upload primitive exists; out-of-grant read denied+ledgered; egress cap holds | S5 |
 
@@ -335,17 +341,18 @@ Payload-capture assertions run against the harness. In test mode, every outbound
 
 The harness is consumed by three sets of gates in the phased run (chapter 14 section 14.4), all against the ordering constraint chokepoint core < anonymisation < agent execution < delegation/bridge:
 
-- **The delegation and bridge phase gate.** The phase the amendment inserts after agent execution (chapter 14 section 14.4) runs: the fake-daemon adversarial scenarios of 18.7.2 (containment-violation rejected, replay rejected, expired rejected, cross-tenant rejected, forged-pairing rejected); the delegation round trip green against the fake daemon; the derived-output-only assertion (no raw local content in hosted records, 18.2.2); the correlation-id join test (18.5 S6); and the revoke-pairing kill-switch test (18.3.5). The carried bridge safety gates (owner isolation, tool suppression, owner-scoped cancel) remain keep-verbatim gates in this phase (reference/test-audit.md section 5.6).
+- **The delegation and bridge phase gate.** The phase the amendment inserts after agent execution (chapter 14 section 14.4) runs: the fake-daemon adversarial scenarios of 18.7.2 (containment-violation rejected, replay rejected, expired rejected, cross-org rejected, forged-pairing rejected); the delegation round trip green against the fake daemon; the derived-output-only assertion (no raw local content in hosted records, 18.2.2); the correlation-id join test (18.5 S6); and the revoke-pairing kill-switch test (18.3.5). The carried bridge safety gates (owner isolation, tool suppression, owner-scoped cancel) remain keep-verbatim gates in this phase (reference/test-audit.md section 5.6).
 - **The anonymisation phase gate.** The payload-capture assertion (18.7.3; chapter 17 section 17.8) is checked here for the chokepoint core and re-exercised against the bridge path in the delegation/bridge phase.
-- **The final security phase.** The security-review and adversarial-Codex passes plus the cross-tenant adversarial suite (chapter 14; security addendum F1-F4) exercise bridge auth, the provider endpoint, and anonymisation-bypass attempts against the harness as first-class suite members.
+- **The final security phase.** The security-review and adversarial-Codex passes plus the cross-org adversarial suite (chapter 14; security addendum F1-F4) exercise bridge auth, the provider endpoint, and anonymisation-bypass attempts against the harness as first-class suite members.
 
 ## 18.8 Acceptance criteria (checkable without a human)
 
 1. **The harness exists and implements the scenario list.** `api/test/fake-daemon/` is present and a WS client that pairs, executes delegated tasks against a fixture directory, emits ledger rows, and produces every scenario of 18.7.2, each with its expected rejection/denial outcome.
-2. **Every S1-S6 principle has at least one named test or structural enforcement.** S1: containment-violation rejection. S2: replay, expiry, foreign-grant, forged-pairing, and cross-tenant rejections. S3: the delegation vocabulary structurally excludes any arbitrary-command verb and cannot reach `local_command`. S4: revoke-both-ends disconnect-and-fail-clean tests plus the per-pairing rate limit. S5: the injection scenario yields no upload, a denied+ledgered out-of-grant read, and a held cap. S6: the correlation-id join test.
-3. **Provider-endpoint auth binding test.** A test asserts the `credential -> pairing -> tenant` chain (18.4.4): a credential resolving to no live pairing is rejected; a request carrying a conversation id from another tenant is rejected before any model call; a tenant-A credential cannot address tenant-B's vault (no request field names one).
+2. **Every S1-S6 principle has at least one named test or structural enforcement.** S1: containment-violation rejection. S2: replay, expiry, foreign-grant, forged-pairing, and cross-org rejections. S3: the delegation vocabulary structurally excludes any arbitrary-command verb and cannot reach `local_command`. S4: revoke-both-ends disconnect-and-fail-clean tests plus the per-pairing rate limit. S5: the injection scenario yields no upload, a denied+ledgered out-of-grant read, and a held cap. S6: the correlation-id join test.
+3. **Provider-endpoint auth binding test.** A test asserts the `credential -> pairing -> org` chain (18.4.4): a credential resolving to no live pairing is rejected; a request carrying a conversation id from another org is rejected before any model call; an org-A credential cannot address org-B's vault (no request field names one).
 4. **Derived-output-only assertion.** After a delegation that reads local files, the hosted conversation record and any hosted run record contain only derived output (summary, citations with path+range, patch proposals, ledger refs, telemetry) and no raw local-file content (invariant I2, 18.2.2).
 5. **Correlation-id join test.** A delegated read's local ledger row and the hosted audit-metadata entry for the same provider request share one correlation id (18.5 S6; chapter 17 section 17.6).
-6. **FIXED-2 exception statement present and scoped.** The chapter states that the bridge WS is daemon-to-Cortex transport, outside FIXED-2's frontend rule - neither the API-transport prohibition nor the canvas media-channel carve-out - and that its governing invariants are the token-class separation, outbound-only/revocable-both-ends, and pairing-registry tenant scoping (18.3.7). The token-class separation is enforced by the carried verifier tests (platform verifier rejects bridge tokens and vice versa; reference/invisible-behaviors.md sections 1.5 and 17; chapter 09 section 9.2).
+6. **FIXED-2 exception statement present and scoped.** The chapter states that the bridge WS is daemon-to-Cortex transport, outside FIXED-2's frontend rule - neither the API-transport prohibition nor the canvas media-channel carve-out - and that its governing invariants are the token-class separation, outbound-only/revocable-both-ends, and pairing-registry org scoping (18.3.7). The token-class separation is enforced by the carried verifier tests (platform verifier rejects bridge tokens and vice versa; reference/invisible-behaviors.md sections 1.5 and 17; chapter 09 section 9.2).
+7. **Activation admission on the bridge (Amendment 2).** A deactivated owner's pairing is refused at connect, its in-flight and new delegated tasks fail cleanly, and its provider-endpoint completions are refused before any model call with the CONV-2 `ACCOUNT_DISABLED` code (a billing-locked owner with `BILLING_LOCKED`); the bridge is thereby the third admission plane alongside the platform JWT middleware and the served-app plane gate (chapter 09 section 9.7.1).
 
-Cross-references: chapter 03 (bridge and agent-face endpoints, section 3.10; the pairing token mint), chapter 05 (delegation is invoked from a chat run; the carried agent-face run class), chapter 06 (the chokepoint, attribution, and metering the provider endpoint routes through - FIXED-3, FIXED-13), chapter 09 (the token-class separation and tenant-scoping invariant homes; the FIXED-14 rate-limit/spend-cap baseline), chapter 12 (the FC-level web surfaces), chapter 14 (the delegation/bridge phase gate, the anonymisation payload-capture gate, and the final security phase that consume the harness), chapter 17 (the anonymisation pipeline, vault, correlation id, and payload-capture harness the provider endpoint and the bridge path depend on - sections 17.3, 17.5, 17.6, 17.8), diagram 10 (privacy boundaries) and diagram 11 (delegation security).
+Cross-references: chapter 03 (bridge and agent-face endpoints, section 3.10; the pairing token mint), chapter 05 (delegation is invoked from a chat run; the carried agent-face run class), chapter 06 (the chokepoint, attribution, and metering the provider endpoint routes through - FIXED-3, FIXED-13), chapter 09 (the token-class separation and org-scoping invariant homes; the activation admission plane, section 9.7.1; the FIXED-14 rate-limit/spend-cap baseline), chapter 12 (the FC-level web surfaces), chapter 14 (the delegation/bridge phase gate, the anonymisation payload-capture gate, and the final security phase that consume the harness), chapter 17 (the anonymisation pipeline, vault, correlation id, and payload-capture harness the provider endpoint and the bridge path depend on - sections 17.3, 17.5, 17.6, 17.8), diagram 10 (privacy boundaries) and diagram 11 (delegation security).

@@ -669,10 +669,6 @@
      "type": "arrow"
     },
     {
-     "id": "e_llm_supabase",
-     "type": "arrow"
-    },
-    {
      "id": "e_bridge_llm",
      "type": "arrow"
     }
@@ -918,16 +914,22 @@
    "lineHeight": 1.25
   },
   {
-   "type": "ellipse",
-   "id": "supabase",
+   "type": "text",
+   "id": "l_fs_fold",
    "x": 1150,
-   "y": 460,
-   "width": 230,
-   "height": 80,
-   "strokeColor": "#1e40af",
-   "backgroundColor": "#dbeafe",
+   "y": 458,
+   "width": 340,
+   "height": 66,
+   "text": "Firestore now also holds (P-08 retired,\nSupabase gone): credentials (encrypted,\noauth | api-key), orgs (identity, branding,\nsettings), activation (active + billing gate)",
+   "originalText": "Firestore now also holds (P-08 retired,\nSupabase gone): credentials (encrypted,\noauth | api-key), orgs (identity, branding,\nsettings), activation (active + billing gate)",
+   "fontSize": 12,
+   "fontFamily": 3,
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#047857",
+   "backgroundColor": "transparent",
    "fillStyle": "solid",
-   "strokeWidth": 2,
+   "strokeWidth": 1,
    "strokeStyle": "solid",
    "roughness": 0,
    "opacity": 100,
@@ -937,33 +939,26 @@
    "versionNonce": 100054,
    "isDeleted": false,
    "groupIds": [],
-   "boundElements": [
-    {
-     "id": "supabase_t",
-     "type": "text"
-    },
-    {
-     "id": "e_llm_supabase",
-     "type": "arrow"
-    }
-   ],
+   "boundElements": null,
    "link": null,
-   "locked": false
+   "locked": false,
+   "containerId": null,
+   "lineHeight": 1.25
   },
   {
    "type": "text",
-   "id": "supabase_t",
-   "x": 1175,
-   "y": 480,
-   "width": 180,
-   "height": 40,
-   "text": "Supabase\nOAuth custody + license",
-   "originalText": "Supabase\nOAuth custody + license",
-   "fontSize": 13,
+   "id": "l_org_tenancy",
+   "x": 64,
+   "y": 248,
+   "width": 280,
+   "height": 32,
+   "text": "org tenancy: every user belongs to\none org (PT-PT label: 'Escritório')",
+   "originalText": "org tenancy: every user belongs to\none org (PT-PT label: 'Escritório')",
+   "fontSize": 12,
    "fontFamily": 3,
-   "textAlign": "center",
-   "verticalAlign": "middle",
-   "strokeColor": "#374151",
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#b45309",
    "backgroundColor": "transparent",
    "fillStyle": "solid",
    "strokeWidth": 1,
@@ -979,7 +974,7 @@
    "boundElements": null,
    "link": null,
    "locked": false,
-   "containerId": "supabase",
+   "containerId": null,
    "lineHeight": 1.25
   },
   {
@@ -1507,52 +1502,6 @@
   },
   {
    "type": "arrow",
-   "id": "e_llm_supabase",
-   "x": 870,
-   "y": 400,
-   "width": 280,
-   "height": 95,
-   "strokeColor": "#6d28d9",
-   "backgroundColor": "transparent",
-   "fillStyle": "solid",
-   "strokeWidth": 2,
-   "strokeStyle": "dashed",
-   "roughness": 0,
-   "opacity": 100,
-   "angle": 0,
-   "seed": 200015,
-   "version": 1,
-   "versionNonce": 200016,
-   "isDeleted": false,
-   "groupIds": [],
-   "boundElements": null,
-   "link": null,
-   "locked": false,
-   "points": [
-    [
-     0,
-     0
-    ],
-    [
-     280,
-     95
-    ]
-   ],
-   "startBinding": {
-    "elementId": "llm_choke",
-    "focus": 0,
-    "gap": 2
-   },
-   "endBinding": {
-    "elementId": "supabase",
-    "focus": 0,
-    "gap": 2
-   },
-   "startArrowhead": null,
-   "endArrowhead": "arrow"
-  },
-  {
-   "type": "arrow",
    "id": "e_events_agents",
    "x": 740,
    "y": 500,
@@ -1791,38 +1740,6 @@
    "seed": 300003,
    "version": 1,
    "versionNonce": 300004,
-   "isDeleted": false,
-   "groupIds": [],
-   "boundElements": null,
-   "link": null,
-   "locked": false,
-   "containerId": null,
-   "lineHeight": 1.25
-  },
-  {
-   "type": "text",
-   "id": "l_oauth",
-   "x": 958,
-   "y": 446,
-   "width": 170,
-   "height": 16,
-   "text": "managed OAuth tokens",
-   "originalText": "managed OAuth tokens",
-   "fontSize": 12,
-   "fontFamily": 3,
-   "textAlign": "left",
-   "verticalAlign": "top",
-   "strokeColor": "#64748b",
-   "backgroundColor": "transparent",
-   "fillStyle": "solid",
-   "strokeWidth": 1,
-   "strokeStyle": "solid",
-   "roughness": 0,
-   "opacity": 100,
-   "angle": 0,
-   "seed": 300005,
-   "version": 1,
-   "versionNonce": 300006,
    "isDeleted": false,
    "groupIds": [],
    "boundElements": null,
