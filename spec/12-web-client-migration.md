@@ -334,7 +334,7 @@ Decision register for this chapter (each decided item, for founder scan; none is
 | FC-125 | Tunnel client-function five | delete | Zero callers AND no backend domain; the `/tunnel` stub dies in FC-100 |
 | FC-126 | Projects client-function four | delete | Zero callers; both ends vestigial (ch03 Appendix A drops the operations) |
 | FC-127 | Legacy chat-send wrapper | delete | Zero callers; chat is the runs resource (FC-013) |
-| FC-128 | Activity-log client function | delete | Zero callers; activity read surfaces are deferred (ch03 Appendix A; FIXED-8 keeps the single write path server-side) |
+| FC-128 | Activity-log client function | delete | Zero callers; the old raw activity list stays dropped (ch03 Appendix A), superseded for reads by the metadata-only Registo read surface (12.9 FC-502; ch03 3.8.24, Amendment 2); FIXED-8 keeps the single write path server-side |
 | FC-129 | Legacy company-knowledge client-function five | delete | Zero callers; superseded by the live knowledge surface (FC-052) |
 | FC-130 | Integration access grant/revoke pair | delete | Zero callers (ch03 Appendix A) |
 | FC-131 | Integration-inference client fn + result type | delete | Zero callers; pairs with FC-105 |

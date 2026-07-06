@@ -92,7 +92,7 @@ Every guard below encodes a production incident or a proven race. Each requires 
 
 ### 5.3.1 Owner-scoped idempotent cancel
 
-`POST .../:id/cancel` is the only way to stop a run. Closing the SSE stream must never stop the run - unsubscribing only stops reading while the SDK keeps generating and billing (carried, reference/operations-inventory.md section 0.1). Cancel resolves the run in the in-memory registry, verifies the caller owns it (admin may also cancel build jobs - carried owner-or-admin rule, reference/invisible-behaviors.md section 7.2), and is idempotent: cancelling a terminal or unknown run returns `{ cancelled: false }` without error. Ordering is load-bearing: cancel sets the status to `cancelled` **before** firing the abort, so the abort path observes the cancelled state and stays quiet instead of double-reporting (carried, section 7.2 cancel-job).
+`POST .../:id/cancel` is the only way to stop a run. Closing the SSE stream must never stop the run - unsubscribing only stops reading while the SDK keeps generating and billing (carried, reference/operations-inventory.md section 0.1). Cancel resolves the run in the in-memory registry, verifies the caller owns it (an org-admin may also cancel build jobs in its own org, super-admin anywhere - carried owner-or-admin rule remapped to the three-role model, reference/invisible-behaviors.md section 7.2), and is idempotent: cancelling a terminal or unknown run returns `{ cancelled: false }` without error. Ordering is load-bearing: cancel sets the status to `cancelled` **before** firing the abort, so the abort path observes the cancelled state and stays quiet instead of double-reporting (carried, section 7.2 cancel-job).
 
 ### 5.3.2 Abort never falls through to a build
 

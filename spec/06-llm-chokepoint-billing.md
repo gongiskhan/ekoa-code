@@ -42,7 +42,8 @@ runOneShot(opts: OneShotOptions, attribution: LlmAttribution): Promise<OneShotRe
   // tiers) and by FAST classifier sites that need image input.
 
 completeFast(opts: MessagesOptions, attribution: LlmAttribution): Promise<MessagesResult>;
-  // Direct Messages REST on the managed OAuth token. FAST tier ONLY - the
+  // Direct Messages REST on the environment's central credential (OAuth token
+  // in oauth mode, API key in api-key mode). FAST tier ONLY - the
   // options type does not admit a tier parameter (section 6.2.2). One
   // forced-token-refresh retry on 401, carried (reference/llm-usage-map.md §2, T2).
 
@@ -154,7 +155,7 @@ The `agentType` tags in these tables are carried verbatim from the normative map
 | 19 | `classify-tui-turn` | TUI turn tier + escalation | `llm/gateway.ts` classify endpoint via `completeFast` | Keyword scorer; hard 3.5 s budget; any failure (HTTP, budget, enum-invalid output) falls back automatically; a keyword-only config mode restores the pure deterministic path; the endpoint never 500s (reference/invisible-behaviors.md 2.8) |
 | 20 | `vision-classify-human-action` | Stuck automation page: CAPTCHA / MFA / login | `automation/` via `runOneShot` (image) | Regex layer runs first and catches most cases; the model is the tail-catcher only |
 
-### 6.4.3 platform - 6 sites, each with its fate executed (FIXED; none survives as a runtime model call)
+### 6.4.3 platform - 6 sites, each with its fate executed (FIXED; none survives as a platform-attributed runtime model call - call 23 re-enters re-attributed as user_work, section 6.4.1 row A1)
 
 | # | Old call | Fate (reference/llm-usage-map.md §7) | Destination in the new design |
 |---|---|---|---|

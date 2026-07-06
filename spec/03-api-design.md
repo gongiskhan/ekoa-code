@@ -190,7 +190,7 @@ Every table row cites the operation it replaces in reference/operations-inventor
 | POST `/auth/device` | -> `DeviceStartResponse {deviceCode, userCode, verificationUri, interval, expiresIn}` | public | `device-start` |
 | POST `/auth/device/poll` | `{ deviceCode }` -> `DevicePollResponse` (status union incl. `slow_down`) | public | `device-poll`; approval single-use |
 | POST `/auth/device/approve` | `{ userCode, deny? }` -> `{ ok }` | user | `device-approve`; binds to approver only; backs the `/activate` page |
-| POST `/auth/logout` | `LogoutRequest { userId? }` -> `{ ok }` | user / admin | **RESOLVED (P-03)**; revokes the presented token by adding it to the `revoked_tokens` collection; the admin `{ userId }` body variant revokes every token of the named user; a subsequently presented revoked token fails `401` (3.2, 3.3) |
+| POST `/auth/logout` | `LogoutRequest { userId? }` -> `{ ok }` | user / super-admin / org-admin | **RESOLVED (P-03)**; revokes the presented token by adding it to the `revoked_tokens` collection; the `{ userId }` body variant (super-admin anywhere, org-admin scoped to its own org - mirroring `PATCH /users/:id`, 3.8.2) revokes every token of the named user; a subsequently presented revoked token fails `401` (3.2, 3.3) |
 
 Logout is a server-side operation under RESOLVED (P-03): `POST /auth/logout` revokes the token via the persisted `revoked_tokens` collection (chapter 04 section 4.3.1), which the auth middleware checks on every request (3.2). The admin body variant `{ userId }` revokes every token for the named user (for example on forced sign-out or role removal).
 
@@ -588,7 +588,7 @@ Expected drops are the orphans and dead client surface recorded in reference/ope
 
 | Operation | Fate |
 |---|---|
-| `ekoa.activity/list` | dropped from v1 API; audit stays a single write path with read surfaces deferred (FIXED-8, chapter 09) |
+| `ekoa.activity/list` | dropped from v1 API; the audit stays a single write path (FIXED-8, chapter 09), and the old per-user activity list is superseded by the org-scoped, metadata-only Registo read surface (3.8.24, Amendment 2) - content-level oversight remains a future decision |
 | `ekoa.chat/send` | dropped; acknowledged stub - real chat is the chat-runs resource (3.8.7) |
 | `ekoa.projects/*` | dropped; vestigial (reference/data-inventory.md section 5.1 marks the store vestigial) |
 | `ekoa.integrations/grant-access\|revoke-access` | dropped; no caller, no UI |
