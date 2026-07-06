@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "appId": "legal-portal",
+  "card": {
+    "titlePt": "O portal do cliente, invisível por omissão",
+    "descriptionPt": "Convide um cliente e decida, item a item, o que ele vê. Nada é partilhado por omissão: o cliente só vê o estado, os documentos e os eventos que o escritório ligar explicitamente.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir-acessos",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Acessos ao portal",
+        "bodyPt": "Cada cliente do Núcleo pode ganhar acesso ao portal. O convite gera um link de uso único para o cliente definir a palavra-passe."
+      }
+    },
+    {
+      "id": "destacar-convidar",
+      "type": "spotlight",
+      "target": "portal-convidar",
+      "copy": {
+        "titlePt": "Convidar um cliente",
+        "bodyPt": "Um clique cria o acesso e o link de definição de palavra-passe. Até o cliente aceitar, e até algo ser partilhado, o portal não lhe mostra nada."
+      }
+    },
+    {
+      "id": "abrir-partilhas",
+      "type": "navigate",
+      "to": "/partilhas",
+      "copy": {
+        "titlePt": "O que o cliente vê",
+        "bodyPt": "Escolhido o cliente e o processo, cada item (estado, documento, evento) tem o seu interruptor de partilha. Nada aparece do lado do cliente sem passar por aqui."
+      }
+    },
+    {
+      "id": "partilhar-estado-nota",
+      "type": "spotlight",
+      "target": "portal-partilhar",
+      "copy": {
+        "titlePt": "Partilhar o estado do processo",
+        "bodyPt": "Ao ligar este item, o cliente passa a ver o estado atual do processo - e só isso, enquanto mais nada for partilhado."
+      }
+    },
+    {
+      "id": "partilhar-estado",
+      "type": "await-action",
+      "target": "portal-partilhar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "portal-partilhar"
+          }
+        ]
+      }
+    },
+    {
+      "id": "anotar-resumo",
+      "type": "annotate-result",
+      "target": "portal-resumo",
+      "copy": {
+        "titlePt": "Exatamente o que foi partilhado",
+        "bodyPt": "O resumo mostra, a qualquer momento, o que este cliente vê no portal. Partilha explícita, auditável e reversível a um clique."
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "appId": "legal-tempos",
+  "card": {
+    "titlePt": "Registo de Tempos",
+    "descriptionPt": "Conte o tempo de cada processo e passe-o para os honorários num clique.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir-registos",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "O registo de tempos do escritório",
+        "bodyPt": "Cada tarefa conta. Aqui o tempo trabalhado fica registado por processo e por pessoa, pronto a faturar."
+      }
+    },
+    {
+      "id": "destacar-temporizador",
+      "type": "spotlight",
+      "target": "tempos-iniciar",
+      "copy": {
+        "titlePt": "Um temporizador ao vivo",
+        "bodyPt": "Descreva a tarefa, escolha o processo e inicie o temporizador. O tempo faturável fica pronto a lançar."
+      },
+      "timeoutMs": 6000
+    },
+    {
+      "id": "lancar-e-transferir",
+      "type": "await-action",
+      "target": "tempos-transferir",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "fill", "target": "tempos-desc", "value": "Reunião de preparação" },
+          { "kind": "fill", "target": "tempos-minutos", "value": "90" },
+          { "kind": "click", "target": "tempos-guardar" },
+          { "kind": "click", "target": "tempos-transferir" }
+        ]
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "anotar-lista",
+      "type": "annotate-result",
+      "target": "tempos-lista",
+      "copy": {
+        "titlePt": "Do tempo ao honorário",
+        "bodyPt": "Cada registo parado e faturável passa para os honorários com o valor calculado a partir da tarifa/hora."
+      },
+      "timeoutMs": 6000
+    }
+  ]
+}

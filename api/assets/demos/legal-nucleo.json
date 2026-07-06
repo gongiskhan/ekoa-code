@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "appId": "legal-nucleo",
+  "card": {
+    "titlePt": "O núcleo partilhado do escritório",
+    "descriptionPt": "O painel do dia: prazos, tarefas e comunicações sobre a espinha partilhada por toda a suite - e o conjunto de demonstração que conta a história encadeada.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Um núcleo, vinte e oito aplicações",
+        "bodyPt": "Clientes e processos vivem numa espinha única - todas as aplicações da suite leem e escrevem aqui."
+      }
+    },
+    {
+      "id": "kpis",
+      "type": "spotlight",
+      "target": "nucleo-kpis",
+      "copy": {
+        "titlePt": "O dia num relance",
+        "bodyPt": "Processos ativos, prazos vencidos, para hoje e a sete dias - os indicadores vêm diretamente da espinha."
+      }
+    },
+    {
+      "id": "radar",
+      "type": "spotlight",
+      "target": "nucleo-radar",
+      "copy": {
+        "titlePt": "Radar de prazos",
+        "bodyPt": "Os prazos mais urgentes de TODAS as aplicações - do CPC ao regime do CIRE - por ordem de urgência."
+      }
+    },
+    {
+      "id": "demo",
+      "type": "annotate-result",
+      "target": "nucleo-demonstracao",
+      "copy": {
+        "titlePt": "Fonseca & Associados",
+        "bodyPt": "O conjunto de demonstração instala e remove-se num clique - atómico, demo-marcado, sem nunca tocar sistemas externos reais."
+      }
+    }
+  ]
+}

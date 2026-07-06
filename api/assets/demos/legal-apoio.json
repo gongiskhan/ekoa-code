@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "appId": "legal-apoio",
+  "card": {
+    "titlePt": "Apoio judiciário, organizado",
+    "descriptionPt": "Veja como o Apoio Judiciário reúne um pedido de protecção jurídica ou nomeação: abra o pedido semeado e veja os dados, os prazos SinOA e o pedido de honorários num só sítio. A submissão continua a ser feita pelo advogado no SinOA.",
+    "durationSec": 30
+  },
+  "steps": [
+    {
+      "id": "abrir-pedidos",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Os pedidos de apoio judiciário",
+        "bodyPt": "Os pedidos vivem sobre a espinha partilhada, com o cliente, o tipo e o estado. Vamos abrir um para ver o que a aplicação organiza."
+      }
+    },
+    {
+      "id": "destacar-pedido",
+      "type": "spotlight",
+      "target": "apoio-pedido",
+      "copy": {
+        "titlePt": "Cada pedido tem a sua ficha",
+        "bodyPt": "Este é o pedido em preparação do cliente. Cada linha abre a ficha completa do pedido."
+      }
+    },
+    {
+      "id": "abrir-pedido",
+      "type": "await-action",
+      "target": "apoio-pedido",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "apoio-pedido" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-detalhe",
+      "type": "annotate-result",
+      "target": "apoio-detalhe",
+      "copy": {
+        "titlePt": "Tudo num só sítio",
+        "bodyPt": "A ficha do pedido reúne os dados, os prazos SinOA gerados pelo motor determinístico e o pedido de honorários com as despesas comprovadas. A submissão é sempre feita pelo advogado no SinOA."
+      }
+    }
+  ]
+}

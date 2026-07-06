@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "appId": "legal-honorarios",
+  "card": {
+    "titlePt": "A pré-fatura que mostra as contas",
+    "descriptionPt": "Escolha o processo e calcule a pré-fatura com IVA e retenção na fonte à taxa em vigor - aritmética em cêntimos inteiros, sempre com o trabalho à vista. Nunca emite fatura fiscal.",
+    "durationSec": 45
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/pre-faturas",
+      "copy": {
+        "titlePt": "Pré-faturação determinística",
+        "bodyPt": "Os tempos e despesas do processo tornam-se uma pré-fatura - a fatura certificada emite-se sempre pela integração (regra AT)."
+      }
+    },
+    {
+      "id": "escolher",
+      "type": "await-action",
+      "target": "hon-processo",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "hon-processo"
+          },
+          {
+            "kind": "select",
+            "target": "hon-processo",
+            "index": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "calcular",
+      "type": "await-action",
+      "target": "hon-calcular",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "hon-calcular"
+          }
+        ]
+      }
+    },
+    {
+      "id": "contas",
+      "type": "annotate-result",
+      "target": "hon-breakdown",
+      "copy": {
+        "titlePt": "As contas à vista",
+        "bodyPt": "Base, IVA e retenção na fonte a 23% (Lei 45-A/2024) - cêntimos inteiros, sem erros de arredondamento, com cada passo explicado."
+      }
+    }
+  ]
+}

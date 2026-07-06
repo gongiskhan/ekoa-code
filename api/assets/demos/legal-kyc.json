@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "appId": "legal-kyc",
+  "card": {
+    "titlePt": "Diligência de clientes em minutos",
+    "descriptionPt": "Crie uma ficha de diligência (Lei n.º 83/2017): confirme a aplicabilidade dos deveres, identifique o cliente e veja o risco pontuado por um motor determinístico, com todos os fatores à vista.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir-nova",
+      "type": "navigate",
+      "to": "/nova",
+      "copy": {
+        "titlePt": "Uma nova ficha de diligência",
+        "bodyPt": "O assistente conduz a identificação e a diligência do cliente passo a passo, sobre a espinha partilhada do escritório."
+      }
+    },
+    {
+      "id": "destacar-assistente",
+      "type": "spotlight",
+      "target": "kyc-nova",
+      "copy": {
+        "titlePt": "Primeiro, a aplicabilidade",
+        "bodyPt": "Os deveres de branqueamento não se aplicam à consulta jurídica nem ao patrocínio. O assistente orienta, mas nunca força - por isso o primeiro passo confirma o âmbito (art. 4.º)."
+      }
+    },
+    {
+      "id": "confirmar-servico",
+      "type": "await-action",
+      "target": "kyc-servico-avancar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "kyc-servico-avancar" }
+        ]
+      }
+    },
+    {
+      "id": "destacar-identificacao",
+      "type": "spotlight",
+      "target": "kyc-cliente",
+      "copy": {
+        "titlePt": "Identificação e fatores de risco",
+        "bodyPt": "Escolha o cliente e os fatores objetivos - tipo, país, natureza da operação, PEP e relação presencial. São estes fatores que alimentam a pontuação."
+      }
+    },
+    {
+      "id": "avaliar-risco",
+      "type": "await-action",
+      "target": "kyc-avancar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "select", "target": "kyc-cliente", "index": 2 },
+          { "kind": "select", "target": "kyc-tipo", "value": "empresa" },
+          { "kind": "select", "target": "kyc-pais", "value": "medio" },
+          { "kind": "select", "target": "kyc-natureza", "value": "societario" },
+          { "kind": "click", "target": "kyc-avancar" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-risco",
+      "type": "annotate-result",
+      "target": "kyc-risco",
+      "copy": {
+        "titlePt": "Risco determinístico, com o trabalho à vista",
+        "bodyPt": "O motor soma cada fator à base e devolve a banda de risco. Todos os fatores aparecem - mesmo os de peso zero - para a diligência ficar auditável de ponta a ponta."
+      }
+    }
+  ]
+}

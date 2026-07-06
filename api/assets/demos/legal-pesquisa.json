@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "appId": "legal-pesquisa",
+  "card": {
+    "titlePt": "Pesquisa jurídica com citações verificáveis",
+    "descriptionPt": "Veja como uma pesquisa guardada mostra as suas fontes DGSI/DRE como ligações reais e verificáveis, com o aviso permanente de que o advogado revê sempre as fontes.",
+    "durationSec": 30
+  },
+  "steps": [
+    {
+      "id": "abrir-historico",
+      "type": "navigate",
+      "to": "/historico",
+      "copy": {
+        "titlePt": "O histórico de pesquisas",
+        "bodyPt": "As pesquisas guardadas nos processos vivem sobre a espinha partilhada. Vamos abrir uma para ver as fontes citadas."
+      }
+    },
+    {
+      "id": "destacar-pesquisa",
+      "type": "spotlight",
+      "target": "pesquisa-historico-item",
+      "copy": {
+        "titlePt": "Cada pesquisa fica arquivada",
+        "bodyPt": "Uma pesquisa sobre o prazo de contestação foi guardada no processo. Cada linha abre as fontes que a fundamentam."
+      }
+    },
+    {
+      "id": "expandir-pesquisa",
+      "type": "await-action",
+      "target": "pesquisa-historico-item",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "pesquisa-historico-item" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-citacoes",
+      "type": "annotate-result",
+      "target": "pesquisa-citacoes",
+      "copy": {
+        "titlePt": "Fontes citáveis, não inventadas",
+        "bodyPt": "Cada citação é uma ligação real para a fonte (aqui, a legislação no Diário da República). Nada é inventado; o advogado revê sempre as fontes."
+      }
+    }
+  ]
+}

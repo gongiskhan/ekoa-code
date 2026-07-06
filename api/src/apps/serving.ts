@@ -33,6 +33,7 @@ import { appRegistry } from './app-registry.js';
 import { getAppIdBySlug } from './slug-index.js';
 import { lookupShareable } from './share-lookup.js';
 import { injectAppContext } from './injected-context.js';
+import { listDemoCards, getDemoSpec, demoAssetsDir } from '../services/demo-registry.js';
 import { artifacts } from '../data/stores.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -309,9 +310,39 @@ export function servingRouter(deps: ServingDeps): Router {
     });
   });
 
-  // Demo bridge client (§7.6; ch03 §3.8.23).
+  // Demo bridge client (§7.6; ch03 §3.8.23) - headers carried.
   r.get('/__ekoa/demo-bridge.js', (_req, res) => {
-    res.type('application/javascript').send(demoBridgeSource);
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(demoBridgeSource);
+  });
+
+  // Public demo registry (ch03 §3.8.23, carried): versioned demo specs + assets.
+  // ALL public (pre-login landing panel + cross-origin served apps). Assets mount
+  // BEFORE /:appId so an asset path is never mistaken for an appId; fallthrough
+  // off -> 404 on miss, dotfiles denied (path-traversal posture carried).
+  r.use('/api/demos/assets', (_req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Cache-Control', 'public, max-age=3600');
+    next();
+  });
+  r.use(
+    '/api/demos/assets',
+    expressStatic(demoAssetsDir(), { maxAge: '1h', fallthrough: false, index: false, dotfiles: 'deny' }),
+  );
+  r.get('/api/demos', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ demos: listDemoCards() });
+  });
+  r.get('/api/demos/:appId', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const spec = getDemoSpec(String(req.params.appId || ''));
+    if (!spec) {
+      res.status(404).json({ error: 'Demonstração não encontrada' });
+      return;
+    }
+    res.json(spec);
   });
 
   // In-page health probe sink (§7.11, carried): no auth (probes have no token);

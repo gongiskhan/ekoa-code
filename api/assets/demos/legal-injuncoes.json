@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "appId": "legal-injuncoes",
+  "card": {
+    "titlePt": "Da fatura vencida à fórmula executória",
+    "descriptionPt": "A fatura de 4.200 euros esgotou a cobrança extrajudicial: verifique a elegibilidade citada, calcule juros por troços e taxa de justiça no serviço de cálculos, registe a interpelação e conduza a submissão assistida no BNI até à fórmula executória.",
+    "durationSec": 75
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A fase judicial da cobrança",
+        "bodyPt": "Quando a sequência de lembretes se esgota, o crédito segue para injunção - com a elegibilidade citada no momento da escolha."
+      }
+    },
+    {
+      "id": "escolher-credito",
+      "type": "await-action",
+      "target": "injuncoes-credito",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "injuncoes-credito" },
+          { "kind": "select", "target": "injuncoes-credito", "index": 1 }
+        ]
+      }
+    },
+    {
+      "id": "criar-nota",
+      "type": "spotlight",
+      "target": "injuncoes-criar",
+      "copy": {
+        "titlePt": "Elegibilidade citada",
+        "bodyPt": "Transação comercial: DL 62/2013, sem limite de valor. Fora disso, o regime geral do DL 269/98 vai até 15.000 euros - e o fundamento fica registado."
+      }
+    },
+    {
+      "id": "criar",
+      "type": "await-action",
+      "target": "injuncoes-criar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-criar" }] }
+    },
+    {
+      "id": "calcular",
+      "type": "await-action",
+      "target": "injuncoes-calcular",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-calcular" }] }
+    },
+    {
+      "id": "calculos-nota",
+      "type": "spotlight",
+      "target": "injuncoes-explicacao",
+      "copy": {
+        "titlePt": "Todo o cálculo cita a fonte",
+        "bodyPt": "Os juros vêm por troços, um Aviso da DGTF por semestre, e a taxa de justiça cita o RCP - tudo calculado pelo serviço de cálculos, nunca por fórmulas locais."
+      }
+    },
+    {
+      "id": "interpelar",
+      "type": "await-action",
+      "target": "injuncoes-interpelar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-interpelar" }] }
+    },
+    {
+      "id": "bni-1",
+      "type": "await-action",
+      "target": "bni-passo-0",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "bni-passo-0" }] }
+    },
+    {
+      "id": "bni-2",
+      "type": "await-action",
+      "target": "bni-passo-1",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "bni-passo-1" }] }
+    },
+    {
+      "id": "bni-3",
+      "type": "await-action",
+      "target": "bni-passo-2",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "bni-passo-2" }] }
+    },
+    {
+      "id": "bni-4",
+      "type": "await-action",
+      "target": "bni-passo-3",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "bni-passo-3" }] }
+    },
+    {
+      "id": "submeter",
+      "type": "await-action",
+      "target": "injuncoes-submeter",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-submeter" }] }
+    },
+    {
+      "id": "notificada",
+      "type": "await-action",
+      "target": "injuncoes-notificada",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-notificada" }] }
+    },
+    {
+      "id": "formula",
+      "type": "await-action",
+      "target": "injuncoes-formula",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "injuncoes-formula" }] }
+    },
+    {
+      "id": "final",
+      "type": "annotate-result",
+      "target": "injuncao-formula",
+      "copy": {
+        "titlePt": "Título executivo",
+        "bodyPt": "Sem oposição nos 15 dias, a fórmula executória é aposta: o requerimento vale como título executivo, a tarefa de execução abre-se e o prazo ficou no radar - a história encadeada completa, sem tocar sistemas externos."
+      }
+    }
+  ]
+}

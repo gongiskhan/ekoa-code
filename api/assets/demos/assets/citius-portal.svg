@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-label="Portal Citius - consulta publica de processos">
+  <rect width="960" height="600" fill="#f1f5f9"/>
+  <!-- browser chrome -->
+  <rect x="40" y="40" width="880" height="520" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+  <rect x="40" y="40" width="880" height="52" rx="14" fill="#0f172a"/>
+  <circle cx="70" cy="66" r="6" fill="#334155"/>
+  <circle cx="92" cy="66" r="6" fill="#334155"/>
+  <circle cx="114" cy="66" r="6" fill="#334155"/>
+  <rect x="150" y="54" width="740" height="24" rx="12" fill="#1e293b"/>
+  <text x="168" y="71" font-family="system-ui, sans-serif" font-size="13" fill="#cbd5e1">tribunais.org.pt/citius/consultarProcesso</text>
+  <!-- portal header -->
+  <text x="72" y="140" font-family="system-ui, sans-serif" font-size="26" font-weight="700" fill="#0f172a">Portal Citius</text>
+  <text x="72" y="166" font-family="system-ui, sans-serif" font-size="15" fill="#475569">Consulta publica de processos e notificacoes</text>
+  <!-- search row -->
+  <rect x="72" y="196" width="560" height="46" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="88" y="224" font-family="system-ui, sans-serif" font-size="15" fill="#334155">1234/26.5T8LSB</text>
+  <rect x="644" y="196" width="120" height="46" rx="8" fill="#0d9488"/>
+  <text x="704" y="224" font-family="system-ui, sans-serif" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">Consultar</text>
+  <!-- results table header -->
+  <rect x="72" y="272" width="816" height="40" fill="#f1f5f9"/>
+  <text x="88" y="297" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#475569">Data</text>
+  <text x="220" y="297" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#475569">Acto</text>
+  <text x="640" y="297" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#475569">Prazo</text>
+  <!-- result rows -->
+  <g font-family="system-ui, sans-serif" font-size="13" fill="#0f172a">
+    <line x1="72" y1="312" x2="888" y2="312" stroke="#e2e8f0"/>
+    <text x="88" y="338">2026-06-05</text>
+    <text x="220" y="338">Notificacao para contestar</text>
+    <text x="640" y="338" fill="#b45309" font-weight="600">30 dias</text>
+    <line x1="72" y1="356" x2="888" y2="356" stroke="#e2e8f0"/>
+    <text x="88" y="382">2026-05-21</text>
+    <text x="220" y="382">Junta documento superveniente</text>
+    <text x="640" y="382" fill="#64748b">-</text>
+    <line x1="72" y1="400" x2="888" y2="400" stroke="#e2e8f0"/>
+    <text x="88" y="426">2026-05-02</text>
+    <text x="220" y="426">Despacho de saneamento</text>
+    <text x="640" y="426" fill="#64748b">-</text>
+    <line x1="72" y1="444" x2="888" y2="444" stroke="#e2e8f0"/>
+  </g>
+  <text x="72" y="512" font-family="system-ui, sans-serif" font-size="13" fill="#64748b">O Ekoa le estas notificacoes e prepara os prazos automaticamente no radar.</text>
+</svg>

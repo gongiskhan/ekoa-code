@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "appId": "legal-recursos",
+  "card": {
+    "titlePt": "O saldo de férias em segundos",
+    "descriptionPt": "Abra a ficha de uma pessoa e veja o direito e o saldo de férias calculados pelo Código do Trabalho (art. 238.º/239.º), com a explicação passo a passo.",
+    "durationSec": 30
+  },
+  "steps": [
+    {
+      "id": "abrir-pessoas",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A equipa do escritório",
+        "bodyPt": "As fichas da equipa vivem sobre a espinha partilhada. Vamos abrir uma para ver as férias."
+      }
+    },
+    {
+      "id": "destacar-pessoa",
+      "type": "spotlight",
+      "target": "recursos-pessoa",
+      "copy": {
+        "titlePt": "Cada pessoa tem a sua ficha",
+        "bodyPt": "Comecemos pela pessoa mais antiga da equipa. Cada linha abre a ficha completa."
+      }
+    },
+    {
+      "id": "abrir-ficha",
+      "type": "await-action",
+      "target": "recursos-pessoa",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "recursos-pessoa" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-saldo",
+      "type": "annotate-result",
+      "target": "recursos-saldo-ferias",
+      "copy": {
+        "titlePt": "Direito, gozado e saldo",
+        "bodyPt": "O motor determinístico aplica a regra correta do Código do Trabalho, mostra os dias e explica passo a passo como lá chegou."
+      }
+    }
+  ]
+}

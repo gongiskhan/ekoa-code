@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "appId": "legal-forms",
+  "card": {
+    "titlePt": "Preenchimento de Formulários",
+    "descriptionPt": "Carregue um formulário oficial em PDF, veja os campos detetados e mapeados ao cliente e ao processo, e exporte o PDF preenchido para o dossiê. Da próxima vez, o mesmo formulário é reconhecido pela impressão digital.",
+    "durationSec": 90
+  },
+  "steps": [
+    {
+      "id": "abrir-modelos",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Formulários oficiais em PDF",
+        "bodyPt": "Aqui vivem os modelos de formulário. Vamos usar um exemplo de procuração forense para ver o preenchimento assistido de ponta a ponta."
+      }
+    },
+    {
+      "id": "destacar-exemplo",
+      "type": "spotlight",
+      "target": "forms-exemplo",
+      "copy": {
+        "titlePt": "Começar por um exemplo",
+        "bodyPt": "O botão Usar exemplo carrega um formulário AcroForm de demonstração, exatamente como se carregasse o seu próprio PDF."
+      }
+    },
+    {
+      "id": "usar-exemplo",
+      "type": "await-action",
+      "target": "forms-exemplo",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "forms-exemplo" }
+        ]
+      }
+    },
+    {
+      "id": "destacar-mapeamento",
+      "type": "spotlight",
+      "target": "forms-mapeamento",
+      "copy": {
+        "titlePt": "Campos detetados e mapeados",
+        "bodyPt": "Os cinco campos do formulário foram detetados e auto-mapeados à espinha - o NIF, o nome, a morada, o número do processo e o tribunal. Pode ajustar cada origem."
+      }
+    },
+    {
+      "id": "preencher-exportar",
+      "type": "await-action",
+      "target": "forms-preencher",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "select", "target": "forms-cliente", "index": 1 },
+          { "kind": "click", "target": "forms-preencher" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-resultado",
+      "type": "annotate-result",
+      "target": "forms-resultado",
+      "copy": {
+        "titlePt": "PDF preenchido e no dossiê",
+        "bodyPt": "O formulário foi preenchido e achatado no browser e guardado no dossiê do processo. Ao recarregar o mesmo PDF, o modelo é reconhecido pela impressão digital e a disposição aprendida é reaplicada."
+      }
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "appId": "legal-calculos",
+  "card": {
+    "titlePt": "Juros de mora por troços, com a fonte citada",
+    "descriptionPt": "Veja como o serviço de Cálculos conta os juros de mora de uma fatura vencida, divide o período nos limites de semestre e cita o Aviso da DGTF de cada troço, produzindo uma memória de cálculo pronta a inserir numa carta de interpelação.",
+    "durationSec": 55
+  },
+  "steps": [
+    {
+      "id": "abrir-juros",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Cálculo de juros de mora",
+        "bodyPt": "O serviço de Cálculos é consumido por toda a suite. Vamos calcular os juros de uma fatura vencida - todo o cálculo cita a sua fonte legal."
+      }
+    },
+    {
+      "id": "destacar-formulario",
+      "type": "spotlight",
+      "target": "calculos-form",
+      "copy": {
+        "titlePt": "Preencha a mora aqui",
+        "bodyPt": "Indique o capital, a data de vencimento e a data até à qual conta os juros. A contagem é actual/365 e divide-se por troços nos limites de semestre."
+      }
+    },
+    {
+      "id": "calcular",
+      "type": "await-action",
+      "target": "calculos-calcular",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "fill", "target": "calculos-capital", "value": "12500,00" },
+          { "kind": "fill", "target": "calculos-vencimento", "value": "2023-04-01" },
+          { "kind": "fill", "target": "calculos-fim", "value": "2023-09-30" },
+          { "kind": "select", "target": "calculos-tipo", "value": "comercial" },
+          { "kind": "click", "target": "calculos-calcular" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-trocos",
+      "type": "annotate-result",
+      "target": "calculos-resultado",
+      "copy": {
+        "titlePt": "Os juros, troço a troço",
+        "bodyPt": "O período cruza dois semestres, por isso surgem dois troços: cada um aplica a taxa em vigor e cita o seu Aviso da DGTF. O total é a soma exacta dos troços."
+      }
+    },
+    {
+      "id": "anotar-memoria",
+      "type": "annotate-result",
+      "target": "calculos-explicacao",
+      "copy": {
+        "titlePt": "A memória de cálculo",
+        "bodyPt": "A memória mostra cada passo e cada fonte. Pode ser guardada e inserida numa carta de interpelação ou numa peça - é o mesmo cálculo, com a fundamentação citada."
+      }
+    },
+    {
+      "id": "sugerir-assistente",
+      "type": "inject-prompt",
+      "surface": "chat",
+      "sendInHarness": false,
+      "prompt": "Quais são as faturas vencidas há mais de 90 dias e quanto rendem de juros de mora até hoje?",
+      "copy": {
+        "titlePt": "Pergunte ao Assistente",
+        "bodyPt": "Também pode pedir ao Assistente uma leitura dos juros a correr sobre a carteira vencida. Preparámos esta pergunta para você a rever antes de a enviar."
+      }
+    }
+  ]
+}

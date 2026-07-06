@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "appId": "legal-prazos",
+  "card": {
+    "titlePt": "Calcular um prazo processual",
+    "descriptionPt": "Veja como a Calculadora conta um prazo a partir da notificação, salta feriados e férias judiciais, e mostra cada dia contado.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir-calculadora",
+      "type": "navigate",
+      "to": "/calculadora",
+      "copy": {
+        "titlePt": "Calculadora de prazos",
+        "bodyPt": "Vamos calcular um prazo processual a partir de uma notificação. O motor aplica as regras do Código de Processo Civil por si."
+      }
+    },
+    {
+      "id": "destacar-formulario",
+      "type": "spotlight",
+      "target": "prazos-form",
+      "copy": {
+        "titlePt": "Preencha o prazo aqui",
+        "bodyPt": "Escolha o processo, indique a data da notificação e o número de dias. A contagem em dias úteis suspende-se nas férias judiciais."
+      }
+    },
+    {
+      "id": "calcular",
+      "type": "await-action",
+      "target": "prazos-calcular",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "select", "target": "prazos-processo", "index": 1 },
+          { "kind": "fill", "target": "prazos-titulo", "value": "Contestação" },
+          { "kind": "fill", "target": "prazos-data", "value": "2026-06-05" },
+          { "kind": "fill", "target": "prazos-dias", "value": "5" },
+          { "kind": "click", "target": "prazos-calcular" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-resultado",
+      "type": "annotate-result",
+      "target": "prazos-resultado",
+      "copy": {
+        "titlePt": "A data-limite está calculada",
+        "bodyPt": "O motor mostra a data-limite e a janela de multa do artigo 139.º, com cada dia útil contado. Pode guardar o prazo para o acompanhar no radar."
+      }
+    },
+    {
+      "id": "sugerir-assistente",
+      "type": "inject-prompt",
+      "surface": "chat",
+      "sendInHarness": false,
+      "prompt": "Quais são os prazos que vencem esta semana e que ainda estão por cumprir?",
+      "copy": {
+        "titlePt": "Pergunte ao Assistente",
+        "bodyPt": "Também pode pedir ao Assistente uma leitura dos prazos. Preparámos esta pergunta para você a rever antes de a enviar."
+      }
+    },
+    {
+      "id": "portal-citius",
+      "type": "external-image-step",
+      "image": "citius-portal.svg",
+      "copy": {
+        "titlePt": "As notificações vêm do Citius",
+        "bodyPt": "No Portal Citius encontra as notificações oficiais do processo. O Ekoa lê estas publicações e prepara os prazos no radar automaticamente."
+      }
+    }
+  ]
+}

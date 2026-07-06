@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ekoa.local/schemas/demo-spec.json",
+  "title": "Ekoa Tutorial Bridge demo spec",
+  "description": "A plain-English, code-free guided tour of one served artifact app. The authoritative validator is cortex/src/services/demo-registry.ts (validateDemoSpec); this JSON Schema mirrors it for humans and tests. Files named _*.json in ekoa-data/demos are NOT specs (this file is skipped by the loader).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "appId", "card", "steps"],
+  "properties": {
+    "version": { "const": 1 },
+    "appId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical app id / slug of the served artifact (e.g. legal-prazos). The tour opens /apps/<appId>/ in an iframe."
+    },
+    "card": { "$ref": "#/definitions/card" },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/step" }
+    }
+  },
+  "definitions": {
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["titlePt", "bodyPt"],
+      "description": "PT-PT formal copy shown to the user. No emoji, no em-dashes.",
+      "properties": {
+        "titlePt": { "type": "string", "minLength": 1 },
+        "bodyPt": { "type": "string", "minLength": 1 }
+      }
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["titlePt", "descriptionPt", "durationSec"],
+      "properties": {
+        "titlePt": { "type": "string", "minLength": 1 },
+        "descriptionPt": { "type": "string", "minLength": 1 },
+        "durationSec": { "type": "integer", "exclusiveMinimum": 0 },
+        "thumbnail": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional path under /api/demos/assets/."
+        }
+      }
+    },
+    "simulateAction": {
+      "description": "One deterministic action the HARNESS performs inside the iframe. Live users perform the action themselves; simulate exists so the automated test can drive the same flow.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "target"],
+          "properties": {
+            "kind": { "const": "click" },
+            "target": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "target", "value"],
+          "properties": {
+            "kind": { "const": "fill" },
+            "target": { "type": "string", "minLength": 1 },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "target"],
+          "description": "Drives a native <select> (fill cannot). Provide value (option value) or index (0-based).",
+          "properties": {
+            "kind": { "const": "select" },
+            "target": { "type": "string", "minLength": 1 },
+            "value": { "type": "string" },
+            "index": { "type": "integer", "minimum": 0 }
+          },
+          "anyOf": [{ "required": ["value"] }, { "required": ["index"] }]
+        }
+      ]
+    },
+    "step": {
+      "description": "Target namespace: a plain name matches data-demo-target inside the app iframe; a 'host:' prefix matches data-demo-target on dashboard (host) elements.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "to"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "navigate" },
+            "to": { "type": "string", "minLength": 1, "description": "App-relative path inside the iframe, e.g. '/' or '/calculadora'." },
+            "copy": { "$ref": "#/definitions/copy" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "target", "copy"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "spotlight" },
+            "target": { "type": "string", "minLength": 1 },
+            "copy": { "$ref": "#/definitions/copy" },
+            "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "target", "event", "simulate"],
+          "description": "Executability invariant (enforced by validateDemoSpec, not expressible in JSON Schema): when event is \"click\", simulate.actions MUST include a click on this step's target - otherwise the awaited click never fires and the tour hangs.",
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "await-action" },
+            "target": { "type": "string", "minLength": 1 },
+            "event": { "enum": ["click", "result-ready"] },
+            "simulate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["actions"],
+              "properties": {
+                "actions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/definitions/simulateAction" }
+                }
+              }
+            },
+            "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "target", "copy"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "annotate-result" },
+            "target": { "type": "string", "minLength": 1 },
+            "copy": { "$ref": "#/definitions/copy" },
+            "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "surface", "prompt"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "inject-prompt" },
+            "surface": { "const": "chat" },
+            "prompt": { "type": "string", "minLength": 1 },
+            "sendInHarness": { "const": false, "description": "The harness never sends (the LLM may be unavailable); it only asserts the text landed." },
+            "copy": { "$ref": "#/definitions/copy" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "type", "image", "copy"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "external-image-step" },
+            "image": { "type": "string", "minLength": 1, "description": "Path under /api/demos/assets/ of an external-portal screenshot." },
+            "copy": { "$ref": "#/definitions/copy" }
+          }
+        }
+      ]
+    }
+  }
+}

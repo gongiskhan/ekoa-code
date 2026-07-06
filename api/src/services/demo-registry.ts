@@ -15,8 +15,9 @@
  * (a repo-relative `ekoa-data/` content tree) is not carried; the directory is env
  * -configurable via `EKOA_DEMOS_DIR`, defaulting to `<dataDir>/demos`.
  */
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, isAbsolute, resolve } from 'node:path';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { join, isAbsolute, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 // ---- schema ----------------------------------------------------------------
@@ -202,10 +203,15 @@ function dataDir(): string {
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 
-/** Absolute path to the demo specs directory (`EKOA_DEMOS_DIR` or `<dataDir>/demos`). */
+/** Absolute path to the demo specs directory. Default is the VERSIONED in-repo
+ *  catalog (api/assets/demos - the Fonseca spine the demo-spine spec drives),
+ *  overridable via EKOA_DEMOS_DIR; resolves from both src/ and dist/ like the
+ *  other api/assets consumers. */
 export function demosDir(): string {
   const raw = process.env.EKOA_DEMOS_DIR;
   if (raw) return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+  const inRepo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'demos');
+  if (existsSync(inRepo)) return inRepo;
   return join(dataDir(), 'demos');
 }
 

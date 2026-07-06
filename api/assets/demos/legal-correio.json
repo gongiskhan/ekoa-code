@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "appId": "legal-correio",
+  "card": {
+    "titlePt": "Uma carta registada em segundos",
+    "descriptionPt": "Registe uma carta de correio registado, gere a referência de registo e marque-a como expedida. O rastreio CTT fica à distância de um clique quando disponível, e a referência mantém-se válida mesmo sem ele.",
+    "durationSec": 30
+  },
+  "steps": [
+    {
+      "id": "abrir-nova",
+      "type": "navigate",
+      "to": "/nova",
+      "copy": {
+        "titlePt": "Nova carta",
+        "bodyPt": "O expediente de correio registado vive sobre a espinha partilhada. Vamos registar uma carta nova."
+      }
+    },
+    {
+      "id": "destacar-registar",
+      "type": "spotlight",
+      "target": "correio-registar",
+      "copy": {
+        "titlePt": "Preencher e registar",
+        "bodyPt": "Indique o destinatário e o conteúdo da carta. O botão Registar gera a referência de registo manual e guarda a carta como rascunho."
+      }
+    },
+    {
+      "id": "registar",
+      "type": "await-action",
+      "target": "correio-registar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "fill", "target": "correio-destinatario", "value": "Sofia Rebelo Nunes" },
+          { "kind": "fill", "target": "correio-conteudo", "value": "Notificação extrajudicial para pagamento" },
+          { "kind": "click", "target": "correio-registar" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-ref",
+      "type": "annotate-result",
+      "target": "correio-ref",
+      "copy": {
+        "titlePt": "Referência de registo gerada",
+        "bodyPt": "A referência segue o formato dos CTT, mas é uma referência de registo manual - substituída pela referência real do balcão. A partir daqui marca-se a carta como expedida e arquiva-se o comprovativo no dossiê."
+      }
+    }
+  ]
+}

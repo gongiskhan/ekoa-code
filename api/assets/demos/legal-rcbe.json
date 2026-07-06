@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "appId": "legal-rcbe",
+  "card": {
+    "titlePt": "A obrigação RCBE fechada num só fluxo",
+    "descriptionPt": "A sociedade cliente tem a confirmação anual em atraso: reveja os beneficiários efetivos partilhados com o KYC, prepare a declaração pré-preenchida, conduza a submissão assistida no Portal da Justiça e arquive o comprovativo - com a avença lançada para honorários.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A carteira RCBE",
+        "bodyPt": "Cada entidade cliente mostra os beneficiários efetivos e o estado das obrigações - a Vinhos do Douro tem a confirmação anual em atraso."
+      }
+    },
+    {
+      "id": "abrir-entidade",
+      "type": "await-action",
+      "target": "rcbe-row",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "rcbe-row" }] }
+    },
+    {
+      "id": "bos-nota",
+      "type": "spotlight",
+      "target": "rcbe-explicacao",
+      "copy": {
+        "titlePt": "Uma estrutura, duas aplicações",
+        "bodyPt": "Os beneficiários (25% ou mais do capital ou votos) vivem numa colecção partilhada - o KYC lê exatamente as mesmas linhas. Sem duplicação, sem divergência."
+      }
+    },
+    {
+      "id": "preparar",
+      "type": "await-action",
+      "target": "rcbe-preparar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "rcbe-preparar" }] }
+    },
+    {
+      "id": "portal-1",
+      "type": "await-action",
+      "target": "portal-passo-0",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "portal-passo-0" }] }
+    },
+    {
+      "id": "portal-2",
+      "type": "await-action",
+      "target": "portal-passo-1",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "portal-passo-1" }] }
+    },
+    {
+      "id": "portal-3",
+      "type": "await-action",
+      "target": "portal-passo-2",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "portal-passo-2" }] }
+    },
+    {
+      "id": "portal-4",
+      "type": "await-action",
+      "target": "portal-passo-3",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "portal-passo-3" }] }
+    },
+    {
+      "id": "arquivar",
+      "type": "await-action",
+      "target": "rcbe-arquivar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "rcbe-arquivar" }] }
+    },
+    {
+      "id": "final",
+      "type": "annotate-result",
+      "target": "rcbe-comprovativo",
+      "copy": {
+        "titlePt": "Obrigação cumprida",
+        "bodyPt": "O comprovativo ficou arquivado no dossiê, a obrigação fechou e a avença do serviço recorrente foi lançada para os honorários. Sem API oficial, cada passo assistido ficou com proveniência registada - e nada tocou sistemas externos reais."
+      }
+    }
+  ]
+}

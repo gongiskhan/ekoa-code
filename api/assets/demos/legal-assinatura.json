@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "appId": "legal-assinatura",
+  "card": {
+    "titlePt": "Assinatura Qualificada",
+    "descriptionPt": "Prepare um envelope de assinatura a partir de uma procuração forense fictícia, defina a ordem dos signatários, assine em modo simulado e arquive o certificado de auditoria no dossiê. O calendário da Portaria 350-A/2025 mostra a passagem à assinatura qualificada obrigatória em 2027.",
+    "durationSec": 100
+  },
+  "steps": [
+    {
+      "id": "abrir-envelopes",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Envelopes de assinatura",
+        "bodyPt": "Este é o painel de envelopes. Em destaque, o calendário que leva à assinatura qualificada obrigatória a partir de 1 de janeiro de 2027."
+      }
+    },
+    {
+      "id": "destacar-calendario",
+      "type": "spotlight",
+      "target": "assinatura-calendario",
+      "copy": {
+        "titlePt": "O calendário de 2027",
+        "bodyPt": "Até 31 de dezembro de 2026 admite-se a assinatura avançada para advogados; a partir de 2027 passa a ser obrigatória a qualificada, com a fonte citada (Portaria n.º 350-A/2025)."
+      }
+    },
+    {
+      "id": "ir-novo",
+      "type": "navigate",
+      "to": "/novo",
+      "copy": {
+        "titlePt": "Preparar um envelope",
+        "bodyPt": "Vamos preparar um envelope a partir de uma procuração forense fictícia. O exemplo preenche o documento e os signatários."
+      }
+    },
+    {
+      "id": "usar-exemplo",
+      "type": "await-action",
+      "target": "assinatura-exemplo",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-exemplo" }
+        ]
+      }
+    },
+    {
+      "id": "destacar-ordem",
+      "type": "spotlight",
+      "target": "assinatura-sigs",
+      "copy": {
+        "titlePt": "Signatários e ordem",
+        "bodyPt": "O exemplo tem dois signatários: o cliente (ordem 1) e a advogada (ordem 2). A assinatura segue esta ordem."
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "criar-envelope",
+      "type": "await-action",
+      "target": "assinatura-criar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-criar" }
+        ]
+      },
+      "timeoutMs": 15000
+    },
+    {
+      "id": "marcar-pronto",
+      "type": "await-action",
+      "target": "assinatura-marcar-pronto",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-marcar-pronto" }
+        ]
+      },
+      "timeoutMs": 15000
+    },
+    {
+      "id": "iniciar-assinatura",
+      "type": "await-action",
+      "target": "assinatura-iniciar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-iniciar" }
+        ]
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "assinar-primeiro",
+      "type": "await-action",
+      "target": "assinatura-assinar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-assinar" }
+        ]
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "assinar-segundo",
+      "type": "await-action",
+      "target": "assinatura-assinar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-assinar" }
+        ]
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "certificado",
+      "type": "annotate-result",
+      "target": "assinatura-explicacao",
+      "copy": {
+        "titlePt": "Certificado de auditoria",
+        "bodyPt": "Todos assinaram e o envelope está concluído. O certificado reúne as impressões digitais dos documentos, os signatários com método e proveniência, e o trilho completo. É um registo de auditoria, não uma atestação de validade jurídica."
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "arquivar",
+      "type": "await-action",
+      "target": "assinatura-arquivar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "assinatura-arquivar" }
+        ]
+      },
+      "timeoutMs": 12000
+    },
+    {
+      "id": "arquivado",
+      "type": "annotate-result",
+      "target": "assinatura-arquivado",
+      "copy": {
+        "titlePt": "Arquivado no dossiê",
+        "bodyPt": "O certificado e a referência do documento assinado ficaram guardados no dossiê. O registo probatório está completo."
+      },
+      "timeoutMs": 12000
+    }
+  ]
+}

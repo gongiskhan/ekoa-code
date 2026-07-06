@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "appId": "legal-financas",
+  "card": {
+    "titlePt": "A conta corrente do cliente, ao cêntimo",
+    "descriptionPt": "Veja o saldo em dívida de um cliente sobre a espinha partilhada e registe uma despesa reembolsável - que, ao ser aprovada, entra na conta corrente como débito.",
+    "durationSec": 35
+  },
+  "steps": [
+    {
+      "id": "abrir-conta",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A conta corrente vive na espinha partilhada",
+        "bodyPt": "Cada cliente tem a sua conta corrente - débitos e créditos com origem, e o saldo corrente sempre à vista."
+      }
+    },
+    {
+      "id": "destacar-saldo",
+      "type": "spotlight",
+      "target": "financas-saldo",
+      "copy": {
+        "titlePt": "O saldo em dívida, em segundos",
+        "bodyPt": "O saldo é a soma dos débitos menos os créditos: positivo quer dizer que o cliente ainda deve ao escritório."
+      }
+    },
+    {
+      "id": "ir-despesas",
+      "type": "navigate",
+      "to": "/despesas",
+      "copy": {
+        "titlePt": "As despesas do processo",
+        "bodyPt": "Taxas, certidões e deslocações. Uma despesa reembolsável, quando aprovada, é debitada na conta corrente do cliente."
+      }
+    },
+    {
+      "id": "registar-despesa-nota",
+      "type": "spotlight",
+      "target": "financas-despesa-nova",
+      "copy": {
+        "titlePt": "Registar uma despesa",
+        "bodyPt": "Abra o formulário de nova despesa: escolha o processo, a categoria e o valor, e marque se é reembolsável pelo cliente."
+      }
+    },
+    {
+      "id": "registar-despesa",
+      "type": "await-action",
+      "target": "financas-despesa-nova",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "financas-despesa-nova"
+          }
+        ]
+      }
+    },
+    {
+      "id": "voltar-conta",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "De volta à conta corrente",
+        "bodyPt": "Depois de aprovada, a despesa reembolsável aparece aqui como um débito, e o saldo em dívida sobe em conformidade."
+      }
+    },
+    {
+      "id": "anotar-saldo",
+      "type": "annotate-result",
+      "target": "financas-saldo",
+      "copy": {
+        "titlePt": "Tudo reconciliado no saldo",
+        "bodyPt": "Despesas aprovadas, provisões recebidas e pré-faturas convergem todas neste saldo - o número que diz, ao cêntimo, quanto o cliente deve."
+      }
+    }
+  ]
+}

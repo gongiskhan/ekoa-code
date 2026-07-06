@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "appId": "legal-pecas",
+  "card": {
+    "titlePt": "Uma peça processual em segundos",
+    "descriptionPt": "Escolha o tipo de peça e o processo, e veja o esqueleto ser composto deterministicamente a partir dos dados do processo e dos precedentes - pronto a rever. Sem invenção: o advogado revê sempre.",
+    "durationSec": 45
+  },
+  "steps": [
+    {
+      "id": "abrir-pecas",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "As peças do escritório",
+        "bodyPt": "As peças processuais vivem sobre a espinha partilhada. Vamos redigir uma nova a partir de um processo."
+      }
+    },
+    {
+      "id": "destacar-nova",
+      "type": "spotlight",
+      "target": "pecas-nova",
+      "copy": {
+        "titlePt": "Começar uma peça nova",
+        "bodyPt": "O assistente Nova peça compõe um esqueleto determinístico: o cabeçalho vem do processo e o corpo do precedente escolhido ou da estrutura-tipo. Não há texto inventado."
+      }
+    },
+    {
+      "id": "criar-peca",
+      "type": "await-action",
+      "target": "pecas-criar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "pecas-nova" },
+          { "kind": "select", "target": "pecas-tipo", "value": "requerimento" },
+          { "kind": "select", "target": "pecas-processo", "index": 1 },
+          { "kind": "click", "target": "pecas-criar" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-corpo",
+      "type": "annotate-result",
+      "target": "pecas-editor-corpo",
+      "copy": {
+        "titlePt": "Esqueleto pronto a rever",
+        "bodyPt": "O tribunal, a comarca, o número do processo e as partes entram no cabeçalho; o corpo traz a estrutura da peça. A partir daqui, cite as pesquisas guardadas e exporte para o dossiê em .docx."
+      }
+    }
+  ]
+}

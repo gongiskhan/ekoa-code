@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "appId": "legal-citius",
+  "card": {
+    "titlePt": "Da notificação Citius ao prazo certo",
+    "descriptionPt": "Cole uma notificação Citius, deixe a triagem determinística reconhecer o ato e o prazo, e confirme para o radar - com o exemplo integrado.",
+    "durationSec": 45
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/colar",
+      "copy": {
+        "titlePt": "A caixa de entrada processual",
+        "bodyPt": "As notificações Citius entram por email monitorizado, consulta ou colagem manual - aqui, cola-se o texto e a triagem é determinística."
+      }
+    },
+    {
+      "id": "exemplo",
+      "type": "await-action",
+      "target": "citius-exemplo",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "citius-exemplo"
+          }
+        ]
+      }
+    },
+    {
+      "id": "processar",
+      "type": "await-action",
+      "target": "citius-processar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "citius-processar"
+          }
+        ]
+      }
+    },
+    {
+      "id": "resultado",
+      "type": "annotate-result",
+      "target": "citius-resultado",
+      "copy": {
+        "titlePt": "Triagem determinística",
+        "bodyPt": "O motor reconhece o tipo de ato, o processo e o prazo aplicável - e mostra o trabalho, pronto a confirmar para o radar de prazos."
+      }
+    }
+  ]
+}

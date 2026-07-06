@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "appId": "legal-transcricao",
+  "card": {
+    "titlePt": "Da gravação ao excerto de recurso",
+    "descriptionPt": "Transcreva a audiência com oradores e tempos por palavra, corrija uma palavra, rotule quem fala e gere o bloco do art. 640.º pronto a colar na peça - exportável apenas depois de revisto.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir-trabalhos",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Os trabalhos de transcrição",
+        "bodyPt": "Cada gravação de audiência é um trabalho: carregada, transcrita, revista. O acesso é restrito - a voz é dado pessoal de terceiros."
+      }
+    },
+    {
+      "id": "abrir-trabalho-nota",
+      "type": "spotlight",
+      "target": "transcricao-row",
+      "copy": {
+        "titlePt": "O trabalho semeado",
+        "bodyPt": "A audiência do processo da obra ja esta na lista - abra o trabalho para transcrever."
+      }
+    },
+    {
+      "id": "abrir-trabalho",
+      "type": "await-action",
+      "target": "transcricao-row",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "transcricao-row"
+          }
+        ]
+      }
+    },
+    {
+      "id": "transcrever-nota",
+      "type": "spotlight",
+      "target": "transcricao-transcrever",
+      "copy": {
+        "titlePt": "Transcrever com diarização",
+        "bodyPt": "O motor devolve oradores e tempos por palavra. Nesta demonstração corre o motor simulado - nenhum sistema externo é tocado."
+      }
+    },
+    {
+      "id": "transcrever",
+      "type": "await-action",
+      "target": "transcricao-transcrever",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "transcricao-transcrever"
+          }
+        ]
+      }
+    },
+    {
+      "id": "corrigir-palavra-nota",
+      "type": "spotlight",
+      "target": "primeira-palavra",
+      "copy": {
+        "titlePt": "Rever com o áudio",
+        "bodyPt": "Clicar numa palavra posiciona o áudio nesse instante e abre a correção inline."
+      }
+    },
+    {
+      "id": "corrigir-palavra",
+      "type": "await-action",
+      "target": "primeira-palavra",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "primeira-palavra"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rotular-orador-nota",
+      "type": "spotlight",
+      "target": "orador-papel-ORADOR_1",
+      "copy": {
+        "titlePt": "Quem fala",
+        "bodyPt": "Rotule cada orador com o papel e o nome - os rótulos entram nos excertos."
+      }
+    },
+    {
+      "id": "rotular-orador",
+      "type": "await-action",
+      "target": "orador-papel-ORADOR_1",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "orador-papel-ORADOR_1"
+          },
+          {
+            "kind": "select",
+            "target": "orador-papel-ORADOR_1",
+            "value": "juiz"
+          }
+        ]
+      }
+    },
+    {
+      "id": "marcar-revisto-nota",
+      "type": "spotlight",
+      "target": "marcar-revisto",
+      "copy": {
+        "titlePt": "Revisão humana obrigatória",
+        "bodyPt": "Os excertos só se exportam depois de o trabalho estar revisto - a regra do art. 640.º é aplicada pela própria aplicação."
+      }
+    },
+    {
+      "id": "marcar-revisto",
+      "type": "await-action",
+      "target": "marcar-revisto",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "marcar-revisto"
+          }
+        ]
+      }
+    },
+    {
+      "id": "selecionar-segmento-nota",
+      "type": "spotlight",
+      "target": "seg-check-3",
+      "copy": {
+        "titlePt": "Escolher a passagem",
+        "bodyPt": "Selecione o depoimento decisivo da testemunha - a passagem que o recurso vai impugnar."
+      }
+    },
+    {
+      "id": "selecionar-segmento",
+      "type": "await-action",
+      "target": "seg-check-3",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "seg-check-3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gerar-excerto-nota",
+      "type": "spotlight",
+      "target": "gerar-excerto",
+      "copy": {
+        "titlePt": "Gerar o bloco 640.º",
+        "bodyPt": "Com o trabalho revisto, o excerto gera-se com ficheiro, tempos e data - e arquiva-se."
+      }
+    },
+    {
+      "id": "gerar-excerto",
+      "type": "await-action",
+      "target": "gerar-excerto",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "gerar-excerto"
+          }
+        ]
+      }
+    },
+    {
+      "id": "bloco-final",
+      "type": "annotate-result",
+      "target": "excerto-bloco",
+      "copy": {
+        "titlePt": "Pronto para a peça",
+        "bodyPt": "O bloco carrega o ficheiro, os tempos de início e fim e a data da audiência - os requisitos do art. 640.º, n.º 2, al. a) do CPC. Copie e cole na alegação de recurso."
+      }
+    }
+  ]
+}

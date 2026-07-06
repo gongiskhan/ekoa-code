@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "appId": "legal-cobrancas",
+  "card": {
+    "titlePt": "A carteira por receber, envelhecida",
+    "descriptionPt": "Veja as cobranças agrupadas por escalões de atraso e abra a mais vencida para acompanhar a sequência de lembretes já enviados, tudo sobre a espinha partilhada do escritório.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir-cobrancas",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A carteira de cobranças",
+        "bodyPt": "As cobranças vivem sobre a espinha partilhada. Vamos ver como a dívida por receber se distribui por escalões de atraso."
+      }
+    },
+    {
+      "id": "destacar-aging",
+      "type": "spotlight",
+      "target": "cobrancas-aging",
+      "copy": {
+        "titlePt": "Envelhecimento por escalões",
+        "bodyPt": "Cada carta soma as cobranças em aberto por dias de atraso: 0 a 30, 31 a 60 e mais de 60 dias. As cobranças já pagas ficam de fora."
+      }
+    },
+    {
+      "id": "abrir-cobranca",
+      "type": "await-action",
+      "target": "cobrancas-linha",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "cobrancas-linha" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-timeline",
+      "type": "annotate-result",
+      "target": "cobrancas-timeline",
+      "copy": {
+        "titlePt": "O histórico de lembretes",
+        "bodyPt": "A ficha da cobrança mostra a linha do tempo dos lembretes já enviados e qual o próximo passo devido da sequência, calculado a partir da data de vencimento."
+      }
+    }
+  ]
+}

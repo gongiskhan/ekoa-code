@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "appId": "legal-conflitos",
+  "card": {
+    "titlePt": "Verificação de Conflitos",
+    "descriptionPt": "Veja como verificar um conflito de interesses antes de abrir um dossiê: pesquise um nome na base de clientes e nas contrapartes dos processos e registe a decisão do advogado, nos termos do art. 99.º do EOA.",
+    "durationSec": 45
+  },
+  "steps": [
+    {
+      "id": "abrir-verificar",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Verificação de conflitos",
+        "bodyPt": "Antes de aceitar um novo dossiê, o advogado tem de verificar se existe conflito de interesses. Vamos fazer essa verificação sobre a base partilhada do escritório."
+      }
+    },
+    {
+      "id": "destacar-termo",
+      "type": "spotlight",
+      "target": "conflitos-termo",
+      "copy": {
+        "titlePt": "Pesquise um nome ou NIF",
+        "bodyPt": "Escreva o nome do potencial cliente ou da contraparte. A pesquisa ignora acentos e maiúsculas e percorre os clientes e as contrapartes de todos os processos."
+      }
+    },
+    {
+      "id": "verificar",
+      "type": "await-action",
+      "target": "conflitos-verificar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "fill", "target": "conflitos-termo", "value": "Padaria" },
+          { "kind": "click", "target": "conflitos-verificar" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-resultado",
+      "type": "annotate-result",
+      "target": "conflitos-resultado",
+      "copy": {
+        "titlePt": "As correspondências aparecem aqui",
+        "bodyPt": "O mesmo nome surge como cliente e como contraparte de um processo, cada um com ligação directa ao registo. A avaliação do conflito é sempre do advogado (art. 99.º do EOA); registe a sua decisão em baixo."
+      }
+    }
+  ]
+}

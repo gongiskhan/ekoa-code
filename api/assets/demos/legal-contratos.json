@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "appId": "legal-contratos",
+  "card": {
+    "titlePt": "Do modelo ao contrato em minutos",
+    "descriptionPt": "A galeria de modelos com cláusulas-padrão gera contratos .docx limpos e editáveis, preenchidos com os dados do cliente e do processo da espinha.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A galeria de modelos",
+        "bodyPt": "Contratos e procurações com cláusulas-padrão, prontos a preencher com os dados da espinha."
+      }
+    },
+    {
+      "id": "pesquisa",
+      "type": "spotlight",
+      "target": "contratos-pesquisa",
+      "copy": {
+        "titlePt": "Encontrar o modelo",
+        "bodyPt": "Pesquise por nome ou categoria - os modelos promovidos da biblioteca oficial chegam aqui com a fonte registada."
+      }
+    },
+    {
+      "id": "gerar",
+      "type": "await-action",
+      "target": "contratos-gerar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "contratos-gerar"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wizard",
+      "type": "annotate-result",
+      "target": "contratos-wizard",
+      "copy": {
+        "titlePt": "Preenchido pela espinha",
+        "bodyPt": "O assistente puxa cliente e processo da espinha e gera o .docx editável - guardado no dossiê do processo."
+      }
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "appId": "legal-insolvencias",
+  "card": {
+    "titlePt": "O devedor insolveu - o crédito não se perde",
+    "descriptionPt": "Registe a insolvência ligada ao crédito, veja o prazo de reclamação correr em 30 dias contínuos (sem parar nas férias judiciais - CIRE art. 9.º), gere a reclamação de créditos e acompanhe a graduação simulada.",
+    "durationSec": 55
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Do crédito à insolvência",
+        "bodyPt": "Quando o devedor é declarado insolvente, o crédito da espinha segue para reclamação - com o prazo certo, calculado pelo regime próprio do CIRE."
+      }
+    },
+    {
+      "id": "escolher",
+      "type": "await-action",
+      "target": "insolv-credito",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "insolv-credito" },
+          { "kind": "select", "target": "insolv-credito", "index": 1 }
+        ]
+      }
+    },
+    {
+      "id": "registar",
+      "type": "await-action",
+      "target": "insolv-registar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "insolv-registar" }] }
+    },
+    {
+      "id": "prazo-nota",
+      "type": "spotlight",
+      "target": "insolv-explicacao",
+      "copy": {
+        "titlePt": "30 dias que não param",
+        "bodyPt": "Ao contrário dos prazos do CPC, o prazo de reclamação NÃO se suspende nas férias judiciais (CIRE art. 9.º n.º 1) - o motor de prazos conta o regime certo e o radar recebe a data exacta."
+      }
+    },
+    {
+      "id": "reclamar",
+      "type": "await-action",
+      "target": "insolv-reclamar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "insolv-reclamar" }] }
+    },
+    {
+      "id": "verificacao",
+      "type": "await-action",
+      "target": "insolv-verificacao",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "insolv-verificacao" }] }
+    },
+    {
+      "id": "graduar",
+      "type": "await-action",
+      "target": "insolv-graduar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "insolv-graduar" }] }
+    },
+    {
+      "id": "final",
+      "type": "annotate-result",
+      "target": "insolv-graduada",
+      "copy": {
+        "titlePt": "Crédito graduado",
+        "bodyPt": "A graduação simulada fecha a história: o crédito está reconhecido e os rateios que chegarem entram diretos na conta corrente do escritório - nada tocou sistemas externos reais."
+      }
+    }
+  ]
+}

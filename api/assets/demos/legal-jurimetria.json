@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "appId": "legal-jurimetria",
+  "card": {
+    "titlePt": "Quanto tempo demora? Médias, com fonte",
+    "descriptionPt": "Compare a experiência do próprio escritório (processos findos) com as durações médias públicas por área - fonte e período sempre citados - e exporte a ficha de expectativas para o cliente. Estatística descritiva, nunca o desfecho de um caso.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Estatística com fonte",
+        "bodyPt": "As médias públicas vêm dos dados abertos da DGPJ, nacionais por área; a amostra interna vem dos processos findos do escritório na espinha partilhada."
+      }
+    },
+    {
+      "id": "tabela-nota",
+      "type": "spotlight",
+      "target": "jurimetria-explicacao",
+      "copy": {
+        "titlePt": "Interno vs. público",
+        "bodyPt": "Cada linha compara a média interna do escritório com a média pública da área - com a fonte e o período citados na própria tabela. Linguagem de médias, sempre."
+      }
+    },
+    {
+      "id": "gerar",
+      "type": "await-action",
+      "target": "jurimetria-gerar",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "jurimetria-gerar" }] }
+    },
+    {
+      "id": "final",
+      "type": "annotate-result",
+      "target": "jurimetria-ficha",
+      "copy": {
+        "titlePt": "A ficha para o cliente",
+        "bodyPt": "A ficha de expectativas leva as médias, a fonte e o aviso obrigatório: valores históricos de conjuntos de processos, nunca garantia nem antecipação do desfecho do caso concreto. Partilhável com o cliente por decisão explícita."
+      }
+    }
+  ]
+}

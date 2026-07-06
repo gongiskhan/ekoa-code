@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "appId": "legal-agenda",
+  "card": {
+    "titlePt": "Marcações que se agendam sozinhas",
+    "descriptionPt": "A agenda partilhada junta eventos e reservas confirmadas; cada tipo de sessão gera uma ligação pública que oferece só horários livres, cruzando as disponibilidades de toda a equipa.",
+    "durationSec": 30
+  },
+  "steps": [
+    {
+      "id": "abrir-agenda",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A agenda da semana",
+        "bodyPt": "Os eventos dos processos e as reservas confirmadas vivem na mesma espinha partilhada — a que a Caixa Citius e o Núcleo alimentam."
+      }
+    },
+    {
+      "id": "anotar-semana",
+      "type": "annotate-result",
+      "target": "agenda-semana",
+      "copy": {
+        "titlePt": "Tudo numa só vista",
+        "bodyPt": "A reserva confirmada aparece na semana ao lado dos eventos do processo. Nada é duplicado: a confirmação re-verifica o horário antes de o marcar."
+      }
+    },
+    {
+      "id": "abrir-tipos",
+      "type": "navigate",
+      "to": "/tipos",
+      "copy": {
+        "titlePt": "O catálogo de sessões",
+        "bodyPt": "Cada tipo define a duração, o preço e os participantes necessários. Os públicos podem ser reservados por qualquer cliente."
+      }
+    },
+    {
+      "id": "destacar-link",
+      "type": "spotlight",
+      "target": "agenda-link-publico",
+      "copy": {
+        "titlePt": "Uma ligação de reserva por tipo",
+        "bodyPt": "O motor cruza as disponibilidades de todos os participantes e oferece ao cliente apenas horários realmente livres."
+      }
+    },
+    {
+      "id": "copiar-link",
+      "type": "await-action",
+      "target": "agenda-copiar-link",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "agenda-copiar-link" }
+        ]
+      }
+    }
+  ]
+}

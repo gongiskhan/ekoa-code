@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "appId": "legal-dossie",
+  "card": {
+    "titlePt": "O processo inteiro, pronto a imprimir",
+    "descriptionPt": "Escolha um processo e receba o dossiê completo - partes, prazos, documentos e histórico - num A4 limpo, pronto a guardar em PDF.",
+    "durationSec": 35
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "Todos os processos",
+        "bodyPt": "O dossiê compila tudo o que a espinha sabe de um processo."
+      }
+    },
+    {
+      "id": "abrir-processo",
+      "type": "await-action",
+      "target": "dossie-card",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          {
+            "kind": "click",
+            "target": "dossie-card"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dossie",
+      "type": "annotate-result",
+      "target": "dossie-processo",
+      "copy": {
+        "titlePt": "O dossiê completo",
+        "bodyPt": "Partes, prazos, documentos, comunicações e honorários do processo - compilados na hora a partir da espinha, com impressão A4 limpa."
+      }
+    }
+  ]
+}

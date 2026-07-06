@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "appId": "legal-modelos",
+  "card": {
+    "titlePt": "Da biblioteca oficial aos seus modelos",
+    "descriptionPt": "Veja como importar uma minuta de fonte oficial (com fonte e licença registadas) para os seus modelos, pronta a usar no app de Contratos.",
+    "durationSec": 40
+  },
+  "steps": [
+    {
+      "id": "abrir-biblioteca",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "A biblioteca de modelos",
+        "bodyPt": "As minutas são redigidas a partir da estrutura de documentos de fonte oficial (DRE, IRN, DGAEP, Segurança Social). Cada uma regista a fonte e a licença."
+      }
+    },
+    {
+      "id": "destacar-minuta",
+      "type": "spotlight",
+      "target": "modelos-item",
+      "copy": {
+        "titlePt": "Fonte e licença sempre à vista",
+        "bodyPt": "Comecemos pela procuração forense. Cada minuta mostra de que fonte oficial deriva a sua estrutura e sob que licença pode ser usada."
+      }
+    },
+    {
+      "id": "importar",
+      "type": "await-action",
+      "target": "modelos-importar",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "modelos-importar" }
+        ]
+      }
+    },
+    {
+      "id": "anotar-sucesso",
+      "type": "annotate-result",
+      "target": "modelos-sucesso",
+      "copy": {
+        "titlePt": "Importada e pronta a usar",
+        "bodyPt": "A minuta passa a viver nos seus modelos, com a proveniência preservada. A partir daqui abre-se diretamente no app de Contratos para gerar o documento."
+      }
+    }
+  ]
+}

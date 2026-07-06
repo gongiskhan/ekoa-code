@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "appId": "legal-kanban",
+  "card": {
+    "titlePt": "Quadro de Tarefas",
+    "descriptionPt": "Organize as tarefas do escritório num quadro de colunas configuráveis. Arraste os cartões ou use \"Mover para\": as colunas mapeadas a um estado sincronizam-no, sem nunca perder o estado canónico da tarefa.",
+    "durationSec": 60
+  },
+  "steps": [
+    {
+      "id": "abrir-quadro",
+      "type": "navigate",
+      "to": "/",
+      "copy": {
+        "titlePt": "O quadro de tarefas",
+        "bodyPt": "As tarefas da espinha partilhada aparecem distribuídas pelas colunas do quadro por omissão, cada uma na coluna correspondente ao seu estado."
+      }
+    },
+    {
+      "id": "spot-novo-cartao",
+      "type": "spotlight",
+      "target": "kanban-novo",
+      "copy": {
+        "titlePt": "Criar um cartão",
+        "bodyPt": "Adicione uma tarefa sem sair do quadro. O novo cartão entra sempre na coluna \"Por fazer\"."
+      }
+    },
+    {
+      "id": "criar-e-mover",
+      "type": "await-action",
+      "target": "kanban-mover",
+      "event": "click",
+      "simulate": {
+        "actions": [
+          { "kind": "click", "target": "kanban-novo" },
+          { "kind": "fill", "target": "kanban-titulo", "value": "Rever minuta de contrato" },
+          { "kind": "click", "target": "kanban-guardar" },
+          { "kind": "select", "target": "kanban-mover", "value": "em_curso" },
+          { "kind": "click", "target": "kanban-mover" }
+        ]
+      }
+    },
+    {
+      "id": "resultado-estado",
+      "type": "annotate-result",
+      "target": "kanban-board",
+      "copy": {
+        "titlePt": "Estado sincronizado",
+        "bodyPt": "Ao passar o cartão para \"Em curso\", o estado da tarefa acompanhou a mudança. O quadro e o Núcleo mostram sempre o mesmo estado canónico."
+      }
+    }
+  ]
+}
