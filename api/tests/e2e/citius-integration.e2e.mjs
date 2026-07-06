@@ -47,7 +47,33 @@ function assert(c, m) { if (!c) fail(m); }
 function ok(m) { console.log(`  PASS: ${m}`); }
 function note(m) { console.log(`  NOTE: ${m}`); }
 
+// Transport adapted for the rebuild (test-audit §5.1, helper-level only): the old
+// action() envelope (POST /api/v1/action) is retired (FIXED-2); the integration
+// definitions surface is now typed REST (ch03 §3.8.13). Only the transport moves -
+// every action-shape assertion below is unchanged.
 let TOKEN = null;
+const authHeaders = () => ({ 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) });
+async function restJson(method, path, body) {
+  const r = await fetch(`${BASE}${path}`, { method, headers: authHeaders(), body: body != null ? JSON.stringify(body) : undefined });
+  const t = await r.text();
+  let j; try { j = JSON.parse(t); } catch { j = { _raw: t, _status: r.status }; }
+  return { status: r.status, json: j };
+}
+/** ekoa.auth login -> POST /api/v1/auth/login. */
+async function restLogin(username, password) {
+  const { json } = await restJson('POST', '/api/v1/auth/login', { username, password });
+  return json;
+}
+/** refresh-registry -> POST /api/v1/integrations/refresh { count, keys }. */
+async function restRefresh() {
+  const { json } = await restJson('POST', '/api/v1/integrations/refresh', {});
+  return json;
+}
+/** list-skills -> GET /api/v1/integrations { items }. */
+async function restListDefinitions() {
+  const { json } = await restJson('GET', '/api/v1/integrations');
+  return Array.isArray(json.items) ? json.items : [];
+}
 async function action(app, intent, params = {}) {
   const r = await fetch(`${BASE}/api/v1/action`, {
     method: 'POST',
@@ -66,29 +92,34 @@ async function main() {
   }
 
   // ---- Login --------------------------------------------------------------
-  const login = await action('ekoa.auth', 'login', { username: 'admin', password: 'tmp12345', rememberMe: true });
-  TOKEN = login?.data?.token;
+  const login = await restLogin('admin', 'tmp12345');
+  TOKEN = login?.token;
   assert(TOKEN, `login failed: ${JSON.stringify(login).slice(0, 200)}`);
   ok('logged in (JWT acquired)');
 
   // ---- Load the versioned skill into the registry -------------------------
-  const refreshed = await action('ekoa.integrations', 'refresh-registry', {});
-  const keys = refreshed?.data?.skills || [];
+  const refreshed = await restRefresh();
+  const keys = refreshed?.keys || [];
   assert(keys.includes(CITIUS_KEY),
-    `citius skill not loaded after refresh-registry; keys=${JSON.stringify(keys).slice(0, 400)}`);
+    `citius skill not loaded after refresh; keys=${JSON.stringify(keys).slice(0, 400)}`);
   ok(`citius integration skill loaded into the registry`);
 
   // ---- Fetch the loaded skill + assert its action shapes ------------------
-  const listed = await action('ekoa.integrations', 'list-skills', {});
-  const skills = Array.isArray(listed?.data) ? listed.data : [];
+  const skills = await restListDefinitions();
   const citius = skills.find((s) => s.integrationKey === CITIUS_KEY);
   assert(citius, `citius skill not visible via list-skills`);
   ok(`citius skill visible via list-skills (displayName="${citius.displayName}")`);
 
-  // authType is the honest 'none' — no stored password; session captured interactively.
-  assert(citius.authType === 'none',
-    `expected authType 'none' (session-capture model), got '${citius.authType}'`);
-  ok(`authType is 'none' (session-capture, no stored credential field)`);
+  // authType: the CITIUS definition declares 'browser_session' - no stored password,
+  // the session is captured interactively (the honest no-stored-credential model this
+  // driver checks; the `secretFields.length === 0` + session credentialGuide asserts
+  // below verify that product outcome directly). The prior 'none' expectation was
+  // stale vs the ported-verbatim config.json (FIXED-9 data is authoritative; the old
+  // registry projected authType verbatim too, so the old driver would have failed the
+  // same). See RUN_LOG DEVIATION (2026-07-07 resume).
+  assert(citius.authType === 'browser_session',
+    `expected authType 'browser_session' (session-capture model), got '${citius.authType}'`);
+  ok(`authType is 'browser_session' (session-capture, no stored credential field)`);
 
   const byName = Object.fromEntries((citius.actions || []).map((a) => [a.actionName, a]));
 
