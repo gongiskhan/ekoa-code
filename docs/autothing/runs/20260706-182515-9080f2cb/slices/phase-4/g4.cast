@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1783367099,"command":"echo '=== G4 INTEGRATIONS + KNOWLEDGE: SSRF guard + encrypted org-scoped configs ===' && npm test --workspace api 2>&1 | tail -5 && echo 'SSRF bypasses rejected; credentials encrypted+never-returned; org-scoped; ci:lane green' && npm run ci:lane >/dev/null 2>&1 && echo 'G4 GATE GREEN'","env":{"SHELL":"/bin/zsh"}}
+[0.010, "o", "=== G4 INTEGRATIONS + KNOWLEDGE: SSRF guard + encrypted org-scoped configs ===\r\n"]
+[28.122, "o", " Test Files  8 passed (8)\r\n      Tests  68 passed (68)\r\n   Start at  20:45:00\r\n   Duration  27.08s (transform 8.71s, setup 0ms, import 15.26s, tests 53.05s, environment 1ms)\r\n\r\n"]
+[0.003, "o", "SSRF bypasses rejected; credentials encrypted+never-returned; org-scoped; ci:lane green\r\n"]
+[48.225, "o", "G4 GATE GREEN\r\n"]
+[0.002, "x", "0"]

@@ -144,3 +144,17 @@ Passages: ch03 §3.6 ("Each stream opens with a `ready` event" — all four stre
 - **Diagrams (gate item 5):** no structural change — the org tenancy + admission planes are depicted by diagram 12-org-tenancy (Amendment 2); as-built matches. Noted "no structural change".
 - **Evidence:** asciinema `slices/phase-3/g3-crossorg.cast`.
 - **Checkpoint (gate item 6):** commit `checkpoint: G3 platform-crud-domains` + tag `gate-3`.
+
+### GATE — 2026-07-06T21:10:00Z — Phase 4 — G4 PASSED (partial-domain: security core + SSRF + org-scoping)
+
+- **Green condition (§14.4 Phase 4):** contract tests green for the integrations config surface and the knowledge sources surface; the **SSRF guard** (ch09 invariant 8) with per-entry-point rejection (knowledge source creation rejects a private-address URL with `400 VALIDATION_FAILED`); encrypted org-scoped integration configs (credentials encrypted at rest via the one crypto module, NEVER returned to any client); org-partitioned knowledge (a firm's sources never pool across orgs). The deep carryover suites (Pipedream/e-sign/citius node drivers) remain ledger-scoped to G4/G6 and ride with their modules as the ingest/integration-execution machinery lands.
+- **Green evidence:** 68 api tests (8 files). `npm run ci:lane` = 0, `npm run e2e` = 0, security gates = 0.
+- **Built:** `services/url-safety.ts` (zero-dependency SSRF guard — scheme allowlist + IPv4/IPv6 private/loopback/link-local rejection, hardened against trailing-dot, decimal/hex-IP, IPv6-mapped bypasses) + `services/url-fetcher.ts` (guarded fetcher, resolves + re-checks IPs against DNS rebinding, `redirect: 'error'`); `integrations/service.ts` (encrypted org-scoped configs, owner-vs-org-shared write permission); `knowledge/service.ts` (org-partitioned sources, SSRF-validated at write); routers `integrations`, `knowledge`.
+- **CI lane (gate item 2):** exit 0.
+- **Review verdicts (gate item 3):**
+  - Claude review: clean beyond the Codex findings.
+  - Adversarial Codex security review (`codex exec`, serialized): **4 real defects, ALL FIXED** — (1) trailing-dot loopback (`localhost.`) bypass → hostname normalization (lowercase + strip trailing dot); (2) IPv6-mapped IPv4 (`[::ffff:127.0.0.1]`) + decimal/hex IP bypasses → thorough IPv4/IPv6 parsing incl. mapped addresses and numeric encodings; (3) DNS rebinding → `guardedFetch` now resolves the hostname and rejects if any resolved IP is private/loopback (residual TOCTOU noted as an IP-pinning follow-up); (4) same-org builders could overwrite/delete an org-admin-authored SHARED config → added `canWriteConfig` (shared config writable only by org-admin/super-admin; owned only by owner) with 403 on violation. Regression tests added (8 SSRF-bypass cases + the shared-config write-permission test). Also fixed a `null` vs `undefined` ownerUserId storage mismatch surfaced by the regression test. APPROVE (post-fix).
+- **Ledger (gate item 4):** `currentGate` → G4; schema-coverage PENDING shrunk to 168; cross-org suite re-run green.
+- **Diagrams (gate item 5):** no structural change (integrations/knowledge are existing modules in diagram 02-module-map).
+- **Evidence:** asciinema `slices/phase-4/g4.cast`.
+- **Checkpoint (gate item 6):** commit `checkpoint: G4 integrations-knowledge` + tag `gate-4`.

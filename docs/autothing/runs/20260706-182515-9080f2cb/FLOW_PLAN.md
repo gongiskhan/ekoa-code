@@ -21,7 +21,7 @@ Brief: build production-ready rc-1 of the rebuilt Ekoa platform (api/, web/, sha
 | 3 | phase-1 | G1 Test estate port: 55 Playwright + 17 unit + test-client + 14 drivers + mocks + ledger | mixed | serial | passed |
 | 4 | phase-2 | G2 Data core + auth: Firestore stores, collections engine, crypto, orgs/credentials, JWT/roles/activation, boot gates | mixed | serial | passed |
 | 5 | phase-3 | G3 Platform CRUD: users/org/orgs/settings/sessions/memories/uploads/billing-reads/Registo + audit path | mixed | serial | passed |
-| 6 | phase-4 | G4 Integrations + knowledge: OAuth, platform caller, Pipedream, e-sign, vault/FTS5, SSRF guard | mixed | serial | pending |
+| 6 | phase-4 | G4 Integrations + knowledge: OAuth, platform caller, Pipedream, e-sign, vault/FTS5, SSRF guard | mixed | serial | passed |
 | 7 | phase-5 | G5 Push infra: SSE manager, SQLite queue, webhook ingress, triggers | mixed | serial | pending |
 | 8 | phase-6 | G6 App pipeline + served-app plane + legal vertical (largest; 37-spec byte-compat gate) | mixed | serial | pending |
 | 9 | phase-7 | G7 LLM chokepoint core + billing metering + rate/spend caps | mixed | serial | pending |

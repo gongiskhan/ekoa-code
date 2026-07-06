@@ -25,6 +25,8 @@ import { sessionsRouter } from './routes/sessions.js';
 import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
+import { integrationsRouter } from './routes/integrations.js';
+import { knowledgeRouter } from './routes/knowledge.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -61,6 +63,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/memories', memoriesRouter(deps));
   app.use('/api/v1/registo', registoRouter(deps));
   app.use('/api/v1/billing', billingRouter(deps));
+  // G4 — integrations + knowledge.
+  app.use('/api/v1/integrations', integrationsRouter(deps));
+  app.use('/api/v1/knowledge', knowledgeRouter(deps));
 
   return app;
 }
