@@ -1,0 +1,252 @@
+# 14. Build sequence
+
+This chapter gives the unsupervised implementation run its phase ordering: eighteen phases, each with an objective, its inputs and outputs, one objective gate checkable without a human, and an estimated relative size. It also fixes the run mechanics that apply to every phase - checkpoint commits, the RUN_LOG.md journal, and abort semantics. The ordering below is a recommendation the run's own planning phase may reorder and refine; the hard dependency constraints in 14.3, the gate discipline in 14.2, and every FIXED decision may never be contradicted. Domain dependency order is grounded in the module tiers of chapter 02 (section 2.7), the resource map of chapter 03 (section 3.8), and the storage map of chapter 04; the test-port phase is grounded in reference/test-audit.md.
+
+## 14.1 What the run receives, and what it may decide
+
+The run's sole input is this spec (`spec/` plus `spec/reference/` and `spec/diagrams/`), with one sanctioned exception: the surviving test estate enumerated by reference/test-audit.md - the Playwright specs, the frontend unit files, `test-client.ts` and its node drivers, the carryover module tests, and their mock servers and fixtures - is copied from the old repositories as reference material per FIXED-1. Phase 1 consumes those files directly (porting them from the reference docs alone is impossible), and chapter 13 section 13.11 item 1 diffs the ported specs against the originals. All other old-Cortex and old-frontend source remains off-limits to the run; the reference docs are the extraction of record. Launch precondition, verified at gate G-P: every PROPOSED item flagged blocking (chapter 15 register) and every Open question flagged blocking (chapter 16 register) carries a recorded founder resolution. Deferrable PROPOSED items default to their stated recommendation unless the founder overrode them at launch. The run therefore starts with zero open decisions (spec ground rule; FIXED decisions per the SPEC.md register).
+
+Decision authority inside the run, in precedence order:
+
+1. **FIXED decisions** - never negotiable. If one proves impossible as specified, the run aborts (14.2.4). It never improvises a workaround.
+2. **Chapter text** (including resolved PROPOSED items) - normative. Deviations are permitted only where reality contradicts the spec (e.g. an API surface behaves differently than documented), and every deviation is logged (14.2.3), never silent.
+3. **Reference docs** (`spec/reference/`) - ground truth for carried behavior where a chapter cites them.
+4. **Conventional practice** - fills genuinely unspecified detail (variable names, file splits below module level, test file layout). Logged as DECISION entries only when a future reader would otherwise be surprised.
+
+Ambiguities that are material but resolvable from the precedence order above are resolved in place and logged as AMBIGUITY entries. Only a FIXED-impossible situation aborts the run.
+
+## 14.2 Run mechanics (apply to every phase)
+
+### 14.2.1 The gate template
+
+Every phase ends at a gate. A gate is passed when ALL of the following hold, in this order:
+
+1. The phase-specific green condition (named per phase in 14.4) is met: a command exits 0, or a named artifact exists and passes its stated check.
+2. The full per-PR CI lane (chapter 13 section 13.9: boundary lint, chokepoint grep, typecheck, unit and module tests, contract suite with its coverage gates, builds, e2e with ledger-scoped skips) exits 0.
+3. The review loop of chapter 13 section 13.7 has run on the phase's cumulative diff - during the unsupervised run BOTH reviews (Opus, then adversarial Codex) run at every phase gate per chapter 13 section 13.7; the significance triggers govern ordinary post-launch PRs only, never run gates - and both verdicts are recorded in RUN_LOG.md. A red adversarial verdict blocks the gate (chapter 13 section 13.7).
+4. The suite ledger (14.2.5) is updated: everything due at this gate is green; the ratchet (nothing previously green regresses to skip or red) holds.
+5. Diagrams affected by the phase's structural changes are updated in the same phase (FIXED-12); the gate's RUN_LOG entry names them or states "no structural change".
+6. A checkpoint commit is made and tagged.
+
+### 14.2.2 Checkpoint commits
+
+At every gate the run commits the entire repo state with message `checkpoint: G<N> <phase-name>` and git tag `gate-<N>`. Checkpoint commits are the run's recovery points: any later failure can be diagnosed against, or rolled back to, the last green gate. Intermediate commits during a phase are free-form, but the tagged gate commit must itself be green under item 2 above (no "fixed in the next commit" gates).
+
+### 14.2.3 RUN_LOG.md
+
+A single append-only journal at the new repo root, initialized at G-P. Entry types, each timestamped (ISO-8601 UTC) and carrying the current phase:
+
+| Type | When | Must contain |
+|---|---|---|
+| `GATE` | every gate pass | phase, green-condition evidence (command + exit status or artifact path), review verdicts, ledger delta, diagram note, commit tag |
+| `DECISION` | a choice the spec leaves open at detail level | options considered, choice, reason |
+| `AMBIGUITY` | spec/reference text admits more than one material reading | the passages, the reading chosen, the precedence rule applied (14.1) |
+| `DEVIATION` | as-built differs from a spec statement | the spec section deviated from, why compliance was impossible or wrong, what was done instead. Never silent: an undocumented deviation found later is a spec violation of the run itself |
+| `ABORT` | a FIXED decision proves impossible as specified (14.2.4) | see 14.2.4 |
+
+The RUN_LOG is a deliverable: chapter 10's cutover procedures and chapter 13's acceptance criteria both consume it (e.g. the deliberate red-test evidence of chapter 13 section 13.11 item 5).
+
+### 14.2.4 Abort semantics (FIXED)
+
+This section is the rule SPEC.md's FIXED register preface binds the run to: the implementation run aborts rather than violating a FIXED decision. If a FIXED decision proves impossible as specified - not inconvenient, not expensive: impossible, with evidence - the run stops at the current gate. It does not improvise, substitute, or partially implement around the FIXED decision. Stop procedure:
+
+1. Halt feature work. Commit the working state on a branch `abort/G<N>` so nothing is lost; the last green checkpoint tag remains the authoritative state.
+2. Write an `ABORT` entry: the FIXED-n at issue, the evidence of impossibility, every approach attempted, and at least two candidate resolutions for the founder (each with consequences).
+3. End the run by producing a final report (the ABORT entry plus a status summary of all gates passed). Resumption is a new launch decision, not something the run schedules for itself.
+
+The same stop procedure applies if gate G-P finds any blocking PROPOSED or Open question without a founder resolution - the run must not begin building on an unresolved blocking decision.
+
+### 14.2.5 The suite ledger
+
+The ported test estate (phase 1) arrives before most of the system it exercises exists. The **suite ledger** makes interim gates objective anyway: a committed machine-readable file (`api/tests/SUITE_LEDGER.json` plus a generated human-readable table) mapping every ported test artifact - each of the 55 surviving Playwright specs, the 17 surviving frontend unit files, the ported node driver client and its 14 drivers, and each carryover module-test group (reference/test-audit.md sections 3, 4, 5) - to the gate at which it must first be green.
+
+- Before its gate: a red or non-runnable artifact is reported as `skipped (awaiting G<N>)`, never silently omitted; the runner output lists every skip with its ledger reason.
+- At and after its gate: red is a gate failure.
+- Ratchet: once green at its gate, an artifact may never be skipped or red at any later gate. The ledger check runs inside the CI lane, so item 2 of the gate template enforces it mechanically.
+- The schema-coverage gate of chapter 13 section 13.5 item 3 uses the same mechanism: a committed allowlist of not-yet-landed `shared/` domains, which must shrink at every domain gate and be empty at G9.
+
+## 14.3 Hard ordering constraints (any reorder must preserve these)
+
+The run's planning phase may split, merge, or reorder phases. It may not violate:
+
+1. G-P before everything; G0 (scaffold + CI + `shared/` contract) before any code phase - nothing merges without the boundary lint and chokepoint grep active (chapter 02 section 2.9).
+2. G1 (test estate port) before any gate that consumes ported tests - which is every gate after it. The ported estate is the only ground truth not authored inside the run; it gates everything downstream (chapter 13 sections 13.2 and 13.3; reference/test-audit.md section 7).
+3. Module tier order (chapter 02 section 2.7): `data/` and `config.ts` before everything; `auth/` and `billing/` stores before domains; `integrations/` before `events/` (events imports integrations for platform polling); `events/` before `agents/` and `automation/` (both emit through injected seams wired against it); `llm/` before `agents/`, `automation/` vision, and metering.
+4. The served-app plane and app pipeline (G6) before the 37-spec legal suite is due (its ledger gate), because those specs drive apps served by `api/` alone (reference/test-audit.md section 2.4).
+5. Web migration (G9) after the API domains it consumes are green - the migrated client is built against a running API (FIXED-9), not against stubs.
+6. Discovery (G11) after web migration - vision passes drive the real product end to end (chapter 13 section 13.4).
+7. Dual-model review (G12) and docs/diagrams reconciliation (G13) last, in that order - review findings may change code; diagrams reconcile to the final state (FIXED-12).
+8. `services/` has no phase of its own: each service lands with its first consumer, together with its ported tests (chapter 13 section 13.3 module-travels-with-tests rule). Same for the injected seams of chapter 02 section 2.8 - each is wired in `server.ts` in the phase that lands its producer.
+9. The egress-module ordering (amendment 2026-07-06; FIXED-8 as amended, FIXED-13): the LLM chokepoint core (G7) before the anonymisation layer (G7A) before agent execution (G7B) before delegation and bridge (G8A). The anonymisation layer is the egress module's second concern and is built after the metering chokepoint exists and before any agent can emit model-bound text; delegation and the bridge provider endpoint come after agent execution because they route through both the chokepoint and the anonymisation layer with session-identity propagation. Automation (G8) is independent of this chain and may sit anywhere after G7B.
+
+## 14.4 The phases
+
+Sizes are relative shares of total run effort (they sum to 100). They are planning estimates, refinable at G-P; gates are not.
+
+### Phase P - Planning (size 2)
+
+- **Objective:** the run reads the entire spec, verifies launch preconditions, and produces its own work plan.
+- **Inputs:** `spec/` complete; founder resolutions for all blocking PROPOSED and Open-question items.
+- **Outputs:** `PLAN.md` in the new repo (phase-to-work-item breakdown, any reorder with its justification against 14.3); RUN_LOG.md initialized; the suite ledger skeleton with every ported artifact assigned a target gate.
+- **Gate G-P:** `PLAN.md` contains a traceability table in which every acceptance criterion of chapters 02 through 14 (and, for the amendment surfaces, chapters 17 and 18) is assigned to exactly one phase. Where a chapter states its criteria as prose or unnumbered bullets rather than a numbered list, the planner enumerates them itself in `PLAN.md` with stable ids (e.g. `C06-03`) and that enumeration is the census baseline; the census (count of enumerated criteria vs count of table rows) matches; every blocking P-nn and Q-nn appears with its recorded resolution. As of the 2026-07-06 amendment the P register carries 27 entries, of which 26 are resolved and P-27 (executor-face run-record retention) is the sole pending entry - deferrable-with-default, its default (detector-at-persist, chapter 17 section 17.10) stamped here at G-P if the founder left it unmarked; the Q register carries zero unresolved run-start blockers (Q-01 and Q-10 resolved, Q-02 and Q-03 cutover-class, answered on the chapter 10 checklist rather than at run start). Any blocking item without a resolution triggers the 14.2.4 stop.
+
+### Phase 0 - Repo scaffold, CI, shared contract (size 4)
+
+- **Objective:** the greenfield repo (FIXED-1) - named `ekoa-code`, a sibling folder of ekoa-dev (RESOLVED (P-16)) - with `api/`, `web/` (empty shell), `shared/`, `spec/` copied in, `CLAUDE.md` with the verbatim blocks, npm workspaces per P-17, an Express 5 skeleton (RESOLVED (P-01): Express 5 with zod middleware is normative), and the full CI lane running. This is the phase that names the repository.
+- **Inputs:** chapter 02 (layout, lint rules 2.9), chapter 03 (every `shared/` schema: domain files, `events.ts` unions, `errors.ts` envelope), chapter 09 (FIXED-14 security baseline; the CI security gates of the security addendum section D.4), chapter 13 (CI lane 13.9, CLAUDE.md block 13.10).
+- **Outputs:** compiling `shared/` covering the complete chapter 03 map; `api/src/` module directories stubbed per the chapter 02 inventory; ESLint boundary zones and the chokepoint grep gate active; the CI security gates of the security addendum section D.4 wired day one, not retrofit - Semgrep SAST, gitleaks secret scanning (in CI and as a pre-commit hook), and an `npm audit` severity gate; CI configuration for the per-PR lane and the nightly lane.
+- **Gate G0:** the CI lane exits 0 on the scaffold; two deliberate red commits - one violating a boundary zone, one importing `@anthropic-ai/*` outside `api/src/llm/` - each fail CI and are reverted, with both failures evidenced in RUN_LOG (this proves the guards bite; chapter 02 section 2.9); the three CI security gates are active and bite - a planted secret fails gitleaks (in CI and at pre-commit) and a planted Semgrep-flagged pattern fails the SAST step, both reverted and evidenced in RUN_LOG (security addendum D.4).
+
+### Phase 1 - Test estate port (size 6)
+
+- **Objective:** port the surviving externally-authored test estate - the only ground truth not authored inside the run - and wire it to the ledger.
+- **Inputs:** reference/test-audit.md (the port plan is chapter 13 sections 13.2 and 13.3); the old repo's test files as reference material (FIXED-1; the sanctioned exception of 14.1).
+- **Outputs:** the 55 surviving Playwright specs committed (13 unchanged, 5 with seeding-helper bodies rewritten to the chapter 03 REST calls, 37 served-app specs unchanged - reference/test-audit.md section 7); the 17 surviving frontend unit files; `test-client.ts` ported to the REST surface and the 14 node drivers re-seeded on it (reference/test-audit.md section 2.6); mock provider servers and fixtures (WAV, HTML, zip) carried; the suite ledger populated with a target gate for every artifact.
+- **Gate G1:** the Playwright runner collects exactly 55 specs and the driver runner exactly 14 drivers (census check); a full harness run completes with zero failures - everything skips with a ledger reason, since no API exists yet; one deliberate ledger violation (marking an artifact due at G1 that is red) demonstrably fails the run, evidenced in RUN_LOG.
+
+### Phase 2 - Data core and auth (size 8)
+
+- **Objective:** the persistence foundation and the login path everything else authenticates through.
+- **Inputs:** chapter 04 (collections engine 4.2, domain store map 4.3.1, exceptions 4.4, Supabase client 4.5, crypto 4.7); chapter 02 (`data/`, `auth/`, `config.ts`); chapter 09 (boot gates 9.7).
+- **Outputs:** `config.ts`; the single crypto module (key mandatory); the Firestore client and every domain store; the collections engine with manifest validation; `auth/` (JWT, login, refresh per P-03, device login, admin seeding); `server.ts` boot skeleton with the fail-closed gates; `/health`; `/api/v1/auth/*` routes.
+- **Gate G2:** ledger-due suites green: the ported persistence parity suite over `mongodb-memory-server` (chapter 04 section 4.2.8 discipline), the engine semantics tests (all eight carried semantics named, chapter 13 section 13.5 item 6), crypto/jwt/device-auth carryover tests, auth contract tests, and boot fail-closed tests (missing `ENCRYPTION_KEY`, missing license config each refuse to boot - chapter 09 section 9.7).
+
+### Phase 3 - Platform CRUD domains (size 9)
+
+- **Objective:** the request-response domains with no model, push, or pipeline dependencies.
+- **Inputs:** chapter 03 sections 3.8.2, 3.8.3, 3.8.4 (CRUD rows only), 3.8.5, 3.8.6, 3.8.19, 3.8.21 (account/usage read rows), 3.8.22; chapter 02 (`memory/`); chapter 04 stores.
+- **Outputs:** routes and services for users, teams, company (CRUD), settings, sessions plus messages, memories (CRUD, resolver, formatter - P-12 scope), uploads, billing accounts and usage reads; the single audit write path middleware (FIXED-8, chapter 09 invariant 3).
+- **Gate G3:** contract tests green for every endpoint listed above; the rewritten rule-set files owed to these domains (settings defaults, onboarding session singleton, memory rules, per-user isolation - chapter 13 section 13.3) present and green, with their rows filled in the `api/tests/contract/README.md` mapping table; the `shared/` coverage allowlist shrunk accordingly.
+
+### Phase 4 - Integrations and knowledge (size 9)
+
+- **Objective:** external connections and the legal/firm knowledge base.
+- **Inputs:** chapter 03 sections 3.8.13 through 3.8.16, 3.8.20; chapter 02 (`integrations/`, `knowledge/`); chapter 09 (credential encryption, SSRF guard homes).
+- **Outputs:** integration definitions and encrypted configs, platform OAuth flows and callbacks, the generic platform API caller, the action runner, Pipedream layer, e-signature stack; the knowledge vault, FTS5 index with ripgrep fallback, ingest, browse, sources, uploads, and the grounding block builder; the SSRF guard and URL fetcher (first consumers land here).
+- **Gate G4:** contract tests green for both domains; ported carryover suites green per ledger (knowledge subsystem, citius trio, cloud-files, platform-oauth-errors, pipedream and the payment/invoicing integration tests against their committed mock servers); node drivers `ifthenpay`, `invoicexpress`, `pipedream`, `citius-integration` green.
+
+### Phase 5 - Push infrastructure and triggers (size 6)
+
+- **Objective:** the SSE manager, the durable event queue, webhook ingress, and the trigger domain.
+- **Inputs:** chapter 03 sections 3.6 (mechanics and the notifications channel), 3.8.17; chapter 02 (`events/`, injected-seam table 2.8); chapter 09 (invariant 9, egress sanitizer at SSE write).
+- **Outputs:** SSE client manager (keepalive, Last-Event-ID replay ring); `GET /api/v1/notifications/events`; the SQLite event queue; `/hooks/:triggerId` ingress with HMAC verification and dedup; trigger CRUD and the delivery pipeline with its targets as injected callbacks (automation and artifact-backend targets stubbed until G8/G6 wire them); the error sanitizer applied at egress, with its rule re-pinned as a unit test (chapter 13 section 13.3).
+- **Gate G5:** contract tests for triggers and notifications green; dedicated stream tests for replay and keepalive green (chapter 13 section 13.6 row 1); queue carryover tests (atomic claim, retry, idempotency) green; the `whatsapp-inbound` driver green up to queue acceptance (full delivery is ledger-deferred to G8); trigger-target discriminator rules green.
+
+### Phase 6 - App pipeline, artifacts, served-app plane, legal vertical (size 14)
+
+- **Objective:** the largest phase: user apps build, serve, and persist - restoring the biggest block of the behavioral safety net.
+- **Inputs:** chapter 07 (whole); chapter 03 sections 3.8.9 through 3.8.12, 3.8.23, 3.9; chapter 04 sections 4.2.7 (engine endpoints); chapter 02 (`apps/`, `legal/`).
+- **Outputs:** esbuild pipeline, scaffold, app registry, static serving with byte-compatible context injection (`window.__ekoa`, `__EKOA_APP_ID` - reference/test-audit.md section 2.4), deterministic slugs, artifact CRUD/fork/files/versions/bundle/backups/backend-runtime routes, company-space, featured prebuild with the featured-app source tree, demos registry, artifact PDF and screenshots (browser pool lands here); the full served-app data plane (`/api/app-data/*`, `/api/app-shared/*`, `/api/app-files/*`, `/api/app-sso/*`, `/api/legal/*`, `/api/citius/consulta`, `/api/legal-research`, `/api/design-tokens.css`, `/api/demos*`); the `legal/` module (calculators, research, CITIUS parsing, tracking).
+- **Gate G6:** the 37 served-app Playwright specs green against `api/` alone, unmodified (the byte-compatibility proof - reference/test-audit.md sections 2.4 and 7; chapter 10 criterion 1 depends on this); artifacts/backups/backend/company-space contract tests green; node drivers `app-files-upload`, `app-auth`, the four `erp-*`, and `legal-research` green; legal engine golden-figure suites and branding token gates green per ledger.
+
+### Phase 7 - LLM chokepoint core and billing metering (size 4)
+
+- **Objective:** the model edge (FIXED-3) and the metering/billing arithmetic - the first of the egress module's three concerns (FIXED-13), built before the anonymisation layer and before any agent can call through it.
+- **Inputs:** chapter 06 (the chokepoint core: client, attribution, tier classifier, managed OAuth custody, gateway, metering, and provider routing config; FIXED-13, FIXED-14); chapter 03 sections 3.8.8, 3.8.21 (billing usage rows).
+- **Outputs:** `llm/` (client, attribution, tier classifier, managed OAuth custody, gateway sub-app); the single metering point and the billing arithmetic (ledger events, credits, overage, pre-run allowance gate); provider routing configuration - base URL, region, zero-retention posture as configuration, never hardcoded (FIXED-13); the per-tenant and per-user rate limits and spend caps enforced at the chokepoint (FIXED-14). The egress module is structured now for its second and third concerns (anonymisation, provider routing) per FIXED-13's one-module-three-concerns rule; the anonymisation concern lands in the next phase.
+- **Gate G7:** chokepoint lint and grep gates green with the SDK now present (only `api/src/llm/` imports it - chapter 02 section 2.9); the chapter 06 disposition checks green (no `platform`-attributed runtime call sites exist - chapter 06 sections 6.4.3 and 6.11); billing contract tests including the hard-cap rules green; the rate-limit and spend-cap tests at the chokepoint green (chapter 13 section 13.5; FIXED-14).
+
+### Phase 7A - Anonymisation layer (size 4)
+
+- **Objective:** build the anonymisation layer into the egress module (FIXED-8 as amended, FIXED-13) - the second of the module's three concerns - after the chokepoint core exists and before any agent can emit model-bound text.
+- **Inputs:** chapter 17 (whole); the running chokepoint core from G7; chapter 09 (where the two trust boundaries are enforced); diagram 10-privacy-boundaries.
+- **Outputs:** the pipeline per request (collect model-bound text -> detect on the DELTA only -> deterministic format-preserving per-session tokenization -> forward -> de-tokenize responses including tool_use argument blocks buffered whole; tool results re-enter and re-tokenize; streaming de-tokenization with minimal straddle buffering - chapter 17 section 17.3); the detection layers (a) PT structured-ID recognizers checksum-verified, (b) per-tenant deny-list encrypted at rest under a tenant-scoped key and access-logged, (c) PT-PT NER behind the same interface with a recall-biased threshold, served in-process CPU/ONNX by default, with (a)+(b) not depending on (c) being up - chapter 17 section 17.4); the per-session in-memory TTL vault, never persisted, keyed by propagated session identity (chapter 17 section 17.5); the async hash-chained metadata-only audit folded into the Registo single write path (chapter 17 section 17.6); the `anonymize`/`deanonymize` service interface (the Garrison line, chapter 17 section 17.7); the payload-capture harness (chapter 17 section 17.8) with synthetic checksum-INVALID test data only.
+- **Gate G7A:** the payload-capture assertion gate (a planted synthetic checksum-INVALID NIF and a deny-listed party name in a chat turn -> the captured outbound Anthropic payload contains tokens only; the user-visible response is cleartext; a tool_use round trip resolves the real value locally); the streaming-straddle test; the prompt-cache byte-identical-prefix test (tokenized prefix identical across turns, cache hit observed, model switch a cache boundary); the vault-never-persisted check (no vault bytes on disk or in any store after a session); the audit-metadata-only check (audit rows carry entity classes, counts, correlation id, payload hash - never bodies, never the vault). All are the suite classes of chapter 13 section 13.5; harness detail in chapter 17 section 17.8.
+
+### Phase 7B - Agent execution (size 4)
+
+- **Objective:** the billable agent surface - agents run in the user's security context through the egress module (chokepoint core + anonymisation).
+- **Inputs:** chapter 05 (whole, including P-10 job registry and orphan sweep); chapter 08 (content loader and composition, incl. the Q-09 legal knowledge packages task-scoped to legal builds); chapter 03 sections 3.8.7, 3.8.4 (research row), 3.8.14; the running egress module from G7A.
+- **Outputs:** `content/` loader and composition directories; `agents/` (job lifecycle, context assembly, typed streaming with server-side marker conversion, chat runs, build jobs, brand research, integration-builder sessions); delegation events on the notifications channel; billing usage pushes through the injected notifier seam; the Agent SDK subprocess paths pointed at the chokepoint via base URL/env (FIXED-13) - the subprocesses never import the Anthropic client.
+- **Gate G7B:** the chokepoint grep gate re-affirmed green with agents present (the SDK spawns route through base URL/env; only `api/src/llm/` imports the client - chapter 02 section 2.9, FIXED-13); chat/jobs contract tests green including the SSE union parses; job orphan-sweep boot test green (chapter 05 P-10); the `onboarding` driver executes its SKIP-gate logic against `/health` (green or SKIP, never red); a structural assertion that no agent-face call path reaches the Anthropic client except through the egress module (FIXED-13).
+
+### Phase 8 - Automation (size 5)
+
+- **Objective:** the vision-first automation engine and the live browser canvas media channel.
+- **Inputs:** chapter 03 sections 3.8.18, 3.7 (canvas endpoint); chapter 02 (`automation/`, `streaming/`); the running agent stack from G7B. Q-01 is resolved to the carve-out (RESOLVED (Q-01), chapter 16), so canvas/`streaming/` work is unconditional - no longer a conditional input.
+- **Outputs:** the resolve loop (cache replay, then vision pinned to the expert tier at maximum effort - no tier escalation; reference/invisible-behaviors.md section 13.2), action runner, fingerprint, memory-backed cache, planner and rehearsal, vision through `llm/`, catalog, consent and approved-commands surfaces, run persistence and the run SSE stream; the `streaming/` module built unconditionally (RESOLVED (Q-01): the live browser canvas is a scoped media-channel exception under FIXED-2; ch03 section 3.7 canvas endpoint with the close-code contract 1000/4000; the resolution cited in RUN_LOG).
+- **Gate G8:** automation contract tests and ported module suites green (engine, action runner, fingerprint, vision with mocked model, cross-agent); the four remote-display tests green (now unconditional - chapter 13 section 13.3); node drivers `integration-automation` and `whatsapp-inbound` (full delivery path) green; the new deterministic-automation Playwright spec of chapter 13 section 13.6 committed (due green at G9, when the UI exists).
+
+### Phase 8A - Delegation and bridge (size 3)
+
+- **Objective:** local file access from the Cortex side (chapter 18) - the delegation tool, the bridge control channel, the provider endpoint, and the fake-daemon harness - placed after agent execution because delegation and the provider endpoint route through the chokepoint and the anonymisation layer with session-identity propagation.
+- **Inputs:** chapter 18 (whole); chapter 17 (session-identity propagation; the vault keyed by conversation id across both faces); the running agent and egress stack from G7B/G8; reference/test-audit.md section 5.6 (bridge safety gates kept verbatim); diagram 11-delegation-security.
+- **Outputs:** the hosted `delegate_to_local(task, grant_refs, budget)` tool - hosted conversation and run records receive derived output only (summaries, citations path+range, patch proposals, ledger refs); raw local content never enters hosted context or persistence (v2 I2); offline behavior honest (unreachable, never degrade to upload); the bridge channel (one outbound WS from the daemon, TLS, pairing-token auth at connect, presence heartbeat, tenant-scoped pairing registry, revoke-pairing kill switch server-side - daemon<->Cortex transport, explicitly outside FIXED-2's frontend rule); the Anthropic-compatible provider endpoint for bridge traffic routing through the chokepoint (FIXED-13) with session-identity propagation and pairing-bound auth (a stolen provider credential cannot address another tenant's session or vault); the correlation id minted per provider request at the chokepoint, propagated through delegation, joining the daemon ledger; the security model S1-S6 (chapter 18 section 18.5); the `bridge/` WS server with its safety gates; the fake-daemon harness at `api/test/fake-daemon/` - a named build deliverable: a contract-faithful simulated daemon (WS client implementing pairing, delegation execution against a fixture directory, ledger-row emission, denial cases), the executable definition of the wire contract shipped in the repo for the ekoa-local run to implement against.
+- **Gate G8A:** the fake-daemon adversarial scenarios all green (a containment-violation request rejected, a replayed task rejected, an expired task rejected, a cross-tenant-addressed task rejected, a forged-pairing connect rejected - each ledgered as a denial); the delegation round trip green against the fake daemon (derived output only returned); the derived-output-only assertion (no raw local content in any hosted conversation or run record); the correlation-id join test (chokepoint audit metadata joins the daemon ledger row on the per-request correlation id); the revoke-pairing kill switch test (a revoked pairing refuses all subsequent delegated tasks and provider-endpoint traffic); bridge safety tests verbatim-green (owner isolation, tool suppression, owner-scoped cancel - reference/test-audit.md section 5.6 keep-verbatim gates). All are the suite classes of chapter 13 section 13.5; harness detail in chapter 18 section 18.7.
+
+### Phase 9 - Web client migration (size 10)
+
+- **Objective:** migrate the existing frontend into `web/` against the running API (FIXED-9): typed REST client generated from `shared/`, transport replacement, dead-code cleanup, no visual redesign.
+- **Inputs:** chapter 12 (the migration map and FC-item fates, including the amendment web surfaces); chapter 03 (client generation rules 3.1); the running `api/` from G8A.
+- **Outputs:** `web/` fully migrated; the generated typed client; the re-coverage specs for the two retired Playwright files (chapter 13 section 13.2); the rewritten `artifacts-page-wiring` static audit; frontend unit mocks updated; the chapter 12 amendment surfaces - the attach affordance (Upload vs Reference with disabled/install/offline states), the per-turn trust chip (bytes-out and masked-entity counts, PT-PT two-boundary-honest copy), and the settings page "Privacidade e ponte local" absorbing `/settings/bridge` (Q-07: bridge status/pairing, active grants with revoke, local ledger viewer served live by the daemon, masking activity summary); the claims-bearing in-app copy drafted but ship-gated - present and disabled, enabled only after the mechanism it describes has passing evidence (chapter 17 section 17.9 claims discipline; the A7.4 gate).
+- **Gate G9:** the entire ledger is due: 55 of 57 Playwright specs green (13 unchanged, 5 fixture-swapped, 37 served-app), 17 frontend unit files green, all 14 drivers green or legitimately SKIP-gated, protocol-parity gate green (chapter 13 section 13.5 item 4), and the `shared/` schema-coverage allowlist empty - every schema exercised. The amendment web surfaces render (attach-affordance states, trust chip, the privacy/bridge settings page) with the claims-copy ship-gate enforced: the claims strings are present but disabled until their mechanism's tests pass (chapter 17 section 17.9). This gate is the run's single largest checkpoint; chapter 10 criteria 1 through 4 become checkable from here on.
+
+### Phase 10 - Migration and parity tooling (size 4)
+
+- **Objective:** build the cutover deliverables chapter 10 requires from the run (they are committed tools, not operator improvisation - chapter 10 sections 10.3 and 10.4).
+- **Inputs:** chapter 10 (procedure, RESOLVED (P-25): ledger replay plus a scripted parity workload is the parity method); chapter 04 section 4.8 (import shapes); chapter 06 (billing arithmetic for the replay harness).
+- **Outputs:** one import script per store family (read-only on sources, idempotent, dry-run by default, verification built in); the ledger-replay harness; the scripted parity workload with its fixed prompts committed.
+- **Gate G10:** every import script dry-runs green against a committed synthetic fixture of old-stack stores (counts and checksums match the fixture manifest); the replay harness reproduces exact totals on a fixture ledger; the workload harness runs end to end against the new stack in structural-assertion mode (one ledger event per model call, correct attribution - chapter 10 RESOLVED (P-25) part B; the cross-stack parity round itself is a founder-supervised pre-cutover activity, out of run scope).
+
+### Phase 11 - Discovery pass and regression expansion (size 4)
+
+- **Objective:** the vision-based discovery layer runs over the full product, and the regression suite is expanded per the coverage-gap plan.
+- **Inputs:** chapter 13 sections 13.4, 13.5, 13.6; the running full stack from G9.
+- **Outputs:** discovery findings log (repro steps, screenshots, severity); new deterministic Playwright and contract tests from findings; every chapter 13 section 13.6 gap row's planned artifact present, or its deferral recorded.
+- **Gate G11:** the findings log exists with 100 percent triage closure - every finding closed by a deterministic test, a fix plus its test, or a written dismissal with reason (chapter 13 section 13.4: never silent); the CI lane including all new tests exits 0; a census over the 13.6 gap table shows each row's artifact present in the repo or a RUN_LOG deferral entry.
+
+### Phase 12 - Dual-model review and final security pass (size 2)
+
+- **Objective:** a final whole-repo review beyond the per-gate diffs: Opus reviews the complete codebase against the spec; the adversarial Codex review attacks the highest-risk surfaces (`shared/`, `auth/`, `billing/`, `llm/`, the collections engine - the chapter 13 section 13.7 trigger list, applied to the whole repo); and, distinct from those code-quality reviews, the two security-briefed passes of the security addendum section F run over the whole repo.
+- **Inputs:** the full repo at G11; chapters 02 through 13 as the review charter; the security addendum section F (F1-F4) and chapter 09 (FIXED-14 enforcement homes); chapters 17 and 18 (the anonymisation and bridge surfaces attacked here).
+- **Outputs:** review findings, each fixed or waived in writing; any code changes re-run through the CI lane; the two security-briefed review passes (chapter 13 section 13.7; security addendum F1-F2) - Claude Code's full-repo security review and a separately-briefed adversarial Codex security pass (authz bypass, tenant leakage, injection paths); the cross-tenant adversarial suite (F3) and the rate-limit/spend-cap tests (F4) run at whole-repo scope; new-surface adversarial probes - bridge auth, provider-endpoint pairing binding (a stolen provider credential cannot address another tenant's session or vault), and anonymisation-bypass attempts; the policy skeleton seeded as three one-page documents in `docs/security/` (incident response runbook, access control policy, secure development policy - security addendum E.5, grown later into the ISMS).
+- **Gate G12:** all review verdicts recorded as approve in RUN_LOG (the two code-quality reviews and the two security-briefed passes); zero unresolved findings (fixed, or waived with written reason); the cross-tenant adversarial suite green (clean 403/404 only), the rate-limit/spend-cap tests green, and the new-surface adversarial probes (bridge auth, provider-endpoint pairing binding, anonymisation bypass) green; the three `docs/security/` policy one-pagers present; the CI lane green after the last fix.
+
+### Phase 13 - Docs and diagrams reconciled to as-built reality (size 2)
+
+- **Objective:** the spec's visual and written record matches what was actually built (FIXED-12).
+- **Inputs:** RUN_LOG.md (every DECISION, AMBIGUITY, DEVIATION); the diagrams in `spec/diagrams/`; the repo docs.
+- **Outputs:** every affected Excalidraw diagram updated to as-built structure, flow, and data shapes; a consolidated deviation annex (generated from RUN_LOG DEVIATION entries) appended to the repo docs; `CLAUDE.md` verified to contain the chapter 02 section 2.9 and chapter 13 section 13.10 blocks verbatim; final release-candidate tag.
+- **Gate G13:** a diagram census maps every chapter 02 module and every SSE stream to at least one current diagram, with modification dates at or after their last structural change (checkable from git history); the deviation annex enumerates exactly the set of DEVIATION entries in RUN_LOG (count match); the CI lane green; tag `rc-1` created. This is the run's terminal gate; what follows (staging, parity rounds, cutover) is chapter 10's founder-gated procedure, outside the run.
+
+## 14.5 Size summary
+
+| Phase | Name | Size |
+|---|---|---|
+| P | Planning | 2 |
+| 0 | Scaffold, CI, shared contract | 4 |
+| 1 | Test estate port | 6 |
+| 2 | Data core and auth | 8 |
+| 3 | Platform CRUD domains | 9 |
+| 4 | Integrations and knowledge | 9 |
+| 5 | Push infrastructure and triggers | 6 |
+| 6 | App pipeline, artifacts, served-app plane, legal | 14 |
+| 7 | LLM chokepoint core and billing metering | 4 |
+| 7A | Anonymisation layer | 4 |
+| 7B | Agent execution | 4 |
+| 8 | Automation | 5 |
+| 8A | Delegation and bridge | 3 |
+| 9 | Web client migration | 10 |
+| 10 | Migration and parity tooling | 4 |
+| 11 | Discovery and regression expansion | 4 |
+| 12 | Dual-model review and final security pass | 2 |
+| 13 | Docs and diagrams reconciliation | 2 |
+| | **Total** | **100** |
+
+The 2026-07-06 amendment split the old Phase 7 (LLM chokepoint, billing, agents - size 12) into the chokepoint core, the anonymisation layer, and agent execution (4+4+4=12, subtotal preserved) so the egress-module ordering constraint (14.3 constraint 9) is a phase boundary, and split the old Phase 8 (automation and bridge - size 8) into automation and the delegation/bridge phase (5+3=8, subtotal preserved); no other phase's size changed and the total holds at 100. The heaviest phases still cluster where the safety net concentrates: phase 6 (served-app contract, 14) and phase 9 (migrated client, 10) are 24 percent between them, and the egress-and-agent band (phases 7 through 7B, 12 combined) carries the billable model surface plus the anonymisation layer this amendment adds. Effort lands where the ported tests and the new privacy and bridge suites can immediately verify it.
+
+## 14.6 Acceptance criteria (checkable without a human)
+
+1. Every phase in 14.4 has an objective, inputs, outputs, one gate expressed as a command or checkable artifact, and a size; the sizes sum to 100 (mechanically checkable against 14.5).
+2. The gate template (14.2.1) requires, at every gate: a green CI lane, recorded review verdicts, a ledger check, a diagram note, and a tagged checkpoint commit - and each phase's RUN_LOG `GATE` entry evidences all five.
+3. RUN_LOG.md exists from G-P, is append-only, and contains the deliberate-red evidence entries required by the gates - at G0 the boundary-zone violation, the `@anthropic-ai/*` import outside `api/src/llm/`, and the two CI security-gate reds (a planted secret caught by gitleaks, a planted pattern caught by Semgrep SAST - security addendum D.4), and at G1 the ledger violation - plus the deliberate schema-coverage red of chapter 13 section 13.11 item 5 (logged at whichever domain gate performs it), plus one `GATE` entry per gate passed.
+4. No `DEVIATION` exists without a spec-section citation and a reason; the G13 deviation annex count equals the RUN_LOG `DEVIATION` count.
+5. The abort procedure of 14.2.4 was never bypassed: either zero `ABORT` entries exist and all eighteen gates passed, or exactly one `ABORT` entry exists and no gate after it was attempted.
+6. Any reorder applied at G-P preserves every constraint in 14.3, with the reorder and its justification recorded in `PLAN.md`.
+7. The 2026-07-06 amendment phases and gates are present and ordered per 14.3 constraint 9: G7 (chokepoint core) precedes G7A (anonymisation) precedes G7B (agent execution) precedes G8A (delegation and bridge). The anonymisation gate G7A asserts the payload-capture tokens-only gate, streaming straddle, prompt-cache byte-identical prefix, vault-never-persisted, and audit-metadata-only checks; the delegation/bridge gate G8A asserts the fake-daemon adversarial scenarios (containment/replay/expiry/cross-tenant/forged-pairing all rejected and ledgered), the delegation round trip, derived-output-only, correlation-id join, and revoke-pairing kill switch; the fake-daemon harness exists at `api/test/fake-daemon/`; Phase 12 records the two security-briefed review passes and the three `docs/security/` policy one-pagers.
+
+Cross-references: chapter 02 (module tiers and lint rules the gates enforce), chapter 03 (the resource map each domain gate discharges), chapter 04 (data foundation of G2), chapters 05 through 08 (the G7 through G8A content), chapter 09 (boot gates in G2, FIXED-14 invariant homes reviewed at G12), chapter 10 (the tooling G10 delivers and the cutover that consumes G9's green state), chapter 12 (the G9 migration map and amendment web surfaces), chapter 13 (the CI lane, review loop, discovery process, and security/privacy suites every gate runs), chapter 16 (Q-01, resolved to the carve-out - canvas work unconditional at G8), chapter 17 (the anonymisation phase G7A), chapter 18 (the delegation and bridge phase G8A).
+
+**Amendment record.** Amended 2026-07-06 per founder resolutions and the anonymisation/local-file-access amendment (docs/ekoa-code-spec-amendment-brief.md): P-01, P-16, and P-25 folded as resolved in their phase refs; G-P register description updated (P register 27 entries, 26 resolved and P-27 deferrable-with-default; Q register zero run-start blockers); Q-01 resolved to the carve-out (G8 canvas work unconditional); Phase 0 gained the security addendum D.4 CI security gates as day-one deliverables; the old Phase 7 was split into Phase 7 (chokepoint core), 7A (anonymisation layer), and 7B (agent execution), and the old Phase 8 into Phase 8 (automation) and 8A (delegation and bridge), preserving both subtotals; Phase 9 gained the chapter 12 web surfaces with the claims-copy ship-gate; Phase 12 was extended with the security addendum F1-F4 passes and the `docs/security/` policy skeleton; 14.3 gained the egress-module ordering constraint.
+
+*End of chapter 14.*
