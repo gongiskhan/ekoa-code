@@ -33,6 +33,11 @@ import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { servedDataRouter } from './apps/served-data.js';
 import { servingRouter } from './apps/serving.js';
+import { appRegistry } from './apps/app-registry.js';
+import { appBuilder } from './apps/builder.js';
+import { loadSlugIndex } from './apps/slug-index.js';
+import { seedFeaturedArtifacts } from './apps/featured-seeder.js';
+import { buildAndRegisterFeaturedArtifacts } from './apps/featured-builder.js';
 import { verifyToken } from './auth/jwt.js';
 import { artifactsRouter } from './routes/artifacts.js';
 
@@ -93,7 +98,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
 }
 
 /** Boot the persistence + admission state (ch09 §9.7): connect fail-fast, load the
- *  activation map + revocation set, seed the founder super-admin. */
+ *  activation map + revocation set, seed the founder super-admin. Then the apps/
+ *  boot obligations (ch07 §7.16): registry scan + slug-index load (parallel block),
+ *  featured-artifact seeding + orphan sweep (sequential migrations). */
 export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> {
   await connectMongo(); // fail-fast on a bad connection string
   const allUsers = await users.find({});
@@ -102,6 +109,20 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;
   if (seedUser && seedPass) await seedAdmin(seedUser, seedPass, deps);
+
+  // ch07 §7.16 - parallel boot block, then sequential migrations.
+  await Promise.all([appRegistry.start(appRegistry.sandboxRoot), loadSlugIndex()]);
+  const seeded = await seedFeaturedArtifacts();
+  console.log(
+    `[featured-seeder] seeded ${seeded.seeded}, refreshed ${seeded.refreshed}, orphans removed ${seeded.orphansRemoved}`,
+  );
+}
+
+/** Post-listen, fire-and-forget obligations (ch07 §7.16): featured prebuild. */
+export function bootPostListen(): void {
+  void buildAndRegisterFeaturedArtifacts()
+    .then((r) => console.log(`[featured-builder] built ${r.built}, skipped ${r.skipped}, failed ${r.failed}, registered ${r.registered}`))
+    .catch((err) => console.warn('[featured-builder] prebuild failed:', err instanceof Error ? err.message : err));
 }
 
 /** Boot: validate config (fail-closed), install process guards, start listening. */
@@ -116,12 +137,20 @@ export function boot(): void {
     .then(() => {
       app.listen(config.port, () => {
         console.log(`[ekoa-api] listening on :${config.port} (${config.nodeEnv})`);
+        bootPostListen();
       });
     })
     .catch((err) => {
       console.error('[ekoa-api] boot failed:', err);
       process.exit(1);
     });
+
+  // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers.
+  const shutdown = () => {
+    void Promise.allSettled([appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 // Boot only when run directly (not when imported by the contract suite's app factory).
