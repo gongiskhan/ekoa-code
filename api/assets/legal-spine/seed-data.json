@@ -1,0 +1,25 @@
+{
+  "clientes": [
+    { "id": "cli-001", "nome": "Marília Costa", "nif": "210000017", "email": "marilia.costa@exemplo.pt", "telefone": "+351 912 000 001", "tipo": "particular" },
+    { "id": "cli-002", "nome": "Padaria Central, Lda.", "nif": "510000028", "email": "geral@padariacentral.pt", "telefone": "+351 220 000 002", "tipo": "empresa" }
+  ],
+  "processos": [
+    { "id": "proc-001", "clienteId": "cli-001", "numeroProcesso": "1234/26.0T8LSB", "tribunal": "Juízo Central Cível de Lisboa", "comarca": "Lisboa", "area": "Cível", "estado": "ativo", "advogadoResponsavel": "Dra. Marília", "descricao": "Acção de responsabilidade civil extracontratual." },
+    { "id": "proc-002", "clienteId": "cli-002", "numeroProcesso": "5678/26.1T8PRT", "tribunal": "Juízo do Trabalho do Porto", "comarca": "Porto", "area": "Laboral", "estado": "ativo", "descricao": "Impugnação de despedimento por facto imputável ao trabalhador." }
+  ],
+  "prazos": [
+    { "id": "prz-001", "processoId": "proc-001", "titulo": "Contestação", "tipoContagem": "uteis", "estado": "pendente" }
+  ],
+  "documentos": [
+    { "id": "doc-001", "processoId": "proc-001", "nome": "Petição inicial", "tipo": "peca-processual" }
+  ],
+  "eventos": [
+    { "id": "evt-001", "processoId": "proc-001", "tipo": "processo-criado", "titulo": "Processo aberto", "data": "2026-06-01", "origem": "nucleo" }
+  ],
+  "lancamentos": [
+    { "id": "lan-001", "processoId": "proc-001", "descricao": "Reunião inicial com o cliente", "horas": 1.5, "taxaHora": 150, "data": "2026-06-02", "faturado": false }
+  ],
+  "tarefas": [
+    { "id": "tar-001", "processoId": "proc-001", "titulo": "Preparar contestação", "estado": "aberta", "responsavel": "Dra. Marília" }
+  ]
+}

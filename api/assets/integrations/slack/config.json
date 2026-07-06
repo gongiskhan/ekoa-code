@@ -1,0 +1,108 @@
+{
+  "version": "2.0",
+  "skillType": "integration",
+  "integrationKey": "slack",
+  "displayName": "Slack",
+  "description": "Send messages to Slack channels and list workspace channels using a Bot Token.",
+  "authType": "api_key",
+  "provider": "Slack",
+  "category": "communication",
+  "credentialGuide": "1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app (or open an existing one) for your workspace.\n2. Under **OAuth & Permissions**, add the bot scopes you need (e.g. `chat:write`, `channels:read`).\n3. Install the app to your workspace, then copy the **Bot User OAuth Token** (starts with `xoxb-`).\n4. Paste it into the Bot Token field below.\n5. Invite the bot to any channel you want it to post in (`/invite @your-bot-name`).",
+  "configSchema": [
+    {
+      "key": "bot_token",
+      "label": "Bot Token",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Your Slack Bot User OAuth Token. Starts with 'xoxb-'. Found at api.slack.com/apps → your app → OAuth & Permissions → Bot User OAuth Token."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "send_message",
+      "description": "Send a text message to a Slack channel",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel name (e.g. #general) or channel ID"
+          },
+          "text": {
+            "type": "string",
+            "description": "Message text to send"
+          },
+          "username": {
+            "type": "string",
+            "description": "Override bot display name for this message"
+          }
+        },
+        "required": [
+          "channel",
+          "text"
+        ]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://slack.com",
+        "path": "/api/chat.postMessage",
+        "headers": {
+          "Authorization": "Bearer {{bot_token}}",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "bodyTemplate": {
+          "channel": "{{channel}}",
+          "text": "{{text}}",
+          "username": "{{username}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_channels",
+      "description": "List public channels in the Slack workspace",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Maximum number of channels to return (default 100, max 1000)"
+          },
+          "exclude_archived": {
+            "type": "boolean",
+            "description": "Exclude archived channels (default true)"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://slack.com",
+        "path": "/api/conversations.list",
+        "headers": {
+          "Authorization": "Bearer {{bot_token}}"
+        },
+        "queryParams": {
+          "limit": "{{limit}}",
+          "exclude_archived": "{{exclude_archived}}"
+        }
+      }
+    }
+  ],
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": [
+      "integrationKey",
+      "actionName",
+      "args"
+    ]
+  }
+}

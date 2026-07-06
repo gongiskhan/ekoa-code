@@ -1,0 +1,54 @@
+{
+  "versao": 1,
+  "atualizadoEm": "2026-07-04",
+  "nota": "Fonte ÚNICA das taxas com prazo de validade (brief §3.3). Linhas com nota 'confirmar' têm valor/aviso por validar contra o DRE - o crawler de Avisos ETF e a sessão de configuração saram estas entradas. O motor de cálculo recebe estas linhas como INPUT e cita o aviso de cada troço; nenhum outro sítio do código pode ter constantes de taxa.",
+  "jurosCivis": {
+    "taxa": 4.0,
+    "base": "Portaria n.º 291/2003, de 8 de abril (art. 559.º do Código Civil)",
+    "vigenciaInicio": "2003-05-01"
+  },
+  "retencaoIrs": {
+    "taxa": 23,
+    "base": "Lei n.º 45-A/2024 (alteração ao art. 101.º do CIRS), em vigor desde 2025",
+    "anterior": { "taxa": 25, "ate": "2024-12-31" }
+  },
+  "uc": [
+    { "ano": 2024, "valor": 102.0, "base": "OE 2024 - UC atualizada para 102,00 EUR" },
+    { "ano": 2025, "valor": 102.0, "base": "OE 2025 - UC mantida em 102,00 EUR", "nota": "confirmar" },
+    { "ano": 2026, "valor": 102.0, "base": "OE 2026 - UC mantida em 102,00 EUR", "nota": "confirmar" }
+  ],
+  "jurosComerciais": [
+    { "semestre": "2013-S1", "taxa": 7.75, "aviso": "confirmar", "vigenciaInicio": "2013-01-01", "vigenciaFim": "2013-06-30", "nota": "confirmar - taxa BCE 0,75% + 7 p.p. (antes do DL 62/2013); aviso DGTF por validar" },
+    { "semestre": "2013-S2", "taxa": 8.5, "aviso": "confirmar", "vigenciaInicio": "2013-07-01", "vigenciaFim": "2013-12-31", "nota": "confirmar - taxa BCE 0,50% + 8 p.p. (DL 62/2013); aviso DGTF por validar" },
+    { "semestre": "2014-S1", "taxa": 8.25, "aviso": "confirmar", "vigenciaInicio": "2014-01-01", "vigenciaFim": "2014-06-30", "nota": "confirmar - taxa BCE 0,25% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2014-S2", "taxa": 8.15, "aviso": "confirmar", "vigenciaInicio": "2014-07-01", "vigenciaFim": "2014-12-31", "nota": "confirmar - taxa BCE 0,15% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2015-S1", "taxa": 8.05, "aviso": "confirmar", "vigenciaInicio": "2015-01-01", "vigenciaFim": "2015-06-30", "nota": "confirmar - taxa BCE 0,05% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2015-S2", "taxa": 8.05, "aviso": "confirmar", "vigenciaInicio": "2015-07-01", "vigenciaFim": "2015-12-31", "nota": "confirmar - taxa BCE 0,05% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2016-S1", "taxa": 8.05, "aviso": "confirmar", "vigenciaInicio": "2016-01-01", "vigenciaFim": "2016-06-30", "nota": "confirmar - taxa BCE 0,05% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2016-S2", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2016-07-01", "vigenciaFim": "2016-12-31", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2017-S1", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2017-01-01", "vigenciaFim": "2017-06-30", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2017-S2", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2017-07-01", "vigenciaFim": "2017-12-31", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2018-S1", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2018-01-01", "vigenciaFim": "2018-06-30", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2018-S2", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2018-07-01", "vigenciaFim": "2018-12-31", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2019-S1", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2019-01-01", "vigenciaFim": "2019-06-30", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2019-S2", "taxa": 8.0, "aviso": "confirmar", "vigenciaInicio": "2019-07-01", "vigenciaFim": "2019-12-31", "nota": "confirmar - taxa BCE 0,00% + 8 p.p.; aviso DGTF por validar" },
+    { "semestre": "2020-S1", "taxa": 8.0, "aviso": "Aviso n.º 1568/2020, DGTF", "vigenciaInicio": "2020-01-01", "vigenciaFim": "2020-06-30" },
+    { "semestre": "2020-S2", "taxa": 8.0, "aviso": "Aviso n.º 10874/2020, DGTF", "vigenciaInicio": "2020-07-01", "vigenciaFim": "2020-12-31", "nota": "confirmar" },
+    { "semestre": "2021-S1", "taxa": 8.0, "aviso": "Aviso n.º 2239/2021, DGTF", "vigenciaInicio": "2021-01-01", "vigenciaFim": "2021-06-30", "nota": "confirmar" },
+    { "semestre": "2021-S2", "taxa": 8.0, "aviso": "Aviso n.º 13486/2021, DGTF", "vigenciaInicio": "2021-07-01", "vigenciaFim": "2021-12-31", "nota": "confirmar" },
+    { "semestre": "2022-S1", "taxa": 8.0, "aviso": "Aviso n.º 2062/2022, DGTF", "vigenciaInicio": "2022-01-01", "vigenciaFim": "2022-06-30", "nota": "confirmar" },
+    { "semestre": "2022-S2", "taxa": 8.0, "aviso": "Aviso n.º 14201/2022, DGTF", "vigenciaInicio": "2022-07-01", "vigenciaFim": "2022-12-31", "nota": "confirmar - taxa BCE em vigor a 1 Jul 2022 era 0,00% (a primeira subida produziu efeitos a 27 Jul), logo 0,00 + 8 p.p." },
+    { "semestre": "2023-S1", "taxa": 10.5, "aviso": "Aviso n.º 1261/2023, DGTF", "vigenciaInicio": "2023-01-01", "vigenciaFim": "2023-06-30" },
+    { "semestre": "2023-S2", "taxa": 12.0, "aviso": "Aviso n.º 20214/2023, DGTF", "vigenciaInicio": "2023-07-01", "vigenciaFim": "2023-12-31" },
+    { "semestre": "2024-S1", "taxa": 12.5, "aviso": "Aviso n.º 1274/2024, DGTF", "vigenciaInicio": "2024-01-01", "vigenciaFim": "2024-06-30" },
+    { "semestre": "2024-S2", "taxa": 12.25, "aviso": "Aviso n.º 15332/2024, DGTF", "vigenciaInicio": "2024-07-01", "vigenciaFim": "2024-12-31", "nota": "confirmar" },
+    { "semestre": "2025-S1", "taxa": 11.15, "aviso": null, "vigenciaInicio": "2025-01-01", "vigenciaFim": "2025-06-30", "nota": "confirmar - taxa BCE 3,15% + 8 p.p.; numero do Aviso DGTF por obter no DRE (nunca citar um aviso inventado)" },
+    { "semestre": "2025-S2", "taxa": 10.15, "aviso": null, "vigenciaInicio": "2025-07-01", "vigenciaFim": "2025-12-31", "nota": "confirmar - taxa BCE 2,15% + 8 p.p.; numero do Aviso DGTF por obter no DRE" },
+    { "semestre": "2026-S1", "taxa": 10.15, "aviso": null, "vigenciaInicio": "2026-01-01", "vigenciaFim": "2026-06-30", "nota": "confirmar - taxa BCE 2,15% + 8 p.p.; numero do Aviso DGTF por obter no DRE" },
+    { "semestre": "2026-S2", "taxa": 10.15, "aviso": null, "vigenciaInicio": "2026-07-01", "vigenciaFim": "2026-12-31", "nota": "confirmar - taxa BCE 2,15% + 8 p.p.; numero do Aviso DGTF por obter no DRE (o crawler/checkpoint saram)" }
+  ],
+  "alarme": {
+    "descricao": "Quando o semestre corrente não tem linha em jurosComerciais (ou tem nota 'confirmar' depois do dia 15 do primeiro mês do semestre), OU o ano corrente não tem linha de UC confirmada, o serviço de tabelas emite o alarme de atualização em falta (brief §3.3). A cobertura de UC começa em 2024 - cálculos de custas para atos anteriores a 2024 devem falhar ruidosamente por falta de UC, nunca calcular em silêncio.",
+    "diaLimiteConfirmacao": 15
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "id": "document",
+  "name": "Documento (Word/PDF)",
+  "description": "Print-styled document page (contract, legal opinion, report, proposal, letter) with a Word (.docx) + PDF download toolbar.",
+  "version": "1.0.0"
+}

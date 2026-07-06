@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "stripe",
+  "displayName": "Stripe",
+  "description": "Receive Stripe webhook events (payment_intent.succeeded, charge.refunded, …) and auto-register the webhook endpoint via the Stripe API.",
+  "authType": "api_key",
+  "provider": "Stripe",
+  "category": "payments",
+  "credentialGuide": "1. Go to your Stripe Dashboard's [API keys page](https://dashboard.stripe.com/apikeys).\n2. Copy the **Secret key**. Use a test-mode key (starts with `sk_test_`) while wiring this up, then switch to the live key (`sk_live_`) once you've verified it works.\n3. Paste it into the Secret Key field below.",
+  "configSchema": [
+    {
+      "key": "secret_key",
+      "label": "Secret Key",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Your Stripe secret key. Starts with 'sk_test_' (test mode) or 'sk_live_' (live mode). Found at dashboard.stripe.com/apikeys."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "register_webhook",
+      "description": "Register a new webhook endpoint on the connected Stripe account. Called by the trigger system to auto-provision /hooks/<id>.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "Public HTTPS URL Stripe will POST to" },
+          "secret": { "type": "string", "description": "HMAC secret echoed in Stripe-Signature header" },
+          "events": { "type": "array", "items": { "type": "string" }, "description": "Stripe event names to subscribe to" }
+        },
+        "required": ["url", "events"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://api.stripe.com",
+        "path": "/v1/webhook_endpoints",
+        "headers": {
+          "Authorization": "Bearer {{secret_key}}",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "bodyTemplate": {
+          "url": "{{url}}",
+          "enabled_events[]": "{{events}}"
+        }
+      }
+    },
+    {
+      "actionName": "unregister_webhook",
+      "description": "Delete a webhook endpoint by its Stripe id (id from register response).",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Stripe webhook endpoint id (we_xxx)" }
+        },
+        "required": ["id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "DELETE",
+        "baseUrl": "https://api.stripe.com",
+        "path": "/v1/webhook_endpoints/{{id}}",
+        "headers": {
+          "Authorization": "Bearer {{secret_key}}"
+        }
+      }
+    }
+  ],
+  "webhookConfig": {
+    "verifySignature": {
+      "algorithm": "stripe_v1",
+      "headerName": "Stripe-Signature",
+      "timestampToleranceSec": 300
+    },
+    "dedupKey": { "source": "body", "field": "id" },
+    "registration": {
+      "register": "register_webhook",
+      "unregister": "unregister_webhook",
+      "responseSecretPath": "secret"
+    },
+    "events": [
+      { "name": "payment_intent.succeeded", "labelPt": "Pagamento concluído com sucesso" },
+      { "name": "payment_intent.payment_failed", "labelPt": "Pagamento falhou" },
+      { "name": "charge.refunded", "labelPt": "Pagamento reembolsado" },
+      { "name": "customer.created", "labelPt": "Cliente criado" },
+      { "name": "invoice.paid", "labelPt": "Fatura paga" }
+    ]
+  }
+}

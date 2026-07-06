@@ -1,0 +1,758 @@
+{
+  "version": "2.0",
+  "skillType": "integration",
+  "integrationKey": "google-workspace",
+  "displayName": "Google Workspace",
+  "description": "Connects Gmail, Drive, Calendar, Sheets, and Docs via Google APIs.",
+  "authType": "oauth2",
+  "provider": "Google",
+  "category": "productivity",
+  "credentialGuide": "This integration connects via Google sign-in, no API keys needed.\n\n1. Go to the **Integrações de Plataforma** section at the top of the Integrations page.\n2. Click **Connect** under Google Workspace.\n3. Sign in with the Google account you want Ekoa to act as, and grant the requested access to Gmail, Calendar, Drive, Docs, Sheets, and Tasks.",
+  "configSchema": [],
+  "actions": [
+    {
+      "actionName": "list_emails",
+      "description": "List email messages from the authenticated user's Gmail inbox",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Gmail search query (e.g. 'from:alice subject:report is:unread')"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "Maximum number of messages to return (default 10, max 500)"
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Page token from a previous response's nextPageToken, to page through results"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "q": "{{q}}",
+          "maxResults": "{{maxResults}}",
+          "pageToken": "{{pageToken}}"
+        }
+      }
+    },
+    {
+      "actionName": "read_email",
+      "description": "Read the full content of a specific Gmail message by ID",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The Gmail message ID to read"
+          },
+          "format": {
+            "type": "string",
+            "description": "Response format: 'full', 'metadata', or 'minimal' (default 'full')"
+          }
+        },
+        "required": ["messageId"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/{{messageId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "format": "{{format}}"
+        }
+      }
+    },
+    {
+      "actionName": "send_email",
+      "description": "Send an email from the authenticated user's Gmail account. The raw field must be a base64url-encoded RFC 2822 message.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "raw": {
+            "type": "string",
+            "description": "Base64url-encoded RFC 2822 email message (includes To, From, Subject, and body)"
+          }
+        },
+        "required": ["raw"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/send",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "raw": "{{raw}}"
+        }
+      }
+    },
+    {
+      "actionName": "send_email_simple",
+      "description": "Send an email from the authenticated user's Gmail account using STRUCTURED fields (to, subject, body). Optionally attach ONE file by passing attachmentBase64 (base64-encoded bytes, no data URI prefix), attachmentFilename, and attachmentMimeType. Prefer this over send_email when you cannot pre-encode RFC 2822 yourself.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient email address (single address; comma-separate for multiple)"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject line"
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body as plain text"
+          },
+          "attachmentBase64": {
+            "type": "string",
+            "description": "Optional: base64-encoded attachment bytes (no 'data:' prefix). Use {{capture.lastScreenshot}} to attach the current page's screenshot."
+          },
+          "attachmentFilename": {
+            "type": "string",
+            "description": "Optional: filename for the attachment (e.g. 'screenshot.png'). Defaults to 'attachment.bin'."
+          },
+          "attachmentMimeType": {
+            "type": "string",
+            "description": "Optional: MIME type for the attachment (e.g. 'image/png'). Defaults to 'application/octet-stream'."
+          }
+        },
+        "required": ["to", "subject", "body"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/send",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "raw": "{{raw}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_events",
+      "description": "List upcoming events from the authenticated user's primary Google Calendar",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "timeMin": {
+            "type": "string",
+            "description": "Lower bound (inclusive) for event start time, as an RFC 3339 timestamp (e.g. '2025-01-01T00:00:00Z')"
+          },
+          "timeMax": {
+            "type": "string",
+            "description": "Upper bound (exclusive) for event start time, as an RFC 3339 timestamp"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "Maximum number of events to return (default 10, max 2500)"
+          },
+          "singleEvents": {
+            "type": "boolean",
+            "description": "Whether to expand recurring events into instances (default true)"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/calendar/v3/calendars/primary/events",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "timeMin": "{{timeMin}}",
+          "timeMax": "{{timeMax}}",
+          "maxResults": "{{maxResults}}",
+          "singleEvents": "{{singleEvents}}",
+          "orderBy": "startTime"
+        }
+      }
+    },
+    {
+      "actionName": "create_event",
+      "description": "Create a new event on the authenticated user's primary Google Calendar",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Title of the event"
+          },
+          "description": {
+            "type": "string",
+            "description": "Description or notes for the event"
+          },
+          "startDateTime": {
+            "type": "string",
+            "description": "Event start as RFC 3339 timestamp (e.g. '2025-06-15T09:00:00-05:00')"
+          },
+          "endDateTime": {
+            "type": "string",
+            "description": "Event end as RFC 3339 timestamp"
+          },
+          "timeZone": {
+            "type": "string",
+            "description": "IANA time zone (e.g. 'America/New_York'). Defaults to calendar time zone."
+          },
+          "attendees": {
+            "type": "string",
+            "description": "Comma-separated email addresses of attendees"
+          }
+        },
+        "required": ["summary", "startDateTime", "endDateTime"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/calendar/v3/calendars/primary/events",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "summary": "{{summary}}",
+          "description": "{{description}}",
+          "start": {
+            "dateTime": "{{startDateTime}}",
+            "timeZone": "{{timeZone}}"
+          },
+          "end": {
+            "dateTime": "{{endDateTime}}",
+            "timeZone": "{{timeZone}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "list_files",
+      "description": "List files in the authenticated user's Google Drive",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Drive search query (e.g. \"name contains 'report'\" or \"mimeType='application/pdf'\")"
+          },
+          "pageSize": {
+            "type": "number",
+            "description": "Maximum number of files to return (default 10, max 1000)"
+          },
+          "orderBy": {
+            "type": "string",
+            "description": "Sort order (e.g. 'modifiedTime desc', 'name')"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/drive/v3/files",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "q": "{{q}}",
+          "pageSize": "{{pageSize}}",
+          "orderBy": "{{orderBy}}",
+          "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink)"
+        }
+      }
+    },
+    {
+      "actionName": "create_doc",
+      "description": "Create a new empty Google Doc with the given title",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Title of the new Google Doc"
+          }
+        },
+        "required": ["title"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://docs.googleapis.com",
+        "path": "/v1/documents",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "title": "{{title}}"
+        }
+      }
+    },
+    {
+      "actionName": "create_sheet",
+      "description": "Create a new Google Sheets spreadsheet with the given title",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Title of the new spreadsheet"
+          }
+        },
+        "required": ["title"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://sheets.googleapis.com",
+        "path": "/v4/spreadsheets",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "properties": {
+            "title": "{{title}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "modify_email",
+      "description": "Add or remove labels on a Gmail message. Use removeLabelIds=['UNREAD'] to mark as read, removeLabelIds=['INBOX'] to archive, addLabelIds=['STARRED'] to star.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": { "type": "string", "description": "The Gmail message ID" },
+          "addLabelIds": { "type": "array", "items": { "type": "string" }, "description": "Label IDs to add (e.g. ['STARRED', 'IMPORTANT'])" },
+          "removeLabelIds": { "type": "array", "items": { "type": "string" }, "description": "Label IDs to remove (e.g. ['UNREAD', 'INBOX'])" }
+        },
+        "required": ["messageId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/{{messageId}}/modify",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "addLabelIds": "{{addLabelIds}}",
+          "removeLabelIds": "{{removeLabelIds}}"
+        }
+      }
+    },
+    {
+      "actionName": "batch_modify_emails",
+      "description": "Bulk add/remove labels on multiple Gmail messages. Use to mark many emails as read and/or archive them at once.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "ids": { "type": "array", "items": { "type": "string" }, "description": "Array of Gmail message IDs to modify" },
+          "addLabelIds": { "type": "array", "items": { "type": "string" }, "description": "Label IDs to add" },
+          "removeLabelIds": { "type": "array", "items": { "type": "string" }, "description": "Label IDs to remove" }
+        },
+        "required": ["ids"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/batchModify",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "ids": "{{ids}}",
+          "addLabelIds": "{{addLabelIds}}",
+          "removeLabelIds": "{{removeLabelIds}}"
+        }
+      }
+    },
+    {
+      "actionName": "trash_email",
+      "description": "Move a Gmail message to Trash",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": { "type": "string", "description": "The Gmail message ID to trash" }
+        },
+        "required": ["messageId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/messages/{{messageId}}/trash",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_labels",
+      "description": "List all Gmail labels (system labels like INBOX, UNREAD, STARRED, SPAM, TRASH and user-created labels)",
+      "mutates": false,
+      "argsSchema": { "type": "object", "properties": {}, "required": [] },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/labels",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_drafts",
+      "description": "List draft emails in the authenticated user's Gmail account",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": { "type": "number", "description": "Maximum drafts to return (default 20)" }
+        },
+        "required": []
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/drafts",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "maxResults": "{{maxResults}}"
+        }
+      }
+    },
+    {
+      "actionName": "delete_event",
+      "description": "Delete a calendar event by its ID",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "eventId": { "type": "string", "description": "The calendar event ID to delete" }
+        },
+        "required": ["eventId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "DELETE",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/calendar/v3/calendars/primary/events/{{eventId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "update_event",
+      "description": "Update a calendar event's details (summary, time, description, attendees)",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "eventId": { "type": "string", "description": "The calendar event ID to update" },
+          "summary": { "type": "string", "description": "Updated event title" },
+          "description": { "type": "string", "description": "Updated event description" },
+          "startDateTime": { "type": "string", "description": "Updated start time (RFC 3339)" },
+          "endDateTime": { "type": "string", "description": "Updated end time (RFC 3339)" },
+          "timeZone": { "type": "string", "description": "IANA time zone" }
+        },
+        "required": ["eventId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "PATCH",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/calendar/v3/calendars/primary/events/{{eventId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "summary": "{{summary}}",
+          "description": "{{description}}",
+          "start": { "dateTime": "{{startDateTime}}", "timeZone": "{{timeZone}}" },
+          "end": { "dateTime": "{{endDateTime}}", "timeZone": "{{timeZone}}" }
+        }
+      }
+    },
+    {
+      "actionName": "read_sheet",
+      "description": "Read values from a specific range in a Google Sheets spreadsheet",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": { "type": "string", "description": "The spreadsheet ID" },
+          "range": { "type": "string", "description": "The A1 notation range to read (e.g. 'Sheet1!A1:C10')" }
+        },
+        "required": ["spreadsheetId", "range"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://sheets.googleapis.com",
+        "path": "/v4/spreadsheets/{{spreadsheetId}}/values/{{range}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "append_sheet",
+      "description": "Append rows of data to a Google Sheets spreadsheet",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": { "type": "string", "description": "The spreadsheet ID" },
+          "range": { "type": "string", "description": "The A1 notation range (e.g. 'Sheet1!A:C')" },
+          "values": { "type": "array", "description": "2D array of values to append, e.g. [['row1col1','row1col2'],['row2col1','row2col2']]" }
+        },
+        "required": ["spreadsheetId", "range", "values"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://sheets.googleapis.com",
+        "path": "/v4/spreadsheets/{{spreadsheetId}}/values/{{range}}:append",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "queryParams": {
+          "valueInputOption": "USER_ENTERED",
+          "insertDataOption": "INSERT_ROWS"
+        },
+        "bodyTemplate": {
+          "values": "{{values}}"
+        }
+      }
+    },
+    {
+      "actionName": "get_file",
+      "description": "Get metadata for a specific file in Google Drive",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": { "type": "string", "description": "The Drive file ID" }
+        },
+        "required": ["fileId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://www.googleapis.com",
+        "path": "/drive/v3/files/{{fileId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "fields": "id,name,mimeType,modifiedTime,size,webViewLink,parents"
+        }
+      }
+    },
+    {
+      "actionName": "write_doc",
+      "description": "Insert text into a Google Doc at the end of the document",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": { "type": "string", "description": "The Google Doc document ID" },
+          "text": { "type": "string", "description": "Text content to insert" },
+          "index": { "type": "number", "description": "Character index to insert at (default: 1 = start of doc)" }
+        },
+        "required": ["documentId", "text"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://docs.googleapis.com",
+        "path": "/v1/documents/{{documentId}}:batchUpdate",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "requests": [
+            {
+              "insertText": {
+                "location": { "index": "{{index}}" },
+                "text": "{{text}}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "actionName": "list_task_lists",
+      "description": "List all Google Tasks task lists",
+      "mutates": false,
+      "argsSchema": { "type": "object", "properties": {}, "required": [] },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://tasks.googleapis.com",
+        "path": "/tasks/v1/users/@me/lists",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_tasks",
+      "description": "List tasks in a specific task list",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "taskListId": { "type": "string", "description": "The task list ID (use list_task_lists to find it)" },
+          "showCompleted": { "type": "boolean", "description": "Whether to include completed tasks (default true)" }
+        },
+        "required": ["taskListId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://tasks.googleapis.com",
+        "path": "/tasks/v1/lists/{{taskListId}}/tasks",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "showCompleted": "{{showCompleted}}"
+        }
+      }
+    },
+    {
+      "actionName": "create_task",
+      "description": "Create a new task in a task list",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "taskListId": { "type": "string", "description": "The task list ID" },
+          "title": { "type": "string", "description": "Task title" },
+          "notes": { "type": "string", "description": "Optional task notes/description" },
+          "due": { "type": "string", "description": "Due date as RFC 3339 timestamp" }
+        },
+        "required": ["taskListId", "title"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://tasks.googleapis.com",
+        "path": "/tasks/v1/lists/{{taskListId}}/tasks",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "title": "{{title}}",
+          "notes": "{{notes}}",
+          "due": "{{due}}"
+        }
+      }
+    },
+    {
+      "actionName": "complete_task",
+      "description": "Mark a task as completed",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "taskListId": { "type": "string", "description": "The task list ID" },
+          "taskId": { "type": "string", "description": "The task ID to complete" }
+        },
+        "required": ["taskListId", "taskId"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "PATCH",
+        "baseUrl": "https://tasks.googleapis.com",
+        "path": "/tasks/v1/lists/{{taskListId}}/tasks/{{taskId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "status": "completed"
+        }
+      }
+    }
+  ],
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": [
+      "integrationKey",
+      "actionName",
+      "args"
+    ]
+  }
+}

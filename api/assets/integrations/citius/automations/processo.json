@@ -1,0 +1,64 @@
+{
+  "templateKey": "processo",
+  "name": "CITIUS/eTribunal — consultar processo",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada e consulta o estado e o histórico de movimentos/tramitação de um processo pelo seu número único.",
+  "inputSchema": {
+    "fields": [
+      {
+        "name": "numeroProcesso",
+        "description": "Número único de processo (ex.: 1234/26.0T8LSB).",
+        "required": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "abrir-portal",
+      "type": "navigate",
+      "description": "Abrir o Portal dos Mandatários (eTribunal).",
+      "url": "https://portal.tribunais.org.pt"
+    },
+    {
+      "id": "confirmar-autenticacao",
+      "type": "verify",
+      "description": "Confirmar que a área reservada do mandatário está aberta (o nome do mandatário e o menu do portal — notificações, os meus processos — estão visíveis, e não a página de autenticação).",
+      "expectedOutcome": "A área reservada do mandatário está aberta e autenticada. Se aparecer a página de autenticação (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão via autenticacao.gov.pt), o advogado autentica-se na janela e a execução prossegue."
+    },
+    {
+      "id": "abrir-consulta",
+      "type": "browser",
+      "description": "Abrir a consulta de processos do mandatário (\"Os meus processos\" ou \"Consultar processo\").",
+      "expectedOutcome": "O formulário/lista de consulta de processos está visível."
+    },
+    {
+      "id": "pesquisar-processo",
+      "type": "browser",
+      "description": "No campo de pesquisa de processo, introduzir o número único de processo '{{input.numeroProcesso}}' e submeter a pesquisa.",
+      "expectedOutcome": "O processo '{{input.numeroProcesso}}' aparece nos resultados."
+    },
+    {
+      "id": "abrir-processo",
+      "type": "browser",
+      "description": "Abrir o registo do processo '{{input.numeroProcesso}}' a partir dos resultados, para ver a ficha do processo.",
+      "expectedOutcome": "A ficha do processo está aberta, com o estado e o separador de movimentos/tramitação."
+    },
+    {
+      "id": "capturar-estado",
+      "type": "browser",
+      "description": "Registar o estado atual do processo, o tribunal/juízo, a espécie e as partes, tal como constam na ficha do processo.",
+      "expectedOutcome": "O estado e os dados de cabeçalho do processo foram registados."
+    },
+    {
+      "id": "capturar-movimentos",
+      "type": "browser",
+      "description": "Abrir o separador de movimentos/tramitação e percorrer todas as linhas do histórico, registando para cada movimento a data e a descrição do acto. Se o histórico tiver mais do que uma página, avançar e repetir até não haver mais páginas.",
+      "expectedOutcome": "O histórico completo de movimentos (data + acto) foi registado."
+    },
+    {
+      "id": "verificar-processo",
+      "type": "verify",
+      "description": "Confirmar que o estado do processo e o histórico de movimentos estão visíveis e foram recolhidos.",
+      "expectedOutcome": "O estado do processo e a tramitação estruturada (datas + actos) estão completos."
+    }
+  ]
+}

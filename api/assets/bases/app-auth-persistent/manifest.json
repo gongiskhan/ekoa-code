@@ -1,0 +1,6 @@
+{
+  "id": "app-auth-persistent",
+  "name": "Authenticated Multi-Page App",
+  "description": "Authenticated multi-page app with persistence; left-nav shell, auth wiring, persistence wiring",
+  "version": "1.0.0"
+}

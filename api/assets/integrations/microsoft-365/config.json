@@ -1,0 +1,376 @@
+{
+  "version": "2.0",
+  "skillType": "integration",
+  "integrationKey": "microsoft-365",
+  "displayName": "Microsoft 365",
+  "description": "Connects Outlook, OneDrive, SharePoint, Teams, Excel, and Word via Microsoft Graph API.",
+  "authType": "oauth2",
+  "provider": "Microsoft",
+  "category": "productivity",
+  "credentialGuide": "This integration connects via Microsoft sign-in, no API keys needed.\n\n1. Go to the **Integrações de Plataforma** section at the top of the Integrations page.\n2. Click **Connect** under Microsoft 365.\n3. Sign in with the Microsoft 365 account you want Ekoa to act as, and grant the requested access to Outlook, Calendar, OneDrive, and SharePoint.",
+  "configSchema": [],
+  "actions": [
+    {
+      "actionName": "list_emails",
+      "description": "List email messages from the authenticated user's Outlook mailbox",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "$top": {
+            "type": "number",
+            "description": "Maximum number of messages to return (default 10, max 1000)"
+          },
+          "$filter": {
+            "type": "string",
+            "description": "OData filter expression (e.g. \"isRead eq false\" or \"from/emailAddress/address eq 'alice@example.com'\")"
+          },
+          "$orderby": {
+            "type": "string",
+            "description": "OData sort expression (e.g. 'receivedDateTime desc')"
+          },
+          "$search": {
+            "type": "string",
+            "description": "Search query for messages (searches subject, body, and addresses)"
+          },
+          "$skip": {
+            "type": "number",
+            "description": "Number of messages to skip (paging within a result set)"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/messages",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "$top": "{{$top}}",
+          "$filter": "{{$filter}}",
+          "$orderby": "{{$orderby}}",
+          "$search": "{{$search}}",
+          "$skip": "{{$skip}}",
+          "$select": "id,subject,from,receivedDateTime,isRead,bodyPreview"
+        }
+      }
+    },
+    {
+      "actionName": "read_email",
+      "description": "Read the full content of a specific Outlook message by ID",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The Outlook message ID to read"
+          }
+        },
+        "required": ["messageId"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/messages/{{messageId}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "send_email",
+      "description": "Send an email from the authenticated user's Outlook account",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Email subject line"
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body content (plain text or HTML)"
+          },
+          "bodyContentType": {
+            "type": "string",
+            "description": "Body content type: 'Text' or 'HTML' (default 'Text')"
+          },
+          "toRecipients": {
+            "type": "string",
+            "description": "Comma-separated email addresses of recipients"
+          },
+          "ccRecipients": {
+            "type": "string",
+            "description": "Comma-separated email addresses of CC recipients"
+          }
+        },
+        "required": ["subject", "body", "toRecipients"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/sendMail",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "message": {
+            "subject": "{{subject}}",
+            "body": {
+              "contentType": "{{bodyContentType}}",
+              "content": "{{body}}"
+            },
+            "toRecipients": "{{toRecipients}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "list_events",
+      "description": "List upcoming events from the authenticated user's Outlook calendar",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "startDateTime": {
+            "type": "string",
+            "description": "Lower bound for event start time as ISO 8601 timestamp (e.g. '2025-01-01T00:00:00Z')"
+          },
+          "endDateTime": {
+            "type": "string",
+            "description": "Upper bound for event end time as ISO 8601 timestamp"
+          },
+          "$top": {
+            "type": "number",
+            "description": "Maximum number of events to return (default 10)"
+          },
+          "$orderby": {
+            "type": "string",
+            "description": "OData sort expression (e.g. 'start/dateTime')"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/events",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "$top": "{{$top}}",
+          "$orderby": "{{$orderby}}",
+          "$select": "id,subject,start,end,location,organizer,isAllDay"
+        }
+      }
+    },
+    {
+      "actionName": "create_event",
+      "description": "Create a new event on the authenticated user's Outlook calendar",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Title of the event"
+          },
+          "body": {
+            "type": "string",
+            "description": "Description or notes for the event"
+          },
+          "startDateTime": {
+            "type": "string",
+            "description": "Event start as ISO 8601 timestamp (e.g. '2025-06-15T09:00:00')"
+          },
+          "endDateTime": {
+            "type": "string",
+            "description": "Event end as ISO 8601 timestamp"
+          },
+          "timeZone": {
+            "type": "string",
+            "description": "IANA time zone (e.g. 'America/New_York')"
+          },
+          "attendees": {
+            "type": "string",
+            "description": "Comma-separated email addresses of attendees"
+          },
+          "location": {
+            "type": "string",
+            "description": "Location of the event"
+          }
+        },
+        "required": ["subject", "startDateTime", "endDateTime", "timeZone"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/events",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "subject": "{{subject}}",
+          "body": {
+            "contentType": "Text",
+            "content": "{{body}}"
+          },
+          "start": {
+            "dateTime": "{{startDateTime}}",
+            "timeZone": "{{timeZone}}"
+          },
+          "end": {
+            "dateTime": "{{endDateTime}}",
+            "timeZone": "{{timeZone}}"
+          },
+          "location": {
+            "displayName": "{{location}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "list_files",
+      "description": "List files and folders in the root of the authenticated user's OneDrive",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "$top": {
+            "type": "number",
+            "description": "Maximum number of items to return (default 20)"
+          },
+          "$orderby": {
+            "type": "string",
+            "description": "OData sort expression (e.g. 'lastModifiedDateTime desc', 'name')"
+          },
+          "$filter": {
+            "type": "string",
+            "description": "OData filter expression"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/drive/root/children",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "$top": "{{$top}}",
+          "$orderby": "{{$orderby}}",
+          "$filter": "{{$filter}}",
+          "$select": "id,name,size,lastModifiedDateTime,webUrl,file,folder"
+        }
+      }
+    },
+    {
+      "actionName": "create_file",
+      "description": "Create or overwrite a file in the authenticated user's OneDrive root. For small files (up to 4 MB).",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Name of the file to create (e.g. 'report.txt', 'data.csv')"
+          },
+          "content": {
+            "type": "string",
+            "description": "File content as a string"
+          },
+          "contentType": {
+            "type": "string",
+            "description": "MIME type of the content (e.g. 'text/plain', 'text/csv', 'application/json')"
+          }
+        },
+        "required": ["filename", "content"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "PUT",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/me/drive/root:/{{filename}}:/content",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "{{contentType}}"
+        },
+        "bodyTemplate": {
+          "__rawBody": "{{content}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_sites",
+      "description": "List SharePoint sites accessible to the authenticated user",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "$search": {
+            "type": "string",
+            "description": "Search query to find sites by name or description"
+          },
+          "$top": {
+            "type": "number",
+            "description": "Maximum number of sites to return (default 10)"
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://graph.microsoft.com",
+        "path": "/v1.0/sites",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        },
+        "queryParams": {
+          "$search": "{{$search}}",
+          "$top": "{{$top}}",
+          "$select": "id,name,displayName,webUrl,description"
+        }
+      }
+    }
+  ],
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": [
+      "integrationKey",
+      "actionName",
+      "args"
+    ]
+  }
+}

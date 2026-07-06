@@ -1,0 +1,86 @@
+{
+  "templateKey": "submissao",
+  "name": "CITIUS/eTribunal — submeter peça",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada e submete uma peça processual num processo (tipo de peça + documento anexo), capturando o comprovativo de submissão. ALTERA dados — a primeira execução é sempre atendida pelo advogado.",
+  "inputSchema": {
+    "fields": [
+      {
+        "name": "numeroProcesso",
+        "description": "Número único de processo (ex.: 1234/26.0T8LSB).",
+        "required": true
+      },
+      {
+        "name": "tipoPeca",
+        "description": "Tipo de peça processual (ex.: Requerimento, Contestação, Recurso).",
+        "required": true
+      },
+      {
+        "name": "ficheiroBase64",
+        "description": "Documento da peça codificado em base64.",
+        "required": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "abrir-portal",
+      "type": "navigate",
+      "description": "Abrir o Portal dos Mandatários (eTribunal).",
+      "url": "https://portal.tribunais.org.pt"
+    },
+    {
+      "id": "confirmar-autenticacao",
+      "type": "verify",
+      "description": "Confirmar que a área reservada do mandatário está aberta (o nome do mandatário e o menu do portal — notificações, os meus processos — estão visíveis, e não a página de autenticação).",
+      "expectedOutcome": "A área reservada do mandatário está aberta e autenticada. Se aparecer a página de autenticação (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão via autenticacao.gov.pt), o advogado autentica-se na janela e a execução prossegue."
+    },
+    {
+      "id": "abrir-consulta",
+      "type": "browser",
+      "description": "Abrir a consulta de processos e localizar o processo '{{input.numeroProcesso}}'.",
+      "expectedOutcome": "O processo '{{input.numeroProcesso}}' está localizado."
+    },
+    {
+      "id": "abrir-formulario",
+      "type": "browser",
+      "description": "Abrir o formulário de apresentação/entrega de peça processual para o processo '{{input.numeroProcesso}}' (opção \"Apresentar peça\" / \"Nova peça\").",
+      "expectedOutcome": "O formulário de apresentação de peça está aberto."
+    },
+    {
+      "id": "selecionar-tipo",
+      "type": "browser",
+      "description": "No formulário, selecionar o tipo de peça '{{input.tipoPeca}}' na lista de tipos disponíveis.",
+      "expectedOutcome": "O tipo de peça '{{input.tipoPeca}}' está selecionado."
+    },
+    {
+      "id": "anexar-documento",
+      "type": "browser",
+      "description": "Anexar o documento da peça ao formulário (ficheiro fornecido na entrada 'ficheiroBase64'), usando o seletor de ficheiro do portal.",
+      "expectedOutcome": "O documento está anexado ao formulário e visível na lista de anexos."
+    },
+    {
+      "id": "rever-submissao",
+      "type": "verify",
+      "description": "Confirmar, ANTES de submeter, que o processo é '{{input.numeroProcesso}}', o tipo de peça é '{{input.tipoPeca}}' e o documento correto está anexado.",
+      "expectedOutcome": "Os dados da submissão (processo, tipo de peça, anexo) estão corretos."
+    },
+    {
+      "id": "submeter",
+      "type": "browser",
+      "description": "Confirmar e submeter a peça processual (botão \"Submeter\" / \"Entregar\"). Se o portal pedir confirmação de assinatura ou 2FA, o advogado confirma na janela.",
+      "expectedOutcome": "A peça foi submetida."
+    },
+    {
+      "id": "capturar-comprovativo",
+      "type": "browser",
+      "description": "Registar o comprovativo de submissão (referência/número do recibo, data e hora) apresentado pelo portal após a entrega.",
+      "expectedOutcome": "O comprovativo de submissão foi registado."
+    },
+    {
+      "id": "verificar-comprovativo",
+      "type": "verify",
+      "description": "Confirmar que é apresentado o comprovativo de submissão da peça.",
+      "expectedOutcome": "É apresentado o comprovativo de submissão da peça (referência/recibo)."
+    }
+  ]
+}

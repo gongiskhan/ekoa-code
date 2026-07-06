@@ -1,0 +1,168 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "whatsapp",
+  "displayName": "WhatsApp Business",
+  "description": "Receber e enviar mensagens de WhatsApp através da Cloud API da Meta (WhatsApp Business Platform). Recebe mensagens por webhook (verificadas com o segredo da app) e envia mensagens de texto, modelos aprovados e marcações de leitura.",
+  "authType": "api_key",
+  "provider": "Meta",
+  "category": "messaging",
+  "credentialGuide": "1. Na [Meta for Developers](https://developers.facebook.com/apps), crie (ou abra) uma app do tipo **Business** e adicione o produto **WhatsApp**.\n2. Em **WhatsApp > Configuração da API**, copie o **Identificador do número de telefone** (phone number id) e gere um **Token de acesso permanente** (System User com a permissão `whatsapp_business_messaging`). Cole ambos abaixo.\n3. Em **Definições da app > Básico**, copie a **Chave secreta da app** (app secret) — é com esta chave que a Meta assina cada webhook (cabeçalho `X-Hub-Signature-256`). Cole-a no campo App Secret.\n4. Deixe o **Graph Base URL** como `https://graph.facebook.com/v20.0` (só o altere se a Meta indicar outra versão).\n5. Depois de ligar, crie um trigger de webhook em Ekoa para obter o **URL de callback** e o **token de verificação**, e registe-os em **WhatsApp > Configuração > Webhooks** (ver SKILL.md).",
+  "configSchema": [
+    {
+      "key": "access_token",
+      "label": "Token de acesso permanente",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Token de acesso do System User com a permissão whatsapp_business_messaging. Usado como Bearer nas chamadas à Graph API. Nunca expira se for gerado como token permanente de System User."
+    },
+    {
+      "key": "phone_number_id",
+      "label": "Identificador do número de telefone",
+      "type": "string",
+      "required": true,
+      "secret": false,
+      "helpText": "Phone Number ID do WhatsApp Business (não é o número de telefone em si). Em Meta for Developers > WhatsApp > Configuração da API."
+    },
+    {
+      "key": "app_secret",
+      "label": "Chave secreta da app (App Secret)",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "App Secret da app da Meta. É com esta chave que a Meta assina os webhooks (cabeçalho X-Hub-Signature-256); Ekoa usa-a para verificar cada mensagem recebida. Em Definições da app > Básico."
+    },
+    {
+      "key": "graph_base_url",
+      "label": "Graph Base URL",
+      "type": "url",
+      "required": true,
+      "secret": false,
+      "helpText": "Base da Graph API, incluindo a versão. Cole https://graph.facebook.com/v20.0 (sem barra final). Só o altere se a Meta indicar outra versão."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "send_message",
+      "description": "Enviar uma mensagem de texto para um número de WhatsApp (formato E.164, ex.: 351912345678).",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "to": { "type": "string", "description": "Número do destinatário em formato internacional sem '+', ex.: 351912345678." },
+          "text": { "type": "string", "description": "Corpo da mensagem de texto." }
+        },
+        "required": ["to", "text"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{graph_base_url}}",
+        "path": "/{{phone_number_id}}/messages",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "messaging_product": "whatsapp",
+          "to": "{{to}}",
+          "type": "text",
+          "text": { "body": "{{text}}" }
+        }
+      }
+    },
+    {
+      "actionName": "send_template",
+      "description": "Enviar uma mensagem de modelo (template) aprovado — necessário para iniciar conversas fora da janela de 24 horas.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "to": { "type": "string", "description": "Número do destinatário em formato internacional sem '+'." },
+          "template_name": { "type": "string", "description": "Nome do modelo aprovado na conta WhatsApp Business." },
+          "language": { "type": "string", "description": "Código de idioma do modelo, ex.: pt_PT ou pt_BR." }
+        },
+        "required": ["to", "template_name", "language"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{graph_base_url}}",
+        "path": "/{{phone_number_id}}/messages",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "messaging_product": "whatsapp",
+          "to": "{{to}}",
+          "type": "template",
+          "template": {
+            "name": "{{template_name}}",
+            "language": { "code": "{{language}}" }
+          }
+        }
+      }
+    },
+    {
+      "actionName": "mark_read",
+      "description": "Marcar uma mensagem recebida como lida (mostra o duplo visto azul ao remetente).",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "message_id": { "type": "string", "description": "Identificador (wamid) da mensagem recebida a marcar como lida." }
+        },
+        "required": ["message_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{graph_base_url}}",
+        "path": "/{{phone_number_id}}/messages",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "messaging_product": "whatsapp",
+          "status": "read",
+          "message_id": "{{message_id}}"
+        }
+      }
+    },
+    {
+      "actionName": "get_media_url",
+      "description": "Obter o URL temporário de descarga de um ficheiro de media recebido (imagem, áudio, documento) a partir do seu media id.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "media_id": { "type": "string", "description": "Media id presente na mensagem recebida (image.id, document.id, etc.)." }
+        },
+        "required": ["media_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{graph_base_url}}",
+        "path": "/{{media_id}}",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
+        }
+      }
+    }
+  ],
+  "webhookConfig": {
+    "verifySignature": {
+      "algorithm": "github_x_hub_sig_256",
+      "headerName": "X-Hub-Signature-256"
+    },
+    "secretSource": { "credentialField": "app_secret" },
+    "challenge": { "type": "meta_hub_challenge" },
+    "events": [
+      { "name": "message.received", "labelPt": "Mensagem recebida" }
+    ]
+  }
+}

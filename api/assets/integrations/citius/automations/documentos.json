@@ -1,0 +1,76 @@
+{
+  "templateKey": "documentos",
+  "name": "CITIUS/eTribunal — documentos de um processo",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada, abre um processo pelo número e ENUMERA todos os seus documentos/peças, descarregando cada ficheiro e devolvendo a lista estruturada (nome, tipo, data, referência do ficheiro). Trata paginação. Os ficheiros descarregados destinam-se ao dossiê do processo (coleção documentos, origem citius).",
+  "inputSchema": {
+    "fields": [
+      {
+        "name": "numeroProcesso",
+        "description": "Número único de processo (ex.: 1234/26.0T8LSB).",
+        "required": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "abrir-portal",
+      "type": "navigate",
+      "description": "Abrir o Portal dos Mandatários (eTribunal).",
+      "url": "https://portal.tribunais.org.pt"
+    },
+    {
+      "id": "confirmar-autenticacao",
+      "type": "verify",
+      "description": "Confirmar que a área reservada do mandatário está aberta (o nome do mandatário e o menu do portal — notificações, os meus processos — estão visíveis, e não a página de autenticação).",
+      "expectedOutcome": "A área reservada do mandatário está aberta e autenticada. Se aparecer a página de autenticação (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão via autenticacao.gov.pt), o advogado autentica-se na janela e a execução prossegue."
+    },
+    {
+      "id": "abrir-consulta",
+      "type": "browser",
+      "description": "Abrir a consulta de processos do mandatário (\"Os meus processos\" ou \"Consultar processo\").",
+      "expectedOutcome": "O formulário/lista de consulta de processos está visível."
+    },
+    {
+      "id": "pesquisar-processo",
+      "type": "browser",
+      "description": "No campo de pesquisa de processo, introduzir o número único de processo '{{input.numeroProcesso}}' e submeter a pesquisa.",
+      "expectedOutcome": "O processo '{{input.numeroProcesso}}' aparece nos resultados."
+    },
+    {
+      "id": "abrir-processo",
+      "type": "browser",
+      "description": "Abrir o registo do processo '{{input.numeroProcesso}}' a partir dos resultados.",
+      "expectedOutcome": "A ficha do processo está aberta."
+    },
+    {
+      "id": "abrir-documentos",
+      "type": "browser",
+      "description": "Abrir o separador de documentos/peças do processo (\"Documentos\", \"Peças processuais\" ou equivalente), onde constam os ficheiros do processo.",
+      "expectedOutcome": "A lista de documentos/peças do processo está visível, com uma linha por documento."
+    },
+    {
+      "id": "enumerar-documentos",
+      "type": "browser",
+      "description": "Percorrer a lista de documentos do processo. Para cada documento listado, registar o nome/designação, o tipo (ex.: petição inicial, contestação, despacho, sentença, requerimento), a data e a referência que identifica o ficheiro. Não saltar nenhuma linha.",
+      "expectedOutcome": "Cada documento visível na página atual foi registado com nome, tipo, data e referência."
+    },
+    {
+      "id": "descarregar-documentos",
+      "type": "browser",
+      "description": "Para cada documento enumerado na página atual, abrir/descarregar o ficheiro respetivo (clicar no ícone ou ligação de descarregar/abrir) e associar o ficheiro descarregado à referência registada para esse documento. Se abrir num visualizador, usar a opção de descarregar/guardar.",
+      "expectedOutcome": "Os ficheiros dos documentos da página atual foram descarregados e associados às suas referências."
+    },
+    {
+      "id": "paginar-documentos",
+      "type": "browser",
+      "description": "Se a lista de documentos tiver mais do que uma página, avançar para a página seguinte e repetir a enumeração e o descarregamento; continuar até não haver mais páginas de documentos.",
+      "expectedOutcome": "Todas as páginas de documentos do processo foram percorridas e todos os ficheiros descarregados."
+    },
+    {
+      "id": "verificar-documentos",
+      "type": "verify",
+      "description": "Confirmar que foi recolhida a lista completa de documentos do processo (nome, tipo, data, referência do ficheiro) e que cada documento tem um ficheiro descarregado associado.",
+      "expectedOutcome": "A lista estruturada de documentos do processo está completa, com um ficheiro descarregado por documento, pronta a ser escrita no dossiê (coleção documentos, origem citius)."
+    }
+  ]
+}

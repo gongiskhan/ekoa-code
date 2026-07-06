@@ -1,0 +1,211 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "citius",
+  "displayName": "CITIUS / eTribunal",
+  "description": "Consulta de notificações e processos e submissão de peças no Portal dos Mandatários (eTribunal), por automação com sessão capturada, mais a consulta pública sem autenticação. Não existe API oficial.",
+  "authType": "browser_session",
+  "provider": "Ministério da Justiça — IGFEJ (eTribunal / CITIUS)",
+  "category": "legal",
+  "sessionConnect": {
+    "loginUrl": "https://portal.tribunais.org.pt",
+    "successUrlContains": "/mandatario",
+    "errorUrlContains": "/error",
+    "guidePt": "Abra o Portal dos Mandatários e autentique-se uma vez (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão). A sessão é capturada e reutilizada até expirar. A consulta pública de distribuição não precisa de sessão."
+  },
+  "credentialGuide": "O CITIUS/eTribunal não disponibiliza API oficial nem credenciais de máquina. O acesso do mandatário ao Portal dos Mandatários (https://portal.tribunais.org.pt) é sempre interativo: certificado digital da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão através do autenticacao.gov.pt (com autenticação de dois fatores).\n\nPor isso, esta integração NÃO guarda palavra-passe. Liga-se assim:\n\n1. A partir do seu Ekoa local, inicia a ligação desta integração.\n2. Abre-se uma janela do Portal dos Mandatários; autentica-se uma vez (certificado da OA ou Chave Móvel Digital / Cartão de Cidadão).\n3. O Ekoa captura a sessão autenticada (cookies) e guarda-a cifrada. A sessão é reutilizada até expirar, altura em que volta a pedir uma autenticação.\n\nOs campos abaixo (cédula profissional, endereço do portal) são apenas configuração, não são segredos. A consulta pública de distribuição não precisa de sessão.",
+  "configSchema": [
+    {
+      "key": "cedula_profissional",
+      "label": "Cédula profissional (OA)",
+      "type": "string",
+      "required": true,
+      "secret": false,
+      "helpText": "Número de cédula profissional / inscrição na Ordem dos Advogados do mandatário. Usado apenas para identificação; não é uma credencial de acesso."
+    },
+    {
+      "key": "portal_url",
+      "label": "Endereço do Portal dos Mandatários",
+      "type": "url",
+      "required": false,
+      "secret": false,
+      "helpText": "Endereço do Portal dos Mandatários. Por omissão https://portal.tribunais.org.pt."
+    },
+    {
+      "key": "nome_mandatario",
+      "label": "Nome do mandatário",
+      "type": "string",
+      "required": false,
+      "secret": false,
+      "helpText": "Nome do advogado/mandatário, para identificação nas listas e comprovativos. Opcional."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "consultar_notificacoes",
+      "description": "Lista as notificações pendentes do mandatário no Portal dos Mandatários (eTribunal). Requer sessão capturada.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Data a partir da qual listar notificações (AAAA-MM-DD). Opcional."
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "Resultado da automação: lista de notificações do mandatário."
+      },
+      "automationBinding": {
+        "automationId": "citius-notificacoes-template",
+        "automationTemplate": "notificacoes",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "consultar_processo",
+      "description": "Consulta o estado e os movimentos de um processo no Portal dos Mandatários (eTribunal). Requer sessão capturada.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo (ex.: 1234/26.0T8LSB)."
+          }
+        },
+        "required": [
+          "numeroProcesso"
+        ]
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "Resultado da automação: estado e movimentos do processo."
+      },
+      "automationBinding": {
+        "automationId": "citius-processo-template",
+        "automationTemplate": "processo",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "fetch_documentos_processo",
+      "description": "Vai buscar TODOS os documentos/peças de um processo no Portal dos Mandatários (eTribunal), enumerando e descarregando cada ficheiro. Requer sessão capturada. Devolve a lista estruturada [{nome, tipo, data, ficheiroRef}] para escrever no dossiê do processo (coleção documentos, origem citius).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo (ex.: 1234/26.0T8LSB)."
+          }
+        },
+        "required": [
+          "numeroProcesso"
+        ]
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "Resultado da automação: lista estruturada de documentos do processo [{nome, tipo, data, ficheiroRef}], com um ficheiro descarregado por documento, destinada ao dossiê (coleção documentos, origem citius)."
+      },
+      "automationBinding": {
+        "automationId": "citius-documentos-template",
+        "automationTemplate": "documentos",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "submeter_peca",
+      "description": "Submete uma peça processual num processo através do Portal dos Mandatários (eTribunal). Requer sessão capturada.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo (ex.: 1234/26.0T8LSB)."
+          },
+          "tipoPeca": {
+            "type": "string",
+            "description": "Tipo de peça processual (ex.: Requerimento, Contestação)."
+          },
+          "ficheiroBase64": {
+            "type": "string",
+            "description": "Documento da peça codificado em base64."
+          }
+        },
+        "required": [
+          "numeroProcesso",
+          "tipoPeca",
+          "ficheiroBase64"
+        ]
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "Resultado da automação: comprovativo de submissão (referência/recibo)."
+      },
+      "automationBinding": {
+        "automationId": "citius-submissao-template",
+        "automationTemplate": "submissao",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "consulta_publica_distribuicao",
+      "description": "Consulta pública (sem autenticação) da distribuição de processos no portal público www.citius.mj.pt/portal/consultas. Apenas dados publicados; não acede ao processado privado do mandatário.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo a consultar."
+          },
+          "nome": {
+            "type": "string",
+            "description": "Nome da parte a consultar (quando aplicável)."
+          }
+        },
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "Página de resultados da consulta pública. O parse estruturado (nº processo / tribunal / data / espécie) é feito pelo serviço citius-etribunal.ts (consultaPublica)."
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://www.citius.mj.pt",
+        "path": "/portal/consultas/ConsultasDistribuicao.aspx",
+        "queryParams": {
+          "NumProcesso": "{{numeroProcesso}}",
+          "Nome": "{{nome}}"
+        }
+      }
+    }
+  ],
+  "listenerConfig": {
+    "pollAction": "consultar_notificacoes",
+    "intervalMs": 900000,
+    "cursorField": "highWater",
+    "eventArrayField": "notificacoes",
+    "dedupKeyField": "id",
+    "outOfOrder": true,
+    "events": [
+      {
+        "name": "notificacao.recebida",
+        "labelPt": "Notificação recebida"
+      }
+    ]
+  },
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": [
+      "integrationKey",
+      "actionName",
+      "args"
+    ]
+  }
+}

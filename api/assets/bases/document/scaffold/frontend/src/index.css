@@ -1,0 +1,232 @@
+/*
+ * Document shell styles — platform-provided, print-tested.
+ * AGENT: do not restyle the sheet or the print rules; the PDF quality
+ * depends on them. Brand color is used ONLY in the (non-printing) toolbar.
+ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --doc-ink: #16181d;
+  --doc-ink-soft: #434852;
+  --doc-serif: 'Source Serif 4', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --doc-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  background: #e9edf2;
+  color: var(--doc-ink, #16181d);
+}
+
+.doc-app { min-height: 100vh; padding-bottom: 6rem; }
+
+/* -- Toolbar (screen only) ------------------------------------------------ */
+
+.doc-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.85rem 1.5rem;
+  background: #ffffff;
+  border-bottom: 1px solid #dde3ea;
+}
+
+.doc-toolbar-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--doc-ink, #16181d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 34rem;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.doc-toolbar-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.btn {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-md, 0.375rem);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn:disabled { opacity: 0.6; cursor: default; }
+
+.btn-primary {
+  background: var(--color-primary, #0f766e);
+  color: #ffffff;
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-hover, #115e59); }
+
+.btn-outline {
+  background: #ffffff;
+  color: var(--color-primary, #0f766e);
+  border-color: var(--color-primary, #0f766e);
+}
+.btn-outline:hover:not(:disabled) { background: #f0fdfa; }
+
+.doc-cloud-status {
+  flex-basis: 100%;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 0.375rem;
+}
+.doc-cloud-status.ok { background: #ecfdf5; color: #065f46; }
+.doc-cloud-status.err { background: #fef2f2; color: #991b1b; }
+.doc-cloud-status a { color: inherit; font-weight: 600; margin-left: 0.25rem; }
+.doc-cloud-dismiss {
+  float: right;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+/* -- Tabs (screen only) --------------------------------------------------- */
+
+.doc-tabs {
+  display: flex;
+  gap: 0.25rem;
+  max-width: 52rem;
+  margin: 1.25rem auto 0;
+  padding: 0 1rem;
+}
+
+.doc-tab {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--doc-ink-soft, #434852);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.doc-tab.active {
+  color: var(--color-primary, #0f766e);
+  border-bottom-color: var(--color-primary, #0f766e);
+}
+
+/* -- The paper sheet ------------------------------------------------------ */
+
+.sheet {
+  font-family: var(--doc-serif, 'Source Serif 4', Georgia, 'Times New Roman', serif);
+  background: #ffffff;
+  color: var(--doc-ink, #16181d);
+  max-width: 52rem;
+  margin: 1.5rem auto 0;
+  padding: 4.5rem 4.75rem 5rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), 0 12px 32px rgba(15, 23, 42, 0.08);
+  font-size: 1.02rem;
+  line-height: 1.75;
+}
+
+.doc-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  margin-bottom: 0.5rem;
+}
+
+.doc-subtitle {
+  text-align: center;
+  font-style: italic;
+  color: var(--doc-ink-soft, #434852);
+  margin-bottom: 2rem;
+}
+
+.doc-heading {
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  margin: 2.25rem 0 1rem;
+}
+
+.doc-clause { margin-top: 1.75rem; }
+
+.doc-clause-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin-bottom: 0.6rem;
+}
+
+.doc-p {
+  text-align: justify;
+  hyphens: auto;
+  margin-bottom: 0.85rem;
+}
+
+.doc-list {
+  margin: 0 0 0.85rem 1.5rem;
+}
+.doc-list li { margin-bottom: 0.4rem; text-align: justify; }
+
+.doc-signatures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3rem;
+  margin-top: 4.5rem;
+}
+
+.doc-signature { flex: 1 1 16rem; }
+.doc-signature-line { border-bottom: 1px solid var(--doc-ink, #16181d); height: 2.75rem; }
+.doc-signature-label { font-weight: 700; margin-top: 0.5rem; }
+.doc-signature-detail { color: var(--doc-ink-soft, #434852); font-size: 0.9rem; }
+
+/* -- Notes tab (never printed/exported) ----------------------------------- */
+
+.notes-sheet { font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif); font-size: 0.95rem; }
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.notes-header .doc-title { text-transform: none; margin: 0; text-align: left; }
+.note { margin-bottom: 1.5rem; }
+.note-heading { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.35rem; }
+
+/* -- Print / PDF ----------------------------------------------------------- */
+
+@page { size: A4; margin: 22mm 20mm; }
+
+.page-break { break-before: page; page-break-before: always; }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #ffffff; }
+  .doc-app { padding-bottom: 0; }
+  .sheet {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    font-size: 11pt;
+    line-height: 1.6;
+  }
+  .doc-title { font-size: 14pt; }
+  .doc-heading { font-size: 12pt; break-after: avoid; }
+  .doc-clause-title { break-after: avoid; }
+  .doc-clause { break-inside: auto; }
+  .doc-signatures { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+}

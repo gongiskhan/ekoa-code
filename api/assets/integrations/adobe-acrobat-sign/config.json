@@ -1,0 +1,148 @@
+{
+  "version": "2.0",
+  "skillType": "integration",
+  "integrationKey": "adobe-acrobat-sign",
+  "displayName": "Adobe Acrobat Sign",
+  "description": "Send documents for e-signature with Adobe Acrobat Sign, track agreement status, fetch the signer's signing link, list agreements and cancel them. Document upload + agreement creation for served apps go through the platform's /api/adobe-sign proxy (it renders to PDF and uploads server-side); these generic actions cover status, listing and signing links.",
+  "authType": "api_key",
+  "provider": "Adobe",
+  "category": "document-signing",
+  "credentialGuide": "1. Integration Keys require an **Enterprise** Acrobat Sign account. Free, Individual, and Business plans don't expose the Integration Key option. If you don't already have Enterprise access, start the free 30-day trial at [adobe.com/acrobat/business/sign.html](https://www.adobe.com/acrobat/business/sign.html) (it unlocks the full enterprise feature set, including API access). If you already have a paid account but the link is missing, contact Acrobat Sign support to request access.\n2. Log in at [secure.adobesign.com](https://secure.adobesign.com).\n3. Go to **Account > Acrobat Sign API > API Information**, then click the **Integration Key** link.\n4. Name the key (e.g. \"Ekoa\") and select the scopes `agreement_read` and `agreement_write`. Don't select `agreement_send` -- it's deprecated and not accepted on API v6, which this integration uses.\n5. Save and copy the key. It is shown only once, and its name and scopes can't be edited afterwards.\n6. Paste it into the Integration Key field below.\n7. For **API Access Point**, look at your Acrobat Sign URL after logging in (e.g. `secure.na4.adobesign.com`) and use the matching API host (e.g. `https://api.na4.adobesign.com`). If unsure, enter any region and run **test_connection** afterwards. It returns the correct value.\n\nAdobe now recommends OAuth over Integration Keys for new integrations, though Integration Keys remain supported for server-to-server workflows like this one.",
+  "configSchema": [
+    {
+      "key": "integration_key",
+      "label": "Integration Key",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Acrobat Sign Integration Key, used as a Bearer token. Requires an Enterprise account (or the free 30-day trial). In Acrobat Sign: Account > Acrobat Sign API > API Information > 'Integration Key'. Select the scopes agreement_read and agreement_write (not agreement_send -- deprecated on API v6)."
+    },
+    {
+      "key": "api_access_point",
+      "label": "API Access Point",
+      "type": "url",
+      "required": true,
+      "secret": false,
+      "helpText": "Your account's regional API base URL. Read the shard from the URL after you log in to Acrobat Sign, e.g. secure.na4.adobesign.com -> https://api.na4.adobesign.com. No trailing slash. If unsure, run the 'test_connection' action: it returns the correct apiAccessPoint."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "test_connection",
+      "description": "Verify the integration key and discover the account's authoritative API access point (apiAccessPoint / webAccessPoint).",
+      "mutates": false,
+      "argsSchema": { "type": "object", "properties": {} },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/baseUris",
+        "headers": { "Authorization": "Bearer {{integration_key}}" }
+      }
+    },
+    {
+      "actionName": "list_agreements",
+      "description": "List the agreements visible to the integration key's user.",
+      "mutates": false,
+      "argsSchema": { "type": "object", "properties": {} },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/agreements",
+        "headers": { "Authorization": "Bearer {{integration_key}}" }
+      }
+    },
+    {
+      "actionName": "get_agreement",
+      "description": "Get a single agreement's metadata and current status (e.g. OUT_FOR_SIGNATURE, SIGNED, CANCELLED).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "agreement_id": { "type": "string", "description": "Acrobat Sign agreement id (returned when the agreement was created)." }
+        },
+        "required": ["agreement_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/agreements/{{agreement_id}}",
+        "headers": { "Authorization": "Bearer {{integration_key}}" }
+      }
+    },
+    {
+      "actionName": "get_signing_urls",
+      "description": "Get the current signer's hosted signing URL(s) for an agreement (404/empty while still processing or for email-only delivery).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "agreement_id": { "type": "string", "description": "Acrobat Sign agreement id." }
+        },
+        "required": ["agreement_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/agreements/{{agreement_id}}/signingUrls",
+        "headers": { "Authorization": "Bearer {{integration_key}}" }
+      }
+    },
+    {
+      "actionName": "get_agreement_documents",
+      "description": "List the document ids that make up an agreement (used to download the signed PDF).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "agreement_id": { "type": "string", "description": "Acrobat Sign agreement id." }
+        },
+        "required": ["agreement_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/agreements/{{agreement_id}}/documents",
+        "headers": { "Authorization": "Bearer {{integration_key}}" }
+      }
+    },
+    {
+      "actionName": "cancel_agreement",
+      "description": "Cancel an in-process agreement (sets state to CANCELLED). Optionally notify the other participants.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "agreement_id": { "type": "string", "description": "Acrobat Sign agreement id." },
+          "comment": { "type": "string", "description": "Reason recorded on the cancellation." }
+        },
+        "required": ["agreement_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "PUT",
+        "baseUrl": "{{api_access_point}}",
+        "path": "/api/rest/v6/agreements/{{agreement_id}}/state",
+        "headers": {
+          "Authorization": "Bearer {{integration_key}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "state": "CANCELLED",
+          "agreementCancellationInfo": {
+            "comment": "{{comment}}",
+            "notifyOthers": false
+          }
+        }
+      }
+    }
+  ],
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": ["integrationKey", "actionName", "args"]
+  }
+}

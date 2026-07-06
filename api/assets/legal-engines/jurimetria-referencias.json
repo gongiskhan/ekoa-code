@@ -1,0 +1,16 @@
+{
+  "versao": 1,
+  "atualizadoEm": "2026-07-04",
+  "nota": "Referências públicas NACIONAIS por área processual (veredicto R-G: os dados abertos DGPJ não têm desagregação por comarca - P2-010). Fonte única: dados.justica.gov.pt, conjunto 'Duração Média Processos Findos' (DGPJ), atualização anual. Valores marcados 'confirmar' saram-se com a ingestão do CSV real (a estrutura de ingestão está no serviço; a atualização periódica corre pós-checkpoint).",
+  "fonte": "DGPJ - dados.justica.gov.pt/dataset/duracaomedia",
+  "periodo": "2024 (valor anual)",
+  "referencias": [
+    { "area": "Cível", "duracaoMediaMeses": 32, "nota": "confirmar - ordem de grandeza das ações declarativas cíveis findas (1.ª instância)" },
+    { "area": "Comercial", "duracaoMediaMeses": 40, "nota": "confirmar" },
+    { "area": "Execução", "duracaoMediaMeses": 65, "nota": "confirmar - as execuções dominam a duração média global" },
+    { "area": "Laboral", "duracaoMediaMeses": 14, "nota": "confirmar" },
+    { "area": "Família", "duracaoMediaMeses": 16, "nota": "confirmar" },
+    { "area": "Administrativo", "duracaoMediaMeses": 48, "nota": "confirmar" },
+    { "area": "Criminal", "duracaoMediaMeses": 12, "nota": "confirmar" }
+  ]
+}

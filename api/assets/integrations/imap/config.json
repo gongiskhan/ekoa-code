@@ -1,0 +1,88 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "imap",
+  "displayName": "IMAP",
+  "description": "Polling email listener: fetches new messages from an IMAP mailbox and fires the trigger for each one. v1 scaffold — pollAction is a placeholder pending an IMAP transport (the executor only supports HTTP today).",
+  "authType": "api_key",
+  "provider": "IMAP",
+  "category": "communication",
+  "credentialGuide": "1. Ask your email provider (or IT admin) for the IMAP server hostname (e.g. `imap.gmail.com`) and port (usually 993 for SSL).\n2. If your account has two-factor authentication enabled, generate an app-specific password instead of using your regular password (for Gmail: [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)).\n3. Enter the server, username, and password below. Leave Folder blank to use the default INBOX.",
+  "configSchema": [
+    {
+      "key": "host",
+      "label": "IMAP server",
+      "type": "string",
+      "required": true,
+      "secret": false,
+      "helpText": "Hostname of the IMAP server (e.g. imap.gmail.com)."
+    },
+    {
+      "key": "port",
+      "label": "Port",
+      "type": "number",
+      "required": false,
+      "secret": false,
+      "helpText": "Defaults to 993 (SSL)."
+    },
+    {
+      "key": "username",
+      "label": "Username",
+      "type": "string",
+      "required": true,
+      "secret": false
+    },
+    {
+      "key": "password",
+      "label": "Password",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "App-specific password recommended (Gmail: myaccount.google.com/apppasswords)."
+    },
+    {
+      "key": "folder",
+      "label": "Folder",
+      "type": "string",
+      "required": false,
+      "secret": false,
+      "helpText": "Defaults to INBOX."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "fetch_messages",
+      "description": "Placeholder pollAction. v1 returns an empty list until an IMAP transport is wired into the integration-action-executor.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "since": { "type": "string", "description": "Highest UID seen so far" }
+        }
+      },
+      "returnSchema": {
+        "type": "object",
+        "properties": {
+          "messages": { "type": "array" },
+          "next_uid": { "type": "string" }
+        }
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "http://127.0.0.1:0",
+        "path": "/imap-bridge-placeholder",
+        "headers": {}
+      }
+    }
+  ],
+  "listenerConfig": {
+    "pollAction": "fetch_messages",
+    "intervalMs": 60000,
+    "cursorField": "next_uid",
+    "eventArrayField": "messages",
+    "dedupKeyField": "uid",
+    "events": [
+      { "name": "message.received", "labelPt": "Quando chegar uma mensagem nova" }
+    ]
+  }
+}

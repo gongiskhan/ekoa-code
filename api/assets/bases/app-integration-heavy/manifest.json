@@ -1,0 +1,6 @@
+{
+  "id": "app-integration-heavy",
+  "name": "Integration-Heavy App",
+  "description": "Authenticated app whose core flow runs through connected integrations (email triage, calendar workflows, document automation).",
+  "version": "1.0.0"
+}

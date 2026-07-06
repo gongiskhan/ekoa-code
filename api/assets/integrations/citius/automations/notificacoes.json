@@ -1,0 +1,70 @@
+{
+  "templateKey": "notificacoes",
+  "name": "CITIUS/eTribunal — consultar notificações",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada e lista as notificações pendentes do advogado (processo, data, tribunal, tipo de acto, se tem documento associado e o prazo), opcionalmente a partir de uma data.",
+  "inputSchema": {
+    "fields": [
+      {
+        "name": "desde",
+        "description": "Data a partir da qual listar notificações (AAAA-MM-DD). Opcional; sem valor, lista todas as pendentes.",
+        "required": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "abrir-portal",
+      "type": "navigate",
+      "description": "Abrir o Portal dos Mandatários (eTribunal).",
+      "url": "https://portal.tribunais.org.pt"
+    },
+    {
+      "id": "confirmar-autenticacao",
+      "type": "verify",
+      "description": "Confirmar que a área reservada do mandatário está aberta (o nome do mandatário e o menu do portal — notificações, os meus processos — estão visíveis, e não a página de autenticação).",
+      "expectedOutcome": "A área reservada do mandatário está aberta e autenticada. Se aparecer a página de autenticação (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão via autenticacao.gov.pt), o advogado autentica-se na janela e a execução prossegue."
+    },
+    {
+      "id": "abrir-notificacoes",
+      "type": "browser",
+      "description": "No menu do portal, abrir a secção \"Notificações\" (Expediente do mandatário / Notificações eletrónicas). Se existir um separador de notificações por ler ou pendentes, selecioná-lo.",
+      "expectedOutcome": "A lista de notificações do mandatário está visível, com uma linha por notificação."
+    },
+    {
+      "id": "filtrar-desde",
+      "type": "browser",
+      "description": "Se a página tiver um filtro por data e a entrada '{{input.desde}}' estiver preenchida, filtrar as notificações recebidas a partir dessa data (AAAA-MM-DD) e aplicar o filtro. Se '{{input.desde}}' estiver vazio, ou não houver filtro de data, deixar a lista completa das pendentes sem filtrar.",
+      "expectedOutcome": "A lista mostra as notificações pendentes no intervalo pretendido."
+    },
+    {
+      "id": "ordenar-recentes",
+      "type": "browser",
+      "description": "Ordenar a lista de notificações pela data, das mais recentes para as mais antigas, se a coluna de data for ordenável (clicar no cabeçalho da data). Caso contrário, deixar a ordenação por omissão.",
+      "expectedOutcome": "A lista está ordenada de forma previsível para a recolha."
+    },
+    {
+      "id": "listar-notificacoes",
+      "type": "browser",
+      "description": "Percorrer todas as linhas de notificação visíveis e, para cada uma, registar o número único do processo, a data da notificação, o tribunal/juízo, o tipo de acto (ex.: citação, notificação de sentença, despacho) e se a linha indica um documento/peça associado. Se uma notificação precisar de ser aberta para revelar o processo ou o prazo, abrir o seu detalhe, registar esses campos e voltar à lista.",
+      "expectedOutcome": "Cada notificação pendente foi registada com processo, data, tribunal, tipo de acto e indicação de documento associado."
+    },
+    {
+      "id": "capturar-prazos",
+      "type": "browser",
+      "description": "Para cada notificação cujo detalhe indique um prazo (ex.: prazo de contestação, prazo de resposta), registar também a data-limite ou o número de dias do prazo, tal como consta na notificação.",
+      "expectedOutcome": "Os prazos indicados nas notificações foram registados, quando existem."
+    },
+    {
+      "id": "paginar-notificacoes",
+      "type": "browser",
+      "description": "Se a lista de notificações tiver mais do que uma página, avançar para a página seguinte e repetir a recolha das linhas; continuar até não haver mais páginas.",
+      "expectedOutcome": "Todas as páginas de notificações pendentes foram percorridas."
+    },
+    {
+      "id": "verificar-lista",
+      "type": "verify",
+      "description": "Confirmar que foi recolhida a lista de notificações do mandatário com o processo associado a cada uma.",
+      "expectedOutcome": "A lista estruturada de notificações (processo, data, tribunal, tipo de acto, documento, prazo) está completa."
+    }
+  ]
+}

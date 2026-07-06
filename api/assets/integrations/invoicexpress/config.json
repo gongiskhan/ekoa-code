@@ -1,0 +1,213 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "invoicexpress",
+  "displayName": "InvoiceXpress",
+  "description": "Faturacao certificada pela Autoridade Tributaria (AT) atraves da InvoiceXpress: criar, finalizar, obter e enviar faturas, obter o PDF e exportar o SAF-T. E o unico caminho de emissao de faturas em Ekoa - a plataforma nunca emite faturas nativamente.",
+  "authType": "api_key",
+  "provider": "InvoiceXpress",
+  "category": "invoicing",
+  "credentialGuide": "1. Entre na sua conta [InvoiceXpress](https://www.invoicexpress.com) e abra **Definicoes > Integracoes / API**.\n2. Copie a **Chave de API (API key)** e cole-a no campo Chave de API.\n3. Anote o **nome da conta** (o subdominio do seu URL, por exemplo `aminhaempresa` em `https://aminhaempresa.app.invoicexpress.com`) e cole-o no campo Nome da conta.\n4. No campo **Base da API**, cole o URL completo da sua conta, sem barra final: `https://<nome-da-conta>.app.invoicexpress.com` (ex.: `https://aminhaempresa.app.invoicexpress.com`).\n5. Confirme que a serie de documentos e o regime de IVA estao configurados na InvoiceXpress antes de emitir - a finalizacao de uma fatura e um ato fiscal certificado e nao pode ser revertida.",
+  "configSchema": [
+    {
+      "key": "account_name",
+      "label": "Nome da conta",
+      "type": "string",
+      "required": true,
+      "secret": false,
+      "helpText": "Nome da conta InvoiceXpress (o subdominio do seu URL). Ex.: aminhaempresa em https://aminhaempresa.app.invoicexpress.com."
+    },
+    {
+      "key": "api_key",
+      "label": "Chave de API",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Chave de API da InvoiceXpress. Enviada como parametro api_key em cada pedido. Em Definicoes > Integracoes / API."
+    },
+    {
+      "key": "api_base",
+      "label": "Base da API",
+      "type": "url",
+      "required": true,
+      "secret": false,
+      "helpText": "URL completo da sua conta, sem barra final: https://<nome-da-conta>.app.invoicexpress.com. Ex.: https://aminhaempresa.app.invoicexpress.com."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "create_invoice",
+      "description": "Criar uma fatura em rascunho (draft). Os campos client (objeto) e items (lista) sao enviados tal como fornecidos. A fatura fica em rascunho ate ser finalizada.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string", "description": "Data da fatura no formato dd/mm/aaaa." },
+          "due_date": { "type": "string", "description": "Data de vencimento no formato dd/mm/aaaa." },
+          "client": { "type": "object", "description": "Objeto do cliente (name, code, email, fiscal_id, ...). Enviado tal como fornecido." },
+          "items": { "type": "array", "description": "Lista de linhas da fatura (name, unit_price, quantity, tax, ...). Enviada tal como fornecida.", "items": { "type": "object" } },
+          "tax_exemption": { "type": "string", "description": "Codigo de motivo de isencao de IVA (quando aplicavel), ex.: M07." },
+          "observations": { "type": "string", "description": "Observacoes a incluir na fatura (opcional)." }
+        },
+        "required": ["date", "client", "items"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{api_base}}",
+        "path": "/invoices.json",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}"
+        },
+        "bodyTemplate": {
+          "invoice": {
+            "date": "{{date}}",
+            "due_date": "{{due_date}}",
+            "tax_exemption": "{{tax_exemption}}",
+            "observations": "{{observations}}",
+            "client": "{{client}}",
+            "items": "{{items}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "finalize_invoice",
+      "description": "Finalizar uma fatura em rascunho (mudar o estado para finalized). Ato fiscal certificado: gera o ATCUD, o numero de serie e o codigo QR, e nao pode ser revertido.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "invoice_id": { "type": "string", "description": "Identificador da fatura devolvido por create_invoice." }
+        },
+        "required": ["invoice_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "PUT",
+        "baseUrl": "{{api_base}}",
+        "path": "/invoices/{{invoice_id}}/change-state.json",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}"
+        },
+        "bodyTemplate": {
+          "invoice": {
+            "state": "finalized"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "get_invoice",
+      "description": "Obter os dados de uma fatura, incluindo o estado, o ATCUD, o numero de serie e o codigo QR quando ja finalizada.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "invoice_id": { "type": "string", "description": "Identificador da fatura." }
+        },
+        "required": ["invoice_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/invoices/{{invoice_id}}.json",
+        "headers": {
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}"
+        }
+      }
+    },
+    {
+      "actionName": "get_invoice_pdf",
+      "description": "Obter o PDF de uma fatura. Na primeira chamada a InvoiceXpress pode responder 202 (a gerar); volte a chamar ate receber 200 com o URL do PDF (output.pdfUrl).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "invoice_id": { "type": "string", "description": "Identificador da fatura." }
+        },
+        "required": ["invoice_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/pdf/{{invoice_id}}.json",
+        "headers": {
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}"
+        }
+      }
+    },
+    {
+      "actionName": "email_invoice",
+      "description": "Enviar uma fatura por email para o cliente. O objeto message (client, subject, body) e enviado tal como fornecido.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "invoice_id": { "type": "string", "description": "Identificador da fatura." },
+          "message": { "type": "object", "description": "Objeto message: client { email, save }, subject, body. Enviado tal como fornecido." }
+        },
+        "required": ["invoice_id", "message"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "PUT",
+        "baseUrl": "{{api_base}}",
+        "path": "/invoices/{{invoice_id}}/email-invoice.json",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}"
+        },
+        "bodyTemplate": {
+          "message": "{{message}}"
+        }
+      }
+    },
+    {
+      "actionName": "export_saft",
+      "description": "Exportar o ficheiro SAF-T de um mes/ano. A InvoiceXpress pode responder 202 (a gerar); volte a chamar ate receber o URL do ficheiro.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "month": { "type": "number", "description": "Mes a exportar (1 a 12)." },
+          "year": { "type": "number", "description": "Ano a exportar, ex.: 2026." }
+        },
+        "required": ["month", "year"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/export_saft.json",
+        "headers": {
+          "Accept": "application/json"
+        },
+        "queryParams": {
+          "api_key": "{{api_key}}",
+          "month": "{{month}}",
+          "year": "{{year}}"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "version": "1.0",
+  "skillType": "integration",
+  "integrationKey": "ifthenpay",
+  "displayName": "Ifthenpay",
+  "description": "Cobrancas em Portugal atraves da Ifthenpay: gerar referencias Multibanco, iniciar pagamentos MB WAY e receber a confirmacao de pagamento por callback (GET assinado com a chave anti-phishing).",
+  "authType": "api_key",
+  "provider": "Ifthenpay",
+  "category": "payments",
+  "credentialGuide": "1. Entre no [backoffice da Ifthenpay](https://backoffice.ifthenpay.com) com as credenciais fornecidas no contrato.\n2. Em **Contas > Multibanco**, copie a **Chave Multibanco (MB Key)** e cole-a no campo Chave Multibanco.\n3. Em **Contas > MB WAY**, copie a **Chave MB WAY** e cole-a no campo Chave MB WAY (necessaria apenas se usar MB WAY).\n4. Em **Definicoes > Callback / Anti-phishing**, copie a **Chave anti-phishing** e cole-a no campo Chave anti-phishing. E com esta chave que a Ifthenpay assina cada callback de pagamento.\n5. Deixe a **Base da API** como `https://api.ifthenpay.com` (so a altere se a Ifthenpay indicar outro endereco).\n6. Depois de ligar, crie um trigger de webhook em Ekoa para obter o URL de callback. Registe no backoffice da Ifthenpay o **URL de callback** no formato:\n`<origem-cortex>/hooks/<triggerId>?chave=[ANTI_PHISHING_KEY]&referencia=[REFERENCIA]&valor=[VALOR]&datahorapag=[DATA_HORA_PAGAMENTO]`\nA Ifthenpay substitui os campos entre parenteses retos pelos valores reais de cada pagamento; o `chave` transporta a sua chave anti-phishing e Ekoa valida-a em cada callback.",
+  "configSchema": [
+    {
+      "key": "api_base",
+      "label": "Base da API",
+      "type": "url",
+      "required": true,
+      "secret": false,
+      "helpText": "Endereco base da API da Ifthenpay, sem barra final. Cole https://api.ifthenpay.com. So o altere se a Ifthenpay indicar outro endereco (por exemplo, um ambiente de testes)."
+    },
+    {
+      "key": "mb_key",
+      "label": "Chave Multibanco (MB Key)",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Chave Multibanco associada a conta Ifthenpay. Usada para gerar referencias Multibanco. Em Contas > Multibanco no backoffice."
+    },
+    {
+      "key": "mbway_key",
+      "label": "Chave MB WAY",
+      "type": "password",
+      "required": false,
+      "secret": true,
+      "helpText": "Chave MB WAY (SPG) da conta Ifthenpay. Necessaria apenas para iniciar e consultar pagamentos MB WAY. Em Contas > MB WAY no backoffice."
+    },
+    {
+      "key": "anti_phishing_key",
+      "label": "Chave anti-phishing",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Chave anti-phishing da conta Ifthenpay. E com esta chave que a Ifthenpay assina cada callback de pagamento (parametro chave no URL de callback); Ekoa usa-a para validar cada confirmacao recebida. Em Definicoes > Callback / Anti-phishing."
+    },
+    {
+      "key": "backoffice_key",
+      "label": "Chave de backoffice",
+      "type": "password",
+      "required": false,
+      "secret": true,
+      "helpText": "Chave de backoffice (opcional) para operacoes administrativas na API da Ifthenpay. Deixe em branco se nao a usar."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "generate_multibanco_reference",
+      "description": "Gerar uma referencia Multibanco (Entidade + Referencia) para um pagamento, associada a um identificador de encomenda.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "order_id": { "type": "string", "description": "Identificador da encomenda no seu sistema (aparece na conciliacao)." },
+          "amount": { "type": "string", "description": "Montante a cobrar, em euros, com ponto decimal, ex.: 10.50." },
+          "description": { "type": "string", "description": "Descricao do pagamento (opcional)." },
+          "expiry_days": { "type": "number", "description": "Numero de dias ate a referencia expirar (opcional)." }
+        },
+        "required": ["order_id", "amount"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{api_base}}",
+        "path": "/multibanco/reference/init",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "mbKey": "{{mb_key}}",
+          "orderId": "{{order_id}}",
+          "amount": "{{amount}}",
+          "description": "{{description}}",
+          "expiryDays": "{{expiry_days}}"
+        }
+      }
+    },
+    {
+      "actionName": "mbway_payment",
+      "description": "Iniciar um pagamento MB WAY: envia um pedido de pagamento para o telemovel do cliente, que confirma na app MB WAY.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "order_id": { "type": "string", "description": "Identificador da encomenda no seu sistema." },
+          "amount": { "type": "string", "description": "Montante a cobrar, em euros, com ponto decimal, ex.: 10.50." },
+          "mobile_number": { "type": "string", "description": "Numero de telemovel do cliente em formato internacional, ex.: 351#912345678." },
+          "description": { "type": "string", "description": "Descricao do pagamento (opcional)." }
+        },
+        "required": ["order_id", "amount", "mobile_number"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{api_base}}",
+        "path": "/spg/payment/mbway",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "mbWayKey": "{{mbway_key}}",
+          "orderId": "{{order_id}}",
+          "amount": "{{amount}}",
+          "mobileNumber": "{{mobile_number}}",
+          "description": "{{description}}"
+        }
+      }
+    },
+    {
+      "actionName": "mbway_status",
+      "description": "Consultar o estado de um pagamento MB WAY previamente iniciado, pelo identificador do pedido devolvido por mbway_payment.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": { "type": "string", "description": "Identificador do pedido (RequestId) devolvido por mbway_payment." }
+        },
+        "required": ["request_id"]
+      },
+      "returnSchema": { "type": "object" },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/spg/payment/mbway/status",
+        "queryParams": {
+          "mbWayKey": "{{mbway_key}}",
+          "requestId": "{{request_id}}"
+        }
+      }
+    }
+  ],
+  "webhookConfig": {
+    "verifySignature": {
+      "algorithm": "hmac_sha256_header",
+      "headerName": "X-Ifthenpay-Unused"
+    },
+    "getCallback": {
+      "keyParam": "chave",
+      "secretSource": { "credentialField": "anti_phishing_key" },
+      "dedupParams": ["referencia", "valor", "datahorapag"],
+      "responseBody": "OK"
+    },
+    "events": [
+      { "name": "payment.confirmed", "labelPt": "Pagamento confirmado" }
+    ]
+  }
+}

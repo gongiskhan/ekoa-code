@@ -1,0 +1,24 @@
+{
+  "id": "error-boundary",
+  "name": "Error-boundary UX recipe",
+  "description": "Wraps any component that fetches data; renders a recoverable error UI if rendering or the underlying fetch throws.",
+  "shape": {
+    "component": "ErrorBoundary",
+    "props": {
+      "fallback": "({ error, retry }) => ReactNode",
+      "onError": "(error) => void (optional logger)"
+    },
+    "visualRules": [
+      "Card with border var(--color-border), radius var(--radius-md), padding var(--spacing-md)",
+      "Headline: \"Ocorreu um problema\" — typography.h3",
+      "Body: error.message, typography.body, color var(--color-text-muted)",
+      "Primary action: \"Tentar de novo\" — calls retry()",
+      "Secondary text link: \"Reportar\" — opens mailto or /support"
+    ]
+  },
+  "rules": [
+    "Every page-level data fetch must be wrapped in this boundary.",
+    "Never let an unhandled exception escape to React's default error UI.",
+    "Do not swallow errors silently."
+  ]
+}
