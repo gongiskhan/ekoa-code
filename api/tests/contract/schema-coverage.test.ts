@@ -23,12 +23,15 @@ const COVERED = new Set<string>([
   // G4 — integrations + knowledge (partial: configs CRUD + sources CRUD + uploads list)
   'integrations.listConfigs', 'integrations.createConfig', 'integrations.updateConfig', 'integrations.deleteSkill',
   'knowledge.listSources', 'knowledge.createSource', 'knowledge.deleteSource', 'knowledge.listUploads',
+  // G5 — triggers + webhook ingress + notifications SSE
+  'triggers.list', 'triggers.create', 'triggers.delete', 'triggers.webhookIngressPost', 'triggers.webhookIngressGet',
+  'notifications.events',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
 // "every descriptor endpoint not in COVERED" here, but pinned by an expected-count assertion so
 // a NEW endpoint added to shared/ without being COVERED bumps the count and fails the gate.
-const EXPECTED_PENDING_COUNT = 168;
+const EXPECTED_PENDING_COUNT = 162;
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {

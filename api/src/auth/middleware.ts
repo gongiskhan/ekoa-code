@@ -50,6 +50,23 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
   next();
 }
 
+/** Token-query auth for the four SSE endpoints (CONV-1: EventSource cannot set headers).
+ *  Verifies the ?token=, revocation, and activation. Returns the claims or an error code. */
+export function verifySseToken(token: string | undefined): { ok: true; claims: JwtClaims } | { ok: false; status: number; code: ErrorCode } {
+  if (!token) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
+  let claims: JwtClaims;
+  try {
+    claims = verifyToken(token);
+  } catch {
+    return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
+  }
+  if (!claims.jti || isRevoked(claims.jti)) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
+  const act = getActivation(claims.sub);
+  if (!act || !act.active) return { ok: false, status: 403, code: 'ACCOUNT_DISABLED' };
+  if (claims.iat !== undefined && claims.iat < act.tokenEpoch) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
+  return { ok: true, claims };
+}
+
 /** Role gate — use after requireAuth for org-admin / super-admin endpoints. */
 export function requireRole(...roles: JwtClaims['role'][]) {
   return (req: AuthedRequest, res: Response, next: NextFunction): void => {

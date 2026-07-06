@@ -27,6 +27,10 @@ import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { knowledgeRouter } from './routes/knowledge.js';
+import { triggersRouter } from './routes/triggers.js';
+import { hooksRouter } from './routes/hooks.js';
+import { notificationsRouter } from './routes/notifications.js';
+import { sseManager } from './events/sse-manager.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -39,6 +43,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const app = express();
   app.set('env', config.nodeEnv);
   app.disable('x-powered-by');
+
+  // Webhook ingress mounts FIRST with its own raw-body parser, BELOW/BEFORE the JSON parser,
+  // so the HMAC verifier sees unmodified bytes (ch09 invariant 9 step 6).
+  app.use('/hooks', hooksRouter(deps));
+
   app.use(express.json({ limit: '1mb' }));
 
   // Public health surface (ch03 §3.8.23) — field shape carried; external watchdogs depend on it.
@@ -47,7 +56,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       ok: true,
       claudeAuth: { ok: false, configured: false },
       clockSkewSec: 0,
-      bridgeConnections: 0,
+      bridgeConnections: sseManager.connectionCount,
       pendingEvents: 0,
     });
   });
@@ -66,6 +75,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));
+  // G5 — push infrastructure + triggers.
+  app.use('/api/v1/triggers', triggersRouter(deps));
+  app.use('/api/v1/notifications', notificationsRouter());
 
   return app;
 }

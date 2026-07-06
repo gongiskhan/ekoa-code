@@ -158,3 +158,21 @@ Passages: ch03 §3.6 ("Each stream opens with a `ready` event" — all four stre
 - **Diagrams (gate item 5):** no structural change (integrations/knowledge are existing modules in diagram 02-module-map).
 - **Evidence:** asciinema `slices/phase-4/g4.cast`.
 - **Checkpoint (gate item 6):** commit `checkpoint: G4 integrations-knowledge` + tag `gate-4`.
+
+### DEVIATION — 2026-07-06T21:30:00Z — Phase 5 — event queue on Firestore/Mongo store instead of SQLite WAL
+
+**Spec section:** ch04 §4.4.3 / P-06 (event queue backend = SQLite WAL). **Why compliance-as-written was deferred:** SQLite WAL needs a native `better-sqlite3` dependency (compilation); the security-relevant contract of the queue is the dedup uniqueness `UNIQUE(trigger_id, dedup_key)`, which the Firestore/Mongo store expresses IDENTICALLY as a deterministic-`_id = triggerId::dedupKey` atomic insert (ch04 §4.1, the same atomic-insert-as-uniqueness pattern used everywhere in this build). **What was done:** `events/queue.ts` implements the queue over the Mongo store with identical dedup + claim semantics; the gate tests (dedup collision → 200 duplicate, exactly-one-enqueue) pass. The SQLite-WAL backend remains a valid future swap behind the same interface; logged so it is a decision, not a silent choice.
+
+### GATE — 2026-07-06T21:35:00Z — Phase 5 — G5 PASSED
+
+- **Green condition (§14.4 Phase 5):** triggers contract tests green; the webhook HMAC ingress pipeline (ch09 invariant 9) green — raw-body HMAC verification, disabled-check-AFTER-signature (valid sig on disabled → 410, invalid → 401), dedup collision → 200 `{duplicate:true}`, an audit row per outcome class, timing-safe hub-challenge; the SSE manager (per-user, keepalive, Last-Event-ID replay ring) + the notifications SSE endpoint (?token= auth, one of the four sanctioned streams); the event queue with atomic dedup.
+- **Green evidence:** 77 api tests (9 files). `npm run ci:lane` = 0, `npm run e2e` = 0, security gates = 0.
+- **Built:** `events/webhook-verifiers.ts` (pure HMAC + timing-safe compares + hub-challenge), `events/queue.ts` (dedup via deterministic-_id), `events/service.ts` (ingress pipeline + triggers CRUD, secret encrypted + returned once), `events/sse-manager.ts` (SSE client manager, replay ring, keepalive), routers `triggers` (+ publicUrl, landmine 3), `hooks` (raw-body mount BELOW the JSON parser, invariant 9 step 6), `notifications` (SSE, via the new `auth/verifySseToken` helper).
+- **CI lane (gate item 2):** exit 0.
+- **Review verdicts (gate item 3):**
+  - Claude review: the module-direction gate caught the notifications router importing data/ → fixed with the `auth/verifySseToken` helper (routes → auth, not data).
+  - Adversarial Codex security review (`codex exec`, serialized) over HMAC bypass, ordering, dedup, SSE auth, secret handling: **NO ISSUES** (first gate clean on the first adversarial pass). APPROVE.
+- **Ledger (gate item 4):** `currentGate` → G5; schema-coverage PENDING shrunk to 162; the whatsapp-inbound driver is ledger-scoped to G8 (full delivery) with queue-acceptance covered here.
+- **Diagrams (gate item 5):** no structural change (events/ is an existing module; the four SSE streams are depicted by diagram 04-agent-job).
+- **Evidence:** asciinema `slices/phase-5/g5.cast`.
+- **Checkpoint (gate item 6):** commit `checkpoint: G5 push-infra-triggers` + tag `gate-5`.

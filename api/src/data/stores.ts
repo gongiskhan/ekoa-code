@@ -85,3 +85,5 @@ export const knowledgeSources = new Store<Doc>('knowledge_sources');
 export const knowledgeUploads = new Store<Doc>('knowledge_uploads');
 export const anonymisationDenyLists = new Store<Doc>('anonymisation_deny_lists');
 export const bridgePairings = new Store<Doc>('bridge_pairings');
+export const eventQueue = new Store<Doc>('event_queue');
+export const webhookAudit = new Store<Doc>('webhook_audit');

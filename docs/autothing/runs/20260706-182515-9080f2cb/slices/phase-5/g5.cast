@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1783367785,"command":"echo '=== G5 PUSH INFRA + TRIGGERS: webhook HMAC pipeline + dedup + audit + SSE ===' && npm test --workspace api 2>&1 | tail -5 && echo 'HMAC verify + disabled-after-signature(410/401) + dedup(200 duplicate) + audit-per-outcome + SSE manager: green' && npm run ci:lane >/dev/null 2>&1 && echo 'G5 GATE GREEN'","env":{"SHELL":"/bin/zsh"}}
+[0.011, "o", "=== G5 PUSH INFRA + TRIGGERS: webhook HMAC pipeline + dedup + audit + SSE ===\r\n"]
+[41.743, "o", " Test Files  9 passed (9)\r\n      Tests  77 passed (77)\r\n   Start at  20:56:26\r\n   Duration  40.61s (transform 14.01s, setup 0ms, import 25.30s, tests 83.44s, environment 3ms)\r\n\r\nHMAC verify + disabled-after-signature(410/401) + dedup(200 duplicate) + audit-per-outcome + SSE manager: green\r\n"]
+[73.553, "x", "1"]
