@@ -54,7 +54,7 @@ describe('/health surface (ch03 §3.8.23)', () => {
   it('returns the carried health field shape', async () => {
     const app = buildApp(testConfig);
     await new Promise<void>((resolve) => {
-      server = app.listen(0, resolve);
+      server = app.listen(0, () => resolve());
     });
     const addr = server!.address();
     const port = typeof addr === 'object' && addr ? addr.port : 0;

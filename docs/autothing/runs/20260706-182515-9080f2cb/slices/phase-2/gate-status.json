@@ -1,0 +1,12 @@
+{
+  "slice": "phase-2", "title": "G2 Data core + auth", "status": "passed", "gate": "G2",
+  "greenCondition": {"met": true, "evidence": "engine parity + 8 semantics over mongodb-memory-server; crypto/jwt; activation write-through + token revoke; boot fail-closed"},
+  "test": {"status": "passed", "evidence": "25 api tests pass; ci:lane + e2e + security exit 0; test-typecheck added"},
+  "review": {"status": "passed", "by": "claude", "note": "test-typecheck caught 4 real type errors, fixed"},
+  "adversarialReview": {"status": "passed", "by": "codex", "verdict": "approve-post-fix", "findings": 4, "resolution": "fail-closed activation; map-first deactivation; jti always minted + HS256 pin; revocation pruning"},
+  "adversarialTest": {"status": "passed", "note": "2 security regression tests (fail-closed cache miss, jti-less token)"},
+  "designAudit": {"status": "skipped", "reason": "no UI"},
+  "video": {"status": "verified", "kind": "asciinema", "path": "slices/phase-2/g2-tests.cast"},
+  "commit": {"tag": "gate-2", "message": "checkpoint: G2 data-core-and-auth"},
+  "at": "2026-07-06T20:15:00Z"
+}

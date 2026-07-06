@@ -8,11 +8,25 @@
  *  - fail-closed config validation (ch09 §9.7): missing ENCRYPTION_KEY / JWT_SECRET refuses boot.
  *  - process-level exception posture: uncaughtException/unhandledRejection log and continue.
  */
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import express, { type Express, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
+import { connectMongo } from './data/mongo.js';
+import { users } from './data/stores.js';
+import { loadActivation } from './data/activation.js';
+import { loadRevocations } from './auth/revocation.js';
+import { seedAdmin } from './auth/service.js';
+import { authRouter } from './routes/auth.js';
 
-export function buildApp(config: Config): Express {
+export interface RuntimeDeps {
+  now: () => number;
+  genId: () => string;
+}
+
+const defaultDeps: RuntimeDeps = { now: () => Date.now(), genId: () => randomUUID() };
+
+export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Express {
   const app = express();
   app.set('env', config.nodeEnv);
   app.disable('x-powered-by');
@@ -29,8 +43,22 @@ export function buildApp(config: Config): Express {
     });
   });
 
-  // Domain routers mount here as their build phases land (G2 auth → G13).
+  // Domain routers (mounted as their build phases land — G2 auth onward).
+  app.use('/api/v1/auth', authRouter(deps));
+
   return app;
+}
+
+/** Boot the persistence + admission state (ch09 §9.7): connect fail-fast, load the
+ *  activation map + revocation set, seed the founder super-admin. */
+export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> {
+  await connectMongo(); // fail-fast on a bad connection string
+  const allUsers = await users.find({});
+  loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active })));
+  await loadRevocations(Math.floor(deps.now() / 1000));
+  const seedUser = process.env.EKOA_ADMIN_USERNAME;
+  const seedPass = process.env.EKOA_ADMIN_PASSWORD;
+  if (seedUser && seedPass) await seedAdmin(seedUser, seedPass, deps);
 }
 
 /** Boot: validate config (fail-closed), install process guards, start listening. */
@@ -41,9 +69,16 @@ export function boot(): void {
 
   const config = loadConfig(); // throws on missing ENCRYPTION_KEY / JWT_SECRET (fail-closed)
   const app = buildApp(config);
-  app.listen(config.port, () => {
-    console.log(`[ekoa-api] listening on :${config.port} (${config.nodeEnv})`);
-  });
+  bootState()
+    .then(() => {
+      app.listen(config.port, () => {
+        console.log(`[ekoa-api] listening on :${config.port} (${config.nodeEnv})`);
+      });
+    })
+    .catch((err) => {
+      console.error('[ekoa-api] boot failed:', err);
+      process.exit(1);
+    });
 }
 
 // Boot only when run directly (not when imported by the contract suite's app factory).
