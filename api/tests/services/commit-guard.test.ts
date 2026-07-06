@@ -7,17 +7,16 @@ import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { activityLogs } from '../../src/data/stores.js';
 import {
-
-// Planted credential assembled at runtime so the fixture never exists as a
-// literal on disk (the repo's own gitleaks gate stays strict).
-const plantedKey = ['sk-ant', 'api03', 'FAKE'.repeat(6)].join('-');
-
   scanText,
   commitSnapshot,
   readVersions,
   SecretCommitError,
   type SnapshotAudit,
 } from '../../src/services/commit-guard.js';
+
+// Planted credential assembled at runtime so the fixture never exists as a
+// literal on disk (the repo's own gitleaks gate stays strict).
+const plantedKey = ['sk-ant', 'api03', 'FAKE'.repeat(6)].join('-');
 
 /**
  * Secret guard + version snapshot (spec/07 §7.9, ch09 code-egress):
