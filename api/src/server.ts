@@ -32,6 +32,7 @@ import { hooksRouter } from './routes/hooks.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { servedDataRouter } from './apps/served-data.js';
+import { devServeRouter } from './apps/dev-serve.js';
 import { servingRouter } from './apps/serving.js';
 import { appRegistry } from './apps/app-registry.js';
 import { appBuilder } from './apps/builder.js';
@@ -90,9 +91,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G6 — artifacts (platform) + the byte-compatible served-app data plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
   app.use('/api', servedDataRouter(deps));
-  // Serving pipeline (ch07 §7.5-7.7): /apps/:idOrSlug/* + demo-bridge + app-health.
+  // Serving pipeline (ch07 §7.5-7.7): /apps/:idOrSlug/* + demo-bridge + demos + app-health.
   // The owner-bypass token verifier is injected here (apps/ never imports auth/, ch02 §2.7).
   app.use('/', servingRouter({ verifyToken }));
+  // Dev-serve (ch07 §7.4 trigger 6) - hard-off in production-like environments.
+  app.use('/', devServeRouter(config.nodeEnv !== 'production'));
 
   return app;
 }
