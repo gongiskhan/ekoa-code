@@ -1,0 +1,4 @@
+{
+  "//": "The ported legal e2e specs use CommonJS __dirname (they compute fixture/screenshot paths relative to their own location). web/ is type:module, so Playwright would otherwise transpile them to ESM where __dirname is undefined. Scoping the spec dir to commonjs makes Playwright emit CJS for them - a helper-level harness fix (reference/test-audit.md §5.1), no assertion touched.",
+  "type": "commonjs"
+}
