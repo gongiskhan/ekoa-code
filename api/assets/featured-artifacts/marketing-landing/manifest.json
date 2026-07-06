@@ -1,0 +1,9 @@
+{
+  "id": "marketing-landing",
+  "name": "Landing de Marketing",
+  "description": "Página única para promover um produto SaaS — hero, funcionalidades, testemunhos, CTA final.",
+  "extends": "landing",
+  "outputKind": "landing_page",
+  "featuredRank": 90,
+  "version": "1.0.0"
+}

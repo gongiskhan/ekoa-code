@@ -1,0 +1,9 @@
+{
+  "id": "legal-dossie",
+  "name": "Jurídico · Dossiê",
+  "description": "Compila o dossiê completo de um processo — cliente, cronologia, prazos e documentos — pronto a guardar em PDF.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 45,
+  "version": "1.0.0"
+}

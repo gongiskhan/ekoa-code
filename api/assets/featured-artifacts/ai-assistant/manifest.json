@@ -1,0 +1,9 @@
+{
+  "id": "ai-assistant",
+  "name": "Assistente IA",
+  "description": "Assistente conversacional com base de conhecimento e ações automatizadas.",
+  "extends": "app-integration-heavy",
+  "outputKind": "agent_app",
+  "featuredRank": 70,
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "legal-contratos",
+  "name": "Jurídico · Contratos",
+  "description": "Gera contratos e procurações em .docx a partir dos dados do processo — limpo, editável, com as cláusulas-padrão.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 44,
+  "version": "1.0.0"
+}

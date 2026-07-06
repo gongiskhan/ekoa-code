@@ -1,0 +1,9 @@
+{
+  "id": "legal-injuncoes",
+  "name": "Jurídico · Injunções",
+  "description": "Da interpelação formal à fórmula executória - a fase judicial da recuperação de créditos: elegibilidade citada, requerimento preparado com juros e taxa de justiça do serviço de cálculos, submissão assistida no BNI com proveniência registada.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 64,
+  "version": "1.0.0"
+}

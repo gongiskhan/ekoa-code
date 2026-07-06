@@ -1,0 +1,9 @@
+{
+  "id": "legal-financas",
+  "name": "Jurídico · Finanças",
+  "description": "Conta corrente, despesas e provisões sobre a espinha partilhada; a emissão de faturas certificadas passa exclusivamente pela integração InvoiceXpress (AT) - a Ekoa nunca emite faturas nativamente.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 59,
+  "version": "1.0.0"
+}

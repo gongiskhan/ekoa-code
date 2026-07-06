@@ -1,0 +1,9 @@
+{
+  "id": "legal-apoio",
+  "name": "Jurídico · Apoio Judiciário",
+  "description": "Apoio judiciário (SADT/SinOA): organiza e prepara pedidos de protecção jurídica, nomeações e escusas, gera os prazos SinOA com o motor determinístico de prazos e reúne o pedido de honorários com despesas comprovadas. Não submete - a submissão é feita pelo advogado no SinOA.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 58,
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "legal-assinatura",
+  "name": "Jurídico · Assinatura",
+  "description": "Assinatura qualificada por envelopes - da preparação ao arquivo probatório. Fluxo orquestrado da Chave Móvel Digital, modo simulado para demonstrações, certificado de auditoria no dossiê e verificação de PDF assinados. Calendário da Portaria 350-A/2025.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 44,
+  "version": "1.0.0"
+}

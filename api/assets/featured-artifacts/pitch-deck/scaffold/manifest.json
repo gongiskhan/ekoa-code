@@ -1,0 +1,9 @@
+{
+  "id": "pitch-deck",
+  "name": "Pitch Deck",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Apresentação de 10 a 12 slides para apresentar uma ideia a investidores."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "legal-citius",
+  "name": "Jurídico · Caixa Citius",
+  "description": "Triagem determinística de notificações Citius — emparelha o processo, calcula o prazo e mostra o seu trabalho; o que for ambíguo vai para revisão.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 42,
+  "version": "1.0.0"
+}

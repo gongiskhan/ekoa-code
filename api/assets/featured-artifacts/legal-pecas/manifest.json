@@ -1,0 +1,9 @@
+{
+  "id": "legal-pecas",
+  "name": "Jurídico · Peças",
+  "description": "Redação de peças processuais a partir do processo e dos precedentes - esqueletos determinísticos por tipo, fundamentação citada das pesquisas e exportação em .docx para o dossiê.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 57,
+  "version": "1.0.0"
+}

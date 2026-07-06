@@ -1,0 +1,9 @@
+{
+  "id": "legal-transcricao",
+  "name": "Jurídico · Transcrição",
+  "description": "Transcrição de gravações de audiência com diarização e tempos por palavra - editor de revisão sincronizado com o áudio e excertos prontos para recurso (art. 640.º CPC), exportáveis apenas depois de revistos.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 63,
+  "version": "1.0.0"
+}

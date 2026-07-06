@@ -1,0 +1,9 @@
+{
+  "id": "legal-prazos",
+  "name": "Jurídico · Prazos",
+  "description": "Cálculo determinístico de prazos processuais (CPC) — dias úteis, férias judiciais, multa do art. 139.º.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 41,
+  "version": "1.0.0"
+}

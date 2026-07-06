@@ -1,0 +1,9 @@
+{
+  "id": "ecommerce-catalog",
+  "name": "Catálogo E-commerce",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Gestão de produtos, encomendas e clientes para uma loja online simples."
+}

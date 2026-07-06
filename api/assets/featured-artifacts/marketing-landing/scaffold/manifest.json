@@ -1,0 +1,9 @@
+{
+  "id": "marketing-landing",
+  "name": "Landing de Marketing",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Página única para promover um produto SaaS — hero, funcionalidades, testemunhos, CTA final."
+}

@@ -1,0 +1,145 @@
+{
+  "lists": [
+    { "name": "A fazer", "slug": "a-fazer", "position": 0, "color": "info" },
+    { "name": "Em curso", "slug": "em-curso", "position": 1, "color": "primary" },
+    { "name": "Em revisão", "slug": "em-revisao", "position": 2, "color": "warning" },
+    { "name": "Concluído", "slug": "concluido", "position": 3, "color": "success" }
+  ],
+  "tasks": [
+    {
+      "title": "Definir objetivos do trimestre",
+      "description": "Acerte os indicadores principais com a equipa de produto e operações.",
+      "listSlug": "a-fazer",
+      "priority": "high",
+      "dueDate": "2026-05-25",
+      "assignee": "Maria Costa",
+      "tags": ["estratégia", "produto"]
+    },
+    {
+      "title": "Rever proposta comercial para cliente Atlântico",
+      "description": "Ajustar tabela de preços e prazos de entrega antes do envio.",
+      "listSlug": "a-fazer",
+      "priority": "medium",
+      "dueDate": "2026-05-23",
+      "assignee": "João Silva",
+      "tags": ["vendas"]
+    },
+    {
+      "title": "Preparar agenda da próxima reunião semanal",
+      "description": "Distribuir tópicos pelos responsáveis com antecedência.",
+      "listSlug": "a-fazer",
+      "priority": "low",
+      "dueDate": "2026-05-22",
+      "assignee": "Ana Pereira",
+      "tags": ["coordenação"]
+    },
+    {
+      "title": "Configurar pipeline de integração contínua",
+      "description": "Adicionar verificações automáticas de testes e cobertura.",
+      "listSlug": "em-curso",
+      "priority": "high",
+      "dueDate": "2026-05-28",
+      "assignee": "Tiago Marques",
+      "tags": ["engenharia", "qualidade"]
+    },
+    {
+      "title": "Atualizar guia de identidade visual",
+      "description": "Refletir a nova paleta cromática nas folhas de estilo partilhadas.",
+      "listSlug": "em-curso",
+      "priority": "medium",
+      "dueDate": "2026-05-30",
+      "assignee": "Sofia Lopes",
+      "tags": ["design"]
+    },
+    {
+      "title": "Migrar utilizadores para o novo portal",
+      "description": "Notificar utilizadores e acompanhar a transição.",
+      "listSlug": "em-curso",
+      "priority": "high",
+      "dueDate": "2026-06-02",
+      "assignee": "Rui Almeida",
+      "tags": ["operações"]
+    },
+    {
+      "title": "Validar relatório financeiro mensal",
+      "description": "Confirmar lançamentos pendentes com a contabilidade.",
+      "listSlug": "em-revisao",
+      "priority": "medium",
+      "dueDate": "2026-05-21",
+      "assignee": "Inês Ribeiro",
+      "tags": ["finanças"]
+    },
+    {
+      "title": "Aprovar campanha de marketing de Junho",
+      "description": "Rever criativos e canais antes do lançamento.",
+      "listSlug": "em-revisao",
+      "priority": "high",
+      "dueDate": "2026-05-26",
+      "assignee": "Pedro Santos",
+      "tags": ["marketing"]
+    },
+    {
+      "title": "Documentar processo de onboarding interno",
+      "description": "Recolher feedback dos novos colaboradores e atualizar o manual.",
+      "listSlug": "em-revisao",
+      "priority": "low",
+      "dueDate": "2026-05-29",
+      "assignee": "Beatriz Carvalho",
+      "tags": ["pessoas", "documentação"]
+    },
+    {
+      "title": "Lançar nova página inicial do portal",
+      "description": "Versão publicada esta semana com testes a correr em produção.",
+      "listSlug": "concluido",
+      "priority": "high",
+      "dueDate": "2026-05-15",
+      "assignee": "Carlos Henriques",
+      "tags": ["produto", "lançamento"]
+    },
+    {
+      "title": "Recolher feedback dos clientes-piloto",
+      "description": "Síntese das entrevistas partilhada com a equipa de produto.",
+      "listSlug": "concluido",
+      "priority": "medium",
+      "dueDate": "2026-05-12",
+      "assignee": "Helena Vieira",
+      "tags": ["pesquisa"]
+    },
+    {
+      "title": "Aprovar orçamento para infraestrutura",
+      "description": "Aprovação confirmada pela direção administrativa.",
+      "listSlug": "concluido",
+      "priority": "medium",
+      "dueDate": "2026-05-10",
+      "assignee": "Filipa Andrade",
+      "tags": ["finanças", "operações"]
+    },
+    {
+      "title": "Conduzir workshop de bem-estar da equipa",
+      "description": "Sessão presencial realizada com toda a equipa central.",
+      "listSlug": "concluido",
+      "priority": "low",
+      "dueDate": "2026-05-08",
+      "assignee": "Marta Lemos",
+      "tags": ["cultura"]
+    },
+    {
+      "title": "Otimizar consultas de base de dados críticas",
+      "description": "Identificar e corrigir consultas lentas em produção.",
+      "listSlug": "em-curso",
+      "priority": "high",
+      "dueDate": "2026-06-05",
+      "assignee": "Tiago Marques",
+      "tags": ["engenharia", "performance"]
+    },
+    {
+      "title": "Agendar avaliações trimestrais",
+      "description": "Marcar reuniões individuais com cada membro da equipa.",
+      "listSlug": "a-fazer",
+      "priority": "medium",
+      "dueDate": "2026-06-10",
+      "assignee": "Ana Pereira",
+      "tags": ["pessoas"]
+    }
+  ]
+}

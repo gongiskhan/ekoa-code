@@ -1,0 +1,9 @@
+{
+  "id": "task-manager",
+  "name": "Gestor de Tarefas",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Quadro kanban para acompanhar tarefas com prioridades e datas-limite."
+}

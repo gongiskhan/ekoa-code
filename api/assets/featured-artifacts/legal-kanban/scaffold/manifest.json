@@ -1,0 +1,10 @@
+{
+  "id": "legal-kanban",
+  "name": "Jurídico · Quadro",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "extends": "app-auth-persistent",
+  "sharedData": true
+}

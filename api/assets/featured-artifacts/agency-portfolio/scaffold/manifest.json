@@ -1,0 +1,9 @@
+{
+  "id": "agency-portfolio",
+  "name": "Portfólio Agência",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Site de portfólio para uma agência criativa, com showcase de trabalhos e secção de contacto."
+}

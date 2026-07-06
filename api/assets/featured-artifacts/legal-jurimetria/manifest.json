@@ -1,0 +1,9 @@
+{
+  "id": "legal-jurimetria",
+  "name": "Jurídico · Jurimetria",
+  "description": "Estatística descritiva da justiça: durações médias públicas por área (fonte e período sempre citados) comparadas com os processos findos do próprio escritório, e ficha de expectativas exportável para o cliente. Médias históricas - nunca antecipação do desfecho de um caso.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 67,
+  "version": "1.0.0"
+}

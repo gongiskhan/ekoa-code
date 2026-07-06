@@ -1,0 +1,9 @@
+{
+  "id": "legal-insolvencias",
+  "name": "Jurídico · Insolvências",
+  "description": "Insolvências do lado do credor: registo ligado ao crédito, prazo de reclamação de 30 dias CONTÍNUOS (CIRE art. 9.º - sem suspensão nas férias judiciais), reclamação de créditos gerada, verificação e graduação acompanhadas e rateios lançados na conta corrente.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 66,
+  "version": "1.0.0"
+}

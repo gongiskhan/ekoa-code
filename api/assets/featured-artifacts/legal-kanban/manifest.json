@@ -1,0 +1,9 @@
+{
+  "id": "legal-kanban",
+  "name": "Jurídico · Quadro",
+  "description": "Quadro de tarefas com colunas configuráveis sobre a espinha partilhada - arrasta os cartões entre colunas sem nunca perder o estado canónico da tarefa.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 47,
+  "version": "1.0.0"
+}

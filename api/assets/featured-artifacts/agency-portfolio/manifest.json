@@ -1,0 +1,9 @@
+{
+  "id": "agency-portfolio",
+  "name": "Portfólio Agência",
+  "description": "Site de portfólio para uma agência criativa, com showcase de trabalhos e secção de contacto.",
+  "extends": "landing",
+  "outputKind": "landing_page",
+  "featuredRank": 100,
+  "version": "1.0.0"
+}

@@ -1,0 +1,180 @@
+{
+  "services": [
+    {
+      "name": "Consulta inicial",
+      "duration": 60,
+      "price": 65.0,
+      "description": "Avaliação inicial e plano de seguimento.",
+      "active": true
+    },
+    {
+      "name": "Sessão de seguimento",
+      "duration": 45,
+      "price": 50.0,
+      "description": "Sessão regular de acompanhamento.",
+      "active": true
+    },
+    {
+      "name": "Avaliação especializada",
+      "duration": 90,
+      "price": 110.0,
+      "description": "Avaliação aprofundada com relatório técnico.",
+      "active": true
+    },
+    {
+      "name": "Sessão de grupo",
+      "duration": 75,
+      "price": 35.0,
+      "description": "Sessão em grupo até oito participantes.",
+      "active": true
+    },
+    {
+      "name": "Atendimento à distância",
+      "duration": 45,
+      "price": 45.0,
+      "description": "Consulta por videochamada (Zoom ou Google Meet).",
+      "active": true
+    }
+  ],
+  "customers": [
+    {
+      "name": "Ana Margarida Silva",
+      "email": "ana.silva@example.pt",
+      "phone": "+351 912 345 678",
+      "notes": "Prefere marcações ao fim do dia."
+    },
+    {
+      "name": "João Pereira",
+      "email": "joao.pereira@example.pt",
+      "phone": "+351 936 112 233"
+    },
+    {
+      "name": "Mariana Costa",
+      "email": "mariana.costa@example.pt",
+      "phone": "+351 919 887 766",
+      "notes": "Sempre acompanhada por intérprete."
+    },
+    {
+      "name": "Ricardo Almeida",
+      "email": "ricardo.almeida@example.pt",
+      "phone": "+351 967 554 433"
+    },
+    {
+      "name": "Sofia Marques",
+      "email": "sofia.marques@example.pt",
+      "phone": "+351 925 998 877",
+      "notes": "Cliente VIP — confirmar 24h antes."
+    },
+    {
+      "name": "Pedro Henriques",
+      "email": "pedro.henriques@example.pt",
+      "phone": "+351 913 221 334"
+    }
+  ],
+  "bookings": [
+    {
+      "date": "2026-05-21",
+      "time": "09:30",
+      "serviceName": "Consulta inicial",
+      "duration": 60,
+      "price": 65.0,
+      "customerName": "Ana Margarida Silva",
+      "status": "confirmed",
+      "notes": "Primeira visita — preencher ficha de admissão."
+    },
+    {
+      "date": "2026-05-21",
+      "time": "11:00",
+      "serviceName": "Sessão de seguimento",
+      "duration": 45,
+      "price": 50.0,
+      "customerName": "João Pereira",
+      "status": "confirmed"
+    },
+    {
+      "date": "2026-05-22",
+      "time": "10:00",
+      "serviceName": "Avaliação especializada",
+      "duration": 90,
+      "price": 110.0,
+      "customerName": "Mariana Costa",
+      "status": "confirmed",
+      "notes": "Trazer relatórios anteriores."
+    },
+    {
+      "date": "2026-05-22",
+      "time": "15:00",
+      "serviceName": "Atendimento à distância",
+      "duration": 45,
+      "price": 45.0,
+      "customerName": "Ricardo Almeida",
+      "status": "pending",
+      "notes": "Enviar link da videochamada 30 min antes."
+    },
+    {
+      "date": "2026-05-25",
+      "time": "09:00",
+      "serviceName": "Sessão de seguimento",
+      "duration": 45,
+      "price": 50.0,
+      "customerName": "Sofia Marques",
+      "status": "confirmed"
+    },
+    {
+      "date": "2026-05-26",
+      "time": "14:30",
+      "serviceName": "Sessão de grupo",
+      "duration": 75,
+      "price": 35.0,
+      "customerName": "Pedro Henriques",
+      "status": "confirmed",
+      "notes": "Sessão temática — gestão de stress."
+    },
+    {
+      "date": "2026-05-27",
+      "time": "11:30",
+      "serviceName": "Consulta inicial",
+      "duration": 60,
+      "price": 65.0,
+      "customerName": "Ana Margarida Silva",
+      "status": "pending"
+    },
+    {
+      "date": "2026-05-28",
+      "time": "16:00",
+      "serviceName": "Avaliação especializada",
+      "duration": 90,
+      "price": 110.0,
+      "customerName": "João Pereira",
+      "status": "confirmed"
+    },
+    {
+      "date": "2026-05-19",
+      "time": "10:00",
+      "serviceName": "Sessão de seguimento",
+      "duration": 45,
+      "price": 50.0,
+      "customerName": "Mariana Costa",
+      "status": "completed",
+      "notes": "Sessão concluída sem ocorrências."
+    },
+    {
+      "date": "2026-05-18",
+      "time": "15:30",
+      "serviceName": "Atendimento à distância",
+      "duration": 45,
+      "price": 45.0,
+      "customerName": "Sofia Marques",
+      "status": "completed"
+    }
+  ],
+  "availability": [
+    { "day": "mon", "open": "09:00", "close": "18:00", "active": true },
+    { "day": "tue", "open": "09:00", "close": "18:00", "active": true },
+    { "day": "wed", "open": "09:00", "close": "18:00", "active": true },
+    { "day": "thu", "open": "09:00", "close": "20:00", "active": true },
+    { "day": "fri", "open": "09:00", "close": "17:00", "active": true },
+    { "day": "sat", "open": "10:00", "close": "13:00", "active": true },
+    { "day": "sun", "open": "00:00", "close": "00:00", "active": false }
+  ]
+}

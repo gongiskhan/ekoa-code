@@ -1,0 +1,9 @@
+{
+  "id": "sales-crm",
+  "name": "CRM de Vendas",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Pipeline de vendas com contactos, oportunidades e seguimento."
+}

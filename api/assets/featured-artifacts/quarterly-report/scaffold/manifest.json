@@ -1,0 +1,9 @@
+{
+  "id": "quarterly-report",
+  "name": "Relatorio Trimestral",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Apresentação com resultados trimestrais, métricas-chave e plano para o próximo trimestre."
+}

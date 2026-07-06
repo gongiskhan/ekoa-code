@@ -1,0 +1,9 @@
+{
+  "id": "help-desk",
+  "name": "Helpdesk",
+  "description": "Gestão de tickets de suporte com integração de e-mail e notificações.",
+  "extends": "app-integration-heavy",
+  "outputKind": "web_app",
+  "featuredRank": 80,
+  "version": "1.0.0"
+}

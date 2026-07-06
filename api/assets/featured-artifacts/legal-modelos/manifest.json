@@ -1,0 +1,9 @@
+{
+  "id": "legal-modelos",
+  "name": "Jurídico · Modelos",
+  "description": "Biblioteca de minutas de fonte oficial (procurações, requerimentos, declarações, contratos e apoio judiciário), com licença registada, versões e promoção a Contratos.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 51,
+  "version": "1.0.0"
+}

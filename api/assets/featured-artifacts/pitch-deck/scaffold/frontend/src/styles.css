@@ -1,0 +1,631 @@
+/* ============================================================
+   Pitch Deck — every value MUST reference a CSS variable with
+   a fallback. Dark by default: background is --color-text,
+   text is --color-bg (intentional contract inversion).
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--text-lg, 1.125rem);
+  background: var(--color-text, #0F172A);
+  color: var(--color-bg, #FFFFFF);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  color: inherit;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ============================================================
+   Deck shell — full-viewport stage with chrome at the bottom
+   ============================================================ */
+
+.deck {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.deck-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12, 3rem) var(--space-16, 4rem);
+  min-height: 0;
+}
+
+.deck-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--space-4, 1rem) var(--space-8, 2rem);
+  background: linear-gradient(to top, var(--color-text, #0F172A), transparent);
+  pointer-events: none;
+}
+
+.deck-progress {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-full, 9999px);
+  overflow: hidden;
+  margin-bottom: var(--space-2, 0.5rem);
+}
+
+.deck-progress-bar {
+  height: 100%;
+  background: var(--color-primary, #0F766E);
+  border-radius: var(--radius-full, 9999px);
+  transition: width 240ms ease;
+}
+
+.deck-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--color-text-subtle, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.deck-hint {
+  opacity: 0.65;
+}
+
+.deck-page {
+  font-weight: 600;
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.85;
+}
+
+/* ============================================================
+   Slide base — every slide is a vertically/horizontally
+   centred composition with a max width of 1200px.
+   ============================================================ */
+
+.slide {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8, 2rem);
+  animation: slideIn 360ms ease both;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.slide h1 {
+  font-size: var(--text-3xl, 1.875rem);
+}
+
+.slide h2 {
+  font-size: var(--text-2xl, 1.5rem);
+}
+
+.slide-eyebrow {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--color-accent, #14B8A6);
+  font-weight: 600;
+}
+
+.slide-lead {
+  font-size: var(--text-xl, 1.25rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.78;
+  max-width: 60ch;
+  line-height: 1.45;
+}
+
+/* ============================================================
+   Title slide
+   ============================================================ */
+
+.title-slide {
+  text-align: left;
+  gap: var(--space-12, 3rem);
+}
+
+.title-slide .mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3, 0.75rem);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-sm, 0.875rem);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle, #64748B);
+}
+
+.title-slide .mark::before {
+  content: '';
+  width: 32px;
+  height: 1px;
+  background: var(--color-accent, #14B8A6);
+}
+
+.title-slide h1 {
+  font-size: clamp(var(--text-3xl, 1.875rem), 6vw, 4.5rem);
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  max-width: 18ch;
+}
+
+.title-slide .gradient-text {
+  background: linear-gradient(120deg, var(--color-accent, #14B8A6), var(--color-primary, #0F766E));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.title-slide .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6, 1.5rem);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text-subtle, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.title-slide .meta strong {
+  color: var(--color-bg, #FFFFFF);
+  font-weight: 600;
+}
+
+/* ============================================================
+   Content slide — eyebrow + heading + body/list
+   ============================================================ */
+
+.content-slide ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 1rem);
+  max-width: 60ch;
+}
+
+.content-slide li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-4, 1rem);
+  font-size: var(--text-lg, 1.125rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.86;
+  line-height: 1.5;
+}
+
+.content-slide li .bullet {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-primary, #0F766E);
+  color: var(--color-bg, #FFFFFF);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   Two-column slide
+   ============================================================ */
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-12, 3rem);
+  align-items: start;
+}
+
+.two-col-block h3 {
+  font-size: var(--text-xl, 1.25rem);
+  margin-bottom: var(--space-4, 1rem);
+  color: var(--color-accent, #14B8A6);
+}
+
+.two-col-block p,
+.two-col-block li {
+  font-size: var(--text-lg, 1.125rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.82;
+  line-height: 1.55;
+}
+
+.two-col-block li + li {
+  margin-top: var(--space-3, 0.75rem);
+}
+
+/* ============================================================
+   Stat grid — 3 to 4 big numbers
+   ============================================================ */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-6, 1.5rem);
+}
+
+@media (max-width: 900px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.stat-card {
+  padding: var(--space-6, 1.5rem);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg, 0.75rem);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+}
+
+.stat-card .stat-value {
+  font-size: clamp(var(--text-2xl, 1.5rem), 4vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: var(--color-accent, #14B8A6);
+  font-feature-settings: 'tnum';
+}
+
+.stat-card .stat-label {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-text-subtle, #64748B);
+}
+
+.stat-card .stat-detail {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.7;
+}
+
+/* ============================================================
+   Team grid
+   ============================================================ */
+
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-6, 1.5rem);
+}
+
+@media (max-width: 900px) {
+  .team-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.team-card {
+  padding: var(--space-6, 1.5rem);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg, 0.75rem);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+}
+
+.team-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full, 9999px);
+  background: linear-gradient(135deg, var(--color-primary, #0F766E), var(--color-accent, #14B8A6));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-bg, #FFFFFF);
+  font-weight: 700;
+  font-size: var(--text-lg, 1.125rem);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.team-card .team-name {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  color: var(--color-bg, #FFFFFF);
+}
+
+.team-card .team-role {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-accent, #14B8A6);
+}
+
+.team-card .team-bio {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.75;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Roadmap timeline
+   ============================================================ */
+
+.roadmap {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-6, 1.5rem);
+  position: relative;
+}
+
+@media (max-width: 900px) {
+  .roadmap {
+    grid-template-columns: 1fr;
+  }
+}
+
+.roadmap::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 900px) {
+  .roadmap::before {
+    display: none;
+  }
+}
+
+.roadmap-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+  position: relative;
+}
+
+.roadmap-step .dot {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-text, #0F172A);
+  border: 2px solid var(--color-accent, #14B8A6);
+  margin-bottom: var(--space-2, 0.5rem);
+}
+
+.roadmap-step.current .dot {
+  background: var(--color-accent, #14B8A6);
+  box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.18);
+}
+
+.roadmap-step .when {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-text-subtle, #64748B);
+}
+
+.roadmap-step .what {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  color: var(--color-bg, #FFFFFF);
+}
+
+.roadmap-step .why {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.72;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Comparison table — competition slide
+   ============================================================ */
+
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-base, 0.9375rem);
+}
+
+.compare th,
+.compare td {
+  text-align: left;
+  padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.compare th {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-subtle, #64748B);
+  font-weight: 600;
+}
+
+.compare td {
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.85;
+}
+
+.compare tr.us td:first-child {
+  color: var(--color-accent, #14B8A6);
+  font-weight: 700;
+}
+
+.compare .mark-yes {
+  color: var(--color-success, #16A34A);
+  font-weight: 700;
+}
+
+.compare .mark-no {
+  color: var(--color-danger, #DC2626);
+  opacity: 0.65;
+}
+
+.compare .mark-partial {
+  color: var(--color-warning, #D97706);
+}
+
+/* ============================================================
+   Allocation bars — Ask slide
+   ============================================================ */
+
+.allocation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 1rem);
+  max-width: 720px;
+}
+
+.allocation-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 80px;
+  align-items: center;
+  gap: var(--space-4, 1rem);
+}
+
+.allocation-row .label {
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-bg, #FFFFFF);
+  opacity: 0.85;
+}
+
+.allocation-row .bar {
+  height: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-full, 9999px);
+  overflow: hidden;
+}
+
+.allocation-row .bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary, #0F766E), var(--color-accent, #14B8A6));
+  border-radius: var(--radius-full, 9999px);
+}
+
+.allocation-row .value {
+  text-align: right;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-accent, #14B8A6);
+  font-weight: 600;
+}
+
+.ask-headline {
+  font-size: clamp(var(--text-2xl, 1.5rem), 5vw, 3.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--color-bg, #FFFFFF);
+}
+
+.ask-headline .amount {
+  color: var(--color-accent, #14B8A6);
+}
+
+/* ============================================================
+   Product mockup — inline SVG container
+   ============================================================ */
+
+.mockup {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg, 0.75rem);
+  background: rgba(255, 255, 255, 0.02);
+  padding: var(--space-6, 1.5rem);
+  box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.3));
+}
+
+.mockup svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ============================================================
+   Thank-you slide
+   ============================================================ */
+
+.thanks {
+  text-align: center;
+  align-items: center;
+}
+
+.thanks h1 {
+  font-size: clamp(var(--text-3xl, 1.875rem), 7vw, 6rem);
+  letter-spacing: -0.04em;
+  background: linear-gradient(120deg, var(--color-accent, #14B8A6), var(--color-primary, #0F766E));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.thanks .contact {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-8, 2rem);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-text-subtle, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.thanks .contact strong {
+  color: var(--color-bg, #FFFFFF);
+  font-weight: 600;
+}

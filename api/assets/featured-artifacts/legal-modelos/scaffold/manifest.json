@@ -1,0 +1,10 @@
+{
+  "id": "legal-modelos",
+  "name": "Jurídico · Modelos",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "extends": "app-auth-persistent",
+  "sharedData": true
+}

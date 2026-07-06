@@ -1,0 +1,9 @@
+{
+  "id": "legal-agenda",
+  "name": "Jurídico · Agenda",
+  "description": "Agenda partilhada da equipa, audiências e marcações — com reserva pública paga. Slots multi-participante determinísticos; a confirmação re-verifica o horário e nunca duplica marcações.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 52,
+  "version": "1.0.0"
+}

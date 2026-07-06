@@ -1,0 +1,9 @@
+{
+  "id": "ecommerce-catalog",
+  "name": "Catálogo E-commerce",
+  "description": "Gestão de produtos, encomendas e clientes para uma loja online simples.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 50,
+  "version": "1.0.0"
+}

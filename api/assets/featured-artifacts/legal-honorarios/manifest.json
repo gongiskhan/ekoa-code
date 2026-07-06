@@ -1,0 +1,9 @@
+{
+  "id": "legal-honorarios",
+  "name": "Jurídico · Honorários",
+  "description": "Pré-faturas determinísticas de honorários — base, IVA e retenção na fonte, com o cálculo à vista; nunca emite fatura.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 43,
+  "version": "1.0.0"
+}

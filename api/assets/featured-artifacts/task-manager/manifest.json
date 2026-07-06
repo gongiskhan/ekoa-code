@@ -1,0 +1,9 @@
+{
+  "id": "task-manager",
+  "name": "Gestor de Tarefas",
+  "description": "Quadro kanban para acompanhar tarefas com prioridades e datas-limite.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 20,
+  "version": "1.0.0"
+}

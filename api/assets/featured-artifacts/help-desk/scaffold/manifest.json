@@ -1,0 +1,9 @@
+{
+  "id": "help-desk",
+  "name": "Helpdesk",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Gestão de tickets de suporte com integração de e-mail e notificações."
+}

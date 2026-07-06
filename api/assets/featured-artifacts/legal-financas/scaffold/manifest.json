@@ -1,0 +1,14 @@
+{
+  "id": "legal-financas",
+  "name": "Jurídico · Finanças",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "extends": "app-auth-persistent",
+  "sharedData": true,
+  "backend": {
+    "entryPoint": "backend/index.js",
+    "handlers": ["onMessage"]
+  }
+}

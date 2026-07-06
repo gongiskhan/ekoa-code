@@ -1,0 +1,9 @@
+{
+  "id": "legal-conflitos",
+  "name": "Jurídico · Conflitos",
+  "description": "Verificação de conflitos de interesses na abertura de dossiês (art. 99.º EOA) - apoio à decisão sobre clientes e contrapartes; a avaliação do conflito é sempre do advogado, nunca um veredicto automático.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 49,
+  "version": "1.0.0"
+}

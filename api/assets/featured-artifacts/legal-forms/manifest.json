@@ -1,0 +1,9 @@
+{
+  "id": "legal-forms",
+  "name": "Jurídico · Formulários",
+  "description": "Preenchimento inteligente de formulários oficiais em PDF - deteta os campos AcroForm, mapeia-os ao cliente e ao processo, e exporta o PDF preenchido para o dossiê.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 50,
+  "version": "1.0.0"
+}

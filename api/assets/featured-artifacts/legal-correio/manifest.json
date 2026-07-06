@@ -1,0 +1,9 @@
+{
+  "id": "legal-correio",
+  "name": "Jurídico · Correio",
+  "description": "Correio registado associado a processos - expedição, rastreio CTT (quando disponível) e comprovativos arquivados no dossiê. Desenho honesto e manual-primeiro: a referência de registo mantém-se válida mesmo sem rastreio automático.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 55,
+  "version": "1.0.0"
+}

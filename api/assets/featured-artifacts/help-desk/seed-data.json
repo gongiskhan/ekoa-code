@@ -1,0 +1,270 @@
+{
+  "categories": [
+    {
+      "id": "seed-cat-faturacao",
+      "name": "Faturação",
+      "description": "Pedidos relacionados com faturas, NIF, reembolsos e cobranças."
+    },
+    {
+      "id": "seed-cat-conta",
+      "name": "Conta",
+      "description": "Acesso à conta, palavra-passe, dados pessoais e privacidade."
+    },
+    {
+      "id": "seed-cat-produto",
+      "name": "Produto",
+      "description": "Funcionamento, configuração e dúvidas sobre os artigos comprados."
+    },
+    {
+      "id": "seed-cat-outro",
+      "name": "Outro",
+      "description": "Pedidos que não se enquadram nas restantes categorias."
+    }
+  ],
+  "agents": [
+    {
+      "id": "seed-agent-andreia",
+      "name": "Andreia Sá",
+      "email": "andreia.sa@exemplo.pt",
+      "role": "Coordenadora de Suporte"
+    },
+    {
+      "id": "seed-agent-bruno",
+      "name": "Bruno Pinto",
+      "email": "bruno.pinto@exemplo.pt",
+      "role": "Agente sénior"
+    },
+    {
+      "id": "seed-agent-clara",
+      "name": "Clara Domingues",
+      "email": "clara.domingues@exemplo.pt",
+      "role": "Agente"
+    }
+  ],
+  "responses": [
+    {
+      "id": "seed-resp-confirmacao",
+      "title": "Confirmação de receção",
+      "body": "Cara cliente / Caro cliente,\n\nConfirmo a receção do pedido. Está a ser analisado pela equipa responsável e receberá resposta no prazo máximo de um dia útil.\n\nCom os melhores cumprimentos,\nEquipa de Suporte"
+    },
+    {
+      "id": "seed-resp-pedido-info",
+      "title": "Pedido de informação adicional",
+      "body": "Para analisar o pedido com rigor, agradecemos o envio dos seguintes elementos:\n\n- Número da encomenda ou da fatura.\n- Descrição detalhada do problema verificado.\n- Imagens ou documentos relevantes, se aplicável.\n\nAssim que receba a informação, retomarei a análise."
+    },
+    {
+      "id": "seed-resp-resolvido-positivo",
+      "title": "Resolução positiva",
+      "body": "Tenho o agrado de informar que o pedido foi resolvido. Em caso de nova dúvida, basta responder a esta mensagem ou contactar o número +351 210 000 000.\n\nObrigada pela paciência."
+    },
+    {
+      "id": "seed-resp-reembolso",
+      "title": "Confirmação de reembolso",
+      "body": "Foi processado o reembolso correspondente. O valor é creditado no método de pagamento original num prazo de 5 dias úteis.\n\nA referência interna ficou registada no histórico da conta."
+    },
+    {
+      "id": "seed-resp-encerramento",
+      "title": "Encerramento por inatividade",
+      "body": "Não recebemos novas informações sobre o pedido nos últimos 7 dias. Por esse motivo, vamos encerrar este ticket. Se persistir alguma questão, basta responder a esta mensagem e o pedido será reaberto automaticamente."
+    },
+    {
+      "id": "seed-resp-faturacao",
+      "title": "Encaminhamento para Faturação",
+      "body": "O pedido envolve dados fiscais e foi encaminhado para a equipa de Faturação (faturacao@exemplo.pt). A equipa entrará em contacto nas próximas 4 horas úteis com a confirmação ou pedido de elementos adicionais."
+    }
+  ],
+  "tickets": [
+    {
+      "subject": "Fatura com NIF errado na encomenda 1024",
+      "requesterName": "Maria João Almeida",
+      "requesterEmail": "maria.almeida@exemplo.pt",
+      "body": "Bom dia. Recebi a fatura da encomenda 1024 com o NIF de particular, mas precisava da fatura em nome da empresa. Indico, por favor: Atelier Lusitano, Lda. NIF 509123456, Rua das Flores 12, 4050-345 Porto. Obrigada.",
+      "status": "open",
+      "priority": "normal",
+      "categoryId": "seed-cat-faturacao",
+      "assigneeId": "seed-agent-andreia",
+      "replies": []
+    },
+    {
+      "subject": "Não recebi o código de acesso por SMS",
+      "requesterName": "Hugo Marques",
+      "requesterEmail": "hugo.marques@exemplo.pt",
+      "body": "Caros, tentei entrar na conta hoje de manhã e não me chega o código de verificação por SMS. Já confirmei o número (+351 91 234 5678) e está correcto. Podem rever o envio? Agradeço resposta rápida.",
+      "status": "in_progress",
+      "priority": "high",
+      "categoryId": "seed-cat-conta",
+      "assigneeId": "seed-agent-bruno",
+      "replies": [
+        {
+          "id": "seed-reply-hugo-1",
+          "author": "agent",
+          "body": "Boa tarde. Identificámos um atraso temporário no envio de SMS para o operador indicado. Será reposto até ao final do dia. Em alternativa, posso enviar o código para o correio electrónico registado. Confirma?",
+          "createdAt": "2026-05-19T15:12:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Pedido de devolução fora de prazo",
+      "requesterName": "Sofia Carvalho",
+      "requesterEmail": "sofia.carvalho@exemplo.pt",
+      "body": "Boa tarde. Pretendo devolver uma mala que comprei há cerca de 20 dias. Ainda está dentro do prazo? O número da encomenda é 1187. Caso já não seja possível, agradeço a indicação de alternativas.",
+      "status": "waiting_customer",
+      "priority": "normal",
+      "categoryId": "seed-cat-produto",
+      "assigneeId": "seed-agent-clara",
+      "replies": [
+        {
+          "id": "seed-reply-sofia-1",
+          "author": "agent",
+          "body": "Boa tarde. O prazo de devolução é de 14 dias, pelo que a encomenda 1187 está fora do período aplicável. Em alternativa, podemos emitir um voucher no valor de 80% do artigo, válido por 12 meses. Aguardamos a confirmação para avançar.",
+          "createdAt": "2026-05-18T11:24:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Reembolso ainda não creditado",
+      "requesterName": "Tiago Reis",
+      "requesterEmail": "tiago.reis@exemplo.pt",
+      "body": "Bom dia. Foi-me indicado que o reembolso da encomenda 932 seria processado em 5 dias úteis. Já passaram 8 e o valor ainda não aparece no cartão. Podem confirmar o estado?",
+      "status": "open",
+      "priority": "high",
+      "categoryId": "seed-cat-faturacao",
+      "assigneeId": "seed-agent-andreia",
+      "replies": []
+    },
+    {
+      "subject": "Como configurar a aplicação no telemóvel",
+      "requesterName": "Inês Lopes",
+      "requesterEmail": "ines.lopes@exemplo.pt",
+      "body": "Olá. Acabei de receber a encomenda e a aplicação móvel pede uma chave de emparelhamento. Não encontrei essa chave na embalagem nem na fatura. Podem indicar onde a posso obter?",
+      "status": "in_progress",
+      "priority": "normal",
+      "categoryId": "seed-cat-produto",
+      "assigneeId": "seed-agent-bruno",
+      "replies": [
+        {
+          "id": "seed-reply-ines-1",
+          "author": "agent",
+          "body": "Boa tarde. A chave de emparelhamento encontra-se no autocolante presente na base do dispositivo, com o prefixo PK-. Caso o autocolante esteja danificado, podemos emitir nova chave após validação da fatura.",
+          "createdAt": "2026-05-19T09:42:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Alteração da palavra-passe não funciona",
+      "requesterName": "Rui Bastos",
+      "requesterEmail": "rui.bastos@exemplo.pt",
+      "body": "Caros, tento alterar a palavra-passe há duas horas e o sistema devolve sempre o erro \"sessão expirou\". Já limpei o histórico do navegador e mudei de browser, sem sucesso. Aguardo orientações.",
+      "status": "open",
+      "priority": "urgent",
+      "categoryId": "seed-cat-conta",
+      "assigneeId": "seed-agent-clara",
+      "replies": []
+    },
+    {
+      "subject": "Pedido de fatura em PDF",
+      "requesterName": "Patrícia Ferreira",
+      "requesterEmail": "patricia.ferreira@exemplo.pt",
+      "body": "Bom dia. Solicito a segunda via da fatura da encomenda 875, em formato PDF, para enviar ao departamento financeiro. Obrigada pela atenção.",
+      "status": "resolved",
+      "priority": "low",
+      "categoryId": "seed-cat-faturacao",
+      "assigneeId": "seed-agent-andreia",
+      "replies": [
+        {
+          "id": "seed-reply-patricia-1",
+          "author": "agent",
+          "body": "Bom dia. A segunda via da fatura da encomenda 875 segue em anexo, em formato PDF, conforme solicitado. Permaneço ao dispor para qualquer outra questão.",
+          "createdAt": "2026-05-15T10:08:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Mudança de morada de entrega",
+      "requesterName": "Joana Vieira",
+      "requesterEmail": "joana.vieira@exemplo.pt",
+      "body": "Caros, gostaria de alterar a morada de entrega da encomenda 1230, que ainda não foi expedida. A nova morada é Rua de Santo António 45, 2.º Dto., 1170-203 Lisboa. Agradeço confirmação assim que possível.",
+      "status": "in_progress",
+      "priority": "high",
+      "categoryId": "seed-cat-outro",
+      "assigneeId": "seed-agent-bruno",
+      "replies": []
+    },
+    {
+      "subject": "Equipamento avariado após uma semana",
+      "requesterName": "Pedro Coelho",
+      "requesterEmail": "pedro.coelho@exemplo.pt",
+      "body": "Bom dia. O equipamento referente à encomenda 1142 deixou de funcionar uma semana após a entrega. Já tentei reiniciar e verificar a ligação eléctrica, sem efeito. Solicito a abertura de assistência técnica ao abrigo da garantia.",
+      "status": "waiting_customer",
+      "priority": "urgent",
+      "categoryId": "seed-cat-produto",
+      "assigneeId": "seed-agent-andreia",
+      "replies": [
+        {
+          "id": "seed-reply-pedro-1",
+          "author": "agent",
+          "body": "Boa tarde. Para abrir a assistência ao abrigo da garantia, agradecemos o envio do número de série (impresso na etiqueta inferior) e de duas fotografias do equipamento. Após a receção, agendaremos a recolha em 48 horas úteis.",
+          "createdAt": "2026-05-17T16:30:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Cancelar a renovação anual",
+      "requesterName": "Madalena Pires",
+      "requesterEmail": "madalena.pires@exemplo.pt",
+      "body": "Bom dia. Pretendo cancelar a renovação anual do plano, agendada para 2 de Junho. Confirmo que mantenho o acesso até essa data. Aguardo confirmação por escrito.",
+      "status": "resolved",
+      "priority": "normal",
+      "categoryId": "seed-cat-conta",
+      "assigneeId": "seed-agent-clara",
+      "replies": [
+        {
+          "id": "seed-reply-madalena-1",
+          "author": "agent",
+          "body": "Bom dia. A renovação automática foi desactivada com sucesso. O acesso ao plano mantém-se até ao dia 2 de Junho. Após essa data, a conta passará para o nível gratuito.",
+          "createdAt": "2026-05-12T09:15:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Encomenda perdida pela transportadora",
+      "requesterName": "Diogo Carvalho",
+      "requesterEmail": "diogo.carvalho@exemplo.pt",
+      "body": "Caros, a encomenda 1205 saiu para entrega há 6 dias e continua sem actualização. A transportadora não responde. Solicito que iniciem a reclamação do extravio e a reposição imediata da encomenda.",
+      "status": "in_progress",
+      "priority": "urgent",
+      "categoryId": "seed-cat-outro",
+      "assigneeId": "seed-agent-andreia",
+      "replies": []
+    },
+    {
+      "subject": "Dúvida sobre garantia internacional",
+      "requesterName": "Beatriz Nunes",
+      "requesterEmail": "beatriz.nunes@exemplo.pt",
+      "body": "Olá. Vou mudar-me para Espanha em Junho e gostaria de saber se a garantia do produto referente à encomenda 1098 é válida nesse país. Aguardo esclarecimento.",
+      "status": "closed",
+      "priority": "low",
+      "categoryId": "seed-cat-produto",
+      "assigneeId": "seed-agent-bruno",
+      "replies": [
+        {
+          "id": "seed-reply-beatriz-1",
+          "author": "agent",
+          "body": "Boa tarde. Confirmo que a garantia se mantém válida em toda a União Europeia. Em Espanha, a assistência é prestada pela parceira IberServe (lisboa@iberserve.es), mediante apresentação da fatura.",
+          "createdAt": "2026-05-09T11:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "subject": "Conta bloqueada após várias tentativas",
+      "requesterName": "Carlos Henrique Vaz",
+      "requesterEmail": "carlos.vaz@exemplo.pt",
+      "body": "Bom dia. A minha conta foi bloqueada após várias tentativas de início de sessão. Não recordo a palavra-passe e o e-mail de recuperação não chega. Solicito o desbloqueio com a maior brevidade.",
+      "status": "open",
+      "priority": "high",
+      "categoryId": "seed-cat-conta",
+      "assigneeId": "seed-agent-clara",
+      "replies": []
+    }
+  ]
+}

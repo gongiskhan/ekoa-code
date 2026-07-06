@@ -1,0 +1,252 @@
+{
+  "categories": [
+    { "key": "papelaria", "name": "Papelaria", "description": "Artigos de escritório e papelaria." },
+    { "key": "ceramica", "name": "Cerâmica", "description": "Peças artesanais em cerâmica portuguesa." },
+    { "key": "textil", "name": "Têxtil", "description": "Tecidos e bordados tradicionais." },
+    { "key": "gourmet", "name": "Gourmet", "description": "Produtos alimentares regionais." }
+  ],
+  "products": [
+    {
+      "sku": "PAP-001",
+      "name": "Caderno A5 capa dura",
+      "category": "papelaria",
+      "price": 12.5,
+      "stock": 48,
+      "description": "Caderno de 192 páginas pautadas, capa em linho cinza-pedra.",
+      "tone": "#0F766E"
+    },
+    {
+      "sku": "PAP-002",
+      "name": "Caneta esferográfica em latão",
+      "category": "papelaria",
+      "price": 28.0,
+      "stock": 22,
+      "description": "Caneta recarregável com acabamento escovado. Inclui recarga azul.",
+      "tone": "#0D9488"
+    },
+    {
+      "sku": "PAP-003",
+      "name": "Agenda anual sem datas",
+      "category": "papelaria",
+      "price": 18.9,
+      "stock": 65,
+      "description": "Agenda flexível, ideal para o trabalho criativo. Marcador em fita.",
+      "tone": "#14B8A6"
+    },
+    {
+      "sku": "CER-001",
+      "name": "Caneca de cerâmica branca",
+      "category": "ceramica",
+      "price": 14.0,
+      "stock": 90,
+      "description": "Caneca artesanal de 350 ml, vidrado mate cor-de-marfim.",
+      "tone": "#475569"
+    },
+    {
+      "sku": "CER-002",
+      "name": "Travessa rústica grande",
+      "category": "ceramica",
+      "price": 36.5,
+      "stock": 17,
+      "description": "Travessa de 32 cm, vidrado azul cobalto, fabricada em Caldas da Rainha.",
+      "tone": "#2563EB"
+    },
+    {
+      "sku": "CER-003",
+      "name": "Conjunto de pires (4 un.)",
+      "category": "ceramica",
+      "price": 24.0,
+      "stock": 31,
+      "description": "Pires assimétricos pintados à mão, cada conjunto é único.",
+      "tone": "#64748B"
+    },
+    {
+      "sku": "TEX-001",
+      "name": "Toalha de linho 50x70",
+      "category": "textil",
+      "price": 22.5,
+      "stock": 40,
+      "description": "Linho 100% natural, lavável a 40 graus, bainha cosida à mão.",
+      "tone": "#D97706"
+    },
+    {
+      "sku": "TEX-002",
+      "name": "Almofada bordada Viana",
+      "category": "textil",
+      "price": 45.0,
+      "stock": 12,
+      "description": "Capa 45x45 cm com bordado regional, enchimento em pena reciclada.",
+      "tone": "#DC2626"
+    },
+    {
+      "sku": "TEX-003",
+      "name": "Manta de lã merino",
+      "category": "textil",
+      "price": 78.0,
+      "stock": 9,
+      "description": "Manta 130x180 cm, lã merino com etiqueta de origem.",
+      "tone": "#16A34A"
+    },
+    {
+      "sku": "GOU-001",
+      "name": "Azeite virgem extra 500 ml",
+      "category": "gourmet",
+      "price": 9.8,
+      "stock": 120,
+      "description": "Lote 2025 do Alentejo, extracção a frio, acidez inferior a 0,3%.",
+      "tone": "#16A34A"
+    },
+    {
+      "sku": "GOU-002",
+      "name": "Compota de figo do Algarve",
+      "category": "gourmet",
+      "price": 6.5,
+      "stock": 80,
+      "description": "Frasco 230 g, açúcar reduzido, ideal com queijos curados.",
+      "tone": "#D97706"
+    },
+    {
+      "sku": "GOU-003",
+      "name": "Caixa de chocolates de Lisboa",
+      "category": "gourmet",
+      "price": 19.5,
+      "stock": 26,
+      "description": "Selecção de 16 bombons artesanais inspirados em bairros lisboetas.",
+      "tone": "#7C3AED"
+    }
+  ],
+  "customers": [
+    {
+      "name": "Joana Carvalho",
+      "email": "joana.carvalho@exemplo.pt",
+      "phone": "+351 912 345 678",
+      "city": "Lisboa",
+      "notes": "Cliente desde 2024. Prefere envio CTT Expresso."
+    },
+    {
+      "name": "Rui Mendes",
+      "email": "rui.mendes@exemplo.pt",
+      "phone": "+351 935 887 102",
+      "city": "Porto",
+      "notes": "Pedidos recorrentes para escritório."
+    },
+    {
+      "name": "Beatriz Lopes",
+      "email": "beatriz.lopes@exemplo.pt",
+      "phone": "+351 967 552 419",
+      "city": "Braga",
+      "notes": "Compra peças de cerâmica em quantidade. Fatura com NIF."
+    },
+    {
+      "name": "Tiago Pinto",
+      "email": "tiago.pinto@exemplo.pt",
+      "phone": "+351 924 003 510",
+      "city": "Coimbra",
+      "notes": "Cliente novo, primeiro pedido confirmado."
+    },
+    {
+      "name": "Inês Cardoso",
+      "email": "ines.cardoso@exemplo.pt",
+      "phone": "+351 916 740 218",
+      "city": "Funchal",
+      "notes": "Envios para a Madeira, considerar prazo adicional."
+    },
+    {
+      "name": "Miguel Soares",
+      "email": "miguel.soares@exemplo.pt",
+      "phone": "+351 933 219 074",
+      "city": "Évora",
+      "notes": "Encomendas para revenda em loja física."
+    }
+  ],
+  "orders": [
+    {
+      "reference": "ENC 2026/0001",
+      "customerName": "Joana Carvalho",
+      "status": "Entregue",
+      "placedAt": "2026-04-18T10:14:00.000Z",
+      "items": [
+        { "sku": "PAP-001", "name": "Caderno A5 capa dura", "quantity": 2, "unitPrice": 12.5 },
+        { "sku": "GOU-001", "name": "Azeite virgem extra 500 ml", "quantity": 1, "unitPrice": 9.8 }
+      ],
+      "shippingCost": 4.5,
+      "total": 39.3,
+      "notes": "Embalagem para oferta solicitada."
+    },
+    {
+      "reference": "ENC 2026/0002",
+      "customerName": "Rui Mendes",
+      "status": "Enviado",
+      "placedAt": "2026-05-02T08:42:00.000Z",
+      "items": [
+        { "sku": "PAP-002", "name": "Caneta esferográfica em latão", "quantity": 6, "unitPrice": 28.0 }
+      ],
+      "shippingCost": 6.0,
+      "total": 174.0,
+      "notes": "Encomenda corporativa, fatura com NIF."
+    },
+    {
+      "reference": "ENC 2026/0003",
+      "customerName": "Beatriz Lopes",
+      "status": "Em preparação",
+      "placedAt": "2026-05-12T16:08:00.000Z",
+      "items": [
+        { "sku": "CER-002", "name": "Travessa rústica grande", "quantity": 1, "unitPrice": 36.5 },
+        { "sku": "CER-003", "name": "Conjunto de pires (4 un.)", "quantity": 2, "unitPrice": 24.0 }
+      ],
+      "shippingCost": 7.5,
+      "total": 92.0,
+      "notes": "Necessário embrulhar com cuidado."
+    },
+    {
+      "reference": "ENC 2026/0004",
+      "customerName": "Tiago Pinto",
+      "status": "Cancelado",
+      "placedAt": "2026-04-30T13:00:00.000Z",
+      "items": [
+        { "sku": "TEX-002", "name": "Almofada bordada Viana", "quantity": 1, "unitPrice": 45.0 }
+      ],
+      "shippingCost": 4.5,
+      "total": 49.5,
+      "notes": "Cancelado a pedido do cliente, sem encargos."
+    },
+    {
+      "reference": "ENC 2026/0005",
+      "customerName": "Inês Cardoso",
+      "status": "Enviado",
+      "placedAt": "2026-05-14T09:25:00.000Z",
+      "items": [
+        { "sku": "TEX-003", "name": "Manta de lã merino", "quantity": 1, "unitPrice": 78.0 },
+        { "sku": "GOU-003", "name": "Caixa de chocolates de Lisboa", "quantity": 2, "unitPrice": 19.5 }
+      ],
+      "shippingCost": 9.0,
+      "total": 126.0,
+      "notes": "Envio para a Madeira via CTT Expresso."
+    },
+    {
+      "reference": "ENC 2026/0006",
+      "customerName": "Miguel Soares",
+      "status": "Em preparação",
+      "placedAt": "2026-05-18T11:53:00.000Z",
+      "items": [
+        { "sku": "CER-001", "name": "Caneca de cerâmica branca", "quantity": 12, "unitPrice": 14.0 },
+        { "sku": "GOU-002", "name": "Compota de figo do Algarve", "quantity": 6, "unitPrice": 6.5 }
+      ],
+      "shippingCost": 12.0,
+      "total": 219.0,
+      "notes": "Revenda. Confirmar disponibilidade antes do envio."
+    },
+    {
+      "reference": "ENC 2026/0007",
+      "customerName": "Joana Carvalho",
+      "status": "Entregue",
+      "placedAt": "2026-05-05T17:10:00.000Z",
+      "items": [
+        { "sku": "PAP-003", "name": "Agenda anual sem datas", "quantity": 1, "unitPrice": 18.9 }
+      ],
+      "shippingCost": 3.5,
+      "total": 22.4,
+      "notes": "Cliente recorrente."
+    }
+  ]
+}

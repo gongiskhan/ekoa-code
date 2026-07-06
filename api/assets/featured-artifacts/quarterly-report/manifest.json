@@ -1,0 +1,9 @@
+{
+  "id": "quarterly-report",
+  "name": "Relatório Trimestral",
+  "description": "Apresentação com resultados trimestrais, métricas-chave e plano para o próximo trimestre.",
+  "extends": "presentation",
+  "outputKind": "presentation_html",
+  "featuredRank": 120,
+  "version": "1.0.0"
+}

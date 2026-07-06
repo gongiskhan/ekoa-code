@@ -1,0 +1,9 @@
+{
+  "id": "legal-portal",
+  "name": "Jurídico · Portal do Cliente",
+  "description": "Portal do cliente sobre a espinha jurídica partilhada: acesso por convite, partilha EXPLÍCITA (invisível por omissão) do estado do processo, documentos e eventos, mensagens de duplo sentido e envio de documentos auditado para o dossiê.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 53,
+  "version": "1.0.0"
+}

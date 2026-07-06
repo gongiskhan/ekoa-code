@@ -1,0 +1,9 @@
+{
+  "id": "legal-kyc",
+  "name": "Jurídico · KYC",
+  "description": "Fichas de identificação e diligência de clientes (Lei n.º 83/2017) - risco determinístico, arquivo de 7 anos e apoio ao RCBE.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 54,
+  "version": "1.0.0"
+}

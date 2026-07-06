@@ -1,0 +1,9 @@
+{
+  "id": "ai-assistant",
+  "name": "Assistente IA",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Assistente conversacional com base de conhecimento e ações automatizadas."
+}

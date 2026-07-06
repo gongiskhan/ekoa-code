@@ -1,0 +1,9 @@
+{
+  "id": "booking-system",
+  "name": "Sistema de Reservas",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Calendário de marcações com gestão de serviços e disponibilidade."
+}

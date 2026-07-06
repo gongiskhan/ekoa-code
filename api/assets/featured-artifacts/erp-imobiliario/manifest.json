@@ -1,0 +1,9 @@
+{
+  "id": "erp-imobiliario",
+  "name": "ERP Imobiliário",
+  "description": "ERP completo para gestão imobiliária e fluxo de caixa: apartamentos, clientes, equipa, lançamentos contabilísticos, dashboard e exportação para Excel.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 35,
+  "version": "1.0.0"
+}

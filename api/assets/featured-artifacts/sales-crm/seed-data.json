@@ -1,0 +1,204 @@
+{
+  "contacts": [
+    {
+      "name": "Maria Santos",
+      "company": "Atlântico Consultores",
+      "role": "Diretora de Operações",
+      "email": "maria.santos@atlanticoconsultores.pt",
+      "phone": "+351 21 234 5678",
+      "city": "Lisboa",
+      "notes": "Interessada em automação de processos. Reunir antes do final do trimestre."
+    },
+    {
+      "name": "João Pereira",
+      "company": "NorteTech Soluções",
+      "role": "CEO",
+      "email": "joao.pereira@nortetech.pt",
+      "phone": "+351 22 345 6789",
+      "city": "Porto",
+      "notes": "Decisor principal. Prefere comunicação por correio electrónico."
+    },
+    {
+      "name": "Inês Carvalho",
+      "company": "Mediterrâneo Logística",
+      "role": "Responsável de Compras",
+      "email": "ines.carvalho@mediterraneo.pt",
+      "phone": "+351 21 987 6543",
+      "city": "Lisboa",
+      "notes": "Avalia propostas em conjunto com a equipa financeira."
+    },
+    {
+      "name": "Rui Lopes",
+      "company": "Algarve Hospitality Group",
+      "role": "Diretor Comercial",
+      "email": "rui.lopes@algarvehg.pt",
+      "phone": "+351 28 901 2345",
+      "city": "Faro",
+      "notes": "Sazonalidade forte. Aproximar contacto antes da época alta."
+    },
+    {
+      "name": "Beatriz Almeida",
+      "company": "Cascais Imobiliária",
+      "role": "Sócia-Gerente",
+      "email": "beatriz.almeida@cascaisimob.pt",
+      "phone": "+351 21 486 7890",
+      "city": "Cascais",
+      "notes": "Procura solução chave-na-mão para gestão de clientes."
+    },
+    {
+      "name": "Pedro Marques",
+      "company": "Beira Industrial",
+      "role": "Gestor de Projecto",
+      "email": "pedro.marques@beiraind.pt",
+      "phone": "+351 27 555 1234",
+      "city": "Viseu",
+      "notes": "Pediu demonstração técnica para a próxima quinzena."
+    },
+    {
+      "name": "Sofia Ribeiro",
+      "company": "Madeira Digital",
+      "role": "Diretora de Marketing",
+      "email": "sofia.ribeiro@madeiradigital.pt",
+      "phone": "+351 29 122 3344",
+      "city": "Funchal",
+      "notes": "Cliente recorrente. Já adquiriu serviços no ano anterior."
+    }
+  ],
+  "deals": [
+    {
+      "title": "Implementação de CRM Corporativo",
+      "company": "Atlântico Consultores",
+      "contactName": "Maria Santos",
+      "value": 24500,
+      "currency": "EUR",
+      "stage": "qualified",
+      "probability": 50,
+      "expectedClose": "2026-07-15",
+      "notes": "Proposta enviada após reunião inicial."
+    },
+    {
+      "title": "Renovação de Licenças Anuais",
+      "company": "Madeira Digital",
+      "contactName": "Sofia Ribeiro",
+      "value": 8900,
+      "currency": "EUR",
+      "stage": "negotiation",
+      "probability": 80,
+      "expectedClose": "2026-06-10",
+      "notes": "Cliente fidelizado. Renovação praticamente confirmada."
+    },
+    {
+      "title": "Módulo de Logística Personalizado",
+      "company": "Mediterrâneo Logística",
+      "contactName": "Inês Carvalho",
+      "value": 42000,
+      "currency": "EUR",
+      "stage": "proposal",
+      "probability": 40,
+      "expectedClose": "2026-08-22",
+      "notes": "A aguardar aprovação do conselho administrativo."
+    },
+    {
+      "title": "Plataforma de Reservas Online",
+      "company": "Algarve Hospitality Group",
+      "contactName": "Rui Lopes",
+      "value": 18500,
+      "currency": "EUR",
+      "stage": "qualified",
+      "probability": 45,
+      "expectedClose": "2026-09-01",
+      "notes": "Calendário a definir consoante época baixa."
+    },
+    {
+      "title": "Portal Imobiliário Multi-Idiomas",
+      "company": "Cascais Imobiliária",
+      "contactName": "Beatriz Almeida",
+      "value": 31200,
+      "currency": "EUR",
+      "stage": "lead",
+      "probability": 20,
+      "expectedClose": "2026-10-15",
+      "notes": "Contacto inicial. Necessário levantamento de requisitos."
+    },
+    {
+      "title": "Auditoria de Processos Industriais",
+      "company": "Beira Industrial",
+      "contactName": "Pedro Marques",
+      "value": 14750,
+      "currency": "EUR",
+      "stage": "proposal",
+      "probability": 60,
+      "expectedClose": "2026-06-30",
+      "notes": "Demonstração técnica agendada."
+    },
+    {
+      "title": "Manutenção e Suporte Premium",
+      "company": "NorteTech Soluções",
+      "contactName": "João Pereira",
+      "value": 12500,
+      "currency": "EUR",
+      "stage": "won",
+      "probability": 100,
+      "expectedClose": "2026-05-05",
+      "notes": "Contrato assinado. Implementação inicia em Junho."
+    }
+  ],
+  "activities": [
+    {
+      "type": "Chamada",
+      "contactName": "Maria Santos",
+      "company": "Atlântico Consultores",
+      "summary": "Apresentação de portefólio e validação de necessidades iniciais.",
+      "occurredAt": "2026-05-18T10:30:00.000Z"
+    },
+    {
+      "type": "E-mail enviado",
+      "contactName": "Inês Carvalho",
+      "company": "Mediterrâneo Logística",
+      "summary": "Proposta comercial detalhada com plano de implementação.",
+      "occurredAt": "2026-05-17T15:45:00.000Z"
+    },
+    {
+      "type": "Reunião",
+      "contactName": "Sofia Ribeiro",
+      "company": "Madeira Digital",
+      "summary": "Revisão anual de contrato e identificação de novas oportunidades.",
+      "occurredAt": "2026-05-16T11:00:00.000Z"
+    },
+    {
+      "type": "Demonstração",
+      "contactName": "Pedro Marques",
+      "company": "Beira Industrial",
+      "summary": "Demonstração técnica realizada com a equipa de operações.",
+      "occurredAt": "2026-05-15T14:00:00.000Z"
+    },
+    {
+      "type": "Chamada",
+      "contactName": "Rui Lopes",
+      "company": "Algarve Hospitality Group",
+      "summary": "Discussão sobre sazonalidade e ajustes na proposta inicial.",
+      "occurredAt": "2026-05-14T09:15:00.000Z"
+    },
+    {
+      "type": "E-mail enviado",
+      "contactName": "Beatriz Almeida",
+      "company": "Cascais Imobiliária",
+      "summary": "Envio de caso de estudo e ficha técnica do produto.",
+      "occurredAt": "2026-05-13T16:20:00.000Z"
+    },
+    {
+      "type": "Reunião",
+      "contactName": "João Pereira",
+      "company": "NorteTech Soluções",
+      "summary": "Assinatura de contrato e definição do cronograma de arranque.",
+      "occurredAt": "2026-05-12T10:00:00.000Z"
+    },
+    {
+      "type": "Chamada",
+      "contactName": "Maria Santos",
+      "company": "Atlântico Consultores",
+      "summary": "Esclarecimento de dúvidas sobre integração com sistemas existentes.",
+      "occurredAt": "2026-05-11T11:45:00.000Z"
+    }
+  ]
+}

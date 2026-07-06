@@ -1,0 +1,9 @@
+{
+  "id": "legal-nucleo",
+  "name": "Jurídico · Núcleo",
+  "description": "Clientes e processos — o núcleo partilhado da edição jurídica.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 40,
+  "version": "1.0.0"
+}

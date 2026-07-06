@@ -1,0 +1,9 @@
+{
+  "id": "legal-cobrancas",
+  "name": "Jurídico · Cobranças",
+  "description": "Cobranças e conta corrente: envelhecimento da dívida por escalões, sequências de lembretes deontológicas e reconciliação automática do pagamento (Ifthenpay/Stripe) na conta corrente do cliente.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 60,
+  "version": "1.0.0"
+}

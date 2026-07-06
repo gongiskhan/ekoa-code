@@ -16,7 +16,17 @@ module.exports = {
   settings: {
     'import/resolver': { typescript: { alwaysTryTypes: true } },
   },
-  ignorePatterns: ['**/dist/**', '**/node_modules/**', '**/*.js', '**/*.cjs', '**/*.mjs', 'web/.next/**'],
+  ignorePatterns: [
+    '**/dist/**',
+    '**/node_modules/**',
+    '**/*.js',
+    '**/*.cjs',
+    '**/*.mjs',
+    'web/.next/**',
+    // Data trees, not platform source: app scaffold templates and the versioned
+    // featured-artifact scaffolds (user-app JSX built by the apps/ pipeline, ch07).
+    'api/assets/**',
+  ],
   overrides: [
     {
       files: ['**/*.ts', '**/*.tsx'],

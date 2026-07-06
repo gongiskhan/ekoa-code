@@ -1,0 +1,9 @@
+{
+  "id": "sales-crm",
+  "name": "CRM de Vendas",
+  "description": "Pipeline de vendas com contactos, oportunidades e seguimento.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 10,
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "legal-pesquisa",
+  "name": "Jurídico · Pesquisa",
+  "description": "Pesquisa jurídica fundamentada em DGSI e DRE, com citações verificáveis (a ligação de cada fonte é confirmada antes de ser mostrada) e um aviso permanente de que é apoio à investigação - o advogado revê sempre as fontes. Quando o índice local está vazio, di-lo com honestidade e permite guardar a pesquisa manualmente no dossiê. Nunca inventa fontes.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 56,
+  "version": "1.0.0"
+}

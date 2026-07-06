@@ -1,0 +1,9 @@
+{
+  "id": "legal-recursos",
+  "name": "Jurídico · Recursos Humanos",
+  "description": "Fichas da equipa, direito a férias determinístico (Código do Trabalho, art. 238.º/239.º) e alocação das pessoas aos processos.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 48,
+  "version": "1.0.0"
+}

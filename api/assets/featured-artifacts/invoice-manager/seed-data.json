@@ -1,0 +1,253 @@
+{
+  "clients": [
+    {
+      "name": "Atlântico Café & Companhia, Lda.",
+      "contactPerson": "Sofia Ribeiro",
+      "email": "financeiro@atlanticocafe.pt",
+      "phone": "+351 213 458 102",
+      "address": "Rua das Janelas Verdes, 18, 1200-690 Lisboa",
+      "nif": "503 998 471",
+      "notes": "Prazo de pagamento acordado: 30 dias."
+    },
+    {
+      "name": "Estúdio Vermelho, Unipessoal Lda.",
+      "contactPerson": "Pedro Aragão",
+      "email": "pedro@estudiovermelho.pt",
+      "phone": "+351 935 002 778",
+      "address": "Praça da Liberdade, 32, 4000-322 Porto",
+      "nif": "514 220 906",
+      "notes": "Pagamento por transferência bancária."
+    },
+    {
+      "name": "Cooperativa Agrícola do Alentejo, CRL",
+      "contactPerson": "Maria do Carmo",
+      "email": "compras@coopalentejo.pt",
+      "phone": "+351 266 740 015",
+      "address": "Estrada Nacional 18, km 4, 7000-208 Évora",
+      "nif": "501 117 332",
+      "notes": "Requer guia de transporte com cada fatura."
+    },
+    {
+      "name": "Hotel Belém Boutique, S.A.",
+      "contactPerson": "André Gameiro",
+      "email": "contabilidade@hotelbelem.pt",
+      "phone": "+351 213 027 980",
+      "address": "Rua de Belém, 47, 1300-085 Lisboa",
+      "nif": "508 432 015",
+      "notes": "Faturação mensal consolidada."
+    },
+    {
+      "name": "Loja Almada Moderna",
+      "contactPerson": "Carla Vieira",
+      "email": "carla@almadamoderna.pt",
+      "phone": "+351 212 559 240",
+      "address": "Avenida D. Nuno Álvares Pereira, 88, 2800-179 Almada",
+      "nif": "506 871 230",
+      "notes": "Cliente novo."
+    },
+    {
+      "name": "Travessa Design Studio",
+      "contactPerson": "Filipa Antunes",
+      "email": "ola@travessadesign.pt",
+      "phone": "+351 962 880 411",
+      "address": "Rua da Rosa, 12, 2.º andar, 1200-385 Lisboa",
+      "nif": "517 044 882",
+      "notes": "Pedido de retenção de IRS na fonte."
+    }
+  ],
+  "invoices": [
+    {
+      "number": "FT 2026/001",
+      "clientName": "Atlântico Café & Companhia, Lda.",
+      "clientNif": "503 998 471",
+      "issuedAt": "2026-02-04",
+      "dueAt": "2026-03-06",
+      "status": "Paga",
+      "currency": "EUR",
+      "items": [
+        { "description": "Consultoria de marca — fase 1", "quantity": 1, "unitPrice": 1850.0 }
+      ],
+      "subtotal": 1850.0,
+      "taxRate": 23,
+      "taxAmount": 425.5,
+      "total": 2275.5,
+      "paidAt": "2026-02-28",
+      "notes": "Pagamento por transferência bancária."
+    },
+    {
+      "number": "FT 2026/002",
+      "clientName": "Estúdio Vermelho, Unipessoal Lda.",
+      "clientNif": "514 220 906",
+      "issuedAt": "2026-02-18",
+      "dueAt": "2026-03-20",
+      "status": "Paga",
+      "currency": "EUR",
+      "items": [
+        { "description": "Design editorial — relatório anual", "quantity": 1, "unitPrice": 1200.0 },
+        { "description": "Revisões adicionais", "quantity": 4, "unitPrice": 85.0 }
+      ],
+      "subtotal": 1540.0,
+      "taxRate": 23,
+      "taxAmount": 354.2,
+      "total": 1894.2,
+      "paidAt": "2026-03-12",
+      "notes": "Recibo verde emitido na sequência da fatura."
+    },
+    {
+      "number": "FT 2026/003",
+      "clientName": "Cooperativa Agrícola do Alentejo, CRL",
+      "clientNif": "501 117 332",
+      "issuedAt": "2026-03-10",
+      "dueAt": "2026-04-09",
+      "status": "Pendente",
+      "currency": "EUR",
+      "items": [
+        { "description": "Workshop de comunicação interna (2 dias)", "quantity": 1, "unitPrice": 2400.0 },
+        { "description": "Materiais impressos para os participantes", "quantity": 25, "unitPrice": 18.0 }
+      ],
+      "subtotal": 2850.0,
+      "taxRate": 23,
+      "taxAmount": 655.5,
+      "total": 3505.5,
+      "notes": "Aguarda emissão da ordem de pagamento."
+    },
+    {
+      "number": "FT 2026/004",
+      "clientName": "Hotel Belém Boutique, S.A.",
+      "clientNif": "508 432 015",
+      "issuedAt": "2026-03-22",
+      "dueAt": "2026-04-21",
+      "status": "Pendente",
+      "currency": "EUR",
+      "items": [
+        { "description": "Sessão fotográfica para campanha de Primavera", "quantity": 1, "unitPrice": 1600.0 },
+        { "description": "Edição e retoque digital", "quantity": 30, "unitPrice": 24.0 }
+      ],
+      "subtotal": 2320.0,
+      "taxRate": 23,
+      "taxAmount": 533.6,
+      "total": 2853.6,
+      "notes": "Inclui licença de utilização por 12 meses."
+    },
+    {
+      "number": "FT 2026/005",
+      "clientName": "Loja Almada Moderna",
+      "clientNif": "506 871 230",
+      "issuedAt": "2026-01-28",
+      "dueAt": "2026-02-27",
+      "status": "Em atraso",
+      "currency": "EUR",
+      "items": [
+        { "description": "Identidade visual completa", "quantity": 1, "unitPrice": 3200.0 }
+      ],
+      "subtotal": 3200.0,
+      "taxRate": 23,
+      "taxAmount": 736.0,
+      "total": 3936.0,
+      "notes": "Segunda nota de cobrança enviada a 12 de Março."
+    },
+    {
+      "number": "FT 2026/006",
+      "clientName": "Travessa Design Studio",
+      "clientNif": "517 044 882",
+      "issuedAt": "2026-04-03",
+      "dueAt": "2026-05-03",
+      "status": "Paga",
+      "currency": "EUR",
+      "items": [
+        { "description": "Mentoria de portefólio (5 sessões)", "quantity": 5, "unitPrice": 120.0 }
+      ],
+      "subtotal": 600.0,
+      "taxRate": 23,
+      "taxAmount": 138.0,
+      "total": 738.0,
+      "paidAt": "2026-04-22",
+      "notes": "IRS retido na fonte de acordo com a tabela em vigor."
+    },
+    {
+      "number": "FT 2026/007",
+      "clientName": "Atlântico Café & Companhia, Lda.",
+      "clientNif": "503 998 471",
+      "issuedAt": "2026-04-15",
+      "dueAt": "2026-05-15",
+      "status": "Pendente",
+      "currency": "EUR",
+      "items": [
+        { "description": "Consultoria de marca — fase 2", "quantity": 1, "unitPrice": 2100.0 },
+        { "description": "Sessão de apresentação com a equipa", "quantity": 1, "unitPrice": 350.0 }
+      ],
+      "subtotal": 2450.0,
+      "taxRate": 23,
+      "taxAmount": 563.5,
+      "total": 3013.5,
+      "notes": "Encadeamento da fatura FT 2026/001."
+    },
+    {
+      "number": "FT 2026/008",
+      "clientName": "Hotel Belém Boutique, S.A.",
+      "clientNif": "508 432 015",
+      "issuedAt": "2026-02-08",
+      "dueAt": "2026-03-10",
+      "status": "Em atraso",
+      "currency": "EUR",
+      "items": [
+        { "description": "Redesenho do menu da pastelaria", "quantity": 1, "unitPrice": 1750.0 }
+      ],
+      "subtotal": 1750.0,
+      "taxRate": 23,
+      "taxAmount": 402.5,
+      "total": 2152.5,
+      "notes": "Aguarda confirmação contabilística."
+    },
+    {
+      "number": "FT 2026/009",
+      "clientName": "Estúdio Vermelho, Unipessoal Lda.",
+      "clientNif": "514 220 906",
+      "issuedAt": "2026-05-02",
+      "dueAt": "2026-06-01",
+      "status": "Pendente",
+      "currency": "EUR",
+      "items": [
+        { "description": "Direcção de arte — campanha Verão", "quantity": 1, "unitPrice": 2800.0 }
+      ],
+      "subtotal": 2800.0,
+      "taxRate": 23,
+      "taxAmount": 644.0,
+      "total": 3444.0,
+      "notes": "Fatura emitida na sequência do briefing de Abril."
+    }
+  ],
+  "payments": [
+    {
+      "invoiceNumber": "FT 2026/001",
+      "receivedAt": "2026-02-28",
+      "amount": 2275.5,
+      "method": "Transferência bancária",
+      "reference": "TRF 20260228-001"
+    },
+    {
+      "invoiceNumber": "FT 2026/002",
+      "receivedAt": "2026-03-12",
+      "amount": 1894.2,
+      "method": "Transferência bancária",
+      "reference": "TRF 20260312-014"
+    },
+    {
+      "invoiceNumber": "FT 2026/006",
+      "receivedAt": "2026-04-22",
+      "amount": 738.0,
+      "method": "MB WAY",
+      "reference": "MBW 20260422-022"
+    }
+  ],
+  "lineItems": [
+    { "code": "CONS-MARCA-1", "description": "Consultoria de marca — fase 1", "unitPrice": 1850.0, "category": "Consultoria" },
+    { "code": "CONS-MARCA-2", "description": "Consultoria de marca — fase 2", "unitPrice": 2100.0, "category": "Consultoria" },
+    { "code": "DES-EDIT", "description": "Design editorial — relatório anual", "unitPrice": 1200.0, "category": "Design" },
+    { "code": "WORK-COM", "description": "Workshop de comunicação interna (2 dias)", "unitPrice": 2400.0, "category": "Formação" },
+    { "code": "FOTO-CAMP", "description": "Sessão fotográfica para campanha", "unitPrice": 1600.0, "category": "Produção" },
+    { "code": "IDENT-VIS", "description": "Identidade visual completa", "unitPrice": 3200.0, "category": "Design" },
+    { "code": "MENT-PORT", "description": "Mentoria de portefólio (por sessão)", "unitPrice": 120.0, "category": "Mentoria" },
+    { "code": "MAT-IMPR", "description": "Material impresso por participante", "unitPrice": 18.0, "category": "Produção" }
+  ]
+}

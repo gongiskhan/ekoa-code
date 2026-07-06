@@ -1,0 +1,9 @@
+{
+  "id": "legal-agenda-reservas",
+  "name": "Jurídico · Reservas (público)",
+  "description": "Página pública de marcação: o cliente escolhe o tipo de sessão, vê os horários livres calculados pelo motor da agenda e reserva — com pagamento (mock) quando exigido. Só expõe horários; nunca dados da equipa.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "shareable": true,
+  "version": "1.0.0"
+}

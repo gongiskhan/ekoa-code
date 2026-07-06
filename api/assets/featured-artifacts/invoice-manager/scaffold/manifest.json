@@ -1,0 +1,9 @@
+{
+  "id": "invoice-manager",
+  "name": "Gestor de Faturas",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Emita faturas, acompanhe pagamentos e gerencie clientes."
+}

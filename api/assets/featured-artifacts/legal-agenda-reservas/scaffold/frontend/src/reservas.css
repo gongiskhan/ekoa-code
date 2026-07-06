@@ -1,0 +1,164 @@
+/*
+ * Estilos PRÓPRIOS da página pública de reservas — STANDALONE.
+ *
+ * O artefacto público NÃO usa a moldura partilhada da suite (Layout/registo):
+ * é a face pública da agenda, não um mosaico do lançador. Traz por isso os seus
+ * próprios estilos, mas mantém a mesma linguagem visual — claro, Inter, cantos
+ * arredondados, tracejados finos, acento azul-marinho da edição jurídica.
+ */
+
+:root {
+  --rz-accent: #1e3a5f;
+  --rz-accent-strong: #16304c;
+  --rz-accent-weak: #eaeff4;
+  --rz-bg: #f6f8fb;
+  --rz-surface: #ffffff;
+  --rz-border: #e2e8f0;
+  --rz-ink: #0f172a;
+  --rz-ink-muted: #475569;
+  --rz-ink-subtle: #64748b;
+  --rz-ok: #0f766e;
+  --rz-ok-weak: #e6f4f1;
+  --rz-warn: #b45309;
+  --rz-warn-weak: #fef6e7;
+  --rz-radius: 0.75rem;
+  --rz-radius-sm: 0.5rem;
+  --rz-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--rz-bg);
+  color: var(--rz-ink);
+  font-family: var(--rz-font);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { min-height: 100vh; }
+
+.rz-shell {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.rz-header { margin-bottom: 1.5rem; }
+.rz-brand {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-weight: 600; color: var(--rz-accent); letter-spacing: -0.01em;
+}
+.rz-brand-mark {
+  width: 1.75rem; height: 1.75rem; border-radius: 0.5rem;
+  background: var(--rz-accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem;
+}
+.rz-title { font-size: 1.5rem; font-weight: 650; margin: 0.75rem 0 0.25rem; letter-spacing: -0.02em; }
+.rz-subtitle { color: var(--rz-ink-muted); margin: 0; }
+
+.rz-card {
+  background: var(--rz-surface);
+  border: 1px solid var(--rz-border);
+  border-radius: var(--rz-radius);
+  padding: 1.25rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.rz-card + .rz-card { margin-top: 1rem; }
+
+.rz-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.rz-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.rz-between { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+
+.rz-eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rz-ink-subtle); font-weight: 600; }
+.rz-muted { color: var(--rz-ink-muted); }
+.rz-subtle { color: var(--rz-ink-subtle); }
+.rz-small { font-size: 0.8125rem; }
+.rz-xs { font-size: 0.75rem; }
+.rz-strong { font-weight: 600; }
+
+/* Cartões de tipo de sessão (quando não há ?tipo). */
+.rz-tipo-card {
+  text-align: left; width: 100%; cursor: pointer;
+  background: var(--rz-surface);
+  border: 1px solid var(--rz-border);
+  border-radius: var(--rz-radius);
+  padding: 1rem 1.125rem;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.rz-tipo-card:hover { border-color: var(--rz-accent); box-shadow: 0 2px 8px rgba(30, 58, 95, 0.08); }
+.rz-tipo-name { font-weight: 600; font-size: 1.0625rem; }
+
+/* Pílulas de data. */
+.rz-dates { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.25rem; }
+.rz-date {
+  flex: 0 0 auto; cursor: pointer;
+  border: 1px solid var(--rz-border); background: var(--rz-surface);
+  border-radius: var(--rz-radius-sm); padding: 0.5rem 0.75rem; min-width: 3.75rem;
+  text-align: center; color: var(--rz-ink); font-family: inherit;
+}
+.rz-date:hover { border-color: var(--rz-accent); }
+.rz-date.is-active { background: var(--rz-accent); border-color: var(--rz-accent); color: #fff; }
+.rz-date-dow { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.85; }
+.rz-date-num { display: block; font-weight: 650; font-size: 1.05rem; }
+
+/* Grelha de horários. */
+.rz-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr)); gap: 0.5rem; }
+.rz-slot {
+  cursor: pointer; border: 1px solid var(--rz-border); background: var(--rz-surface);
+  border-radius: var(--rz-radius-sm); padding: 0.6rem 0.25rem; text-align: center;
+  font-weight: 600; color: var(--rz-accent); font-family: inherit; font-size: 0.95rem;
+}
+.rz-slot:hover { border-color: var(--rz-accent); background: var(--rz-accent-weak); }
+.rz-slot.is-active { background: var(--rz-accent); border-color: var(--rz-accent); color: #fff; }
+
+/* Campos. */
+.rz-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.rz-label { font-size: 0.8125rem; font-weight: 600; color: var(--rz-ink-muted); }
+.rz-input {
+  width: 100%; font: inherit; color: var(--rz-ink);
+  border: 1px solid var(--rz-border); border-radius: var(--rz-radius-sm);
+  padding: 0.55rem 0.7rem; background: var(--rz-surface);
+}
+.rz-input:focus { outline: 2px solid var(--rz-accent-weak); border-color: var(--rz-accent); }
+
+/* Botões. */
+.rz-btn {
+  cursor: pointer; font: inherit; font-weight: 600;
+  border-radius: var(--rz-radius-sm); padding: 0.65rem 1.1rem; border: 1px solid transparent;
+}
+.rz-btn-primary { background: var(--rz-accent); color: #fff; }
+.rz-btn-primary:hover { background: var(--rz-accent-strong); }
+.rz-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.rz-btn-ghost { background: transparent; color: var(--rz-accent); border-color: var(--rz-border); }
+.rz-btn-ghost:hover { background: var(--rz-accent-weak); }
+
+/* Distintivos. */
+.rz-badge {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.75rem; font-weight: 600;
+  background: var(--rz-accent-weak); color: var(--rz-accent);
+}
+.rz-badge-ok { background: var(--rz-ok-weak); color: var(--rz-ok); }
+.rz-badge-warn { background: var(--rz-warn-weak); color: var(--rz-warn); }
+
+/* Painel de pagamento (mock). */
+.rz-pay { border: 1px dashed var(--rz-border); border-radius: var(--rz-radius); padding: 1rem; background: #fbfdff; }
+.rz-pay-method { border: 1px solid var(--rz-border); border-radius: var(--rz-radius-sm); padding: 0.85rem 1rem; }
+.rz-pay-method + .rz-pay-method { margin-top: 0.65rem; }
+.rz-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; letter-spacing: 0.02em; }
+
+.rz-result { border-left: 3px solid var(--rz-ok); background: var(--rz-ok-weak); border-radius: var(--rz-radius-sm); padding: 1rem 1.125rem; }
+
+.rz-note { font-size: 0.75rem; color: var(--rz-ink-subtle); }
+
+.rz-empty { text-align: center; color: var(--rz-ink-subtle); padding: 1.5rem; }
+
+.rz-back {
+  background: none; border: none; cursor: pointer; color: var(--rz-accent);
+  font: inherit; padding: 0; margin-bottom: 0.75rem; display: inline-flex; align-items: center; gap: 0.35rem;
+}
+.rz-back:hover { text-decoration: underline; }

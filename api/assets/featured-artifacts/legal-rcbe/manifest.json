@@ -1,0 +1,9 @@
+{
+  "id": "legal-rcbe",
+  "name": "Jurídico · Beneficiário Efetivo",
+  "description": "Obrigações RCBE das entidades clientes: beneficiários efetivos partilhados com o KYC, calendário de obrigações (inicial, atualização, confirmação anual), declaração pré-preenchida e submissão assistida no Portal da Justiça com proveniência registada.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 65,
+  "version": "1.0.0"
+}

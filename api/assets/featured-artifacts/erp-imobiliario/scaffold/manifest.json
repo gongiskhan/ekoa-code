@@ -1,0 +1,9 @@
+{
+  "id": "erp-imobiliario",
+  "name": "ERP Imobiliário",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "ERP completo para gestão imobiliária e fluxo de caixa: apartamentos, clientes, equipa, lançamentos contabilísticos, dashboard e exportação para Excel."
+}

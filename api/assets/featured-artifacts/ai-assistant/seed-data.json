@@ -1,0 +1,123 @@
+{
+  "conversations": [
+    {
+      "id": "seed-conv-devolucoes",
+      "title": "Política de devoluções",
+      "summary": "Esclarecimento sobre o prazo e o procedimento para devolver uma encomenda recente."
+    },
+    {
+      "id": "seed-conv-horarios",
+      "title": "Horário de atendimento ao fim de semana",
+      "summary": "Confirmação dos horários do atendimento telefónico e presencial nos sábados e domingos."
+    },
+    {
+      "id": "seed-conv-fatura",
+      "title": "Pedido de fatura em nome de empresa",
+      "summary": "Encaminhamento do pedido para a equipa de Faturação com indicação dos elementos necessários."
+    }
+  ],
+  "messages": [
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "user",
+      "body": "Bom dia. Comprei umas botas há quatro dias e gostaria de saber qual é o prazo para devolver. O número da encomenda é 1024."
+    },
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "assistant",
+      "body": "Encontrei a informação relevante no documento \"Política de devoluções\":\n\nO prazo para devolução de artigos não personalizados é de 14 dias após a recepção. A devolução deve ser efectuada com o artigo na embalagem original, acompanhado da fatura. O reembolso é processado no prazo de 5 dias úteis para o método de pagamento original.\n\nA encomenda 1024 está dentro do prazo. Deseja que prepare a etiqueta de devolução?"
+    },
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "user",
+      "body": "Sim, por favor. E qual o custo da recolha?"
+    },
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "assistant",
+      "body": "Para encomendas com valor acima de 50 euros, a recolha é gratuita. A encomenda 1024 reúne essa condição, pelo que não terá qualquer custo associado. A etiqueta será enviada para o endereço de correio electrónico registado nos próximos minutos."
+    },
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "user",
+      "body": "Obrigado pelo esclarecimento."
+    },
+    {
+      "conversationId": "seed-conv-devolucoes",
+      "role": "assistant",
+      "body": "Permaneço ao dispor para qualquer outra questão."
+    },
+    {
+      "conversationId": "seed-conv-horarios",
+      "role": "user",
+      "body": "Boa tarde. Podia indicar-me o horário de atendimento durante o fim de semana?"
+    },
+    {
+      "conversationId": "seed-conv-horarios",
+      "role": "assistant",
+      "body": "De acordo com o documento \"Horário de atendimento\":\n\n- Sábado: das 10h00 às 18h00 (atendimento telefónico e presencial).\n- Domingo: das 11h00 às 17h00 (apenas atendimento telefónico e chat).\n\nEm feriados nacionais, o atendimento segue o horário de domingo."
+    },
+    {
+      "conversationId": "seed-conv-horarios",
+      "role": "user",
+      "body": "E na loja de Aveiro?"
+    },
+    {
+      "conversationId": "seed-conv-horarios",
+      "role": "assistant",
+      "body": "A loja de Aveiro mantém o horário-padrão aos sábados (10h00-18h00), mas encerra ao domingo. Para confirmação no próprio dia, recomendo o contacto telefónico indicado no documento \"Contactos\"."
+    },
+    {
+      "conversationId": "seed-conv-fatura",
+      "role": "user",
+      "body": "Necessito de uma fatura em nome de empresa para a encomenda 982."
+    },
+    {
+      "conversationId": "seed-conv-fatura",
+      "role": "assistant",
+      "body": "Para emitir fatura em nome da empresa, indique, por favor, o nome fiscal, o NIF e a morada de faturação. A alteração é possível até cinco dias úteis após a entrega, conforme descrito no documento \"Faturação\"."
+    },
+    {
+      "conversationId": "seed-conv-fatura",
+      "role": "user",
+      "body": "Empresa: Atelier Lusitano, Lda. NIF: 509123456. Morada: Rua das Flores 12, 4050-345 Porto."
+    },
+    {
+      "conversationId": "seed-conv-fatura",
+      "role": "assistant",
+      "body": "Os dados foram registados. A fatura corrigida será emitida em nome da Atelier Lusitano, Lda., e enviada por correio electrónico no prazo máximo de dois dias úteis. Se preferir, posso enviar também a original em PDF para arquivo."
+    }
+  ],
+  "documents": [
+    {
+      "title": "Política de devoluções",
+      "body": "O prazo para devolução de artigos não personalizados é de 14 dias após a recepção. A devolução deve ser efectuada com o artigo na embalagem original, acompanhado da fatura.\n\nO reembolso é processado no prazo de 5 dias úteis para o método de pagamento original. Para encomendas com valor acima de 50 euros, a recolha é gratuita e a etiqueta é enviada por correio electrónico após confirmação do pedido."
+    },
+    {
+      "title": "Horário de atendimento",
+      "body": "Atendimento telefónico:\n- Segunda a sexta: 09h00 às 19h00\n- Sábado: 10h00 às 18h00\n- Domingo: 11h00 às 17h00 (apenas telefone e chat)\n\nLojas físicas:\n- Lisboa Baixa: segunda a sábado, 10h00 às 20h00; domingo, 11h00 às 18h00\n- Porto Boavista: segunda a sábado, 10h00 às 20h00; domingo, 11h00 às 18h00\n- Aveiro Centro: segunda a sábado, 10h00 às 18h00; encerrada ao domingo\n\nEm feriados nacionais, o atendimento segue o horário de domingo."
+    },
+    {
+      "title": "Contactos",
+      "body": "Atendimento geral: +351 210 000 000\nApoio a clientes: apoio@exemplo.pt\nFaturação: faturacao@exemplo.pt\n\nMorada da sede:\nRua Garrett, 50\n1200-204 Lisboa\nPortugal\n\nO tempo médio de resposta por correio electrónico é de 4 horas em dias úteis."
+    },
+    {
+      "title": "Faturação",
+      "body": "A alteração da fatura para nome de empresa é possível até 5 dias úteis após a entrega. É necessário indicar o nome fiscal, o NIF e a morada de faturação.\n\nReembolsos: o valor é creditado no método de pagamento original em até 5 dias úteis. Caso opte por crédito interno, a transferência é imediata.\n\nA segunda via de fatura pode ser pedida em qualquer momento por correio electrónico para faturacao@exemplo.pt, indicando o número da encomenda."
+    },
+    {
+      "title": "Garantia e assistência",
+      "body": "Todos os artigos têm garantia legal de 2 anos a partir da data de entrega, conforme a legislação portuguesa.\n\nDurante o primeiro ano, a reparação é gratuita ao domicílio (Portugal continental) para artigos com valor acima de 100 euros.\n\nNo segundo ano, a reparação é gratuita, mas implica a entrega num dos centros de assistência. Para pedir uma intervenção, é necessária a fatura e uma breve descrição da avaria."
+    }
+  ],
+  "instructions": [
+    {
+      "name": "Atendimento formal PT-PT",
+      "body": "Responda sempre em português europeu (PT-PT). Trate o interlocutor com a forma de cortesia, na terceira pessoa. Evite \"você\" ou registo informal.\n\nMantenha as respostas concisas, com um máximo de quatro parágrafos. Quando referir um valor monetário, utilize o símbolo do euro (€) e a vírgula como separador decimal."
+    },
+    {
+      "name": "Encaminhamento por área",
+      "body": "Quando o pedido envolver faturação, encaminhe para faturacao@exemplo.pt. Para questões técnicas, encaminhe para apoio@exemplo.pt. Para reclamações formais, indique o livro de reclamações electrónico e a referência da encomenda.\n\nNão prometa prazos que não constem dos documentos da base de conhecimento."
+    }
+  ]
+}

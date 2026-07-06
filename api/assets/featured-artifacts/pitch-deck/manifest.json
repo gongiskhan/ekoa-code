@@ -1,0 +1,9 @@
+{
+  "id": "pitch-deck",
+  "name": "Pitch Deck",
+  "description": "Apresentação de 10 a 12 slides para apresentar uma ideia a investidores.",
+  "extends": "presentation",
+  "outputKind": "presentation_html",
+  "featuredRank": 110,
+  "version": "1.0.0"
+}
