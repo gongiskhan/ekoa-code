@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, isAbsolute, resolve } from 'node:path';
 import { loadConfig } from '../config.js';
 import { getSharedBrowser } from './browser-pool.js';
@@ -44,7 +45,7 @@ const RENDER_SETTLE_MS = 800;
  * which also keeps it overridable in tests. Default `./data` per the slice brief.
  */
 function dataDir(): string {
-  const raw = process.env.EKOA_DATA_DIR || './data';
+  const raw = process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data');
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 

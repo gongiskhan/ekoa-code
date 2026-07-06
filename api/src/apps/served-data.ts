@@ -65,9 +65,11 @@ export function servedDataRouter(deps: { now: () => number; genId: () => string 
     next();
   };
 
-  /** Charset-check the header, resolve slug->canonical app, gate on the owner's
-   *  activation. Writes the error response and returns null on refusal. */
-  async function appFor(req: Request, res: Response): Promise<ResolvedApp | null> {
+  /** Validate the X-Ekoa-App-Id header (charset + not the reserved prefix). Writes
+   *  the 400 and returns null on refusal. Byte-compat: the OLD per-app plane did NOT
+   *  require the app to exist - it keyed data on the (charset-checked, non-reserved)
+   *  header value directly, so featured apps, dev-serve apps, and any app id all work. */
+  function headerFor(req: Request, res: Response): string | null {
     const header = req.header('x-ekoa-app-id');
     if (
       typeof header !== 'string' ||
@@ -77,36 +79,47 @@ export function servedDataRouter(deps: { now: () => number; genId: () => string 
       res.status(400).json({ error: 'Missing or invalid X-Ekoa-App-Id header' });
       return null;
     }
+    return header;
+  }
+
+  /** Amendment 2 second admission plane: when an ARTIFACT backs the app, its owner's
+   *  activation gates service (fail-closed CONV-2). Apps with no artifact owner (dev-
+   *  serve, or a raw/unregistered id on the key-value per-app plane) have no subject,
+   *  so the gate is skipped - carried old-plane behavior. Returns true to proceed. */
+  function admitOwner(app: ResolvedApp | null, res: Response): boolean {
+    if (!app || !app.artifactBacked) return true;
+    const activation = getActivation(app.ownerUserId);
+    if (!activation || activation.active === false) {
+      res.status(403).json({ error: { code: 'ACCOUNT_DISABLED', message: 'A sua conta está bloqueada. Contacte o suporte.' } });
+      return false;
+    }
+    if (activation.billingLocked) {
+      res.status(402).json({ error: { code: 'BILLING_LOCKED', message: 'A sua conta tem um problema de faturação. Contacte o suporte.' } });
+      return false;
+    }
+    return true;
+  }
+
+  async function scopeFor(req: Request, res: Response, shared: boolean) {
+    const header = headerFor(req, res);
+    if (!header) return null;
+    // Best-effort resolve: the per-app plane does NOT require existence (key-value,
+    // carried), but a resolved artifact still gates on its owner's activation.
     const app = await resolveApp(header);
+    if (!admitOwner(app, res)) return null;
+
+    if (!shared) {
+      // Per-app scope: a resolved app gives its canonical id (so slug and id hit the
+      // same data - edits never orphan it); an unresolved (dev/raw) id keys on itself.
+      // Existence is NOT required (key-value plane, carried).
+      return appScope(app ? app.appId : header);
+    }
+
+    // Shared namespace REQUIRES a resolved owner - guards carried verbatim.
     if (!app) {
       res.status(404).json({ error: 'Not found' });
       return null;
     }
-    // Second admission plane (ch03 §3.2/§3.9, Amendment 2): the artifact owner's
-    // activation gates service. Fail CLOSED on a missing record. CONV-2 envelope
-    // here by design - the one sanctioned non-byte-compat response on this plane.
-    const activation = getActivation(app.ownerUserId);
-    if (!activation || activation.active === false) {
-      res.status(403).json({
-        error: { code: 'ACCOUNT_DISABLED', message: 'A sua conta está bloqueada. Contacte o suporte.' },
-      });
-      return null;
-    }
-    if (activation.billingLocked) {
-      res.status(402).json({
-        error: { code: 'BILLING_LOCKED', message: 'A sua conta tem um problema de faturação. Contacte o suporte.' },
-      });
-      return null;
-    }
-    return app;
-  }
-
-  async function scopeFor(req: Request, res: Response, shared: boolean) {
-    const app = await appFor(req, res);
-    if (!app) return null;
-    if (!shared) return appScope(app.appId);
-
-    // Shared namespace guards, carried verbatim from the old plane.
     if (originIsForeign(req.headers.origin as string | undefined, req.headers.host)) {
       res.status(403).json({ error: 'cross-origin shared-data access denied' });
       return null;

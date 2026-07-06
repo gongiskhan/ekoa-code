@@ -63,8 +63,8 @@ function isBlockedIpv6(addr: string): boolean {
   }
   const mappedHex = /::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
   if (mappedHex) {
+    // Only the high 16 bits (the first two IPv4 octets) decide every blocked class.
     const hi = parseInt(mappedHex[1] as string, 16);
-    const lo = parseInt(mappedHex[2] as string, 16);
     return isBlockedIpv4Octets((hi >> 8) & 255, hi & 255) || ((hi >> 8) & 255) === 127;
   }
   return false;

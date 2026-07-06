@@ -39,6 +39,17 @@ import { appBuilder } from './apps/builder.js';
 import { loadSlugIndex } from './apps/slug-index.js';
 import { seedFeaturedArtifacts } from './apps/featured-seeder.js';
 import { buildAndRegisterFeaturedArtifacts } from './apps/featured-builder.js';
+import { resolveApp } from './apps/registry.js';
+import { appFilesRouter } from './apps/app-files.js';
+import { buildLinkRouter } from './apps/build-link.js';
+import { appSsoRouter } from './integrations/app-sso.js';
+import { m365ProxyRouter } from './integrations/m365-proxy.js';
+import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
+import { adobeSignRouter } from './integrations/adobe-sign.js';
+import type { ResolveAppScope } from './integrations/app-scope.js';
+import { legalRouter } from './legal/router.js';
+import { designTokensHandler } from './services/design-tokens.js';
+import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
 import { artifactsRouter } from './routes/artifacts.js';
 
@@ -57,6 +68,44 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // Webhook ingress mounts FIRST with its own raw-body parser, BELOW/BEFORE the JSON parser,
   // so the HMAC verifier sees unmodified bytes (ch09 invariant 9 step 6).
   app.use('/hooks', hooksRouter(deps));
+
+  // Injected app-scope seam (ch02 §2.7): integrations/ never imports apps/, so the
+  // composition root builds the header->canonical-app resolver from apps/ internals.
+  // Byte-compat: the served-app planes are key-value by app id (the old plane never
+  // required the app to exist), so a charset-valid id ALWAYS resolves to a scope; an
+  // artifact/registry hit fills the owner + served facts, an unregistered dev id gets
+  // an empty owner (its owner-activation admission then has no subject - see
+  // checkOwnerActivation). The Q-10 workspace m365 proxy gates on `isServed` +
+  // `m365Proxy` separately, so an unregistered id can never reach the workspace token.
+  const APP_ID_CHARSET = /^[a-zA-Z0-9._-]{1,100}$/;
+  const resolveAppScope: ResolveAppScope = async (idOrSlug) => {
+    if (!APP_ID_CHARSET.test(idOrSlug) || idOrSlug.startsWith('usr.')) return null;
+    const appRow = await resolveApp(idOrSlug);
+    const appId = appRow?.appId ?? idOrSlug;
+    const reg = appRegistry.getApp(appId);
+    return {
+      appId,
+      ownerUserId: appRow?.artifactBacked ? appRow.ownerUserId : '',
+      isServed: !!reg,
+      m365Proxy: (reg?.manifest as { m365Proxy?: boolean } | null)?.m365Proxy === true,
+    };
+  };
+  // Workspace-credential seams (ch06/G8 territory): until the platform-integrations
+  // credential store lands, the workspace planes surface the honest not-connected state.
+  const workspaceNotConnected = (what: string) => async (): Promise<never> => {
+    throw Object.assign(new Error(`${what} is not connected`), { code: 'not_connected' });
+  };
+
+  // Raw-body served-app planes mount BEFORE the global JSON parser: their proxied/
+  // uploaded bytes must arrive unconsumed (each carries its own per-route parsers).
+  app.use('/api/m365', m365ProxyRouter({ resolveAppScope, getWorkspaceGraphToken: workspaceNotConnected('Microsoft workspace integration'), verifyToken }));
+  app.use('/api/app-cloud-files', appCloudFilesRouter({
+    resolveAppScope,
+    getStatus: async () => ({ google: { connected: false, needsReauth: false }, microsoft: { connected: false, needsReauth: false } }),
+    getAccessToken: workspaceNotConnected('Workspace cloud storage'),
+  }));
+  app.use('/api/app-files', appFilesRouter());
+  app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 
   app.use(express.json({ limit: '1mb' }));
 
@@ -88,9 +137,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G5 — push infrastructure + triggers.
   app.use('/api/v1/triggers', triggersRouter(deps));
   app.use('/api/v1/notifications', notificationsRouter());
-  // G6 — artifacts (platform) + the byte-compatible served-app data plane (outside /api/v1).
+  // G6 — artifacts (platform) + the byte-compatible served-app plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
+  app.use('/api/v1/company-space', companySpaceRouter(deps));
   app.use('/api', servedDataRouter(deps));
+  // Legal vertical services + e-signature (full paths carried inside the routers).
+  app.use('/', legalRouter({ resolveApp: resolveAppScope }));
+  app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
+  app.get('/api/design-tokens.css', designTokensHandler());
+  // Build-share links (ch07 §7.7): fork-per-click.
+  app.use('/build', buildLinkRouter({ ...deps, verifyToken }));
   // Serving pipeline (ch07 §7.5-7.7): /apps/:idOrSlug/* + demo-bridge + demos + app-health.
   // The owner-bypass token verifier is injected here (apps/ never imports auth/, ch02 §2.7).
   app.use('/', servingRouter({ verifyToken }));

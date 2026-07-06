@@ -146,7 +146,12 @@ describe('served-app data plane (ch03 §3.9) - the old wire envelope, byte-compa
     expect(badCol.status).toBe(400);
     expect(await badCol.json()).toEqual({ error: 'Invalid collection name' });
 
-    expect((await appApi('/api/app-data/clientes', 'nope')).status).toBe(404);
+    // Byte-compat: the PER-APP plane is key-value - an unknown-but-valid id is NOT
+    // rejected (the old plane never required the app to exist; featured/dev/any id
+    // work). It keys on itself and reads back empty.
+    const unknown = await appApi('/api/app-data/clientes', 'nope');
+    expect(unknown.status).toBe(200);
+    expect(((await unknown.json()) as { data: unknown[] }).data).toHaveLength(0);
   });
 
   it('app A data is isolated from app B (scoping)', async () => {

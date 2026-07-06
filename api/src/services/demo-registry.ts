@@ -16,6 +16,7 @@
  * -configurable via `EKOA_DEMOS_DIR`, defaulting to `<dataDir>/demos`.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, isAbsolute, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -199,7 +200,7 @@ export function validateDemoSpec(raw: unknown): DemoValidationResult {
 // ---- loading ---------------------------------------------------------------
 
 function dataDir(): string {
-  const raw = process.env.EKOA_DATA_DIR || './data';
+  const raw = process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data');
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 
