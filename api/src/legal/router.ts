@@ -162,14 +162,17 @@ export function legalRouter(deps: LegalRouterDeps): Router {
       const provider = await getSttProvider(engine);
       const result = await provider.transcribe(Buffer.alloc(0), { language: 'pt-PT', diarize: true, consentCloud });
 
-      // Write progress/segments back to the owner spine row (best-effort).
+      // Write progress/segments back to the owner spine row (best-effort). Byte-compat
+      // with the old endpoint (cortex server.ts:2370): the row's `segmentos` field is
+      // the ARRAY (the served app reads row.segmentos to render getByTestId('segmentos'));
+      // the RESPONSE `segmentos` is the count. `transcritoEm` carried.
       await deps.transcricao
         .updateRow(app, 'transcricoes', transcricaoId, {
           estado: 'transcrito',
           engine: result.engine,
           durationSec: result.durationSec,
-          segmentos: result.segments.length,
-          segments: result.segments,
+          segmentos: result.segments,
+          transcritoEm: new Date(now()).toISOString(),
         })
         .catch(() => {});
 

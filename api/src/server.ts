@@ -14,6 +14,7 @@ import express, { type Express, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
 import { connectMongo } from './data/mongo.js';
 import { users } from './data/stores.js';
+import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
@@ -142,7 +143,26 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/company-space', companySpaceRouter(deps));
   app.use('/api', servedDataRouter(deps));
   // Legal vertical services + e-signature (full paths carried inside the routers).
-  app.use('/', legalRouter({ resolveApp: resolveAppScope }));
+  // The owner-spine seams read/write the app owner's SHARED collections (usr.<owner>)
+  // through the collections engine - the same spine the app itself drives via
+  // window.__ekoa.shared. legal/ may import data/, but the SCOPE derivation lives at
+  // the composition root so the resolver stays the one injected seam.
+  const legalEngine = new CollectionsEngine(deps);
+  const spineScope = (a: { appId: string; ownerUserId: string }) => sharedScope(a.appId, a.ownerUserId);
+  app.use('/', legalRouter({
+    resolveApp: resolveAppScope,
+    transcricao: {
+      getRow: (a, coll, id) => legalEngine.get(spineScope(a), coll, id),
+      updateRow: async (a, coll, id, patch) => { await legalEngine.upsert(spineScope(a), coll, id, patch); },
+    },
+    calculos: {
+      getOverlay: (a) => legalEngine.list(spineScope(a), 'tabelas_taxas_overlay').catch(() => []),
+      alarmeStore: {
+        list: (scope, coll) => legalEngine.list({ scopeKey: scope, appId: scope }, coll),
+        create: (scope, coll, data) => legalEngine.create({ scopeKey: scope, appId: scope }, coll, data),
+      },
+    },
+  }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
   app.get('/api/design-tokens.css', designTokensHandler());
   // Build-share links (ch07 §7.7): fork-per-click.
