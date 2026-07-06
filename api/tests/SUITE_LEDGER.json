@@ -154,15 +154,18 @@
       },
       {
         "name": "ifthenpay",
-        "targetGate": "G4"
+        "targetGate": "G8",
+        "note": "was G4; G4 passed partial-domain (RUN_LOG G4) without the action-runner/platform-caller machinery this driver's execute step needs, and the driver still speaks the retired action API (FIXED-2) — retargeted to G8 (integration-execution) at the 2026-07-06 resume; REST adaptation owed there. See RUN_LOG DEVIATION."
       },
       {
         "name": "invoicexpress",
-        "targetGate": "G4"
+        "targetGate": "G8",
+        "note": "was G4; same as ifthenpay — rides the G8 integration-execution machinery; REST adaptation owed there. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "pipedream",
-        "targetGate": "G4"
+        "targetGate": "G8",
+        "note": "was G4; the Pipedream REST layer (ch03 §3.8.16) did not land in the G4 partial-domain pass — module + adapted driver owed at G8. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "integration-automation",

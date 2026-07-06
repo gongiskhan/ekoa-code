@@ -101,6 +101,32 @@ function ledgerArtifacts(ledger) {
   return out;
 }
 
+/** The dev-server base the node drivers target (committed `backend.port` file, else 4111). */
+function driverServerBase() {
+  try { return `http://127.0.0.1:${readFileSync(join(ROOT, 'backend.port'), 'utf8').trim()}`; }
+  catch { return 'http://127.0.0.1:4111'; }
+}
+
+/**
+ * A DUE driver whose server is unreachable must FAIL the run, never skip-green. The ported
+ * drivers exit 0 with a "SKIP: cortex not reachable" note when /health is down — a design
+ * for ad-hoc local runs. Under the ledger that would count a due artifact green without
+ * executing a single assertion: exactly the silent false-green §14.2.5 exists to prevent
+ * (and how the unadapted G4 drivers rode green through two gates — RUN_LOG 2026-07-06
+ * resume DEVIATION). So the runner preflights /health itself and goes red, loudly.
+ */
+async function serverReachable(base) {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 3000);
+    const r = await fetch(`${base}/health`, { signal: ctl.signal });
+    clearTimeout(t);
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Recursively list files under a dir matching a predicate (relative paths). */
 function listFiles(dir, pred, base = dir, acc = []) {
   if (!existsSync(dir)) return acc;
@@ -112,7 +138,7 @@ function listFiles(dir, pred, base = dir, acc = []) {
   return acc;
 }
 
-function main() {
+async function main() {
   const ledger = loadLedger();
   const { gate, run } = parseArgs(ledger);
   const currentIdx = gateIndex(gate);
@@ -189,12 +215,21 @@ function main() {
           failed = true;
         }
       }
-      for (const d of dueDrivers) {
-        try {
-          execSync(`node ${d.file}`, { cwd: ROOT, stdio: 'inherit' });
-        } catch {
-          log(`[FAIL] due driver red at ${gate}: ${d.name}`);
+      if (dueDrivers.length > 0) {
+        const base = driverServerBase();
+        if (!(await serverReachable(base))) {
+          log(`[FAIL] ${dueDrivers.length} due driver(s) require a live dev API at ${base} — start it (MONGODB_URI=... npm run dev --workspace api) and re-run. An unreachable-server skip is NOT green.`);
+          for (const d of dueDrivers) log(`  due (server unreachable) — driver ${d.name} @ ${d.targetGate}`);
           failed = true;
+        } else {
+          for (const d of dueDrivers) {
+            try {
+              execSync(`node ${d.file}`, { cwd: ROOT, stdio: 'inherit' });
+            } catch {
+              log(`[FAIL] due driver red at ${gate}: ${d.name}`);
+              failed = true;
+            }
+          }
         }
       }
       // Due frontend unit files run via the web workspace vitest (they become runnable at G9,
@@ -219,4 +254,4 @@ function main() {
   log('[suite-ledger] OK — census matches, every non-due artifact ledger-skipped, ratchet holds');
 }
 
-main();
+await main();
