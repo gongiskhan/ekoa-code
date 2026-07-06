@@ -21,6 +21,15 @@
         "status": "skipped"
       },
       "at": "2026-07-06T18:00:00Z"
+    },
+    "phase-0": {
+      "status": "passed",
+      "gate": "G0",
+      "video": {
+        "status": "verified",
+        "kind": "asciinema"
+      },
+      "at": "2026-07-06T19:15:00Z"
     }
   },
   "globalGate": {

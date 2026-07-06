@@ -1,0 +1,17 @@
+{
+  "slice": "phase-0",
+  "title": "G0 Scaffold, CI, shared contract",
+  "status": "passed",
+  "gate": "G0",
+  "greenCondition": {"met": true, "evidence": "ci:lane exit 0; 24 descriptor maps/206 endpoints; 17 module dirs; 4 deliberate reds bite+revert"},
+  "test": {"status": "passed", "evidence": "shared contract test (24) + api boot/health test (4); npm run ci:lane exit 0"},
+  "review": {"status": "passed", "by": "claude", "findings": 12, "resolution": "all fixed + regression-tested"},
+  "adversarialReview": {"status": "passed", "by": "codex", "verdict": "approve-post-fix", "findings": 3, "resolution": "chokepoint .tsx + split-string grep + logout elevation documented"},
+  "adversarialTest": {"status": "passed", "by": "fresh-context-finders", "note": "3 fresh-context Anthropic finder agents (no implementer rationale) drove the contract + gate integrity; committed correctness assertions in place"},
+  "designAudit": {"status": "skipped", "reason": "no UI (infra/scaffold slice)"},
+  "video": {"status": "verified", "kind": "asciinema", "path": "slices/phase-0/g0-ci-lane.cast", "gif": "slices/phase-0/g0-ci-lane.gif", "shows": "full green ci:lane + security gates"},
+  "securityGates": {"sast": 0, "secrets": 0, "audit": 0},
+  "deliberateReds": ["boundary", "anthropic-import", "planted-secret", "semgrep-eval", "split-string-evasion", "garrison-dep", "server.ts-import"],
+  "commit": {"tag": "gate-0", "message": "checkpoint: G0 scaffold-ci-shared-contract"},
+  "at": "2026-07-06T19:15:00Z"
+}

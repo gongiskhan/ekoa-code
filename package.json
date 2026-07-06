@@ -1,0 +1,38 @@
+{
+  "name": "ekoa-code",
+  "private": true,
+  "version": "0.0.0-rc",
+  "description": "Rebuilt Ekoa/Cortex platform: api/, web/, shared/ (FIXED-1). npm workspaces (P-17).",
+  "workspaces": [
+    "shared",
+    "api",
+    "web"
+  ],
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "scripts": {
+    "build": "npm run build --workspace shared && npm run build --workspace api && npm run build --workspace web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "npm run test --workspaces --if-present",
+    "test:contract": "npm run test:contract --workspace api --if-present",
+    "e2e": "npm run e2e --workspace web --if-present",
+    "gate:chokepoint": "bash scripts/chokepoint-grep.sh",
+    "gate:encryption-key": "bash scripts/encryption-key-grep.sh",
+    "gate:garrison": "bash scripts/garrison-grep.sh",
+    "gate:sast": "semgrep --config scripts/semgrep.yml --error --quiet api/src shared/src",
+    "gate:secrets": "gitleaks detect --no-banner --redact -c scripts/gitleaks.toml",
+    "gate:audit": "npm audit --audit-level=high",
+    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^8.57.1",
+    "eslint-import-resolver-typescript": "^3.6.3",
+    "eslint-plugin-import": "^2.31.0",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.10"
+  }
+}

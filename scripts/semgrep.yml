@@ -1,0 +1,21 @@
+rules:
+  - id: no-eval
+    languages: [typescript, javascript]
+    message: "eval() is forbidden (FIXED-14: no server-side eval; served apps sandboxed)."
+    severity: ERROR
+    pattern: "eval(...)"
+  - id: no-child-process-shell-true
+    languages: [typescript, javascript]
+    message: "spawn/exec with shell:true risks command injection (FIXED-14)."
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: "exec(..., { shell: true, ... })"
+          - pattern: "execSync(..., { shell: true, ... })"
+          - pattern: "spawn(..., { shell: true, ... })"
+          - pattern: "spawnSync(..., { shell: true, ... })"
+  - id: no-anthropic-key-literal
+    languages: [typescript, javascript]
+    message: "Hardcoded Anthropic key literal (ch09 invariant 4: centrally managed credentials only)."
+    severity: ERROR
+    pattern-regex: "sk-ant-[A-Za-z0-9_-]{20,}"

@@ -1,0 +1,24 @@
+{
+  "name": "@ekoa/api",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:contract": "vitest run tests/contract",
+    "dev": "node --watch --loader ts-node/esm src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@ekoa/shared": "*",
+    "express": "^5.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.17.6",
+    "ts-node": "^10.9.2"
+  }
+}

@@ -1,0 +1,56 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Per-PR lane (ch13 §13.9): blocking, LLM-free, deterministic.
+  per-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      # 1. boundary lint + chokepoint grep + ENCRYPTION_KEY grep + garrison grep
+      - run: npm run lint
+      - run: npm run gate:chokepoint
+      - run: npm run gate:encryption-key
+      - run: npm run gate:garrison
+      # 2. typecheck shared/api/web
+      - run: npm run typecheck
+      # 3. unit + module tests (api vitest runs tests/contract too, once the suite exists)
+      - run: npm test
+      # 5. build web + api
+      - run: npm run build
+      # 6. playwright e2e — added at G1+ (skips cleanly until the stack exists)
+      - run: npm run e2e --if-present
+      # 7. suite-ledger check — enforced from G1
+      - run: npm run gate:ledger --if-present
+
+  # Security CI gates (security addendum D.4): Semgrep SAST, gitleaks, npm audit.
+  security-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: gitleaks (secret scanning)
+        # Release assets are version-pinned (gitleaks_<ver>_linux_x64.tar.gz); no `|| true`,
+        # so a broken download fails the step loudly instead of masking a skipped scan.
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks detect --no-banner --redact -c scripts/gitleaks.toml
+      - name: semgrep SAST
+        run: |
+          pipx install semgrep || pip install semgrep
+          npm run gate:sast
+      - name: npm audit (high severity gate)
+        run: npm run gate:audit

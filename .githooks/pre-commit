@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Pre-commit secret scan (security addendum D.4: gitleaks in CI AND as a pre-commit hook).
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --no-banner --redact -c scripts/gitleaks.toml
+else
+  echo "pre-commit: gitleaks not installed; skipping secret scan (install with 'brew install gitleaks')" >&2
+fi

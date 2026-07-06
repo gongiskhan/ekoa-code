@@ -1,0 +1,21 @@
+# gitleaks config (security addendum D.4). Uses the default ruleset plus an Anthropic
+# key rule; allowlists the spec/ tree and synthetic checksum-INVALID test fixtures.
+title = "ekoa-code gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[allowlist]
+description = "Spec text, docs, and synthetic test fixtures are not secrets"
+paths = [
+  '''spec/.*''',
+  '''docs/.*''',
+  '''.*\.example\..*''',
+  '''api/test/fake-daemon/fixtures/.*''',
+]

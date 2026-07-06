@@ -74,3 +74,25 @@ The chapter 13 §13.7 dual review at every gate is executed as: Claude Code buil
 - **Ledger (gate item 4):** SUITE_LEDGER.json skeleton created; ratchet not yet active (no green artifacts). No regression possible.
 - **Diagrams (gate item 5):** no structural change (planning phase; diagrams untouched).
 - **Checkpoint (gate item 6):** commit `checkpoint: G-P planning` + tag `gate-P`.
+
+### DECISION — 2026-07-06T19:10:00Z — Phase 0 — vitest upgraded to v4 for the npm-audit gate
+
+The security addendum D.4 `npm audit` high-severity gate failed on the default vitest 2.x dependency chain (vite/esbuild dev-server advisories: path traversal, UI-server arbitrary file read — all dev-only). Options: (a) pin overrides on esbuild/vite; (b) upgrade vitest to the fixed major. Choice: (b) vitest ^4.1.10 across all three workspaces — `npm audit --audit-level=high` now reports 0 vulnerabilities. Reason: cleaner than transitive overrides; vitest 4 `vitest run` is API-compatible with our usage.
+
+### AMBIGUITY — 2026-07-06T19:12:00Z — Phase 0 — NotificationEvent `ready` variant
+
+Passages: ch03 §3.6 ("Each stream opens with a `ready` event" — all four streams) vs §3.6.4 / P-04 ("the channel carries exactly the five events above"). Reading chosen: the `ready` frame is a stream-open ack (a mechanic like keepalive), not one of the five payload events, so `shared/events.ts` `NotificationEvent` includes a `ready` member. Precedence: §14.1 rule 2 — §3.6's all-streams-open-with-ready mechanic governs, and the ch13 §13.5 protocol-parity gate requires the union to represent what the server emits. Surfaced by the G0 same-context review.
+
+### GATE — 2026-07-06T19:15:00Z — Phase 0 — G0 PASSED
+
+- **Green condition (§14.4 Phase 0):** the CI lane exits 0 on the scaffold; `shared/` covers the complete ch03 map (24 domain descriptor maps, 206 endpoints, contract test green); `api/src/` stubbed per the ch02 inventory (17 module dirs + config.ts + server.ts); npm workspaces (P-17), Express 5 (P-01); `CLAUDE.md` carries the ch02 §2.9 and ch13 §13.10 blocks verbatim; the three ESLint families (boundary, chokepoint, module-direction) and the three CI security gates (Semgrep SAST, gitleaks incl. pre-commit hook, npm audit) active.
+- **Green evidence (commands, exit 0):** `npm run ci:lane` (lint + chokepoint/encryption-key/garrison greps + typecheck×3 + test + build×3) = 0; `npm run gate:sast` = 0; `npm run gate:secrets` = 0; `npm run gate:audit` = 0 (0 vulnerabilities); shared 24 tests + api 4 tests green.
+- **Deliberate reds (each committed→failed CI→reverted; C14-03):** (1) web/→api/ boundary import → ESLint `import/no-restricted-paths` exit 1; (2) `@anthropic-ai/sdk` import in api/src/services/ → ESLint `no-restricted-imports` AND chokepoint grep exit 1; (3) planted `sk-ant-…` secret staged → `gitleaks protect --staged` exit 1; (4) `eval(userInput)` → Semgrep `no-eval` exit 1. Also verified: the hardened chokepoint grep catches split-string evasion (`'api.'+'anthropic.com'`) exit 1; the garrison gate bites a planted `garrison-client` dependency; the module-direction zone bites a domain module importing `server.ts`.
+- **CI lane (gate item 2):** exit 0 (evidence above).
+- **Review verdicts (gate item 3):**
+  - Claude review (3 fresh-context finder angles: line-by-line correctness, contract fidelity vs ch03, gate integrity): 12 real findings, ALL FIXED — server.ts boot guard (pathToFileURL for spaced/symlinked paths), ESLint `except` no-op + the previously-unenforced "nothing imports server.ts" zone, CI gitleaks 404 download (version-pinned), garrison grep unescaped-dot false-negative + missing root-manifest scan + node_modules descent (rewritten to inspect dependency keys), IsoTimestamp dead datetime, config PORT empty/NaN guard, TriggerCreateRequest invented top-level discriminator (→ spec-shaped z.union), JobCreateRequest kind (→ literal 'build'), NotificationEvent missing `ready` (AMBIGUITY above), Language.optional() neutralizing the pt default on chat + integration-builder, chokepoint gate not covering web/shared, redundant mis-wired test:contract CI step. Regression assertions added to the contract test. APPROVE (post-fix).
+  - Adversarial Codex review (`codex exec --sandbox read-only`, serialized): 3 findings, ALL ADDRESSED — chokepoint ESLint ban extended to `.tsx`; chokepoint grep hardened to a broad case-insensitive `anthropic` pass catching split-string evasion; auth.logout `{userId}` elevation documented as a G2 handler responsibility (the static class stays `user`, which the spec lists first for that row). APPROVE (post-fix).
+- **Ledger (gate item 4):** SUITE_LEDGER.json unchanged; no ported artifact due at G0; ratchet trivially holds.
+- **Diagrams (gate item 5):** no structural change — the scaffold IMPLEMENTS the structure already depicted by diagrams 02-module-map and 03-request-crud; no diagram edit required (built to the existing normative diagrams).
+- **Evidence:** asciinema `slices/phase-0/g0-ci-lane.cast` (+ .gif) records the full green lane + security gates.
+- **Checkpoint (gate item 6):** commit `checkpoint: G0 scaffold-ci-shared-contract` + tag `gate-0`.
