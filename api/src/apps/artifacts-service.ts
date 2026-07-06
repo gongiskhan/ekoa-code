@@ -6,6 +6,7 @@
 import { artifacts, slugs } from '../data/stores.js';
 import { OwnerVisibilityScoped, type Actor } from '../data/scoped.js';
 import type { Doc } from '../data/store.js';
+import { indexSlug } from './slug-index.js';
 
 export interface ArtifactDoc extends Doc {
   name: string;
@@ -52,6 +53,7 @@ export async function createArtifact(actor: Actor, input: { name: string; visibi
   const id = deps.genId();
   const slug = await generateSlug(input.name, deps);
   await slugs.put({ _id: slug, artifactId: id }); // point the reservation at the new artifact
+  indexSlug(slug, id); // keep the in-memory serving index current (ch07 §7.8)
   const doc: ArtifactDoc = { _id: id, name: input.name, slug, userId: actor.userId, orgId: actor.orgId, visibility: input.visibility ?? 'private', status: 'draft' };
   await artifacts.insert(doc as never);
   return doc;
@@ -68,6 +70,7 @@ export async function patchArtifact(actor: Actor, id: string, patch: Record<stri
   if (typeof patch.slug === 'string' && patch.slug !== guard.row!.slug) {
     const ok = await slugs.insert({ _id: patch.slug, artifactId: id });
     if (!ok) return { verdict: 'forbidden' }; // slug taken — surfaced as SLUG_TAKEN at the route
+    indexSlug(patch.slug, id); // serving resolves the new slug immediately (edits never orphan data)
   }
   const updated = (await artifacts.update(id, (a) => ({ ...a, ...patch }))) as ArtifactDoc;
   return { verdict: 'ok', artifact: updated };

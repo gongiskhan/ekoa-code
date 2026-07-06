@@ -200,9 +200,12 @@ export class CollectionsEngine {
     throw new EngineError('INTERNAL', 500, 'Upsert CAS exhausted retries');
   }
 
-  async delete(scope: Scope, collection: string, id: string): Promise<void> {
+  /** Returns true when an item was deleted, false when the id was absent (the
+   *  served-app wire distinguishes `{success:true}` from 404 'Not found'). */
+  async delete(scope: Scope, collection: string, id: string): Promise<boolean> {
     guardCollectionName(collection);
-    await col().deleteOne({ _id: docId(scope, collection, id), appId: scope.scopeKey, collection });
+    const res = await col().deleteOne({ _id: docId(scope, collection, id), appId: scope.scopeKey, collection });
+    return res.deletedCount === 1;
   }
 
   private checkSize(rule: z.infer<typeof collectionRule> | undefined, item: Record<string, unknown>): void {
