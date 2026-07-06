@@ -11,6 +11,8 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 60_000,
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    // Vitest 4 removed poolOptions.forks.singleFork; fileParallelism:false is the
+    // supported serializer (forces maxWorkers to 1, one isolated fork at a time).
+    fileParallelism: false,
   },
 });

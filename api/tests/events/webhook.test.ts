@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { triggers, webhookAudit, eventQueue } from '../../src/data/stores.js';
 import { handleIngress, createTrigger } from '../../src/events/service.js';
@@ -14,7 +14,7 @@ const actor = { userId: 'u1', orgId: 'orgA', role: 'builder' as const };
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();
-  mem = await MongoMemoryServer.create(); await connectMongo(mem.getUri(), 'ekoa_g5');
+  mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_g5');
 }, 60_000);
 afterAll(async () => { await closeMongo(); await mem.stop(); });
 beforeEach(async () => { for (const s of [triggers, webhookAudit, eventQueue]) await s.deleteMany({}); });

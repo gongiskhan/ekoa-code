@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, artifacts, slugs } from '../../src/data/stores.js';
 import { getDb } from '../../src/data/mongo.js';
@@ -30,7 +30,7 @@ const appApi = (p: string, appId: string, init: RequestInit = {}) => api(p, { ..
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();
-  mem = await MongoMemoryServer.create(); await connectMongo(mem.getUri(), 'ekoa_g6');
+  mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_g6');
   const app = buildApp(cfg, deps);
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
   port = (server.address() as { port: number }).port;
@@ -106,5 +106,34 @@ describe('artifacts (ch03 §3.8.9) — CRUD + visibility + slug', () => {
     const t = await tokenFor('ua');
     expect((await jwtApi('/api/v1/artifacts/p1', t)).status).toBe(404);
     expect((await jwtApi('/api/v1/artifacts/p1', t, { method: 'PATCH', body: JSON.stringify({ name: 'x' }) })).status).toBe(403);
+  });
+});
+
+describe('served-app static serving + window.__ekoa injection (ch07 §7.5/7.6)', () => {
+  it('injects window.__ekoa, base href, demo-bridge into a shareable app HTML', async () => {
+    await artifacts.insert({ _id: 'sv1', name: 'Served', slug: 'served', userId: 'o', orgId: 'orgA', visibility: 'org', shareable: true, data: { distHtml: '<!doctype html><head></head><body>hi</body>' } } as never);
+    await slugs.put({ _id: 'served', artifactId: 'sv1' });
+    const res = await api('/apps/served/');
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('window.__EKOA_APP_ID="sv1"');
+    expect(html).toContain('window.__ekoa');
+    expect(html).toContain('<base href="/apps/sv1/">');
+    expect(html).toContain('/__ekoa/demo-bridge.js');
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('trailing-slash redirect; non-shareable without token → 403; not-yet-built → 503', async () => {
+    await artifacts.insert({ _id: 'sv2', name: 'Priv', slug: 'priv', userId: 'o', orgId: 'orgA', visibility: 'private', shareable: false } as never);
+    await slugs.put({ _id: 'priv', artifactId: 'sv2' });
+    const redir = await api('/apps/priv', { redirect: 'manual' });
+    expect(redir.status).toBe(301);
+    const forbidden = await api('/apps/priv/');
+    expect(forbidden.status).toBe(403);
+    // shareable but no dist → building placeholder
+    await artifacts.insert({ _id: 'sv3', name: 'Build', slug: 'bld', userId: 'o', orgId: 'orgA', visibility: 'org', shareable: true } as never);
+    await slugs.put({ _id: 'bld', artifactId: 'sv3' });
+    const building = await api('/apps/bld/');
+    expect(building.status).toBe(503);
   });
 });

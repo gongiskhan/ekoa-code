@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import {
   CollectionsEngine,
@@ -18,7 +18,7 @@ let seq = 0;
 const engine = new CollectionsEngine({ now: () => 1_700_000_000_000 + seq, genId: () => `id_${seq++}` });
 
 beforeAll(async () => {
-  mem = await MongoMemoryServer.create();
+  mem = await createMem();
   await connectMongo(mem.getUri(), 'ekoa_test');
 }, 60_000);
 

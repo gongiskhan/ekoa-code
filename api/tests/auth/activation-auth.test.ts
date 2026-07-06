@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, orgs } from '../../src/data/stores.js';
 import { loadActivation, setActivation, __resetActivationForTests } from '../../src/data/activation.js';
@@ -25,7 +25,7 @@ beforeAll(async () => {
   process.env.JWT_SECRET = 'test-secret';
   __resetConfigForTests();
   loadConfig();
-  mem = await MongoMemoryServer.create();
+  mem = await createMem();
   await connectMongo(mem.getUri(), 'ekoa_auth_test');
 }, 60_000);
 

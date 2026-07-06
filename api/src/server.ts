@@ -32,6 +32,7 @@ import { hooksRouter } from './routes/hooks.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { servedDataRouter } from './apps/served-data.js';
+import { servingRouter } from './apps/serving.js';
 import { artifactsRouter } from './routes/artifacts.js';
 
 export interface RuntimeDeps {
@@ -83,6 +84,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G6 — artifacts (platform) + the byte-compatible served-app data plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
   app.use('/api', servedDataRouter(deps));
+  app.use('/', servingRouter()); // /apps/:idOrSlug/ static serving + window.__ekoa injection
 
   return app;
 }

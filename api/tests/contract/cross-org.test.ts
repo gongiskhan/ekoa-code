@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, orgs, memories, activityLogs } from '../../src/data/stores.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
@@ -40,7 +40,7 @@ beforeAll(async () => {
   process.env.JWT_SECRET = 's';
   __resetConfigForTests();
   loadConfig();
-  mem = await MongoMemoryServer.create();
+  mem = await createMem();
   await connectMongo(mem.getUri(), 'ekoa_g3');
   const app = buildApp(cfg, deps);
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
