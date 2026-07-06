@@ -1,0 +1,30 @@
+{
+  "runId": "20260706-182515-9080f2cb",
+  "project": "ekoa-code",
+  "createdAt": "2026-07-06T18:25:15+01:00",
+  "gatesConfig": {
+    "test": true,
+    "review": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "design": true,
+    "walkthrough": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true
+  },
+  "slices": {
+    "phase-p": {
+      "status": "passed",
+      "gate": "G-P",
+      "video": {
+        "status": "skipped"
+      },
+      "at": "2026-07-06T18:00:00Z"
+    }
+  },
+  "globalGate": {
+    "status": "in-progress",
+    "codexCheckpoint": null
+  }
+}

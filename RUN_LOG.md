@@ -44,3 +44,33 @@ The amendment brief's acceptance greps (Part 8) were run after the patch and pas
 Cross-reference integrity verified directly (the fanned-out adversarial verification workflow aborted on Fable-5 credit exhaustion mid-run and produced no findings; a targeted main-loop pass on Opus 4.8 replaced it): every new section anchor cited by a sibling chapter exists with matching content - 3.8.24 (Registo), 9.7.1 (activation gates), 9.7.2 (persistence postures), 7.2.6 (per-build verification), 10.6.1 (deploy artifacts), 12.9 / FC-500..FC-509, 14.7 (cut lines), 14.8 (owner-actions annex), 4.5 (control plane, P-08 re-resolved). The three admission planes are described identically in chapters 03, 09, 13, and 18. Register arithmetic after this session: 27 P entries, all resolved (P-27 resolved by this amendment; P-08 and P-12 re-resolved); zero pending; gate G-P stamps nothing; Q-01-Q-10 all carry filled Resolution lines; Q-02's factual half closed above. Diagrams: 01/04/05/06 edited, 03/08/10/11 swept for tenancy/retirement, new 12-org-tenancy added, 09-qa-pipeline correctly untouched; every changed and new PNG re-exported at house scale and visually verified.
 
 **Working tree left uncommitted** for founder review of the diff (no commit made this session; the amendment is documents and diagrams only).
+
+---
+
+## Implementation run — initialized 2026-07-06T17:45:00Z (Phase P)
+
+**Run id:** autothing 20260706-182515-9080f2cb. **Input:** `spec/` complete (SPEC.md + chapters 01-18 + reference/ + diagrams/), Amendment 2 applied, register zero-pending. **Mechanics:** chapter 14 §14.2 verbatim — gate template, checkpoint commits `checkpoint: G<N> <phase-name>` + tag `gate-<N>`, this journal (append-only, entries GATE/DECISION/AMBIGUITY/DEVIATION/ABORT, ISO-8601 UTC + phase), abort semantics §14.2.4. Build plan: `docs/autothing/runs/20260706-182515-9080f2cb/FLOW_PLAN.md`; repo `PLAN.md` (traceability table) is the G-P deliverable, in progress.
+
+### DECISION — 2026-07-06T17:45:00Z — Phase P — phase ordering adopted as recommended
+
+Options: (a) adopt chapter 14 §14.4 ordering as written; (b) reorder within §14.3 constraints. Choice: (a) — no constraint pressure found; the recommended order already satisfies all nine §14.3 constraints. Slices map 1:1 to the eighteen phases. Justification recorded in PLAN.md per §14.6 criterion 6.
+
+### DECISION — 2026-07-06T17:45:00Z — Phase P — verification tooling for the run
+
+The chapter 13 §13.7 dual review at every gate is executed as: Claude Code built-in code review (the "Opus review" role) then an adversarial `codex exec` review (cross-vendor; serialized run-wide; "Logged in using ChatGPT" verified 2026-07-06). Both verdicts recorded per GATE entry. CI security gates tooling installed for G0: gitleaks 8.30.1, semgrep 1.168.0 (brew, 2026-07-06). Reason: the spec names the review mechanics but not the executor CLI; conventional practice fills the detail (§14.1 precedence 4).
+
+### AMBIGUITY — 2026-07-06T17:55:00Z — Phase P — progressive (multi-gate) acceptance criteria
+
+**Passages:** ch09 acceptance 17 + ch13 §13.11.15 ("deactivation immediate on all three admission planes") and ch09 acceptance 6 + ch13 §13.11.12 + ch17 §17.11 bullets 1-6 ("payload-capture tokens-only across all origins including bridge/TUI"). **Reading admitted:** these could be read as requiring a single gate where the whole thing is green, or as first-landing at the gate the phase-gate text names with later re-exercise. **Chosen reading (precedence 2, spec phase-gate text is binding):** first-landing at the gate chapter 14's phase-gate text binds the primary assertion to — activation → G2 (write-through test) / G3 (admission test); payload-capture → G7A (C14-07 "G7A asserts the payload-capture tokens-only test"). The later admission planes (served-app G6, bridge G8A/C18-07) and the bridge/TUI payload-capture origin (G8A/C13-13, re-exercise per §18.7.4) are independently covered by their own criteria. Documented in PLAN.md "Progressive (multi-gate) criteria". No census change (each criterion counted once). Surfaced by the G-P adversarial Codex review (below).
+
+### GATE — 2026-07-06T18:00:00Z — Phase P — G-P PASSED
+
+- **Green condition (§14.4 Phase P):** PLAN.md contains the traceability table assigning every enumerated acceptance criterion of ch02-14+17+18 to exactly one phase. Census: 224 enumerated criteria (C02:7 C03:14 C04:20 C05:34 C06:18 C07:32 C08:9 C09:21 C10:11 C12:17 C13:18 C14:8 C17:8 C18:7) == 224 phase-table assignments (mechanically verified). Sizes sum to 100 (§14.5, verified). Every blocking P-nn (9) and Q-nn (2 run-start) verified resolved; register zero-pending; gate G-P stamps nothing.
+- **Artifacts:** `PLAN.md`, `RUN_LOG.md` (initialized this phase), `api/tests/SUITE_LEDGER.json` (skeleton: every ported artifact → target gate), `docs/autothing/runs/20260706-182515-9080f2cb/FLOW_PLAN.md`. Foundation: `.claude/skills/ekoa-architecture|testing|governance`, `docs/decisions.md` (CLAUDE.md deferred to G0 as spec deliverable).
+- **CI lane (gate item 2):** N/A at G-P — planning phase produces no code; the CI lane is a G0 deliverable. Not falsely asserted green.
+- **Review verdicts (gate item 3):**
+  - Claude review (code-review role): census verified mechanically (224=224), size sum 100, §14.3 nine constraints each preserved by the recommended order, no FIXED decision contradicted. APPROVE.
+  - Adversarial Codex review (`codex exec --sandbox read-only`, serialized; "Logged in using ChatGPT"): 2 findings, both traceability nuances on progressive criteria (activation three-plane assignment at G2; payload-capture all-origins at G7A) — neither a §14.3 or FIXED contradiction; the phase ORDER is correct. Resolved by the "Progressive (multi-gate) criteria" section + the AMBIGUITY entry above (first-landing assignment is the spec's own phase-gate-text reading; later planes/origins covered by C18-07/C13-13/G12). Re-affirmed: no red blocker. APPROVE (post-resolution).
+- **Ledger (gate item 4):** SUITE_LEDGER.json skeleton created; ratchet not yet active (no green artifacts). No regression possible.
+- **Diagrams (gate item 5):** no structural change (planning phase; diagrams untouched).
+- **Checkpoint (gate item 6):** commit `checkpoint: G-P planning` + tag `gate-P`.
