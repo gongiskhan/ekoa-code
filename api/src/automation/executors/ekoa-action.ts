@@ -122,7 +122,13 @@ export async function executeEkoaActionStep(args: ExecuteEkoaActionArgs): Promis
   }
 
   // Merge step inputs with automation inputs — step-level overrides automation-level.
-  const mergedInputs = { ...inputs, ...spec.inputs };
+  // CREDENTIAL BOUNDARY (Codex round-3): drop `credentials` before the recipe ever sees it. An
+  // ekoa_action recipe operates on the artifact's app-data and never needs the run's decrypted
+  // credentials; leaving them in scope lets a crafted recipe capture `{{inputs.credentials}}` (a
+  // direct ref that skips template-vars string redaction) into the PERSISTED capturedValues. The
+  // browser session reads inputs.credentials.storageState separately in the engine, not here.
+  const { credentials: _dropped, ...safeInputs } = inputs;
+  const mergedInputs = { ...safeInputs, ...spec.inputs };
 
   // Execute recipe
   const actionCtx: EkoaActionContext = {

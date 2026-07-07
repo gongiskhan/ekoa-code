@@ -230,8 +230,10 @@ function actorFromCtx(ctx: RunContext): Actor {
 // ============================================================================
 
 /** Drop the `credentials` key from a run's inputs before persistence/wire (credential boundary,
- *  §5.6.7). The in-memory `inputs` keeps it for the browser session; the stored copy never has it. */
-function scrubCredentials(inputs: Record<string, unknown>): Record<string, unknown> {
+ *  §5.6.7). The in-memory `inputs` keeps it for the browser session; the stored copy never has it.
+ *  Exported so EVERY persist site scrubs — the service's register-first insert AND this engine
+ *  create both write the run row, so both must strip credentials (Codex round-2). */
+export function scrubCredentials(inputs: Record<string, unknown>): Record<string, unknown> {
   if (!('credentials' in inputs)) return inputs;
   const { credentials: _dropped, ...rest } = inputs;
   return rest;

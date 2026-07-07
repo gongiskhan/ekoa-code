@@ -143,6 +143,18 @@ describe('automation service surface (§3.8.18)', () => {
     expect(RunRecordSchema.safeParse(run).success).toBe(true);
   });
 
+  it('startRun scrubs inputs.credentials from the PERSISTED run record (Codex round-2 — register-first insert)', async () => {
+    const a = await svc.createAutomation(admin, { name: 'Empty2' });
+    const { runId } = await svc.startRun(admin, a.id, { inputs: { credentials: { apiKey: 'chave-secretissima' }, foo: 'bar' } });
+    // Read the RAW persisted doc (not the wire view) — the register-first insert must not store it.
+    const raw = (await automationRuns.get(runId)) as { inputs?: Record<string, unknown> } | null;
+    expect(raw).toBeTruthy();
+    expect(raw!.inputs).toBeDefined();
+    expect(raw!.inputs!.credentials).toBeUndefined();
+    expect(raw!.inputs!.foo).toBe('bar'); // non-secret inputs survive
+    expect(JSON.stringify(raw!.inputs)).not.toContain('chave-secretissima');
+  });
+
   it('startRun on an automation you do not own is forbidden', async () => {
     const a = await svc.createAutomation(admin, { name: 'Admin owned' });
     await expect(svc.startRun(builder, a.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });

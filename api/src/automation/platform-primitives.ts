@@ -252,6 +252,10 @@ function renderRef(ref: TemplateRef, ctx: EkoaActionContext): unknown {
   const direct = /^\{\{\s*(captured|inputs)\.([a-zA-Z0-9_]+)\s*\}\}$/.exec(trimmed);
   if (direct) {
     const [, source, name] = direct;
+    // CREDENTIAL BOUNDARY: never resolve the run's decrypted credentials through a direct ref
+    // (which skips string redaction). Defense-in-depth — ekoa-action.ts already scrubs them from
+    // ctx.inputs before the recipe runs.
+    if (source === 'inputs' && name === 'credentials') return undefined;
     return source === 'captured' ? ctx.captured[name!] : ctx.inputs[name!];
   }
   // For interpolation we feed BOTH inputs and captured into a single namespace

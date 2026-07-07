@@ -27,7 +27,7 @@ import type {
 } from '@ekoa/shared';
 import { automations, automationRuns } from '../data/stores.js';
 import { createMemory } from '../memory/index.js';
-import { runAutomation, rehearseAutomation, type RunContext } from './engine.js';
+import { runAutomation, rehearseAutomation, scrubCredentials, type RunContext } from './engine.js';
 import { planFromGoal as plannerPlanFromGoal } from './planner.js';
 import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
@@ -324,7 +324,10 @@ async function startRunInternal(
     automationId,
     startedAt: new Date().toISOString(),
     status: 'running',
-    inputs: opts.inputs ?? {},
+    // CREDENTIAL BOUNDARY (§5.6.7): the register-first insert persists the row BEFORE the engine
+    // runs, and the engine's later insert is a duplicate no-op — so THIS write is the one that
+    // sticks. Scrub credentials here too, never only in the engine (Codex round-2).
+    inputs: scrubCredentials(opts.inputs ?? {}),
     steps: [],
     triggeredBy: 'user',
     ownerUserId: owner.userId,

@@ -158,12 +158,20 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
 
   const isJson = looksLikeJson(responseHeaders, bodyText);
 
+  // CREDENTIAL BOUNDARY (Codex round-2): a server can echo the CLIENT's own secret back in the
+  // response body/headers of an error (e.g. "invalid client_secret: sk-live-…"). That body is
+  // PERSISTED in the step output + error details, so mask any occurrence of the client's decrypted
+  // credential values. This only ever masks the CLIENT's own configured secret — a token the API
+  // legitimately RETURNS is a different value (not in secretValues), so real data survives.
+  const safeBody = redactSecretValues(bodyText, secretValues);
+  const safeResponseHeaders = redactHeaderValues(responseHeaders, secretValues);
+
   const output: StepOutput = {
     kind: 'api_call',
     status: response.status,
     statusText: response.statusText,
-    responseHeaders,
-    responseBody: bodyText,
+    responseHeaders: safeResponseHeaders,
+    responseBody: safeBody,
     responseBodyIsJson: isJson,
     truncated,
     durationMs: Date.now() - fetchStart,
@@ -176,8 +184,8 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
       error: {
         message: `HTTP ${response.status} ${response.statusText}`,
         recoverable: true,
-        // The URL may carry a secret in its query string — redact before persisting the details.
-        details: { request: { method: spec.method, url: redactSecretValues(resolvedUrl, secretValues) }, response: { status: response.status, body: bodyText.slice(0, 2000) } },
+        // Both the URL (query-string secret) and the response body (echoed secret) are redacted.
+        details: { request: { method: spec.method, url: redactSecretValues(resolvedUrl, secretValues) }, response: { status: response.status, body: safeBody.slice(0, 2000) } },
       },
       output,
       resolvedAction: resolved,
