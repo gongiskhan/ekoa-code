@@ -138,6 +138,20 @@ describe('build execution (§5.4, §5.6.2)', () => {
     expect((complete!.data as { result?: string }).result).toContain('Formulário não submete.');
   });
 
+  it('an honest not-run (e.g. credential-skip) COMPLETES the build with the note surfaced, never fails it', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    // A not-run: ran:false, passed:false, note present (the verify-runner's credential-skip shape).
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: false, passed: false, note: 'verification skipped: model credential unavailable' }));
+    const { mech } = fakeMechanics();
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a thing', language: 'pt', deps: deps() });
+    // The build COMPLETES (a not-run is not a failure) ...
+    expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
+    // ... and the honest note is surfaced on the complete event (not silently "clean").
+    const complete = events.find((e) => e.stream === 'job' && e.type === 'complete');
+    expect((complete!.data as { result?: string }).result).toContain('credential unavailable');
+  });
+
   it('skips verification entirely when the user setting build.verifyBuilds is off', async () => {
     await userSettings.put({ _id: 'u1', build: { verifyBuilds: false } });
     const t = resetAgentState({ finalText: 'built' });

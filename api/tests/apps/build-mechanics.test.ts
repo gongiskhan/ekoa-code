@@ -112,11 +112,13 @@ describe('createBuildMechanics — first build (ch05 §5.6.2, ch07 §7.3/§7.4)'
 });
 
 describe('verifyRunner — honest credential-skip (ch07 §7.2.6)', () => {
-  it('reports not-run (no fake pass) when no model credential is configured', async () => {
+  it('reports a not-run as a distinct non-passing state (no fake pass) when no credential is configured', async () => {
     __resetCredentialsForTests(); // unconfigured → claudeAuthStatus().ok === false
     const verdict = await verifyRunner({ artifactId: 'a1', projectDir: sandbox, appUrl: '/apps/a1/', userId: USER, depth: 'full' });
     expect(verdict.ran).toBe(false);
-    expect(verdict.passed).toBe(true);
+    // A not-run must NOT claim passed:true — only a real ran+passed verification does (was a bug:
+    // the skip returned passed:true, so build.ts surfaced no note and the skip read as "clean").
+    expect(verdict.passed).toBe(false);
     expect(verdict.note).toMatch(/credential unavailable/);
   });
 });

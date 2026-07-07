@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import {
   listArtifacts, createArtifact, getVisibleArtifact, patchArtifact, deleteArtifact,
-  artifactView, type ArtifactDoc,
+  artifactView, stripReservedDataKeys, type ArtifactDoc,
 } from '../apps/artifacts-service.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import type { SnapshotAudit } from '../services/commit-guard.js';
@@ -97,6 +97,11 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.patch('/:id', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, ArtifactPatch, req.body) as Record<string, unknown> | undefined;
     if (!body) return;
+    // Strip server-owned reserved keys (e.g. `projectDir`) from any client `data` at the boundary
+    // before they reach the store — a client must never influence the build sandbox path (ch09).
+    if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+      body.data = stripReservedDataKeys(body.data as Record<string, unknown>);
+    }
     const result = await patchArtifact(actorOf(req), req.params.id as string, body);
     if (result.verdict === 'notfound') return notFound(res);
     if (result.verdict === 'forbidden') {

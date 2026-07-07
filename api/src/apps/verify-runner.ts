@@ -10,8 +10,10 @@
  *
  * Two honesty invariants:
  *  - Credential-skip: when no usable model credential is configured (`claudeAuthStatus().ok`
- *    false) the runner reports `{ ran: false, passed: true, note }` — an honest not-run, never a
- *    fake claim of having verified.
+ *    false) the runner reports `{ ran: false, passed: false, note }` — an honest not-run is a
+ *    distinct non-passing state (only a real ran+passed verification sets `passed: true`), never a
+ *    fake claim of having verified. A not-run does not FAIL the build (build.ts completes with the
+ *    note); it just refuses to report a pass it did not earn.
  *  - Never throw into the build pipeline (§5.6.2 step 5): every failure is wrapped into a
  *    VerifyRunResult with an honest `ran` flag.
  */
@@ -42,7 +44,7 @@ export async function verifyRunner(input: VerifyRunInput): Promise<VerifyRunResu
   // Credential-skip (ch05 §5.6.2 step 5): `ok` is false when unconfigured OR a refresh alert is
   // latched — either way a real verification run cannot proceed, so report an honest not-run.
   if (!claudeAuthStatus().ok) {
-    return { ran: false, passed: true, note: 'verification skipped: model credential unavailable' };
+    return { ran: false, passed: false, note: 'verification skipped: model credential unavailable' };
   }
 
   try {

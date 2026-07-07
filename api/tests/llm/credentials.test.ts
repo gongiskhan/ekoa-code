@@ -122,4 +122,15 @@ describe('buildSubprocessEnv scrubs inherited provider env and injects per mode'
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(env.ANTHROPIC_BASE_URL).toBe(loadConfig().llmChokepointBaseUrl);
   });
+
+  it('scrubs the ANTH_API_KEY alias from the child env (ch05 §5.4.1 acceptance 3)', async () => {
+    process.env.ANTH_API_KEY = 'leaked-alias-key';
+    try {
+      await setCredential({ mode: 'oauth', secret: 'oauth-tok', expiresAt: T0 + 60 * 60 * 1000 });
+      const env = await buildSubprocessEnv();
+      expect(env.ANTH_API_KEY).toBeUndefined(); // the alias must not leak past the chokepoint
+    } finally {
+      delete process.env.ANTH_API_KEY;
+    }
+  });
 });

@@ -126,10 +126,18 @@ export class MarkerProcessor {
     return emit;
   }
 
-  /** Remove any complete integration marker (+ optional hint) and `<ekoa-context>` blocks that
-   *  are fully present in the buffer. Partial trailing markers stay buffered (hold-back covers
-   *  the split case). */
+  /** Remove any complete integration marker (+ optional hint), `<ekoa-context>` blocks, and any
+   *  BUILD marker that surfaces AFTER start-of-stream — all that are fully present in the buffer.
+   *  Partial trailing markers stay buffered (hold-back covers the split case). */
   private stripSignals(): void {
+    // Build marker mid-stream (§5.7.2): a start-of-stream build marker is consumed by
+    // resolveStart() and drives the delegation path; ANY later occurrence is an adversarial or
+    // drifted emission that must never reach a `text_chunk`, so strip every complete instance.
+    for (;;) {
+      const idx = this.buffer.indexOf(BUILD_MARKER);
+      if (idx === -1) break;
+      this.buffer = this.buffer.slice(0, idx) + this.buffer.slice(idx + BUILD_MARKER.length);
+    }
     // Integration marker: `[[EKOA_INTEGRATION_BUILD]]` optionally followed by `(hint)`.
     for (;;) {
       const idx = this.buffer.indexOf(INTEGRATION_MARKER);

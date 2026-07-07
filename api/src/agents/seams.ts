@@ -100,15 +100,18 @@ export interface VerifyRunInput {
 
 export interface VerifyRunResult {
   ran: boolean;
+  /** Only a real ran+passed verification sets this true; a not-run is a distinct non-passing
+   *  state (honest not-run, never a fake pass — ch07 §7.2.6). */
   passed: boolean;
-  /** The honest user-visible note appended to `complete` when a failure could not be fixed. */
+  /** The honest user-visible note appended to `complete` when the stage did not cleanly pass —
+   *  a failure it could not fix, or an honest not-run (e.g. credential-skip). Never fails the build. */
   note?: string;
 }
 
 /** The playwright-cli medium-depth verification agent (ch07 owns the mechanics). Its model
  *  calls are attributed `user_work` `build-verify` inside the runner (ch06 6.4.1 row A2). */
 export type VerifyRunnerFn = (input: VerifyRunInput) => Promise<VerifyRunResult>;
-const defaultVerifyRunner: VerifyRunnerFn = async () => ({ ran: false, passed: true });
+const defaultVerifyRunner: VerifyRunnerFn = async () => ({ ran: false, passed: false });
 let verifyRunnerFn: VerifyRunnerFn = defaultVerifyRunner;
 export function setVerifyRunner(fn: VerifyRunnerFn): void {
   verifyRunnerFn = fn;

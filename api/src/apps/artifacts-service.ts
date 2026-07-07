@@ -23,6 +23,29 @@ export interface ArtifactDoc extends Doc {
 
 export interface Deps { now: () => number; genId: () => string }
 
+/**
+ * Keys inside an artifact's `data` bag that ONLY server build/fork/bundle/featured machinery may
+ * write. A client PATCH must never set these: `data.projectDir` in particular feeds
+ * `projectDirFor()` and thus the follow-up build sandbox cwd/HOME (a path-injection →
+ * sandbox-escape vector, ch09). The route strips them at the boundary and `patchArtifact` strips
+ * them again before merging onto the existing bag (defense in depth), so a client can neither
+ * overwrite nor wipe them.
+ */
+export const RESERVED_ARTIFACT_DATA_KEYS: readonly string[] = [
+  'projectDir', 'appUrl', 'sessionId', 'sdkSessionId',
+  'seededFrom', 'seededVersion', 'updateAvailable',
+  'importedFrom', 'forkedFrom', 'lastBundleUpdateAt', 'customized',
+];
+
+/** Drop every server-owned reserved key from a client-supplied `data` bag (see the constant). */
+export function stripReservedDataKeys(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (!RESERVED_ARTIFACT_DATA_KEYS.includes(k)) out[k] = v;
+  }
+  return out;
+}
+
 const scoped = new OwnerVisibilityScoped<ArtifactDoc>(artifacts as never);
 
 export function artifactView(a: ArtifactDoc) {
@@ -72,7 +95,16 @@ export async function patchArtifact(actor: Actor, id: string, patch: Record<stri
     if (!ok) return { verdict: 'forbidden' }; // slug taken — surfaced as SLUG_TAKEN at the route
     indexSlug(patch.slug, id); // serving resolves the new slug immediately (edits never orphan data)
   }
-  const updated = (await artifacts.update(id, (a) => ({ ...a, ...patch }))) as ArtifactDoc;
+  const updated = (await artifacts.update(id, (a) => {
+    const next = { ...a, ...patch } as ArtifactDoc;
+    // A client `data` patch MERGES onto the existing bag (never a wholesale replace) with the
+    // server-owned reserved keys stripped, so the client can neither overwrite nor wipe them.
+    if (patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {
+      const existing = (a.data as Record<string, unknown> | undefined) ?? {};
+      next.data = { ...existing, ...stripReservedDataKeys(patch.data as Record<string, unknown>) };
+    }
+    return next;
+  })) as ArtifactDoc;
   return { verdict: 'ok', artifact: updated };
 }
 

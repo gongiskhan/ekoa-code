@@ -28,6 +28,33 @@ describe('MarkerProcessor — build handoff (§5.7.2)', () => {
     expect(emitted).toBe('');
     expect(findings.build?.description).toBe('build me a form');
   });
+
+  it('strips a BUILD marker that surfaces mid-stream and never leaks any of it to a text_chunk', () => {
+    // Adversarial/drifted emission: a build marker AFTER start-of-stream prose. The start-of-stream
+    // delegation is untouched (this is not at offset 0), so no build is entered, but the marker must
+    // be stripped from the wire — no `text_chunk` may contain any substring of it (§5.7.2).
+    const { emitted, findings } = drive(new MarkerProcessor(), [`hello ${BUILD_MARKER} build X world`]);
+    expect(emitted).not.toContain('[[EKOA'); // no substring of the marker
+    expect(emitted).toContain('hello');
+    expect(emitted).toContain('world');
+    expect(findings.build).toBeUndefined(); // a mid-stream marker is NOT a delegation
+  });
+
+  it('never leaks a mid-stream BUILD marker split across two chunks', () => {
+    const mid = Math.floor(BUILD_MARKER.length / 2);
+    const chunks = ['prefix ', BUILD_MARKER.slice(0, mid), `${BUILD_MARKER.slice(mid)} suffix`];
+    let emitted = '';
+    const p = new MarkerProcessor();
+    for (const c of chunks) {
+      const out = p.push(c);
+      expect(out).not.toContain('[[EKOA'); // no partial marker ever emitted mid-stream
+      emitted += out;
+    }
+    emitted += p.end().text;
+    expect(emitted).not.toContain('[[EKOA');
+    expect(emitted).toContain('prefix');
+    expect(emitted).toContain('suffix');
+  });
 });
 
 describe('MarkerProcessor — integration handoff + context blocks', () => {

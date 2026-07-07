@@ -17,6 +17,8 @@ import {
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { users, artifacts, slugs } from '../../src/data/stores.js';
+import { projectDirFor } from '../../src/apps/app-paths.js';
+import type { ArtifactDoc } from '../../src/apps/artifacts-service.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
@@ -436,5 +438,33 @@ describe('featured toggle authz (ch03 §3.8.9)', () => {
     const ok = await jwtApi('/api/v1/artifacts/ft1/featured', sa, { method: 'PUT', body: JSON.stringify({ featured: true, featuredRank: 3 }) });
     expect(ok.status).toBe(200);
     expectValid(Artifact, await ok.json());
+  });
+});
+
+describe('PATCH data reserved-key strip (ch09 — no client-controlled build sandbox path)', () => {
+  it('a PATCH cannot overwrite server-owned data.projectDir; non-reserved keys still merge', async () => {
+    const realDir = await mkApp('sec1', { userId: 'owner1', orgId: 'orgA' });
+    const t = await tokenFor('owner1');
+
+    const res = await jwtApi('/api/v1/artifacts/sec1', t, {
+      method: 'PATCH',
+      body: JSON.stringify({ data: { projectDir: '/tmp/evil', sdkSessionId: 'hijack', foo: 'bar' } }),
+    });
+    expect(res.status).toBe(200);
+    expectValid(Artifact, await res.json());
+
+    // The reserved keys are stripped: projectDir keeps its server-set value, no sdkSessionId
+    // injected; the non-reserved `foo` merges onto the existing bag (never a wholesale replace).
+    const row = (await artifacts.get('sec1')) as ArtifactDoc;
+    const data = row.data as Record<string, unknown>;
+    expect(data.projectDir).toBe(realDir);
+    expect(data.sdkSessionId).toBeUndefined();
+    expect(data.appUrl).toBe('/apps/sec1/'); // existing reserved key preserved through the merge
+    expect(data.foo).toBe('bar');
+
+    // The resolved build dir stays inside the sandbox — the escape path never takes effect.
+    const resolved = projectDirFor(row);
+    expect(resolved).toBe(realDir);
+    expect(resolved.startsWith(sandbox)).toBe(true);
   });
 });

@@ -2,11 +2,18 @@
   "slice": "phase-7b",
   "gate": "G7B",
   "status": "in_progress",
-  "startedBy": "session ac243460 (Fable 5), 2026-07-07",
-  "workers": {
-    "g7b-agents": "running",
-    "g7b-content": "running",
-    "g7b-knowledge": "running"
-  },
-  "gates": {}
+  "startedBy": "session ac243460 (Fable 5 -> Opus 4.8 handoff at ~iter 307)",
+  "checkpointCommit": "6ef1480 (pre-review); fixes uncommitted pending re-review",
+  "gates": {
+    "greenCondition": { "status": "passed", "evidence": "phase green condition met (ch05+08 acceptance)" },
+    "ciLane": { "status": "passed", "exit": 0, "note": "post-fix: typecheck x3 + all tests + build x3, exit 0" },
+    "e2eRatchet": { "status": "passed", "exit": 0, "note": "post-fix: 127/127 specs, census 55/14/17, onboarding driver SKIPs on claudeAuth, ratchet holds" },
+    "securityGates": { "status": "passed", "note": "sast/secrets/audit exit 0 (pre-fix run; fixes touch no new deps)" },
+    "codexReview": {
+      "status": "issues-fixed",
+      "round1": "issues-found (C1 Critical sandbox escape via client projectDir; H1 High EKOA_BUILD marker mid-stream leak; M1 Medium verify-runner dishonest skip; M2 Medium ANTH_API_KEY not scrubbed)",
+      "fixes": "C1 projectDirFor jails recorded projectDir via resolveWithinJail(sandboxRoot) + falls back to default layout on escape, artifacts patch route strips reserved data keys; H1 markers strips BUILD_MARKER on every pass; M1 verify-runner returns {ran:false,passed:false,note} on credential-skip + build surfaces honest note without failing; M2 ANTH_API_KEY added to SCRUBBED_PROVIDER_ENV. Each has a regression test.",
+      "round2": "re-review relaunched (round-1 codex hung on stdin; re-run with stdin closed) — verdict pending"
+    }
+  }
 }

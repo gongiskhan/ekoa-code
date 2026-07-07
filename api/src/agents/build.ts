@@ -339,14 +339,17 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // Step 4: slug — preserved on follow-ups, generated on first builds (already resolved in prep).
 
     // Step 5: per-build verification (default ON per user's build.verifyBuilds). Full acceptance
-    // pass on a first build; scoped tests + smoke on a follow-up. Failure it cannot fix → honest
-    // visible note on the complete event (billed user_work build-verify inside the runner).
+    // pass on a first build; scoped tests + smoke on a follow-up. A stage that did not cleanly
+    // pass — a real ran+failed it could not fix, OR an honest not-run (e.g. credential-skip) —
+    // surfaces its note on the complete event (billed user_work build-verify inside the runner).
+    // Only a real ran+passed adds no note. A not-run is NOT a build failure: the build still
+    // completes, just with the honest visible note.
     let verifyNote: string | undefined;
     const verifyEnabled = (await userSettings.get(input.actor.userId))?.build?.verifyBuilds ?? true;
     if (verifyEnabled) {
       sink.planStep('verifying', 'A testar a aplicação...');
       const verdict = await verifyRunner({ artifactId, projectDir, appUrl, userId: input.actor.userId, depth: opts.firstBuild ? 'full' : 'scoped' });
-      if (verdict.ran && !verdict.passed) verifyNote = verdict.note ?? 'Algumas verificações não passaram.';
+      if (!verdict.passed && verdict.note) verifyNote = verdict.note;
     }
 
     // Step 6: complete event (bundle error + any unresolved verification failure appended).
