@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import { listTriggers, createTrigger, deleteTrigger, triggerView } from '../events/service.js';
 import { getAutomation, AutomationServiceError } from '../automation/index.js';
+import { loadReadable } from '../apps/app-paths.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 
 // The wire shape is a union on target.kind (automation flat vs artifact-backend nested).
@@ -29,10 +30,10 @@ export function triggersRouter(deps: { now: () => number; genId: () => string })
     if (!body) return;
     const hasBackend = 'target' in body;
     const actor = actorOf(req);
-    // Cross-org binding guard (Codex G8): a trigger targeting an automation must reference one the
-    // creator can access — otherwise org A could bind a webhook to org B's automation and drive its
-    // execution on delivery (the engine trusts the trigger owner). getAutomation enforces the org
-    // scope (same-org read or super-admin) and throws NOT_FOUND for a foreign/unknown automation.
+    // Cross-org binding guard (Codex G8): a trigger's TARGET must be one the creator can access —
+    // otherwise org A could bind a webhook to org B's automation OR artifact backend and drive its
+    // execution on delivery (the engine/runtime trusts the trigger owner). Both target kinds are
+    // validated to the same org (same-org read or super-admin); a foreign/unknown target is a 404.
     if (!hasBackend) {
       try {
         await getAutomation(actor, body.automationId as string);
@@ -40,6 +41,9 @@ export function triggersRouter(deps: { now: () => number; genId: () => string })
         if (err instanceof AutomationServiceError) return sendError(res, 'NOT_FOUND', 'Automação não encontrada.');
         throw err;
       }
+    } else {
+      const artifactId = (body.target as { artifactId: string }).artifactId;
+      if (!(await loadReadable(actor, artifactId))) return sendError(res, 'NOT_FOUND', 'Artefacto não encontrado.');
     }
     const input = hasBackend
       ? { targetKind: 'artifact-backend' as const, integrationKey: body.integrationKey as string, eventName: body.eventName as string, artifactId: (body.target as { artifactId: string }).artifactId, entrypoint: (body.target as { entrypoint: string }).entrypoint }

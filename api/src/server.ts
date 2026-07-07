@@ -366,6 +366,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       return { ok: false, reason: `run ended ${outcome.outcome}`, ...(outcome.permanent ? { permanent: true } : {}) };
     },
     invokeArtifactBackend: async (artifactId, entrypoint, event) => {
+      // Delivery-side cross-org guard (Codex G8, defense-in-depth alongside the trigger-creation
+      // check): the runtime resolves the artifact by raw id, so verify HERE that the target belongs
+      // to the trigger owner's org before invoking. A foreign/unknown artifact is a permanent
+      // failure — never executed, never retried.
+      const art = await getArtifactById(artifactId);
+      if (!art || art.orgId !== event.trigger.orgId) {
+        return { ok: false, reason: 'artifact not in the trigger owner org', permanent: true };
+      }
       try {
         const result = await invokeArtifactBackend(artifactId, entrypoint, {
           event: event.payload,
