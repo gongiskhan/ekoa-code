@@ -157,7 +157,7 @@ test('legal suite: cliente → processo → dossiê nota → prazo → radar →
     // ---------------------------------------------------------------------
     // 1) NÚCLEO — open a new matter: cliente + FK-linked processo.
     // ---------------------------------------------------------------------
-    await page.goto(NUCLEO, { waitUntil: 'networkidle' });
+    await page.goto(NUCLEO, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('dashboard')).toBeVisible({ timeout: 20_000 });
 
     await page.getByTestId('nav-clientes').click();
@@ -193,7 +193,7 @@ test('legal suite: cliente → processo → dossiê nota → prazo → radar →
     // ---------------------------------------------------------------------
     const dossieHref = `/apps/legal-dossie/processo/${ids.processoId}`;
     await expect(page.getByTestId('abrir-dossie')).toHaveAttribute('href', dossieHref);
-    await page.goto(`${CORTEX}${dossieHref}`, { waitUntil: 'networkidle' });
+    await page.goto(`${CORTEX}${dossieHref}`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('processo-page')).toBeVisible({ timeout: 20_000 });
     assertClean('dossiê deep link');
 
@@ -289,7 +289,7 @@ test('legal suite: cliente → processo → dossiê nota → prazo → radar →
     // ---------------------------------------------------------------------
     // 6) BELL — the in-spine notifications feed, driven on the Núcleo header.
     // ---------------------------------------------------------------------
-    await page.goto(NUCLEO, { waitUntil: 'networkidle' });
+    await page.goto(NUCLEO, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('dashboard')).toBeVisible({ timeout: 20_000 });
     // record which OTHER notifications are currently unread — we must restore
     // exactly these after "marcar todas como lidas" flips them.
@@ -311,7 +311,7 @@ test('legal suite: cliente → processo → dossiê nota → prazo → radar →
     expect(ids.notificacaoId, 'notificação created').toBeTruthy();
 
     // reload so the bell (loaded once on mount) picks the new notification up
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('dashboard')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('bell-badge')).toBeVisible({ timeout: 10_000 });
 
@@ -330,7 +330,7 @@ test('legal suite: cliente → processo → dossiê nota → prazo → radar →
     // 7) DOSSIÊ cronologia — both the nota milestone and the prazo are merged
     //    into this processo's timeline (derived, never persisted as eventos).
     // ---------------------------------------------------------------------
-    await page.goto(`${CORTEX}${dossieHref}?tab=cronologia`, { waitUntil: 'networkidle' });
+    await page.goto(`${CORTEX}${dossieHref}?tab=cronologia`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('processo-page')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('cronologia-tab')).toBeVisible({ timeout: 15_000 });
     const timeline = page.getByTestId('cronologia-timeline');
