@@ -74,7 +74,7 @@ describe('scanText (pure scanner)', () => {
   it('flags a high-confidence credential and reports rule + line, never the value', () => {
     const findings = scanText('config.ts', `const a = 1;\nconst key = "${plantedKey}";`);
     expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({ path: 'config.ts', rule: 'openai-anthropic-key', line: 2 });
+    expect(findings[0]).toMatchObject({ path: 'config.ts', rule: 'provider-sk-key', line: 2 });
   });
 
   it('passes clean source and skips lockfiles', () => {

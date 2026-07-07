@@ -258,7 +258,7 @@ describe('m365 workspace Graph proxy (Q-10 gate + verbatim forward)', () => {
     const realFetch = globalThis.fetch;
     let seenAuth: string | undefined;
     let seenUrl: string | undefined;
-    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url.startsWith('https://graph.microsoft.com/')) {
         seenUrl = url;

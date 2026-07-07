@@ -92,15 +92,16 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
     for (const name of ['consultar_notificacoes', 'consultar_processo', 'fetch_documentos_processo', 'submeter_peca']) {
       const a = byName[name];
       expect(a, `portal action ${name}`).toBeTruthy();
+      if (!a) continue;
       expect(typeof a.automationBinding?.automationId).toBe('string');
       expect((a.automationBinding?.automationId ?? '').length).toBeGreaterThan(0);
       expect(a.automationBinding?.passCredentials).toBe(true);
       expect(a.httpConfig).toBeUndefined();
     }
-    expect(byName['fetch_documentos_processo'].automationBinding?.automationId).toBe('citius-documentos-template');
-    expect(byName['fetch_documentos_processo'].mutates).toBe(false);
-    expect(byName['submeter_peca'].mutates).toBe(true);
-    expect(byName['consultar_notificacoes'].mutates).toBe(false);
+    expect(byName['fetch_documentos_processo']!.automationBinding?.automationId).toBe('citius-documentos-template');
+    expect(byName['fetch_documentos_processo']!.mutates).toBe(false);
+    expect(byName['submeter_peca']!.mutates).toBe(true);
+    expect(byName['consultar_notificacoes']!.mutates).toBe(false);
 
     // Notification listener: polls consultar_notificacoes, dedups by id over the notificacoes array.
     expect(citius!.listenerConfig?.pollAction).toBe('consultar_notificacoes');
@@ -110,10 +111,10 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
     // Credential-free public consulta: httpConfig GET against citius.mj.pt, no session, no auth header.
     const pub = byName['consulta_publica_distribuicao'];
     expect(pub, 'consulta_publica_distribuicao present').toBeTruthy();
-    expect(pub.httpConfig?.method).toBe('GET');
-    expect(pub.automationBinding).toBeUndefined();
-    expect(Object.keys(pub.httpConfig?.headers ?? {}).map((h) => h.toLowerCase())).not.toContain('authorization');
-    expect(pub.httpConfig?.baseUrl ?? '').toMatch(/citius\.mj\.pt/);
+    expect(pub!.httpConfig?.method).toBe('GET');
+    expect(pub!.automationBinding).toBeUndefined();
+    expect(Object.keys(pub!.httpConfig?.headers ?? {}).map((h) => h.toLowerCase())).not.toContain('authorization');
+    expect(pub!.httpConfig?.baseUrl ?? '').toMatch(/citius\.mj\.pt/);
 
     // configSchema holds no secret fields (session captured, not stored); credentialGuide explains it.
     expect((citius!.configSchema ?? []).some((f) => f.secret === true)).toBe(false);

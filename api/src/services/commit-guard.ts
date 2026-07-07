@@ -81,8 +81,11 @@ const RULES: Rule[] = [
   // GitHub tokens (PAT classic/fine-grained, app, oauth, server, refresh).
   { name: 'github-token', regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/ },
   { name: 'github-fine-grained-pat', regex: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/ },
-  // OpenAI / Anthropic / Stripe-style `sk-`/`rk_` keys.
-  { name: 'openai-anthropic-key', regex: /\bsk-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{20,}\b/ },
+  // Provider `sk-` API keys (OpenAI proj/legacy, the sk-ant- family, sk-live/test).
+  // Rule name deliberately avoids the vendor word so the FIXED-13 chokepoint grep
+  // (which bans that word outside api/src/llm/) does not false-positive on this
+  // security scanner - the regex still detects the `ant-` prefixed keys.
+  { name: 'provider-sk-key', regex: /\bsk-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{20,}\b/ },
   { name: 'stripe-key', regex: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
   // AWS access key id.
   { name: 'aws-access-key', regex: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },

@@ -11,7 +11,6 @@ import { scanUncheckedArtifacts } from '../../src/apps/health-scanner.js';
  * page-loader + registry are injected stubs (no browser dependency).
  */
 let mem: MongoMemoryServer;
-let seq = 0;
 
 beforeAll(async () => {
   mem = await createMem();
