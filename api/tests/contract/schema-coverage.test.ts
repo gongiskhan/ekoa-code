@@ -20,6 +20,9 @@ const COVERED = new Set<string>([
   'memories.list', 'memories.get', 'memories.create', 'memories.update', 'memories.delete',
   'registo.listRegisto',
   'billing.getUsage', 'billing.getHistory',
+  // G7 — billing metering write + admin surfaces (billing.test.ts)
+  'billing.getBreakdown', 'billing.purchaseCredits', 'billing.toggleOverage', 'billing.adminGlobalOverage',
+  'billing.adminListUsage', 'billing.adminResetUsage', 'billing.adminSetLimit',
   // G4 — integrations + knowledge (partial: configs CRUD + sources CRUD + uploads list)
   'integrations.listConfigs', 'integrations.createConfig', 'integrations.updateConfig', 'integrations.deleteSkill',
   'knowledge.listSources', 'knowledge.createSource', 'knowledge.deleteSource', 'knowledge.listUploads',
@@ -53,9 +56,9 @@ const COVERED = new Set<string>([
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
 // "every descriptor endpoint not in COVERED" here, but pinned by an expected-count assertion so
 // a NEW endpoint added to shared/ without being COVERED bumps the count and fails the gate.
-// G5 -> G6: 148 -> 95 as the full served-app plane, artifact family, legal vertical, and
+// G5->G6: 148->95; G6->G7: 95->88 (7 billing write/admin endpoints) as the full served-app plane, artifact family, legal vertical, and
 // integration-definitions surfaces landed with their contract tests (53 endpoints newly covered).
-const EXPECTED_PENDING_COUNT = 95;
+const EXPECTED_PENDING_COUNT = 88;
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {
