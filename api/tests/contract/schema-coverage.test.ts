@@ -30,12 +30,32 @@ const COVERED = new Set<string>([
   'artifacts.list', 'artifacts.get', 'artifacts.patch', 'artifacts.remove',
   'servedApp.appDataList', 'servedApp.appDataGet', 'servedApp.appDataCreate', 'servedApp.appDataUpsert', 'servedApp.appDataDelete',
   'servedApp.appSharedList', 'servedApp.appSharedGet', 'servedApp.appSharedCreate', 'servedApp.appSharedUpsert', 'servedApp.appSharedDelete',
+  // G6 (full) — artifact family, backups, backend runtime, company-space (artifact-family.test.ts)
+  'artifacts.fork', 'artifacts.export', 'artifacts.import', 'artifacts.bundleUpdate', 'artifacts.setFeatured',
+  'artifacts.featuredUpdateApply', 'artifacts.featuredUpdateIgnore', 'artifacts.versionsList', 'artifacts.versionsRestore',
+  'artifacts.filesList', 'artifacts.readFile', 'artifacts.writeFile', 'artifacts.download', 'artifacts.pdf',
+  'artifacts.backupStatus', 'artifacts.backupSnapshot', 'artifacts.backupExport', 'artifacts.backupPreview', 'artifacts.backupRestore',
+  'artifacts.backendStatus', 'artifacts.backendLogs', 'artifacts.backendInvocations', 'artifacts.backendSetEnabled', 'artifacts.backendSampleRun',
+  'companySpace.list', 'companySpace.get', 'companySpace.start', 'companySpace.stop',
+  // G6 — served-app files/sso/cloud/m365 (app-files.test.ts, app-sso.test.ts)
+  'servedApp.appFileUpload', 'servedApp.appFileGet', 'servedApp.appFileDelete',
+  'servedApp.appSsoLogin', 'servedApp.appSsoSetPassword', 'servedApp.appSsoLogout', 'servedApp.appSsoMe',
+  'servedApp.appSsoMicrosoftStart', 'servedApp.appSsoM365', 'servedApp.appCloudFilesStatus', 'servedApp.m365Proxy',
+  // G6 — legal vertical services + e-sign (legal-plane.test.ts)
+  'servedApp.legalCalculos', 'servedApp.legalTranscricao', 'servedApp.legalResearch', 'servedApp.trackingConsulta',
+  'servedApp.citiusConsulta', 'servedApp.signatureSend', 'servedApp.adobeSignWebhookGet', 'servedApp.adobeSignWebhookPost',
+  // G6 — serving plane + health + demos (served-app.test.ts)
+  'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge',
+  // G6 — integration definitions registry (integration-definitions.test.ts)
+  'integrations.list', 'integrations.listActive', 'integrations.refresh',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
 // "every descriptor endpoint not in COVERED" here, but pinned by an expected-count assertion so
 // a NEW endpoint added to shared/ without being COVERED bumps the count and fails the gate.
-const EXPECTED_PENDING_COUNT = 148;
+// G5 -> G6: 148 -> 95 as the full served-app plane, artifact family, legal vertical, and
+// integration-definitions surfaces landed with their contract tests (53 endpoints newly covered).
+const EXPECTED_PENDING_COUNT = 95;
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {
