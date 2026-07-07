@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1783385792,"command":"bash /tmp/g6-evidence.sh","env":{"SHELL":"/bin/zsh"}}
+[0.006, "o", "=== G6 GATE EVIDENCE — app pipeline + served-app plane + legal vertical ===\r\n--- CI lane (lint, chokepoint/encryption/garrison greps, typecheck x3, tests, build x3) ---\r\n"]
+[186.703, "o", "> ekoa-code@0.0.0-rc ci:lane\r\n> ekoa-code@0.0.0-rc lint\r\n> ekoa-code@0.0.0-rc gate:chokepoint\r\n> ekoa-code@0.0.0-rc gate:encryption-key\r\n> ekoa-code@0.0.0-rc gate:garrison\r\n> ekoa-code@0.0.0-rc typecheck\r\n> ekoa-code@0.0.0-rc test\r\n Test Files  2 passed (2)\r\n      Tests  24 passed (24)\r\n Test Files  35 passed (35)\r\n      Tests  327 passed | 1 skipped (328)\r\n> ekoa-code@0.0.0-rc build\r\n"]
+[0.000, "o", "--- security gates ---\r\n"]
+[7.035, "o", "gate:sast OK\r\n"]
+[7.915, "o", "gate:secrets OK\r\n"]
+[1.255, "o", "gate:audit OK\r\n"]
+[0.000, "o", "--- suite ledger at G6 (census + due partition) ---\r\n"]
+[0.209, "o", "[census] specs on disk: 55 (ledger: 55)\r\n[census] drivers on disk: 14 (ledger: 14)\r\n[census] frontend unit files on disk: 17 (ledger: 17)\r\n[summary] due-at-G6: 41, awaiting: 45\r\n"]
+[0.000, "o", "=== G6 objective evidence green: 37-spec byte-compat proof runs via 'npm run e2e:server' (127/127, captured separately) ===\r\n"]
+[0.000, "x", "0"]
