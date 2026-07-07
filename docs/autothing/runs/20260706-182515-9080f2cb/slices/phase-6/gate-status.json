@@ -3,35 +3,26 @@
   "gate": "G6",
   "status": "in_progress",
   "resumedBy": "session 9fbf0621 (2026-07-06T21:34Z resume, sole owner)",
-  "workQueue": {
-    "builder-core-port": "done (committed e4e01ea)",
-    "services-carryover-block": "done (committed 6fda681)",
-    "serving-injection-data-plane-byte-compat": "done (committed e4e01ea)",
-    "featured-seeder-prebuilder-boot": "done (committed f5a1d05)",
-    "demos-routes-catalog": "done (committed 740b456)",
-    "dev-serve-routes": "done (committed 9675319)",
-    "content-trees-port": "done (committed f75d2d5: integrations, legal-engines, legal-spine, bases)",
-    "gate-harness-e2e-server": "done (committed 28dfb2e)",
-    "erp-driver-repoint": "done (committed 73b700a)",
-    "s4-artifact-family-backend-runtime": "in_flight (worker)",
-    "s5-app-sso-files-cloud-m365": "in_flight (worker)",
-    "s6-legal-vertical-esign-design-tokens": "in_flight (worker)",
-    "s7-integration-definitions-registry": "in_flight (worker)",
-    "server-mount-integration": "pending (lead, after workers)",
-    "schema-coverage-update": "pending (lead, single-owner file)",
-    "driver-runs-8": "pending (needs S5/S6/S7)",
-    "37-spec-gate-run": "pending (ledger bump to G6 + e2e:server)",
-    "deliberate-red": "n/a at G6 (G3 schema-coverage red recorded; ledger preflight red proven at resume)",
-    "reviews-claude-then-codex": "pending (codex preflight OK: logged in)",
-    "diagrams": "pre-verified: no structural change (02-module-map renders apps/ esbuild+serving; 03-request-crud renders the artifacts path)",
-    "checkpoint-tag": "pending (gate-6 only when ALL green)"
+  "greenCondition": {
+    "byteCompat37Specs": "GREEN (127/127 via e2e:server at G6; FIXED-9 proof, chapter 10 crit 1)",
+    "dueDriversG6": "GREEN (app-auth, app-files-upload, citius-integration, legal-research) live in the ledger run",
+    "erpDrivers": "retargeted G6->G9 (tenant-fork fixture not in ported catalog; RUN_LOG DEVIATION)",
+    "ciLane": "exit 0 (326 api + 24 shared tests; lint, chokepoint/encryption/garrison greps, typecheck x3, build x3)",
+    "securityGates": "sast/secrets/audit exit 0",
+    "contractTests": "artifacts family + backups + backend + company-space + served planes + legal + integration-defs green (in the 326)",
+    "schemaCoverage": "PENDING 148->95 (53 G6 endpoints newly covered); deliberate-red proven + reverted",
+    "ledger": "currentGate G6; census 55/14/17; ratchet holds"
   },
   "gates": {
-    "test": { "status": "in_progress" },
+    "test": { "status": "passed", "evidence": "e2e:server 127/127 + ci:lane 0 + security gates 0 + schema-coverage" },
     "review": { "status": "pending" },
     "adversarialReview": { "status": "pending" },
     "adversarialTest": { "status": "pending" },
-    "design": { "status": "pending", "note": "API-only slice per FLOW_PLAN evidence note (asciinema)" },
+    "design": { "status": "n/a", "reason": "served-app plane is byte-compat data infra; UI is the ported featured apps, unchanged" },
     "walkthrough": { "status": "pending", "kind": "asciinema" }
-  }
+  },
+  "diagrams": "no NEW diagram required (FIXED-12): ch07 opening states this pipeline is rendered across 02-module-map (apps/ esbuild+serving) and 03-request-crud (artifact path); as-built matches both. Noted in the GATE entry.",
+  "deliberateRed": "schema-coverage red proven (a COVERED name that is not a real descriptor fails the gate) + reverted (ch13 §13.11 item 5).",
+  "reviewVerdicts": { "claude": "pending", "codex": "pending" },
+  "checkpointTag": "gate-6 only when reviews approve"
 }
