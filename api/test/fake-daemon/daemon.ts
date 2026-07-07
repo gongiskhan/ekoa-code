@@ -13,7 +13,7 @@ import { relative } from 'node:path';
 // The canonical signing bytes come from the FROZEN shared contract — the daemon verifies with the
 // SAME bytes Cortex signed (§18.1 wire lockstep). Only the wire contract is imported, never api/src.
 import { canonicalTaskBinding } from '@ekoa/shared';
-import { resolveWithinGrant, ContainmentError } from './containment.js';
+import { resolveWithinGrant, realRoot, ContainmentError } from './containment.js';
 
 /** The 8-field S2 binding + transport fields (mirrors shared/ekoa-local DelegatedTask). */
 export interface DelegatedTask {
@@ -145,7 +145,9 @@ export class FakeDaemon {
       ts: new Date(this.now()).toISOString(),
       session: task.session,
       correlationId,
-      path: relative(grant.root, real) || real,
+      // Relative to the REAL grant root (realpath), so a /var → /private/var symlink on the root
+      // itself does not produce a spurious ../ path in the ledger row.
+      path: relative(realRoot(grant.root), real) || real,
       byteRange: `0-${bytes.length}`,
       bytesOut: bytes.length,
       sha256: createHash('sha256').update(bytes).digest('hex'),
