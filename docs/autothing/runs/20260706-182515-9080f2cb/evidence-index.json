@@ -94,6 +94,16 @@
         "codex": "approve (1C+1H fixed)"
       },
       "tag": "gate-7"
+    },
+    "phase-7a": {
+      "gate": "G7A",
+      "status": "passed",
+      "evidence": "slices/phase-7a/g7a-gate.cast",
+      "reviews": {
+        "claude": "approve-after-fixes+reverified",
+        "codex": "approve (3C+1H+1M fixed)"
+      },
+      "tag": "gate-7a"
     }
   },
   "globalGate": {
