@@ -220,16 +220,18 @@ export interface ArtifactResolution {
 }
 
 // Async: the real resolver (apps/ registry) reads the slug index + artifacts store off the
-// database, so it returns a Promise. Default resolves null.
-export type ArtifactResolver = (slugOrId: string) => Promise<ArtifactResolution | null>;
+// database, so it returns a Promise. Default resolves null. `requesterOrgId` is the RUN's org —
+// the resolver MUST refuse an artifact outside it, so an ekoa_action step cannot target another
+// org's artifact and execute its manifest capability against the victim's app-data (Codex G8).
+export type ArtifactResolver = (slugOrId: string, requesterOrgId: string) => Promise<ArtifactResolution | null>;
 
 const defaultArtifactResolver: ArtifactResolver = async () => null;
 let artifactResolver: ArtifactResolver = defaultArtifactResolver;
 export function setArtifactResolver(fn: ArtifactResolver): void {
   artifactResolver = fn;
 }
-export function resolveArtifactProjectDir(slugOrId: string): Promise<ArtifactResolution | null> {
-  return artifactResolver(slugOrId);
+export function resolveArtifactProjectDir(slugOrId: string, requesterOrgId: string): Promise<ArtifactResolution | null> {
+  return artifactResolver(slugOrId, requesterOrgId);
 }
 
 // ============================================================================

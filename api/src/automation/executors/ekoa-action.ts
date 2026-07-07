@@ -71,8 +71,9 @@ export async function executeEkoaActionStep(args: ExecuteEkoaActionArgs): Promis
     });
   }
 
-  // Resolve slug → app id → project dir
-  const resolution = await resolveArtifactProjectDir(spec.artifactSlug);
+  // Resolve slug → app id → project dir, org-scoped to the RUN (a cross-org artifact is refused,
+  // so an ekoa_action step cannot execute another org's capability against its app-data — Codex G8).
+  const resolution = await resolveArtifactProjectDir(spec.artifactSlug, ctx.orgId);
   if (!resolution) {
     return finishRecord(baseRecord, 'failed', stepStart, {
       tier: 'cache',
@@ -133,6 +134,7 @@ export async function executeEkoaActionStep(args: ExecuteEkoaActionArgs): Promis
   // Execute recipe
   const actionCtx: EkoaActionContext = {
     userId: ctx.ownerUserId,
+    orgId: ctx.orgId,
     artifactId,
     inputs: mergedInputs,
     captured: {},
@@ -213,14 +215,14 @@ export interface ResolveArtifactResult {
   projectDir: string;
 }
 
-export function resolveArtifactProjectDir(slugOrId: string): Promise<ResolveArtifactResult | null> {
-  return resolveArtifactSeam(slugOrId);
+export function resolveArtifactProjectDir(slugOrId: string, requesterOrgId: string): Promise<ResolveArtifactResult | null> {
+  return resolveArtifactSeam(slugOrId, requesterOrgId);
 }
 
 // Wire artifact.invoke primitive to recursive ekoa_action execution.
-// Resolves another artifact's capability and runs its recipe in-process.
-setInvokeArtifactCapability(async (slug, capabilityName, inputs, userId) => {
-  const resolution = await resolveArtifactProjectDir(slug);
+// Resolves another artifact's capability and runs its recipe in-process — org-scoped to the RUN.
+setInvokeArtifactCapability(async (slug, capabilityName, inputs, userId, orgId) => {
+  const resolution = await resolveArtifactProjectDir(slug, orgId);
   if (!resolution) throw new EkoaActionFailure(`artifact.invoke: artifact "${slug}" not found`);
   const manifestPath = join(resolution.projectDir, 'MANIFEST.md');
   if (!existsSync(manifestPath)) throw new EkoaActionFailure(`artifact.invoke: MANIFEST.md missing for ${slug}`);
@@ -229,6 +231,7 @@ setInvokeArtifactCapability(async (slug, capabilityName, inputs, userId) => {
   if (!cap) throw new EkoaActionFailure(`artifact.invoke: capability "${capabilityName}" not in ${slug}`);
   const subCtx: EkoaActionContext = {
     userId,
+    orgId,
     artifactId: resolution.artifactId,
     inputs,
     captured: {},

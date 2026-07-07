@@ -68,6 +68,30 @@ afterEach(() => {
   __resetAutomationSeamsForTests();
 });
 
+describe('ekoa_action cross-org artifact resolution (Codex G8)', () => {
+  it('the resolver receives the RUN org; a cross-org run cannot resolve the target artifact', async () => {
+    const seenOrgs: string[] = [];
+    const projectDir = join(dir, 'app');
+    // Resolver that only serves org 'orgA' (mirrors the composition-root org check).
+    setArtifactResolver(async (_slug, requesterOrgId) => {
+      seenOrgs.push(requesterOrgId);
+      return requesterOrgId === 'orgA' ? { artifactId: 'leaky-app', projectDir } : null;
+    });
+    const step = { id: 's1', description: 'act', type: 'ekoa_action', ekoaAction: { artifactSlug: 'leaky-app', capabilityName: 'leak' } } as unknown as Step;
+    const run = async (orgId: string) => {
+      const { finishRecord, captured } = makeFinish();
+      await executeEkoaActionStep({
+        step, index: 0, runId: 'r1', automation: { id: 'a1', name: 'A', steps: [] } as never,
+        ctx: { ...ctx(), orgId }, inputs: {}, baseRecord: baseRecord(), stepStart: 0, finishRecord,
+      } as never);
+      return captured;
+    };
+    const foreign = await run('orgB');
+    expect(foreign.status).toBe('failed'); // artifact not resolvable for org B → step fails, never executes
+    expect(seenOrgs).toContain('orgB'); // the run org was passed to the resolver
+  });
+});
+
 describe('ekoa_action credential boundary (§5.6.7)', () => {
   it('a recipe cannot capture inputs.credentials into the persisted output', async () => {
     const step = { id: 's1', description: 'act', type: 'ekoa_action', ekoaAction: { artifactSlug: 'leaky-app', capabilityName: 'leak' } } as unknown as Step;

@@ -63,6 +63,8 @@ export type PlatformPrimitive =
 
 export interface EkoaActionContext {
   userId: string;
+  /** The RUN's org — used to org-scope artifact resolution (ekoa_action target + artifact.invoke). */
+  orgId: string;
   artifactId: string;
   /** User-supplied inputs passed when the step ran. */
   inputs: Record<string, unknown>;
@@ -161,7 +163,7 @@ async function executePrimitive(p: PlatformPrimitive, ctx: EkoaActionContext): P
         // Defer to ekoa-action executor itself (recursive). Implemented
         // by the executor — primitive interpreter exposes a hook for it.
         const inputs = renderObjectRefs(p.inputs, ctx);
-        const result = await invokeArtifactCapability(p.artifactSlug, p.capabilityName, inputs, ctx.userId);
+        const result = await invokeArtifactCapability(p.artifactSlug, p.capabilityName, inputs, ctx.userId, ctx.orgId);
         if (p.returnAs) ctx.captured[p.returnAs] = result;
         ctx.trace.push({ op: p.op, summary: `artifact.invoke ${p.artifactSlug}.${p.capabilityName} ok`, durationMs: Date.now() - opStart, status: 'ok' });
         return;
@@ -329,7 +331,7 @@ function resolveUserPath(path: string, _userId: string): string {
 
 // Pluggable hook so the executor can wire artifact.invoke without a
 // circular import.
-type InvokeArtifactCapability = (slug: string, name: string, inputs: Record<string, unknown>, userId: string) => Promise<unknown>;
+type InvokeArtifactCapability = (slug: string, name: string, inputs: Record<string, unknown>, userId: string, orgId: string) => Promise<unknown>;
 let invokeArtifactCapability: InvokeArtifactCapability = async () => {
   throw new EkoaActionFailure('artifact.invoke not wired (executor must register a hook)');
 };

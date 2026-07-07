@@ -309,12 +309,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     update: async (a, c, id, patch) => automationAppData.upsert(await appScopeOf(a), c, id, patch),
     delete: async (a, c, id) => automationAppData.delete(await appScopeOf(a), c, id),
   });
-  // 7. Artifact resolution for ekoa_action target apps (slug or id → project dir, jailed).
-  setArtifactResolver(async (slugOrId) => {
+  // 7. Artifact resolution for ekoa_action target apps (slug or id → project dir, jailed), ORG-
+  //    SCOPED to the run: a cross-org artifact is refused, so an ekoa_action step can never resolve
+  //    and execute another org's capability against its app-data (Codex G8).
+  setArtifactResolver(async (slugOrId, requesterOrgId) => {
     const resolved = await resolveApp(slugOrId);
     if (!resolved || !resolved.artifactBacked) return null;
     const art = await getArtifactById(resolved.appId);
-    return art ? { artifactId: resolved.appId, projectDir: projectDirFor(art) } : null;
+    if (!art || art.orgId !== requesterOrgId) return null;
+    return { artifactId: resolved.appId, projectDir: projectDirFor(art) };
   });
   // 8. Catalog sources: integration definitions feed skills; connected platform accounts and
   //    artifact (ekoa_action) capabilities keep honest empties this gate — the seam carries no
