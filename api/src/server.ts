@@ -26,6 +26,7 @@ import { sessionsRouter } from './routes/sessions.js';
 import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
+import { llmHealth, registerGateway, loadCredential } from './llm/index.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { knowledgeRouter } from './routes/knowledge.js';
 import { triggersRouter } from './routes/triggers.js';
@@ -111,10 +112,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use(express.json({ limit: '1mb' }));
 
   // Public health surface (ch03 §3.8.23) — field shape carried; external watchdogs depend on it.
+  // G7: the LLM-chokepoint slice (claudeAuth field carried verbatim as the watchdog contract,
+  // §6.2.4; plus the metering-anomaly + gateway-unmetered counters, §6.3 rule 3 / §6.5.4).
   app.get('/health', (_req: Request, res: Response) => {
+    const llm = llmHealth();
     res.json({
       ok: true,
-      claudeAuth: { ok: false, configured: false },
+      claudeAuth: llm.claudeAuth,
+      meteringAnomalies: llm.meteringAnomalies,
+      gatewayUnmeteredCalls: llm.gatewayUnmeteredCalls,
       clockSkewSec: 0,
       bridgeConnections: sseManager.connectionCount,
       pendingEvents: 0,
@@ -132,6 +138,10 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/memories', memoriesRouter(deps));
   app.use('/api/v1/registo', registoRouter(deps));
   app.use('/api/v1/billing', billingRouter(deps));
+  // G7 — the ekoa-local LLM gateway sub-app (ch03 §3.10; metering inside the chokepoint,
+  // §6.5.4). Mounted at /api/v1/llm; the owner-bypass token verifier is injected (llm/ needs
+  // no auth/ import — the gateway takes it as a dep). Bills wire-tier FAST per proxied call.
+  registerGateway(app, { verifyToken });
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));
@@ -185,6 +195,7 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   const allUsers = await users.find({});
   loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active })));
   await loadRevocations(Math.floor(deps.now() / 1000));
+  await loadCredential(); // G7: load the central model credential (§6.2; no-op when unconfigured)
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;
   if (seedUser && seedPass) await seedAdmin(seedUser, seedPass, deps);
