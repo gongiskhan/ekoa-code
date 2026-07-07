@@ -108,8 +108,13 @@
     },
     "phase-7b": {
       "gate": "G7B",
-      "status": "in_progress",
-      "resumedBy": "session ac243460 (Fable 5), 2026-07-07T04:40Z"
+      "status": "passed",
+      "evidence": "slices/phase-7b/g7b-gate.log",
+      "reviews": {
+        "codex": "clean (4 findings 1C+1H+2M fixed round1, round2 clean)",
+        "claude-fresh-context": "in-flight-confirming"
+      },
+      "tag": "gate-7b"
     }
   },
   "globalGate": {

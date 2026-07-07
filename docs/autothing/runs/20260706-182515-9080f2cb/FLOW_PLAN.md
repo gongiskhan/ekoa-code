@@ -26,7 +26,7 @@ Brief: build production-ready rc-1 of the rebuilt Ekoa platform (api/, web/, sha
 | 8 | phase-6 | G6 App pipeline + served-app plane + legal vertical (largest; 37-spec byte-compat gate) | mixed | serial | passed |
 | 9 | phase-7 | G7 LLM chokepoint core + billing metering + rate/spend caps | mixed | serial | passed |
 | 10 | phase-7a | G7A Anonymisation layer: detectors, vault, streaming de-tok, audit, payload-capture harness | mixed | serial | passed |
-| 11 | phase-7b | G7B Agent execution: content loader, jobs, SDK-via-chokepoint, build-verify, memory-extract | mixed | serial | in_progress |
+| 11 | phase-7b | G7B Agent execution: content loader, jobs, SDK-via-chokepoint, build-verify, memory-extract | mixed | serial | passed |
 | 12 | phase-8 | G8 Automation engine + canvas streaming carve-out | mixed | serial | pending |
 | 13 | phase-8a | G8A Delegation + bridge + provider endpoint + fake-daemon harness (S1-S6) | mixed | serial | pending |
 | 14 | phase-9 | G9 Web client migration into web/ (typed client, FC fates, Amendment 2 surfaces; full ledger due) | ui | serial | pending |
