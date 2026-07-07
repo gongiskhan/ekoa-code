@@ -58,11 +58,6 @@ function mintToken(cls: EntityClass, seq: number): string {
   }
 }
 
-interface ChannelPrefix {
-  clearPrefix: string;
-  tokenizedPrefix: string;
-}
-
 interface SessionVault {
   sessionId: string;
   createdAt: number;
@@ -70,8 +65,6 @@ interface SessionVault {
   valueToToken: Map<string, string>;
   tokenToValue: Map<string, string>;
   perClass: Map<EntityClass, number>;
-  /** detect-on-delta running prefixes, scoped per channel (§17.3 step 2). */
-  channels: Map<string, ChannelPrefix>;
   /** cached sorted token list + a version, for de-tokenization + straddle detection. */
   tokenListVersion: number;
 }
@@ -120,7 +113,6 @@ function getOrCreateVault(sessionId: string): SessionVault {
       valueToToken: new Map(),
       tokenToValue: new Map(),
       perClass: new Map(),
-      channels: new Map(),
       tokenListVersion: 0,
     };
     vaults.set(sessionId, v);
@@ -167,16 +159,6 @@ export function maxTokenLength(handle: VaultHandle): number {
   return max;
 }
 
-/** Read/advance the per-channel detect-on-delta prefix. Returns the recorded prefixes (or
- *  empty) so the caller can detect on the delta only and reuse the tokenized head. */
-export function channelPrefix(handle: VaultHandle, channel: string): ChannelPrefix {
-  const v = getOrCreateVault(handle.sessionId);
-  return v.channels.get(channel) ?? { clearPrefix: '', tokenizedPrefix: '' };
-}
-export function setChannelPrefix(handle: VaultHandle, channel: string, next: ChannelPrefix): void {
-  const v = getOrCreateVault(handle.sessionId);
-  v.channels.set(channel, next);
-}
 
 /** Clear a session vault at session end (§17.5, D1). After this the map does not exist. */
 export function clearSession(sessionId: string): void {

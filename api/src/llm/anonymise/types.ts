@@ -78,7 +78,6 @@ export interface AnonymiseContext {
   sessionId: string;
   ruleset: OrgRuleset;
   correlationId?: string;
-  channel?: string;
   actor?: AnonAuditActor;
 }
 

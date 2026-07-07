@@ -541,9 +541,9 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     const correlationId = newCorrelationId();
     const sk = sessionKeyFor(attribution);
     const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
-    const promptAnon = anonymize(opts.prompt, { ...ctx, channel: 'prompt' });
+    const promptAnon = anonymize(opts.prompt, ctx);
     const handle: VaultHandle = promptAnon.handle;
-    const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, { ...ctx, channel: 'system' }) : undefined;
+    const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
     const detok = createDetokenizer(handle);
     let rawText = ''; // the tokenized text as it comes off the transport
     try {
@@ -621,8 +621,8 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const correlationId = newCorrelationId();
   const sk = sessionKeyFor(attribution);
   const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
-  const promptAnon = anonymize(opts.prompt, { ...ctx, channel: 'prompt' });
-  const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, { ...ctx, channel: 'system' }) : undefined;
+  const promptAnon = anonymize(opts.prompt, ctx);
+  const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
   const env = await buildSubprocessEnv();
   const res = await transport.oneShot({
     prompt: promptAnon.text,

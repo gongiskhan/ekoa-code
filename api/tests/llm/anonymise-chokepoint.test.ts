@@ -233,6 +233,25 @@ describe('encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b),
     }));
     await expect(completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr)).rejects.toThrow();
   });
+
+  it('encrypted deny-list access is audit-logged as a COUNT on the persisted row (§17.4 b, D3)', async () => {
+    setRulesetResolver((orgId): OrgRuleset => ({ orgId, denyListCiphertext: encryptForScope(JSON.stringify([PARTY]), orgId) }));
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { return { status: 200, headers: {}, body: bodyEcho((p.payload.messages as Array<{ content: string }>)[0]!.content) }; },
+    }));
+    await completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr);
+    let rows: Array<{ metadata?: Record<string, unknown> }> = [];
+    for (let i = 0; i < 50 && rows.length === 0; i++) {
+      rows = (await activityLogs.find({ category: 'anonymisation' })) as typeof rows;
+      if (rows.length === 0) await new Promise((r) => setTimeout(r, 20));
+    }
+    const m = rows[0]!.metadata!;
+    // The encrypted deny-list access IS logged on the persisted row (a consultation count, one per
+    // tokenized leaf) - the §17.4(b)/D3 requirement, reaching the row (not just the in-memory rec).
+    expect(m.denyListAccessed as number).toBeGreaterThanOrEqual(1);
+    // metadata-only: the literal party name is never in the row
+    expect(JSON.stringify(m)).not.toContain(PARTY);
+  });
 });
 
 describe('audit folds into the single Registo write path, metadata only (§17.6, §17.11)', () => {

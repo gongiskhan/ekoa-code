@@ -27,8 +27,9 @@ export interface AnonAuditRecord {
   payloadHash: string;
   /** false when NER coverage was reduced for this event (§17.3 fail-open on (c)). */
   nerAvailable: boolean;
-  /** count of encrypted deny-list literals consulted for this event - the §17.4 (b)/D3 access-log,
-   *  metadata only (a count, never the literals). Absent when no encrypted deny-list was used. */
+  /** how many times the encrypted deny-list was decrypted+consulted for this event (one per
+   *  tokenized text leaf) - the §17.4 (b)/D3 access-log, metadata only (a count, never the
+   *  literals). Absent when no encrypted deny-list was used. */
   denyListAccessed?: number;
   /** true when this event is a fail-closed refusal (a mandatory detector was down, §17.3). */
   refused?: boolean;
@@ -95,6 +96,8 @@ export function recordAnonAudit(actor: AnonAuditActor, rec: AnonAuditRecord): st
     chainSeq: seq,
     prevChainHash,
     chainHash,
+    // The §17.4(b)/D3 deny-list access-log count MUST reach the persisted row (metadata only).
+    ...(rec.denyListAccessed !== undefined ? { denyListAccessed: rec.denyListAccessed } : {}),
     ...(rec.refused ? { refused: true } : {}),
   };
 
