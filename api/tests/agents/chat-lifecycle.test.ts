@@ -21,13 +21,18 @@ interface Captured { stream: string; streamId: string; type: string; data: unkno
 let events: Captured[];
 
 async function runChat(script: FakeTransportScript, message = 'hello'): Promise<string> {
-  resetAgentState(script);
+  const { runId } = await runChatT(script, message);
+  return runId;
+}
+
+async function runChatT(script: FakeTransportScript, message = 'hello'): Promise<{ runId: string; transport: ReturnType<typeof resetAgentState> }> {
+  const transport = resetAgentState(script);
   events = [];
   vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
   const input = { actor, username: 'u1', sessionId: 's1', message, language: 'pt', deps };
   const { runId } = createChatRun(input);
   await executeChatRun(runId, input);
-  return runId;
+  return { runId, transport };
 }
 
 const chatEventsFor = (runId: string) => events.filter((e) => e.stream === 'chat' && e.streamId === runId);
@@ -87,6 +92,13 @@ describe('chat run pipeline + streaming contract', () => {
     expect(events.some((e) => e.stream === 'notifications' && e.type === 'integration_build_intent')).toBe(true);
   });
 
+  it('mounts the two §5.4.4 knowledge tools as in-process MCP and allowlists their wire names', async () => {
+    const { transport } = await runChatT({ finalText: 'ok' });
+    const call = transport.streamCalls[0]!;
+    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read']);
+    expect(call.allowedTools).toEqual(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read']);
+  });
+
   it('never emits subagent_event, phase_changed, or usage_progress on the wire (§5.7.3)', async () => {
     const runId = await runChat({
       stream: [{ kind: 'text', text: 'hi' }, { kind: 'plan' }, { kind: 'usage', usage: { input: 1, output: 1, cacheCreate: 0, cacheRead: 0 } }],
@@ -111,6 +123,23 @@ describe('chat run pipeline + streaming contract', () => {
     const err = evs.find((e) => e.type === 'error');
     expect(err).toBeTruthy();
     expect((err!.data as { code: string }).code).toBe('TIMEOUT'); // timeout ≠ silent Stop
+    expect(evs.some((e) => e.type === 'complete')).toBe(false);
+    expect(getRun(runId)?.status).toBe('error');
+  });
+
+  it('a timeout firing BEFORE the stream (early abort checkpoint) still surfaces TIMEOUT, never a silent cancel (§5.3.6 — G7B review find)', async () => {
+    resetAgentState({ finalText: 'late' });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: 'hi', language: 'pt', deps };
+    const { runId, entry } = createChatRun(input);
+    entry.timedOut = true; // the §5.3.6 timer fired during an early await (deterministic simulation)
+    entry.abort.abort();
+    await executeChatRun(runId, input);
+    const evs = chatEventsFor(runId);
+    const err = evs.find((e) => e.type === 'error');
+    expect(err).toBeTruthy();
+    expect((err!.data as { code: string }).code).toBe('TIMEOUT');
     expect(evs.some((e) => e.type === 'complete')).toBe(false);
     expect(getRun(runId)?.status).toBe('error');
   });

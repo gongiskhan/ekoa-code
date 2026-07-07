@@ -27,6 +27,7 @@ import {
 import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './streaming.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { toolPolicyFor } from './tools.js';
+import { knowledgeToolSpecs, loadContextToolSpec } from './sdk-tools.js';
 import { classifyInBuildIntent } from './guided-build.js';
 import {
   persistJob,
@@ -251,7 +252,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
 
     // Billing gate (§5.2 step 3).
     const allow = await checkAllowance(input.actor.userId);
-    if (abort.signal.aborted) { await bail(); return; }
+    if (abort.signal.aborted) { await settleAborted(); return; }
     if (!allow.ok) {
       clearTimers();
       if (finalizeOnce(jobId)) {
@@ -278,7 +279,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       projectDir = resolved.projectDir;
       resumeSessionId = resolved.resumeSessionId;
     }
-    if (abort.signal.aborted) { await bail(); return; }
+    if (abort.signal.aborted) { await settleAborted(); return; }
 
     // Routing floored at the expert tier (§5.2 step 5); emit the routing event.
     const decision = decideForTask(input.description, undefined, 'EXPERT');
@@ -295,6 +296,8 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,
+        // Builds mount the knowledge tools + the context-loading tool as in-process MCP (§5.4.4).
+        sdkTools: [...knowledgeToolSpecs(input.actor), loadContextToolSpec(input.actor, 'coding')],
         cwd: projectDir || undefined,
         homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
@@ -318,11 +321,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const result = await handle.result;
     clearTimers();
 
-    if (result.aborted) {
-      if (entry?.timedOut && !entry.cancelled) { await finishError('TIMEOUT'); }
-      else { await bail(); } // cancelled → cancelled terminal; plain abort → quiet
-      return;
-    }
+    if (result.aborted) { await settleAborted(); return; }
 
     // §5.6.2 completion sequence, step 1: provider-error-as-result reroute (§5.3.7).
     if (scanProviderError(result.text)) { await finishError('ADAPTER_ERROR'); return; }
@@ -395,6 +394,16 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       await patchJob(jobId, { status: 'cancelled', endedAt: new Date(input.deps.now()).toISOString() });
     }
     terminalReached = true;
+  }
+
+  // Abort resolution (§5.3.6): a timeout surfaces a terminal ERROR wherever the abort lands —
+  // including the early checkpoints before the stream — while a user Stop stays silent (cancel
+  // owns the terminal state). Found by the G7B fresh-context review: bail() alone is
+  // timeout-blind, so a timeout during checkAllowance/prepare was misreported as a cancel.
+  async function settleAborted(): Promise<void> {
+    clearTimers();
+    if (entry?.timedOut && !entry.cancelled) await finishError('TIMEOUT');
+    else await bail();
   }
 }
 

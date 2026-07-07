@@ -61,6 +61,54 @@ export function knowledgeGrounding(input: KnowledgeGroundingInput): Promise<stri
   return knowledgeGroundingFn(input);
 }
 
+// --- In-process MCP knowledge tools (ch05 §5.4.4) -----------------------------------------
+
+/** A search hit the `knowledge_search` tool cites (docId + collection locate it for a read). */
+export interface KnowledgeToolHit {
+  docId: string;
+  collection: string;
+  title: string;
+  sourceUrl: string;
+  snip: string;
+}
+
+/** Org-partitioned search behind the `knowledge_search` tool. The orgId comes from the run's
+ *  actor — NEVER from tool arguments — so cross-org search is impossible by construction. */
+export type KnowledgeToolSearchFn = (input: { orgId: string; query: string; limit?: number }) => Promise<KnowledgeToolHit[]>;
+const defaultKnowledgeToolSearch: KnowledgeToolSearchFn = async () => [];
+let knowledgeToolSearchFn: KnowledgeToolSearchFn = defaultKnowledgeToolSearch;
+export function setKnowledgeToolSearch(fn: KnowledgeToolSearchFn): void {
+  knowledgeToolSearchFn = fn;
+}
+export function knowledgeToolSearch(input: { orgId: string; query: string; limit?: number }): Promise<KnowledgeToolHit[]> {
+  return knowledgeToolSearchFn(input);
+}
+
+/** Org-partitioned document read behind the `knowledge_read` tool (same actor-owned orgId rule). */
+export type KnowledgeToolReadFn = (input: { orgId: string; collection: string; docId: string }) => Promise<{ title: string; sourceUrl: string; body: string } | null>;
+const defaultKnowledgeToolRead: KnowledgeToolReadFn = async () => null;
+let knowledgeToolReadFn: KnowledgeToolReadFn = defaultKnowledgeToolRead;
+export function setKnowledgeToolRead(fn: KnowledgeToolReadFn): void {
+  knowledgeToolReadFn = fn;
+}
+export function knowledgeToolRead(input: { orgId: string; collection: string; docId: string }): Promise<{ title: string; sourceUrl: string; body: string } | null> {
+  return knowledgeToolReadFn(input);
+}
+
+// --- On-demand agent-context content (ch05 §5.4.4 build row; ch08 on-demand files) ---------
+
+/** The `load_context` tool: fetch a named on-demand content file from the user's composed
+ *  agent context. Returns null when no such package/file exists (an honest not-found). */
+export type LoadContextContentFn = (input: { userId: string; agentKind: 'coding' | 'chat' | 'automation'; name: string }) => Promise<string | null>;
+const defaultLoadContextContent: LoadContextContentFn = async () => null;
+let loadContextContentFn: LoadContextContentFn = defaultLoadContextContent;
+export function setLoadContextContent(fn: LoadContextContentFn): void {
+  loadContextContentFn = fn;
+}
+export function loadContextContent(input: { userId: string; agentKind: 'coding' | 'chat' | 'automation'; name: string }): Promise<string | null> {
+  return loadContextContentFn(input);
+}
+
 // --- Integration pre-fetch (ch05 §5.5.2 layer 3, chat only) -------------------------------
 
 /** Live Google/Microsoft data pre-fetched into the system prompt on keyword hits, with a 60 s
@@ -183,6 +231,9 @@ export function getBuildMechanics(): BuildMechanics {
 export function __resetAgentSeamsForTests(): void {
   assembleAgentContextFn = defaultAssembleAgentContext;
   knowledgeGroundingFn = defaultKnowledgeGrounding;
+  knowledgeToolSearchFn = defaultKnowledgeToolSearch;
+  knowledgeToolReadFn = defaultKnowledgeToolRead;
+  loadContextContentFn = defaultLoadContextContent;
   integrationPrefetchFn = defaultIntegrationPrefetch;
   catalogFn = defaultCatalog;
   verifyRunnerFn = defaultVerifyRunner;

@@ -43,6 +43,11 @@ export {
   type RawUsage,
 } from './client.js';
 
+// In-process MCP tool declarations (§5.4.4): agents/ declares plain specs; the chokepoint
+// instantiates them on the SDK spawn (sdk-tools.ts). Only the spec type + wire-name helper
+// cross the boundary — createSdkMcpServer/tool stay inside llm/.
+export { mcpToolName, type SdkToolSpec } from './sdk-tools.js';
+
 // Central credential custody: boot load, the /health claudeAuth field, admin set.
 export {
   loadCredential,

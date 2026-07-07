@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { appBuilder } from './builder.js';
 import { appRegistry } from './app-registry.js';
 import { artifacts } from '../data/stores.js';
+import { recordedProjectDir } from './app-paths.js';
 import { featuredArtifactsDir, featuredArtifactDir } from './featured-seeder.js';
 import { captureArtifactScreenshot, getArtifactScreenshotDir } from '../services/artifact-screenshot.js';
 
@@ -151,7 +152,7 @@ async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite):
   try {
     const row = await artifacts.get(manifest.id);
     const data = (row?.data ?? {}) as Record<string, unknown>;
-    const workingDir = typeof data.projectDir === 'string' ? data.projectDir : undefined;
+    const workingDir = recordedProjectDir(data); // jail-resolved (ch09 invariant 10), never raw
     if (row && data.customized === true && workingDir && existsSync(workingDir)) {
       const fresh = await isFresh(workingDir, workingDir);
       if (!fresh) {

@@ -11,3 +11,13 @@ coverage/
 !.env.example
 test-results/
 playwright-report/
+
+# >>> autothing >>>
+# evidence binaries + liveness state (resume-critical small files stay versioned)
+**/*.cast
+docs/autothing/runs/**/*.webm
+docs/autothing/runs/**/*.mp4
+docs/autothing/runs/**/*.png
+docs/autothing/runs/**/status.json
+docs/autothing/runs/**/owner.lock.json
+# <<< autothing <<<

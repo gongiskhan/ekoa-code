@@ -25,6 +25,7 @@ import {
   billeeOf,
 } from './attribution.js';
 import { decideForTier, type RouterDecision, type Tier } from './router.js';
+import { buildMcpServers, translateAllowedTools, type SdkToolSpec } from './sdk-tools.js';
 import { buildSubprocessEnv, getSecret, forceRefresh, currentMode, type CredentialMode } from './credentials.js';
 import {
   anonymize,
@@ -178,6 +179,8 @@ export interface SdkCallParams {
   disallowedTools?: string[];
   cwd?: string;
   maxTurns?: number;
+  /** In-process MCP tool specs the spawn mounts (§5.4.4; instantiated in sdk-tools.ts). */
+  sdkTools?: SdkToolSpec[];
   /** Base64 image attachments for vision one-shots (§6.2.1 runOneShot). */
   images?: Array<{ mediaType: string; data: string }>;
   signal?: AbortSignal;
@@ -323,6 +326,8 @@ function sdkOptions(p: SdkCallParams): Record<string, unknown> {
     ...(p.cwd ? { cwd: p.cwd } : {}),
     ...(p.maxTurns !== undefined ? { maxTurns: p.maxTurns } : {}),
     ...(p.systemPrompt ? { customSystemPrompt: p.systemPrompt } : {}),
+    // In-process MCP tools (§5.4.4) — instantiated at spawn time, in-process only (no egress).
+    ...(p.sdkTools?.length ? { mcpServers: buildMcpServers(p.sdkTools) } : {}),
   };
 }
 
@@ -575,6 +580,8 @@ export interface AgentRunOptions {
   /** Build runs set HOME = projectDir; agent-face runs raise the stream-close timeout (§5.4.1). */
   homeDir?: string;
   streamCloseTimeoutMs?: number;
+  /** In-process MCP tools this run mounts (§5.4.4) — plain specs; the chokepoint instantiates. */
+  sdkTools?: SdkToolSpec[];
   callbacks?: AgentRunCallbacks;
 }
 
@@ -651,10 +658,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
         systemPrompt: systemAnon?.text,
         resume: opts.resume,
         forkSession: opts.forkSession,
-        allowedTools: opts.allowedTools,
+        // Plain §5.4.4 names become MCP wire names for every mounted in-process tool (§5.4.4).
+        allowedTools: translateAllowedTools(opts.allowedTools, opts.sdkTools),
         disallowedTools: opts.disallowedTools,
         cwd: opts.cwd,
         maxTurns: opts.maxTurns,
+        sdkTools: opts.sdkTools,
         signal: ac.signal,
       });
       for await (const msg of stream) {

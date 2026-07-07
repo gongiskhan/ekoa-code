@@ -15,3 +15,7 @@ export {
 } from './service.js';
 export { buildGroundingBlock, isLegalContext, type GroundingInput, type GroundingResult } from './grounding.js';
 export { closeIndex } from './index-store.js';
+// The §5.4.4 in-process knowledge tools' backing functions (org-partitioned by signature; the
+// composition root binds them to the agents/ tool seams — agents/ never imports knowledge/).
+export { search as searchKnowledgeIndex, type SearchHit } from './index-store.js';
+export { readDoc as readKnowledgeDoc } from './vault.js';

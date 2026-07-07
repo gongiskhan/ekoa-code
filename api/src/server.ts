@@ -9,6 +9,7 @@
  *  - process-level exception posture: uncaughtException/unhandledRejection log and continue.
  */
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import express, { type Express, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
@@ -62,12 +63,15 @@ import { jobsRouter } from './routes/jobs.js';
 import {
   setAssembleAgentContext,
   setKnowledgeGrounding,
+  setKnowledgeToolSearch,
+  setKnowledgeToolRead,
+  setLoadContextContent,
   setVerifyRunner,
   setBuildMechanics,
   sweepOrphans,
 } from './agents/index.js';
-import { assembleAgentContext, bootContentLoader, configureContentLoader } from './content/index.js';
-import { backfillKnowledgeIndex, buildGroundingBlock } from './knowledge/index.js';
+import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
+import { backfillKnowledgeIndex, buildGroundingBlock, searchKnowledgeIndex, readKnowledgeDoc } from './knowledge/index.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -111,6 +115,38 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   );
   setVerifyRunner(verifyRunner); // per-build verification (ch07 §7.2.6)
   setBuildMechanics(createBuildMechanics(deps)); // the G6 build pipeline (ch07 §7.2-§7.4)
+  // The §5.4.4 in-process knowledge tools: org partitioning rides the seam signature — the
+  // orgId reaches these from the run's actor, never from tool arguments (agents/sdk-tools.ts).
+  setKnowledgeToolSearch(async ({ orgId, query, limit }) =>
+    searchKnowledgeIndex(orgId, query, limit).map((h) => ({
+      docId: h.docId,
+      collection: h.collection,
+      title: h.title,
+      sourceUrl: h.sourceUrl ?? '',
+      snip: h.snippet,
+    })),
+  );
+  setKnowledgeToolRead(async ({ orgId, collection, docId }) => {
+    const doc = await readKnowledgeDoc(orgId, collection, docId);
+    return doc ? { title: doc.fm.title, sourceUrl: doc.fm.sourceUrl ?? '', body: doc.body } : null;
+  });
+  // The build-run `load_context` tool (§5.4.4): a named on-demand file from the user's composed
+  // context. The name matches against the loader's OWN returned file list (never a joined path),
+  // so the tool argument cannot traverse; frontmatter strips like the eager prompt sections.
+  setLoadContextContent(async ({ userId, agentKind, name }) => {
+    const composed = await composeContext(userId, agentKind);
+    const file = composed.onDemandFiles.find((f) => {
+      const base = f.replace(/\\/g, '/').split('/').pop() ?? '';
+      return base === name || base.replace(/\.[^.]+$/, '') === name;
+    });
+    if (!file) return null;
+    const raw = await readFile(file, 'utf8');
+    if (!raw.startsWith('---')) return raw;
+    const end = raw.indexOf('\n---', 3);
+    if (end === -1) return raw;
+    const after = raw.indexOf('\n', end + 1);
+    return after === -1 ? '' : raw.slice(after + 1).replace(/^\n+/, '');
+  });
   // Integration pre-fetch (§5.5.2 layer 3) + automation catalog (layer 4) land at G8 — an honest
   // cross-gate deferral; both keep their safe empty defaults until then.
 

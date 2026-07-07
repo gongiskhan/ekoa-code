@@ -22,6 +22,7 @@ import {
 import { ChatStreamSink, emitBuildIntent, emitIntegrationBuildIntent } from './streaming.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { toolPolicyFor } from './tools.js';
+import { knowledgeToolSpecs } from './sdk-tools.js';
 import { assembleRunContext, renderPrompt } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 
@@ -75,6 +76,14 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
   // they are never removed on finalize — a restart empties the registry, giving the 404 (crit 2).
   const cleanup = (): void => clearTimeout(timer);
   const settleCancelled = (): void => { cleanup(); settleChatRun(runId, { status: 'cancelled' }); };
+  // Abort checkpoint resolution (§5.3.6): a timeout must surface a terminal ERROR even when the
+  // timer fires during an early await (billing gate, context assembly) — only a user Stop is
+  // silent. Without the timedOut check a timeout landing before the stream was misreported as a
+  // silent cancel (machine-load dependent; found by the G7B fresh-context review).
+  const settleAborted = (): void => {
+    if (entry.timedOut && !entry.cancelled) finishError('TIMEOUT', 'A execução excedeu o tempo limite.');
+    else settleCancelled();
+  };
   const finishError = (code: string, message: string): void => {
     cleanup();
     if (finalizeOnce(runId)) sink.error(code, message);
@@ -95,7 +104,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
   try {
     // Billing gate (§5.2 step 3).
     const allow = await checkAllowance(input.actor.userId);
-    if (entry.abort.signal.aborted) { settleCancelled(); return; } // abort checkpoint (§5.2 step 4)
+    if (entry.abort.signal.aborted) { settleAborted(); return; } // abort checkpoint (§5.2 step 4)
     if (!allow.ok) {
       // The wire error event is {code, message}; the billing URL rides the message text (§5.2.3).
       const url = allow.billingUrl ?? BILLING_PAGE_URL;
@@ -116,12 +125,15 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       groundKnowledge: false,
       now: input.deps.now,
     });
-    if (entry.abort.signal.aborted) { settleCancelled(); return; }
+    if (entry.abort.signal.aborted) { settleAborted(); return; }
 
     // Routing floored at the standard tier; attachments imply the code-generation hint (§5.6.1).
     const hasAttachments = !!input.attachments?.length;
     const decision = decideForTask(input.message, hasAttachments ? { complexityHint: 'high' } : undefined, 'WORKHORSE');
     const policy = hasAttachments ? toolPolicyFor('text-attachments') : toolPolicyFor('chat');
+    // Chat runs mount the two knowledge tools as in-process MCP (§5.4.4); the attachments
+    // variant is Read/Glob/Grep only and mounts nothing.
+    const sdkTools = hasAttachments ? undefined : knowledgeToolSpecs(input.actor);
 
     const liveMarkers = new MarkerProcessor();
     const handle = runAgent(
@@ -132,6 +144,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
         allowedTools: policy.allowedTools,
         disallowedTools: policy.disallowedTools,
         maxTurns: policy.maxTurns,
+        ...(sdkTools ? { sdkTools } : {}),
         signal: entry.abort.signal,
         callbacks: {
           onToolEvent: (e) => sink.toolEvent(e),
@@ -151,11 +164,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     clearTimeout(timer);
 
     // Abort handling (§5.3.1, §5.3.6): a user Stop is silent; a timeout surfaces an error.
-    if (result.aborted) {
-      if (entry.timedOut && !entry.cancelled) finishError('TIMEOUT', 'A execução excedeu o tempo limite.');
-      else settleCancelled(); // cancelled or plain abort → silent (cancel owns the terminal state)
-      return;
-    }
+    if (result.aborted) { settleAborted(); return; }
 
     // Authoritative marker pass over the final result text (success text wins over stream text).
     const finalMarkers = new MarkerProcessor();

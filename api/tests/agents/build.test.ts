@@ -89,6 +89,23 @@ describe('build execution (§5.4, §5.6.2)', () => {
   beforeEach(async () => { await seedUser('u1', 'o1'); });
   afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); });
 
+  it('a timeout firing BEFORE the stream (early abort checkpoint) fails the job with TIMEOUT, never a silent cancel (§5.3.6 — G7B review find)', async () => {
+    resetAgentState({ finalText: 'late' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = 'job-timeout-early';
+    const abort = new AbortController();
+    const entry = registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', sessionId: 's1', request: { description: 'x', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    entry.timedOut = true; // the §5.3.6 timer fired during an early await (deterministic simulation)
+    abort.abort();
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'x', language: 'pt', deps: deps() }, abort, { firstBuild: true });
+    const job = (await jobs.get(jobId)) as JobRecord & { error?: { code: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('TIMEOUT');
+  });
+
   it('a build run gets the coding preset and HOME = projectDir (§5.4.1, §5.4.4)', async () => {
     const t = resetAgentState({ finalText: 'built' });
     startEvents();
@@ -97,6 +114,13 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const call = t.streamCalls[0]!;
     expect(call.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']));
     expect(call.env.HOME).toBe('/pd');
+    // §5.4.4 build row: the knowledge tools + the context-loading tool mount as in-process MCP,
+    // and the allowlist carries their translated wire names alongside the untouched built-ins.
+    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'load_context']);
+    expect(call.allowedTools).toEqual(
+      expect.arrayContaining(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__load_context']),
+    );
+    expect(call.allowedTools).not.toContain('knowledge_search'); // the plain name is translated, not duplicated
   });
 
   it('persists a CHANGED sdkSessionId but not an unchanged one (§5.4.5)', async () => {

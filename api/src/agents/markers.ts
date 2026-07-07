@@ -22,7 +22,8 @@ export const INTEGRATION_MARKER = '[[EKOA_INTEGRATION_BUILD]]';
 export const CONTEXT_OPEN = '<ekoa-context>';
 export const CONTEXT_CLOSE = '</ekoa-context>';
 
-const MAX_MARKER_LEN = Math.max(BUILD_MARKER.length, INTEGRATION_MARKER.length, CONTEXT_OPEN.length, CONTEXT_CLOSE.length);
+const ALL_MARKERS = [BUILD_MARKER, INTEGRATION_MARKER, CONTEXT_OPEN, CONTEXT_CLOSE];
+const MAX_MARKER_LEN = Math.max(...ALL_MARKERS.map((m) => m.length));
 const HOLD_BACK = MAX_MARKER_LEN - 1;
 
 export interface MarkerFindings {
@@ -115,6 +116,11 @@ export class MarkerProcessor {
     this.stripSignals();
     let emit: string;
     if (flush) {
+      // End-of-stream: the hold-back no longer protects the tail, so a generation that ends
+      // exactly on a strict prefix of a marker would flush it to the wire. §5.7.2 forbids any
+      // marker fragment in a `text_chunk`, so drop the longest trailing suffix of the buffer
+      // that is a strict prefix of any marker.
+      this.dropTrailingMarkerPrefix();
       emit = this.buffer;
       this.buffer = '';
     } else {
@@ -124,6 +130,19 @@ export class MarkerProcessor {
     }
     if (emit) this.emittedAnyText = true;
     return emit;
+  }
+
+  /** Drop the longest trailing suffix of the buffer that is a strict prefix of any marker —
+   *  only ever called at flush, where the split-marker hold-back no longer applies. */
+  private dropTrailingMarkerPrefix(): void {
+    const max = Math.min(HOLD_BACK, this.buffer.length);
+    for (let len = max; len > 0; len--) {
+      const tail = this.buffer.slice(this.buffer.length - len);
+      if (ALL_MARKERS.some((m) => m.length > len && m.startsWith(tail))) {
+        this.buffer = this.buffer.slice(0, this.buffer.length - len);
+        return;
+      }
+    }
   }
 
   /** Remove any complete integration marker (+ optional hint), `<ekoa-context>` blocks, and any

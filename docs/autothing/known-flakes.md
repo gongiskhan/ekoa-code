@@ -1,0 +1,1 @@
+- 2026-07-07T10:35:08Z [e2e] web/e2e/legal-insolvencias.spec.ts "rateio 1200" conta_corrente assertion failed once on a back-to-back e2e:server re-run (2nd run of the same 07:03 dist; 1st and 3rd runs green 127/127). Suspected intra-run ordering/state nondeterminism in the rateio flow, not code. Watch; if it recurs, pin the seeded credores state before the rateio assertion.

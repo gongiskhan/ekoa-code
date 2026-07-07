@@ -24,6 +24,24 @@ function defaultProjectDir(art: ArtifactDoc): string {
   return join(sandboxRoot(), `user-${art.userId}`, art._id);
 }
 
+/**
+ * The jail-resolved `data.projectDir` a row records, or undefined when absent or escaping.
+ * `data` is a client-influenced bag, so NO consumer may read `data.projectDir` raw: resolve it
+ * through the owner sandbox jail (ch09 invariant 10, FIXED-8) and drop it if it escapes — never
+ * hand back the attacker path. This closes the follow-up build sandbox-escape vector where a
+ * PATCHed `data.projectDir` would otherwise become an agent run's cwd/HOME or a build source.
+ */
+export function recordedProjectDir(data: Record<string, unknown>): string | undefined {
+  const recorded = data.projectDir;
+  if (typeof recorded !== 'string' || recorded.length === 0) return undefined;
+  try {
+    return resolveWithinJail(sandboxRoot(), recorded);
+  } catch (err) {
+    if (!(err instanceof UnsafePathError)) throw err;
+    return undefined;
+  }
+}
+
 /** The on-disk working copy for an artifact's source tree (see file header). */
 export function projectDirFor(art: ArtifactDoc): string {
   const data = (art.data ?? {}) as Record<string, unknown>;
@@ -31,21 +49,8 @@ export function projectDirFor(art: ArtifactDoc): string {
   if (art.featured === true && data.seededFrom === SEEDED_FROM) {
     return join(featuredArtifactDir(art._id), 'scaffold');
   }
-  // A recorded projectDir wins (session-keyed builds record it explicitly) — but `data` is a
-  // client-influenced bag, so NEVER return it unjailed: resolve it through the owner sandbox jail
-  // (ch09 invariant 10, FIXED-8) and fall back to the deterministic layout if it escapes. This
-  // closes the follow-up build sandbox-escape vector where a PATCHed `data.projectDir` would
-  // otherwise become the agent run's cwd/HOME.
-  const recorded = data.projectDir;
-  if (typeof recorded === 'string' && recorded.length > 0) {
-    try {
-      return resolveWithinJail(sandboxRoot(), recorded);
-    } catch (err) {
-      if (!(err instanceof UnsafePathError)) throw err;
-      // Escapes the jail → ignore the recorded path (never the attacker path); use the default.
-    }
-  }
-  return defaultProjectDir(art);
+  // A recorded projectDir wins (session-keyed builds record it explicitly), jail-resolved.
+  return recordedProjectDir(data) ?? defaultProjectDir(art);
 }
 
 /** The fresh working-copy dir a NEW artifact (fork/import) owns. */

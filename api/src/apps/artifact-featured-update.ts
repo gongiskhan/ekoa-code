@@ -20,7 +20,7 @@ import { readFile, readdir, writeFile, mkdir, rm, stat } from 'node:fs/promises'
 import { join, resolve, sep, dirname } from 'node:path';
 import { artifacts } from '../data/stores.js';
 import type { ArtifactDoc } from './artifacts-service.js';
-import { newProjectDir, patchArtifactData } from './app-paths.js';
+import { newProjectDir, patchArtifactData, recordedProjectDir } from './app-paths.js';
 import { featuredArtifactDir } from './featured-seeder.js';
 import { commitSnapshot, type SnapshotAudit } from '../services/commit-guard.js';
 import { restoreVersion } from './versions.js';
@@ -42,12 +42,10 @@ function scaffoldDirFor(art: ArtifactDoc): string {
   return join(featuredArtifactDir(art._id), 'scaffold');
 }
 
-/** Working copy for a customized featured instance. */
+/** Working copy for a customized featured instance (jail-resolved, ch09 invariant 10). */
 function workingDirFor(art: ArtifactDoc): string {
   const data = (art.data ?? {}) as Record<string, unknown>;
-  const recorded = data.projectDir;
-  if (typeof recorded === 'string' && recorded.length > 0) return recorded;
-  return newProjectDir(art.userId, art._id);
+  return recordedProjectDir(data) ?? newProjectDir(art.userId, art._id);
 }
 
 /** Relative paths of scaffold-tracked files under `root` (runtime dirs / oversize excluded). */

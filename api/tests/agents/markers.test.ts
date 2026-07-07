@@ -96,6 +96,29 @@ describe('MarkerProcessor — integration handoff + context blocks', () => {
     expect(findings.build).toBeUndefined();
     expect(findings.integration).toBeUndefined();
   });
+
+  it('never flushes a trailing partial marker at end-of-stream (§5.7.2 — G7B review probe)', () => {
+    // The exact probe the fresh-context review reproduced: generation terminates on a strict
+    // prefix of a marker; end() must not flush the fragment to the wire.
+    const { emitted } = drive(new MarkerProcessor(), ['here is your answer [[EKOA_BUI']);
+    expect(emitted).toBe('here is your answer ');
+    expect(emitted).not.toContain('[[EKOA');
+  });
+
+  it('drops a trailing partial marker even when it arrives split across pushes', () => {
+    const { emitted } = drive(new MarkerProcessor(), ['answer [[EKOA', '_INTEGRATION_BU']);
+    expect(emitted).toBe('answer ');
+  });
+
+  it('drops a trailing partial context tag at end-of-stream', () => {
+    const { emitted } = drive(new MarkerProcessor(), ['done. <ekoa-cont']);
+    expect(emitted).toBe('done. ');
+  });
+
+  it('keeps a trailing fragment that is NOT a marker prefix', () => {
+    const { emitted } = drive(new MarkerProcessor(), ['ratio is a [b']);
+    expect(emitted).toBe('ratio is a [b'); // '[b' is not a prefix of any marker
+  });
 });
 
 describe('provider-error scanners (§5.3.7)', () => {

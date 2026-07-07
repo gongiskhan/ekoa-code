@@ -1,0 +1,6 @@
+{
+  "slice": "phase-8", "gate": "G8", "status": "in_progress",
+  "startedBy": "session ac243460, 2026-07-07 (post gate-7b)",
+  "note": "Automation engine + streaming canvas carve-out (ch05 §5.6.7 + carryover B7-B10/B24) + G4-deferred payment/integration drivers. Implementation worker g8-automation building; output durable. Resume: check the worker's report + the api/src/automation, api/src/streaming, api/src/routes/automations.ts working-tree state (untrusted-until-verified per §14.1 resume discipline), then continue to the G8 gate.",
+  "gates": {}
+}
