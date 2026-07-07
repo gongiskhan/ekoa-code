@@ -118,6 +118,18 @@ describe('api_call credential redaction (§5.6.7)', () => {
     expect(JSON.stringify(captured.error)).not.toContain(SECRET);
   });
 
+  it('redacts a secret carried in a NETWORK-ERROR message (Codex round-4 — fetch throws with the URL)', async () => {
+    // A fetch rejection whose message echoes the resolved URL (which carries the secret).
+    fetchSpy.mockRejectedValueOnce(new Error(`connect ECONNREFUSED https://api.example.com/data?token=${SECRET}`));
+    const captured = await runApiCall({
+      method: 'GET',
+      url: 'https://api.example.com/data?token={{integration.stripe.apiKey}}',
+      authIntegrationKey: 'stripe',
+    });
+    expect(captured.status).toBe('failed');
+    expect(JSON.stringify(captured.error)).not.toContain(SECRET);
+  });
+
   it('redacts a secret ECHOED back in the response body/output (Codex round-2)', async () => {
     // A server that reflects the client secret in its error body.
     fetchSpy.mockResolvedValueOnce(

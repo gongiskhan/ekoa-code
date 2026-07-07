@@ -129,9 +129,11 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // A network/timeout error message can include the failed request URL, which may carry a secret
+    // in its query string or authority — redact before persisting/emitting it (credential boundary).
     return finishRecord(baseRecord, 'failed', stepStart, {
       tier: 'cache',
-      error: { message: `request failed: ${message}`, recoverable: true },
+      error: { message: redactSecretValues(`request failed: ${message}`, secretValues), recoverable: true },
       resolvedAction: resolved,
     });
   }
