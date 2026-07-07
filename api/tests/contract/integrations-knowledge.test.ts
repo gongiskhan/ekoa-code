@@ -8,7 +8,7 @@ import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
-import { loadConfig, __resetConfigForTests, type Config } from '../../src/config.js';
+import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 
 /**
  * G4 gate: encrypted org-scoped integration configs (credentials never returned + cross-org
@@ -16,7 +16,7 @@ import { loadConfig, __resetConfigForTests, type Config } from '../../src/config
  */
 let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
-const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x' };
+const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
 async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });

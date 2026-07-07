@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import { buildApp, boot } from '../src/server.js';
-import { loadConfig, __resetConfigForTests, type Config } from '../src/config.js';
+import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../src/config.js';
 
 /**
  * G0 runtime correctness gate: the fail-closed boot gate (ch09 §9.7) and the carried
@@ -13,6 +13,7 @@ const testConfig: Config = {
   encryptionKey: 'test',
   nodeEnv: 'test',
   llmChokepointBaseUrl: 'http://127.0.0.1:0/api/v1/llm',
+  llm: defaultLlmConfig(),
 };
 
 let server: Server | undefined;
