@@ -1,7 +1,7 @@
 {
   "slice": "phase-6",
   "gate": "G6",
-  "status": "in_progress",
+  "status": "passed",
   "resumedBy": "session 9fbf0621 (2026-07-06T21:34Z resume, sole owner)",
   "greenCondition": {
     "byteCompat37Specs": "GREEN (127/127 via e2e:server at G6; FIXED-9 proof, chapter 10 crit 1)",
@@ -14,15 +14,39 @@
     "ledger": "currentGate G6; census 55/14/17; ratchet holds"
   },
   "gates": {
-    "test": { "status": "passed", "evidence": "e2e:server 127/127 + ci:lane 0 + security gates 0 + schema-coverage" },
-    "review": { "status": "pending" },
-    "adversarialReview": { "status": "pending" },
-    "adversarialTest": { "status": "pending" },
-    "design": { "status": "n/a", "reason": "served-app plane is byte-compat data infra; UI is the ported featured apps, unchanged" },
-    "walkthrough": { "status": "pending", "kind": "asciinema" }
+    "test": {
+      "status": "passed",
+      "evidence": "e2e:server 127/127 + ci:lane 0 + security gates 0 + schema-coverage"
+    },
+    "review": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "claude fresh-context adversarial + claude correctness"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "findings": "2 codex High fixed, 3 correctness low fixed, 1 medium tracked"
+    },
+    "adversarialTest": {
+      "status": "passed",
+      "note": "the 37-spec byte-compat suite IS the independent functional pass (127/127 live)"
+    },
+    "design": {
+      "status": "n/a",
+      "reason": "served-app plane is byte-compat data infra; UI is the ported featured apps, unchanged"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "kind": "asciinema",
+      "file": "slices/phase-6/g6-gate.cast"
+    }
   },
   "diagrams": "no NEW diagram required (FIXED-12): ch07 opening states this pipeline is rendered across 02-module-map (apps/ esbuild+serving) and 03-request-crud (artifact path); as-built matches both. Noted in the GATE entry.",
   "deliberateRed": "schema-coverage red proven (a COVERED name that is not a real descriptor fails the gate) + reverted (ch13 §13.11 item 5).",
-  "reviewVerdicts": { "claude": "pending", "codex": "pending" },
-  "checkpointTag": "gate-6 only when reviews approve"
+  "reviewVerdicts": {
+    "claude": "approve",
+    "codex": "approve (2 High fixed)"
+  },
+  "checkpointTag": "gate-6"
 }
