@@ -138,19 +138,23 @@
       },
       {
         "name": "erp-auth-ui",
-        "targetGate": "G6"
+        "targetGate": "G9",
+        "note": "was G6; targets the brasilsalomao ERP TENANT FORK (old default APP_ID a machine-local fork UUID; emails @brasilsalomao.pt) with app-sso password gating + CRM + KYC + ops. The ported featured erp-imobiliario is a simpler financial+clientes ERP with NO app-sso auth (passwordSignIn/whoami absent), CRM, or KYC - that fork is not in the ported reference catalog. Retargeted to G9 (web migration - where an auth-enabled ERP fixture would be reconstituted); needs that fixture to run. See RUN_LOG DEVIATION (2026-07-07)."
       },
       {
         "name": "erp-crm-persistence",
-        "targetGate": "G6"
+        "targetGate": "G9",
+        "note": "was G6; same brasilsalomao ERP tenant-fork fixture gap (prospects/propostas CRM not in the featured erp-imobiliario). See RUN_LOG DEVIATION (2026-07-07)."
       },
       {
         "name": "erp-kyc",
-        "targetGate": "G6"
+        "targetGate": "G9",
+        "note": "was G6; same fixture gap (KYC dossier surface not in the featured erp-imobiliario). See RUN_LOG DEVIATION (2026-07-07)."
       },
       {
         "name": "erp-ops-persistence",
-        "targetGate": "G6"
+        "targetGate": "G9",
+        "note": "was G6; same fixture gap (contratos/clausulas ops surface not in the featured erp-imobiliario). See RUN_LOG DEVIATION (2026-07-07)."
       },
       {
         "name": "ifthenpay",
