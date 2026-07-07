@@ -15,7 +15,9 @@
  */
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { loadConfig } from '../config.js';
-import { recordTokenEvent, type TokenEventInput } from '../billing/tracker.js';
+import { recordTokenEvent, resolvePlatformBillee, type TokenEventInput } from '../billing/tracker.js';
+import { checkRateCaps, recordSpend, type RateCapKey, type RateCapVerdict } from '../billing/rate-caps.js';
+import { users } from '../data/stores.js';
 import {
   type LlmAttribution,
   requireAttribution,
@@ -63,6 +65,61 @@ export class LlmTransportError extends Error {
     super(message);
     this.name = 'LlmTransportError';
   }
+}
+
+/**
+ * Blocked by a per-user or per-org rate limit / spend cap (§6.6.4). Thrown at the entry point
+ * BEFORE the call is admitted, so a blocked request is never forwarded, metered, or recorded —
+ * only admitted calls accrue against the sliding window (§6.6.4).
+ */
+export class LlmRateCapError extends Error {
+  constructor(readonly verdict: RateCapVerdict) {
+    super(verdict.reason ?? 'LLM rate/spend cap exceeded');
+    this.name = 'LlmRateCapError';
+  }
+}
+
+// --- Rate/spend caps at the chokepoint (§6.6.4) ------------------------------------------
+// The caps group per-org AND per-user, but LlmAttribution carries only the billee. The org is
+// resolved from the billee through an injected seam (default: the users store — llm/ MAY import
+// data/), so per-org caps work without threading orgId through every call site.
+
+/** userId -> orgId resolver. Default reads the users store; injectable for tests + the root. */
+type OrgResolver = (userId: string) => Promise<string | undefined>;
+const defaultOrgResolver: OrgResolver = async (userId) => {
+  if (!userId) return undefined;
+  try {
+    const u = (await users.get(userId)) as { orgId?: string } | null;
+    return u?.orgId;
+  } catch {
+    return undefined; // a resolver hiccup never fails the model call — caps fail open on org
+  }
+};
+let orgResolver: OrgResolver = defaultOrgResolver;
+export function setOrgResolver(fn: OrgResolver): void {
+  orgResolver = fn;
+}
+export function __resetOrgResolverForTests(): void {
+  orgResolver = defaultOrgResolver;
+}
+
+/** Build the cap key for a billee. An empty billee (platform / gateway-key traffic) resolves to
+ *  the platform-admin id — the same account the ledger bills (§6.3 rule 3) — so platform traffic
+ *  is capped under a real account, never an empty pseudo-key. */
+async function capKeyFor(billeeUserId: string): Promise<RateCapKey> {
+  const userId = billeeUserId || (await resolvePlatformBillee());
+  const orgId = (await orgResolver(userId)) ?? '';
+  return { billeeUserId: userId, orgId };
+}
+
+/** Pre-admission gate (§6.6.4): resolve the cap key, check the sliding window, and throw a typed
+ *  LlmRateCapError WITHOUT recording when a cap is tripped. Returns the key so the caller records
+ *  spend against the same identity AFTER metering succeeds. */
+async function admitOrThrow(billeeUserId: string): Promise<RateCapKey> {
+  const key = await capKeyFor(billeeUserId);
+  const verdict = checkRateCaps(key);
+  if (!verdict.ok) throw new LlmRateCapError(verdict);
+  return key;
 }
 
 // --- Transport seam ----------------------------------------------------------------------
@@ -428,6 +485,15 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     let text = '';
     let usage: RawUsage = { ...ZERO_USAGE };
     let aborted = false;
+    let capKey: RateCapKey;
+    try {
+      // Pre-admission rate/spend cap (§6.6.4): a blocked run is never started nor recorded.
+      capKey = await admitOrThrow(billeeOf(attribution));
+    } catch (err) {
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      rejectResult(err);
+      throw err;
+    }
     try {
       const env = await buildSubprocessEnv();
       const stream = transport.streamAgent({
@@ -461,7 +527,8 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     }
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
     // Single metering point: bill the reported usage even on abort (P-19); zero => nothing billed.
-    await meter(attribution, decision.tier, decision.model, usage);
+    const metered = await meter(attribution, decision.tier, decision.model, usage);
+    recordSpend({ ...capKey, metered }); // accrue the admitted call's spend into the window (§6.6.4)
     const r: AgentRunResult = { text, usage, aborted };
     resolveResult(r);
     return r;
@@ -492,6 +559,7 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   requireAttribution(attribution);
   assertNotPlatformCall(attribution);
   const decision = opts.decision;
+  const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
   const env = await buildSubprocessEnv();
   const res = await transport.oneShot({
     prompt: opts.prompt,
@@ -505,7 +573,8 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
     signal: opts.signal,
   });
   // Bill the reported usage even on abort (P-19), THEN reject abort as abort.
-  await meter(attribution, decision.tier, decision.model, res.usage);
+  const metered = await meter(attribution, decision.tier, decision.model, res.usage);
+  recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
   if (res.aborted) throw new LlmAbortedError();
   return { text: res.text, usage: res.usage };
 }
@@ -532,6 +601,7 @@ export interface MessagesResult {
 export async function completeFast(opts: MessagesOptions, attribution: LlmAttribution): Promise<MessagesResult> {
   requireAttribution(attribution);
   assertNotPlatformCall(attribution);
+  const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
   const decision = decideForTier('FAST'); // FAST by construction
   const mode = (await currentMode()) ?? 'oauth';
   const payload: Record<string, unknown> = {
@@ -560,9 +630,13 @@ export async function completeFast(opts: MessagesOptions, attribution: LlmAttrib
   }
   if (opts.signal?.aborted) throw new LlmAbortedError();
 
-  const usage = parseUsageFromBody(resp.body, false) ?? { ...ZERO_USAGE };
-  await meter(attribution, 'FAST', decision.model, usage);
+  // Meter only a successful, usage-bearing response: a 4xx/5xx carries no billable usage, so it
+  // is NOT metered (consistent with the gateway's meter-only-on-2xx rule, §6.5.4). The 401
+  // refresh-and-retry already happened above.
   if (resp.status >= 400) throw new LlmTransportError(`Messages REST failed: HTTP ${resp.status}`, resp.status);
+  const usage = parseUsageFromBody(resp.body, false) ?? { ...ZERO_USAGE };
+  const metered = await meter(attribution, 'FAST', decision.model, usage);
+  recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
   return { text: textFromBody(resp.body), usage, status: resp.status };
 }
 
@@ -587,6 +661,7 @@ export async function proxyGatewayMessages(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
 ): Promise<GatewayForwardResult> {
+  const capKey = await admitOrThrow(billeeUserId); // §6.6.4 pre-admission cap (empty => platform admin)
   const decision = decideForTier('FAST'); // wire tier is FAST (§6.5.4)
   const mode = (await currentMode()) ?? 'oauth';
   const isStream = reqBody.stream === true;
@@ -610,8 +685,14 @@ export async function proxyGatewayMessages(
   if (resp.status >= 200 && resp.status < 300) {
     const usage = parseUsageFromBody(resp.body, isStream);
     if (usage) {
-      const attribution: LlmAttribution = { kind: 'user_work', agentType: 'pi-fast-loop', billeeUserId };
+      // A JWT principal is real user work billed to that user (§6.4.1 site 7); a gateway API-key
+      // principal (empty billee) is platform overhead — attributed `platform`, which the tracker
+      // ledgers against the platform admin (§6.3 rule 3), never user_work with an empty billee.
+      const attribution: LlmAttribution = billeeUserId
+        ? { kind: 'user_work', agentType: 'pi-fast-loop', billeeUserId }
+        : { kind: 'platform', agentType: 'pi-fast-loop', justification: 'ekoa-local gateway API-key principal — platform overhead billed to the platform admin (§6.5.4)' };
       metered = await meter(attribution, 'FAST', decision.model, usage);
+      recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
     } else {
       unmetered = true; // parse-or-skip (§6.5.4); the caller bumps gateway_unmetered_call
     }

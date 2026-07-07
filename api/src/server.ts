@@ -27,6 +27,7 @@ import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
 import { llmHealth, registerGateway, loadCredential } from './llm/index.js';
+import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { knowledgeRouter } from './routes/knowledge.js';
 import { triggersRouter } from './routes/triggers.js';
@@ -62,10 +63,26 @@ export interface RuntimeDeps {
 
 const defaultDeps: RuntimeDeps = { now: () => Date.now(), genId: () => randomUUID() };
 
+/** The usage push (§6.7): a bare `usage_updated` poke on the billee's notifications channel,
+ *  fired once per ledger write (ch03 §3.6.4). Best-effort — a push failure NEVER fails the
+ *  metering/turn (fire-and-forget with error log; the tracker also guards the call). */
+export function usageUpdatedNotifier(userId: string): void {
+  if (!userId) return;
+  try {
+    sseManager.emit('notifications', userId, 'usage_updated', {});
+  } catch (err) {
+    console.warn('[billing] usage_updated push failed:', err instanceof Error ? err.message : err);
+  }
+}
+
 export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Express {
   const app = express();
   app.set('env', config.nodeEnv);
   app.disable('x-powered-by');
+
+  // Usage push seam (§6.7, ch02 §2.8 seam 1): billing/ never imports events/, so the composition
+  // root injects the notifier that pushes `usage_updated` on the billee's notifications channel.
+  setUsageNotifier(usageUpdatedNotifier);
 
   // Webhook ingress mounts FIRST with its own raw-body parser, BELOW/BEFORE the JSON parser,
   // so the HMAC verifier sees unmodified bytes (ch09 invariant 9 step 6).

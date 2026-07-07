@@ -8,6 +8,8 @@ export {
   recordTokenEvent,
   computeMetered,
   setUsageNotifier,
+  setPlatformBilleeResolver,
+  resolvePlatformBillee,
   readGlobalOverageEnabled,
   writeGlobalOverageEnabled,
   type TokenEventInput,

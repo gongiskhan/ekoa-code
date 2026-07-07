@@ -7,9 +7,36 @@
  * usage push (§6.7). Non-Anthropic surfaces (STT, Pipedream) ride the same recorder (§6.5.6).
  */
 import { randomUUID } from 'node:crypto';
-import { tokenEvents, billingAccounts, settings } from '../data/stores.js';
+import { tokenEvents, billingAccounts, settings, users } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 import { billingConfig, cacheReadFactor, periodMs, type Tier, tierWeight } from './constants.js';
+
+/**
+ * Resolve the account that carries platform / gateway-key usage (§6.3 rule 3): usage with no
+ * user billee (attributionKind 'platform', or a gateway API-key principal) ledgers against the
+ * PLATFORM ADMIN, never an empty pseudo-account (`billeeUserId=''` / `billing_accounts._id=''`).
+ * Injected in tests; the default resolves + caches the founder super-admin id from the users
+ * store. Returns '' only when no super-admin exists (pre-seed) - the write still lands, on ''.
+ */
+let cachedPlatformBillee: string | null = null;
+let platformBilleeResolver: () => Promise<string> = async () => {
+  if (cachedPlatformBillee) return cachedPlatformBillee;
+  const admins = await users.find({ role: 'super-admin' });
+  cachedPlatformBillee = admins[0]?._id ?? '';
+  return cachedPlatformBillee;
+};
+export function setPlatformBilleeResolver(fn: () => Promise<string>): void {
+  platformBilleeResolver = fn;
+  cachedPlatformBillee = null;
+}
+export function __resetPlatformBilleeForTests(): void {
+  cachedPlatformBillee = null;
+}
+/** Public accessor for the platform-admin billee id, used by the chokepoint to key the rate
+ *  cap for platform / gateway-key traffic (empty user billee) against the admin account. */
+export async function resolvePlatformBillee(): Promise<string> {
+  return platformBilleeResolver();
+}
 
 export type AttributionKind = 'user_work' | 'classifier' | 'platform';
 export type { Tier } from './constants.js';
@@ -153,10 +180,14 @@ export async function recordTokenEvent(e: TokenEventInput): Promise<{ metered: n
   const weight = tierWeight(e.tier);
   const metered = computeMetered(e.tier, e.raw);
 
+  // Platform / gateway-key usage (empty billee) ledgers against the platform admin, never ''
+  // (§6.3 rule 3). user_work/classifier calls always carry a real billee and pass through.
+  const billeeUserId = e.billeeUserId || (await platformBilleeResolver());
+
   // 1. The one ledger write (§6.5.3 shape). token_events has a single writer (§6.5.1).
   await tokenEvents.insert({
     _id: randomUUID(),
-    billeeUserId: e.billeeUserId,
+    billeeUserId,
     attributionKind: e.attributionKind,
     agentType: e.agentType,
     ...(e.artifactId ? { artifactId: e.artifactId } : {}),
@@ -172,9 +203,9 @@ export async function recordTokenEvent(e: TokenEventInput): Promise<{ metered: n
 
   // 2. Fold into the billee's meter under CAS. globalOverageEnabled is resolved BEFORE the
   //    CAS mutator (which must stay synchronous/pure so it re-runs cleanly on _rev drift).
-  await ensureAccount(e.billeeUserId, now);
+  await ensureAccount(billeeUserId, now);
   const globalOverage = await readGlobalOverageEnabled();
-  await casUpdateAccount(e.billeeUserId, (cur) => {
+  await casUpdateAccount(billeeUserId, (cur) => {
     const { used, periodStart } = applyLazyReset(cur, now);
     const base = baseFor(cur);
     const newUsed = used + metered;
@@ -200,7 +231,7 @@ export async function recordTokenEvent(e: TokenEventInput): Promise<{ metered: n
 
   // 3. Usage push (§6.7): fire-and-forget, never fails the turn.
   try {
-    usageNotifier(e.billeeUserId);
+    usageNotifier(billeeUserId);
   } catch {
     /* never fail a turn on a notify error */
   }

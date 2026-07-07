@@ -15,6 +15,9 @@ import {
 import { decideForTier } from '../../src/llm/router.js';
 import { meteringAnomalyCount, __resetAttributionCountersForTests, type LlmAttribution } from '../../src/llm/attribution.js';
 import { setCredential, __resetCredentialsForTests, __setRefreshFnForTests, __setNowForTests } from '../../src/llm/credentials.js';
+import { LlmRateCapError, setOrgResolver, __resetOrgResolverForTests } from '../../src/llm/client.js';
+import { __resetRateCapsForTests } from '../../src/billing/rate-caps.js';
+import { setPlatformBilleeResolver, __resetPlatformBilleeForTests } from '../../src/billing/tracker.js';
 
 /**
  * Chokepoint entries + the single metering point (ch06 §6.5.1), exercised end-to-end against
@@ -65,13 +68,63 @@ beforeEach(async () => {
   __resetAttributionCountersForTests();
   __resetTransportForTests();
   __resetCredentialsForTests();
+  __resetRateCapsForTests();
+  __resetOrgResolverForTests();
+  __resetPlatformBilleeForTests();
   __setNowForTests(() => T0);
-  for (const c of ['token_events', 'billing_accounts', 'credentials', 'settings']) {
+  for (const c of ['token_events', 'billing_accounts', 'credentials', 'settings', 'users']) {
     await getDb().collection(c).deleteMany({});
   }
   await setCredential({ mode: 'oauth', secret: 'tok', refreshToken: 'rt', expiresAt: T0 + 60 * 60 * 1000 });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete process.env.EKOA_RATECAP_CALLS_PER_USER;
+  __resetRateCapsForTests();
+});
+
+describe('rate/spend caps are ENFORCED at the chokepoint (§6.6.4) - not inert', () => {
+  it('trips the per-user call cap: the (cap+1)th call throws LlmRateCapError and is NOT recorded', async () => {
+    process.env.EKOA_RATECAP_CALLS_PER_USER = '2';
+    __resetRateCapsForTests();
+    __setTransportForTests(fakeTransport({
+      async messages() { return { status: 200, headers: {}, body: bodyWithUsage({ input: 10, output: 5 }) }; },
+    }));
+    const attr: LlmAttribution = { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId: 'capped' };
+    await completeFast({ messages: [{ role: 'user', content: 'a' }] }, attr);
+    await completeFast({ messages: [{ role: 'user', content: 'b' }] }, attr);
+    // The third exceeds the per-user cap of 2 -> blocked before the call, no ledger row.
+    await expect(completeFast({ messages: [{ role: 'user', content: 'c' }] }, attr)).rejects.toBeInstanceOf(LlmRateCapError);
+    expect(await tokenEvents.find({ billeeUserId: 'capped' })).toHaveLength(2);
+  });
+
+  it('a blocked call does not accrue spend (the block itself never extends the window)', async () => {
+    process.env.EKOA_RATECAP_CALLS_PER_USER = '1';
+    __resetRateCapsForTests();
+    __setTransportForTests(fakeTransport({
+      async messages() { return { status: 200, headers: {}, body: bodyWithUsage({ input: 10, output: 5 }) }; },
+    }));
+    const attr: LlmAttribution = { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId: 'once' };
+    await completeFast({ messages: [{ role: 'user', content: 'a' }] }, attr);
+    await expect(completeFast({ messages: [{ role: 'user', content: 'b' }] }, attr)).rejects.toBeInstanceOf(LlmRateCapError);
+    await expect(completeFast({ messages: [{ role: 'user', content: 'c' }] }, attr)).rejects.toBeInstanceOf(LlmRateCapError);
+    // Exactly one admitted call was ever metered.
+    expect(await tokenEvents.find({ billeeUserId: 'once' })).toHaveLength(1);
+  });
+});
+
+describe('platform / empty billee ledgers against the platform admin, never "" (§6.3 rule 3)', () => {
+  it('resolves an empty billee to the injected platform-admin id', async () => {
+    setPlatformBilleeResolver(async () => 'admin-1');
+    __setTransportForTests(fakeTransport({
+      async oneShot() { return { text: 'x', usage: { input: 20, output: 10, cacheCreate: 0, cacheRead: 0 } }; },
+    }));
+    // A classifier call with an empty billee stands in for gateway-key / platform traffic.
+    await runOneShot({ prompt: 'p', decision: decideForTier('FAST') }, { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId: '' });
+    expect(await tokenEvents.find({ billeeUserId: '' })).toHaveLength(0);
+    expect(await tokenEvents.find({ billeeUserId: 'admin-1' })).toHaveLength(1);
+  });
+});
 
 describe('single metering point fires with the right tier + attribution', () => {
   it('completeFast (FAST) records one token_events row billed to the user', async () => {
