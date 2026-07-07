@@ -37,6 +37,8 @@ import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
+import { attachBridgeServer } from './bridge/index.js';
+import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
 import { devServeRouter } from './apps/dev-serve.js';
 import { servingRouter } from './apps/serving.js';
@@ -489,6 +491,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // The OAuth callback path is kept VERBATIM (§3.8.15): it is a registered redirect URI.
   app.use('/api/v1/oauth', oauthCallbackRouter(deps));
   app.use('/api/v1/pipedream', pipedreamRouter(deps));
+  // G8A — the bridge token mint (ch18 §18.3.2, §3.10); the WS connect + provider endpoint are on
+  // the bridge WS server attached at boot, not REST.
+  app.use('/api/v1/bridge', bridgeTokenRouter());
   // G6 — artifacts (platform) + the byte-compatible served-app plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
   app.use('/api/v1/company-space', companySpaceRouter(deps));
@@ -586,6 +591,12 @@ export function boot(): void {
       // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
       // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
       attachCanvasServer(httpServer);
+      // The daemon-to-Cortex bridge (ch18 §18.3, outside FIXED-2's frontend rule): the WS server
+      // the ekoa-local daemon dials into. Org resolution reads the users store; a ledger row is
+      // display metadata only (§18.6, never persisted hosted by default).
+      attachBridgeServer(httpServer, {
+        resolveUserOrg: async (userId) => ((await users.get(userId)) as { orgId?: string } | null)?.orgId,
+      });
     })
     .catch((err) => {
       console.error('[ekoa-api] boot failed:', err);
