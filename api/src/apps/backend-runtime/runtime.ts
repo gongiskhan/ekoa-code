@@ -176,6 +176,12 @@ export class WorkerThreadRuntime implements ArtifactBackendRuntime {
   private readonly revoked = new Set<string>();
   private readonly activeRpcs = new Map<string, Set<Promise<void>>>();
   private readonly invocations = new Map<string, InvocationRecord[]>();
+  // Artifacts whose worker died UNEXPECTEDLY (onWorkerDown), distinct from a clean
+  // idle/explicit shutdown. getStatus reads this for the 'crashed' state - the prior
+  // `last.error.includes('crash')` string-match never fired (the real reason is
+  // "worker exited unexpectedly (code N)" / "worker error: ..."), leaving 'crashed'
+  // dead. Cleared on a fresh spawn or a clean shutdown.
+  private readonly crashedArtifacts = new Set<string>();
   private invokeSeq = 0;
 
   constructor(deps?: Partial<RuntimeDeps>, opts: { idleTimeoutMs?: number; invokeTimeoutMs?: number; startupTimeoutMs?: number } = {}) {
@@ -261,6 +267,7 @@ export class WorkerThreadRuntime implements ArtifactBackendRuntime {
     const entry = this.spawn(artifactId);
     this.workers.set(artifactId, entry);
     this.liveArtifacts.add(artifactId);
+    this.crashedArtifacts.delete(artifactId); // a fresh worker clears the prior crash state
     return entry;
   }
 
@@ -388,6 +395,7 @@ export class WorkerThreadRuntime implements ArtifactBackendRuntime {
   private onWorkerDown(artifactId: string, entry: WorkerEntry, reason: string): void {
     if (entry.crashed) return;
     entry.crashed = true;
+    this.crashedArtifacts.add(artifactId); // unexpected death -> the 'crashed' state
     this.liveArtifacts.delete(artifactId);
     if (this.workers.get(artifactId) === entry) this.workers.delete(artifactId);
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
@@ -417,6 +425,7 @@ export class WorkerThreadRuntime implements ArtifactBackendRuntime {
     if (!entry) return;
     this.workers.delete(artifactId);
     entry.crashed = true; // suppress onWorkerDown
+    this.crashedArtifacts.delete(artifactId); // a clean shutdown is 'stopped', not 'crashed'
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     for (const p of entry.pending.values()) {
       if (!p.settled) { p.settled = true; clearTimeout(p.timer); p.resolve({ ok: false, error: 'artifact backend shut down', logs: p.logs }); }
@@ -465,7 +474,7 @@ export class WorkerThreadRuntime implements ArtifactBackendRuntime {
     let state: BackendState;
     if (!enabled) state = 'disabled';
     else if (entry && !entry.crashed) state = entry.pending.size > 0 ? 'running' : 'idle';
-    else if (last && !last.ok && last.error?.includes('crash')) state = 'crashed';
+    else if (this.crashedArtifacts.has(artifactId)) state = 'crashed';
     else state = history.length > 0 ? 'stopped' : 'idle';
     return {
       artifactId, state, live: !!entry && !entry.crashed, enabled,

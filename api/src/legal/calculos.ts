@@ -214,7 +214,10 @@ export function verificarAtualizacaoTaxas(now: Date, tabela: TabelaTaxas = loadC
   const { chave, primeiroMes } = semestreDe(now);
   const diaLimite = tabela.alarme?.diaLimiteConfirmacao ?? 15;
 
-  const emGraca = now.getUTCMonth() === primeiroMes && now.getUTCDate() < diaLimite;
+  // Grace runs THROUGH the deadline day (the detalhe says "até ao dia <diaLimite>"
+  // and the header says the alarm fires DEPOIS do dia-limite), so day `diaLimite`
+  // itself is still grace and the alarm first fires on the following day.
+  const emGraca = now.getUTCMonth() === primeiroMes && now.getUTCDate() <= diaLimite;
   const rows = Array.isArray(tabela.jurosComerciais) ? tabela.jurosComerciais : [];
   const row = rows.find((r) => r.semestre === chave);
 

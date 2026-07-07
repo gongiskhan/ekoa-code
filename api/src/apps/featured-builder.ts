@@ -140,7 +140,12 @@ async function isFresh(buildDir: string, scaffoldDir: string): Promise<boolean> 
 }
 
 /** Build (or skip-if-fresh) and register one featured artifact. */
-async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite): Promise<boolean> {
+/** Returns `{ built }`: true when a real build ran, false when the existing dist was
+ *  fresh and reused. The caller uses this for the built/skipped metrics and the
+ *  self-healing screenshot decision - freshness is judged against the ACTUAL build
+ *  source (the working copy for a customized artifact, the mirror for a scaffold),
+ *  never a single pre-computed guess against the mirror. */
+async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite): Promise<{ built: boolean }> {
   // U1: a customized featured artifact has a persistent working copy - build from
   // THAT, never force-copy the scaffold over the user's edits.
   try {
@@ -148,14 +153,15 @@ async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite):
     const data = (row?.data ?? {}) as Record<string, unknown>;
     const workingDir = typeof data.projectDir === 'string' ? data.projectDir : undefined;
     if (row && data.customized === true && workingDir && existsSync(workingDir)) {
-      if (!(await isFresh(workingDir, workingDir))) {
+      const fresh = await isFresh(workingDir, workingDir);
+      if (!fresh) {
         const result = await appBuilder.build(manifest.id, workingDir);
         if (!result.success) {
           console.warn(`[featured-builder] ${manifest.id}: working-copy build failed - ${result.errors.join('; ')}`);
         }
       }
       await appRegistry.register(manifest.id, workingDir, 'system', manifest.name);
-      return true;
+      return { built: !fresh };
     }
   } catch (err) {
     console.warn(
@@ -179,7 +185,8 @@ async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite):
     },
   });
 
-  if (!(await isFresh(buildDir, scaffoldDir))) {
+  const scaffoldFresh = await isFresh(buildDir, scaffoldDir);
+  if (!scaffoldFresh) {
     const result = await appBuilder.build(manifest.id, buildDir);
     if (!result.success) {
       // Register anyway - the error HTML serves instead of the placeholder.
@@ -209,7 +216,7 @@ async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite):
     }
   }
 
-  return true;
+  return { built: !scaffoldFresh };
 }
 
 export interface FeaturedBuildResult {
@@ -247,18 +254,22 @@ export async function buildAndRegisterFeaturedArtifacts(overrideRoot?: string): 
       result.failed++;
       continue;
     }
-    const wasFresh = await isFresh(join(builtBuildsRoot(), manifest.id), scaffoldDir);
     try {
-      await buildAndRegisterOne(scaffoldDir, manifest);
+      // buildAndRegisterOne judges freshness against the ACTUAL build source
+      // (working copy for customized, mirror for scaffold) and reports whether it
+      // built - a pre-computed guess against the mirror was always stale for
+      // customized artifacts (they build from the working copy), miscounting them
+      // as `built` and re-shooting every boot.
+      const { built } = await buildAndRegisterOne(scaffoldDir, manifest);
       result.registered++;
-      if (wasFresh) result.skipped++;
-      else result.built++;
+      if (built) result.built++;
+      else result.skipped++;
 
       // Fire-and-forget screenshot; self-heal only when the prior PNG is missing.
       // EKOA_SCREENSHOTS_DISABLED=1 skips capture entirely (the same toggle class
       // §7.11 sanctions for the health scanner; tests and headless CI use it).
       const shotPath = join(getArtifactScreenshotDir(), `${manifest.id}.png`);
-      const needsShot = !wasFresh || !existsSync(shotPath);
+      const needsShot = built || !existsSync(shotPath);
       if (needsShot && process.env.EKOA_SCREENSHOTS_DISABLED !== '1') {
         void (async () => {
           try {
