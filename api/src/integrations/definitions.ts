@@ -257,6 +257,12 @@ export function listDefinitions(): IntegrationDefinition[] {
   return Array.from(ensure().values());
 }
 
+/** One loaded definition by key, or null. Used by the platform API caller (platform-call.ts)
+ *  to resolve an action's httpConfig without re-reading config.json off disk. */
+export function getDefinition(key: string): IntegrationDefinition | null {
+  return ensure().get(key) ?? null;
+}
+
 /** The action + event catalog for every loaded definition (unfiltered; the route joins
  *  it against the org's enabled configs to produce the "active" set for the trigger picker). */
 export function activeCatalog(): ActiveIntegrationCatalog[] {

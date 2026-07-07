@@ -2,29 +2,38 @@
 /**
  * InvoiceXpress integration — committed, re-runnable E2E.
  *
- * Proves the PB1 InvoiceXpress slice against a RUNNING dev cortex + a local mock
- * InvoiceXpress API (no real account exists):
+ * Proves the PB1 InvoiceXpress slice against a RUNNING dev api using the typed REST
+ * surface (no real InvoiceXpress account exists):
  *
- *   1. The invoicexpress skill is loaded with the six actions, the api_key/
- *      account_name/api_base schema, and NO webhookConfig (outbound-only).
- *   2. A config is saved with api_base → the local mock; the `ekoa.integrations
- *      execute` intent round-trips it and returns the DECRYPTED config (the
- *      platform exposes no server-side HTTP action intent — execute hands the
- *      decrypted config to the agent layer, which performs the call).
- *   3. Driving the actions exactly as the agent layer would (using the decrypted
- *      api_base + api_key), the certified-invoicing lifecycle carries the ATCUD:
- *      create (draft) → finalize (ATCUD CSDF7T5H-50) → get (reads ATCUD back), and
- *      get_invoice_pdf returns 202 while generating then 200 with the URL.
+ *   1. The invoicexpress integration DEFINITION is loaded with the six actions
+ *      (create_invoice / finalize_invoice / get_invoice / get_invoice_pdf /
+ *      email_invoice / export_saft), the account_name/api_key/api_base schema, and
+ *      NO webhookConfig (outbound-only).
+ *   2. A config is saved (POST /configs → 201; credentials redacted in the summary),
+ *      round-trips through the config list, and is deleted.
  *
- * Auth: login admin/tmp12345 via the ekoa.auth action API for a JWT.
+ * REST adaptation (2026-07-07, G8, per spec/reference/test-audit.md §5.1): transport
+ * swapped from the retired action envelope (POST /api/v1/action; ekoa.auth /
+ * ekoa.integrations intents) to the typed REST surface (POST /api/v1/auth/login,
+ * GET /api/v1/integrations, /api/v1/integrations/configs).
+ *
+ * DOCUMENTED SKIPs (no REST surface in the current build — the deferred G8 execution
+ * stack; reported to the lead, not worked around here):
+ *   - The `ekoa.integrations execute` intent returned the DECRYPTED config for the
+ *     agent layer to drive the InvoiceXpress API; the rebuild does not expose it (the
+ *     config summary never returns credentials), so the certified-invoicing lifecycle
+ *     over a mock InvoiceXpress API — create(draft) → finalize(ATCUD CSDF7T5H-50) →
+ *     get(reads ATCUD) → pdf poll (202→200) — has no REST home here. It is proven
+ *     over-the-wire by the vitest service suite (invoicexpress-skill) — SKIP.
+ *
+ * Auth: login admin/tmp12345 via POST /api/v1/auth/login for a JWT.
  * Cleanup: the integration config is deleted (best-effort) before and after.
- * Requires a running dev cortex. Run: node cortex/tests/e2e/invoicexpress.e2e.mjs
+ * Run: node api/tests/e2e/invoicexpress.e2e.mjs
  */
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { start as startIxMock, stop as stopIxMock } from '../helpers/mock-invoicexpress-server.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PORT = (() => {
@@ -39,121 +48,77 @@ function ok(m) { console.log(`  PASS: ${m}`); }
 function note(m) { console.log(`  NOTE: ${m}`); }
 
 let TOKEN = null;
-async function action(app, intent, params = {}) {
-  const r = await fetch(`${BASE}/api/v1/action`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) },
-    body: JSON.stringify({ app, intent, params, request_id: randomUUID() }),
-  });
+const authHeaders = () => ({ 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) });
+async function restJson(method, path, body) {
+  const r = await fetch(`${BASE}${path}`, { method, headers: authHeaders(), body: body != null ? JSON.stringify(body) : undefined });
   const t = await r.text();
-  try { return JSON.parse(t); } catch { return { _raw: t, _status: r.status }; }
+  let json; try { json = JSON.parse(t); } catch { json = { _raw: t, _status: r.status }; }
+  return { status: r.status, json };
 }
-
-/** POST/PUT/GET a JSON action against the mock, exactly as the agent layer would from the decrypted config. */
-async function ix(base, apiKey, method, path, body) {
-  const url = `${base}${path}${path.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(apiKey)}`;
-  const resp = await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await resp.text();
-  let data; try { data = JSON.parse(text); } catch { data = text; }
-  return { status: resp.status, data };
+async function restLogin(username, password) {
+  const { json } = await restJson('POST', '/api/v1/auth/login', { username, password, rememberMe: true });
+  return json;
 }
 
 async function main() {
   const health = await fetch(`${BASE}/health`).catch(() => null);
   if (!health || !health.ok) {
-    console.log(`SKIP: cortex not reachable at ${BASE}/health — start the dev cortex first.`);
+    console.log(`SKIP: api not reachable at ${BASE}/health — start the dev api first (node scripts/dev-api.mjs).`);
     process.exit(0);
   }
 
-  const mockBase = await startIxMock();
   let configId = null;
 
   try {
-    const login = await action('ekoa.auth', 'login', { username: 'admin', password: 'tmp12345', rememberMe: true });
-    TOKEN = login?.data?.token;
+    // ---- Login ------------------------------------------------------------
+    const login = await restLogin('admin', 'tmp12345');
+    TOKEN = login?.token;
     assert(TOKEN, `login failed: ${JSON.stringify(login).slice(0, 200)}`);
     ok('logged in (JWT acquired)');
 
-    // ---- The invoicexpress skill must be loaded --------------------------
-    const skills = await action('ekoa.integrations', 'list-skills', {});
-    const ix0 = (skills?.data || []).find((s) => s.integrationKey === 'invoicexpress');
-    assert(ix0, 'invoicexpress integration skill not loaded (ekoa-data/integrations/invoicexpress missing? restart cortex)');
+    // ---- The invoicexpress definition must be loaded ----------------------
+    const defs = (await restJson('GET', '/api/v1/integrations')).json.items || [];
+    const ix0 = defs.find((s) => s.integrationKey === 'invoicexpress');
+    assert(ix0, 'invoicexpress integration definition not loaded (api/assets/integrations/invoicexpress missing?)');
     const actionNames = (ix0.actions || []).map((a) => a.actionName);
     for (const a of ['create_invoice', 'finalize_invoice', 'get_invoice', 'get_invoice_pdf', 'email_invoice', 'export_saft']) {
-      assert(actionNames.includes(a), `invoicexpress skill missing action ${a} (has: ${actionNames.join(', ')})`);
+      assert(actionNames.includes(a), `invoicexpress definition missing action ${a} (has: ${actionNames.join(', ')})`);
     }
     const fieldKeys = (ix0.configSchema || []).map((f) => f.key);
     for (const k of ['account_name', 'api_key', 'api_base']) {
-      assert(fieldKeys.includes(k), `invoicexpress skill missing config field ${k}`);
+      assert(fieldKeys.includes(k), `invoicexpress definition missing config field ${k}`);
     }
     assert(!ix0.webhookConfig, 'invoicexpress must not declare a webhookConfig (outbound-only)');
-    ok('invoicexpress skill loaded (6 actions, api_key/account_name/api_base, no webhook)');
+    ok('invoicexpress definition loaded (6 actions, api_key/account_name/api_base, no webhook)');
 
-    // ---- Save a config with api_base → the local mock --------------------
-    const created = await action('ekoa.integrations', 'create-config', {
+    // ---- Save a config + prove it round-trips + summary redacts ------------
+    const created = await restJson('POST', '/api/v1/integrations/configs', {
       integrationKey: 'invoicexpress',
-      configValues: { account_name: 'acme', api_key: API_KEY, api_base: mockBase },
+      configValues: { account_name: 'acme', api_key: API_KEY, api_base: 'http://127.0.0.1:1/invoicexpress-mock' },
     });
-    configId = created?.data?.id;
-    assert(configId, `create-config failed: ${JSON.stringify(created).slice(0, 300)}`);
-    ok(`invoicexpress config saved (${configId})`);
+    configId = created.json?.id;
+    assert(created.status === 201 && configId, `create-config failed (${created.status}): ${JSON.stringify(created.json).slice(0, 300)}`);
+    assert(!JSON.stringify(created.json).includes(API_KEY), 'config summary must never echo credential values (api_key leaked)');
+    ok(`invoicexpress config saved (${configId}); summary carries no credential values`);
 
-    // ---- execute round-trips + decrypts the config -----------------------
-    const exec = await action('ekoa.integrations', 'execute', {
-      id: configId,
-      action: 'create_invoice',
-      args: { date: '01/07/2026', client: { name: 'Cliente E2E' }, items: [{ name: 'Consulta', unit_price: 100, quantity: 1 }] },
-    });
-    assert(exec?.data?.integration?.type === 'invoicexpress', `execute integration.type mismatch: ${JSON.stringify(exec?.data?.integration)}`);
-    assert(exec?.data?.action === 'create_invoice', 'execute did not echo the action');
-    assert(Array.isArray(exec?.data?.args?.items) && exec.data.args.items.length === 1, 'execute did not round-trip the items arg');
-    const creds = JSON.parse(exec.data.credentials);
-    assert(creds.api_base === mockBase, `decrypted api_base mismatch: ${creds.api_base} != ${mockBase}`);
-    assert(creds.api_key === API_KEY, 'decrypted api_key mismatch');
-    ok('execute intent round-trips the stored config + decrypts api_base/api_key');
+    const listed = (await restJson('GET', '/api/v1/integrations/configs')).json.items || [];
+    assert(listed.some((c) => c.integrationKey === 'invoicexpress'), 'saved invoicexpress config not visible in the config list');
+    ok('invoicexpress config visible in the org config list');
 
-    // ---- Drive the lifecycle against the mock (as the agent layer would) --
-    const createResp = await ix(creds.api_base, creds.api_key, 'POST', '/invoices.json', {
-      invoice: { date: '01/07/2026', client: { name: 'Cliente E2E' }, items: [{ name: 'Consulta', unit_price: 100, quantity: 1 }] },
-    });
-    assert(createResp.status === 201 && createResp.data?.invoice?.id, `create_invoice failed: ${JSON.stringify(createResp).slice(0, 200)}`);
-    const invoiceId = createResp.data.invoice.id;
-    assert(createResp.data.invoice.status === 'draft', `expected draft, got ${createResp.data.invoice.status}`);
-    ok(`create_invoice → draft invoice id=${invoiceId}`);
-
-    const finalizeResp = await ix(creds.api_base, creds.api_key, 'PUT', `/invoices/${invoiceId}/change-state.json`, { invoice: { state: 'finalized' } });
-    assert(finalizeResp.status === 200, `finalize failed: ${finalizeResp.status}`);
-    assert(finalizeResp.data?.invoice?.atcud === 'CSDF7T5H-50', `finalize did not assign ATCUD: ${JSON.stringify(finalizeResp.data).slice(0, 160)}`);
-    ok(`finalize_invoice → status finalized + ATCUD ${finalizeResp.data.invoice.atcud} + serie ${finalizeResp.data.invoice.sequence_number}`);
-
-    const getResp = await ix(creds.api_base, creds.api_key, 'GET', `/invoices/${invoiceId}.json`);
-    assert(getResp.status === 200 && getResp.data?.invoice?.atcud === 'CSDF7T5H-50', `get_invoice did not carry ATCUD: ${JSON.stringify(getResp.data).slice(0, 160)}`);
-    ok('get_invoice → carries the ATCUD assigned at finalize');
-
-    // pdf: 202 while generating, then 200 with the URL (documented poll).
-    const pdf1 = await ix(creds.api_base, creds.api_key, 'GET', `/api/pdf/${invoiceId}.json`);
-    const pdf2 = await ix(creds.api_base, creds.api_key, 'GET', `/api/pdf/${invoiceId}.json`);
-    const pdf3 = await ix(creds.api_base, creds.api_key, 'GET', `/api/pdf/${invoiceId}.json`);
-    assert(pdf1.status === 202 && pdf2.status === 202, `expected 202 while generating, got ${pdf1.status}/${pdf2.status}`);
-    assert(pdf3.status === 200 && pdf3.data?.output?.pdfUrl, `expected 200 + pdfUrl, got ${pdf3.status}`);
-    ok('get_invoice_pdf → 202 (generating) x2 then 200 with output.pdfUrl');
+    // ---- Deferred / out-of-surface observations ---------------------------
+    note('SKIP execute round-trip + create/finalize(ATCUD)/get/pdf lifecycle: needs the deferred G8 integration-action executor (the retired `execute` intent returned decrypted creds); the config summary never returns credentials. Proven over-the-wire by the vitest service suite (invoicexpress-skill).');
   } finally {
     if (configId) {
-      const d = await action('ekoa.integrations', 'delete-config', { id: configId });
-      if (d?.data?.deleted) note(`cleaned up integration config ${configId}`);
+      const d = await restJson('DELETE', '/api/v1/integrations/invoicexpress');
+      if (d.json?.ok) note('cleaned up invoicexpress integration config');
     }
-    await stopIxMock();
   }
 }
 
 main().then(
   () => {
     if (process.exitCode) { console.error('\nE2E: FAILURES above.'); process.exit(process.exitCode); }
-    console.log('\nE2E PASS: InvoiceXpress skill load + config execute round-trip + create/finalize/get(ATCUD) + pdf poll verified.');
+    console.log('\nE2E PASS: InvoiceXpress definition (6 actions, no webhook) + config CRUD round-trip verified.');
     process.exit(0);
   },
   (err) => {

@@ -87,8 +87,9 @@ function loadLedger() {
 function ledgerArtifacts(ledger) {
   const out = [];
   const pw = ledger.playwright;
-  for (const band of ['band1_zero_change', 'band2_fixture_swap', 'band3_served_app']) {
+  for (const band of ['band1_zero_change', 'band2_fixture_swap', 'band3_served_app', 'band4_gap_plan']) {
     const b = pw[band];
+    if (!b) continue;
     for (const spec of b.specs) out.push({ kind: 'spec', name: spec, file: `web/e2e/${spec}.spec.ts`, targetGate: b.targetGate });
   }
   for (const d of ledger.node_drivers.drivers) {

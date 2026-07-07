@@ -77,6 +77,7 @@ export const tokenEvents = new Store<Doc>('token_events');
 export const billingAccounts = new Store<Doc>('billing_accounts');
 export const automations = new Store<Doc>('automations');
 export const automationRuns = new Store<Doc>('automation_runs');
+export const approvedCommands = new Store<Doc>('approved_commands');
 export const triggers = new Store<Doc>('triggers');
 export const appSessions = new Store<Doc>('app_sessions');
 export const appSsoPending = new Store<Doc>('app_sso_pending');

@@ -5,15 +5,24 @@
  */
 import { Router, type Request, type Response } from 'express';
 import express from 'express';
-import { handleIngress, hubChallenge } from '../events/service.js';
+import { handleIngress, handleGetCallbackIngress, hubChallenge } from '../events/service.js';
 
 export function hooksRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
   // Raw body for signature verification — never JSON-parsed above the verifier.
   r.use(express.raw({ type: '*/*', limit: '5mb' }));
 
-  // GET handles Meta-style hub-challenge handshakes (timing-safe token compare).
-  r.get('/:triggerId', (req: Request, res: Response) => {
+  // GET splits GET-as-EVENT (getCallback integrations, e.g. Ifthenpay) from GET-as-HANDSHAKE
+  // (Meta hub-challenge) — carried webhooks-handler semantics.
+  r.get('/:triggerId', async (req: Request, res: Response) => {
+    const query = Object.fromEntries(
+      Object.entries(req.query).map(([k, v]) => [k, String(Array.isArray(v) ? v[0] : v)]),
+    ) as Record<string, string>;
+    const cb = await handleGetCallbackIngress(req.params.triggerId as string, query, deps);
+    if (cb) {
+      if (typeof cb.body === 'string') return res.status(cb.status).type('text/plain').send(cb.body);
+      return res.status(cb.status).json(cb.body);
+    }
     const token = process.env.WEBHOOK_HUB_VERIFY_TOKEN ?? '';
     const challenge = hubChallenge(req.query as Record<string, unknown>, token);
     if (challenge !== null) return res.status(200).send(challenge);

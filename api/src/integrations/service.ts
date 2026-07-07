@@ -17,6 +17,28 @@ export interface IntegrationConfigDoc extends Doc {
   enabled: boolean;
   credentialsCiphertext?: string; // never returned
   needsReauth?: boolean;
+  // --- Platform-integration (managed OAuth) rows only (G8, ch03 §3.8.15). Set on the
+  //     org-scoped workspace-connection rows written by integrations/platform-oauth.ts;
+  //     undefined on ordinary user-defined integration configs. ---
+  /** google | microsoft — marks this row as a managed platform OAuth connection. */
+  platformProvider?: 'google' | 'microsoft';
+  /** Pending OAuth CSRF state (high-entropy nonce); cleared once the callback completes. */
+  oauthState?: string;
+  /** Epoch-ms expiry of `oauthState`; a callback presenting an expired/absent state is refused. */
+  oauthStateExpiresAt?: number;
+  /** Connected account email (from the provider userinfo call); shown in status/list. */
+  email?: string;
+}
+
+/** Reserved integrationKey of the single org-scoped Pipedream Connect config row
+ *  (ch03 §3.8.16). Kept out of the user-defined config surface (see `listConfigs`). */
+export const PIPEDREAM_INTEGRATION_KEY = 'pipedream';
+
+/** True when a row is a G8-owned platform/pipedream row, not a user-defined integration
+ *  config. Such rows carry their own resource surfaces (§3.8.15/§3.8.16) and must not leak
+ *  into the user-defined integrations config list. */
+export function isReservedIntegrationRow(c: IntegrationConfigDoc): boolean {
+  return c.platformProvider != null || c.integrationKey === PIPEDREAM_INTEGRATION_KEY;
 }
 
 export interface Deps { now: () => number; genId: () => string }
@@ -26,10 +48,24 @@ export function configSummary(c: IntegrationConfigDoc) {
   return { id: c._id, integrationKey: c.integrationKey, name: c.name, enabled: c.enabled, needsReauth: c.needsReauth ?? false, ownerUserId: c.ownerUserId };
 }
 
-/** List configs visible to the actor: org-shared (ownerUserId undefined) + own. */
+/** List configs visible to the actor: org-shared (ownerUserId undefined) + own. Platform
+ *  and Pipedream rows (G8) are excluded — they are separate resources (§3.8.15/§3.8.16) and
+ *  must not surface in the user-defined integrations config list. */
 export async function listConfigs(actor: Actor): Promise<IntegrationConfigDoc[]> {
   const inOrg = await integrationConfigs.find({ orgId: actor.orgId });
-  return (inOrg as IntegrationConfigDoc[]).filter((c) => c.ownerUserId == null || c.ownerUserId === actor.userId);
+  return (inOrg as IntegrationConfigDoc[]).filter(
+    (c) => (c.ownerUserId == null || c.ownerUserId === actor.userId) && !isReservedIntegrationRow(c),
+  );
+}
+
+/** Resolve the credential config an owner may USE for an integration action: the owner's own
+ *  row wins, else the org-shared (ownerUserId undefined) row. Org-scoped; returns null when the
+ *  integration is not connected for this owner. Used by the user-defined action executor (G8).
+ *  A bare (orgId, ownerUserId) is taken because the automation engine calls with a run owner,
+ *  not a role-bearing actor. */
+export async function findConfigForOwner(orgId: string, ownerUserId: string, integrationKey: string): Promise<IntegrationConfigDoc | null> {
+  const rows = (await integrationConfigs.find({ orgId, integrationKey })) as IntegrationConfigDoc[];
+  return rows.find((c) => c.ownerUserId === ownerUserId) ?? rows.find((c) => c.ownerUserId == null) ?? null;
 }
 
 export async function createConfig(actor: Actor, input: { integrationKey: string; configValues: Record<string, unknown>; name?: string }, deps: Deps): Promise<IntegrationConfigDoc> {

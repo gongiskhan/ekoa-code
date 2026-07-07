@@ -35,6 +35,8 @@ import { triggersRouter } from './routes/triggers.js';
 import { hooksRouter } from './routes/hooks.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
+import { startDelivery, stopDelivery } from './events/delivery.js';
+import { attachCanvasServer } from './streaming/index.js';
 import { servedDataRouter } from './apps/served-data.js';
 import { devServeRouter } from './apps/dev-serve.js';
 import { servingRouter } from './apps/serving.js';
@@ -68,10 +70,46 @@ import {
   setLoadContextContent,
   setVerifyRunner,
   setBuildMechanics,
+  setIntegrationPrefetch,
+  setCatalog,
   sweepOrphans,
 } from './agents/index.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
 import { backfillKnowledgeIndex, buildGroundingBlock, searchKnowledgeIndex, readKnowledgeDoc } from './knowledge/index.js';
+// G8 — automation engine + integrations execution layer + delivery targets + canvas.
+import { automationsRouter } from './routes/automations.js';
+import { platformIntegrationsRouter, oauthCallbackRouter } from './routes/platform-integrations.js';
+import { pipedreamRouter } from './routes/pipedream.js';
+import {
+  setRunEventEmitterFactory,
+  setIntegrationActionExecutor,
+  setPlatformIntegrationCaller,
+  setIntegrationCredentialLoader,
+  setScopedMemoryResolver,
+  setAppDataStore,
+  setArtifactResolver,
+  setCatalogSources,
+  setLocalBrowserContextProvider,
+  startRunForTrigger,
+  runAutomationForAction,
+  buildAutomationCatalog,
+  formatCatalogForPrompt,
+  type RunEventEmitter,
+} from './automation/index.js';
+import {
+  executeUserIntegrationAction,
+  callPlatformIntegration,
+  findConfigForOwner,
+  integrationPrefetch,
+  listDefinitions,
+  getDefinition,
+} from './integrations/index.js';
+import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
+import { getArtifactById, projectDirFor } from './apps/app-paths.js';
+import { listVisibleMemories } from './memory/index.js';
+import { getSharedBrowser } from './services/browser-pool.js';
+import { setDeliveryTargets } from './events/delivery.js';
+import { decrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -79,6 +117,40 @@ import { logActivity } from './data/activity.js';
 export interface RuntimeDeps {
   now: () => number;
   genId: () => string;
+}
+
+/**
+ * Adapt the automation engine's RunEventEmitter callback seam onto the AutomationRunEvent wire
+ * union (§3.6.3) on the 'automation' SSE stream. Every payload matches shared/events.ts; the
+ * engine itself never imports events/ (ch02 §2.8 — the seam the old engine already had, B7).
+ */
+function makeRunSseEmitter(runId: string): RunEventEmitter {
+  const emit = (type: string, data: Record<string, unknown>): void => {
+    try {
+      sseManager.emit('automation', runId, type, data);
+    } catch (err) {
+      console.warn('[automation-sse] emit failed:', err instanceof Error ? err.message : err);
+    }
+  };
+  return {
+    stepUpdate: (record, id) => emit('step', { runId: id, stepIndex: record.index, status: record.status }),
+    runComplete: (_id, _durationMs, summary) => emit('complete', { summary }),
+    runError: (_id, error) => emit('error', { code: 'AUTOMATION_FAILED', message: error }),
+    runPaused: (_id, _reason, service) => emit('paused', { service }),
+    runPatch: (_id, info) => emit('patch', { patch: { ...info } }),
+    runPauseForUser: (_id, info) => emit('pause_for_user', {
+      stepIndex: info.stepIndex,
+      reasoning: info.reasoning,
+      userInstructions: info.userInstructions,
+      ...(info.failureMessage ? { failureMessage: info.failureMessage } : {}),
+      ...(info.screenshotUrl ? { screenshotUrl: info.screenshotUrl } : {}),
+    }),
+    runResumed: () => emit('resumed', {}),
+    runStreamingAvailable: (_id, info) => emit('streaming_available', { token: info.token, wsUrl: info.wsUrl, viewport: info.viewport }),
+    runAwaitingConsent: (_id, info) => emit('awaiting_consent', { stepIndex: info.stepIndex, shape: info.shape, argv: info.argv, description: info.description }),
+    runAwaitingDaemon: (_id, info) => emit('awaiting_daemon', { stepIndex: info.stepIndex, capability: info.capability, reason: info.reason }),
+    runOutputChunk: (_id, info) => emit('step_output_chunk', { stepIndex: info.stepIndex, stream: info.stream, chunk: info.chunk }),
+  };
 }
 
 const defaultDeps: RuntimeDeps = { now: () => Date.now(), genId: () => randomUUID() };
@@ -147,8 +219,164 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const after = raw.indexOf('\n', end + 1);
     return after === -1 ? '' : raw.slice(after + 1).replace(/^\n+/, '');
   });
-  // Integration pre-fetch (§5.5.2 layer 3) + automation catalog (layer 4) land at G8 — an honest
-  // cross-gate deferral; both keep their safe empty defaults until then.
+  // G8 — the §5.5.2 chat grounding seams land: live integration pre-fetch (layer 3) and the
+  // cross-agent automation/integration catalog (layer 4).
+  setIntegrationPrefetch(integrationPrefetch);
+  setCatalog(async ({ userId, orgId }) => {
+    void orgId; // catalog visibility is user-keyed; org scoping rides the underlying stores
+    try {
+      const catalog = await buildAutomationCatalog(userId, false);
+      return formatCatalogForPrompt(catalog);
+    } catch {
+      return ''; // catalog failures are non-fatal (§5.5.2 layer 4)
+    }
+  });
+
+  // G8 — automation engine seams (ch02 §2.8; automation/ may not import events/, apps/ or the
+  // composition surfaces directly, so the root binds every collaborator).
+  // 1. Run events → the automation SSE stream (§3.6.3): the emitter factory adapts the engine's
+  //    callback seam onto the AutomationRunEvent wire union, replayable via Last-Event-ID.
+  setRunEventEmitterFactory((runId) => makeRunSseEmitter(runId));
+  // 2. Integration action execution (user-defined skills; §5.6.7 integration steps).
+  setIntegrationActionExecutor(async (call) => {
+    const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
+    const r = await executeUserIntegrationAction(
+      {
+        orgId: owner?.orgId ?? '',
+        ownerUserId: call.ownerUserId,
+        integrationKey: call.integrationKey,
+        actionName: call.actionName,
+        args: call.args,
+      },
+      {
+        // integração-por-automação (carried B25): an automationBinding action runs the bound
+        // automation under the verified owner; integrations/ never imports automation/ (tiers).
+        runAutomationBackedAction: async (b) => {
+          const out = await runAutomationForAction({
+            binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
+            args: b.args,
+            credentialFields: b.credentialFields,
+            orgId: b.orgId,
+            ownerUserId: b.ownerUserId,
+          });
+          return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
+        },
+      },
+    );
+    return { success: r.success, data: r.data, error: r.error, details: r.code };
+  });
+  // 3. Platform integrations (Google/Microsoft) behind automation + listener steps.
+  setPlatformIntegrationCaller(async (call, pactor) => {
+    const owner = (await users.get(pactor.userId)) as { orgId?: string } | null;
+    const r = await callPlatformIntegration(
+      { orgId: owner?.orgId ?? '', integrationKey: call.integrationKey, actionName: call.actionName, args: call.args },
+      { now: deps.now, genId: deps.genId },
+    );
+    return { success: r.success, data: r.data, error: r.error };
+  });
+  // 4. Decrypted credential fields for api_call auth injection (encrypted at rest, ch09).
+  setIntegrationCredentialLoader(async (integrationKey, ownerUserId) => {
+    const owner = (await users.get(ownerUserId)) as { orgId?: string } | null;
+    if (!owner?.orgId) return null;
+    const cfg = await findConfigForOwner(owner.orgId, ownerUserId, integrationKey);
+    if (!cfg?.credentialsCiphertext) return null;
+    try {
+      const values = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
+    } catch {
+      return null;
+    }
+  });
+  // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
+  setScopedMemoryResolver(async (q) => {
+    const all = await listVisibleMemories({ userId: q.ownerUserId, orgId: q.orgId, role: 'builder' });
+    const tag = `automation:${q.automationId}`;
+    return all
+      .filter((m) => (m.tags ?? []).includes(tag) && typeof m.content === 'string')
+      .slice(0, q.maxMemories)
+      .map((m) => m.content as string);
+  });
+  // 6. App-data collections behind ekoa_action steps (the served-app shared plane, G6).
+  const automationAppData = new CollectionsEngine(deps);
+  const appScopeOf = async (artifactId: string) => {
+    const art = await getArtifactById(artifactId);
+    return sharedScope(artifactId, (art?.userId as string | undefined) ?? '');
+  };
+  setAppDataStore({
+    list: async (a, c) => automationAppData.list(await appScopeOf(a), c),
+    get: async (a, c, id) => automationAppData.get(await appScopeOf(a), c, id),
+    create: async (a, c, data) => (await automationAppData.create(await appScopeOf(a), c, data)) as { id: string } & Record<string, unknown>,
+    update: async (a, c, id, patch) => automationAppData.upsert(await appScopeOf(a), c, id, patch),
+    delete: async (a, c, id) => automationAppData.delete(await appScopeOf(a), c, id),
+  });
+  // 7. Artifact resolution for ekoa_action target apps (slug or id → project dir, jailed).
+  setArtifactResolver(async (slugOrId) => {
+    const resolved = await resolveApp(slugOrId);
+    if (!resolved || !resolved.artifactBacked) return null;
+    const art = await getArtifactById(resolved.appId);
+    return art ? { artifactId: resolved.appId, projectDir: projectDirFor(art) } : null;
+  });
+  // 8. Catalog sources: integration definitions feed skills; connected platform accounts and
+  //    artifact (ekoa_action) capabilities keep honest empties this gate — the seam carries no
+  //    org context for accounts and no MANIFEST-capability surface exists yet (G9 note).
+  setCatalogSources({
+    getVisibleSkills: () =>
+      listDefinitions().map((d) => ({
+        integrationKey: d.integrationKey,
+        actions: d.actions.map((a) => ({ actionName: a.actionName, description: a.description, mutates: a.mutates })),
+      })),
+    getSkill: (integrationKey) => {
+      const d = getDefinition(integrationKey);
+      return d
+        ? {
+            integrationKey: d.integrationKey,
+            actions: d.actions.map((a) => ({ actionName: a.actionName, description: a.description, mutates: a.mutates })),
+          }
+        : undefined;
+    },
+    getConnectedPlatformAccounts: async () => [],
+    listEkoaActions: async () => [],
+  });
+  // 9. The in-process local browser for browser-step automations (services/ shared pool).
+  setLocalBrowserContextProvider(async () => {
+    const browser = await getSharedBrowser();
+    return browser.newContext();
+  });
+  // (setDaemonConnectionResolver stays on its honest default — the bridge lands at G8A.)
+
+  // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).
+  setDeliveryTargets({
+    startAutomationRun: async (automationId, event) => {
+      const outcome = await startRunForTrigger({
+        automationId,
+        // Server-trusted owner from the trigger record, NEVER the inbound payload (§5.6.7).
+        ownerUserId: event.trigger.ownerUserId,
+        orgId: event.trigger.orgId,
+        triggeredBy: 'webhook',
+        event: {
+          triggerId: event.trigger._id,
+          integrationKey: event.trigger.integrationKey,
+          eventName: event.trigger.eventName,
+          receivedAt: new Date(deps.now()).toISOString(),
+          payload: event.payload,
+          rawHeaders: {},
+        },
+      });
+      if (outcome.outcome === 'completed') return { ok: true };
+      return { ok: false, reason: `run ended ${outcome.outcome}`, ...(outcome.permanent ? { permanent: true } : {}) };
+    },
+    invokeArtifactBackend: async (artifactId, entrypoint, event) => {
+      try {
+        const result = await invokeArtifactBackend(artifactId, entrypoint, {
+          event: event.payload,
+          trigger: { id: event.trigger._id, eventName: event.trigger.eventName },
+        });
+        return result.ok ? { ok: true } : { ok: false, reason: result.error ?? 'backend handler reported failure' };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : 'backend invoke failed' };
+      }
+    },
+  });
 
   // content/ audit write path (FIXED-8, ch08): the loader reaches data/ logActivity ONLY through
   // this injected seam, wired BEFORE boot ingest. Fire-and-forget — an audit hiccup never blocks
@@ -244,6 +472,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G5 — push infrastructure + triggers.
   app.use('/api/v1/triggers', triggersRouter(deps));
   app.use('/api/v1/notifications', notificationsRouter());
+  // G8 — automations (§3.8.18) + the platform-integration execution layer (§3.8.15/16).
+  app.use('/api/v1/automations', automationsRouter());
+  app.use('/api/v1/platform-integrations', platformIntegrationsRouter(deps));
+  // The OAuth callback path is kept VERBATIM (§3.8.15): it is a registered redirect URI.
+  app.use('/api/v1/oauth', oauthCallbackRouter(deps));
+  app.use('/api/v1/pipedream', pipedreamRouter(deps));
   // G6 — artifacts (platform) + the byte-compatible served-app plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
   app.use('/api/v1/company-space', companySpaceRouter(deps));
@@ -330,19 +564,27 @@ export function boot(): void {
   const app = buildApp(config);
   bootState()
     .then(() => {
-      app.listen(config.port, () => {
+      const httpServer = app.listen(config.port, () => {
         console.log(`[ekoa-api] listening on :${config.port} (${config.nodeEnv})`);
         bootPostListen();
+        // Boot ordering constraint (ch02 §2.6 server.ts row): the trigger delivery pipeline
+        // starts only AFTER the HTTP server is listening, so re-entrant deliveries (a run
+        // calling back into this server) find a live listener.
+        void startDelivery();
       });
+      // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
+      // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
+      attachCanvasServer(httpServer);
     })
     .catch((err) => {
       console.error('[ekoa-api] boot failed:', err);
       process.exit(1);
     });
 
-  // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers.
+  // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers;
+  // the delivery pipeline drains in-flight dispatches (the rest recovers next boot, §12.3).
   const shutdown = () => {
-    void Promise.allSettled([appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
+    void Promise.allSettled([stopDelivery(), appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

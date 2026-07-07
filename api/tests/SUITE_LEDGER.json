@@ -1,8 +1,8 @@
 {
-  "$comment": "Suite ledger (chapter 14 §14.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
+  "$comment": "Suite ledger (chapter 14 \u00a714.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
   "version": 1,
   "runId": "20260706-182515-9080f2cb",
-  "currentGate": "G7B",
+  "currentGate": "G8",
   "playwright": {
     "band1_zero_change": {
       "targetGate": "G9",
@@ -83,6 +83,13 @@
         "chat-fixes",
         "chat-preview-resolution"
       ]
+    },
+    "band4_gap_plan": {
+      "targetGate": "G9",
+      "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",
+      "specs": [
+        "automation-deterministic"
+      ]
     }
   },
   "frontend_unit": {
@@ -159,17 +166,17 @@
       {
         "name": "ifthenpay",
         "targetGate": "G8",
-        "note": "was G4; G4 passed partial-domain (RUN_LOG G4) without the action-runner/platform-caller machinery this driver's execute step needs, and the driver still speaks the retired action API (FIXED-2) — retargeted to G8 (integration-execution) at the 2026-07-06 resume; REST adaptation owed there. See RUN_LOG DEVIATION."
+        "note": "was G4; G4 passed partial-domain (RUN_LOG G4) without the action-runner/platform-caller machinery this driver's execute step needs, and the driver still speaks the retired action API (FIXED-2) \u2014 retargeted to G8 (integration-execution) at the 2026-07-06 resume; REST adaptation owed there. See RUN_LOG DEVIATION."
       },
       {
         "name": "invoicexpress",
         "targetGate": "G8",
-        "note": "was G4; same as ifthenpay — rides the G8 integration-execution machinery; REST adaptation owed there. See RUN_LOG DEVIATION (2026-07-06 resume)."
+        "note": "was G4; same as ifthenpay \u2014 rides the G8 integration-execution machinery; REST adaptation owed there. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "pipedream",
         "targetGate": "G8",
-        "note": "was G4; the Pipedream REST layer (ch03 §3.8.16) did not land in the G4 partial-domain pass — module + adapted driver owed at G8. See RUN_LOG DEVIATION (2026-07-06 resume)."
+        "note": "was G4; the Pipedream REST layer (ch03 \u00a73.8.16) did not land in the G4 partial-domain pass \u2014 module + adapted driver owed at G8. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "integration-automation",
