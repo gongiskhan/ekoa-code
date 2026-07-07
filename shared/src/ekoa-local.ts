@@ -120,3 +120,75 @@ export const ekoaLocalEndpoints: DomainDescriptorMap = {
     kind: 'sse',
   },
 };
+
+// ---------------------------------------------------------------------------
+// Bridge delegation wire contract (ch18 §18.2.6, §18.3.8, §18.5.1). The shared
+// schemas both the Cortex bridge server AND the fake-daemon harness build against
+// (§18.1: the harness is authoritative on the wire; this is the readable form).
+// ---------------------------------------------------------------------------
+
+/** Billing allowance reference carried in a delegation budget (ch06 §6.6.3). */
+export const AllowanceRef = z.object({ userId: z.string() }).passthrough();
+export type AllowanceRef = z.infer<typeof AllowanceRef>;
+
+/** A task minted hosted-side per delegation, signed by Cortex, sent over the bridge (§18.2.6).
+ *  Binds the eight S2 fields + a server-minted id + a signature. */
+export const DelegatedTask = z.object({
+  taskId: z.string(),
+  org: z.string(),
+  user: z.string(),
+  session: z.string(),
+  pairingId: z.string(),
+  grantRefs: z.array(z.string()),
+  task: z.string(),
+  budget: z.object({ egressBytes: z.number(), modelSpend: AllowanceRef }),
+  expiry: z.string(),
+  nonce: z.string(),
+  sig: z.string(),
+});
+export type DelegatedTask = z.infer<typeof DelegatedTask>;
+
+/** Derived output only (§18.2.2); never raw file bytes. */
+export const PatchProposal = z.object({ path: z.string(), diff: z.string() }).passthrough();
+export type PatchProposal = z.infer<typeof PatchProposal>;
+
+export const DelegationResult = z.object({
+  status: z.enum(['ok', 'unreachable', 'cap_reached', 'denied']),
+  answer: z.string().optional(),
+  citations: z.array(z.object({ path: z.string(), range: z.string() })),
+  patches: z.array(PatchProposal).optional(),
+  ledgerRefs: z.array(z.string()),
+  telemetry: z.object({ egressBytes: z.number(), maskedCounts: z.record(z.number()) }),
+});
+export type DelegationResult = z.infer<typeof DelegationResult>;
+
+/** Daemon-side append-only egress ledger row; Cortex receives rows as display metadata (§18.5.1). */
+export const EgressLedgerRow = z.object({
+  ts: z.string(),
+  session: z.string(),
+  correlationId: z.string(),
+  path: z.string(),
+  byteRange: z.string(),
+  bytesOut: z.number(),
+  sha256: z.string(),
+  tool: z.string(),
+});
+export type EgressLedgerRow = z.infer<typeof EgressLedgerRow>;
+
+/** The bridge WS frames added for delegation (§18.3.8). Discriminated on `type`. Cortex validates
+ *  every inbound frame at the boundary and drops unparseable/invalid frames (§18.3.1). */
+export const BridgeFrame = z.discriminatedUnion('type', [
+  // hosted -> daemon
+  z.object({ type: z.literal('delegate'), task: DelegatedTask }),
+  z.object({ type: z.literal('provider_response'), correlationId: z.string(), body: z.unknown() }),
+  z.object({ type: z.literal('cancel'), taskId: z.string() }),
+  // daemon -> hosted
+  z.object({ type: z.literal('provider_request'), correlationId: z.string(), session: z.string(), credential: z.string(), body: z.unknown() }),
+  z.object({ type: z.literal('ledger_row'), taskId: z.string(), row: EgressLedgerRow }),
+  z.object({ type: z.literal('delegation_result'), taskId: z.string(), result: DelegationResult }),
+  z.object({ type: z.literal('denial'), taskId: z.string().optional(), reason: z.string(), principle: z.string() }),
+  // presence
+  z.object({ type: z.literal('ping') }),
+  z.object({ type: z.literal('pong') }),
+]);
+export type BridgeFrame = z.infer<typeof BridgeFrame>;
