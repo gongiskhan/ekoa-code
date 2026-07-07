@@ -232,23 +232,25 @@ async function executeHttpAction(
       response.headers.forEach((v, k) => {
         responseHeaders[k] = v;
       });
-      // CREDENTIAL BOUNDARY (Codex G8): a server can echo the CLIENT's own secret in the error
-      // body/message — value-redact it from every PERSISTED string before returning.
+      // CREDENTIAL BOUNDARY (Codex G8): a server can echo the CLIENT's own secret in ANY string of
+      // the error surface (message, body, headers, statusText/reason phrase). Deep VALUE-redact the
+      // whole details object so no field — named or not — can carry a decrypted secret.
+      const details = redactSecretsDeep({
+        request: requestSummary,
+        response: {
+          status: response.status,
+          statusText: response.statusText,
+          headers: redactHeaders(responseHeaders),
+          body: truncateForDisplay(bodyIsJson ? safeStringify(data) : text, MAX_BODY_DISPLAY_BYTES),
+          bodyIsJson,
+        },
+      }, secretValues) as IntegrationErrorDetails;
       return {
         success: false,
         status: response.status,
         code: classifyHttpFailure(response.status, data),
         error: redactSecretValuesIn(buildErrorMessage(response.status, response.statusText, data, text), secretValues),
-        details: {
-          request: requestSummary,
-          response: {
-            status: response.status,
-            statusText: response.statusText,
-            headers: Object.fromEntries(Object.entries(redactHeaders(responseHeaders)).map(([k, v]) => [k, redactSecretValuesIn(v, secretValues)])),
-            body: redactSecretValuesIn(truncateForDisplay(bodyIsJson ? safeStringify(data) : text, MAX_BODY_DISPLAY_BYTES), secretValues),
-            bodyIsJson,
-          },
-        },
+        details,
       };
     }
     // Success: a 2xx body may still echo the client's own credential (which an automation may then

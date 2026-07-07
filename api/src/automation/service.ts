@@ -532,6 +532,14 @@ export interface TriggerRunOutcome {
  * PERMANENT failure (never retried). The engine runs one attempt — retry lives in `events/`.
  */
 export async function startRunForTrigger(input: TriggerRunInput): Promise<TriggerRunOutcome> {
+  // Delivery-side cross-org guard (Codex G8, defense-in-depth alongside the trigger-creation check):
+  // the engine skips the owner check for triggered runs, so verify HERE that the target automation
+  // belongs to the trigger owner's org. A foreign/unknown automation is a PERMANENT failure — never
+  // executed, never retried.
+  const target = (await automations.get(input.automationId)) as StoredAutomation | null;
+  if (!target || target.orgId !== input.orgId) {
+    return { outcome: 'failed', permanent: true };
+  }
   const ctx: RunContext = {
     ownerUserId: input.ownerUserId,
     orgId: input.orgId,

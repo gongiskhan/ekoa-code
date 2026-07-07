@@ -276,6 +276,18 @@ describe('automation service surface (§3.8.18)', () => {
     expect(out).toEqual({ outcome: 'failed', permanent: true });
   });
 
+  it('startRunForTrigger refuses a CROSS-ORG automation as a permanent failure (Codex G8 — no foreign execution)', async () => {
+    // The automation belongs to org o2; a trigger owned by org o1 must not drive it.
+    await automations.insert({
+      _id: 'foreign', id: 'foreign', name: 'Foreign', description: '', ownerUserId: 'x1', orgId: 'o2',
+      steps: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const out = await svc.startRunForTrigger({ automationId: 'foreign', ownerUserId: 'u1', orgId: 'o1', triggeredBy: 'webhook' });
+    expect(out).toEqual({ outcome: 'failed', permanent: true });
+    // No run record was created for the foreign automation under o1.
+    expect(await automationRuns.find({ automationId: 'foreign' })).toHaveLength(0);
+  });
+
   it('startRunForTrigger runs under the trigger owner and awaits terminal status', async () => {
     await automations.insert({
       _id: 'tauto', id: 'tauto', name: 'Trigger auto', description: '', ownerUserId: 'u1', orgId: 'o1',
