@@ -115,7 +115,8 @@
         "claude-fresh-context": "in-flight-confirming"
       },
       "tag": "gate-7b"
-    }
+    },
+    "phase-8": "passed"
   },
   "globalGate": {
     "status": "in-progress",

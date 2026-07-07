@@ -1,6 +1,7 @@
 {
-  "slice": "phase-8", "gate": "G8", "status": "in_progress",
-  "startedBy": "session ac243460, 2026-07-07 (post gate-7b)",
-  "note": "Automation engine + streaming canvas carve-out (ch05 §5.6.7 + carryover B7-B10/B24) + G4-deferred payment/integration drivers. Implementation worker g8-automation building; output durable. Resume: check the worker's report + the api/src/automation, api/src/streaming, api/src/routes/automations.ts working-tree state (untrusted-until-verified per §14.1 resume discipline), then continue to the G8 gate.",
-  "gates": {}
+  "slice": "phase-8", "gate": "G8", "status": "passed",
+  "completedBy": "session edcc57e1 (Fable 5)",
+  "greenCondition": "ci:lane exit 0 (shared 24 + api 97 files); e2e:server exit 0 (127/127, 47 due at G8, 5 drivers live, ratchet holds); sast/secrets/audit 0",
+  "reviews": { "claudeFreshContext": "needs-work->3 findings all fixed", "codexCheckpoint": "11 rounds, all findings fixed+re-confirmed, credit-exhausted post-convergence" },
+  "checkpoint": "tag gate-8"
 }
