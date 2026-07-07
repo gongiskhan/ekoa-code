@@ -161,6 +161,15 @@ describe('automations contract (§3.8.18)', () => {
     expect(body.rehearsing).toBe(true);
   });
 
+  it('plan-from-goal honours the creation-authority gate: a builder is 403 by default (Codex G8)', async () => {
+    hoisted.planText = JSON.stringify({ status: 'ok', name: 'X', description: '', inputs: [], steps: [{ type: 'wait', durationMs: 1 }], reasoning: '' });
+    const t = await builderToken();
+    // Org setting is off by default (the earlier test restored it) → a builder may not create via /plan.
+    const denied = await api('/api/v1/automations/plan', t, { method: 'POST', body: JSON.stringify({ goal: 'x', language: 'pt' }) });
+    expect(denied.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(await denied.json()).success).toBe(true);
+  });
+
   it('catalog + approved-commands respond schema-valid', async () => {
     const t = await adminToken();
     const cat = await (await api('/api/v1/automations/catalog', t)).json();

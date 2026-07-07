@@ -120,6 +120,19 @@ describe('queue claim/fail/recover', () => {
     expect(cur.status).toBe('dead');
   });
 
+  it('two concurrent claims of ONE pending event yield exactly one non-null winner (Codex G8 — no double dispatch)', async () => {
+    const t = await mkAutomationTrigger();
+    await enqueue(t._id, 'k1', '{}', new Date(deps.now()).toISOString());
+    // Same nowIso for both callers — the old timestamp identity check would let both win on a
+    // same-millisecond race. The random claim token must make exactly one win.
+    const nowIso = new Date(deps.now()).toISOString();
+    const [a, b] = await Promise.all([claimNext(nowIso), claimNext(nowIso)]);
+    const winners = [a, b].filter(Boolean);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]!.status).toBe('dispatching');
+    expect(winners[0]!.attempts).toBe(1); // claimed exactly once
+  });
+
   it('boot recovery flips rows stuck dispatching >10min back to pending', async () => {
     const t = await mkAutomationTrigger();
     await enqueue(t._id, 'k1', '{}', new Date(deps.now()).toISOString());

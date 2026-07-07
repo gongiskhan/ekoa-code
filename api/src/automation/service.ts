@@ -78,11 +78,16 @@ function toWireAutomation(doc: StoredAutomation): WireAutomation {
 }
 
 function toWireRun(doc: StoredRun): WireRunRecord {
+  // Defense-in-depth: the engine already scrubs `credentials` before persistence, but never
+  // return it on the wire even if a legacy row carries it (credential boundary, §5.6.7).
+  const wireInputs = doc.inputs && 'credentials' in doc.inputs
+    ? Object.fromEntries(Object.entries(doc.inputs).filter(([k]) => k !== 'credentials'))
+    : doc.inputs;
   return {
     id: doc.id,
     automationId: doc.automationId,
     status: doc.status,
-    ...(doc.inputs ? { inputs: doc.inputs } : {}),
+    ...(wireInputs ? { inputs: wireInputs } : {}),
     ...(doc.rehearsalSummary?.reason ? { summary: doc.rehearsalSummary.reason } : {}),
     ...(doc.startedAt ? { startedAt: doc.startedAt } : {}),
     ...(doc.endedAt ? { finishedAt: doc.endedAt } : {}),
@@ -112,6 +117,15 @@ function canSeeRun(run: StoredRun, actor: Actor): boolean {
   if (actor.role === 'super-admin') return true;
   if (run.orgId !== actor.orgId) return false;
   return run.ownerUserId === actor.userId || actor.role === 'org-admin';
+}
+
+/** Cancel/resume/consent/step-feedback are OWNER-scoped (§5.6.7): only the run's own user (or a
+ *  super-admin for platform ops) may mutate a run or touch the owner's consent/cache/memory. An
+ *  org-admin has READ visibility (canSeeRun) but must NOT be able to inject a standing command
+ *  approval into another member's account or drive their local execution. */
+function isRunOwner(run: StoredRun, actor: Actor): boolean {
+  if (actor.role === 'super-admin') return true;
+  return run.orgId === actor.orgId && run.ownerUserId === actor.userId;
 }
 
 async function loadAutomationForRead(actor: Actor, id: string): Promise<StoredAutomation> {
@@ -228,8 +242,15 @@ export async function deleteAutomation(actor: Actor, id: string): Promise<{ ok: 
 export async function planFromGoal(
   actor: Actor,
   input: { goal: string; name?: string; automationId?: string; language?: string },
+  orgSettings?: { allowBuilderAutomations?: boolean },
 ): Promise<WirePlanResponse> {
   void input.language; // language is carried on the wire (ch03 §3.4); the planner output is language-agnostic
+  // Creation authority (Amendment 2): plan-from-goal PERSISTS a new automation (landmine 9), so it
+  // is subject to the same gate as POST /automations — a builder in an org without builder-authoring
+  // cannot create one via /plan. Updating an existing automation is guarded by canWriteAutomation below.
+  if (!input.automationId && !canCreateAutomation(actor, orgSettings)) {
+    throw new AutomationServiceError('FORBIDDEN', 'not authorized to create automations');
+  }
   const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
   const result = await plannerPlanFromGoal({ goal: input.goal, userId: actor.userId, catalog, ...(input.name ? { automationName: input.name } : {}) });
 
@@ -356,7 +377,7 @@ export async function getRunRecord(actor: Actor, runId: string): Promise<WireRun
  *  no-op → `{ cancelled: false }`. */
 export async function cancelRun(actor: Actor, runId: string): Promise<{ cancelled: boolean }> {
   const run = (await automationRuns.get(runId)) as StoredRun | null;
-  if (!run || !canSeeRun(run, actor)) return { cancelled: false };
+  if (!run || !isRunOwner(run, actor)) return { cancelled: false };
   const sig = signals.get(runId);
   if (!sig || sig.cancelled) return { cancelled: false };
   sig.cancelled = true; // engine observes this at the next loop check / resume poll
@@ -366,7 +387,7 @@ export async function cancelRun(actor: Actor, runId: string): Promise<{ cancelle
 /** Resume a paused-for-user run (§5.6.7). A run that is not currently paused is a no-op. */
 export async function resumeRun(actor: Actor, runId: string): Promise<{ resumed: boolean }> {
   const run = (await automationRuns.get(runId)) as StoredRun | null;
-  if (!run || !canSeeRun(run, actor)) return { resumed: false };
+  if (!run || !isRunOwner(run, actor)) return { resumed: false };
   const sig = signals.get(runId);
   if (!sig || run.status !== 'paused_for_user') return { resumed: false };
   sig.resumeFlag = true;
@@ -382,7 +403,7 @@ export async function resolveConsent(
 ): Promise<WireConsentResult> {
   const run = (await automationRuns.get(runId)) as StoredRun | null;
   if (!run) throw new AutomationServiceError('NOT_FOUND', 'run not found');
-  if (!canSeeRun(run, actor)) throw new AutomationServiceError('FORBIDDEN', 'not authorized for this run');
+  if (!isRunOwner(run, actor)) throw new AutomationServiceError('FORBIDDEN', 'not authorized for this run');
   const sig = signals.get(runId);
   const ownerUserId = run.ownerUserId ?? actor.userId;
 
@@ -390,8 +411,11 @@ export async function resolveConsent(
     if (sig) sig.cancelled = true;
     return { decision: 'stop', resumed: false, persisted: false };
   }
+  // Defense-in-depth: only persist a STANDING command approval when the run is genuinely awaiting
+  // consent — never let an approval be injected against a run that never asked for one.
+  const awaitingConsent = run.status === 'awaiting_consent';
   let persisted = false;
-  if (input.decision === 'always') {
+  if (input.decision === 'always' && awaitingConsent) {
     await approveCommandShape(ownerUserId, input.shape);
     persisted = true;
   }
@@ -411,7 +435,9 @@ export async function submitStepFeedback(
   input: { kind: string; note?: string },
 ): Promise<WireStepFeedbackResponse> {
   const run = (await automationRuns.get(runId)) as StoredRun | null;
-  if (!run || !canSeeRun(run, actor)) throw new AutomationServiceError('NOT_FOUND', 'run not found');
+  // Owner-scoped: step feedback evicts the owner's cache entries and may write a correction memory
+  // into the owner's memory (§5.6.7, §11.6), so an org-admin must not drive another member's memory.
+  if (!run || !isRunOwner(run, actor)) throw new AutomationServiceError('NOT_FOUND', 'run not found');
   const step = run.steps.find((s) => s.stepId === stepId);
   if (!step) throw new AutomationServiceError('NOT_FOUND', 'step not found');
 

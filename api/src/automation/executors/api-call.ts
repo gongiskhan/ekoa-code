@@ -101,12 +101,18 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
     else if (bodyKind === 'text') resolvedHeaders['Content-Type'] = 'text/plain';
   }
 
+  // CREDENTIAL BOUNDARY (ch05 §5.6.7): the resolved action is PERSISTED into the step record and
+  // returned by GET /automations/runs/:id. Name-based header redaction is not enough — a secret
+  // interpolated into the URL query string, the request body, or a non-auth-shaped header would
+  // otherwise be stored in cleartext. Redact every occurrence of any decrypted integration secret
+  // VALUE from the persisted copy (the real request above already used the un-redacted values).
+  const secretValues = collectSecretValues(integrationFields);
   const resolved: ApiCallResolved = {
     kind: 'api_call',
     method: spec.method,
-    url: resolvedUrl,
-    headers: redactHeadersForCache(resolvedHeaders),
-    body: resolvedBody,
+    url: redactSecretValues(resolvedUrl, secretValues),
+    headers: redactHeaderValues(redactHeadersForCache(resolvedHeaders), secretValues),
+    body: resolvedBody ? redactSecretValues(resolvedBody, secretValues) : resolvedBody,
     bodyKind,
     timeoutMs,
     authIntegrationKey: spec.authIntegrationKey,
@@ -170,7 +176,8 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
       error: {
         message: `HTTP ${response.status} ${response.statusText}`,
         recoverable: true,
-        details: { request: { method: spec.method, url: resolvedUrl }, response: { status: response.status, body: bodyText.slice(0, 2000) } },
+        // The URL may carry a secret in its query string — redact before persisting the details.
+        details: { request: { method: spec.method, url: redactSecretValues(resolvedUrl, secretValues) }, response: { status: response.status, body: bodyText.slice(0, 2000) } },
       },
       output,
       resolvedAction: resolved,
@@ -205,6 +212,36 @@ function redactHeadersForCache(headers: Record<string, string>): Record<string, 
   for (const [k, v] of Object.entries(headers)) {
     out[k] = isAuthShapedHeader(k) ? '<resolved-at-runtime>' : v;
   }
+  return out;
+}
+
+/** Every decrypted secret value across the resolved integration credential fields. Longest first
+ *  so an overlapping shorter value never masks a longer one. */
+function collectSecretValues(integrationFields: Record<string, Record<string, string>> | undefined): string[] {
+  if (!integrationFields) return [];
+  const values = new Set<string>();
+  for (const fields of Object.values(integrationFields)) {
+    for (const v of Object.values(fields)) {
+      if (typeof v === 'string' && v.length >= 4) values.add(v); // skip trivially-short values
+    }
+  }
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+/** Replace every occurrence of any secret value in `text` with a redaction marker. */
+function redactSecretValues(text: string, secretValues: string[]): string {
+  let out = text;
+  for (const secret of secretValues) {
+    if (out.includes(secret)) out = out.split(secret).join('<redacted>');
+  }
+  return out;
+}
+
+/** Redact secret values that landed in a (non-auth-shaped) header value. */
+function redactHeaderValues(headers: Record<string, string>, secretValues: string[]): Record<string, string> {
+  if (!secretValues.length) return headers;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) out[k] = redactSecretValues(v, secretValues);
   return out;
 }
 

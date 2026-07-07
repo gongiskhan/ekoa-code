@@ -18,7 +18,7 @@ import type { Server as HttpServer, IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Page } from 'playwright';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { signStreamToken, tokenTtlSeconds, verifyStreamToken } from './auth.js';
+import { signStreamToken, tokenTtlSeconds, verifyStreamToken, consumeStreamToken } from './auth.js';
 import { StreamSession, type RunStateProbe } from './session.js';
 import {
   getSession,
@@ -97,7 +97,9 @@ export interface AttachCanvasOptions {
 }
 
 export function attachCanvasServer(httpServer: HttpServer, opts: AttachCanvasOptions = {}): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  // maxPayload bounds every inbound frame: mouse/key JSON is tiny, so an 8 KiB cap is generous
+  // and closes the memory-DoS vector where a giant frame is buffered before parse (Codex G8).
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 });
   const log = opts.log ?? defaultLog;
 
   httpServer.on('upgrade', (req, socket, head) => {
@@ -180,6 +182,16 @@ function handleUpgrade(
       rejectSocket(socket, 403, 'ownership-mismatch');
       return;
     }
+  }
+
+  // Single-use: consume the token so a client closed with 4000 (takeover) cannot reconnect with
+  // the same credential, and a leaked short-TTL token cannot be replayed (landmine 8). LAST check
+  // — only once every other gate passed, so a rejected upgrade never burns a token. A legitimate
+  // new viewer takes over with a fresh streaming_available token.
+  if (!consumeStreamToken(verified.claims.jti, verified.claims.exp)) {
+    log('streaming.auth_failure', { reason: 'token-replayed', traceId });
+    rejectSocket(socket, 401, 'token-replayed');
+    return;
   }
 
   wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {

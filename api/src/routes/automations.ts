@@ -88,7 +88,11 @@ export function automationsRouter(): Router {
   r.post('/plan', handle(async (req, res) => {
     const body = parseBody(res, PlanRequest, req.body);
     if (!body) return;
-    res.json(await planFromGoal(actorOf(req), body));
+    const actor = actorOf(req);
+    // /plan persists a new automation (landmine 9) → same creation gate as POST /automations.
+    const org = await getOrg(actor.orgId);
+    const settings = (org?.settings ?? {}) as { allowBuilderAutomations?: boolean };
+    res.json(await planFromGoal(actor, body, settings));
   }));
 
   r.get('/runs', handle(async (req, res) => {

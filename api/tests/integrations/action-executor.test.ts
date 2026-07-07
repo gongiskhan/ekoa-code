@@ -72,6 +72,7 @@ beforeAll(async () => {
       actions: [
         { actionName: 'list_things', description: 'list', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://api.acme.example', path: '/things', headers: { Authorization: 'Bearer {{api_key}}' }, queryParams: { limit: '{{limit}}' } } },
         { actionName: 'token_grant', description: 'grant', mutates: false, httpConfig: { method: 'POST', baseUrl: 'https://api.acme.example', path: '/oauth/token', headers: { 'Content-Type': 'application/json' }, bodyTemplate: { client_secret: '{{api_key}}', grant_type: 'client_credentials' } } },
+        { actionName: 'query_key', description: 'key in query', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://api.acme.example', path: '/data', queryParams: { token: '{{api_key}}' } } },
         { actionName: 'no_http', description: 'noop', mutates: false },
       ],
     }),
@@ -155,6 +156,18 @@ describe('executeUserIntegrationAction (G8, ch03 §3.8.13)', () => {
     expect(res.success).toBe(false);
     expect(JSON.stringify(res)).not.toContain('body-secret-xyz');
     expect(res.details?.request.body).toMatch(/client_secret/);
+  });
+
+  it('never leaks a credential carried in the URL query string on error (URL redaction — G8 review)', async () => {
+    await connectAcme('u1', 'query-secret-abc');
+    const ff = fakeFetch(() => mkResponse(403, '{"error":"forbidden"}'));
+    const res = await executeUserIntegrationAction({ orgId: 'orgA', ownerUserId: 'u1', integrationKey: 'acme', actionName: 'query_key', args: {} }, { fetchImpl: ff.fn });
+    expect(res.success).toBe(false);
+    // The real request carried the secret in the query string...
+    expect(ff.calls[0]!.url).toContain('query-secret-abc');
+    // ...but the surfaced failure summary must not.
+    expect(JSON.stringify(res)).not.toContain('query-secret-abc');
+    expect(res.details?.request.url).not.toContain('query-secret-abc');
   });
 
   it('does not use another owner\'s credential row (per-owner scoping)', async () => {

@@ -9,6 +9,7 @@
  * insert = the UNIQUE constraint) to keep one storage idiom and avoid a native SQLite dep.
  * The security-relevant contract (dedup + audit) is unchanged and is what the gate tests.
  */
+import { randomUUID } from 'node:crypto';
 import { eventQueue } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 
@@ -23,6 +24,9 @@ export interface QueuedEvent extends Doc {
   nextAttemptAt?: string;
   /** Set when the row is claimed; used by boot recovery to flip stuck dispatching rows. */
   claimedAt?: string;
+  /** A random token written by the CAS winner; the claimant is the caller whose token is on the
+   *  row after the write. Distinguishes the real winner from a CAS loser that read the same row. */
+  claimToken?: string;
   /** The last delivery failure, kept for the dead-letter audit trail. */
   lastError?: string;
 }
@@ -70,13 +74,18 @@ export async function claimNext(nowIso: string): Promise<QueuedEvent | null> {
   pending.sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
   for (const e of pending) {
     if (e.nextAttemptAt && e.nextAttemptAt > nowIso) continue;
+    // A RANDOM token per attempt identifies the CAS winner. The store's update returns the row
+    // after any winning OR losing write, so a loser reads back the winner's row — a timestamp
+    // identity check collides on a same-millisecond race and double-dispatches. The token is
+    // unique per caller, so only the caller whose write actually won sees its own token on the row.
+    const claimToken = randomUUID();
     const claimed = await eventQueue.update(e._id, (cur) =>
       cur.status === 'pending'
-        ? { ...cur, status: 'dispatching', attempts: (cur.attempts as number) + 1, claimedAt: nowIso }
+        ? { ...cur, status: 'dispatching', attempts: (cur.attempts as number) + 1, claimedAt: nowIso, claimToken }
         : cur,
-    );
-    if (claimed && (claimed as QueuedEvent).status === 'dispatching' && (claimed as QueuedEvent).claimedAt === nowIso) {
-      return claimed as QueuedEvent;
+    ) as QueuedEvent | null;
+    if (claimed && claimed.status === 'dispatching' && claimed.claimToken === claimToken) {
+      return claimed;
     }
   }
   return null;

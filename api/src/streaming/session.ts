@@ -34,6 +34,8 @@ const MAX_FRAME_BACKLOG = parseInt(process.env.EKOA_STREAMING_MAX_FRAME_BACKLOG 
 // leaving the canvas black. Poll captureScreenshot at this rate as a fallback;
 // the screencast path still drives fast updates when the page is dynamic.
 const POLL_INTERVAL_MS = parseInt(process.env.EKOA_STREAMING_POLL_INTERVAL_MS || '500', 10);
+/** Max pending (queued + in-flight) input dispatches before new input is dropped (backpressure). */
+const MAX_QUEUED_INPUT = parseInt(process.env.EKOA_STREAMING_MAX_QUEUED_INPUT || '32', 10);
 
 export type RunStateProbe = () => 'paused_for_user' | 'other';
 
@@ -62,6 +64,11 @@ export class StreamSession {
   private inputAllowed = true;
   private pollTimer: NodeJS.Timeout | null = null;
   private lastFrameAt = 0;
+  // Input backpressure (Codex G8): dispatch is serialized through one CDP chain and the number of
+  // queued inputs is bounded, so a flood of tiny valid mouse/key messages cannot pile up unbounded
+  // pending CDP promises and exhaust the process/browser.
+  private inputChain: Promise<void> = Promise.resolve();
+  private inputQueued = 0;
 
   constructor(opts: StreamSessionOptions) {
     this.traceId = opts.traceId;
@@ -292,12 +299,24 @@ export class StreamSession {
         this.onLog('streaming.auth_failure', { reason: 'state-not-paused', traceId: this.traceId });
         return;
       }
-      this.inputBatchCount++;
-      if (payload.type === 'mouse') {
-        await this.dispatchMouse(payload);
-      } else {
-        await this.dispatchKey(payload);
+      // Bounded, serialized dispatch: drop the input when the queue is already saturated (a
+      // pointer move/wheel is safe to drop; the next event supersedes it) rather than growing
+      // unbounded pending CDP work.
+      if (this.inputQueued >= MAX_QUEUED_INPUT) {
+        this.onLog('streaming.input_dropped', { reason: 'backpressure', traceId: this.traceId });
+        return;
       }
+      this.inputBatchCount++;
+      this.inputQueued++;
+      const msg = payload;
+      const dispatch = this.inputChain
+        .then(() => (msg.type === 'mouse' ? this.dispatchMouse(msg) : this.dispatchKey(msg)))
+        .catch(() => {})
+        .finally(() => { this.inputQueued--; });
+      this.inputChain = dispatch;
+      // The socket 'message' handler fires-and-forgets this (non-blocking read); returning the
+      // dispatch promise lets a direct caller (tests) await the actual CDP dispatch.
+      return dispatch;
     }
   }
 

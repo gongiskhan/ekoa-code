@@ -497,6 +497,17 @@ describe('runAutomation', () => {
     // credentials bag, and by reference (no copy that could get logged).
     expect(hoisted.localSessionOpts[0].sessionState).toBe(storageState);
     expect(hoisted.localSessionOpts[0].sessionState.apiKey).toBeUndefined();
+    // CREDENTIAL BOUNDARY (G8 Codex finding): the PERSISTED run record must NOT carry the
+    // credentials bag — GET /automations/runs/:id returns inputs to the owner AND org admins.
+    // Find THIS run's create call by id (runCreate is a shared hoisted mock across tests — a
+    // fixed [0] index is cross-test-flaky; select by runId instead).
+    const call = hoisted.runCreate.mock.calls.find((c: any[]) => c[0]?.id === result.runId);
+    expect(call, 'runCreate was called for this run').toBeTruthy();
+    const persisted = call![0];
+    expect(persisted.inputs).toBeDefined();
+    expect(persisted.inputs.credentials).toBeUndefined();
+    expect(JSON.stringify(persisted.inputs)).not.toContain('chave-secreta');
+    expect(JSON.stringify(persisted.inputs)).not.toContain('tok-secreto');
   });
 
   it('does NOT forward the session credential to the DaemonBrowserSession (local-session-only)', async () => {

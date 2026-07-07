@@ -28,8 +28,16 @@ describe('webhook verifiers (pure)', () => {
     const body = Buffer.from('{"a":1}');
     const sig = createHmac('sha256', 'secret').update(body).digest('hex');
     expect(verifyHmac('hmac-sha256-hex', 'secret', body, sig)).toBe(true);
-    expect(verifyHmac('hmac-sha256-hex', 'secret', body, 'sha256=' + sig)).toBe(true); // prefix stripped
+    expect(verifyHmac('hmac-sha256-hex', 'secret', body, 'sha256=' + sig)).toBe(true); // own prefix stripped
     expect(verifyHmac('hmac-sha256-hex', 'wrong', body, sig)).toBe(false);
+  });
+  it('rejects a MISMATCHED sha-family prefix instead of stripping it (Codex G8 — replay defense)', () => {
+    const body = Buffer.from('{"a":1}');
+    const sig = createHmac('sha256', 'secret').update(body).digest('hex');
+    // A sha256 trigger must NOT accept the same digest under a sha1=/sha999= prefix — otherwise a
+    // captured signature replays with varied prefixes past a header-keyed dedup.
+    expect(verifyHmac('hmac-sha256-hex', 'secret', body, 'sha1=' + sig)).toBe(false);
+    expect(verifyHmac('hmac-sha256-hex', 'secret', body, 'sha999=' + sig)).toBe(false);
   });
   it('safeEqual is length-safe', () => {
     expect(safeEqual('abc', 'abc')).toBe(true);
@@ -86,6 +94,18 @@ describe('ingress pipeline (ch09 invariant 9)', () => {
     expect(second.body).toEqual({ duplicate: true });
     expect(second.outcome).toBe('duplicate');
     // exactly one queued event
+    expect(await eventQueue.find({ triggerId: id })).toHaveLength(1);
+  });
+
+  it('dedup keys on the BODY HASH, so a replay with a varied signature prefix does NOT re-enqueue (Codex G8)', async () => {
+    const { id } = await mkTrigger();
+    const body = '{"delivery":"xyz"}';
+    const digest = createHmac('sha256', 'shh').update(Buffer.from(body)).digest('hex');
+    const first = await handleIngress(id, Buffer.from(body), `sha256=${digest}`, deps);
+    expect(first.outcome).toBe('accepted');
+    // A bare (no-prefix) form of the SAME body still verifies but must dedup on the body hash.
+    const replay = await handleIngress(id, Buffer.from(body), digest, deps);
+    expect(replay.outcome).toBe('duplicate');
     expect(await eventQueue.find({ triggerId: id })).toHaveLength(1);
   });
 

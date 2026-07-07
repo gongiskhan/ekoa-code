@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocket as WsClient } from 'ws';
 import { attachCanvasServer, CANVAS_WS_PATH_PREFIX } from '../../src/streaming/index.js';
-import { signStreamToken } from '../../src/streaming/auth.js';
+import { signStreamToken, __resetConsumedStreamTokensForTests } from '../../src/streaming/auth.js';
 import { StreamSession } from '../../src/streaming/session.js';
 import { registerSession, clearAllSessionsForTest } from '../../src/streaming/registry.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
@@ -34,6 +34,7 @@ beforeAll(() => {
 
 afterEach(async () => {
   await clearAllSessionsForTest();
+  __resetConsumedStreamTokensForTests();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
@@ -116,5 +117,17 @@ describe('attachCanvasServer — upgrade auth', () => {
     const token = signStreamToken({ userId: 'u1', traceId: 't-none' });
     const result = await tryConnect(port, 't-none', token);
     expect(result.opened).toBe(false);
+  });
+
+  it('a token is single-use: a replay after the first upgrade is rejected (4000 = never reconnect)', async () => {
+    const port = await startServer();
+    seedSession('t1', 'u1');
+    const token = signStreamToken({ userId: 'u1', traceId: 't1' });
+    const first = await tryConnect(port, 't1', token);
+    expect(first.opened).toBe(true);
+    // The SAME token again (a displaced client reconnecting, or a leaked-token replay) is refused.
+    const replay = await tryConnect(port, 't1', token);
+    expect(replay.opened).toBe(false);
+    expect(authFailureReasons()).toContain('token-replayed');
   });
 });

@@ -110,8 +110,13 @@ describe('automation service surface (§3.8.18)', () => {
 
   // ---- plan-from-goal (Landmine 9) ---------------------------------------
 
+  it('planFromGoal requires creation authority: a builder without the org setting is FORBIDDEN (§3.8.18 landmine-9 gate)', async () => {
+    await expect(svc.planFromGoal(builder, { goal: 'x', language: 'pt-PT' })).rejects.toThrow(/not authorized/);
+  });
+
   it('planFromGoal persists the automation AND starts a rehearsal run (landmine 9)', async () => {
-    const res = await svc.planFromGoal(builder, { goal: 'abre example.com e guarda', language: 'pt-PT' });
+    // Builder with the org's builder-authoring setting enabled (the creation gate) — owns the result.
+    const res = await svc.planFromGoal(builder, { goal: 'abre example.com e guarda', language: 'pt-PT' }, { allowBuilderAutomations: true });
     expect(PlanResponseSchema.safeParse(res).success).toBe(true);
     expect(res.rehearsing).toBe(true);
     expect(res.automation).toBeDefined();

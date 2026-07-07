@@ -113,4 +113,26 @@ describe('streaming session — state gating', () => {
     await session._injectClientMessage(mouseDown);
     expect(cdp.calls.filter((c) => c.method === 'Input.dispatchMouseEvent').length).toBe(0);
   });
+
+  it('drops input past the backpressure cap instead of piling unbounded pending CDP work (Codex G8)', async () => {
+    const logs: Array<[string, Record<string, unknown>]> = [];
+    const { session, cdp } = buildSession(() => 'paused_for_user', logs);
+    // Make each dispatch hang so the queue fills: the CDP send never resolves during the burst.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    cdp.send = vi.fn(async (method: string, params: any) => {
+      cdp.calls.push({ method, params });
+      await gate; // hold every dispatch open
+    }) as any;
+    // Fire far more than the cap (32) without awaiting — they queue onto the serialized chain.
+    const bursts = Array.from({ length: 80 }, () => session._injectClientMessage(mouseDown));
+    // The first dispatch is in-flight (awaiting gate); the queue holds up to the cap; the rest drop.
+    await new Promise((r) => setTimeout(r, 20));
+    const dropped = logs.filter(([e, f]) => e === 'streaming.input_dropped' && f.reason === 'backpressure');
+    expect(dropped.length).toBeGreaterThan(0);
+    // At most cap+1 dispatches ever reached CDP (one in-flight + queue), never all 80.
+    expect(cdp.calls.length).toBeLessThanOrEqual(33);
+    release();
+    await Promise.allSettled(bursts);
+  });
 });

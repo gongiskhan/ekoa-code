@@ -99,6 +99,25 @@ export function redactBody(raw: string): string {
   );
 }
 
+/**
+ * Redact a resolved request URL before it is persisted/surfaced on failure. A credential
+ * interpolated into the query string (e.g. `?token=<secret>`) is otherwise stored in cleartext,
+ * even when headers/body are redacted. Value-based: every occurrence of a decrypted credential
+ * value is masked, then a secret-key-name pass catches conventionally-named params too.
+ */
+export function redactUrl(url: string, secretValues: string[]): string {
+  let out = url;
+  for (const secret of secretValues) {
+    if (!secret || secret.length < 4) continue;
+    for (const form of new Set([secret, encodeURIComponent(secret)])) {
+      if (out.includes(form)) out = out.split(form).join(maskValue(secret));
+    }
+  }
+  return out.replace(/([?&][\w.-]+)=([^&#\s]+)/g, (match, prefixKey: string, value: string) =>
+    SECRET_KEY_PATTERN.test(prefixKey) ? `${prefixKey}=${maskValue(decodeURIComponent(value))}` : match,
+  );
+}
+
 function redactJsonTree(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(redactJsonTree);
   if (node && typeof node === 'object') {

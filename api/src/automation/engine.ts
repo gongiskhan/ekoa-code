@@ -229,6 +229,14 @@ function actorFromCtx(ctx: RunContext): Actor {
 // Public API
 // ============================================================================
 
+/** Drop the `credentials` key from a run's inputs before persistence/wire (credential boundary,
+ *  §5.6.7). The in-memory `inputs` keeps it for the browser session; the stored copy never has it. */
+function scrubCredentials(inputs: Record<string, unknown>): Record<string, unknown> {
+  if (!('credentials' in inputs)) return inputs;
+  const { credentials: _dropped, ...rest } = inputs;
+  return rest;
+}
+
 export async function runAutomation(
   automationId: string,
   ctx: RunContext,
@@ -285,12 +293,19 @@ async function runOrRehearse(
   const inputs = options.inputs ?? {};
   const isRehearsal = options.kind === 'rehearsal';
 
+  // CREDENTIAL BOUNDARY (ch05 §5.6.7; v2 invariant I2): `inputs.credentials` carries decrypted
+  // secrets (an integration action's passCredentials fields, a captured Playwright storageState).
+  // It is consumed IN-MEMORY only (the browser session below; template-vars redacts it from any
+  // substitution). It must NEVER reach the persisted run record — `GET /automations/runs/:id`
+  // returns `inputs` to the owner AND org admins, so a persisted credential is a cross-actor leak.
+  const persistedInputs = scrubCredentials(inputs);
+
   const initialRecord: RunRecord = {
     id: runId,
     automationId,
     startedAt,
     status: 'running',
-    inputs,
+    inputs: persistedInputs,
     steps: [],
     triggeredBy: ctx.triggeredBy,
     ownerUserId: ctx.ownerUserId,

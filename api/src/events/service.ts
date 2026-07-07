@@ -107,8 +107,12 @@ export async function handleIngress(triggerId: string, rawBody: Buffer, signatur
     await audit(triggerId, 'rejected_disabled', deps);
     return { status: 410, body: { error: { code: 'TRIGGER_DISABLED', message: 'Trigger desativado.' } }, outcome: 'rejected_disabled' };
   }
-  // 3. Dedup enqueue (UNIQUE(trigger_id, dedup_key)).
-  const dedupKey = signature.slice(0, 64); // provider signature is a stable per-delivery key
+  // 3. Dedup enqueue (UNIQUE(trigger_id, dedup_key)). Key on the BODY HASH, not the signature
+  // header: a signature can carry cosmetic variation (prefix, case) that verifies but slips a
+  // header-keyed dedup, letting one captured delivery replay unboundedly. The body hash is the
+  // stable per-delivery identity (byte-identical retries dedup; distinct events differ) — the
+  // §12.3 body-hash fallback made the primary key.
+  const dedupKey = createHash('sha256').update(rawBody).digest('hex');
   const enq = await enqueue(triggerId, dedupKey, rawBody.toString('utf8'), new Date(deps.now()).toISOString());
   if (enq.duplicate) {
     await audit(triggerId, 'duplicate', deps);

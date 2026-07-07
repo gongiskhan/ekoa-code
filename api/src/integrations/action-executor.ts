@@ -26,6 +26,7 @@ import {
   buildVars,
   redactHeaders,
   redactBody,
+  redactUrl,
   truncateForDisplay,
   findHeaderValue,
   formUrlEncode,
@@ -144,7 +145,10 @@ export async function executeUserIntegrationAction(
 
   const httpConfig = action.httpConfig!;
   const { stringVars, rawVars } = buildVars(input.args, credentialFields);
-  return executeHttpAction(httpConfig, stringVars, rawVars, deps);
+  // The decrypted credential VALUES — for value-based URL redaction in the failure summary.
+  const secretValues = Object.values(credentialFields)
+    .filter((v): v is string => typeof v === 'string' && v.length >= 4);
+  return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues);
 }
 
 const DECRYPT_FAILED = Symbol('decrypt-failed');
@@ -169,6 +173,7 @@ async function executeHttpAction(
   vars: Record<string, string>,
   rawVars: Record<string, unknown>,
   deps: ExecutorDeps,
+  secretValues: string[] = [],
 ): Promise<ExecuteIntegrationActionResult> {
   const baseUrl = interpolate(httpConfig.baseUrl, vars);
   if (!/^https?:\/\//i.test(baseUrl)) {
@@ -197,7 +202,9 @@ async function executeHttpAction(
   const requestUrl = url.toString();
   const requestSummary = {
     method: httpConfig.method,
-    url: requestUrl,
+    // Redact any credential value that landed in the query string before this summary is surfaced
+    // on failure (headers/body are already redacted; the URL was the remaining leak — G8 review).
+    url: redactUrl(requestUrl, secretValues),
     headers: redactHeaders(headers),
     body: body ? truncateForDisplay(redactBody(body), MAX_BODY_DISPLAY_BYTES) : undefined,
   };
