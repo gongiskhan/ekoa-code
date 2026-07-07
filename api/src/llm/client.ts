@@ -26,6 +26,17 @@ import {
 } from './attribution.js';
 import { decideForTier, type RouterDecision, type Tier } from './router.js';
 import { buildSubprocessEnv, getSecret, forceRefresh, currentMode, type CredentialMode } from './credentials.js';
+import {
+  anonymize,
+  deanonymize,
+  anonymizeRequestBody,
+  createDetokenizer,
+  newCorrelationId,
+  resolveRuleset,
+  endSession,
+  type AnonymiseContext,
+  type VaultHandle,
+} from './anonymise/index.js';
 
 /** The provider host literal lives HERE, inside the egress module (never in config.ts, which
  *  the chokepoint grep gate scans). Env-overridable via `config.llm.providerBaseUrl`. */
@@ -120,6 +131,37 @@ async function admitOrThrow(billeeUserId: string): Promise<RateCapKey> {
   const verdict = checkRateCaps(key);
   if (!verdict.ok) throw new LlmRateCapError(verdict);
   return key;
+}
+
+// --- Anonymisation context (ch17 §17.3) --------------------------------------------------
+// The egress module's second concern: model-bound text is anonymised BEFORE the transport and
+// de-tokenized on the way back, on this single code path (FIXED-13; §17.2 - no bypass). The
+// per-org ruleset (deny-list) is loaded through the anonymise resolver seam; the vault is keyed
+// by the session identity (§17.5), falling back to a per-call ephemeral key when a call carries
+// no session.
+
+/** The vault session key for a call: the propagated conversation id (user_work), else a fresh
+ *  per-call key so a session-less call still gets a consistent, isolated vault. `ephemeral` is
+ *  true for the per-call fallback so the entry can clear that vault as soon as it is done (a
+ *  session vault is left to live for the conversation + its TTL, §17.5). */
+function sessionKeyFor(attribution: LlmAttribution): { sessionId: string; ephemeral: boolean } {
+  if (attribution.kind === 'user_work' && attribution.sessionId) {
+    return { sessionId: attribution.sessionId, ephemeral: false };
+  }
+  return { sessionId: `sess_${newCorrelationId()}`, ephemeral: true };
+}
+
+/** Build the anonymisation context: resolve the billee's org, load its ruleset, and stamp the
+ *  audit actor. One correlation id is minted per provider request and shared by every part. */
+async function anonContextFor(
+  attribution: LlmAttribution,
+  sessionId: string,
+  correlationId: string,
+): Promise<AnonymiseContext> {
+  const userId = billeeOf(attribution);
+  const orgId = (await orgResolver(userId)) ?? '';
+  const ruleset = await resolveRuleset(orgId);
+  return { sessionId, ruleset, correlationId, actor: { userId, orgId, username: userId } };
 }
 
 // --- Transport seam ----------------------------------------------------------------------
@@ -494,14 +536,24 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       rejectResult(err);
       throw err;
     }
+    // Anonymise the model-bound text BEFORE the transport (§17.3): prompt + system prompt
+    // tokenize into one session vault; the streamed response is de-tokenized on the way back.
+    const correlationId = newCorrelationId();
+    const sk = sessionKeyFor(attribution);
+    const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
+    const promptAnon = anonymize(opts.prompt, { ...ctx, channel: 'prompt' });
+    const handle: VaultHandle = promptAnon.handle;
+    const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, { ...ctx, channel: 'system' }) : undefined;
+    const detok = createDetokenizer(handle);
+    let rawText = ''; // the tokenized text as it comes off the transport
     try {
       const env = await buildSubprocessEnv();
       const stream = transport.streamAgent({
-        prompt: opts.prompt,
+        prompt: promptAnon.text,
         model: decision.model,
         effort: decision.effort,
         env,
-        systemPrompt: opts.systemPrompt,
+        systemPrompt: systemAnon?.text,
         resume: opts.resume,
         forkSession: opts.forkSession,
         allowedTools: opts.allowedTools,
@@ -512,20 +564,25 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       });
       for await (const msg of stream) {
         if (msg.kind === 'text') {
-          text += msg.text;
-          yield { type: 'text', text: msg.text };
+          rawText += msg.text;
+          const clear = detok.push(msg.text); // incremental de-tokenization, straddle-buffered
+          if (clear) yield { type: 'text', text: clear };
         } else {
-          text = msg.text || text;
+          rawText = msg.text || rawText;
           usage = msg.usage;
           aborted = !!msg.aborted;
         }
       }
+      const tail = detok.end();
+      if (tail) yield { type: 'text', text: tail };
     } catch (err) {
       if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
       rejectResult(err);
       throw err;
     }
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+    text = deanonymize(rawText, handle); // final result is cleartext (incl any tool_use values)
+    if (sk.ephemeral) endSession(handle); // a session-less run keeps no vault past the call (§17.5)
     // Single metering point: bill the reported usage even on abort (P-19); zero => nothing billed.
     const metered = await meter(attribution, decision.tier, decision.model, usage);
     recordSpend({ ...capKey, metered }); // accrue the admitted call's spend into the window (§6.6.4)
@@ -560,13 +617,19 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   assertNotPlatformCall(attribution);
   const decision = opts.decision;
   const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
+  // Anonymise prompt + system BEFORE the transport; de-tokenize the returned text (§17.3).
+  const correlationId = newCorrelationId();
+  const sk = sessionKeyFor(attribution);
+  const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
+  const promptAnon = anonymize(opts.prompt, { ...ctx, channel: 'prompt' });
+  const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, { ...ctx, channel: 'system' }) : undefined;
   const env = await buildSubprocessEnv();
   const res = await transport.oneShot({
-    prompt: opts.prompt,
+    prompt: promptAnon.text,
     model: decision.model,
     effort: decision.effort,
     env,
-    systemPrompt: opts.systemPrompt,
+    systemPrompt: systemAnon?.text,
     images: opts.images,
     disallowedTools: ['*'], // no tools on a one-shot
     maxTurns: 1,
@@ -575,8 +638,10 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   // Bill the reported usage even on abort (P-19), THEN reject abort as abort.
   const metered = await meter(attribution, decision.tier, decision.model, res.usage);
   recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
+  const text = deanonymize(res.text, promptAnon.handle);
+  if (sk.ephemeral) endSession(promptAnon.handle); // session-less: no vault past the call (§17.5)
   if (res.aborted) throw new LlmAbortedError();
-  return { text: res.text, usage: res.usage };
+  return { text, usage: res.usage };
 }
 
 export interface MessagesOptions {
@@ -604,11 +669,20 @@ export async function completeFast(opts: MessagesOptions, attribution: LlmAttrib
   const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
   const decision = decideForTier('FAST'); // FAST by construction
   const mode = (await currentMode()) ?? 'oauth';
+  // Anonymise the model-bound request body BEFORE the transport (§17.3); the response body is
+  // de-tokenized before the text is parsed.
+  const correlationId = newCorrelationId();
+  const sk = sessionKeyFor(attribution);
+  const anonCtx = await anonContextFor(attribution, sk.sessionId, correlationId);
+  const anon = anonymizeRequestBody(
+    { messages: opts.messages, ...(opts.system ? { system: opts.system } : {}) },
+    anonCtx,
+  );
   const payload: Record<string, unknown> = {
     model: decision.model,
     max_tokens: opts.maxTokens ?? 4096,
-    messages: opts.messages,
-    ...(opts.system ? { system: opts.system } : {}),
+    messages: anon.body.messages,
+    ...(anon.body.system !== undefined ? { system: anon.body.system } : {}),
     metadata: { user_id: 'ekoa-llm-chokepoint' },
   };
   const base = providerBaseUrl();
@@ -634,10 +708,14 @@ export async function completeFast(opts: MessagesOptions, attribution: LlmAttrib
   // is NOT metered (consistent with the gateway's meter-only-on-2xx rule, §6.5.4). The 401
   // refresh-and-retry already happened above.
   if (resp.status >= 400) throw new LlmTransportError(`Messages REST failed: HTTP ${resp.status}`, resp.status);
-  const usage = parseUsageFromBody(resp.body, false) ?? { ...ZERO_USAGE };
+  // De-tokenize the whole response body (text + any tool_use argument blocks, §17.3 step 5)
+  // before parsing. Usage counts are unaffected by de-tokenization (format-preserving, §6.1).
+  const clearBody = deanonymize(resp.body, anon.handle);
+  if (sk.ephemeral) endSession(anon.handle); // session-less: no vault past the call (§17.5)
+  const usage = parseUsageFromBody(clearBody, false) ?? { ...ZERO_USAGE };
   const metered = await meter(attribution, 'FAST', decision.model, usage);
   recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
-  return { text: textFromBody(resp.body), usage, status: resp.status };
+  return { text: textFromBody(clearBody), usage, status: resp.status };
 }
 
 /**
@@ -667,8 +745,24 @@ export async function proxyGatewayMessages(
   const isStream = reqBody.stream === true;
   // Clamp the wire model to FAST; keep the client's other fields. Ensure OAuth metadata.
   const meta = (reqBody.metadata as Record<string, unknown> | undefined) ?? {};
+
+  // Anonymise the bridge/subprocess request BEFORE the transport (§17.3, §17.2: subprocess
+  // traffic funnels through this chokepoint via ANTHROPIC_BASE_URL). The vault is keyed by the
+  // propagated conversation id so one vault serves both the hosted and delegated turns (§17.5).
+  const correlationId = newCorrelationId();
+  const orgId = (await orgResolver(billeeUserId)) ?? '';
+  const ruleset = await resolveRuleset(orgId);
+  const hasSession = typeof meta.session_id === 'string';
+  const sessionId = hasSession ? (meta.session_id as string) : `sess_${correlationId}`;
+  const anonCtx: AnonymiseContext = {
+    sessionId,
+    ruleset,
+    correlationId,
+    actor: { userId: billeeUserId, orgId, username: billeeUserId },
+  };
+  const anon = anonymizeRequestBody(reqBody, anonCtx);
   const payload: Record<string, unknown> = {
-    ...reqBody,
+    ...anon.body,
     model: decision.model,
     metadata: { ...meta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
   };
@@ -678,6 +772,10 @@ export async function proxyGatewayMessages(
   if (resp.status === 401) {
     resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await forceRefresh(), payload, stream: isStream });
   }
+  // De-tokenize the response body (text + tool_use argument blocks, §17.3 step 5) so the local
+  // loop acts on the REAL value, not a placeholder that does not exist on disk.
+  resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
+  if (!hasSession) endSession(anon.handle); // no propagated conversation: no vault past the call (§17.5)
 
   // Meter only successful responses; a 4xx/5xx carries no billable usage (carried).
   let unmetered = false;
