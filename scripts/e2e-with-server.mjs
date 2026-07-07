@@ -9,8 +9,8 @@
  *   1. boots scripts/dev-api.mjs --built (ephemeral memory-mongo, seeded admin,
  *      featured seeding at boot) - requires `npm run build` output to exist;
  *   2. waits for DEV-API READY, then for the featured prebuild summary
- *      ("[featured-builder] built ...") so /apps/legal-*/ serve real bundles,
- *      not placeholders;
+ *      ("[featured-builder] built ...") so the served legal apps serve real
+ *      bundles, not placeholders;
  *   3. runs `node scripts/suite-ledger-run.mjs --run`;
  *   4. tears the server down and exits with the runner's code.
  *
