@@ -100,6 +100,9 @@ async function connectAcme(userId: string, apiKey: string, opts: { enabled?: boo
   const cfg = await createConfig(actor(userId), { integrationKey: 'acme', configValues: { api_key: apiKey } }, deps);
   if (opts.enabled === false) await integrationConfigs.update(cfg._id, (cur) => ({ ...cur, enabled: false }));
 }
+async function connectBenign(userId: string, apiKey: string) {
+  await createConfig(actor(userId), { integrationKey: 'benign', configValues: { api_key: apiKey } }, deps);
+}
 
 describe('executeUserIntegrationAction (G8, ch03 §3.8.13)', () => {
   it('returns unknown_integration for an unknown key', async () => {
@@ -168,6 +171,21 @@ describe('executeUserIntegrationAction (G8, ch03 §3.8.13)', () => {
     // ...but the surfaced failure summary must not.
     expect(JSON.stringify(res)).not.toContain('query-secret-abc');
     expect(res.details?.request.url).not.toContain('query-secret-abc');
+  });
+
+  it('redacts a secret in a BENIGN-named request header/body field on failure (Codex G8 round-6 — value-based)', async () => {
+    // A secret placed in a header/body field whose NAME does not match the secret-key pattern.
+    mkdirSync(join(fixtureRoot, 'benign'), { recursive: true });
+    writeFileSync(join(fixtureRoot, 'benign', 'config.json'), JSON.stringify({
+      version: '1.0', integrationKey: 'benign', displayName: 'Benign', authType: 'api_key', provider: 'benign', category: 'test', configSchema: [],
+      actions: [{ actionName: 'go', description: 'g', mutates: false, httpConfig: { method: 'POST', baseUrl: 'https://api.benign.example', path: '/x', headers: { 'X-Tenant': '{{api_key}}' }, bodyTemplate: { note: '{{api_key}}' } } }],
+    }), 'utf-8');
+    refreshDefinitions();
+    await connectBenign('u1', 'benign-secret-42');
+    const ff = fakeFetch(() => mkResponse(400, '{"error":"nope"}'));
+    const res = await executeUserIntegrationAction({ orgId: 'orgA', ownerUserId: 'u1', integrationKey: 'benign', actionName: 'go', args: {} }, { fetchImpl: ff.fn });
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).not.toContain('benign-secret-42'); // not in details.request.headers/body
   });
 
   it('redacts a secret ECHOED in a non-2xx response body/error (Codex G8 round-5)', async () => {

@@ -202,14 +202,16 @@ async function executeHttpAction(
   }
 
   const requestUrl = url.toString();
-  const requestSummary = {
+  // Systemic credential-boundary redaction (Codex G8): name-based redaction of headers/body is
+  // not enough — a secret can land in a benign-named header (X-Tenant) or body field (note). Build
+  // the summary with name-based redaction, then deep VALUE-redact the whole object so ANY secret,
+  // in any field, is masked before it is persisted/surfaced on failure.
+  const requestSummary = redactSecretsDeep({
     method: httpConfig.method,
-    // Redact any credential value that landed in the query string before this summary is surfaced
-    // on failure (headers/body are already redacted; the URL was the remaining leak — G8 review).
     url: redactUrl(requestUrl, secretValues),
     headers: redactHeaders(headers),
     body: body ? truncateForDisplay(redactBody(body), MAX_BODY_DISPLAY_BYTES) : undefined,
-  };
+  }, secretValues) as { method: string; url: string; headers: Record<string, string>; body?: string };
 
   const fetchImpl = deps.fetchImpl ?? ((u: string, init?: Parameters<FetchLike>[1]) => globalThis.fetch(u, init as RequestInit));
   const controller = new AbortController();

@@ -167,11 +167,13 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   // legitimately RETURNS is a different value (not in secretValues), so real data survives.
   const safeBody = redactSecretValues(bodyText, secretValues);
   const safeResponseHeaders = redactHeaderValues(responseHeaders, secretValues);
+  // The HTTP reason phrase (statusText) is server-controlled and can echo the client secret too.
+  const safeStatusText = redactSecretValues(response.statusText, secretValues);
 
   const output: StepOutput = {
     kind: 'api_call',
     status: response.status,
-    statusText: response.statusText,
+    statusText: safeStatusText,
     responseHeaders: safeResponseHeaders,
     responseBody: safeBody,
     responseBodyIsJson: isJson,
@@ -184,7 +186,7 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
     return finishRecord(baseRecord, 'failed', stepStart, {
       tier: 'cache',
       error: {
-        message: `HTTP ${response.status} ${response.statusText}`,
+        message: `HTTP ${response.status} ${safeStatusText}`,
         recoverable: true,
         // Both the URL (query-string secret) and the response body (echoed secret) are redacted.
         details: { request: { method: spec.method, url: redactSecretValues(resolvedUrl, secretValues) }, response: { status: response.status, body: safeBody.slice(0, 2000) } },

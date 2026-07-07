@@ -130,6 +130,19 @@ describe('api_call credential redaction (§5.6.7)', () => {
     expect(JSON.stringify(captured.error)).not.toContain(SECRET);
   });
 
+  it('redacts a secret echoed in the HTTP statusText / reason phrase (Codex round-6)', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('nope', { status: 400, statusText: `Bad ${SECRET}` }));
+    const captured = await runApiCall({
+      method: 'GET',
+      url: 'https://api.example.com/data?token={{integration.stripe.apiKey}}',
+      authIntegrationKey: 'stripe',
+    });
+    expect(captured.status).toBe('failed');
+    const output = captured.output as { statusText?: string };
+    expect(output.statusText).not.toContain(SECRET);
+    expect(JSON.stringify(captured.error)).not.toContain(SECRET);
+  });
+
   it('redacts a secret ECHOED back in the response body/output (Codex round-2)', async () => {
     // A server that reflects the client secret in its error body.
     fetchSpy.mockResolvedValueOnce(
