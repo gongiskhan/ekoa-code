@@ -57,3 +57,7 @@ W3 step (2) makes the app drivable end-to-end (login/chat/streams), so W3.3+ ver
 product. Land W1..W5 as separate commits. This is a LARGE phase — expect multiple iterations; each
 stage's exit gate is the natural checkpoint. The cross-model Codex security pass (deferred from G8A on
 credit exhaustion) rides the run's final security phase.
+
+## Progress
+- **W1 DONE** (commit abf8d58): ekoa/ frontend copied into web/ (157 files: app/components/hooks/lib/stores/types/locales/public + configs), workspace-reconciled (@ekoa/web, Next.js tsconfig + @/ alias, frontend deps + @ekoa/shared). Exit gate GREEN: `next build` exits 0. Old transport rides along unchanged for W3. KNOWN: sharp (unused optional Next dep) hangs its libvips fetch in this env → installed --omit=optional + pinned 3 darwin-arm64 natives; durably fix (pin @img binary / npm override) before the W5 ci:lane.
+- **W2 NEXT**: build web/lib/api/ (request core, single token accessor, single base-URL resolver, per-domain namespaces from shared/ descriptors) + stream.ts + canvas.ts, ALONGSIDE the old client (no call sites moved). Rewrite cortex-provider → ApiProvider. Exit: new modules compile + typecheck vs shared/.
