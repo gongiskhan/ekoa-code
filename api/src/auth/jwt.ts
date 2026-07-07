@@ -33,7 +33,23 @@ export function signToken(
 }
 
 /** Verify a token. jsonwebtoken rejects alg:none and tampered signatures by default;
- *  we additionally require HS256 explicitly so an attacker cannot downgrade the alg. */
+ *  we additionally require HS256 explicitly so an attacker cannot downgrade the alg.
+ *
+ *  Token-class separation (ch18 §18.3.6, ch09 §9.2): the platform verifier positively REJECTS
+ *  bridge tokens. Platform JWTs and bridge tokens are two classes over ONE secret, never
+ *  interchangeable — a bridge token carries `aud: ekoa-bridge` and a `pairingId`/`connectionId`
+ *  claim, none of which a minted platform token ever has, so any token bearing them is a bridge
+ *  token presented on the wrong plane and is refused. This is an anti-replay/anti-misconfiguration
+ *  defence: a stolen bridge token cannot call the platform API. (The bridge verifier rejects
+ *  platform tokens symmetrically — bridge/token.ts readBridgeToken.) */
 export function verifyToken(token: string): JwtClaims {
-  return jwt.verify(token, loadConfig().jwtSecret, { algorithms: ['HS256'] }) as JwtClaims;
+  const decoded = jwt.verify(token, loadConfig().jwtSecret, { algorithms: ['HS256'] }) as JwtClaims & {
+    aud?: unknown;
+    pairingId?: unknown;
+    connectionId?: unknown;
+  };
+  if (decoded.aud === 'ekoa-bridge' || decoded.pairingId !== undefined || decoded.connectionId !== undefined) {
+    throw new Error('bridge token presented on the platform verifier (token-class separation, ch18 §18.3.6)');
+  }
+  return decoded as JwtClaims;
 }
