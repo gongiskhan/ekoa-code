@@ -1,0 +1,7 @@
+{
+  "slice": "phase-8a", "gate": "G8A", "status": "passed",
+  "completedBy": "session edcc57e1 (Fable 5) + worker g8a-bridge",
+  "greenCondition": "ci:lane exit 0 (888 tests incl. 44 bridge+fake-daemon); e2e:server 127/127; sast/secrets/audit 0; all 7 §18.8 criteria + S1-S6 covered",
+  "reviews": { "worker": "g8a-bridge Cortex side (26 tests)", "lead": "fake-daemon harness + integration + correlation-join (18 tests)", "codexCheckpoint": "deferred to final security phase (credit-exhausted); 44 committed adversarial+integration tests cover S1-S6" },
+  "checkpoint": "tag gate-8a"
+}

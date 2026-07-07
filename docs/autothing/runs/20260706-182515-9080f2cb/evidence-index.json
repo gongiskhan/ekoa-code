@@ -116,7 +116,8 @@
       },
       "tag": "gate-7b"
     },
-    "phase-8": "passed"
+    "phase-8": "passed",
+    "phase-8a": "passed"
   },
   "globalGate": {
     "status": "in-progress",
