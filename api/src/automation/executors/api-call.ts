@@ -20,6 +20,8 @@ import type {
 import type { RunContext } from '../engine.js';
 import { interpolate } from '../template-vars.js';
 import { loadIntegrationCredentialFields as loadDecryptedCredentialFields } from '../seams.js';
+import { guardedFetch } from '../../services/url-fetcher.js';
+import { SsrfError } from '../../services/url-safety.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
@@ -121,11 +123,15 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   const fetchStart = Date.now();
   let response: Response;
   try {
-    response = await fetch(resolvedUrl, {
+    // SSRF guard (Codex G8): an automation-authored api_call URL is untrusted, so route it through
+    // guardedFetch — it rejects private/loopback/link-local/metadata hosts (incl. a public name
+    // that resolves to one, DNS-rebinding) and refuses redirects to such addresses. An SsrfError is
+    // a hard, non-recoverable failure.
+    response = await guardedFetch(resolvedUrl, {
       method: spec.method,
       headers: resolvedHeaders,
-      body: spec.method === 'GET' || spec.method === 'HEAD' ? undefined : resolvedBody,
-      signal: AbortSignal.timeout(timeoutMs),
+      ...(spec.method === 'GET' || spec.method === 'HEAD' ? {} : { body: resolvedBody }),
+      timeoutMs,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -133,7 +139,7 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
     // in its query string or authority — redact before persisting/emitting it (credential boundary).
     return finishRecord(baseRecord, 'failed', stepStart, {
       tier: 'cache',
-      error: { message: redactSecretValues(`request failed: ${message}`, secretValues), recoverable: true },
+      error: { message: redactSecretValues(`request failed: ${message}`, secretValues), recoverable: !(err instanceof SsrfError) },
       resolvedAction: resolved,
     });
   }

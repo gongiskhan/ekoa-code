@@ -66,6 +66,21 @@ afterEach(() => {
   __resetAutomationSeamsForTests();
 });
 
+describe('api_call SSRF guard (Codex G8)', () => {
+  it('refuses an api_call to a loopback/private address (no fetch, non-recoverable failure)', async () => {
+    const captured = await runApiCall({ method: 'GET', url: 'http://127.0.0.1:9999/admin' });
+    expect(captured.status).toBe('failed');
+    expect(fetchSpy).not.toHaveBeenCalled(); // blocked BEFORE any network call
+    expect((captured.error as { recoverable?: boolean }).recoverable).toBe(false);
+  });
+
+  it('refuses the cloud metadata endpoint (169.254.169.254)', async () => {
+    const captured = await runApiCall({ method: 'GET', url: 'http://169.254.169.254/latest/meta-data/' });
+    expect(captured.status).toBe('failed');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('api_call credential redaction (§5.6.7)', () => {
   it('redacts the secret from a URL query string in the persisted resolvedAction — but sends it for real', async () => {
     const captured = await runApiCall({
