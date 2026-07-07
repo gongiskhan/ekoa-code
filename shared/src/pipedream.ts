@@ -46,7 +46,7 @@ export const PipedreamConnectTokenResponse = z.object({
 });
 export type PipedreamConnectTokenResponse = z.infer<typeof PipedreamConnectTokenResponse>;
 
-export const pipedreamEndpoints: DomainDescriptorMap = {
+export const pipedreamEndpoints = {
   status: {
     method: 'GET',
     path: '/api/v1/pipedream',
@@ -84,4 +84,4 @@ export const pipedreamEndpoints: DomainDescriptorMap = {
     auth: 'user',
     response: OkResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

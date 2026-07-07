@@ -34,7 +34,7 @@ export type CompanySpaceStartResponse = z.infer<typeof CompanySpaceStartResponse
 export const CompanySpaceStopResponse = OkResponse;
 export type CompanySpaceStopResponse = z.infer<typeof CompanySpaceStopResponse>;
 
-export const companySpaceEndpoints: DomainDescriptorMap = {
+export const companySpaceEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/company-space',
@@ -59,4 +59,4 @@ export const companySpaceEndpoints: DomainDescriptorMap = {
     auth: 'user',
     response: CompanySpaceStopResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

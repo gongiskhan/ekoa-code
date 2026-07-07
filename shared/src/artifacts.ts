@@ -225,7 +225,7 @@ export const BackendSampleRunResponse = z
   .passthrough();
 export type BackendSampleRunResponse = z.infer<typeof BackendSampleRunResponse>;
 
-export const artifactsEndpoints: DomainDescriptorMap = {
+export const artifactsEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/artifacts',
@@ -408,4 +408,4 @@ export const artifactsEndpoints: DomainDescriptorMap = {
     request: BackendSampleRunRequest,
     response: BackendSampleRunResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

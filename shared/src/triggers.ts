@@ -65,7 +65,7 @@ export const WebhookIngressResponse = z
   .passthrough();
 export type WebhookIngressResponse = z.infer<typeof WebhookIngressResponse>;
 
-export const triggersEndpoints: DomainDescriptorMap = {
+export const triggersEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/triggers',
@@ -103,4 +103,4 @@ export const triggersEndpoints: DomainDescriptorMap = {
     auth: 'hmac',
     response: WebhookIngressResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

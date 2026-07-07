@@ -87,7 +87,7 @@ export const AdminSetLimitResponse = z.object({
 });
 export type AdminSetLimitResponse = z.infer<typeof AdminSetLimitResponse>;
 
-export const billingEndpoints: DomainDescriptorMap = {
+export const billingEndpoints = {
   getUsage: {
     method: 'GET',
     path: '/api/v1/billing/usage',
@@ -147,4 +147,4 @@ export const billingEndpoints: DomainDescriptorMap = {
     request: AdminSetLimitRequest,
     response: AdminSetLimitResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

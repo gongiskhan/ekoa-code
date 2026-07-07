@@ -5,7 +5,7 @@ import { NotificationEvent } from './events.js';
 
 export { NotificationEvent };
 
-export const notificationsEndpoints: DomainDescriptorMap = {
+export const notificationsEndpoints = {
   events: {
     method: 'GET',
     path: '/api/v1/notifications/events',
@@ -13,4 +13,4 @@ export const notificationsEndpoints: DomainDescriptorMap = {
     response: NotificationEvent,
     kind: 'sse',
   },
-};
+} as const satisfies DomainDescriptorMap;

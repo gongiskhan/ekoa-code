@@ -51,7 +51,7 @@ export type BridgeDebugInvokeRequest = z.infer<typeof BridgeDebugInvokeRequest>;
 export const BridgeDebugInvokeResponse = z.unknown();
 export type BridgeDebugInvokeResponse = z.infer<typeof BridgeDebugInvokeResponse>;
 
-export const ekoaLocalEndpoints: DomainDescriptorMap = {
+export const ekoaLocalEndpoints = {
   llmMessages: {
     method: 'POST',
     path: '/api/v1/llm/messages',
@@ -119,7 +119,7 @@ export const ekoaLocalEndpoints: DomainDescriptorMap = {
     response: z.unknown(),
     kind: 'sse',
   },
-};
+} as const satisfies DomainDescriptorMap;
 
 // ---------------------------------------------------------------------------
 // Bridge delegation wire contract (ch18 §18.2.6, §18.3.8, §18.5.1). The shared

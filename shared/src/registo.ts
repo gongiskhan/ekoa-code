@@ -28,7 +28,7 @@ export type RegistoQuery = z.infer<typeof RegistoQuery>;
 export const RegistoListResponse = listResponse(RegistoEntry);
 export type RegistoListResponse = z.infer<typeof RegistoListResponse>;
 
-export const registoEndpoints: DomainDescriptorMap = {
+export const registoEndpoints = {
   listRegisto: {
     method: 'GET',
     path: '/api/v1/registo',
@@ -36,4 +36,4 @@ export const registoEndpoints: DomainDescriptorMap = {
     query: RegistoQuery,
     response: RegistoListResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

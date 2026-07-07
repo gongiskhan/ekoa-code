@@ -11,7 +11,7 @@ export type AppDataDocument = z.infer<typeof AppDataDocument>;
 export const GenericQuery = z.record(z.string());
 export type GenericQuery = z.infer<typeof GenericQuery>;
 
-export const servedAppEndpoints: DomainDescriptorMap = {
+export const servedAppEndpoints = {
   // Per-app data CRUD (/api/app-data/:collection[/:id]), header-scoped, no JWT.
   appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: z.array(AppDataDocument) },
   appDataGet: { method: 'GET', path: '/api/app-data/:collection/:id', auth: 'header-scoped', response: AppDataDocument },
@@ -74,4 +74,4 @@ export const servedAppEndpoints: DomainDescriptorMap = {
   serveApp: { method: 'GET', path: '/apps/:idOrSlug/', auth: 'public', kind: 'static', query: GenericQuery, response: z.unknown() },
   serveBuild: { method: 'GET', path: '/build/:slug', auth: 'public', kind: 'static', response: z.unknown() },
   demoBridge: { method: 'GET', path: '/__ekoa/demo-bridge.js', auth: 'public', kind: 'static', response: z.unknown() },
-};
+} as const satisfies DomainDescriptorMap;

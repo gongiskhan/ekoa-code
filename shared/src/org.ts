@@ -64,7 +64,7 @@ export type OrgPatch = z.infer<typeof OrgPatch>;
 export const OrgListResponse = itemsResponse(OrgConfig);
 export type OrgListResponse = z.infer<typeof OrgListResponse>;
 
-export const orgEndpoints: DomainDescriptorMap = {
+export const orgEndpoints = {
   getOrg: {
     method: 'GET',
     path: '/api/v1/org',
@@ -112,4 +112,4 @@ export const orgEndpoints: DomainDescriptorMap = {
     request: OrgPatch,
     response: OrgConfig,
   },
-};
+} as const satisfies DomainDescriptorMap;

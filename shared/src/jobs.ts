@@ -41,7 +41,7 @@ export type JobCreateResponse = z.infer<typeof JobCreateResponse>;
 export const JobCancelResponse = z.object({ cancelled: z.boolean() });
 export type JobCancelResponse = z.infer<typeof JobCancelResponse>;
 
-export const jobsEndpoints: DomainDescriptorMap = {
+export const jobsEndpoints = {
   create: {
     method: 'POST',
     path: '/api/v1/jobs',
@@ -69,4 +69,4 @@ export const jobsEndpoints: DomainDescriptorMap = {
     kind: 'sse',
     response: JobEvent,
   },
-};
+} as const satisfies DomainDescriptorMap;

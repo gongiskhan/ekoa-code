@@ -43,7 +43,7 @@ export const UserSettingsPatch = z
   .passthrough();
 export type UserSettingsPatch = z.infer<typeof UserSettingsPatch>;
 
-export const settingsEndpoints: DomainDescriptorMap = {
+export const settingsEndpoints = {
   get: {
     method: 'GET',
     path: '/api/v1/settings',
@@ -64,4 +64,4 @@ export const settingsEndpoints: DomainDescriptorMap = {
     request: UserSettingsPatch,
     response: PlatformSettings,
   },
-};
+} as const satisfies DomainDescriptorMap;

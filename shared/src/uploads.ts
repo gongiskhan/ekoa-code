@@ -11,7 +11,7 @@ export const UploadResult = z.object({
 });
 export type UploadResult = z.infer<typeof UploadResult>;
 
-export const uploadsEndpoints: DomainDescriptorMap = {
+export const uploadsEndpoints = {
   create: {
     method: 'POST',
     path: '/api/v1/uploads',
@@ -19,4 +19,4 @@ export const uploadsEndpoints: DomainDescriptorMap = {
     response: UploadResult,
     kind: 'binary',
   },
-};
+} as const satisfies DomainDescriptorMap;

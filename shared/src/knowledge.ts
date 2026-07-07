@@ -137,7 +137,7 @@ export type DeleteUploadResponse = z.infer<typeof DeleteUploadResponse>;
 export const ReindexResponse = z.object({ started: z.boolean() });
 export type ReindexResponse = z.infer<typeof ReindexResponse>;
 
-export const knowledgeEndpoints: DomainDescriptorMap = {
+export const knowledgeEndpoints = {
   listCollections: {
     method: 'GET',
     path: '/api/v1/knowledge/collections',
@@ -239,4 +239,4 @@ export const knowledgeEndpoints: DomainDescriptorMap = {
     auth: 'org-admin',
     response: IndexStatus,
   },
-};
+} as const satisfies DomainDescriptorMap;

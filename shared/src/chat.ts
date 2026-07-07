@@ -39,7 +39,7 @@ export type ChatRunCreateResponse = z.infer<typeof ChatRunCreateResponse>;
 export const ChatRunCancelResponse = z.object({ cancelled: z.boolean() });
 export type ChatRunCancelResponse = z.infer<typeof ChatRunCancelResponse>;
 
-export const chatEndpoints: DomainDescriptorMap = {
+export const chatEndpoints = {
   createRun: {
     method: 'POST',
     path: '/api/v1/chat/runs',
@@ -67,4 +67,4 @@ export const chatEndpoints: DomainDescriptorMap = {
     auth: 'user',
     response: ChatRunCancelResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

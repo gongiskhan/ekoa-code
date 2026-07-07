@@ -202,7 +202,7 @@ export const RunListQuery = z.object({
 });
 export type RunListQuery = z.infer<typeof RunListQuery>;
 
-export const automationsEndpoints: DomainDescriptorMap = {
+export const automationsEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/automations',
@@ -315,4 +315,4 @@ export const automationsEndpoints: DomainDescriptorMap = {
     request: RevokeApprovedCommandRequest,
     response: RevokeApprovedCommandResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

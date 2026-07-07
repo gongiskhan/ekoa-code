@@ -5,30 +5,20 @@
  * contract (including endpoints no page calls yet; unused methods tree-shake away).
  *
  * ---------------------------------------------------------------------------------------
- * TYPING LIMITATION (load-bearing for W3 - read this).
+ * TYPE-LEVEL GENERATION (§12.2.1, criterion 7).
  *
- * §12.2.1's sketch declares each domain map `as const satisfies EndpointMap`, which would
- * preserve per-op literal types. The ACTUAL `shared/` maps are annotated
- * `: DomainDescriptorMap` (= `Record<string, EndpointDescriptor>`), which WIDENS them: the
- * per-method key names and the specific zod schema types are erased at the type level.
- * Consequences, given the maps as they exist today:
- *   - Domain namespaces ARE typed/autocompleted (`api.auth`, `api.chat`, ... are literal
- *     keys of the object passed to `createClient`).
- *   - Method names fall under an index signature (`api.auth.login` type-checks, but so
- *     would any name) - no per-method autocomplete.
- *   - Request bodies / path params / query are passed as a flat `Record<string, unknown>`
- *     and are NOT type-checked against the schema.
- *   - Response types resolve to `unknown` (NOT `any` - the widened branch is unknown-safe).
- *
- * The honest affordance for callers: each method is generic on its response, so W3 supplies
- * the response type from the shared inferred types (which ARE exported), with zero `any`
- * and zero cast:
- *     const res = await api.auth.login<LoginResponse>({ username, password });
- *
- * If `shared/` later tightens its maps to `as const satisfies` (the §12.2.1 form), the
- * `ResponseOf<D>` conditional below lights up automatically and the explicit type argument
- * becomes redundant - this client needs no change. Path params stay untyped regardless,
- * because they live only in the `path` string, not in a schema.
+ * The `shared/` domain maps are declared `as const satisfies DomainDescriptorMap`, so each
+ * op's method/path literals AND its zod request/response schema types are preserved. The
+ * client is generated from those precise types with no codegen:
+ *   - Domain namespaces are typed keys (`api.auth`, `api.chat`, ...).
+ *   - Method names are the literal op keys (`api.auth.login` autocompletes; a typo fails).
+ *   - `args` is inferred from the op's `request` schema input (`z.input`); path params live
+ *     only in the `path` string (not a schema) so they ride an index signature, untyped by
+ *     design (§12.2.1). Query fields likewise.
+ *   - The return type is inferred from the op's `response` schema output (`z.output`).
+ * So `await api.auth.login({ username, password })` is `Promise<LoginResponse>` with no cast
+ * and no explicit type argument. A method still accepts an optional response override for the
+ * rare endpoint whose response type a caller wants to narrow.
  * ---------------------------------------------------------------------------------------
  */
 
@@ -64,15 +54,25 @@ import { resolveUrl, appUrl, withPreviewToken } from './url';
 
 // -- Type-level client generation over the descriptor maps ------------------------------
 
-/** The response type of a descriptor: the schema's inferred output when literal, else `unknown`. */
+/** The response type of a descriptor: the response schema's inferred output, else `unknown`. */
 type ResponseOf<D> = D extends { response: infer R } ? (R extends { _output: infer O } ? O : unknown) : unknown;
 
 /**
- * One client method. Generic on the response so callers can supply the shared inferred type
- * (`api.auth.login<LoginResponse>({...})`) while the widened maps erase per-op inference.
- * The default `ResponseOf<D>` becomes the real type automatically if `shared/` tightens.
+ * The args type of a descriptor: the request schema's inferred INPUT (typed body fields),
+ * intersected with an index signature so flat path params / query fields (which live in the
+ * `path` string / query schema, not the request schema) are allowed alongside, untyped. When
+ * the op has no `request` schema (GET/DELETE), args is an optional flat record for params/query.
  */
-type ClientMethod<D> = <T = ResponseOf<D>>(args?: RequestArgs, opts?: RequestOptions) => Promise<T>;
+type RequestInputOf<D> = D extends { request: infer R }
+  ? (R extends { _input: infer I } ? I & Record<string, unknown> : RequestArgs)
+  : RequestArgs;
+
+/**
+ * One client method. `args` is inferred from the op's request schema, the return from its
+ * response schema (§12.2.1) - no cast, no explicit type argument at the call site. `T` remains
+ * an optional response override for the rare endpoint a caller wants to narrow.
+ */
+type ClientMethod<D> = <T = ResponseOf<D>>(args?: RequestInputOf<D>, opts?: RequestOptions) => Promise<T>;
 
 type DomainClient<M extends DomainDescriptorMap> = {
   [K in keyof M]: ClientMethod<M[K]>;

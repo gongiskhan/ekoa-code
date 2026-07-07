@@ -82,7 +82,7 @@ export const LogoutRequest = z.object({
 });
 export type LogoutRequest = z.infer<typeof LogoutRequest>;
 
-export const authEndpoints: DomainDescriptorMap = {
+export const authEndpoints = {
   login: {
     method: 'POST',
     path: '/api/v1/auth/login',
@@ -140,4 +140,4 @@ export const authEndpoints: DomainDescriptorMap = {
     request: LogoutRequest,
     response: OkResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

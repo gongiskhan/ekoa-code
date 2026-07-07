@@ -91,7 +91,7 @@ export const IntegrationBuilderTestResponse = z.object({
 });
 export type IntegrationBuilderTestResponse = z.infer<typeof IntegrationBuilderTestResponse>;
 
-export const integrationBuilderEndpoints: DomainDescriptorMap = {
+export const integrationBuilderEndpoints = {
   chat: {
     method: 'POST',
     path: '/api/v1/integration-builder/chat',
@@ -123,4 +123,4 @@ export const integrationBuilderEndpoints: DomainDescriptorMap = {
     response: IntegrationBuilderTestResponse,
     timeoutMs: 60000,
   },
-};
+} as const satisfies DomainDescriptorMap;

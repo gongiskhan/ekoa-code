@@ -33,7 +33,7 @@ export type PlatformIntegrationDisconnectResponse = z.infer<
   typeof PlatformIntegrationDisconnectResponse
 >;
 
-export const platformIntegrationsEndpoints: DomainDescriptorMap = {
+export const platformIntegrationsEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/platform-integrations',
@@ -64,4 +64,4 @@ export const platformIntegrationsEndpoints: DomainDescriptorMap = {
     auth: 'public',
     kind: 'redirect',
   },
-};
+} as const satisfies DomainDescriptorMap;

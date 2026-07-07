@@ -26,7 +26,7 @@ export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequest>;
 export const UserListResponse = itemsResponse(AuthUser);
 export type UserListResponse = z.infer<typeof UserListResponse>;
 
-export const usersEndpoints: DomainDescriptorMap = {
+export const usersEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/users',
@@ -60,4 +60,4 @@ export const usersEndpoints: DomainDescriptorMap = {
     request: ResetPasswordRequest,
     response: OkResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

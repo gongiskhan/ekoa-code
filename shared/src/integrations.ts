@@ -93,7 +93,7 @@ export const ProvisionAutomationsResponse = z.object({
 });
 export type ProvisionAutomationsResponse = z.infer<typeof ProvisionAutomationsResponse>;
 
-export const integrationsEndpoints: DomainDescriptorMap = {
+export const integrationsEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/integrations',
@@ -156,4 +156,4 @@ export const integrationsEndpoints: DomainDescriptorMap = {
     auth: 'user',
     response: ProvisionAutomationsResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

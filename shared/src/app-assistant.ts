@@ -19,7 +19,7 @@ export const AssistantChatResponse = z.object({
 });
 export type AssistantChatResponse = z.infer<typeof AssistantChatResponse>;
 
-export const appAssistantEndpoints: DomainDescriptorMap = {
+export const appAssistantEndpoints = {
   assistantChat: {
     method: 'POST',
     path: '/api/app-assistant',
@@ -27,4 +27,4 @@ export const appAssistantEndpoints: DomainDescriptorMap = {
     request: AssistantChatRequest,
     response: AssistantChatResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

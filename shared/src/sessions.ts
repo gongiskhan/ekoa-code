@@ -68,7 +68,7 @@ export type SessionMessageListResponse = z.infer<typeof SessionMessageListRespon
 export const SeedFeaturedRequest = z.object({ artifactId: Id });
 export type SeedFeaturedRequest = z.infer<typeof SeedFeaturedRequest>;
 
-export const sessionsEndpoints: DomainDescriptorMap = {
+export const sessionsEndpoints = {
   create: {
     method: 'POST',
     path: '/api/v1/sessions',
@@ -121,4 +121,4 @@ export const sessionsEndpoints: DomainDescriptorMap = {
     request: SeedFeaturedRequest,
     response: OkResponse,
   },
-};
+} as const satisfies DomainDescriptorMap;

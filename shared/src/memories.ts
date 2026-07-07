@@ -90,7 +90,7 @@ export type MemoryTag = z.infer<typeof MemoryTag>;
 export const MemoryTagsResponse = itemsResponse(MemoryTag);
 export type MemoryTagsResponse = z.infer<typeof MemoryTagsResponse>;
 
-export const memoriesEndpoints: DomainDescriptorMap = {
+export const memoriesEndpoints = {
   list: {
     method: 'GET',
     path: '/api/v1/memories',
@@ -150,4 +150,4 @@ export const memoriesEndpoints: DomainDescriptorMap = {
     auth: 'user',
     response: MemoryStats,
   },
-};
+} as const satisfies DomainDescriptorMap;
