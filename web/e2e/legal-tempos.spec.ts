@@ -127,8 +127,10 @@ test('Tempos: iniciar e parar o temporizador cria um registo parado com minutos 
 
   await page.getByTestId('tempos-parar').click();
 
-  // The stopped row lands as 'parado' with a computed minutos > 0.
-  const st = await page.evaluate(async (n) => {
+  // The stopped row lands as 'parado' with a computed minutos > 0. The stop persists
+  // asynchronously, so POLL for the row to settle rather than reading once (an immediate read
+  // races the stop write and can still see 'em_curso' under machine load).
+  const readRow = () => page.evaluate(async (n) => {
     const s = (window as unknown as SharedWindow).__ekoa!.shared!;
     const rows = (await s.list('registos_tempo')).filter(
       (r) => typeof r.descricao === 'string' && r.descricao.includes(n),
@@ -137,6 +139,8 @@ test('Tempos: iniciar e parar o temporizador cria um registo parado com minutos 
     return { count: rows.length, estado: String(r?.estado), minutos: Number(r?.minutos) };
   }, nonce);
 
+  await expect.poll(async () => (await readRow()).estado, { timeout: 15_000 }).toBe('parado');
+  const st = await readRow();
   expect(st.count).toBe(1);
   expect(st.estado).toBe('parado');
   expect(st.minutos).toBeGreaterThan(0);
