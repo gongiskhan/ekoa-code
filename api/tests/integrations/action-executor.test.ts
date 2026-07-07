@@ -170,6 +170,25 @@ describe('executeUserIntegrationAction (G8, ch03 §3.8.13)', () => {
     expect(res.details?.request.url).not.toContain('query-secret-abc');
   });
 
+  it('redacts a secret ECHOED in a non-2xx response body/error (Codex G8 round-5)', async () => {
+    await connectAcme('u1', 'echoed-secret-123');
+    const ff = fakeFetch(() => mkResponse(400, `{"error":"bad token echoed-secret-123"}`));
+    const res = await executeUserIntegrationAction({ orgId: 'orgA', ownerUserId: 'u1', integrationKey: 'acme', actionName: 'list_things', args: {} }, { fetchImpl: ff.fn });
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).not.toContain('echoed-secret-123');
+  });
+
+  it('deep-redacts a secret ECHOED in a 2xx success body so a captured value cannot persist it (Codex G8 round-5)', async () => {
+    await connectAcme('u1', 'echoed-secret-ok');
+    const ff = fakeFetch(() => mkResponse(200, `{"profile":{"apiKeyEcho":"echoed-secret-ok"},"name":"ok"}`));
+    const res = await executeUserIntegrationAction({ orgId: 'orgA', ownerUserId: 'u1', integrationKey: 'acme', actionName: 'list_things', args: {} }, { fetchImpl: ff.fn });
+    expect(res.success).toBe(true);
+    // The client's own secret is masked in the returned data (a real API token would be a
+    // different value and survive); a downstream ekoa_action capture cannot persist it.
+    expect(JSON.stringify(res.data)).not.toContain('echoed-secret-ok');
+    expect((res.data as { name?: string }).name).toBe('ok'); // non-secret data survives
+  });
+
   it('does not use another owner\'s credential row (per-owner scoping)', async () => {
     await connectAcme('someone-else', 'their-key');
     const ff = fakeFetch(() => mkResponse(200, '{}'));

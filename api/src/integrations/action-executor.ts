@@ -27,6 +27,8 @@ import {
   redactHeaders,
   redactBody,
   redactUrl,
+  redactSecretValuesIn,
+  redactSecretsDeep,
   truncateForDisplay,
   findHeaderValue,
   formUrlEncode,
@@ -228,27 +230,33 @@ async function executeHttpAction(
       response.headers.forEach((v, k) => {
         responseHeaders[k] = v;
       });
+      // CREDENTIAL BOUNDARY (Codex G8): a server can echo the CLIENT's own secret in the error
+      // body/message — value-redact it from every PERSISTED string before returning.
       return {
         success: false,
         status: response.status,
         code: classifyHttpFailure(response.status, data),
-        error: buildErrorMessage(response.status, response.statusText, data, text),
+        error: redactSecretValuesIn(buildErrorMessage(response.status, response.statusText, data, text), secretValues),
         details: {
           request: requestSummary,
           response: {
             status: response.status,
             statusText: response.statusText,
-            headers: redactHeaders(responseHeaders),
-            body: truncateForDisplay(bodyIsJson ? safeStringify(data) : text, MAX_BODY_DISPLAY_BYTES),
+            headers: Object.fromEntries(Object.entries(redactHeaders(responseHeaders)).map(([k, v]) => [k, redactSecretValuesIn(v, secretValues)])),
+            body: redactSecretValuesIn(truncateForDisplay(bodyIsJson ? safeStringify(data) : text, MAX_BODY_DISPLAY_BYTES), secretValues),
             bodyIsJson,
           },
         },
       };
     }
-    return { success: true, status: response.status, data };
+    // Success: a 2xx body may still echo the client's own credential (which an automation may then
+    // capture + persist via integration.call → capturedValues). Deep-redact the client's secret
+    // values from the returned data; a token the API legitimately returns is a different value.
+    return { success: true, status: response.status, data: redactSecretsDeep(data, secretValues) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const transport = msg.includes('abort') ? 'Request timed out after 30s' : msg;
+    // A transport error message can include the failed URL (secret in the query/authority) — redact.
+    const transport = redactSecretValuesIn(msg.includes('abort') ? 'Request timed out after 30s' : msg, secretValues);
     return { success: false, code: 'transport_error', error: transport, details: { request: requestSummary, transportError: transport } };
   } finally {
     clearTimeout(timeout);

@@ -118,6 +118,36 @@ export function redactUrl(url: string, secretValues: string[]): string {
   );
 }
 
+/** Mask every occurrence of a decrypted credential value in a string (value-based). */
+export function redactSecretValuesIn(text: string, secretValues: string[]): string {
+  let out = text;
+  for (const secret of secretValues) {
+    if (!secret || secret.length < 4) continue;
+    for (const form of new Set([secret, encodeURIComponent(secret)])) {
+      if (out.includes(form)) out = out.split(form).join(maskValue(secret));
+    }
+  }
+  return out;
+}
+
+/**
+ * Recursively mask any decrypted credential VALUE appearing in a returned data tree. Only the
+ * CLIENT's own credential values are masked — a token the API legitimately RETURNS is a different
+ * value and survives — so an integration that echoes the client's secret in a 2xx body cannot land
+ * it in a captured/persisted step output (credential boundary, Codex G8).
+ */
+export function redactSecretsDeep(value: unknown, secretValues: string[]): unknown {
+  if (!secretValues.length) return value;
+  if (typeof value === 'string') return redactSecretValuesIn(value, secretValues);
+  if (Array.isArray(value)) return value.map((v) => redactSecretsDeep(v, secretValues));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = redactSecretsDeep(v, secretValues);
+    return out;
+  }
+  return value;
+}
+
 function redactJsonTree(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(redactJsonTree);
   if (node && typeof node === 'object') {
