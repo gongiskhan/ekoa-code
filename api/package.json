@@ -12,6 +12,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.118",
     "@ekoa/shared": "*",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
