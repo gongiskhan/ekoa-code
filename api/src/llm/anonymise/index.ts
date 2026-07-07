@@ -25,8 +25,6 @@ import {
   tokenFor,
   tokensOf,
   maxTokenLength,
-  channelPrefix,
-  setChannelPrefix,
   clearSession,
 } from './vault.js';
 import { recordAnonAudit, sha256, type AnonAuditRecord } from './audit.js';
@@ -91,13 +89,21 @@ interface TokenizeOutcome {
   entityCount: number;
   nerAvailable: boolean;
   mandatoryOk: boolean;
+  /** count of deny-list literals decrypted+consulted for this text (§17.4 b access-log, D3). */
+  denyAccessCount: number;
 }
 
-/** Detect + replace on one piece of text (no delta bookkeeping). Position-based reconstruction
- *  keeps replacement exact; repeated identical values map to the same token (determinism). */
+/** Detect + replace on one piece of text. Position-based reconstruction keeps replacement exact;
+ *  repeated identical values map to the same token (determinism). Detection runs on the WHOLE
+ *  text (no delta shortcut) so a value that grows across the prior-turn boundary is never split
+ *  into two non-hits; the tokenized prefix stays byte-identical across turns via deterministic
+ *  per-session tokens, not by reusing a cached prefix (§17.3 step 2, §17.5). */
 function tokenizeText(text: string, handle: VaultHandle, ruleset: OrgRuleset): TokenizeOutcome {
-  const { spans, nerAvailable, mandatoryOk } = detect(text, ruleset);
-  if (!mandatoryOk) return { text, classes: {}, entityCount: 0, nerAvailable, mandatoryOk: false };
+  let denyAccessCount = 0;
+  const { spans, nerAvailable, mandatoryOk } = detect(text, ruleset, (n) => {
+    denyAccessCount += n;
+  });
+  if (!mandatoryOk) return { text, classes: {}, entityCount: 0, nerAvailable, mandatoryOk: false, denyAccessCount };
 
   const byClass = new Map<EntityClass, Set<string>>();
   const ordered = [...spans].sort((a, b) => a.start - b.start);
@@ -118,7 +124,7 @@ function tokenizeText(text: string, handle: VaultHandle, ruleset: OrgRuleset): T
     classes[cls] = set.size;
     entityCount += set.size;
   }
-  return { text: out, classes, entityCount, nerAvailable, mandatoryOk: true };
+  return { text: out, classes, entityCount, nerAvailable, mandatoryOk: true, denyAccessCount };
 }
 
 function auditFor(ctx: AnonymiseContext, correlationId: string, cleartext: string, o: TokenizeOutcome, refused = false): void {
@@ -128,39 +134,34 @@ function auditFor(ctx: AnonymiseContext, correlationId: string, cleartext: strin
     entityCount: o.entityCount,
     payloadHash: sha256(cleartext),
     nerAvailable: o.nerAvailable,
+    // Metadata-only access-log for the encrypted deny-list (§17.4 b, D3): the COUNT of secret
+    // literals consulted, never the literals themselves.
+    ...(o.denyAccessCount > 0 ? { denyListAccessed: o.denyAccessCount } : {}),
     ...(refused ? { refused: true } : {}),
   };
   recordAnonAudit(ctx.actor ?? {}, rec);
 }
 
 /**
- * Anonymise one piece of model-bound text (§17.7 `anonymize`). Detects on the DELTA only,
- * reusing the already-tokenized channel prefix so the tokenized prefix stays byte-identical
- * across turns (cache preservation, §17.3 step 2 / §17.5). Fails closed on a mandatory-detector
- * outage.
+ * Anonymise one piece of model-bound text (§17.7 `anonymize`). Detects on the WHOLE text every
+ * turn: cache-prefix stability (§17.3 step 2 / §17.5) comes from DETERMINISTIC per-session
+ * tokenization - the same real value always maps to the same token within a session, so a growing
+ * prompt's tokenized prefix is byte-identical across turns without a delta shortcut. The old
+ * detect-on-delta reuse split a value straddling the prior-turn boundary into two non-hits and
+ * leaked it in cleartext (dual-review HIGH/Critical); detecting the full text closes that. Fails
+ * closed on a mandatory-detector outage.
  */
 export function anonymize(text: string, ctx: AnonymiseContext): AnonymiseResult {
   const handle = openVault(ctx.sessionId);
   const correlationId = ctx.correlationId ?? newCorrelationId();
-  const channel = ctx.channel ?? 'main';
 
-  const prev = channelPrefix(handle, channel);
-  let tokenizedHead = '';
-  let deltaText = text;
-  if (prev.clearPrefix.length > 0 && text.startsWith(prev.clearPrefix)) {
-    tokenizedHead = prev.tokenizedPrefix;
-    deltaText = text.slice(prev.clearPrefix.length);
-  }
-
-  const o = tokenizeText(deltaText, handle, ctx.ruleset);
+  const o = tokenizeText(text, handle, ctx.ruleset);
   if (!o.mandatoryOk) {
     auditFor(ctx, correlationId, text, o, true);
     throw new AnonymisationRefusedError();
   }
-  const out = tokenizedHead + o.text;
-  setChannelPrefix(handle, channel, { clearPrefix: text, tokenizedPrefix: out });
   auditFor(ctx, correlationId, text, o);
-  return { text: out, handle, correlationId };
+  return { text: o.text, handle, correlationId };
 }
 
 /**
@@ -180,6 +181,7 @@ export function anonymizeRequestBody(
   let entityCount = 0;
   let nerAvailable = true;
   let mandatoryOk = true;
+  let denyAccessCount = 0;
   const parts: string[] = [];
 
   const tokenizeLeaf = (s: string): string => {
@@ -187,6 +189,7 @@ export function anonymizeRequestBody(
     const o = tokenizeText(s, handle, ctx.ruleset);
     if (!o.mandatoryOk) mandatoryOk = false;
     if (!o.nerAvailable) nerAvailable = false;
+    denyAccessCount += o.denyAccessCount;
     // Accumulate per-leaf distinct counts. A value repeated across leaves maps to the same
     // token (determinism); the audit metadata counts tokenized spans, which is enough.
     for (const [cls, count] of Object.entries(o.classes) as Array<[EntityClass, number]>) {
@@ -199,8 +202,12 @@ export function anonymizeRequestBody(
   const nextBody: Record<string, unknown> = { ...body };
   if (body.system !== undefined) nextBody.system = mapStringLeaves(body.system, tokenizeLeaf);
   if (body.messages !== undefined) nextBody.messages = mapStringLeaves(body.messages, tokenizeLeaf);
+  // `tools` definitions carry content-bearing text (descriptions, input_schema enums/defaults)
+  // that can embed PII (§17.3 step 1, dual-review Critical); walk their string leaves too. The
+  // structural keys are strings but tokenization only rewrites values it detects as entities.
+  if (body.tools !== undefined) nextBody.tools = mapStringLeaves(body.tools, tokenizeLeaf);
 
-  const outcome: TokenizeOutcome = { text: '', classes, entityCount, nerAvailable, mandatoryOk };
+  const outcome: TokenizeOutcome = { text: '', classes, entityCount, nerAvailable, mandatoryOk, denyAccessCount };
   if (!mandatoryOk) {
     auditFor(ctx, correlationId, parts.join(' '), outcome, true);
     throw new AnonymisationRefusedError();

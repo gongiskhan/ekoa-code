@@ -17,7 +17,7 @@ import {
   type AnonymiseContext,
 } from '../../src/llm/anonymise/index.js';
 import { __resetRulesetResolverForTests } from '../../src/llm/anonymise/index.js';
-import { isValidNif, makeNifToken, makeNissToken, makeIbanToken } from '../../src/llm/anonymise/checksum.js';
+import { isValidNif, isValidIbanPt, makeNifToken, makeNissToken, makeIbanToken } from '../../src/llm/anonymise/checksum.js';
 import { detect, resolveDenyList } from '../../src/llm/anonymise/detectors.js';
 
 /**
@@ -232,5 +232,63 @@ describe('detect() returns a clean interface result (§17.4)', () => {
     const res = detect(`NIF ${valid}`, { orgId: 'org1' });
     expect(res.mandatoryOk).toBe(true);
     expect(res.spans.some((s) => s.value === valid)).toBe(true);
+  });
+});
+
+/** Compute a synthetic checksum-VALID PT IBAN at runtime (PT + 2 check digits + a fixed 21-digit
+ *  BBAN), never a committed literal. Exactly one pair of check digits validates. */
+function computeValidIban(bban21: string): string {
+  for (let cd = 2; cd <= 98; cd++) {
+    const s = `PT${String(cd).padStart(2, '0')}${bban21}`;
+    if (isValidIbanPt(s)) return s;
+  }
+  throw new Error('no valid IBAN check digits');
+}
+
+// Regression tests for the dual-review (Claude adversarial + Codex) findings on G7A - each is a
+// demonstrated cleartext-PII leak, now closed.
+describe('dual-review hardening: no boundary/format/overlap leak', () => {
+  it('detect-on-full-text: a value that GROWS across the prior-turn boundary is tokenized, not split (HIGH)', () => {
+    const valid = computeValidNif('50000000'); // 9 digits
+    // Same session + channel. Turn 1 ends mid-NIF; turn 2 completes it. The old detect-on-delta
+    // scanned only the appended tail and leaked the now-complete NIF; full-text detection catches it.
+    const head = `Cliente NIF ${valid.slice(0, 5)}`;
+    anonymize(head, ctx({ sessionId: 's-grow', channel: 'prompt' }));
+    const r2 = anonymize(`Cliente NIF ${valid}`, ctx({ sessionId: 's-grow', channel: 'prompt' }));
+    expect(r2.text).not.toContain(valid); // the completed NIF is tokenized, not cleartext
+    expect(deanonymize(r2.text, r2.handle)).toContain(valid);
+  });
+
+  it('deny-listed party that grows across the boundary is tokenized (HIGH)', () => {
+    const rs = { orgId: 'org1', denyList: ['Petrova Holdings'] };
+    anonymize('Cliente Petrova', ctx({ sessionId: 's-party', channel: 'prompt', ruleset: rs }));
+    const r2 = anonymize('Cliente Petrova Holdings', ctx({ sessionId: 's-party', channel: 'prompt', ruleset: rs }));
+    expect(r2.text).not.toContain('Petrova Holdings'); // deny-listed party caught after growth
+  });
+
+  it('cache-prefix stays byte-identical across turns via deterministic tokens (no delta shortcut)', () => {
+    const rs = { orgId: 'org1', denyList: ['Petrova Holdings'] };
+    const r1 = anonymize('Meeting with Petrova Holdings', ctx({ sessionId: 's-cache', channel: 'prompt', ruleset: rs }));
+    const r2 = anonymize('Meeting with Petrova Holdings next week', ctx({ sessionId: 's-cache', channel: 'prompt', ruleset: rs }));
+    expect(r2.text.startsWith(r1.text)).toBe(true); // determinism preserves the prompt-cache prefix
+  });
+
+  it('spaced PT IBAN is detected + tokenized (Codex Critical: regex missed the standard grouping)', () => {
+    const compact = computeValidIban('000201231234567895417'); // 21-digit BBAN
+    const spaced = compact.replace(/^(PT\d{2})(\d{4})(\d{4})(\d{4})(\d{4})(\d{4})(\d)$/, '$1 $2 $3 $4 $5 $6 $7');
+    expect(spaced).toContain(' '); // sanity: it is actually spaced
+    const r = anonymize(`Transferir para IBAN ${spaced}`, ctx());
+    expect(r.text).not.toContain(spaced); // the spaced IBAN is tokenized
+    expect(deanonymize(r.text, r.handle)).toContain(spaced);
+  });
+
+  it('partial overlap tokenizes the UNION, never leaking a non-overlapping remainder (MEDIUM)', () => {
+    // NER flags "Petrova Silva" (PERSON) partially overlapping the deny-listed party "Aveleda
+    // Petrova". The old resolver dropped the PERSON span whole, leaking "Silva"; union-merge redacts
+    // the whole run.
+    setNerDetector(dictionaryNer(['Petrova Silva']));
+    const r = anonymize('Cliente Aveleda Petrova Silva assinou', ctx({ ruleset: { orgId: 'org1', denyList: ['Aveleda Petrova'] } }));
+    expect(r.text).not.toContain('Silva'); // the remainder is not leaked
+    expect(r.text).not.toContain('Petrova');
   });
 });

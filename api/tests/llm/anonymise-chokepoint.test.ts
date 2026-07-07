@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
-import { encrypt } from '../../src/data/crypto.js';
+import { encryptForScope } from '../../src/data/crypto.js';
 import { activityLogs } from '../../src/data/stores.js';
 import {
   runAgent,
@@ -181,11 +181,36 @@ describe('payload-capture: every entry tokenizes the outbound payload (§17.8, �
     const parsed = JSON.parse(result.body) as { content: Array<{ input: { pattern: string } }> };
     expect(parsed.content[0]!.input.pattern).toBe(VALID_NIF);
   });
+
+  it('tool DEFINITIONS are anonymised too - PII in a tool description does not leak (dual-review Critical)', async () => {
+    let captured = '';
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) {
+        captured = JSON.stringify(p.payload);
+        return { status: 200, headers: {}, body: bodyEcho('ok') };
+      },
+    }));
+    await proxyGatewayMessages(
+      {
+        messages: [{ role: 'user', content: 'hi' }],
+        // a client-supplied tool definition carrying PII in its description + schema default
+        tools: [{ name: 'lookup', description: `Find client ${PARTY} NIF ${VALID_NIF}`, input_schema: { type: 'object', properties: { q: { type: 'string', default: VALID_NIF } } } }],
+        metadata: { session_id: 'conv-tools' },
+      },
+      'u1',
+    );
+    // the whole outbound payload (incl. tools) is tokens-only: no cleartext PII reaches the model
+    assertTokensOnly(captured);
+    expect(captured).not.toContain(VALID_NIF);
+    expect(captured).not.toContain(PARTY);
+  });
 });
 
 describe('encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b), D3)', () => {
   it('decrypts an org-scoped-encrypted deny-list and tokenizes the party', async () => {
-    setRulesetResolver((orgId): OrgRuleset => ({ orgId, denyListCiphertext: encrypt(JSON.stringify([PARTY])) }));
+    // Encrypt the deny-list bound to the SAME org the resolver reports - the org-scoped key
+    // (§17.4 b) means each org's ciphertext decrypts only under its own orgId.
+    setRulesetResolver((orgId): OrgRuleset => ({ orgId, denyListCiphertext: encryptForScope(JSON.stringify([PARTY]), orgId) }));
     let captured = '';
     __setTransportForTests(fakeTransport({
       async messages(p: RestCallParams) {
@@ -195,6 +220,18 @@ describe('encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b),
     }));
     await completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr);
     expect(captured).not.toContain(PARTY); // caught via the decrypted deny-list
+  });
+
+  it('org-scoping is enforced: another org\'s ciphertext cannot be decrypted here (§17.4 b, fail-closed)', async () => {
+    // Ciphertext encrypted for org "other-org" but attached to a ruleset reporting a different
+    // orgId: the GCM auth fails under the wrong scoped key, the mandatory detector errors, and
+    // the pipeline REFUSES (fail-closed) rather than forwarding cleartext.
+    const foreignCipher = encryptForScope(JSON.stringify([PARTY]), 'other-org');
+    setRulesetResolver((orgId): OrgRuleset => ({ orgId, denyListCiphertext: foreignCipher }));
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { return { status: 200, headers: {}, body: bodyEcho((p.payload.messages as Array<{ content: string }>)[0]!.content) }; },
+    }));
+    await expect(completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr)).rejects.toThrow();
   });
 });
 

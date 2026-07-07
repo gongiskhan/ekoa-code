@@ -14,7 +14,7 @@
  *       (§17.3, §17.4). A real in-process ONNX model is a later task; this ships a pluggable
  *       placeholder the interface can swap without a call-site change.
  */
-import { decrypt } from '../../data/crypto.js';
+import { decryptForScope } from '../../data/crypto.js';
 import type { EntityClass, EntitySpan, OrgRuleset } from './types.js';
 import { isValidNif, isValidNiss, isValidIbanPt, isValidCc } from './checksum.js';
 
@@ -66,10 +66,17 @@ interface Recognizer {
   /** the capture group index carrying the candidate (0 = whole match). */
   group: number;
   valid: (candidate: string) => boolean;
+  /** normalize the raw match before checksum validation (e.g. strip IBAN grouping spaces); the
+   *  span VALUE stays the raw match so replacement covers the separators. */
+  normalize?: (candidate: string) => string;
 }
 
+const stripSpaces = (s: string): string => s.replace(/\s+/g, '');
+
 const RECOGNIZERS: Recognizer[] = [
-  { cls: 'IBAN', re: /\bPT\d{23}\b/g, group: 0, valid: isValidIbanPt },
+  // IBAN accepts the compact (PT+23 digits) AND the standard space-grouped form; the checksum
+  // runs on the space-stripped value, the span covers the raw (spaced) text.
+  { cls: 'IBAN', re: /\bPT\d{2}(?:\s?\d{4}){5}\s?\d\b/g, group: 0, valid: isValidIbanPt, normalize: stripSpaces },
   { cls: 'NISS', re: /\b\d{11}\b/g, group: 0, valid: isValidNiss },
   { cls: 'CC', re: /\b\d{9}[A-Z]{2}\d\b/g, group: 0, valid: isValidCc },
   { cls: 'NIF', re: /\b\d{9}\b/g, group: 0, valid: isValidNif },
@@ -87,7 +94,7 @@ function structuredSpans(text: string): EntitySpan[] {
     while ((m = re.exec(text)) !== null) {
       const candidate = m[r.group];
       if (candidate === undefined) continue;
-      if (!r.valid(candidate)) continue;
+      if (!r.valid(r.normalize ? r.normalize(candidate) : candidate)) continue;
       const start = m.index + m[0].indexOf(candidate);
       spans.push({ start, end: start + candidate.length, value: candidate, cls: r.cls });
     }
@@ -123,7 +130,9 @@ function literalSpans(text: string, literals: string[], cls: EntityClass): Entit
  */
 export function resolveDenyList(ruleset: OrgRuleset, onAccess?: (count: number) => void): string[] {
   if (ruleset.denyListCiphertext) {
-    const parsed = JSON.parse(decrypt(ruleset.denyListCiphertext)) as unknown;
+    // Org-scoped decryption (§17.4 b): the ciphertext is bound to ruleset.orgId, so another org's
+    // ciphertext cannot be decrypted here (GCM auth fails) - defense in depth beyond row scoping.
+    const parsed = JSON.parse(decryptForScope(ruleset.denyListCiphertext, ruleset.orgId)) as unknown;
     const list = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
     onAccess?.(list.length); // access-logged: the deny-list is secret material (D3)
     return list;
@@ -141,19 +150,35 @@ export interface DetectionResult {
   mandatoryOk: boolean;
 }
 
-/** Overlap resolution: keep the longest span; on a tie keep the earliest. Certain-catch
- *  layers ((a) checksum, (b) deny-list) win ties over the recall-biased (c) NER. */
-function resolveOverlaps(spans: EntitySpan[]): EntitySpan[] {
+/** Overlap resolution, recall-biased (§17.4 c "when unsure, redact"): overlapping spans are
+ *  MERGED into their union and the whole union is tokenized, so a partially-overlapping span's
+ *  non-overlapping remainder is never dropped (a leak). The union's class is the longest
+ *  contributing span's, with a certain-catch class ((a)/(b), rank 1) winning a tie over the
+ *  recall-biased (c) NER (rank 0). Adjacent-but-not-overlapping spans (s.start === last.end) do
+ *  NOT merge. `text` supplies the union's exact substring value. */
+function resolveOverlaps(spans: EntitySpan[], text: string): EntitySpan[] {
+  if (spans.length === 0) return [];
   const rank = (c: EntityClass): number => (c === 'PERSON' ? 0 : 1);
-  const sorted = [...spans].sort(
-    (a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start || rank(b.cls) - rank(a.cls),
-  );
-  const kept: EntitySpan[] = [];
+  const sorted = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: EntitySpan[] = [];
+  let bestLen = 0;
   for (const s of sorted) {
-    if (kept.some((k) => s.start < k.end && k.start < s.end)) continue;
-    kept.push(s);
+    const last = merged[merged.length - 1];
+    if (last && s.start < last.end) {
+      // Overlap -> extend the union and re-pick the class from the longest / most-certain span.
+      const sLen = s.end - s.start;
+      if (s.end > last.end) last.end = s.end;
+      last.value = text.slice(last.start, last.end);
+      if (sLen > bestLen || (sLen === bestLen && rank(s.cls) > rank(last.cls))) {
+        last.cls = s.cls;
+        bestLen = sLen;
+      }
+    } else {
+      merged.push({ ...s });
+      bestLen = s.end - s.start;
+    }
   }
-  return kept;
+  return merged;
 }
 
 /**
@@ -185,5 +210,5 @@ export function detect(text: string, ruleset: OrgRuleset, onDenyAccess?: (count:
     }
   }
 
-  return { spans: resolveOverlaps(spans), nerAvailable, mandatoryOk };
+  return { spans: resolveOverlaps(spans, text), nerAvailable, mandatoryOk };
 }

@@ -27,6 +27,9 @@ export interface AnonAuditRecord {
   payloadHash: string;
   /** false when NER coverage was reduced for this event (§17.3 fail-open on (c)). */
   nerAvailable: boolean;
+  /** count of encrypted deny-list literals consulted for this event - the §17.4 (b)/D3 access-log,
+   *  metadata only (a count, never the literals). Absent when no encrypted deny-list was used. */
+  denyListAccessed?: number;
   /** true when this event is a fail-closed refusal (a mandatory detector was down, §17.3). */
   refused?: boolean;
 }
