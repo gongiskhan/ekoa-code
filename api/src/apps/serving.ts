@@ -34,6 +34,7 @@ import { getAppIdBySlug } from './slug-index.js';
 import { lookupShareable } from './share-lookup.js';
 import { injectAppContext } from './injected-context.js';
 import { listDemoCards, getDemoSpec, demoAssetsDir } from '../services/demo-registry.js';
+import { resolveWithinJail } from '../services/safe-path.js';
 import { artifacts } from '../data/stores.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -109,14 +110,31 @@ async function tryRegisterAppFromInstance(appId: string, deps: ServingDeps): Pro
     const artifact = await artifacts.get(resolvedId);
     if (!artifact) return false;
 
-    const projectDir = (artifact.data as Record<string, unknown> | undefined)?.projectDir;
-    if (typeof projectDir !== 'string' || projectDir.length === 0) return false;
+    const rawProjectDir = (artifact.data as Record<string, unknown> | undefined)?.projectDir;
+    if (typeof rawProjectDir !== 'string' || rawProjectDir.length === 0) return false;
 
+    // JAIL the artifact-record projectDir before trusting it (ch09 invariant 10):
+    // `data` is a client-writable bag (ArtifactPatch permits `data`), so a raw
+    // `startsWith(sandboxRoot)` accepts `<sandboxRoot>/../outside` (the string starts
+    // with the root but `..` escapes it) and would then serve arbitrary on-disk files.
+    // resolveWithinJail normalizes + confines + symlink-checks; an escape throws.
     const sandboxRoot = process.env.SANDBOX_ROOT || join(homedir(), '.ekoa', 'sandboxes');
     const featuredRoot = process.env.EKOA_FEATURED_BUILDS_DIR || join(homedir(), '.ekoa', 'data', 'featured-builds');
-    if (!projectDir.startsWith(sandboxRoot) && !projectDir.startsWith(featuredRoot)) return false;
+    let projectDir: string;
+    let underSandbox: boolean;
+    try {
+      projectDir = resolveWithinJail(sandboxRoot, rawProjectDir);
+      underSandbox = true;
+    } catch {
+      try {
+        projectDir = resolveWithinJail(featuredRoot, rawProjectDir);
+        underSandbox = false;
+      } catch {
+        return false; // outside both jails - refuse to heal/serve
+      }
+    }
 
-    if (!existsSync(projectDir) && projectDir.startsWith(sandboxRoot) && deps.hydrateAppRepoIfMissing) {
+    if (!existsSync(projectDir) && underSandbox && deps.hydrateAppRepoIfMissing) {
       const hydrated = await deps.hydrateAppRepoIfMissing(projectDir, resolvedId).catch((err) => {
         console.warn(`[apps] hydrate(${resolvedId}) failed:`, err instanceof Error ? err.message : err);
         return { hydrated: false } as const;
@@ -216,11 +234,15 @@ export function servingRouter(deps: ServingDeps): Router {
     // Canonical id: slug lookup first, raw id fallback (data stability; §7.5 step 2).
     const canonicalAppId = getAppIdBySlug(appId) || appId;
 
-    // Shareability gate (§7.7, carried exactly): document requests only, and only
-    // when the app is not a direct registry hit. Browsers do not propagate ?token=
-    // on sub-resource fetches, so gating assets would blank the iframe - the HTML
-    // gate is the security boundary.
-    if (!ASSET_EXT_RE.test(req.path) && !appRegistry.getApp(appId)) {
+    // Shareability gate (§7.7): DOCUMENT requests only - browsers do not propagate
+    // ?token= on sub-resource fetches, so gating assets would blank the iframe; the
+    // HTML gate is the security boundary. Hardening over the old plane (which skipped
+    // this for any registry hit): a revoked-then-registered artifact reached by its
+    // canonical id must still 410. lookupShareable returns `ok` for featured artifacts
+    // (revoke does not apply) and `not-found` for dev-serve/unregistered apps (no
+    // artifact record - they fall through and serve), so only a genuinely revoked
+    // artifact is gated. See RUN_LOG (G6 review, Codex finding 1).
+    if (!ASSET_EXT_RE.test(req.path)) {
       const lookup = await lookupShareable(appId);
       if (lookup.kind === 'revoked') {
         // Owners may view their own non-shareable artifacts. Requester-token

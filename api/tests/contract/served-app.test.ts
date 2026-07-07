@@ -258,13 +258,38 @@ describe('static serving pipeline (ch07 §7.5, carried exactly)', () => {
     const owner = await api(`/apps/privslug/?token=${t}`);
     expect(owner.status).toBe(200);
 
-    // reached by the registered id directly → no gate (carried behavior)
-    const direct = await api('/apps/svpriv/');
-    expect(direct.status).toBe(200);
+    // Hardened over the old plane (Codex G6 review finding 1): a revoked/non-shareable
+    // artifact reached by its CANONICAL id is also gated - 410 without a token, 200 for
+    // the owner. The old plane skipped the check for any registry hit, letting an
+    // attacker who learned the canonical id keep loading a revoked share.
+    const directAnon = await api('/apps/svpriv/');
+    expect(directAnon.status).toBe(410);
+    const directOwner = await api(`/apps/svpriv/?token=${t}`);
+    expect(directOwner.status).toBe(200);
 
     // assets are never gated (browsers do not propagate ?token= on sub-resources)
     const asset = await api('/apps/privslug/bundle.js');
     expect(asset.status).not.toBe(410);
+  });
+
+  it('lazy-heal jails a client-set data.projectDir - a `..` escape never serves outside the sandbox (Codex G6 finding 2)', async () => {
+    // ArtifactPatch permits `data`, so a client can set data.projectDir. A raw
+    // startsWith(sandboxRoot) accepted `<sandboxRoot>/../<escape>` (starts with the
+    // root, escapes via ..). The jail must refuse it -> the app stays "building"
+    // (503/placeholder), never serving arbitrary on-disk files.
+    const sandbox = process.env.SANDBOX_ROOT || join(tmpdir(), 'nope-sandbox');
+    await artifacts.insert({
+      _id: 'evilheal', name: 'Evil', userId: 'owner1', orgId: 'orgA', visibility: 'org', shareable: true,
+      data: { projectDir: join(sandbox, '..', '..', '..', '..', 'etc') },
+    } as never);
+    setActivation('owner1', { active: true, billingLocked: false });
+    const res = await api('/apps/evilheal/');
+    const html = await res.text();
+    // The jail refused the escape, so serving fell through to the "Building..."
+    // placeholder (200 nav) - it NEVER registered/served the escaped directory.
+    expect(res.status).toBe(200);
+    expect(html).toContain('Building');
+    expect(html).not.toContain('root:'); // never leaks /etc/* style content
   });
 
   it('building placeholder: 200 auto-refresh HTML for navigations, 503 plain for assets, both uncacheable', async () => {
