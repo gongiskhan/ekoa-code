@@ -20,15 +20,26 @@
  *   ["curl", "-s", "https://api.x.com/foo"]  → "curl -s <URL>"
  *   ["bash", "-c", "ls | wc -l"]             → "bash -c <SCRIPT>"
  *
- * Ported as-is from the old Cortex automation family (carryover-audit A8): pure, zero-import.
+ * Ported from the old Cortex automation family (carryover-audit A8); pure, zero-import.
+ *
+ * DEVIATION (Codex G8, RUN_LOG): the old A8 collapsed EVERY `bash -c <script>` to one shape
+ * `bash -c <SCRIPT>`, so approving one benign shell command with "always" silently approved ALL
+ * future shell scripts (arbitrary local code execution past the consent gate). A shell script
+ * body is arbitrary code — there is no safe "class" to wildcard — so the shape now binds to the
+ * EXACT normalized script: "always" only re-approves the identical script; a different script is a
+ * distinct shape that re-prompts. Stronger than the carried behavior; the consent MECHANISM
+ * (shape → approval lookup) is unchanged.
  */
 export function computeCommandShape(argv: string[]): string {
   if (argv.length === 0) return '';
   const head = argv[0]!;
 
-  // Special-case bash -c / sh -c / zsh -c — collapse the script body.
+  // bash -c / sh -c / zsh -c: the script body IS the command — bind consent to the exact script
+  // (whitespace-normalized), never to "any -c script". Extra positional args are appended raw.
   if ((head === 'bash' || head === 'sh' || head === 'zsh') && argv[1] === '-c') {
-    return `${head} -c <SCRIPT>`;
+    const script = (argv[2] ?? '').replace(/\s+/g, ' ').trim();
+    const rest = argv.slice(3);
+    return `${head} -c: ${script}${rest.length ? ` ${rest.join(' ')}` : ''}`;
   }
 
   const parts = [head];
