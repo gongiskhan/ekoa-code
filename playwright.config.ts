@@ -10,6 +10,10 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './web/e2e',
   testMatch: '**/*.spec.ts',
+  // Seed the legal shared spine once before the byte-compat suite (see the file
+  // header): the satellite legal apps READ the Núcleo's seed, which a fresh per-run
+  // Mongo does not carry. Harness setup only - no assertion is touched.
+  globalSetup: './web/e2e/global-setup.ts',
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
