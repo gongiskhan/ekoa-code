@@ -47,6 +47,63 @@ export async function resolveMemoryBlock(actor: Actor): Promise<string> {
   return visible.map((m) => `- ${m.title ?? ''}: ${m.content ?? ''}`).join('\n');
 }
 
+/** Split text into a lowercase term set for the deterministic overlap resolver (no model call). */
+function terms(text: string): Set<string> {
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .split(/[^a-z0-9à-ú]+/i)
+      .filter((w) => w.length > 2),
+  );
+}
+
+const MAX_ACTIVE_INJECTED = 8;
+
+/**
+ * Deterministic term-overlap memory injection (ch05 §5.5.2 layer 1). No model call: guardrail
+ * memories render first as non-negotiable RULE lines; core-tier memories are always injected;
+ * active-tier memories are scored by term overlap with the query and the top ones injected. The
+ * resolver's write-on-read side effect (a usage-count bump per resolved memory) is carried as a
+ * conscious decision — applied here through the store. Returns '' when nothing resolves.
+ */
+export async function resolveMemoryInjection(actor: Actor, query: string, deps: MemoryDeps): Promise<string> {
+  const visible = await listVisibleMemories(actor);
+  if (visible.length === 0) return '';
+  const q = terms(query);
+
+  const guardrails = visible.filter((m) => m.type === 'guardrail' || m.tier === 'guardrail');
+  const core = visible.filter((m) => m.tier === 'core' && !guardrails.includes(m));
+  const active = visible.filter((m) => !guardrails.includes(m) && !core.includes(m));
+
+  const scored = active
+    .map((m) => {
+      const mt = terms(`${m.title ?? ''} ${m.content ?? ''} ${(m.tags ?? []).join(' ')}`);
+      let overlap = 0;
+      for (const t of q) if (mt.has(t)) overlap++;
+      return { m, overlap };
+    })
+    .filter((s) => s.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, MAX_ACTIVE_INJECTED)
+    .map((s) => s.m);
+
+  const resolved = [...guardrails, ...core, ...scored];
+  if (resolved.length === 0) return '';
+
+  // Write-on-read: bump usage count per resolved memory (carried side effect, §5.5.2). Failures
+  // are swallowed — injection must never fail a run on a bookkeeping write.
+  for (const m of resolved) {
+    memories
+      .update(m._id, (cur) => ({ ...cur, usageCount: (((cur as MemoryDoc).usageCount as number) ?? 0) + 1, lastUsedAt: new Date(deps.now()).toISOString() } as never))
+      .catch(() => {});
+  }
+
+  const lines: string[] = [];
+  for (const m of guardrails) lines.push(`RULE: ${m.content ?? m.title ?? ''}`);
+  for (const m of [...core, ...scored]) lines.push(`- ${m.title ?? ''}: ${m.content ?? ''}`);
+  return lines.join('\n');
+}
+
 // ---- Write operations (the memory router goes through the module, not data/ — ch02 §2.7) ----
 export interface MemoryDeps { now: () => number; genId: () => string }
 

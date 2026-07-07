@@ -1,0 +1,8 @@
+{
+  "name": "automation-agent",
+  "version": "1.0.0",
+  "description": "Base behavior for the automation agent: planning discipline and closed-vocabulary output",
+  "agents": ["automation"],
+  "mode": "eager",
+  "files": ["SKILL.md"]
+}

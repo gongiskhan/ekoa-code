@@ -199,9 +199,19 @@ export interface RawRestResponse {
   body: string;
 }
 
-/** One normalized message off an agent stream. The LAST message is always `final`. */
+/** One normalized message off an agent stream. The LAST message is always `final`. The
+ *  intermediate kinds beyond `text` are what `agents/` needs to build the typed streaming
+ *  pipeline (ch05 §5.4.6, §5.7.1): tool-use start/finish, the once-only sdkSessionId, usage
+ *  deltas (internal billing capture), and plan/subtask notifications (internal — reset the
+ *  inactivity timer, §5.3.6). Tool `args`/`result` are tokenized here and de-tokenized in
+ *  `runAgent` through the SAME vault handle before they leave `llm/` (§5.7.1). */
 export type AgentStreamMsg =
   | { kind: 'text'; text: string }
+  | { kind: 'tool_use'; tool: string; toolId?: string; args?: Record<string, unknown> }
+  | { kind: 'tool_result'; tool: string; toolId?: string; result?: unknown; isError?: boolean }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'usage'; usage: RawUsage }
+  | { kind: 'plan' }
   | { kind: 'final'; text: string; usage: RawUsage; aborted?: boolean };
 
 export interface TransportResult {
@@ -242,6 +252,18 @@ function rawFromSdkUsage(u: unknown): RawUsage {
   };
 }
 
+/** De-tokenize every string leaf of a tool arg/result value through the run's vault handle
+ *  (§5.7.1). Whole-JSON replacement reuses `deanonymize`'s longest-token-first substitution;
+ *  a plain string round-trips through JSON so quotes are handled. Undefined passes through. */
+function detokJson<T>(value: T, handle: VaultHandle): T {
+  if (value === undefined) return value;
+  try {
+    return JSON.parse(deanonymize(JSON.stringify(value), handle)) as T;
+  } catch {
+    return value;
+  }
+}
+
 function isAbortError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return true;
   return err instanceof Error && (err.name === 'AbortError' || /abort/i.test(err.message));
@@ -257,11 +279,42 @@ function controllerFor(signal?: AbortSignal): AbortController {
   return ac;
 }
 
+/** Extract tool_use blocks from an assistant SDK message's content array. */
+function toolUsesOf(msg: SDKMessage): Array<{ tool: string; toolId?: string; args?: Record<string, unknown> }> {
+  if (msg.type !== 'assistant') return [];
+  const content = (msg.message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b): b is { type?: string; name?: string; id?: string; input?: unknown } => !!b && typeof b === 'object')
+    .filter((b) => b.type === 'tool_use')
+    .map((b) => ({ tool: b.name ?? 'tool', toolId: b.id, args: (b.input ?? {}) as Record<string, unknown> }));
+}
+
+/** Extract tool_result blocks from a user SDK message's content array (the SDK surfaces tool
+ *  results as user-role messages). */
+function toolResultsOf(msg: SDKMessage): Array<{ toolId?: string; result?: unknown; isError?: boolean }> {
+  if (msg.type !== 'user') return [];
+  const content = (msg.message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b): b is { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean } => !!b && typeof b === 'object')
+    .filter((b) => b.type === 'tool_result')
+    .map((b) => ({ toolId: b.tool_use_id, result: b.content, isError: b.is_error === true }));
+}
+
+function sessionIdOf(msg: SDKMessage): string | undefined {
+  const s = (msg as { session_id?: unknown }).session_id;
+  return typeof s === 'string' && s ? s : undefined;
+}
+
 function sdkOptions(p: SdkCallParams): Record<string, unknown> {
   return {
     model: p.model,
     effort: p.effort,
     env: p.env,
+    // The production agent inherits nothing from any developer's ~/.claude profile (§5.4.1,
+    // FIXED-6): everything ships in the repo via the content loader.
+    settingSources: [],
     abortController: controllerFor(p.signal),
     ...(p.resume ? { resume: p.resume } : {}),
     ...(p.forkSession ? { forkSession: true } : {}),
@@ -277,16 +330,31 @@ const defaultTransport: ChokepointTransport = {
   async *streamAgent(p) {
     let text = '';
     let usage: RawUsage = { ...ZERO_USAGE };
+    let sessionEmitted = false;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const q = query({ prompt: p.prompt, options: sdkOptions(p) as any });
       for await (const msg of q) {
+        // sdkSessionId is reported once on the first message carrying one (§5.4.5).
+        if (!sessionEmitted) {
+          const sid = sessionIdOf(msg);
+          if (sid) { sessionEmitted = true; yield { kind: 'session', sessionId: sid }; }
+        }
         if (msg.type === 'assistant') {
           const t = textOfSdkMessage(msg);
           if (t) {
             text += t;
             yield { kind: 'text', text: t };
           }
+          for (const tu of toolUsesOf(msg)) yield { kind: 'tool_use', ...tu };
+          const u = rawFromSdkUsage((msg.message as { usage?: unknown }).usage);
+          if (u.input || u.output || u.cacheRead || u.cacheCreate) yield { kind: 'usage', usage: u };
+        } else if (msg.type === 'user') {
+          for (const tr of toolResultsOf(msg)) yield { kind: 'tool_result', tool: 'tool', ...tr };
+        } else if (msg.type === 'system') {
+          // Sub-task / plan notifications are consumed internally to reset the inactivity
+          // timer; they are never forwarded to the wire (§5.7.3, P-11).
+          yield { kind: 'plan' };
         } else if (msg.type === 'result') {
           usage = rawFromSdkUsage((msg as { usage?: unknown }).usage);
           if (msg.subtype === 'success') text = (msg as { result: string }).result;
@@ -473,6 +541,25 @@ async function meter(attribution: LlmAttribution, tier: Tier, model: string, raw
 
 // --- Entry points (§6.2.1) ---------------------------------------------------------------
 
+/** Injected callbacks surfaced from inside the chokepoint's stream loop (ch05 §5.4.6, §5.7.1).
+ *  Tool args/results are de-tokenized through the run's vault handle before they reach these
+ *  callbacks, so `agents/` never sees a placeholder. sdkSessionId, usage deltas, and plan
+ *  notifications are all internal signals `agents/` consumes (persistence / billing / timer). */
+export interface AgentRunCallbacks {
+  onToolEvent?(e: {
+    phase: 'started' | 'finished';
+    tool: string;
+    toolId?: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    isError?: boolean;
+  }): void;
+  onSessionId?(sessionId: string): void;
+  onUsageDelta?(usage: RawUsage): void;
+  /** A sub-task / plan notification arrived — reset the inactivity timer (§5.3.6). */
+  onPlanNotification?(): void;
+}
+
 export interface AgentRunOptions {
   prompt: string;
   /** Required routing decision — a missing decision is a compile error, not an Opus default. */
@@ -485,6 +572,10 @@ export interface AgentRunOptions {
   cwd?: string;
   maxTurns?: number;
   signal?: AbortSignal;
+  /** Build runs set HOME = projectDir; agent-face runs raise the stream-close timeout (§5.4.1). */
+  homeDir?: string;
+  streamCloseTimeoutMs?: number;
+  callbacks?: AgentRunCallbacks;
 }
 
 export interface AgentRunResult {
@@ -546,8 +637,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
     const detok = createDetokenizer(handle);
     let rawText = ''; // the tokenized text as it comes off the transport
+    const cb = opts.callbacks;
     try {
-      const env = await buildSubprocessEnv();
+      const env = await buildSubprocessEnv({
+        ...(opts.homeDir ? { homeDir: opts.homeDir } : {}),
+        ...(opts.streamCloseTimeoutMs !== undefined ? { streamCloseTimeoutMs: opts.streamCloseTimeoutMs } : {}),
+      });
       const stream = transport.streamAgent({
         prompt: promptAnon.text,
         model: decision.model,
@@ -563,14 +658,34 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
         signal: ac.signal,
       });
       for await (const msg of stream) {
-        if (msg.kind === 'text') {
-          rawText += msg.text;
-          const clear = detok.push(msg.text); // incremental de-tokenization, straddle-buffered
-          if (clear) yield { type: 'text', text: clear };
-        } else {
-          rawText = msg.text || rawText;
-          usage = msg.usage;
-          aborted = !!msg.aborted;
+        switch (msg.kind) {
+          case 'text': {
+            rawText += msg.text;
+            const clear = detok.push(msg.text); // incremental de-tokenization, straddle-buffered
+            if (clear) yield { type: 'text', text: clear };
+            break;
+          }
+          case 'tool_use':
+            // De-tokenize tool args through the SAME vault handle before they leave llm/ (§5.7.1).
+            cb?.onToolEvent?.({ phase: 'started', tool: msg.tool, toolId: msg.toolId, args: detokJson(msg.args, handle) });
+            break;
+          case 'tool_result':
+            cb?.onToolEvent?.({ phase: 'finished', tool: msg.tool, toolId: msg.toolId, result: detokJson(msg.result, handle), isError: msg.isError });
+            break;
+          case 'session':
+            cb?.onSessionId?.(msg.sessionId);
+            break;
+          case 'usage':
+            cb?.onUsageDelta?.(msg.usage);
+            break;
+          case 'plan':
+            cb?.onPlanNotification?.();
+            break;
+          case 'final':
+            rawText = msg.text || rawText;
+            usage = msg.usage;
+            aborted = !!msg.aborted;
+            break;
         }
       }
       const tail = detok.end();

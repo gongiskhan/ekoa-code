@@ -1,0 +1,8 @@
+{
+  "name": "coding-agent",
+  "version": "1.0.0",
+  "description": "Base behavior for the coding agent: build conventions and app-data discipline",
+  "agents": ["coding"],
+  "mode": "eager",
+  "files": ["SKILL.md"]
+}

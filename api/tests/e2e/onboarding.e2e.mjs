@@ -2,25 +2,30 @@
 /**
  * Guided onboarding - live conversation smoke (ONB-4), integration-gated.
  *
- * The committed Playwright spec (ekoa/e2e/onboarding.spec.ts) proves the entry
+ * The committed Playwright spec (web/e2e/onboarding.spec.ts) proves the entry
  * flow deterministically with NO model call. This driver is the complementary
  * LIVE smoke: it opens a real onboarding-typed session and sends one turn
  * through the actual chat-agent, proving the server-side seam fires end-to-end
- * (session_id → owner-checked sessionType='onboarding' → onboarding-prompt
+ * (sessionId → owner-checked session type='onboarding' → onboarding catalog
  * injection → a grounded reply). It is INTEGRATION-GATED on claudeAuth health:
  * when the model credential is invalid/expired (GET /health → claudeAuth.ok
  * false) it prints SKIP and exits 0, so CI stays green while the deterministic
  * gates carry the correctness weight.
  *
- * The prompt ASSEMBLY (mechanism + vertical catalog + inventory, and the
- * non-onboarding no-op) is asserted deterministically by the unit test
- * cortex/tests/onboarding-prompt.test.ts - there is no HTTP surface that echoes
- * the assembled append, so here the grounding checks are SOFT (logged, never
- * fail) because live model wording varies.
+ * REST adaptation (2026-07-07, G7B, per spec/reference/test-audit.md §5.1):
+ * transport swapped from the retired action API (POST /api/v1/action,
+ * POST /api/v1/request, the global /api/v1/events trace stream - FIXED-2) to
+ * the typed REST surface (POST /api/v1/auth/login, POST /api/v1/sessions,
+ * POST /api/v1/chat/runs 202 {runId}, GET /api/v1/chat/runs/:id/events SSE,
+ * ch03 §3.8.7). Every assertion and SKIP gate carries; the retired `mode`
+ * routing enum and client-minted trace ids are dropped per ch03 §3.4.
  *
- * Auth + transport mirror scripts/chat-cancel-smoke.mjs: login via the action
- * API for a JWT, open the SSE stream, POST /api/v1/request, and read the
- * `complete` event for our trace. Run: node cortex/tests/e2e/onboarding.e2e.mjs
+ * The prompt ASSEMBLY (mechanism + vertical catalog + inventory, and the
+ * non-onboarding no-op) is asserted deterministically by unit tests - there is
+ * no HTTP surface that echoes the assembled append, so here the grounding
+ * checks are SOFT (logged, never fail) because live model wording varies.
+ *
+ * Run: node api/tests/e2e/onboarding.e2e.mjs
  */
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -30,8 +35,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'
 const PORT = (() => {
   try { return readFileSync(join(REPO_ROOT, 'backend.port'), 'utf-8').trim(); } catch { return '4111'; }
 })();
-// 127.0.0.1 (not localhost): cortex binds IPv4 (0.0.0.0); Node's fetch can
-// resolve `localhost` to IPv6 ::1, which is refused.
+// 127.0.0.1 (not localhost): the api binds IPv4; Node's fetch can resolve
+// `localhost` to IPv6 ::1, which is refused.
 const BASE = process.env.CORTEX_BASE || `http://127.0.0.1:${PORT}`;
 
 // Generous ceiling: a cold onboarding turn (interview reasoning + tool-less
@@ -50,57 +55,68 @@ function soft(name, passed, detail = '') {
 }
 
 let TOKEN = null;
-async function action(app, intent, params = {}) {
-  const r = await fetch(`${BASE}/api/v1/action`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) },
-    body: JSON.stringify({ app, intent, params, request_id: Math.random().toString(36).slice(2) }),
+const authHeaders = () => ({ 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) });
+
+async function rest(method, path, body) {
+  const r = await fetch(`${BASE}${path}`, {
+    method,
+    headers: authHeaders(),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const t = await r.text();
-  try { return JSON.parse(t); } catch { return { _raw: t, _status: r.status }; }
+  let json;
+  try { json = JSON.parse(t); } catch { json = { _raw: t }; }
+  return { status: r.status, json };
 }
 
 async function main() {
   // ---- Reachability + integration gate ------------------------------------
   const health = await fetch(`${BASE}/health`).catch(() => null);
   if (!health || !health.ok) {
-    console.log(`SKIP: cortex not reachable at ${BASE}/health - cannot run the live onboarding smoke.`);
+    console.log(`SKIP: api not reachable at ${BASE}/health - cannot run the live onboarding smoke.`);
     process.exit(0);
   }
   const healthJson = await health.json().catch(() => ({}));
   const claudeAuth = healthJson.claudeAuth || {};
   if (!claudeAuth.ok) {
     console.log(
-      `SKIP: claudeAuth not healthy (ok=${claudeAuth.ok}, source=${claudeAuth.source}, ` +
+      `SKIP: claudeAuth not healthy (ok=${claudeAuth.ok}, mode=${claudeAuth.mode || 'unset'}, ` +
       `lastRefreshError=${claudeAuth.lastRefreshError || 'none'}) - the live onboarding turn needs a valid model credential. ` +
-      `Remediate with \`npm run auth\` (interactive), then re-run.`,
+      `Remediate by configuring the credential custody (ch06 §6.2.4), then re-run.`,
     );
     process.exit(0);
   }
-  ok(`claudeAuth healthy (source=${claudeAuth.source}) - running the live onboarding turn`);
+  ok(`claudeAuth healthy (mode=${claudeAuth.mode}) - running the live onboarding turn`);
 
-  // ---- Login --------------------------------------------------------------
-  const login = await action('ekoa.auth', 'login', { username: 'admin', password: 'tmp12345', rememberMe: true });
-  TOKEN = login?.data?.token;
-  assert(TOKEN, `login failed: ${JSON.stringify(login).slice(0, 200)}`);
+  // ---- Login ----------------------------------------------------------------
+  const login = await rest('POST', '/api/v1/auth/login', { username: 'admin', password: 'tmp12345', rememberMe: true });
+  TOKEN = login.json?.token;
+  assert(TOKEN, `login failed (${login.status}): ${JSON.stringify(login.json).slice(0, 200)}`);
   ok('logged in (JWT acquired)');
 
   // ---- Create an onboarding-typed session (the seam keys off this) ---------
-  const created = await action('ekoa.sessions', 'create', { type: 'onboarding', name: 'Orientação guiada (e2e)' });
-  const sessionId = created?.data?.id;
-  assert(sessionId, `could not create onboarding session: ${JSON.stringify(created).slice(0, 200)}`);
-  assert(created.data.type === 'onboarding', `session type not persisted as onboarding (got ${created.data.type})`);
+  const created = await rest('POST', '/api/v1/sessions', { type: 'onboarding', name: 'Orientação guiada (e2e)' });
+  const sessionId = created.json?.id;
+  assert(sessionId, `could not create onboarding session (${created.status}): ${JSON.stringify(created.json).slice(0, 200)}`);
+  assert(created.json.type === 'onboarding', `session type not persisted as onboarding (got ${created.json.type})`);
   ok(`onboarding session created (${sessionId})`);
 
-  const traceId = 'onb-e2e-' + Math.random().toString(36).slice(2);
+  // ---- Fire one onboarding turn (202 + server-minted runId, ch03 §3.8.7) ---
+  console.log(`>>> POST /api/v1/chat/runs (onboarding turn) on ${sessionId}`);
+  const createdRun = await rest('POST', '/api/v1/chat/runs', {
+    sessionId, message: PT_MESSAGE, language: 'pt',
+  });
+  const runId = createdRun.json?.runId;
+  assert(createdRun.status === 202 && runId, `run not accepted (${createdRun.status}): ${JSON.stringify(createdRun.json).slice(0, 200)}`);
+  ok(`run accepted (202, runId ${runId})`);
 
-  // ---- Open the SSE stream and watch our trace ----------------------------
+  // ---- Watch the run's SSE stream ------------------------------------------
   const evCtrl = new AbortController();
-  const seen = { routing: false, firstStreamAt: 0, complete: false, error: null };
+  const seen = { firstStreamAt: 0, complete: false, error: null };
   let streamText = '';
   let resultText = '';
   const ssePromise = (async () => {
-    const res = await fetch(`${BASE}/api/v1/events?token=${encodeURIComponent(TOKEN)}`, {
+    const res = await fetch(`${BASE}/api/v1/chat/runs/${runId}/events?token=${encodeURIComponent(TOKEN)}`, {
       headers: { Accept: 'text/event-stream' }, signal: evCtrl.signal,
     });
     const reader = res.body.getReader();
@@ -117,33 +133,16 @@ async function main() {
           const line = f.split('\n').find((l) => l.startsWith('data:'));
           if (!line) continue;
           let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-          if (ev.trace_id !== traceId) continue;
-          if (ev.type === 'routing') seen.routing = true;
-          if (ev.type === 'stream') {
+          if (ev.type === 'text_chunk') {
             if (!seen.firstStreamAt) seen.firstStreamAt = Date.now();
-            streamText += (ev.content || ev.text || ev.delta || '');
+            streamText += (ev.text || '');
           }
-          if (ev.type === 'complete') { seen.complete = true; resultText = String(ev.result || ev.content || ''); }
-          if (ev.type === 'error') seen.error = String(ev.error || 'unknown error');
+          if (ev.type === 'complete') { seen.complete = true; resultText = String(ev.result || ''); }
+          if (ev.type === 'error') seen.error = `${ev.code || 'ERROR'}: ${ev.message || 'unknown error'}`;
         }
       }
     } catch { /* aborted on teardown */ }
   })();
-
-  // Give the SSE a beat to connect before firing the request.
-  await sleep(500);
-
-  // ---- Fire one onboarding turn ------------------------------------------
-  console.log(`>>> POST /api/v1/request (onboarding turn) on ${sessionId}`);
-  const reqRes = await fetch(`${BASE}/api/v1/request`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({
-      message: PT_MESSAGE, session_id: sessionId, trace_id: traceId, mode: 'auto', metadata: { language: 'pt' },
-    }),
-  });
-  const accepted = await reqRes.json().catch(() => ({}));
-  assert(accepted.status === 'accepted', `request not accepted: ${JSON.stringify(accepted).slice(0, 200)}`);
 
   // ---- Wait for completion (or a clean skip on model failure) -------------
   const t0 = Date.now();
@@ -157,7 +156,7 @@ async function main() {
     // A provider/engine failure mid-run is an environment condition, not an
     // onboarding regression - skip cleanly (like the health gate) rather than
     // fail the suite on an infra hiccup.
-    await action('ekoa.sessions', 'delete', { sessionId }).catch(() => {});
+    await rest('DELETE', `/api/v1/sessions/${sessionId}`).catch(() => {});
     console.log(`SKIP: the model run errored (${seen.error}). Onboarding wiring untested this run; deterministic gates unaffected.`);
     process.exit(0);
   }
@@ -178,7 +177,7 @@ async function main() {
   console.log('  --- reply sample ---\n  ' + reply.slice(0, 280).replace(/\n+/g, ' '));
 
   // ---- Cleanup ------------------------------------------------------------
-  await action('ekoa.sessions', 'delete', { sessionId }).catch(() => {});
+  await rest('DELETE', `/api/v1/sessions/${sessionId}`).catch(() => {});
   ok('cleaned up the e2e onboarding session');
 
   console.log('\nE2E PASS: live onboarding turn completed on an onboarding-typed session (seam fired, non-empty grounded reply).');

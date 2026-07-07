@@ -1,0 +1,8 @@
+{
+  "name": "legal-spine",
+  "version": "1.0.0",
+  "description": "Legal Edition shared-data spine contract, loaded on-demand for legal builds",
+  "agents": ["coding"],
+  "mode": "on-demand",
+  "files": ["SKILL.md"]
+}

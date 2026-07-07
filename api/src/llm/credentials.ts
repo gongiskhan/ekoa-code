@@ -244,25 +244,39 @@ export function claudeAuthStatus(): ClaudeAuthStatus {
   return status;
 }
 
+/** Per-run environment shaping options (ch05 §5.4.1). */
+export interface SubprocessEnvOptions {
+  /** Build runs set `HOME = projectDir`, confining `~` expansion to the sandbox (§5.4.1). */
+  homeDir?: string;
+  /** Agent-face runs raise `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (§5.4.1, default 180 000 ms). */
+  streamCloseTimeoutMs?: number;
+}
+
 /**
  * Build the SDK subprocess env for the current mode: start from a scrubbed clone of the
  * inherited env (no provider auth/base-url leaks), inject the configured credential
  * (`CLAUDE_CODE_OAUTH_TOKEN` for oauth, `ANTHROPIC_API_KEY` for api-key), and point the
  * subprocess at the chokepoint via `ANTHROPIC_BASE_URL` (ch05 §5.4.1; FIXED-13). Every SDK
- * subprocess call thereby funnels through the chokepoint.
+ * subprocess call thereby funnels through the chokepoint. Additionally (§5.4.1): `CLAUDECODE`
+ * is deleted (prevents nested-session detection), `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS='1'`
+ * is set, build runs get `HOME = projectDir`, and agent-face runs raise the stream-close timeout.
  */
-export async function buildSubprocessEnv(): Promise<Record<string, string>> {
+export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promise<Record<string, string>> {
   const secret = await getSecret();
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
     if (SCRUBBED_PROVIDER_ENV.includes(k)) continue;
+    if (k === 'CLAUDECODE') continue; // deleted: prevents nested-session detection (§5.4.1)
     env[k] = v;
   }
   const mode = cached!.mode;
   if (mode === 'oauth') env.CLAUDE_CODE_OAUTH_TOKEN = secret;
   else env.ANTHROPIC_API_KEY = secret;
   env.ANTHROPIC_BASE_URL = loadConfig().llmChokepointBaseUrl;
+  env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
+  if (opts.homeDir) env.HOME = opts.homeDir;
+  if (opts.streamCloseTimeoutMs !== undefined) env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(opts.streamCloseTimeoutMs);
   return env;
 }
 

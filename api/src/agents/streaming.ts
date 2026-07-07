@@ -1,0 +1,120 @@
+/**
+ * The streaming pipeline (ch05 §5.7.1): the one internal sink `agents/` writes to, which maps
+ * run activity to the typed `shared/events.ts` union members and hands them to `events/` for
+ * SSE delivery. Every payload emitted here is a valid member of its per-stream union (the ch13
+ * streaming-contract gate). `subagent_event`, `phase_changed`, and `usage_progress` are NEVER
+ * emitted (§5.7.3, P-11): plan/subtask notifications are consumed internally (they reset the
+ * inactivity timer) and usage deltas feed billing capture only.
+ *
+ * Terminal events (`complete`/`error`) go through the dual-fire guard at the call site
+ * (registry.finalizeOnce, §5.3.4), never here.
+ */
+import { sseManager } from '../events/sse-manager.js';
+import { loadAgentsConfig } from '../config.js';
+import type { ChatRunEvent, JobEvent, NotificationEvent } from '@ekoa/shared';
+
+/** Truncate a tool arg/result value's string form to the configured cap (§5.7.1). */
+function truncate(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  const cap = loadAgentsConfig().toolResultTruncateChars;
+  const s = typeof value === 'string' ? value : JSON.stringify(value);
+  if (s === undefined) return value;
+  return s.length > cap ? s.slice(0, cap) : s;
+}
+
+/** A tool_event payload (shared by chat + job streams). */
+export interface ToolEventInput {
+  phase: 'started' | 'finished' | 'failed';
+  tool: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  isError?: boolean;
+  durationMs?: number;
+}
+
+function toolEventPayload(e: ToolEventInput): Record<string, unknown> {
+  return {
+    type: 'tool_event',
+    phase: e.phase,
+    tool: e.tool,
+    ...(e.args !== undefined ? { args: e.args } : {}),
+    ...(e.result !== undefined ? { result: truncate(e.result) } : {}),
+    ...(e.isError !== undefined ? { isError: e.isError } : {}),
+    ...(e.durationMs !== undefined ? { durationMs: e.durationMs } : {}),
+  };
+}
+
+/** Chat-run stream sink (§3.6.1 `ChatRunEvent`). */
+export class ChatStreamSink {
+  constructor(private runId: string) {}
+  private emit(ev: ChatRunEvent): void {
+    sseManager.emit('chat', this.runId, ev.type, ev);
+  }
+  text(text: string): void {
+    if (text) this.emit({ type: 'text_chunk', text });
+  }
+  toolEvent(e: ToolEventInput): void {
+    this.emit(toolEventPayload(e) as ChatRunEvent);
+  }
+  contextEvent(name: string, action: 'loaded' | 'used'): void {
+    this.emit({ type: 'context_event', name, action });
+  }
+  complete(result: unknown, durationMs: number, delegate?: { kind: 'build' | 'integration'; request: Record<string, unknown> }): void {
+    this.emit({ type: 'complete', result, durationMs, ...(delegate ? { delegate } : {}) });
+  }
+  error(code: string, message: string): void {
+    this.emit({ type: 'error', code, message });
+  }
+}
+
+/** Job stream sink (§3.6.2 `JobEvent`). */
+export class JobStreamSink {
+  constructor(private jobId: string) {}
+  private emit(ev: JobEvent): void {
+    sseManager.emit('job', this.jobId, ev.type, ev);
+  }
+  routing(tier: string, reason: string): void {
+    this.emit({ type: 'routing', tier, reason });
+  }
+  text(text: string): void {
+    if (text) this.emit({ type: 'text_chunk', text });
+  }
+  toolEvent(e: ToolEventInput): void {
+    this.emit(toolEventPayload(e) as JobEvent);
+  }
+  contextEvent(name: string, action: 'loaded' | 'used'): void {
+    this.emit({ type: 'context_event', name, action });
+  }
+  planStep(status: string, description?: string, detail?: string): void {
+    this.emit({ type: 'plan_step', status, ...(description ? { description } : {}), ...(detail ? { detail } : {}) });
+  }
+  previewReload(): void {
+    this.emit({ type: 'preview_reload' });
+  }
+  complete(payload: { result?: unknown; artifactId?: string; slug?: string; appUrl?: string }, durationMs: number): void {
+    this.emit({ type: 'complete', durationMs, ...payload });
+  }
+  error(code: string, message: string): void {
+    this.emit({ type: 'error', code, message });
+  }
+}
+
+// --- Notifications channel (§3.6.4 `NotificationEvent`) -----------------------------------
+
+/** Fire a `build_intent` on the target user's notifications channel (§5.7.2). */
+export function emitBuildIntent(userId: string, ev: { sessionId: string; sourceRunId: string; request: { description: string; artifactId?: string } }): void {
+  const payload: NotificationEvent = { type: 'build_intent', ...ev };
+  sseManager.emit('notifications', userId, 'build_intent', payload);
+}
+
+/** Fire an `integration_build_intent` on the target user's notifications channel (§5.7.2). */
+export function emitIntegrationBuildIntent(userId: string, ev: { sessionId: string; hint?: string }): void {
+  const payload: NotificationEvent = { type: 'integration_build_intent', ...ev };
+  sseManager.emit('notifications', userId, 'integration_build_intent', payload);
+}
+
+/** Deliver a `chat_answer` on the notifications channel (§5.6.2 in-build answer flow). */
+export function emitChatAnswer(userId: string, ev: { sessionId: string; sourceRunId: string; text: string }): void {
+  const payload: NotificationEvent = { type: 'chat_answer', ...ev };
+  sseManager.emit('notifications', userId, 'chat_answer', payload);
+}

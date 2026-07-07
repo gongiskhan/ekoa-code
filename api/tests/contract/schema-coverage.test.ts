@@ -26,6 +26,9 @@ const COVERED = new Set<string>([
   // G4 — integrations + knowledge (partial: configs CRUD + sources CRUD + uploads list)
   'integrations.listConfigs', 'integrations.createConfig', 'integrations.updateConfig', 'integrations.deleteSkill',
   'knowledge.listSources', 'knowledge.createSource', 'knowledge.deleteSource', 'knowledge.listUploads',
+  // G7B — knowledge vault + lexical index (knowledge.test.ts)
+  'knowledge.listCollections', 'knowledge.listDocuments', 'knowledge.createDocument', 'knowledge.deleteDocument',
+  'knowledge.createUpload', 'knowledge.deleteUpload', 'knowledge.reindex', 'knowledge.indexStatus',
   // G5 — triggers + webhook ingress + notifications SSE
   'triggers.list', 'triggers.create', 'triggers.delete', 'triggers.webhookIngressPost', 'triggers.webhookIngressGet',
   'notifications.events',
@@ -51,6 +54,9 @@ const COVERED = new Set<string>([
   'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge',
   // G6 — integration definitions registry (integration-definitions.test.ts)
   'integrations.list', 'integrations.listActive', 'integrations.refresh',
+  // G7B — agent execution: chat runs + build jobs (chat.test.ts, jobs.test.ts)
+  'chat.createRun', 'chat.getRun', 'chat.runEvents', 'chat.cancelRun',
+  'jobs.create', 'jobs.get', 'jobs.cancel', 'jobs.events',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
@@ -58,7 +64,11 @@ const COVERED = new Set<string>([
 // a NEW endpoint added to shared/ without being COVERED bumps the count and fails the gate.
 // G5->G6: 148->95; G6->G7: 95->88 (7 billing write/admin endpoints) as the full served-app plane, artifact family, legal vertical, and
 // integration-definitions surfaces landed with their contract tests (53 endpoints newly covered).
-const EXPECTED_PENDING_COUNT = 88;
+// G7->G7B: 88->80 as the knowledge vault + lexical index surface landed (8 endpoints: collections,
+// documents list/ingest/delete, uploads create/delete, reindex, index-status). Knowledge crawl
+// endpoints (updateSource, crawlSource, crawlStatus, refreshSchedule) remain PENDING for the crawl gate.
+// G7B agent-execution: 80->72 as chat runs (4) + build jobs (4) landed with their contract tests.
+const EXPECTED_PENDING_COUNT = 72;
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {

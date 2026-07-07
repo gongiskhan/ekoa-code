@@ -103,7 +103,13 @@
         "claude": "approve-after-fixes+reverified",
         "codex": "approve (3C+1H+1M fixed)"
       },
-      "tag": "gate-7a"
+      "tag": "gate-7a",
+      "postGateRepair": "a605a10 lane repair at resume (garrison comment literals + stale channel test refs); full ci:lane + e2e:server re-verified green"
+    },
+    "phase-7b": {
+      "gate": "G7B",
+      "status": "in_progress",
+      "resumedBy": "session ac243460 (Fable 5), 2026-07-07T04:40Z"
     }
   },
   "globalGate": {

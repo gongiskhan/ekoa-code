@@ -55,6 +55,22 @@ import { designTokensHandler } from './services/design-tokens.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
 import { artifactsRouter } from './routes/artifacts.js';
+// G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
+// boot obligations (content ingest, knowledge backfill, orphan sweep).
+import { chatRouter } from './routes/chat.js';
+import { jobsRouter } from './routes/jobs.js';
+import {
+  setAssembleAgentContext,
+  setKnowledgeGrounding,
+  setVerifyRunner,
+  setBuildMechanics,
+  sweepOrphans,
+} from './agents/index.js';
+import { assembleAgentContext, bootContentLoader, configureContentLoader } from './content/index.js';
+import { backfillKnowledgeIndex, buildGroundingBlock } from './knowledge/index.js';
+import { verifyRunner } from './apps/verify-runner.js';
+import { createBuildMechanics } from './apps/build-mechanics.js';
+import { logActivity } from './data/activity.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -83,6 +99,29 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // Usage push seam (§6.7, ch02 §2.8 seam 1): billing/ never imports events/, so the composition
   // root injects the notifier that pushes `usage_updated` on the billee's notifications channel.
   setUsageNotifier(usageUpdatedNotifier);
+
+  // G7B — agent-execution seams (ch02 §2.8, ch05 §5.5/§5.6.2). agents/ codes against typed seams;
+  // the composition root binds the real collaborators (structural binding is where the shapes are
+  // checked). server.ts is the only file that may reach across these seams.
+  setAssembleAgentContext(assembleAgentContext); // content loader (ch08 §8.3.2, ch05 §5.5.1)
+  // Knowledge grounding (ch08 §8.4 slot 5): buildGroundingBlock already applies the chat-always /
+  // build-only-legal rule internally, so the adapter only maps agentKind → its chat|build kind.
+  setKnowledgeGrounding(async ({ orgId, query, agentKind }) =>
+    buildGroundingBlock({ orgId, query, kind: agentKind === 'chat' ? 'chat' : 'build' }).block,
+  );
+  setVerifyRunner(verifyRunner); // per-build verification (ch07 §7.2.6)
+  setBuildMechanics(createBuildMechanics(deps)); // the G6 build pipeline (ch07 §7.2-§7.4)
+  // Integration pre-fetch (§5.5.2 layer 3) + automation catalog (layer 4) land at G8 — an honest
+  // cross-gate deferral; both keep their safe empty defaults until then.
+
+  // content/ audit write path (FIXED-8, ch08): the loader reaches data/ logActivity ONLY through
+  // this injected seam, wired BEFORE boot ingest. Fire-and-forget — an audit hiccup never blocks
+  // content IO.
+  configureContentLoader({
+    audit: ({ type, metadata }) => {
+      void logActivity({ userId: 'system', username: 'system', orgId: '' }, 'execute', type, deps, metadata).catch(() => undefined);
+    },
+  });
 
   // Webhook ingress mounts FIRST with its own raw-body parser, BELOW/BEFORE the JSON parser,
   // so the HMAC verifier sees unmodified bytes (ch09 invariant 9 step 6).
@@ -155,6 +194,10 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/memories', memoriesRouter(deps));
   app.use('/api/v1/registo', registoRouter(deps));
   app.use('/api/v1/billing', billingRouter(deps));
+  // G7B — agent execution: chat runs + build/brand-research jobs (ch03 §3.8.7-8). The router
+  // internal paths determine the surface: /api/v1/chat/runs, /api/v1/jobs.
+  app.use('/api/v1/chat', chatRouter(deps));
+  app.use('/api/v1/jobs', jobsRouter(deps));
   // G7 — the ekoa-local LLM gateway sub-app (ch03 §3.10; metering inside the chokepoint,
   // §6.5.4). Mounted at /api/v1/llm; the owner-bypass token verifier is injected (llm/ needs
   // no auth/ import — the gateway takes it as a dep). Bills wire-tier FAST per proxied call.
@@ -213,6 +256,15 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active })));
   await loadRevocations(Math.floor(deps.now() / 1000));
   await loadCredential(); // G7: load the central model credential (§6.2; no-op when unconfigured)
+
+  // G7B — agent-execution boot obligations (ch08 §8.3.1, ch04 §4.4.1, ch05 §5.2.1). All three are
+  // resilient on a fresh/empty data directory: content ingest ensures its dirs, the knowledge
+  // backfill ensures the index dir and no-ops on an already-populated index, and the orphan sweep
+  // finds nothing to sweep. Ordered after connectMongo (the sweep + backfill read collections).
+  await bootContentLoader();
+  await backfillKnowledgeIndex();
+  await sweepOrphans(deps.now);
+
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;
   if (seedUser && seedPass) await seedAdmin(seedUser, seedPass, deps);

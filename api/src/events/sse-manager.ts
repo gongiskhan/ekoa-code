@@ -46,7 +46,10 @@ export class SseManager {
     this.writeFrame(res, { id: ++this.seq, type: 'ready', data: { stream, id: streamId } });
 
     const keepalive = setInterval(() => res.write(': keepalive\n\n'), KEEPALIVE_MS);
-    const client: Client = { res, userId, stream, keepalive };
+    // Match `emit`, which targets clients by the composite `${stream}:${streamId}` key. Storing
+    // the bare stream name here meant live pushes never matched an attached client (only ring
+    // replay on reconnect worked); the composite makes live delivery work (G7B).
+    const client: Client = { res, userId, stream: `${stream}:${streamId}`, keepalive };
     this.clients.add(client);
     res.on('close', () => {
       clearInterval(keepalive);

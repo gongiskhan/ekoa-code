@@ -23,10 +23,10 @@ Brief: build production-ready rc-1 of the rebuilt Ekoa platform (api/, web/, sha
 | 5 | phase-3 | G3 Platform CRUD: users/org/orgs/settings/sessions/memories/uploads/billing-reads/Registo + audit path | mixed | serial | passed |
 | 6 | phase-4 | G4 Integrations + knowledge: OAuth, platform caller, Pipedream, e-sign, vault/FTS5, SSRF guard | mixed | serial | passed |
 | 7 | phase-5 | G5 Push infra: SSE manager, SQLite queue, webhook ingress, triggers | mixed | serial | passed |
-| 8 | phase-6 | G6 App pipeline + served-app plane + legal vertical (largest; 37-spec byte-compat gate) | mixed | serial | in_progress |
-| 9 | phase-7 | G7 LLM chokepoint core + billing metering + rate/spend caps | mixed | serial | pending |
-| 10 | phase-7a | G7A Anonymisation layer: detectors, vault, streaming de-tok, audit, payload-capture harness | mixed | serial | pending |
-| 11 | phase-7b | G7B Agent execution: content loader, jobs, SDK-via-chokepoint, build-verify, memory-extract | mixed | serial | pending |
+| 8 | phase-6 | G6 App pipeline + served-app plane + legal vertical (largest; 37-spec byte-compat gate) | mixed | serial | passed |
+| 9 | phase-7 | G7 LLM chokepoint core + billing metering + rate/spend caps | mixed | serial | passed |
+| 10 | phase-7a | G7A Anonymisation layer: detectors, vault, streaming de-tok, audit, payload-capture harness | mixed | serial | passed |
+| 11 | phase-7b | G7B Agent execution: content loader, jobs, SDK-via-chokepoint, build-verify, memory-extract | mixed | serial | in_progress |
 | 12 | phase-8 | G8 Automation engine + canvas streaming carve-out | mixed | serial | pending |
 | 13 | phase-8a | G8A Delegation + bridge + provider endpoint + fake-daemon harness (S1-S6) | mixed | serial | pending |
 | 14 | phase-9 | G9 Web client migration into web/ (typed client, FC fates, Amendment 2 surfaces; full ledger due) | ui | serial | pending |

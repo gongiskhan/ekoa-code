@@ -32,6 +32,33 @@ export interface LlmConfig {
   gatewayEnabled: boolean;
 }
 
+/** Agent-execution tunables (ch05 §5.4.7). Named config values, never inline literals; every
+ *  default carries today's value. Read by `agents/` (timers, turn ceilings, reservation TTL,
+ *  the memory-extract kill switch, tool_event truncation). */
+export interface AgentsConfig {
+  /** 5.3.6 chat run timer. */
+  chatRunTimeoutMs: number;
+  /** 5.3.6 build inactivity timer (reset on every stream/tool callback). */
+  buildInactivityTimeoutMs: number;
+  /** 5.3.6 build absolute wall-clock ceiling. */
+  buildWallClockMs: number;
+  /** 5.3.3 first-build reservation TTL (wall clock + 5 min margin). */
+  firstBuildReservationTtlMs: number;
+  /** 5.4.4 build maxTurns. */
+  maxTurnsBuild: number;
+  /** 5.4.4 text/chat/one-shot maxTurns. */
+  maxTurnsText: number;
+  /** 5.4.2 transient-provider retry backoff. */
+  transientRetryBackoffMs: number[];
+  /** 5.4.1 agent-face stream-close timeout. */
+  agentFaceStreamCloseTimeoutMs: number;
+  /** P-12 (5.8) platform kill switch for automatic memory extraction. The per-user
+   *  `memory.autoExtract` toggle (default ON) rides user settings and gates independently. */
+  memoryAutoExtractEnabled: boolean;
+  /** 5.7.1 tool_event result/args truncation length. */
+  toolResultTruncateChars: number;
+}
+
 export interface Config {
   port: number;
   jwtSecret: string;
@@ -63,6 +90,41 @@ export function defaultLlmConfig(): LlmConfig {
     gatewayApiKey: process.env.LLM_GATEWAY_API_KEY || undefined,
     gatewayEnabled: process.env.LLM_GATEWAY_ENABLED !== 'false',
   };
+}
+
+/** Parse a positive integer env override, falling back to `dflt` on unset/invalid. */
+function envInt(name: string, dflt: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return dflt;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : dflt;
+}
+
+/** Build the agent-execution config (ch05 §5.4.7) from env. Kept as a standalone memoized
+ *  loader (like `defaultLlmConfig`) rather than a field on `Config`, so the many bare-`Config`
+ *  literals in the suite stay valid; `agents/` reads it via `loadAgentsConfig()`. */
+export function defaultAgentsConfig(): AgentsConfig {
+  return {
+    chatRunTimeoutMs: envInt('CHAT_RUN_TIMEOUT_MS', 300_000),
+    buildInactivityTimeoutMs: envInt('BUILD_INACTIVITY_TIMEOUT_MS', 300_000),
+    buildWallClockMs: envInt('BUILD_WALL_CLOCK_MS', 2_400_000),
+    firstBuildReservationTtlMs: envInt('FIRST_BUILD_RESERVATION_TTL_MS', 2_700_000),
+    maxTurnsBuild: envInt('MAX_TURNS_BUILD', 100),
+    maxTurnsText: envInt('MAX_TURNS_TEXT', 30),
+    transientRetryBackoffMs: [envInt('TRANSIENT_RETRY_BACKOFF_MS_1', 5_000), envInt('TRANSIENT_RETRY_BACKOFF_MS_2', 15_000)],
+    agentFaceStreamCloseTimeoutMs: envInt('AGENT_FACE_STREAM_CLOSE_TIMEOUT_MS', 180_000),
+    memoryAutoExtractEnabled: process.env.MEMORY_AUTO_EXTRACT_ENABLED !== 'false',
+    toolResultTruncateChars: envInt('TOOL_RESULT_TRUNCATE_CHARS', 200),
+  };
+}
+
+let cachedAgents: AgentsConfig | undefined;
+export function loadAgentsConfig(): AgentsConfig {
+  if (!cachedAgents) cachedAgents = defaultAgentsConfig();
+  return cachedAgents;
+}
+export function __resetAgentsConfigForTests(): void {
+  cachedAgents = undefined;
 }
 
 class ConfigError extends Error {}

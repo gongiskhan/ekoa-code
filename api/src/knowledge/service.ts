@@ -1,13 +1,24 @@
 /**
- * Knowledge service (ch03 §3.8.20, ch04 §4.4.1). Org-partitioned: the firm's documents
- * never pool across orgs. Sources carry a user-supplied URL and are SSRF-validated at write
- * time (ch09 invariant 8). The vault + FTS index are a filesystem/SQLite exception (built
- * out in the ingest phase); this phase lands the org-scoped source/document CRUD surface.
+ * Knowledge service (ch03 §3.8.20, ch04 §4.4.1). Org-partitioned throughout: a firm's documents
+ * never pool across orgs. Two concerns compose here:
+ *  - Sources (G4): a user-supplied URL, SSRF-validated at write time (ch09 invariant 8).
+ *  - The vault + lexical index (this slice): the filesystem markdown corpus and its FTS5 index,
+ *    a deliberate filesystem/SQLite exception (§4.4.1). The service is the orchestrator — it owns
+ *    the write/delete hooks that keep the index in step with the vault, plus uploads and the
+ *    org-admin heal operations (reindex, index-status) and the startup backfill.
+ *
+ * knowledge/ has NO import path to llm/ (CLAUDE.md, FIXED-3). The grounding builder lives beside
+ * this module and is consumed by agents/, not by any REST route.
  */
 import { knowledgeSources, knowledgeUploads } from '../data/stores.js';
 import { assertSafeUrl, SsrfError } from '../services/url-safety.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
+import * as vault from './vault.js';
+import * as index from './index-store.js';
+import { PathSafetyError, uploadBlobPath, uploadsDir, knowledgeRoot } from './paths.js';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { relative } from 'node:path';
 
 export interface KnowledgeSourceDoc extends Doc {
   orgId: string;
@@ -17,6 +28,18 @@ export interface KnowledgeSourceDoc extends Doc {
   crawlConfig?: Record<string, unknown>;
 }
 
+export interface KnowledgeUploadDoc extends Doc {
+  orgId: string;
+  filename: string;
+  collection?: string;
+  docIds: string[];
+  status: string;
+  size?: number;
+  contentType?: string;
+  storedPath?: string; // storage-relative (P-07)
+  createdAt?: string;
+}
+
 export interface Deps { now: () => number; genId: () => string }
 
 export class KnowledgeError extends Error {
@@ -24,6 +47,8 @@ export class KnowledgeError extends Error {
     super(message);
   }
 }
+
+// --- Sources (G4, unchanged) ---------------------------------------------------------------
 
 export function sourceView(s: KnowledgeSourceDoc) {
   return { id: s._id, url: s.url, kind: s.kind, seedId: s.seedId };
@@ -59,6 +84,209 @@ export async function deleteSource(actor: Actor, id: string): Promise<boolean> {
   return knowledgeSources.delete(id);
 }
 
+// --- Vault documents (this slice) -----------------------------------------------------------
+
+export interface CreateDocumentInput {
+  collection: string;
+  title: string;
+  text: string;
+  sourceUrl?: string;
+  sourceType?: string;
+  language?: string;
+}
+
+function toSummary(d: vault.VaultDoc, now?: string) {
+  return {
+    id: d.docId,
+    collection: d.collection,
+    title: d.title,
+    sourceUrl: d.sourceUrl,
+    sourceType: d.sourceType,
+    language: d.language,
+    size: d.size,
+    createdAt: d.createdAt || now,
+  };
+}
+
+/** Ingest a document: write the vault file, then run the index write hook. Returns the id. */
+export async function ingestDocument(actor: Actor, input: CreateDocumentInput, deps: Deps): Promise<{ id: string }> {
+  const docId = deps.genId();
+  const createdAt = new Date(deps.now()).toISOString();
+  const fm: vault.DocFrontmatter = {
+    title: input.title,
+    sourceUrl: input.sourceUrl,
+    sourceType: input.sourceType,
+    language: input.language,
+    createdAt,
+  };
+  try {
+    await vault.writeDoc(actor.orgId, input.collection, docId, fm, input.text);
+  } catch (e) {
+    if (e instanceof PathSafetyError) throw new KnowledgeError('VALIDATION_FAILED', 400, 'Coleção inválida.');
+    throw e;
+  }
+  index.indexDoc({
+    orgId: actor.orgId,
+    collection: input.collection,
+    docId,
+    title: input.title,
+    body: input.text,
+    createdAt,
+    sourceUrl: input.sourceUrl,
+    sourceType: input.sourceType,
+    language: input.language,
+  });
+  return { id: docId };
+}
+
+export async function listDocuments(
+  actor: Actor,
+  opts: { collection?: string; offset?: number; limit?: number },
+): Promise<{ items: ReturnType<typeof toSummary>[]; total: number }> {
+  const { items, total } = await vault.listDocs(actor.orgId, opts);
+  return { items: items.map((d) => toSummary(d)), total };
+}
+
+export async function listCollections(actor: Actor): Promise<string[]> {
+  return vault.listCollections(actor.orgId);
+}
+
+/** Delete a document: remove the vault file + the index row. */
+export async function deleteDocument(actor: Actor, collection: string, docId: string): Promise<boolean> {
+  let removed = false;
+  try {
+    removed = await vault.deleteDoc(actor.orgId, collection, docId);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return false;
+    throw e;
+  }
+  index.removeDoc(actor.orgId, collection, docId);
+  return removed;
+}
+
+// --- Uploads (this slice) -------------------------------------------------------------------
+
+const TEXT_EXTENSIONS = ['.md', '.txt', '.markdown'];
+
+function isTextUpload(filename: string, contentType: string): boolean {
+  const lower = filename.toLowerCase();
+  if (TEXT_EXTENSIONS.some((e) => lower.endsWith(e))) return true;
+  return contentType.startsWith('text/') || contentType === 'text/markdown';
+}
+
+/** Store a raw upload blob (org-scoped), register it, and — for plain text/markdown — ingest its
+ *  text into the vault so it becomes searchable. Other formats are registered honestly as
+ *  `unindexed` (no silent partial indexing). */
+export async function createUpload(
+  actor: Actor,
+  input: { filename: string; collection?: string; contentType: string; bytes: Buffer },
+  deps: Deps,
+): Promise<{ uploadId: string; filename: string; collection?: string; status: string; docsIndexed: number }> {
+  const uploadId = deps.genId();
+  const createdAt = new Date(deps.now()).toISOString();
+  await mkdir(uploadsDir(actor.orgId), { recursive: true });
+  const blobPath = uploadBlobPath(actor.orgId, uploadId);
+  await writeFile(blobPath, input.bytes);
+
+  const docIds: string[] = [];
+  let status: string;
+  if (isTextUpload(input.filename, input.contentType)) {
+    const collection = input.collection || 'uploads';
+    const { id } = await ingestDocument(
+      actor,
+      { collection, title: input.filename, text: input.bytes.toString('utf8'), sourceType: 'upload' },
+      deps,
+    );
+    docIds.push(id);
+    status = 'indexed';
+  } else {
+    // Registered but not indexed — v1 ingests plain text/markdown only (spec §3.8.20 upload row).
+    status = 'registered';
+  }
+
+  const row: KnowledgeUploadDoc = {
+    _id: uploadId,
+    orgId: actor.orgId,
+    filename: input.filename,
+    collection: input.collection,
+    docIds,
+    status,
+    size: input.bytes.length,
+    contentType: input.contentType,
+    storedPath: relative(knowledgeRoot(), blobPath),
+    createdAt,
+  };
+  await knowledgeUploads.insert(row as never);
+  return { uploadId, filename: input.filename, collection: input.collection, status, docsIndexed: docIds.length };
+}
+
 export async function listUploads(actor: Actor) {
   return knowledgeUploads.find({ orgId: actor.orgId });
+}
+
+/** Delete an upload: unindex its ingested docs, remove the blob, drop the registry row. */
+export async function deleteUpload(actor: Actor, id: string): Promise<{ removed: boolean; docsRemoved: number }> {
+  const row = (await knowledgeUploads.get(id)) as KnowledgeUploadDoc | null;
+  if (!row || row.orgId !== actor.orgId) return { removed: false, docsRemoved: 0 }; // cross-org → uniform not-found
+  let docsRemoved = 0;
+  const collection = row.collection || 'uploads';
+  for (const docId of row.docIds ?? []) {
+    if (await deleteDocument(actor, collection, docId)) docsRemoved++;
+  }
+  await rm(uploadBlobPath(actor.orgId, id), { force: true }).catch(() => {});
+  await knowledgeUploads.delete(id);
+  return { removed: true, docsRemoved };
+}
+
+// --- Heal operations (org-admin) + startup backfill ----------------------------------------
+
+/** Rebuild one org's index from its vault (admin heal). Synchronous + deterministic in v1;
+ *  clears the org partition then re-indexes every vault file. */
+export async function reindexOrg(actor: Actor): Promise<{ started: boolean }> {
+  await index.ensureIndexDir();
+  index.clearOrg(actor.orgId);
+  await indexOrgFromVault(actor.orgId);
+  return { started: true };
+}
+
+export function indexStatus(actor: Actor): { status: string; documentCount: number; collectionCount: number } {
+  const s = index.orgStatus(actor.orgId);
+  return { status: 'ready', documentCount: s.documentCount, collectionCount: s.collectionCount };
+}
+
+/** Read every vault file for an org and (re)index it. */
+async function indexOrgFromVault(orgId: string): Promise<number> {
+  const docs = await vault.listAllDocs(orgId);
+  let n = 0;
+  for (const d of docs) {
+    const parsed = await vault.readDoc(orgId, d.collection, d.docId);
+    if (!parsed) continue;
+    index.indexDoc({
+      orgId,
+      collection: d.collection,
+      docId: d.docId,
+      title: parsed.fm.title,
+      body: parsed.body,
+      createdAt: parsed.fm.createdAt,
+      sourceUrl: parsed.fm.sourceUrl,
+      sourceType: parsed.fm.sourceType,
+      language: parsed.fm.language,
+    });
+    n++;
+  }
+  return n;
+}
+
+/** Startup backfill (ch04 §4.4.1): the FTS index is derived data that must persist across
+ *  restarts. If it is present and non-empty we keep it; if it is missing/empty we rebuild it
+ *  from the filesystem corpus. Returns the number of documents (re)indexed. Wire this into
+ *  server.ts bootState (reported to the lead). */
+export async function backfillKnowledgeIndex(opts: { force?: boolean } = {}): Promise<{ indexed: number; skipped: boolean }> {
+  await index.ensureIndexDir();
+  if (!opts.force && index.totalRows() > 0) return { indexed: 0, skipped: true };
+  let indexed = 0;
+  for (const orgId of await vault.listOrgIds()) {
+    indexed += await indexOrgFromVault(orgId);
+  }
+  return { indexed, skipped: false };
 }
