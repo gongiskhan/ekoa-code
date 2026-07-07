@@ -30,7 +30,7 @@ export interface EntitySpan {
 }
 
 /**
- * The loaded org ruleset + deny-list (§17.7, the Garrison line). The MECHANISM is core; the
+ * The loaded org ruleset + deny-list (§17.7, the edge-boundary line). The MECHANISM is core; the
  * PT-PT ruleset and the per-org deny-list are configuration loaded against it. Either a
  * plaintext `denyList` (already loaded) or an org-scoped `denyListCiphertext` (encrypted at
  * rest, decrypted + access-logged on load, §17.4 (b)) may be supplied.

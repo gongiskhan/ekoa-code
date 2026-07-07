@@ -250,26 +250,26 @@ function computeValidIban(bban21: string): string {
 describe('dual-review hardening: no boundary/format/overlap leak', () => {
   it('detect-on-full-text: a value that GROWS across the prior-turn boundary is tokenized, not split (HIGH)', () => {
     const valid = computeValidNif('50000000'); // 9 digits
-    // Same session + channel. Turn 1 ends mid-NIF; turn 2 completes it. The old detect-on-delta
+    // Same session. Turn 1 ends mid-NIF; turn 2 completes it. The old detect-on-delta
     // scanned only the appended tail and leaked the now-complete NIF; full-text detection catches it.
     const head = `Cliente NIF ${valid.slice(0, 5)}`;
-    anonymize(head, ctx({ sessionId: 's-grow', channel: 'prompt' }));
-    const r2 = anonymize(`Cliente NIF ${valid}`, ctx({ sessionId: 's-grow', channel: 'prompt' }));
+    anonymize(head, ctx({ sessionId: 's-grow' }));
+    const r2 = anonymize(`Cliente NIF ${valid}`, ctx({ sessionId: 's-grow' }));
     expect(r2.text).not.toContain(valid); // the completed NIF is tokenized, not cleartext
     expect(deanonymize(r2.text, r2.handle)).toContain(valid);
   });
 
   it('deny-listed party that grows across the boundary is tokenized (HIGH)', () => {
     const rs = { orgId: 'org1', denyList: ['Petrova Holdings'] };
-    anonymize('Cliente Petrova', ctx({ sessionId: 's-party', channel: 'prompt', ruleset: rs }));
-    const r2 = anonymize('Cliente Petrova Holdings', ctx({ sessionId: 's-party', channel: 'prompt', ruleset: rs }));
+    anonymize('Cliente Petrova', ctx({ sessionId: 's-party', ruleset: rs }));
+    const r2 = anonymize('Cliente Petrova Holdings', ctx({ sessionId: 's-party', ruleset: rs }));
     expect(r2.text).not.toContain('Petrova Holdings'); // deny-listed party caught after growth
   });
 
   it('cache-prefix stays byte-identical across turns via deterministic tokens (no delta shortcut)', () => {
     const rs = { orgId: 'org1', denyList: ['Petrova Holdings'] };
-    const r1 = anonymize('Meeting with Petrova Holdings', ctx({ sessionId: 's-cache', channel: 'prompt', ruleset: rs }));
-    const r2 = anonymize('Meeting with Petrova Holdings next week', ctx({ sessionId: 's-cache', channel: 'prompt', ruleset: rs }));
+    const r1 = anonymize('Meeting with Petrova Holdings', ctx({ sessionId: 's-cache', ruleset: rs }));
+    const r2 = anonymize('Meeting with Petrova Holdings next week', ctx({ sessionId: 's-cache', ruleset: rs }));
     expect(r2.text.startsWith(r1.text)).toBe(true); // determinism preserves the prompt-cache prefix
   });
 

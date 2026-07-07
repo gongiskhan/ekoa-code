@@ -1,11 +1,12 @@
 /**
- * llm/anonymise/index.ts - the anonymisation service interface (§17.7, the Garrison line) and
- * the per-request pipeline (§17.3). This is the clean seam a future edge/Garrison deployment
+ * llm/anonymise/index.ts - the anonymisation service interface (the §17.7 edge-boundary line)
+ * and the per-request pipeline (§17.3). This is the clean seam a future edge deployment
  * slots into without a call-site change; callers depend on `anonymize` / `deanonymize` and
  * never on detector internals or on where the service runs.
  *
- * Pipeline per request (§17.3): collect model-bound text -> detect on the DELTA only (never the
- * already-tokenized prefix, which preserves the byte-identical prompt-cache prefix) ->
+ * Pipeline per request (§17.3): collect model-bound text -> detect on the WHOLE text every turn
+ * (deterministic per-session tokens keep the tokenized prefix byte-identical for the prompt
+ * cache; no delta shortcut - see `anonymize`) ->
  * deterministic FORMAT-PRESERVING per-session tokenization -> forward -> de-tokenize the
  * response INCLUDING tool_use argument blocks -> stream de-tokenization with minimal straddle
  * buffering. Fail-closed: a payload the mandatory detectors could not process is REFUSED, never
@@ -63,7 +64,7 @@ export function newCorrelationId(): string {
   return `anon_${randomUUID()}`;
 }
 
-// --- Ruleset resolution seam (the Garrison line: ruleset loads as config, §17.7) ---------
+// --- Ruleset resolution seam (the §17.7 edge-boundary line: ruleset loads as config) -----
 
 /** orgId -> loaded ruleset. Default is an empty ruleset (structured-ID + NER on, no deny-list);
  *  the composition root injects the real per-org loader. */
