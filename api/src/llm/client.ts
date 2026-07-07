@@ -857,11 +857,18 @@ export interface GatewayForwardResult {
   /** true when the (2xx) body had no parseable usage — the caller counts it as unmetered. */
   unmetered: boolean;
   metered: number;
+  /** The correlation id the hosted anon-audit was recorded under (ch18 §18.5 S6 join key). */
+  correlationId: string;
 }
 
 export async function proxyGatewayMessages(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
+  /** The correlation id to record the hosted anon-audit under (ch18 §18.5 S6). When the bridge
+   *  provider endpoint passes the daemon's per-request id, the hosted audit and the daemon's egress
+   *  ledger row share ONE correlation id — the join key (§18.4.5, §18.8 criterion 5). Absent for a
+   *  non-bridge caller: mint a fresh one as before. */
+  correlationIdIn?: string,
 ): Promise<GatewayForwardResult> {
   const capKey = await admitOrThrow(billeeUserId); // §6.6.4 pre-admission cap (empty => platform admin)
   const decision = decideForTier('FAST'); // wire tier is FAST (§6.5.4)
@@ -873,7 +880,7 @@ export async function proxyGatewayMessages(
   // Anonymise the bridge/subprocess request BEFORE the transport (§17.3, §17.2: subprocess
   // traffic funnels through this chokepoint via ANTHROPIC_BASE_URL). The vault is keyed by the
   // propagated conversation id so one vault serves both the hosted and delegated turns (§17.5).
-  const correlationId = newCorrelationId();
+  const correlationId = correlationIdIn ?? newCorrelationId();
   const orgId = (await orgResolver(billeeUserId)) ?? '';
   const ruleset = await resolveRuleset(orgId);
   const hasSession = typeof meta.session_id === 'string';
@@ -919,5 +926,5 @@ export async function proxyGatewayMessages(
       unmetered = true; // parse-or-skip (§6.5.4); the caller bumps gateway_unmetered_call
     }
   }
-  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered };
+  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId };
 }

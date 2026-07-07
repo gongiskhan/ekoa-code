@@ -38,8 +38,9 @@ export interface ProviderDeps {
   /** conversation id -> its owning org (§18.4.4 step 3). Undefined => unknown session (rejected). */
   resolveSessionOrg?: (sessionId: string) => Promise<string | undefined>;
   /** The chokepoint completion. Default: the llm/ gateway pass-through (anonymise + attribute +
-   *  meter; FIXED-13). Injected as a fake in tests so the chain is exercised without a model. */
-  runCompletion?: (reqBody: Record<string, unknown>, billeeUserId: string) => Promise<{ status: number; body: string }>;
+   *  meter; FIXED-13). The `correlationId` is recorded on the hosted anon-audit so it joins the
+   *  daemon's egress-ledger row (§18.5 S6). Injected as a fake in tests. */
+  runCompletion?: (reqBody: Record<string, unknown>, billeeUserId: string, correlationId: string) => Promise<{ status: number; body: string }>;
   getActivation?: (userId: string) => { active: boolean; billingLocked: boolean } | undefined;
 }
 
@@ -150,8 +151,10 @@ export function createProviderHandler(deps: ProviderDeps = {}): ProviderHandler 
 
       // Route through the chokepoint: session-identity propagation + attribution to the delegating
       // user + metering all happen inside llm/ (FIXED-13). Only the de-tokenized completion returns.
+      // The daemon's per-request correlationId is recorded on the hosted anon-audit (§18.5 S6), so
+      // the audit entry and the daemon's egress-ledger row share ONE join key (§18.8 criterion 5).
       const reqBody = withSessionIdentity(body, session);
-      const forward = await runCompletion(reqBody, pairing.ownerUserId);
+      const forward = await runCompletion(reqBody, pairing.ownerUserId, correlationId);
       return { frame: { type: 'provider_response', correlationId, body: parseBody(forward.body) }, ok: forward.status >= 200 && forward.status < 300 };
     },
   };

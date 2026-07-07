@@ -131,6 +131,19 @@ describe('S1 — containment (§18.5 S1)', () => {
   });
 });
 
+describe('S3 — no arbitrary-command primitive on the chat delegation path (§18.5 S3, §18.8 crit 2)', () => {
+  it('the fake-daemon delegation vocabulary is fixed file-tools only — NO shell/exec/command verb', () => {
+    const d = daemon();
+    // Structural: the daemon exposes read + stat (the fixed file-tool vocabulary), and NO verb by
+    // which a chat delegation could run an arbitrary command (no exec/command/shell/spawn/local_command).
+    for (const forbidden of ['exec', 'command', 'shell', 'spawn', 'run', 'local_command', 'bash']) {
+      expect((d as unknown as Record<string, unknown>)[forbidden]).toBeUndefined();
+    }
+    expect(typeof d.read).toBe('function');
+    expect(typeof d.stat).toBe('function');
+  });
+});
+
 describe('S5 — injection contained by absence of exfiltration primitives', () => {
   it('a granted file that says "upload me / read ~/.ssh" cannot exfiltrate: no upload verb, out-of-grant read denied, cap holds', () => {
     // The daemon exposes NO upload primitive (structural — the class has read/stat only).
