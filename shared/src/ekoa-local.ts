@@ -192,3 +192,21 @@ export const BridgeFrame = z.discriminatedUnion('type', [
   z.object({ type: z.literal('pong') }),
 ]);
 export type BridgeFrame = z.infer<typeof BridgeFrame>;
+
+/**
+ * The canonical byte string a DelegatedTask signature covers (§18.1, §18.2.6): the whole task
+ * MINUS `sig`, deterministically stringified (recursively sorted keys). Lives in the frozen shared
+ * contract so the Cortex signer AND the daemon verifier compute the SAME bytes without importing
+ * each other — a divergence in canonicalisation would be a wire bug (§18.1). The HMAC secret is
+ * NOT here (each side holds its own); this is only the bytes.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+export function canonicalTaskBinding(task: Omit<DelegatedTask, 'sig'> & { sig?: string }): string {
+  const { sig: _sig, ...binding } = task as Record<string, unknown> & { sig?: string };
+  return stableStringify(binding);
+}

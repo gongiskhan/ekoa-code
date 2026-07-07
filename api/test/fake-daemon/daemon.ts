@@ -10,6 +10,9 @@
 import { createHmac, createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { relative } from 'node:path';
+// The canonical signing bytes come from the FROZEN shared contract — the daemon verifies with the
+// SAME bytes Cortex signed (§18.1 wire lockstep). Only the wire contract is imported, never api/src.
+import { canonicalTaskBinding } from '@ekoa/shared';
 import { resolveWithinGrant, ContainmentError } from './containment.js';
 
 /** The 8-field S2 binding + transport fields (mirrors shared/ekoa-local DelegatedTask). */
@@ -57,13 +60,10 @@ export interface FakeDaemonOptions {
   now?: () => number;
 }
 
-/** The canonical byte string a task signature covers — MUST match the Cortex signer. */
-export function canonicalBinding(t: Omit<DelegatedTask, 'sig'>): string {
-  return [t.taskId, t.org, t.user, t.session, t.pairingId, t.grantRefs.join(','), t.task, t.budget.egressBytes, t.expiry, t.nonce].join('|');
-}
-
+/** Sign a task the way Cortex does: HMAC-SHA256 over the SHARED canonical binding (§18.1). The
+ *  daemon and Cortex share the HMAC secret (established at pairing; in tests the secret is passed). */
 export function signTask(t: Omit<DelegatedTask, 'sig'>, secret: string): string {
-  return createHmac('sha256', secret).update(canonicalBinding(t)).digest('hex');
+  return createHmac('sha256', secret).update(canonicalTaskBinding(t)).digest('hex');
 }
 
 /**
@@ -91,7 +91,7 @@ export class FakeDaemon {
 
   /** §18.5.1: verify sig → this-pairing → expiry → nonce → grants-for-session. Returns null on OK. */
   verifyTask(task: DelegatedTask): Denial | null {
-    // 1. signature over the binding (reject a forged task).
+    // 1. signature over the SHARED canonical binding (reject a forged task) — same bytes as Cortex.
     const expectSig = signTask(task, this.opts.signingSecret);
     if (task.sig !== expectSig) return this.deny(task, { reason: 'bad signature', principle: 'S2' });
     // 2. addressed to THIS pairing (reject a task forged for another pairing).

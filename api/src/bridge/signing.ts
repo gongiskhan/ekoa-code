@@ -12,24 +12,12 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { DelegatedTask } from '@ekoa/shared';
+// The canonical binding lives in the FROZEN shared contract so the Cortex signer and the daemon
+// verifier compute byte-identical bytes without importing each other (§18.1 — single wire source).
+import { canonicalTaskBinding } from '@ekoa/shared';
 import { loadConfig } from '../config.js';
 
-/** Deterministic JSON: object keys sorted recursively, arrays order-preserved. Two structurally
- *  equal bindings therefore serialise to byte-identical strings regardless of key insertion order. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
-}
-
-/** The exact bytes signed: the whole task minus `sig`. Exported so the daemon computes the same. */
-export function canonicalTaskBinding(task: Omit<DelegatedTask, 'sig'> & { sig?: string }): string {
-  const binding = { ...task } as Record<string, unknown>;
-  delete binding.sig;
-  return stableStringify(binding);
-}
+export { canonicalTaskBinding };
 
 /** HMAC-SHA256 of the canonical binding, hex. */
 export function signDelegatedTask(task: Omit<DelegatedTask, 'sig'> & { sig?: string }): string {
