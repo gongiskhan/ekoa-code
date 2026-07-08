@@ -1,0 +1,13 @@
+{
+  "service": "ekoa-web",
+  "container_name": "ekoa-web",
+  "dockerfile": "Dockerfile.web",
+  "port": 3000,
+  "health_endpoint": "/",
+  "health_timeout_seconds": 60,
+  "note": "P-02 two-container topology: the Next.js web client behind the existing reverse proxy. Extracted from ekoa-deploy's ekoa-app service (port 3000, health /), reference-only. NEXT_PUBLIC_API_URL is a BUILD-TIME arg (the public API origin the browser calls, not a secret) - passed via docker build --build-arg. No runtime secrets.",
+  "build_args": [
+    "NEXT_PUBLIC_API_URL"
+  ],
+  "env_passthrough": []
+}

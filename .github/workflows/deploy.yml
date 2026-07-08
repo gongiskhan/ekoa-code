@@ -1,0 +1,48 @@
+name: deploy
+# ch14 §14.4 G13 / Amendment 2 Part 7.20 deploy lane. P-02: two containers (api + web) behind
+# the existing reverse proxy. P-26: upstream-swap cutover (the proxy repoints its upstreams to
+# the new images; the old ekoa-deploy pipeline keeps deploying old Cortex until the founder-gated
+# switch, then retires). NO secret VALUES here - secrets live in Secret Manager (FIXED-14 C3);
+# this lane only proves the images build and the cutover shape is well-formed (dry-run).
+# ekoa-deploy is reference-only; its obsolete site/stt/tts lanes are ignored (ch10 §10.6.1/§10.8).
+on:
+  workflow_dispatch:
+  push:
+    tags: ['rc-*']
+
+jobs:
+  # Both container images must build (the G13 gate). Dry-run: build only, no registry push,
+  # no deploy - a real cutover is the founder-gated chapter-10 procedure, outside this run.
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build api image (P-02)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.api
+          push: false
+          tags: ekoa-api:${{ github.sha }}
+      - name: build web image (P-02)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.web
+          push: false
+          tags: ekoa-web:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.PUBLIC_API_URL || 'https://api.ekoa.example' }}
+
+  # P-02 topology + P-26 cutover shape, DRY-RUN. Proves the topology descriptors are well-formed
+  # and carry NO secret values; runs the cutover plan without deploying.
+  cutover-dry-run:
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: validate deploy topology (P-02, no secret values)
+        run: bash deploy/validate-topology.sh
+      - name: cutover plan (P-26 upstream-swap, dry-run)
+        run: bash deploy/cutover.sh --dry-run

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# api/ container (ch14 Phase 13, Amendment 2 Part 7.20; P-02 two-container topology).
+# One conventional Node service: the Express 5 API on :4111. Secrets are NEVER baked in -
+# they arrive at runtime from Secret Manager (FIXED-14, C3); this image carries only code.
+# Multi-stage: build the shared + api workspaces with dev deps, then ship a lean runtime
+# image with production node_modules + the compiled dist/ only.
+
+# ---- build stage -----------------------------------------------------------
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+# Workspace manifests first for layer-cached installs.
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY api/package.json api/
+COPY web/package.json web/
+# Full install (workspaces) so tsc + the shared build resolve; --ignore-scripts avoids
+# building web's native optionals we don't need for the api image.
+RUN npm ci --ignore-scripts
+# Sources needed to compile shared + api (web is not built in this image).
+COPY tsconfig.base.json ./
+COPY shared/ shared/
+COPY api/ api/
+RUN npm run build --workspace shared && npm run build --workspace api
+
+# ---- runtime stage ---------------------------------------------------------
+FROM node:20-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+# Production-only dependencies (no dev/test toolchain in the shipped image).
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY api/package.json api/
+COPY web/package.json web/
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+# Compiled output: shared/dist (api imports @ekoa/shared) + api/dist + api runtime assets.
+COPY --from=build /app/shared/dist shared/dist
+COPY --from=build /app/api/dist api/dist
+COPY api/assets api/assets
+# Drop privileges: run as the built-in non-root `node` user.
+USER node
+EXPOSE 4111
+# PORT/ENCRYPTION_KEY/JWT_SECRET/MONGODB_URI/ANTHROPIC_* injected at runtime (Secret Manager).
+CMD ["node", "api/dist/server.js"]

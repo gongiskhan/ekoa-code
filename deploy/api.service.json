@@ -1,0 +1,35 @@
+{
+  "service": "ekoa-api",
+  "container_name": "ekoa-api",
+  "dockerfile": "Dockerfile.api",
+  "port": 4111,
+  "health_endpoint": "/health",
+  "health_timeout_seconds": 90,
+  "note": "P-02 two-container topology: the api container behind the existing reverse proxy. Extracted from ekoa-deploy's cortex service (port 4111, /health), reference-only. env_passthrough is NAMES ONLY - the values live in Secret Manager (FIXED-14 C3), NEVER in this repo. As-built env reflects Amendment 2: Mongo (not Supabase, P-08 retired), no license gate (G2 dropped it).",
+  "env_passthrough": [
+    "PORT",
+    "JWT_SECRET",
+    "ENCRYPTION_KEY",
+    "MONGODB_URI",
+    "LLM_CHOKEPOINT_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET",
+    "MICROSOFT_TENANT_ID",
+    "MICROSOFT_SSO_CLIENT_ID",
+    "MICROSOFT_SSO_CLIENT_SECRET",
+    "MICROSOFT_SSO_TENANT_ID",
+    "MICROSOFT_SSO_REDIRECT_URI",
+    "EKOA_OAUTH_REDIRECT_BASE_URL",
+    "ADOBE_CLIENT_ID",
+    "ADOBE_CLIENT_SECRET",
+    "ADOBE_OAUTH_SHARD",
+    "EKOA_APP_DATA_BACKEND",
+    "EKOA_APP_DATA_MONGO_URI",
+    "EKOA_APP_DATA_MONGO_DB"
+  ],
+  "volumes": [
+    "/opt/ekoa/api-data:/root/.ekoa"
+  ]
+}

@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+# web/ container (ch14 Phase 13, Amendment 2 Part 7.20; P-02 two-container topology).
+# The Next.js web client on :3000. NEXT_PUBLIC_API_URL is a BUILD-TIME arg (Next inlines
+# NEXT_PUBLIC_* at build) — the reverse proxy's public API origin, never a secret. Uses
+# Next standalone output (output: 'standalone', gated on NEXT_OUTPUT_STANDALONE in
+# next.config.ts) so the runtime image ships only the traced server + minimal node_modules.
+
+# ---- build stage -----------------------------------------------------------
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+ENV NEXT_OUTPUT_STANDALONE=1
+# The public API origin the browser calls; inlined into the client bundle at build.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY api/package.json api/
+COPY web/package.json web/
+RUN npm ci --ignore-scripts
+# web imports @ekoa/shared, so shared must be built first.
+COPY tsconfig.base.json ./
+COPY shared/ shared/
+COPY web/ web/
+RUN npm run build --workspace shared && npm run build --workspace web
+
+# ---- runtime stage ---------------------------------------------------------
+FROM node:20-bookworm-slim AS runtime
+ENV NODE_ENV=production
+ENV PORT=3000
+WORKDIR /app
+# Next standalone bundle: server.js + traced node_modules + static assets.
+COPY --from=build /app/web/.next/standalone ./
+COPY --from=build /app/web/.next/static ./web/.next/static
+COPY --from=build /app/web/public ./web/public
+USER node
+EXPOSE 3000
+# Standalone emits web/server.js (the workspace path is preserved in the trace).
+CMD ["node", "web/server.js"]

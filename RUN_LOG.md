@@ -548,3 +548,25 @@ Continuing the 08:40Z entry: the G12 fresh e2e:server run (first since the gate-
 **Diagrams (item 5):** the new composition-root security-headers middleware is a request-path enforcement point -> reconciled into 03-request-crud in G13 (FIXED-12).
 
 **Checkpoint (item 6):** commit `checkpoint: G12 final-security-phase` + tag `gate-12`, green under item 2. Ledger currentGate=G12.
+
+### GATE - 2026-07-08T10:03:05Z - Phase 13 (G13) PASSED - docs/diagrams reconciled + deviation annex + deploy artifacts; rc-1
+
+**Diagram census + FIXED-12 reconciliation (item: diagram census).** `docs/diagram-census-and-deviation-annex.md`: every one of the 17 `api/src/` modules maps to 02-module-map (verified) + a per-concern diagram; the 4 web-client SSE streams (chat/jobs/automations/notifications runs events) map to 04-agent-job. No G10-G13 change altered the diagrammed structure/flow/data-shape, so no diagram mod-date is stale: the G12 security-headers middleware is a cross-cutting response-header decorator (within the 03-request-crud middleware-chain abstraction, not a flow/shape change - FIXED-12's exact trigger not met); the shared/ tightening is constraints on existing shapes; the deploy artifacts realize the two-container P-02 topology 08-coexistence-cutover already renders.
+
+**Deviation annex (item: count match).** The same doc enumerates exactly the 12 `### DEVIATION` entries in RUN_LOG.md (count: 12 == 12). ✓
+
+**CLAUDE.md verified** to contain the ch02 §2.9 (lint/CI enforcement) block and the ch13 §13.10 (QA process + diagram invariant) blocks verbatim.
+
+**Deploy artifacts (Amendment 2 Part 7.20; item: images build + lane dry-run).**
+- `Dockerfile.api` - multi-stage Node 20 image, builds shared+api, ships `node api/dist/server.js` on :4111, non-root `node` user, secrets injected at runtime (never baked). **Built green** (`docker build -f Dockerfile.api` exit 0).
+- `Dockerfile.web` - multi-stage Next standalone image (output:'standalone' gated on NEXT_OUTPUT_STANDALONE), NEXT_PUBLIC_API_URL a build-arg, `node web/server.js` on :3000. **Built green** (`docker build -f Dockerfile.web --build-arg NEXT_PUBLIC_API_URL=...` exit 0).
+- `deploy/{api,web}.service.json` - P-02 topology descriptors (ports 4111/3000, health /health + /, env NAMES only reflecting the as-built Amendment-2 env: Mongo not Supabase, no license gate; values in Secret Manager FIXED-14 C3). Extracted from ekoa-deploy's cortex/ekoa-app services (reference-only; obsolete site/stt/tts NOT carried, §10.6.1/§10.8).
+- `deploy/validate-topology.sh` + `deploy/cutover.sh --dry-run` - the P-02 validate + P-26 upstream-swap cutover plan, **dry-run green** (topology well-formed, env NAMES only, no secret values, obsolete lanes absent; cutover prints the plan, makes no changes).
+- `.github/workflows/deploy.yml` - the CI deploy lane (build both images push:false + cutover-dry-run job), triggered on `rc-*` tags / dispatch. `.dockerignore` added.
+- The old ekoa-deploy pipeline is left UNTOUCHED (keeps deploying old Cortex until the founder-gated cutover, then retires - the retirement row is ch10's). NO cutover, NO production deploy performed.
+
+**CI lane (item: CI green).** `npm run ci:lane` exit 0 (lint 0 errors, all 4 greps, shared 32 + api 937/1-skip + web 113, typecheck + build x3). sast/secrets/audit exit 0.
+
+**e2e:server baseline:** carries the pre-existing, non-reproducible debt documented in the Phase-12 DEVIATIONs (band1 needs a running web dashboard; band2 uses the retired /api/v1/action; erp fork -> CUTOVER) - out of scope per 'no redo completed gates'. This holds the terminal GLOBAL GATE at completed-with-blockers, honestly, not a faked pass.
+
+**Checkpoint (item: rc-1 tag).** commit `checkpoint: G13 docs-diagrams-deploy-artifacts-rc1` + tag `rc-1`, green under the CI lane. This is the run's terminal gate; staging/parity/cutover are ch10's founder-gated procedure, OUTSIDE this run.

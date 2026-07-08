@@ -46,6 +46,10 @@ function resolveVertical(): string {
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  // Standalone output for the container image (Dockerfile.web sets NEXT_OUTPUT_STANDALONE=1):
+  // emits `.next/standalone` with the traced server + minimal node_modules, so the runtime
+  // image ships only what it needs. Off by default so dev/CI builds are unchanged.
+  ...(process.env.NEXT_OUTPUT_STANDALONE ? { output: "standalone" as const } : {}),
   // Gate/CI builds can use an isolated dist dir so a `next build` never
   // corrupts a live dev server's .next incremental state.
   distDir: process.env.NEXT_BUILD_DIST_DIR || ".next",

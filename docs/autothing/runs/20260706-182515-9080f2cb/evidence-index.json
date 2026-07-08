@@ -121,10 +121,11 @@
   "phase-9": "passed",
   "phase-10": "passed",
   "phase-11": "passed",
-  "phase-12": "passed"
+  "phase-12": "passed",
+  "phase-13": "passed"
  },
  "globalGate": {
-  "status": "in-progress",
+  "status": "completed-with-blockers",
   "codexCheckpoint": {
    "status": "issues-fixed",
    "scopes": 5,
@@ -141,6 +142,21 @@
   "e2eBaseline": {
    "status": "pre-existing-debt",
    "note": "band1 needs web dashboard (harness gap); 4 band2 specs use retired /api/v1/action; erp drivers->CUTOVER; documented in 2x RUN_LOG DEVIATION (2026-07-08); security-headers change verified non-breaking"
-  }
+  },
+  "deploy": {
+   "apiImage": "built",
+   "webImage": "built",
+   "deployLaneDryRun": "green",
+   "note": "P-02 two-container topology + P-26 cutover dry-run; no cutover/production deploy"
+  },
+  "blockers": [
+   {
+    "cause": "pre-existing e2e:server baseline debt (band1 web-dashboard specs need a running dashboard; band2 specs use retired /api/v1/action; erp fork->CUTOVER)",
+    "remediation": "dedicated e2e-baseline-repair: full-stack harness + REST-migrate the 4 band2 specs + reconstitute/retire the brasilsalomao ERP fork",
+    "scope": "G6-G9-era, out of G12/G13 scope per no-redo-completed-gates",
+    "introducedBy": "pre-existing, NOT this session"
+   }
+  ],
+  "ciLane": "green"
  }
 }
