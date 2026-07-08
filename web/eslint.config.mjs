@@ -12,7 +12,14 @@ const eslintConfig = defineConfig([
     rules: {
       "no-restricted-imports": [
         "error",
-        { patterns: [{ group: ["**/api/*", "**/api/src/*", "../api", "../api/**"], message: "web/ must not import from api/ (FIXED-1)." }] },
+        {
+          // The sibling api/ is reachable only by a relative escape into its source or dist (web's
+          // OWN client is `@/lib/api`, which has no src/dist subdir, so it is never matched). Catches
+          // deep escapes (../../../api/src/x) at any depth without false-positiving on `@/lib/api`.
+          patterns: [
+            { group: ["**/api/src", "**/api/src/**", "**/api/dist", "**/api/dist/**", "@ekoa/api", "@ekoa/api/**"], message: "web/ must not import from api/ (FIXED-1)." },
+          ],
+        },
       ],
       // FIXED-9 (migrate, do not rewrite): the frontend is ported source-level unchanged. The old
       // app carried these as pervasive, non-gating findings (134 in the original tree); downgrade

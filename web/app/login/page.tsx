@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuthStore } from "@/stores/auth";
+import { resolveBaseUrl } from "@/lib/api/base-url";
 import { useTranslation } from "@/stores/i18n";
 import { useVerticalProfile } from "@/lib/verticals";
 
@@ -50,9 +51,14 @@ function safeNextUrl(raw: string | null): string | null {
   if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
   try {
     const parsed = new URL(raw);
-    const apiOrigin = process.env.NEXT_PUBLIC_API_URL
-      ? new URL(process.env.NEXT_PUBLIC_API_URL).origin
-      : null;
+    // Resolve the API origin through the single base-URL resolver (crit 5), never a raw env read.
+    let apiOrigin: string | null = null;
+    try {
+      const base = resolveBaseUrl();
+      apiOrigin = base ? new URL(base).origin : (typeof window !== "undefined" ? window.location.origin : null);
+    } catch {
+      apiOrigin = null;
+    }
     if (apiOrigin && parsed.origin === apiOrigin) return parsed.toString();
   } catch {
     /* fall through */

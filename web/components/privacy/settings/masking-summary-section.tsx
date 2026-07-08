@@ -3,6 +3,7 @@
 import { EyeOff } from 'lucide-react';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { PRIVACY_COPY } from '@/lib/privacy-claims';
+import { GatedClaim } from '../gated-claim';
 
 /**
  * FC-408 masking activity summary. The counts come from the hosted anonymisation
@@ -15,7 +16,11 @@ export function MaskingSummarySection() {
   return (
     <section data-testid="privacy-masking-summary">
       <CardTitle icon={EyeOff}>{PRIVACY_COPY.maskingSectionTitle}</CardTitle>
-      <CardDescription>{PRIVACY_COPY.maskingSectionDesc}</CardDescription>
+      {/* The description asserts the masking mechanism ("foram mascaradas antes de cada pedido
+          chegar ao fornecedor de IA") - a claim, so it is ship-gated (§17.9 A7.4) like the rest. */}
+      <CardDescription>
+        <GatedClaim inline>{PRIVACY_COPY.maskingSectionDesc}</GatedClaim>
+      </CardDescription>
 
       <Card className="mt-3">
         <p className="text-sm text-neutral-500">{PRIVACY_COPY.maskingPending}</p>

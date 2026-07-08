@@ -24,7 +24,7 @@
     "gate:sast": "semgrep --config scripts/semgrep.yml --error --quiet api/src shared/src",
     "gate:secrets": "gitleaks detect --no-banner --redact -c scripts/gitleaks.toml",
     "gate:audit": "npm audit --audit-level=high",
-    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && npm run build",
+    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} npm run build",
     "gate:ledger": "node scripts/suite-ledger-run.mjs",
     "e2e:server": "node scripts/e2e-with-server.mjs"
   },

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
  * First-build ask-once dialog (Amendment 2, FC-506). On the user's first-ever
  * build, one dialog asks whether to verify builds; the answer is stored as the
  * per-user setting `build.verifyBuilds` (`PATCH /settings/me`, FC-507). Asked
- * once only — a local flag records that the question was put, so it never
+ * once only - a local flag records that the question was put, so it never
  * reappears. Agent questions stay reserved for app ambiguity, never process.
  *
  * Mounted once at the dashboard layout. It watches the orchestration store for
@@ -50,7 +50,7 @@ export function FirstBuildDialog() {
     try {
       localStorage.setItem(ASKED_FLAG, "1");
     } catch {
-      /* ignore storage failures — worst case the dialog reappears next build */
+      /* ignore storage failures - worst case the dialog reappears next build */
     }
   }
 

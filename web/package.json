@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} next build --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint .",
     "typecheck": "tsc --noEmit",
