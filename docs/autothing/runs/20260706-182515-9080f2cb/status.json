@@ -1,9 +1,9 @@
 {
  "slice": "phase-10",
- "gate": "ready-to-start",
- "lastAction": "G9 PASSED + tagged gate-9 (web client migration, the size-10 phase). 14/18 slices done. Next: G10 (migration + parity tooling: import scripts, ledger replay, parity workload)",
- "at": "2026-07-08T03:51:41Z",
+ "gate": "planned",
+ "lastAction": "G9 PASSED+tagged (gate-9, the size-10 web migration). G10 scoped: 3 tools (import scripts + ledger-replay + parity-workload) vs synthetic fixtures. Roadmap in G10-PLAN.md",
+ "at": "2026-07-08T03:55:18Z",
  "model": "claude-fable-5",
- "iteration": 40,
- "resumePosture": "clean: gate-P..gate-9 tagged (15 tags), all suites green (ci:lane 0, e2e 127/127); next slice G10 per FLOW_PLAN (migration/parity tooling, ch10)"
+ "iteration": 41,
+ "resumePosture": "clean: gate-P..gate-9 tagged (15 tags), all suites green; next = G10 build per docs/.../G10-PLAN.md (import scripts \u00a710.2/\u00a710.3, ledger-replay \u00a710.4 Part A zero-tolerance, parity-workload \u00a710.4 Part B structural mode) vs committed synthetic fixtures, then gate-10"
 }
