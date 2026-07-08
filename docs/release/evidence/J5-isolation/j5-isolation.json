@@ -1,0 +1,195 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J5.setupX",
+      "detail": "IsoX org=6d9ef9f1-ee9a-4f0e-8d94-d99f4a798684 admin role=org-admin via=post-org-admin"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.setupY",
+      "detail": "IsoY org=0f884c6f-d1ee-47bc-8e19-74f38b4cf046 admin role=org-admin via=post-org-admin"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.kseedX",
+      "detail": "IsoX knowledge doc c5f79603-4f01-4cf3-9836-486b2fa97588"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.kseedY",
+      "detail": "IsoY knowledge doc a985679f-4575-4d97-9cf6-ed9a2c120223"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.klistX",
+      "detail": "IsoX sees only its docs: [\"Segredo X\"]"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.klistY",
+      "detail": "IsoY sees only its docs: [\"Segredo Y\"]"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.kcross",
+      "detail": "IsoY cross-org delete of IsoX doc -> 404 NOT_FOUND"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.memcreate",
+      "detail": "IsoX memory 58f44e7a-0dac-4e58-bf56-e16eef517774 visibility=private"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.memlistY",
+      "detail": "IsoY memory list does not contain IsoX memory (count=0)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.memgetY",
+      "detail": "IsoY GET IsoX memory by id -> 404"
+    },
+    {
+      "kind": "INFO",
+      "id": "J5.registoX",
+      "detail": "org-admin registo 200, 0 rows; RegistoEntry exposes no orgId field (isolation is service-scoped, not visible in payload)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.registoSuperY",
+      "detail": "super-admin registo?orgId=IsoY -> 200, 0 rows, actors=[]"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.brandReal",
+      "detail": "PUT /org/branding (real mount) -> 200, primaryColor=#FF0044"
+    },
+    {
+      "kind": "INFO",
+      "id": "J5.brandContract",
+      "detail": "PUT /api/v1/branding (CONTRACT path) -> 404 json=false ct=text/html; charset=utf-8 (contract-vs-code gap: mount is /org/branding)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5.tokens",
+      "detail": "design-tokens.css neutral default --color-primary=#0F766E (NOT the org #FF0044)"
+    }
+  ],
+  "detail": {
+    "orgs": {
+      "X": {
+        "orgId": "6d9ef9f1-ee9a-4f0e-8d94-d99f4a798684",
+        "userId": "25a06b14-5a3f-4928-91e7-8d17bc764aa2",
+        "role": "org-admin",
+        "via": "post-org-admin",
+        "username": "ix-admin-1783533643219",
+        "orgStatus": 201,
+        "userStatus": 201
+      },
+      "Y": {
+        "orgId": "0f884c6f-d1ee-47bc-8e19-74f38b4cf046",
+        "userId": "bd56de2e-f95c-4dc0-a36e-706cd5e51b12",
+        "role": "org-admin",
+        "via": "post-org-admin",
+        "username": "iy-admin-1783533643219",
+        "orgStatus": 201,
+        "userStatus": 201
+      }
+    },
+    "knowledgeSeed": {
+      "docX": {
+        "status": 201,
+        "body": {
+          "id": "c5f79603-4f01-4cf3-9836-486b2fa97588"
+        }
+      },
+      "docY": {
+        "status": 201,
+        "body": {
+          "id": "a985679f-4575-4d97-9cf6-ed9a2c120223"
+        }
+      }
+    },
+    "knowledgeList": {
+      "X": {
+        "status": 200,
+        "titles": [
+          "Segredo X"
+        ]
+      },
+      "Y": {
+        "status": 200,
+        "titles": [
+          "Segredo Y"
+        ]
+      }
+    },
+    "knowledgeCrossDelete": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "NOT_FOUND",
+          "message": "Não encontrado."
+        }
+      }
+    },
+    "memoryCreate": {
+      "status": 201,
+      "body": {
+        "id": "58f44e7a-0dac-4e58-bf56-e16eef517774",
+        "content": "Memória privada da IsoX: LARANJA-11.",
+        "type": "note",
+        "visibility": "private",
+        "userId": "25a06b14-5a3f-4928-91e7-8d17bc764aa2"
+      }
+    },
+    "memoryListY": {
+      "status": 200,
+      "count": 0,
+      "leak": false
+    },
+    "memoryGetY": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "NOT_FOUND",
+          "message": "Não encontrado."
+        }
+      }
+    },
+    "registoX": {
+      "status": 200,
+      "count": 0,
+      "orgIdsPresent": []
+    },
+    "registoSuperY": {
+      "status": 200,
+      "count": 0,
+      "actors": []
+    },
+    "brandingReal": {
+      "status": 200,
+      "body": {
+        "id": "6d9ef9f1-ee9a-4f0e-8d94-d99f4a798684",
+        "name": "IsoX-1783533643219",
+        "displayName": "IsoX-1783533643219",
+        "branding": {
+          "primaryColor": "#FF0044"
+        }
+      }
+    },
+    "brandingContract": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "isJson": false,
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot PUT /api/v1/branding</pre>\n</body>\n</html>\n"
+    },
+    "designTokens": {
+      "status": 200,
+      "contentType": "text/css; charset=utf-8",
+      "colorPrimary": "#0F766E",
+      "head": "/* Generated by api/src/services/design-tokens.ts */\n/* Locked contract: ekoa-data/bases/CSS_VARS_CONTRACT.md */\n:root {\n  --color-primary: #0F766E;\n  --color-primary-hover: #0D9488;\n  --color-accent: #14B8A6;\n  --color-bg: #FFFFFF;\n  --col"
+    }
+  }
+}

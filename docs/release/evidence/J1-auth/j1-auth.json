@@ -1,0 +1,272 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J1a.login",
+      "detail": "admin login 200 with token"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1a.me",
+      "detail": "me 200 role=super-admin orgId=d9546d78-4333-42b1-872c-6e13b61660a7"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1b.refresh",
+      "detail": "POST /auth/refresh -> 404 ct=text/html; charset=utf-8 json=false head=\"<!DOCTYPE html> <html lang=\"en\"> <head> <meta charset=\"utf-8\""
+    },
+    {
+      "kind": "INFO",
+      "id": "J1c.logout",
+      "detail": "POST /auth/logout -> 404 json=false body=null"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1c.revocation",
+      "detail": "token STILL VALID after logout (me -> 200) — no server-side revocation on logout"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1d.badcred",
+      "detail": "bad login -> 401 UNAUTHENTICATED"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1d.garbage",
+      "detail": "garbage bearer -> 401 UNAUTHENTICATED (valid envelope)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1e.org",
+      "detail": "created org ProbeA id=6734ed96-9cda-4afb-8736-db29cc83f806"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1e.user",
+      "detail": "created builder pa-u1-1783533625803 id=ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6 role=builder"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1e.paLogin",
+      "detail": "pa-u1 login+me 200"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1f.deactivate",
+      "detail": "PATCH active:false -> 200 active=false"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1f.rest",
+      "detail": "REST GET /sessions (disabled) -> 403 ACCOUNT_DISABLED, msg contains 'bloqueada'"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1f.sse",
+      "detail": "SSE notifications (disabled) -> 403 ACCOUNT_DISABLED msg=\"Não autorizado.\""
+    },
+    {
+      "kind": "INFO",
+      "id": "J1f.me",
+      "detail": "/auth/me with disabled-user token -> 403 ACCOUNT_DISABLED (brief expected 401; activation check runs before epoch)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1g.reactivate",
+      "detail": "reactivated -> fresh login+me 200"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1h.password",
+      "detail": "POST /auth/password -> 404 json=false ct=text/html; charset=utf-8"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1h.device",
+      "detail": "POST /auth/device -> 404 json=false ct=text/html; charset=utf-8"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1i.userpw",
+      "detail": "POST /users/:id/password -> 404 json=false ct=text/html; charset=utf-8 head=\"<!DOCTYPE html> <html lang=\"en\"> <head> <meta charset=\"utf-8\""
+    }
+  ],
+  "detail": {
+    "login": {
+      "status": 200,
+      "isJson": true,
+      "body": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNDcxZGExMC1hYWU0LTRhNzUtOThiZS0zZTNiODQzOTRkNzciLCJyb2xlIjoic3VwZXItYWRtaW4iLCJzY29wZSI6InVzZXIiLCJvcmdJZCI6ImQ5NTQ2ZDc4LTQzMzMtNDJiMS04NzJjLTZlMTNiNjE2NjBhNyIsInVzZXJuYW1lIjoiYWRtaW4iLCJqdGkiOiJmNDcxZGExMC1hYWU0LTRhNzUtOThiZS0zZTNiODQzOTRkNzcuMDBiMDNjYmItMThiYS00ZTVmLTk1ZmQtMjYxNDlkNTA5ZTIzIiwiaWF0IjoxNzgzNTMzNjIzLCJleHAiOjE3ODM2MjAwMjN9._uf5SAwosv5esEL1uLq4BYplJIdbZhtUOVveitv4ddI",
+        "user": {
+          "id": "f471da10-aae4-4a75-98be-3e3b84394d77",
+          "username": "admin",
+          "role": "super-admin",
+          "orgId": "d9546d78-4333-42b1-872c-6e13b61660a7",
+          "active": true,
+          "passwordChangeRequired": true
+        },
+        "passwordChangeRequired": true,
+        "expiresIn": 86400
+      }
+    },
+    "me": {
+      "status": 200,
+      "body": {
+        "id": "f471da10-aae4-4a75-98be-3e3b84394d77",
+        "username": "admin",
+        "role": "super-admin",
+        "orgId": "d9546d78-4333-42b1-872c-6e13b61660a7",
+        "active": true
+      }
+    },
+    "refresh": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/v1/auth/refresh</pre>\n</body>\n</html>\n",
+      "isJson": false
+    },
+    "logout": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "body": null,
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/v1/auth/logout</pre>\n</body>\n</html>\n"
+    },
+    "meAfterLogout": {
+      "status": 200,
+      "body": {
+        "id": "f471da10-aae4-4a75-98be-3e3b84394d77",
+        "username": "admin",
+        "role": "super-admin",
+        "orgId": "d9546d78-4333-42b1-872c-6e13b61660a7",
+        "active": true
+      }
+    },
+    "badCred": {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "UNAUTHENTICATED",
+          "message": "Credenciais inválidas."
+        }
+      }
+    },
+    "garbageBearer": {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "UNAUTHENTICATED",
+          "message": "Sessão expirada. Inicie sessão novamente."
+        }
+      }
+    },
+    "orgCreate": {
+      "status": 201,
+      "body": {
+        "id": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "name": "ProbeA",
+        "displayName": "Probe A"
+      }
+    },
+    "userCreate": {
+      "status": 201,
+      "body": {
+        "id": "ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6",
+        "username": "pa-u1-1783533625803",
+        "role": "builder",
+        "orgId": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "active": true,
+        "passwordChangeRequired": true
+      }
+    },
+    "paMe": {
+      "status": 200,
+      "body": {
+        "id": "ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6",
+        "username": "pa-u1-1783533625803",
+        "role": "builder",
+        "orgId": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "active": true
+      }
+    },
+    "deactivate": {
+      "status": 200,
+      "body": {
+        "id": "ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6",
+        "username": "pa-u1-1783533625803",
+        "role": "builder",
+        "orgId": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "active": false,
+        "passwordChangeRequired": true
+      }
+    },
+    "paSessionsDisabled": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "ACCOUNT_DISABLED",
+          "message": "A sua conta está bloqueada. Contacte o suporte."
+        }
+      }
+    },
+    "paSseDisabled": {
+      "ok": false,
+      "status": 403,
+      "closedReason": "http-error",
+      "errorBody": {
+        "error": {
+          "code": "ACCOUNT_DISABLED",
+          "message": "Não autorizado."
+        }
+      },
+      "frames": []
+    },
+    "paMeDisabled": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "ACCOUNT_DISABLED",
+          "message": "A sua conta está bloqueada. Contacte o suporte."
+        }
+      }
+    },
+    "reactivate": {
+      "status": 200,
+      "body": {
+        "id": "ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6",
+        "username": "pa-u1-1783533625803",
+        "role": "builder",
+        "orgId": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "active": true,
+        "passwordChangeRequired": true
+      }
+    },
+    "reactivatedMe": {
+      "status": 200,
+      "body": {
+        "id": "ffdcdcd8-5fc2-41f8-a3ec-24af4f53d3a6",
+        "username": "pa-u1-1783533625803",
+        "role": "builder",
+        "orgId": "6734ed96-9cda-4afb-8736-db29cc83f806",
+        "active": true
+      }
+    },
+    "passwordChange": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "isJson": false,
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/v1/auth/password</pre>\n</body>\n</html>\n"
+    },
+    "deviceStart": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "isJson": false,
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/v1/auth/device</pre>\n</body>\n</html>\n"
+    },
+    "userPasswordReset": {
+      "status": 404,
+      "contentType": "text/html; charset=utf-8",
+      "isJson": false,
+      "bodyHead": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/v1/users/ffdcdcd8-5fc2-41f8-a3ec-24af4f"
+    }
+  }
+}
