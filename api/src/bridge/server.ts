@@ -30,6 +30,7 @@ import {
   attachLiveConnection,
   removeLiveConnection,
   getLiveConnection,
+  isLive,
   getPairingById,
   isRevoked,
   sendToPairing,
@@ -169,10 +170,17 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
 
       // Persist the durable pairing row BEFORE accepting, so the provider credential chain (§18.4.4)
       // and delegation resolution never race an unwritten row.
+      let registered;
       try {
-        await registerPairing({ pairingId, org, ownerUserId: claims.sub }, { now });
+        registered = await registerPairing({ pairingId, org, ownerUserId: claims.sub }, { now });
       } catch {
         return refuse(socket, 500, 'INTERNAL', 'Falha ao registar o emparelhamento.');
+      }
+      // Close the precheck->register TOCTOU (§18.3.5): registerPairing preserves any revocation
+      // tombstone, so if a revoke won the race between the precheck above and this write, the stored
+      // row is revoked - refuse rather than admit a just-revoked pairing.
+      if (registered.revokedAt !== null) {
+        return refuse(socket, 401, 'UNAUTHENTICATED', 'Este emparelhamento foi revogado. Emparelhe de novo.', 'pairing-revoked');
       }
 
       wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, { pairingId, org, ownerUserId: claims.sub }));
@@ -208,6 +216,12 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     const res = BridgeFrame.safeParse(parsed);
     if (!res.success) return; // drop invalid frames (§18.3.1)
     const frame = res.data;
+
+    // Liveness guard (§18.3.5, S4): drop any inbound frame from a pairing that is no longer the
+    // live connection - a socket that was revoked or replaced. Its 'close' handler runs the teardown
+    // (removeLiveConnection + failDelegationsForPairing), but a frame already dispatched into the
+    // loop before that must not still resolve a delegation / emit a ledger row post-revoke.
+    if (!isLive(pairingId)) return;
 
     switch (frame.type) {
       case 'provider_request': {
