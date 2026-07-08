@@ -16,7 +16,7 @@
  * Shared by the /artifacts Starting Points strip and the /chat empty-state
  * stripes so both behave identically.
  */
-import * as api from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 
 export interface ForkedInstance {
   id: string;
@@ -32,10 +32,8 @@ export async function forkFeaturedInto(
   sourceId: string,
   appTab: Window | null,
 ): Promise<ForkedInstance | null> {
-  const res = await api.wsAction<ForkedInstance>('ekoa.templates', 'fork-instance', {
-    sourceId,
-  });
-  if (!res.success || !res.data?.id) {
+  const res = await tryCall(() => api.artifacts.fork({ id: sourceId }));
+  if (!res.ok || !res.data?.id) {
     appTab?.close();
     return null;
   }
@@ -50,7 +48,7 @@ export async function forkFeaturedInto(
     } catch {
       /* cross-origin after navigation — nothing to sever */
     }
-    appTab.location.replace(api.getAppUrl(fork.slug || fork.id));
+    appTab.location.replace(api.appUrl(fork.slug || fork.id));
   }
   return fork;
 }

@@ -17,7 +17,7 @@ import {
   AlertCircle,
   Save,
 } from 'lucide-react';
-import { getArtifactFileContent, saveArtifactFileContent } from '@/lib/api/client';
+import { api } from '@/lib/api';
 import { getMonacoLanguage, getSandboxDisplayPath } from '@/lib/file-utils';
 import { useTranslation } from '@/stores/i18n';
 
@@ -28,6 +28,8 @@ import { useTranslation } from '@/stores/i18n';
 interface FileEditorDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Artifact whose file is edited; the file endpoints are keyed by artifact id. */
+  artifactId: string;
   filePath: string;
   onSave?: () => void;
 }
@@ -126,6 +128,7 @@ function saveSize(size: DialogSize): void {
 export function FileEditorDialog({
   open,
   onOpenChange,
+  artifactId,
   filePath,
   onSave,
 }: FileEditorDialogProps) {
@@ -156,23 +159,20 @@ export function FileEditorDialog({
       setError(null);
       setIsEditorReady(false);
 
-      getArtifactFileContent(filePath)
+      api.artifacts
+        .readFile({ id: artifactId, path: displayPath })
         .then((result) => {
-          if (result.success) {
-            setOriginalContent(result.data);
-            setCurrentContent(result.data);
-          } else {
-            setError(result.error.message);
-          }
+          setOriginalContent(result.content);
+          setCurrentContent(result.content);
         })
         .catch((err) => {
-          setError(err.message || 'Failed to load file');
+          setError(err instanceof Error ? err.message : 'Failed to load file');
         })
         .finally(() => {
           setIsLoading(false);
         });
     }
-  }, [open, filePath]);
+  }, [open, filePath, artifactId, displayPath]);
 
   // Handle save
   const handleSave = useCallback(async () => {
@@ -180,20 +180,16 @@ export function FileEditorDialog({
 
     setIsSaving(true);
     try {
-      const result = await saveArtifactFileContent(filePath, currentContent);
-      if (result.success) {
-        setOriginalContent(currentContent);
-        onSave?.();
-        onOpenChange(false);
-      } else {
-        setError(result.error?.message || 'Failed to save file');
-      }
+      await api.artifacts.writeFile({ id: artifactId, path: displayPath, content: currentContent });
+      setOriginalContent(currentContent);
+      onSave?.();
+      onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save file');
     } finally {
       setIsSaving(false);
     }
-  }, [filePath, currentContent, hasUnsavedChanges, isSaving, onOpenChange]);
+  }, [artifactId, displayPath, currentContent, hasUnsavedChanges, isSaving, onOpenChange]);
 
   // Keyboard shortcut: Cmd/Ctrl+S, Escape
   useEffect(() => {

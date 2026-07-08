@@ -8,7 +8,7 @@
  */
 
 import { create } from 'zustand';
-import * as api from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 import { cacheVertical } from '@/lib/verticals/storage';
 
 // ============================================
@@ -112,8 +112,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   fetchSettings: async () => {
     set({ isLoading: true, error: null });
     try {
-      const res = await api.getSettings();
-      if (res.success && res.data) {
+      const res = await tryCall(() => api.settings.get());
+      if (res.ok) {
         const data = res.data as Record<string, unknown>;
         const settings: PlatformSettings = {
           general: {
@@ -173,15 +173,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   _saveToServer: async (settings: PlatformSettings) => {
     set({ isSaving: true, saveError: null });
-    try {
-      const res = await api.updateSettings(settings);
-      if (!res.success) {
-        set({ saveError: res.error?.message || 'Failed to save settings' });
-      }
-    } catch (err) {
-      set({ saveError: err instanceof Error ? err.message : 'Failed to save settings' });
-    } finally {
-      set({ isSaving: false });
+    // The org settings PATCH accepts a passthrough patch; the rich presentation
+    // settings ride through unchanged while the typed fields are honoured.
+    const res = await tryCall(() =>
+      api.settings.update(settings as unknown as Parameters<typeof api.settings.update>[0]),
+    );
+    if (!res.ok) {
+      set({ saveError: res.error.message || 'Failed to save settings' });
     }
+    set({ isSaving: false });
   },
 }));

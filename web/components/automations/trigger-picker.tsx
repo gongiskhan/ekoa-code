@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { wsAction } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useTranslation } from '@/stores/i18n';
 import type { Translations } from '@/locales/types';
@@ -44,13 +44,6 @@ interface TriggerSummary {
   createdAt: string;
 }
 
-interface CreateTriggerResponse {
-  trigger: TriggerSummary;
-  publicUrl: string;
-  secret?: string;
-  registrationError?: string;
-}
-
 interface TriggerPickerProps {
   automationId: string;
   artifactId?: string;
@@ -74,17 +67,23 @@ export function TriggerPicker({ automationId, artifactId, initialTrigger }: Trig
   // Pull the list of integrations with trigger-capable events.
   useEffect(() => {
     void (async () => {
-      const r = await wsAction<IntegrationSkillWithEvents[]>(
-        'ekoa.integrations',
-        'list-active',
-        {},
+      const r = await tryCall(() => api.integrations.listActive());
+      if (!r.ok) return;
+      // Shared `ActiveIntegration` keys the integration by `key`; the
+      // event descriptors ride as untyped passthrough records.
+      const mapped: IntegrationSkillWithEvents[] = r.data.items.map((item) => {
+        const it = item as { key: string; integrationKey?: string; displayName?: string; webhookEvents?: unknown; listenerEvents?: unknown };
+        return {
+          integrationKey: it.integrationKey ?? it.key,
+          displayName: it.displayName ?? it.key,
+          webhookEvents: it.webhookEvents as SkillEventDescriptor[] | undefined,
+          listenerEvents: it.listenerEvents as SkillEventDescriptor[] | undefined,
+        };
+      });
+      const withEvents = mapped.filter(
+        (s) => (s.webhookEvents?.length ?? 0) + (s.listenerEvents?.length ?? 0) > 0,
       );
-      if (r.success && Array.isArray(r.data)) {
-        const withEvents = r.data.filter(
-          (s) => (s.webhookEvents?.length ?? 0) + (s.listenerEvents?.length ?? 0) > 0,
-        );
-        setSkills(withEvents);
-      }
+      setSkills(withEvents);
     })();
   }, []);
 
@@ -99,17 +98,19 @@ export function TriggerPicker({ automationId, artifactId, initialTrigger }: Trig
     setBusy(true);
     setError(null);
     try {
-      const r = await wsAction<CreateTriggerResponse>('ekoa.triggers', 'create', {
-        automationId,
-        integrationKey: skillKey,
-        eventName,
-        artifactId,
-      });
-      if (!r.success || !r.data) {
-        setError(r.error?.message || t.createError);
+      const r = await tryCall(() =>
+        api.triggers.create({
+          automationId,
+          integrationKey: skillKey,
+          eventName,
+          artifactId,
+        }),
+      );
+      if (!r.ok) {
+        setError(r.error.message || t.createError);
         return;
       }
-      setTrigger(r.data.trigger);
+      setTrigger(r.data.trigger as unknown as TriggerSummary);
       setRegistrationError(r.data.registrationError ?? null);
       if (r.data.secret) {
         setManualSetup({ url: r.data.publicUrl, secret: r.data.secret });
@@ -129,9 +130,9 @@ export function TriggerPicker({ automationId, artifactId, initialTrigger }: Trig
     setBusy(true);
     setError(null);
     try {
-      const r = await wsAction<{ deleted: boolean }>('ekoa.triggers', 'delete', { id: trigger.id });
-      if (!r.success) {
-        setError(r.error?.message || t.removeError);
+      const r = await tryCall(() => api.triggers.delete({ id: trigger.id }));
+      if (!r.ok) {
+        setError(r.error.message || t.removeError);
         return;
       }
       setTrigger(null);

@@ -7,15 +7,16 @@
  */
 
 import { create } from 'zustand';
-import * as api from '@/lib/api/client';
-import { getConnection } from '@/lib/cortex/connection';
+import { api, tryCall } from '@/lib/api';
 import type {
   IntegrationSkill,
   IntegrationCompanyConfig,
   ActiveIntegration,
   IntegrationBuilderOutput,
   IntegrationSessionStatus,
-} from '@/lib/api/client';
+  IntegrationConnectSessionResult,
+  IntegrationProvisionAutomationsResult,
+} from '@/types/integration';
 
 export interface PlatformIntegrationStatus {
   connected: boolean;
@@ -125,227 +126,168 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
 
   fetchSkills: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.listIntegrationSkills();
-      if (response.success && response.data) {
-        set({ skills: response.data, isLoading: false });
-      } else {
-        set({
-          error: response.error?.message || 'Failed to fetch integration skills',
-          isLoading: false,
-        });
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch integration skills',
-        isLoading: false,
-      });
+    // The list endpoint returns the minimal typed IntegrationDefinition, but the
+    // passthrough payload carries the full rich skill (integrationKey + configSchema
+    // + actions + sessionConnect/webhookConfig); cast to the web view-model.
+    const res = await tryCall(() => api.integrations.list());
+    if (res.ok) {
+      set({ skills: res.data.items as unknown as IntegrationSkillScoped[], isLoading: false });
+    } else {
+      set({ error: res.error.message || 'Failed to fetch integration skills', isLoading: false });
     }
   },
 
   fetchConfigs: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.getIntegrationConfigs();
-      if (response.success && response.data) {
-        set({ configs: response.data, isLoading: false });
-      } else {
-        set({
-          error: response.error?.message || 'Failed to fetch integration configs',
-          isLoading: false,
-        });
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch integration configs',
-        isLoading: false,
-      });
+    const res = await tryCall(() => api.integrations.listConfigs());
+    if (res.ok) {
+      set({ configs: res.data.items as unknown as IntegrationCompanyConfig[], isLoading: false });
+    } else {
+      set({ error: res.error.message || 'Failed to fetch integration configs', isLoading: false });
     }
   },
 
   fetchActiveIntegrations: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.getActiveIntegrations();
-      if (response.success && response.data) {
-        set({ activeIntegrations: response.data, isLoading: false });
-      } else {
-        set({
-          error: response.error?.message || 'Failed to fetch active integrations',
-          isLoading: false,
-        });
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch active integrations',
-        isLoading: false,
-      });
+    const res = await tryCall(() => api.integrations.listActive());
+    if (res.ok) {
+      set({ activeIntegrations: res.data.items as unknown as ActiveIntegration[], isLoading: false });
+    } else {
+      set({ error: res.error.message || 'Failed to fetch active integrations', isLoading: false });
     }
   },
 
   fetchAll: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const [skillsRes, configsRes, activeRes] = await Promise.all([
-        api.listIntegrationSkills(),
-        api.getIntegrationConfigs().catch(() => ({ success: true as const, data: [] as IntegrationCompanyConfig[] })),
-        api.getActiveIntegrations(),
-      ]);
+    const [skillsRes, configsRes, activeRes] = await Promise.all([
+      tryCall(() => api.integrations.list()),
+      tryCall(() => api.integrations.listConfigs()),
+      tryCall(() => api.integrations.listActive()),
+    ]);
 
-      const newState: Partial<IntegrationsState> = { isLoading: false };
+    const newState: Partial<IntegrationsState> = { isLoading: false };
 
-      if (skillsRes.success && skillsRes.data) {
-        newState.skills = Array.isArray(skillsRes.data) ? skillsRes.data : [];
-      }
-      if (configsRes.success && configsRes.data) {
-        newState.configs = Array.isArray(configsRes.data) ? configsRes.data : [];
-      }
-      if (activeRes.success && activeRes.data) {
-        newState.activeIntegrations = Array.isArray(activeRes.data) ? activeRes.data : [];
-      }
-
-      set(newState);
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch integrations',
-        isLoading: false,
-      });
+    if (skillsRes.ok) {
+      newState.skills = skillsRes.data.items as unknown as IntegrationSkillScoped[];
     }
+    // Configs failure is tolerated (an org may have none / lack access); skills and
+    // active drive the error banner, mirroring the prior Promise.all behaviour.
+    if (configsRes.ok) {
+      newState.configs = configsRes.data.items as unknown as IntegrationCompanyConfig[];
+    }
+    if (activeRes.ok) {
+      newState.activeIntegrations = activeRes.data.items as unknown as ActiveIntegration[];
+    }
+    if (!skillsRes.ok) {
+      newState.error = skillsRes.error.message || 'Failed to fetch integrations';
+    } else if (!activeRes.ok) {
+      newState.error = activeRes.error.message || 'Failed to fetch integrations';
+    }
+
+    set(newState);
   },
 
   configureIntegration: async (integrationKey, configValues) => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.configureIntegration(integrationKey, configValues);
-      if (response.success) {
-        // Refresh both configs and active integrations
-        await Promise.all([
-          get().fetchConfigs(),
-          get().fetchActiveIntegrations(),
-        ]);
-        set({ isLoading: false });
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to configure integration';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to configure integration';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const res = await tryCall(() => api.integrations.createConfig({ integrationKey, configValues }));
+    if (res.ok) {
+      // Refresh both configs and active integrations
+      await Promise.all([
+        get().fetchConfigs(),
+        get().fetchActiveIntegrations(),
+      ]);
+      set({ isLoading: false });
+      return { success: true };
     }
+    const errorMsg = res.error.message || 'Failed to configure integration';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   setEnabled: async (integrationKey, enabled) => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.setIntegrationEnabled(integrationKey, enabled);
-      if (response.success) {
-        set((state) => ({
-          configs: state.configs.map((c) =>
-            c.integrationKey === integrationKey ? { ...c, enabled } : c
-          ),
-          isLoading: false,
-        }));
-        get().fetchActiveIntegrations();
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to update integration status';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to update integration status';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const res = await tryCall(() => api.integrations.updateConfig({ integrationKey, enabled }));
+    if (res.ok) {
+      set((state) => ({
+        configs: state.configs.map((c) =>
+          c.integrationKey === integrationKey ? { ...c, enabled } : c
+        ),
+        isLoading: false,
+      }));
+      get().fetchActiveIntegrations();
+      return { success: true };
     }
+    const errorMsg = res.error.message || 'Failed to update integration status';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   deleteSkill: async (integrationKey) => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.deleteIntegrationSkill(integrationKey);
-      if (response.success) {
-        set((state) => ({
-          skills: state.skills.filter((s) => s.integrationKey !== integrationKey),
-          isLoading: false,
-        }));
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to delete integration skill';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to delete integration skill';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const res = await tryCall(() => api.integrations.deleteSkill({ key: integrationKey }));
+    if (res.ok) {
+      set((state) => ({
+        skills: state.skills.filter((s) => s.integrationKey !== integrationKey),
+        isLoading: false,
+      }));
+      return { success: true };
     }
+    const errorMsg = res.error.message || 'Failed to delete integration skill';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   refreshRegistry: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.refreshIntegrationRegistry();
-      if (response.success) {
-        await get().fetchSkills();
-        set({ isLoading: false });
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to refresh registry';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to refresh registry';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const res = await tryCall(() => api.integrations.refresh());
+    if (res.ok) {
+      await get().fetchSkills();
+      set({ isLoading: false });
+      return { success: true };
     }
+    const errorMsg = res.error.message || 'Failed to refresh registry';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   loadIntegrationPackage: async (integrationKey) => {
-    try {
-      const response = await api.loadIntegrationFull(integrationKey);
-      if (response.success && response.data?.generatedPackage) {
-        return { success: true, data: response.data.generatedPackage, sessionId: response.data.sessionId };
+    const res = await tryCall(() => api.integrationBuilder.load({ integrationKey }));
+    if (res.ok) {
+      if (res.data.generatedPackage) {
+        return {
+          success: true,
+          data: res.data.generatedPackage as unknown as IntegrationBuilderOutput,
+          sessionId: res.data.builderSessionId,
+        };
       }
-      return { success: false, error: response.error?.message || 'Failed to load integration package' };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to load integration package' };
+      return { success: false, error: 'Failed to load integration package' };
     }
+    return { success: false, error: res.error.message || 'Failed to load integration package' };
   },
 
   saveIntegrationPackage: async (pkg) => {
-    try {
-      const response = await api.saveIntegrationDirect(pkg);
-      if (response.success) {
-        // Refresh the skills list after saving
-        await get().fetchSkills();
-        return { success: true };
-      }
-      return { success: false, error: response.error?.message || 'Failed to save integration' };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to save integration' };
+    // Spread into a fresh object literal: a named interface is not assignable to the
+    // passthrough GeneratedPackage index signature, but an anonymous object type is.
+    const res = await tryCall(() => api.integrationBuilder.save({ generatedPackage: { ...pkg } }));
+    if (res.ok) {
+      // Refresh the skills list after saving
+      await get().fetchSkills();
+      return { success: true };
     }
+    return { success: false, error: res.error.message || 'Failed to save integration' };
   },
 
   clearError: () => set({ error: null }),
 
   // Platform integration actions
   connectPlatform: async (provider) => {
-    const conn = getConnection();
-    const result = await conn.sendAction<{ authUrl: string; state: string }>(
-      'ekoa.platform-integrations',
-      'connect',
-      { provider },
-    );
-    return result;
+    // Returns { authUrl, state } directly and throws ApiError on failure (the
+    // PlatformIntegrationCard handles the rejection), preserving prior behaviour.
+    return api.platformIntegrations.connect({ provider });
   },
 
   disconnectPlatform: async (provider) => {
-    const conn = getConnection();
-    await conn.sendAction('ekoa.platform-integrations', 'disconnect', { provider });
+    await api.platformIntegrations.disconnect({ provider });
     set((state) => ({
       platformStatuses: {
         ...state.platformStatuses,
@@ -355,43 +297,35 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
   },
 
   fetchPlatformStatus: async (provider) => {
-    try {
-      const conn = getConnection();
-      const result = await conn.sendAction<PlatformIntegrationStatus>(
-        'ekoa.platform-integrations',
-        'status',
-        { provider },
-      );
+    const res = await tryCall(() => api.platformIntegrations.status({ provider }));
+    if (res.ok) {
       set((state) => ({
         platformStatuses: {
           ...state.platformStatuses,
-          [provider]: result,
+          [provider]: {
+            connected: res.data.connected,
+            email: res.data.email,
+            expiresAt: res.data.expiresAt,
+          },
         },
       }));
-    } catch {
-      // Silently fail -- platform integrations may not be available
     }
+    // Otherwise silently keep the prior status -- platform integrations may not be available.
   },
 
   fetchAllPlatformStatuses: async () => {
-    try {
-      const conn = getConnection();
-      const result = await conn.sendAction<{
-        integrations: Array<{ provider: string; connected: boolean; email?: string }>;
-      }>('ekoa.platform-integrations', 'list', {});
-      if (result?.integrations) {
-        const statuses: Record<string, PlatformIntegrationStatus> = {};
-        for (const item of result.integrations) {
-          statuses[item.provider] = {
-            connected: item.connected,
-            email: item.email,
-          };
-        }
-        set({ platformStatuses: statuses });
+    const res = await tryCall(() => api.platformIntegrations.list());
+    if (res.ok) {
+      const statuses: Record<string, PlatformIntegrationStatus> = {};
+      for (const item of res.data.items) {
+        statuses[item.provider] = {
+          connected: item.connected,
+          email: item.email,
+        };
       }
-    } catch {
-      // Silently fail -- platform integrations may not be available
+      set({ platformStatuses: statuses });
     }
+    // Otherwise silently keep prior statuses -- platform integrations may not be available.
   },
 
   // Browser-session actions
@@ -401,9 +335,10 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
     if (sessionStatusInFlight.has(integrationKey)) return;
     sessionStatusInFlight.add(integrationKey);
     try {
-      const response = await api.integrationSessionStatus(integrationKey);
-      if (response.success && response.data) {
-        const status = response.data;
+      const res = await tryCall(() => api.integrations.sessionStatus({ key: integrationKey }));
+      if (res.ok) {
+        // The passthrough SessionCaptureStatus carries the full rich status snapshot.
+        const status = res.data as unknown as IntegrationSessionStatus;
         set((state) => ({
           sessionStatuses: { ...state.sessionStatuses, [integrationKey]: status },
         }));
@@ -411,8 +346,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
           stopSessionPolling(integrationKey);
         }
       }
-    } catch {
-      // Keep the last known snapshot; the next poll retries.
+      // On failure keep the last known snapshot; the next poll retries.
     } finally {
       sessionStatusInFlight.delete(integrationKey);
     }
@@ -421,9 +355,9 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
   connectSession: async (integrationKey) => {
     set((state) => ({ sessionBusy: { ...state.sessionBusy, [integrationKey]: true } }));
     try {
-      const response = await api.integrationConnectSession(integrationKey);
-      if (response.success && response.data) {
-        const { started, session } = response.data;
+      const res = await tryCall(() => api.integrations.connectSession({ key: integrationKey }));
+      if (res.ok) {
+        const { started, session } = res.data as unknown as IntegrationConnectSessionResult;
         // Optimistic update: reflect waiting_login/failed immediately, before
         // the first poll lands. Falls back to a minimal entry if the card
         // connected before the initial session-status fetch resolved.
@@ -447,10 +381,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
         if (started) startSessionPolling(integrationKey);
         return started ? { success: true } : { success: false, error: session.message };
       }
-      const errorMsg = response.error?.message || 'Não foi possível iniciar a captura da sessão.';
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Não foi possível iniciar a captura da sessão.';
+      const errorMsg = res.error.message || 'Não foi possível iniciar a captura da sessão.';
       return { success: false, error: errorMsg };
     } finally {
       set((state) => ({ sessionBusy: { ...state.sessionBusy, [integrationKey]: false } }));
@@ -460,9 +391,9 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
   provisionAutomations: async (integrationKey) => {
     set((state) => ({ sessionBusy: { ...state.sessionBusy, [integrationKey]: true } }));
     try {
-      const response = await api.integrationProvisionAutomations(integrationKey);
-      if (response.success && response.data) {
-        const { actions } = response.data;
+      const res = await tryCall(() => api.integrations.provisionAutomations({ key: integrationKey }));
+      if (res.ok) {
+        const { actions } = res.data as unknown as IntegrationProvisionAutomationsResult;
         const prev = get().sessionStatuses[integrationKey];
         if (prev) {
           set((state) => ({
@@ -476,10 +407,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
         }
         return { success: true };
       }
-      const errorMsg = response.error?.message || 'Não foi possível criar as automatizações.';
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Não foi possível criar as automatizações.';
+      const errorMsg = res.error.message || 'Não foi possível criar as automatizações.';
       return { success: false, error: errorMsg };
     } finally {
       set((state) => ({ sessionBusy: { ...state.sessionBusy, [integrationKey]: false } }));

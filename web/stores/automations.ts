@@ -1,21 +1,7 @@
 "use client";
 
 import { create } from 'zustand';
-import {
-  listAutomations,
-  getAutomation,
-  createAutomation,
-  updateAutomation,
-  deleteAutomation,
-  planAutomationFromGoal,
-  runAutomation as apiRunAutomation,
-  cancelAutomationRun,
-  resumeAutomationRun,
-  listAutomationRuns,
-  getAutomationRun,
-  submitAutomationStepFeedback,
-  listAutomationCatalog,
-} from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 import type {
   Automation,
   RunRecord,
@@ -42,6 +28,7 @@ interface AutomationsState {
   /** Live run state. */
   activeRun: {
     runId?: string;
+    /** @deprecated retired with the old client-minted trace id (W3); runs are keyed by `runId`. */
     traceId?: string;
     automationId?: string;
     /** Step records as they stream in via SSE (indexed by stepIndex). */
@@ -119,6 +106,8 @@ interface AutomationsActions {
     error?: string;
   }>;
   start: (id: string, inputs?: Record<string, unknown>) => Promise<string | null>;
+  /** Recover the active run for an automation after a page reload (in-memory store is empty). */
+  recoverActiveRun: (automationId: string) => Promise<void>;
   cancel: () => Promise<void>;
   resume: () => Promise<void>;
   applyLiveEvent: (event: AutomationLiveEvent) => void;
@@ -143,6 +132,18 @@ const INITIAL_RUN: AutomationsState['activeRun'] = {
   status: 'idle',
 };
 
+/**
+ * Non-terminal run statuses used when recovering an in-flight run after reload.
+ * The shared RunStatus is a superset; these are the states the store keeps live.
+ */
+const NON_TERMINAL_RUN_STATUSES = new Set<string>([
+  'running',
+  'awaiting_integration',
+  'paused_for_user',
+  'awaiting_consent',
+  'awaiting_daemon',
+]);
+
 // ============================================================================
 // Store
 // ============================================================================
@@ -162,77 +163,80 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
 
   async fetchAutomations() {
     set({ loading: true, error: undefined });
-    const res = await listAutomations();
-    if (res.success && res.data) {
-      set({ automations: res.data.automations, loading: false });
+    const res = await tryCall(() => api.automations.list());
+    if (res.ok) {
+      set({ automations: res.data.items as unknown as Automation[], loading: false });
     } else {
-      set({ loading: false, error: res.error?.message ?? 'failed to load automations' });
+      set({ loading: false, error: res.error.message || 'failed to load automations' });
     }
   },
 
   async fetchOne(id) {
     set({ currentLoading: true, error: undefined });
-    const res = await getAutomation(id);
-    if (res.success && res.data) {
-      set({ current: res.data.automation, currentLoading: false });
-      return res.data.automation;
+    const res = await tryCall(() => api.automations.get({ id }));
+    if (res.ok) {
+      const automation = res.data as unknown as Automation;
+      set({ current: automation, currentLoading: false });
+      return automation;
     }
-    set({ currentLoading: false, error: res.error?.message ?? 'failed to load automation' });
+    set({ currentLoading: false, error: res.error.message || 'failed to load automation' });
     return null;
   },
 
   async create(data) {
-    const res = await createAutomation(data);
-    if (res.success && res.data) {
-      const a = res.data.automation;
+    const res = await tryCall(() =>
+      api.automations.create({ name: data.name, description: data.description, steps: data.steps }),
+    );
+    if (res.ok) {
+      const a = res.data as unknown as Automation;
       set((s) => ({ automations: [a, ...s.automations], current: a }));
       return a;
     }
-    set({ error: res.error?.message ?? 'failed to create' });
+    set({ error: res.error.message || 'failed to create' });
     return null;
   },
 
   async update(id, patch) {
-    const res = await updateAutomation(id, patch);
-    if (res.success && res.data) {
-      const updated = res.data.automation;
+    const res = await tryCall(() => api.automations.patch({ id, ...patch }));
+    if (res.ok) {
+      const updated = res.data as unknown as Automation;
       set((s) => ({
         automations: s.automations.map((a) => (a.id === id ? updated : a)),
         current: s.current?.id === id ? updated : s.current,
       }));
       return updated;
     }
-    set({ error: res.error?.message ?? 'failed to update' });
+    set({ error: res.error.message || 'failed to update' });
     return null;
   },
 
   async remove(id) {
-    const res = await deleteAutomation(id);
-    if (res.success) {
+    const res = await tryCall(() => api.automations.remove({ id }));
+    if (res.ok) {
       set((s) => ({
         automations: s.automations.filter((a) => a.id !== id),
         current: s.current?.id === id ? null : s.current,
       }));
       return true;
     }
-    set({ error: res.error?.message ?? 'failed to delete' });
+    set({ error: res.error.message || 'failed to delete' });
     return false;
   },
 
   async planFromGoal(goal, name, automationId) {
-    const res = await planAutomationFromGoal(goal, name, automationId);
-    if (!res.success || !res.data) {
-      return { ok: false, error: res.error?.message ?? 'planner failed' };
+    const res = await tryCall(() => api.automations.plan({ goal, name, automationId }));
+    if (!res.ok) {
+      return { ok: false, error: res.error.message || 'planner failed' };
     }
-    const plan = res.data.plan;
+    const plan = res.data.plan as { status?: string; service?: string; reason?: string };
     if (plan.status === 'awaiting_integration') {
-      return { ok: false, awaiting: { service: plan.service, reason: plan.reason } };
+      return { ok: false, awaiting: { service: plan.service ?? '', reason: plan.reason ?? '' } };
     }
     // The backend persisted the automation and kicked off the rehearsal
     // run. Surface both so the caller can navigate to the editor and
     // subscribe to the live rehearsal events.
-    const automation = res.data.automation;
-    const traceId = res.data.traceId;
+    const automation = res.data.automation as unknown as Automation | undefined;
+    const runId = res.data.runId;
     if (!automation) {
       return { ok: false, error: 'planner returned no automation' };
     }
@@ -241,49 +245,70 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
       current: automation,
       // Pre-arm activeRun so the live-run hook can attach as soon as the
       // editor mounts and the SSE events start arriving.
-      activeRun: traceId
-        ? { ...INITIAL_RUN, automationId: automation.id, traceId, status: 'running', kind: 'rehearsal' }
+      activeRun: runId
+        ? { ...INITIAL_RUN, automationId: automation.id, runId, status: 'running', kind: 'rehearsal' }
         : s.activeRun,
     }));
-    return { ok: true, automation, traceId, rehearsing: !!res.data.rehearsing };
+    return { ok: true, automation, traceId: runId, rehearsing: !!res.data.rehearsing };
   },
 
   async start(id, inputs) {
     set({ activeRun: { ...INITIAL_RUN, automationId: id, status: 'running', kind: 'normal' } });
-    const res = await apiRunAutomation(id, inputs);
-    if (res.success && res.data) {
-      set((s) => ({
-        activeRun: { ...s.activeRun, traceId: res.data!.traceId },
-      }));
-      return res.data.traceId;
+    const res = await tryCall(() => api.automations.createRun({ id, inputs: inputs ?? {} }));
+    if (res.ok) {
+      // The run id is server-minted (the old client-minted trace id is retired).
+      const runId = res.data.runId;
+      set((s) => ({ activeRun: { ...s.activeRun, runId } }));
+      return runId;
     }
     set({
       activeRun: { ...INITIAL_RUN, status: 'failed' },
-      error: res.error?.message ?? 'failed to start run',
+      error: res.error.message || 'failed to start run',
     });
     return null;
   },
 
+  async recoverActiveRun(automationId) {
+    // After a reload the in-memory store is empty. Per-run SSE streams need a
+    // run id to subscribe, so recover the most recent in-flight run for this
+    // automation before the live-run hook can attach.
+    const { activeRun } = get();
+    if (activeRun.runId && activeRun.automationId === automationId) return;
+    const res = await tryCall(() => api.automations.listRuns({ automationId, limit: 20 }));
+    if (!res.ok) return;
+    const runs = res.data.items as unknown as RunRecord[];
+    const live = runs.find((r) => NON_TERMINAL_RUN_STATUSES.has(r.status));
+    if (!live) return;
+    set((s) => {
+      // Don't clobber a run the user just started for this automation.
+      if (s.activeRun.runId && s.activeRun.automationId === automationId) return s;
+      const status = NON_TERMINAL_RUN_STATUSES.has(live.status)
+        ? (live.status as AutomationsState['activeRun']['status'])
+        : 'running';
+      return { activeRun: { ...INITIAL_RUN, automationId, runId: live.id, status, kind: 'normal' } };
+    });
+  },
+
   async cancel() {
     const { activeRun } = get();
-    if (!activeRun.traceId) {
-      console.warn('[automations] cancel(): no active traceId — nothing to cancel');
+    if (!activeRun.runId) {
+      console.warn('[automations] cancel(): no active runId - nothing to cancel');
       return;
     }
-    await cancelAutomationRun(activeRun.traceId);
+    await tryCall(() => api.automations.cancelRun({ id: activeRun.runId! }));
     set((s) => ({ activeRun: { ...s.activeRun, status: 'cancelled', streamingSession: undefined } }));
   },
 
   async resume() {
     const { activeRun } = get();
-    if (!activeRun.traceId) {
-      console.warn('[automations] resume(): no active traceId — store has no record of which run is paused. Reload the page once events arrive again.');
+    if (!activeRun.runId) {
+      console.warn('[automations] resume(): no active runId - store has no record of which run is paused. Reload the page once events arrive again.');
       return;
     }
-    await resumeAutomationRun(activeRun.traceId);
-    // The engine will emit `automation_run_resumed` which will flip
-    // status back to 'running' through applyLiveEvent. We optimistically
-    // clear the pauseRequest here so the UI reacts immediately.
+    await tryCall(() => api.automations.resumeRun({ id: activeRun.runId! }));
+    // The engine will emit `resumed` which will flip status back to 'running'
+    // through applyLiveEvent. We optimistically clear the pauseRequest here so
+    // the UI reacts immediately.
     set((s) => ({
       activeRun: { ...s.activeRun, pauseRequest: undefined, status: 'running', streamingSession: undefined },
     }));
@@ -291,18 +316,8 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
 
   applyLiveEvent(event) {
     set((s) => {
-      // Filter by traceId so events from other runs don't leak into this view
-      if (s.activeRun.traceId && event.trace_id !== s.activeRun.traceId) return s;
-
-      // Hydrate traceId from the event when the store doesn't have it.
-      // Happens after a page reload mid-run: SSE re-connects, the pause /
-      // step events flow in, but the store starts with an empty
-      // activeRun. Without this, resume() reads an undefined traceId and
-      // silently returns — the user sees a Continue button that does
-      // nothing. The first incoming event is enough to lock the view to
-      // this run.
-      const traceId = s.activeRun.traceId ?? event.trace_id;
-
+      // The stream is run-scoped (openAutomationRunStream), so there is no
+      // client-side trace filtering to do (FC-028).
       const timeline = [...s.activeRun.timeline, event];
 
       switch (event.type) {
@@ -310,7 +325,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               liveSteps: { ...s.activeRun.liveSteps, [event.stepIndex]: event },
               timeline,
@@ -321,7 +335,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               status: 'completed',
               summary: event.summary,
@@ -334,7 +347,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               status: 'failed',
               error: event.error,
@@ -347,7 +359,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               status: 'awaiting_integration',
               awaitingService: event.service,
@@ -356,12 +367,11 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           };
         }
         case 'automation_run_patch': {
-          // Patch events don't change run status — they're informational
+          // Patch events don't change run status - they're informational
           // signals while the engine is mid-fix.
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               timeline,
             },
@@ -371,7 +381,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               status: 'paused_for_user',
               timeline,
@@ -389,7 +398,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               status: 'running',
               pauseRequest: undefined,
@@ -402,7 +410,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               timeline,
               streamingSession: {
@@ -418,7 +425,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               timeline,
               status: 'awaiting_consent',
@@ -435,7 +441,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               timeline,
               status: 'awaiting_daemon',
@@ -460,7 +465,6 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           return {
             activeRun: {
               ...s.activeRun,
-              traceId,
               runId: event.runId,
               timeline,
               liveSteps: existingByIndex,
@@ -469,7 +473,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
           };
         }
         default: {
-          // exhaustiveness check — new event types must be handled above.
+          // exhaustiveness check - new event types must be handled above.
           return s;
         }
       }
@@ -494,24 +498,26 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
 
   async fetchRuns(automationId, limit) {
     set({ runsLoading: true });
-    const res = await listAutomationRuns(automationId, limit);
-    if (res.success && res.data) {
-      set({ runs: res.data.runs, runsLoading: false });
+    const res = await tryCall(() => api.automations.listRuns({ automationId, limit }));
+    if (res.ok) {
+      set({ runs: res.data.items as unknown as RunRecord[], runsLoading: false });
     } else {
-      set({ runsLoading: false, error: res.error?.message ?? 'failed to load runs' });
+      set({ runsLoading: false, error: res.error.message || 'failed to load runs' });
     }
   },
 
-  async fetchRun(automationId, runId) {
-    const res = await getAutomationRun(automationId, runId);
-    if (res.success && res.data) return res.data.run;
+  async fetchRun(_automationId, runId) {
+    const res = await tryCall(() => api.automations.getRun({ id: runId }));
+    if (res.ok) return res.data as unknown as RunRecord;
     return null;
   },
 
   async submitFeedback(input) {
-    const res = await submitAutomationStepFeedback(input);
-    if (!res.success) {
-      set({ error: res.error?.message ?? 'feedback failed' });
+    const res = await tryCall(() =>
+      api.automations.stepFeedback({ id: input.runId, stepId: input.stepId, kind: input.kind, note: input.note }),
+    );
+    if (!res.ok) {
+      set({ error: res.error.message || 'feedback failed' });
       return false;
     }
     return true;
@@ -519,9 +525,12 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
 
   async fetchCatalog() {
     set({ catalogLoading: true });
-    const res = await listAutomationCatalog();
-    if (res.success && res.data) {
-      set({ catalog: res.data, catalogLoading: false });
+    const res = await tryCall(() => api.automations.catalog());
+    if (res.ok) {
+      set({
+        catalog: res.data as unknown as AutomationsState['catalog'],
+        catalogLoading: false,
+      });
     } else {
       set({ catalogLoading: false });
     }

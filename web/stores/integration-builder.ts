@@ -4,33 +4,21 @@
  * Integration Builder Store
  *
  * Manages the AI-powered integration builder UI state:
- * - Chat session with streaming
+ * - Chat session (request-response; no streamed prose - FC-035)
  * - Generated integration package
  * - Test credentials and results
  * - Side panel tab state
  */
 
 import { create } from 'zustand';
-import * as api from '@/lib/api/client';
-import { getConnection } from '@/lib/cortex/connection';
-import { useI18nStore } from '@/stores/i18n';
+import { api, tryCall } from '@/lib/api';
 import type {
   IntegrationBuilderOutput,
   BuilderChatMessage,
   IntegrationTestResult,
-} from '@/lib/api/client';
+} from '@/types/integration';
 
 export type BuilderTab = 'skill' | 'config' | 'actions' | 'tests';
-
-/** Strip skill-md and config-json code blocks from chat text (they populate the side panel) */
-function stripCodeBlocks(text: string): string {
-  return text
-    .replace(/```skill-md\s*\n[\s\S]*?```/g, '')
-    .replace(/```config-json\s*\n[\s\S]*?```/g, '')
-    .replace(/```[\w-]*\s*\n[\s\S]*?```/g, '')  // catch any remaining fenced blocks
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 interface IntegrationBuilderState {
   // Session
@@ -108,107 +96,54 @@ export const useIntegrationBuilderStore = create<IntegrationBuilderState>()(
         timestamp: new Date().toISOString(),
       };
 
-      // Add assistant placeholder
-      const assistantMessage: BuilderChatMessage = {
-        role: 'assistant',
-        content: '',
-        timestamp: new Date().toISOString(),
-      };
-
       set((state) => ({
-        messages: [...state.messages, userMessage, assistantMessage],
+        messages: [...state.messages, userMessage],
         isGenerating: true,
         error: null,
         lastSentMessage: message,
       }));
 
-      // Subscribe to stream events before sending
-      const conn = getConnection();
-      let streamUnsubscribe: (() => void) | null = null;
+      // FC-035: the integration-builder chat is request-response (POST
+      // /integration-builder/chat, 300s via the descriptor); there is NO streamed
+      // prose. `isGenerating` is the busy/progress state until the reply lands.
+      // Language is auto-injected by the transport for language-flagged ops.
+      const res = await tryCall(() =>
+        api.integrationBuilder.chat({ message, builderSessionId: sessionId || undefined }),
+      );
 
-      // We need to intercept the action_stream events for this request
-      // The connection.sendAction will handle the request_id correlation
-      // But we need to listen for action_stream events with the same request_id
-      // This is a bit tricky since sendAction generates the request_id internally
+      if (res.ok) {
+        const { builderSessionId, generatedPackage, validationErrors } = res.data;
+        // The passthrough GeneratedPackage carries the full { skillMd, config } view-model
+        // when the agent produced one; an interim reply carries no `config`.
+        const pkg = generatedPackage as unknown as IntegrationBuilderOutput | undefined;
 
-      // Instead, we'll use the onStream handler which catches all action_stream events
-      // and filter by checking the sessionId in the stream data
-      const currentSessionId = sessionId;
+        set(() => {
+          const updates: Partial<IntegrationBuilderState> = {
+            sessionId: builderSessionId,
+            isGenerating: false,
+            // lastSentMessage intentionally kept — powers the Resend button on the latest user msg.
+            error: null,
+          };
 
-      streamUnsubscribe = conn.onStream((event) => {
-        if (event.type !== 'action_stream') return;
-        const streamData = event as Record<string, unknown>;
-        if (streamData.streamType === 'builder_text') {
-          const chunk = streamData.content as string;
-          set((state) => {
-            const messages = [...state.messages];
-            const lastMsg = messages[messages.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant') {
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                content: lastMsg.content + chunk,
-              };
-            }
-            return { messages };
-          });
-        }
-      });
+          if (pkg && pkg.config) {
+            updates.currentPackage = pkg;
+            updates.validationErrors = (validationErrors ?? []).map((e) => e.message);
+            updates.sidePanelTab = 'config';
+            updates.isSidePanelOpen = true;
+          }
 
-      try {
-        const language = useI18nStore.getState().language;
-        const response = await api.integrationBuilderChat(message, sessionId || undefined, language);
-
-        if (response.success && response.data) {
-          const { sessionId: newSessionId, generatedPackage, validationErrors } = response.data;
-
-          set((state) => {
-            const updates: Partial<IntegrationBuilderState> = {
-              sessionId: newSessionId,
-              isGenerating: false,
-              // lastSentMessage intentionally kept — powers the Resend button on the latest user msg.
-              error: null,
-            };
-
-            if (generatedPackage) {
-              updates.currentPackage = generatedPackage;
-              updates.validationErrors = validationErrors;
-              updates.sidePanelTab = 'config';
-              updates.isSidePanelOpen = true;
-
-              // Strip code blocks from last assistant message
-              const messages = [...state.messages];
-              const lastMsg = messages[messages.length - 1];
-              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
-                messages[messages.length - 1] = {
-                  ...lastMsg,
-                  content: stripCodeBlocks(lastMsg.content),
-                };
-              }
-              updates.messages = messages;
-            }
-
-            return updates as IntegrationBuilderState;
-          });
-        } else {
-          const errorMsg = response.error?.message || 'Failed to get response from builder';
-          set((state) => {
-            // Update the assistant message with error
-            const messages = [...state.messages];
-            const lastMsg = messages[messages.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                content: `Error: ${errorMsg}`,
-              };
-            }
-            return { messages, isGenerating: false, error: errorMsg };
-          });
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        set({ isGenerating: false, error: errorMsg });
-      } finally {
-        streamUnsubscribe?.();
+          return updates as IntegrationBuilderState;
+        });
+      } else {
+        const errorMsg = res.error.message || 'Failed to get response from builder';
+        set((state) => ({
+          messages: [
+            ...state.messages,
+            { role: 'assistant', content: `Error: ${errorMsg}`, timestamp: new Date().toISOString() },
+          ],
+          isGenerating: false,
+          error: errorMsg,
+        }));
       }
     },
 
@@ -232,30 +167,20 @@ export const useIntegrationBuilderStore = create<IntegrationBuilderState>()(
 
     loadIntegration: async (integrationKey: string) => {
       set({ isLoading: true, error: null });
-      try {
-        const response = await api.integrationBuilderLoad(integrationKey);
-        if (response.success && response.data) {
-          set({
-            sessionId: response.data.sessionId,
-            selectedIntegrationKey: integrationKey,
-            messages: response.data.messages || [],
-            currentPackage: response.data.generatedPackage,
-            validationErrors: response.data.validationErrors || [],
-            isLoading: false,
-            sidePanelTab: 'config',
-            isSidePanelOpen: true,
-          });
-        } else {
-          set({
-            error: response.error?.message || 'Failed to load integration',
-            isLoading: false,
-          });
-        }
-      } catch (error) {
+      const res = await tryCall(() => api.integrationBuilder.load({ integrationKey }));
+      if (res.ok) {
         set({
-          error: error instanceof Error ? error.message : 'Failed to load integration',
+          sessionId: res.data.builderSessionId,
+          selectedIntegrationKey: integrationKey,
+          messages: (res.data.messages ?? []) as unknown as BuilderChatMessage[],
+          currentPackage: res.data.generatedPackage as unknown as IntegrationBuilderOutput,
+          validationErrors: (res.data.validationErrors ?? []).map((e) => e.message),
           isLoading: false,
+          sidePanelTab: 'config',
+          isSidePanelOpen: true,
         });
+      } else {
+        set({ error: res.error.message || 'Failed to load integration', isLoading: false });
       }
     },
 
@@ -266,32 +191,24 @@ export const useIntegrationBuilderStore = create<IntegrationBuilderState>()(
       }
 
       set({ isSaving: true, error: null });
-      try {
-        // Pass test credentials so the backend auto-configures the integration
-        const credsToSave = hasSuccessfulTest && Object.keys(testCredentials).length > 0
-          ? testCredentials
-          : undefined;
-        const response = await api.integrationBuilderSave(
-          sessionId || '',
-          currentPackage,
-          credsToSave,
-        );
-        if (response.success && response.data) {
-          set({
-            isSaving: false,
-            selectedIntegrationKey: response.data.integrationKey,
-          });
-          return { success: true };
-        } else {
-          const errorMsg = response.error?.message || 'Failed to save integration';
-          set({ isSaving: false, error: errorMsg });
-          return { success: false, error: errorMsg };
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Failed to save integration';
-        set({ isSaving: false, error: errorMsg });
-        return { success: false, error: errorMsg };
+      // Pass test credentials so the backend auto-configures the integration
+      const credsToSave = hasSuccessfulTest && Object.keys(testCredentials).length > 0
+        ? testCredentials
+        : undefined;
+      const res = await tryCall(() =>
+        api.integrationBuilder.save({
+          builderSessionId: sessionId || '',
+          generatedPackage: currentPackage,
+          testCredentials: credsToSave,
+        }),
+      );
+      if (res.ok) {
+        set({ isSaving: false, selectedIntegrationKey: res.data.integrationKey });
+        return { success: true };
       }
+      const errorMsg = res.error.message || 'Failed to save integration';
+      set({ isSaving: false, error: errorMsg });
+      return { success: false, error: errorMsg };
     },
 
     testAction: async (actionKey: string, testInput?: Record<string, unknown>) => {
@@ -299,36 +216,36 @@ export const useIntegrationBuilderStore = create<IntegrationBuilderState>()(
       if (!sessionId) return;
 
       set({ isTesting: true, error: null });
-      try {
-        const response = await api.integrationBuilderTest(
-          sessionId,
+      const res = await tryCall(() =>
+        api.integrationBuilder.test({
+          builderSessionId: sessionId,
           actionKey,
           testCredentials,
           testInput,
-        );
+        }),
+      );
 
+      if (res.ok) {
         const result: IntegrationTestResult = {
           actionKey,
-          success: response.data?.success || false,
-          statusCode: response.data?.statusCode,
-          response: response.data?.response,
-          error: response.data?.error,
+          success: res.data.success || false,
+          statusCode: res.data.statusCode,
+          response: res.data.response,
+          error: res.data.error,
           timestamp: new Date().toISOString(),
         };
-
         set((state) => ({
           testResults: [result, ...state.testResults],
           isTesting: false,
           hasSuccessfulTest: state.hasSuccessfulTest || result.success,
         }));
-      } catch (error) {
+      } else {
         const result: IntegrationTestResult = {
           actionKey,
           success: false,
-          error: error instanceof Error ? error.message : 'Test failed',
+          error: res.error.message || 'Test failed',
           timestamp: new Date().toISOString(),
         };
-
         set((state) => ({
           testResults: [result, ...state.testResults],
           isTesting: false,

@@ -2,12 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, AlertTriangle, RotateCcw } from "lucide-react";
-import {
-  listArtifactVersions,
-  restoreArtifactVersion,
-  type ArtifactVersion,
-} from "@/lib/api/client";
+import { api, tryCall } from "@/lib/api";
+import type { ArtifactVersion } from "@ekoa/shared";
 import { useTranslation } from "@/stores/i18n";
+
+/** Version rows may carry these via the schema's passthrough (not in the typed core). */
+type VersionExtras = { timestamp?: number; buildFailed?: boolean; isRestore?: boolean };
+function versionTimestamp(v: ArtifactVersion): number {
+  const extra = (v as VersionExtras).timestamp;
+  if (typeof extra === "number") return extra;
+  return v.createdAt ? new Date(v.createdAt).getTime() : Date.now();
+}
 
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
@@ -48,18 +53,13 @@ export function VersionsPanel({
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const res = await listArtifactVersions(artifactId);
-      if (res.success && res.data) {
-        setVersions(res.data.versions);
-      } else {
-        setError(res.error?.message || t.failedToLoad);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t.failedToLoad);
-    } finally {
-      setLoading(false);
+    const res = await tryCall(() => api.artifacts.versionsList({ id: artifactId }));
+    if (res.ok) {
+      setVersions(res.data.items);
+    } else {
+      setError(res.error.message || t.failedToLoad);
     }
+    setLoading(false);
   }, [artifactId]);
 
   useEffect(() => {
@@ -72,15 +72,13 @@ export function VersionsPanel({
     setRestoringSha(sha);
     setPendingRestore(null);
     try {
-      const res = await restoreArtifactVersion(artifactId, sha);
-      if (!res.success) {
-        setError(res.error?.message || t.failedToRestore);
+      const res = await tryCall(() => api.artifacts.versionsRestore({ id: artifactId, sha }));
+      if (!res.ok) {
+        setError(res.error.message || t.failedToRestore);
         return;
       }
       await load();
       onAfterRestore?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t.failedToRestore);
     } finally {
       setRestoringSha(null);
     }
@@ -124,6 +122,7 @@ export function VersionsPanel({
             {versions.map((v, idx) => {
               const isLatest = idx === 0;
               const isRestoring = restoringSha === v.sha;
+              const extras = v as VersionExtras;
               return (
                 <li key={v.sha} className="px-4 py-3 hover:bg-neutral-50">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -131,14 +130,14 @@ export function VersionsPanel({
                       {v.sha.slice(0, 7)}
                     </span>
                     <span className="text-[10px] text-neutral-500">
-                      {relativeTime(v.timestamp)}
+                      {relativeTime(versionTimestamp(v))}
                     </span>
                     {isLatest && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-700">
                         {t.current}
                       </span>
                     )}
-                    {v.buildFailed && (
+                    {extras.buildFailed && (
                       <span
                         className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700"
                         title={t.buildFailedTitle}
@@ -147,14 +146,14 @@ export function VersionsPanel({
                         {t.buildFailed}
                       </span>
                     )}
-                    {v.isRestore && (
+                    {extras.isRestore && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
                         {t.restored}
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-neutral-700 line-clamp-2">
-                    {firstLine(v.message) || t.noMessage}
+                    {firstLine(v.message ?? "") || t.noMessage}
                   </p>
                   {!isLatest && (
                     <button
@@ -190,7 +189,7 @@ export function VersionsPanel({
               {t.restoreToTitle(pendingRestore.sha.slice(0, 7))}
             </h3>
             <p className="text-xs text-neutral-600 mb-3">
-              {firstLine(pendingRestore.message) || t.noMessage}
+              {firstLine(pendingRestore.message ?? "") || t.noMessage}
             </p>
             <p className="text-xs text-neutral-500 mb-4">
               {t.restoreExplain}

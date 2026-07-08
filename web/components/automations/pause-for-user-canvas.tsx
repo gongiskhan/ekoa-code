@@ -3,6 +3,13 @@
 import { useEffect, useRef } from 'react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAutomationsStore } from '@/stores/automations';
+import {
+  openCanvas,
+  CANVAS_CLOSE_NORMAL,
+  type CanvasSession,
+  type CanvasInputEvent,
+  type CanvasStatus,
+} from '@/lib/api';
 import type { StreamingConnectionStatus, StreamingSession } from '@/types/automation';
 
 interface Props {
@@ -10,51 +17,25 @@ interface Props {
   onStatusChange?: (status: StreamingConnectionStatus) => void;
 }
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_BASE_DELAY_MS = 750;
-const PING_INTERVAL_MS = 25_000;
-
-const MOUSE_BUTTON: Record<number, 'left' | 'middle' | 'right'> = {
-  0: 'left',
-  1: 'middle',
-  2: 'right',
-};
-
-interface ServerFrame {
-  type: 'frame';
-  seq: number;
-  jpegBase64: string;
+/** Map the media-channel status to the store's connection status vocabulary. */
+function canvasStatusToConnection(status: CanvasStatus): StreamingConnectionStatus {
+  switch (status) {
+    case 'connecting':
+      return 'connecting';
+    case 'open':
+      return 'connected';
+    case 'closed':
+    default:
+      return 'disconnected';
+  }
 }
-
-interface ServerViewport {
-  type: 'viewport';
-  width: number;
-  height: number;
-}
-
-interface ServerError {
-  type: 'error';
-  code: string;
-  message: string;
-}
-
-interface ServerPong {
-  type: 'pong';
-  t: number;
-}
-
-type ServerMessage = ServerFrame | ServerViewport | ServerError | ServerPong;
 
 export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pendingFrameRef = useRef<{ seq: number; bitmap: ImageBitmap } | null>(null);
+  const canvasSessionRef = useRef<CanvasSession | null>(null);
   const rafRef = useRef<number | null>(null);
+  const pendingBitmapRef = useRef<ImageBitmap | null>(null);
   const viewportRef = useRef<{ width: number; height: number }>(session.viewport);
-  const closedByCallerRef = useRef(false);
   const isMobile = useIsMobile();
   const setStreamingStatus = useAutomationsStore((s) => s.setStreamingStatus);
 
@@ -65,179 +46,6 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
   const updateStatus = (status: StreamingConnectionStatus) => {
     setStreamingStatus(status);
     onStatusChange?.(status);
-  };
-
-  // WebSocket lifecycle.
-  useEffect(() => {
-    closedByCallerRef.current = false;
-    reconnectAttemptsRef.current = 0;
-
-    const url = appendToken(session.wsUrl, session.token);
-
-    const open = () => {
-      updateStatus('connecting');
-      let ws: WebSocket;
-      try {
-        ws = new WebSocket(url);
-      } catch (err) {
-        console.error('[streaming] failed to open WebSocket', err);
-        scheduleReconnect();
-        return;
-      }
-      wsRef.current = ws;
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        reconnectAttemptsRef.current = 0;
-        updateStatus('connected');
-        if (pingTimerRef.current) clearInterval(pingTimerRef.current);
-        pingTimerRef.current = setInterval(() => {
-          const sock = wsRef.current;
-          if (sock && sock.readyState === WebSocket.OPEN) {
-            try { sock.send(JSON.stringify({ type: 'ping', t: Date.now() })); } catch { /* noop */ }
-          }
-        }, PING_INTERVAL_MS);
-      };
-
-      ws.onmessage = (e) => {
-        if (typeof e.data !== 'string') return;
-        let msg: ServerMessage;
-        try {
-          msg = JSON.parse(e.data) as ServerMessage;
-        } catch {
-          return;
-        }
-        if (msg.type === 'frame') {
-          handleIncomingFrame(msg);
-        } else if (msg.type === 'viewport') {
-          viewportRef.current = { width: msg.width, height: msg.height };
-        } else if (msg.type === 'error') {
-          console.warn('[streaming] server error', msg.code, msg.message);
-        }
-      };
-
-      ws.onerror = (e) => {
-        console.warn('[streaming] WebSocket error', e);
-      };
-
-      ws.onclose = (e) => {
-        // Stale close: a newer WS instance has already replaced this one
-        // (StrictMode double-mount + cortex takeover policy). Don't reconnect —
-        // the active socket is still alive and reconnecting would evict it.
-        if (wsRef.current !== ws) return;
-        wsRef.current = null;
-        if (pingTimerRef.current) {
-          clearInterval(pingTimerRef.current);
-          pingTimerRef.current = null;
-        }
-        if (closedByCallerRef.current) return;
-        // 1000 = normal close (we initiated), 4000 = cortex takeover (newer
-        // connection won). Either way, don't loop.
-        if (e.code === 1000 || e.code === 4000) return;
-        scheduleReconnect();
-      };
-    };
-
-    const scheduleReconnect = () => {
-      if (closedByCallerRef.current) return;
-      reconnectAttemptsRef.current += 1;
-      if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
-        updateStatus('failed');
-        return;
-      }
-      updateStatus('disconnected');
-      const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttemptsRef.current - 1);
-      reconnectTimerRef.current = setTimeout(open, delay);
-    };
-
-    open();
-
-    return () => {
-      closedByCallerRef.current = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      if (pingTimerRef.current) {
-        clearInterval(pingTimerRef.current);
-        pingTimerRef.current = null;
-      }
-      const ws = wsRef.current;
-      wsRef.current = null;
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        try { ws.close(1000, 'unmount'); } catch { /* noop */ }
-      }
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const pending = pendingFrameRef.current;
-      if (pending) {
-        try { pending.bitmap.close(); } catch { /* noop */ }
-        pendingFrameRef.current = null;
-      }
-    };
-    // session token / wsUrl identify the connection target; reconnect if either changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.token, session.wsUrl]);
-
-  // Frame paint pump driven by rAF — drops late frames so we never block.
-  const handleIncomingFrame = (frame: ServerFrame) => {
-    const dataUrl = `data:image/jpeg;base64,${frame.jpegBase64}`;
-    const img = new Image();
-    img.decoding = 'async';
-    img.onload = () => {
-      const decode = 'createImageBitmap' in window
-        ? createImageBitmap(img)
-        : Promise.resolve(null);
-      decode.then((bitmap) => {
-        const previous = pendingFrameRef.current;
-        if (previous) {
-          try { previous.bitmap.close(); } catch { /* noop */ }
-        }
-        if (bitmap) {
-          pendingFrameRef.current = { seq: frame.seq, bitmap };
-        } else {
-          // Fallback: paint directly without ImageBitmap.
-          paintImageDirect(img);
-          ackFrame(frame.seq);
-          return;
-        }
-        ackFrame(frame.seq);
-        scheduleRepaint();
-      }).catch(() => {
-        paintImageDirect(img);
-        ackFrame(frame.seq);
-      });
-    };
-    img.onerror = () => { /* drop frame */ };
-    img.src = dataUrl;
-  };
-
-  const ackFrame = (seq: number) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify({ type: 'frame_ack', seq })); } catch { /* noop */ }
-    }
-  };
-
-  const scheduleRepaint = () => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      const canvas = canvasRef.current;
-      const pending = pendingFrameRef.current;
-      if (!canvas || !pending) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      if (canvas.width !== pending.bitmap.width || canvas.height !== pending.bitmap.height) {
-        canvas.width = pending.bitmap.width;
-        canvas.height = pending.bitmap.height;
-      }
-      ctx.drawImage(pending.bitmap, 0, 0);
-      try { pending.bitmap.close(); } catch { /* noop */ }
-      pendingFrameRef.current = null;
-    });
   };
 
   const paintImageDirect = (img: HTMLImageElement) => {
@@ -252,14 +60,100 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     ctx.drawImage(img, 0, 0);
   };
 
+  const scheduleRepaint = () => {
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const canvas = canvasRef.current;
+      const bitmap = pendingBitmapRef.current;
+      if (!canvas || !bitmap) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+      }
+      ctx.drawImage(bitmap, 0, 0);
+      try { bitmap.close(); } catch { /* noop */ }
+      pendingBitmapRef.current = null;
+    });
+  };
+
+  // Frame paint pump driven by rAF - drops late frames so we never block.
+  const handleIncomingFrame = (frame: Blob) => {
+    if (typeof window !== 'undefined' && 'createImageBitmap' in window) {
+      void createImageBitmap(frame)
+        .then((bitmap) => {
+          const previous = pendingBitmapRef.current;
+          if (previous) {
+            try { previous.close(); } catch { /* noop */ }
+          }
+          pendingBitmapRef.current = bitmap;
+          scheduleRepaint();
+        })
+        .catch(() => { /* drop frame */ });
+      return;
+    }
+    // Fallback: paint via an object URL when ImageBitmap is unavailable.
+    const url = URL.createObjectURL(frame);
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      paintImageDirect(img);
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  };
+
+  // Canvas lifecycle. The single WebSocket transport lives in `web/lib/api/canvas.ts`
+  // (openCanvas); this component only paints frames and forwards input. The named close
+  // codes are terminal (1000 = normal hand-back / run resumes, 4000 = takeover) and the
+  // media channel never auto-reconnects.
+  useEffect(() => {
+    const canvas = openCanvas({
+      wsUrl: session.wsUrl,
+      token: session.token,
+      viewport: session.viewport,
+    });
+    canvasSessionRef.current = canvas;
+
+    const offFrame = canvas.onFrame((frame) => handleIncomingFrame(frame));
+    const offStatus = canvas.onStatusChange((status) => {
+      updateStatus(canvasStatusToConnection(status));
+    });
+    const offClose = canvas.onClose((_code, resumed) => {
+      // 1000 (resumed hand-back): the run resumes and the overlay unmounts as the
+      // store clears the streaming session. 4000 / errors: surface as offline.
+      updateStatus(resumed ? 'idle' : 'failed');
+    });
+
+    return () => {
+      offFrame();
+      offStatus();
+      offClose();
+      canvasSessionRef.current = null;
+      canvas.close(CANVAS_CLOSE_NORMAL);
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      const pending = pendingBitmapRef.current;
+      if (pending) {
+        try { pending.close(); } catch { /* noop */ }
+        pendingBitmapRef.current = null;
+      }
+    };
+    // session token / wsUrl identify the connection target; reopen if either changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.token, session.wsUrl]);
+
   // ============================================================================
   // Input capture
   // ============================================================================
 
-  const sendInput = (msg: Record<string, unknown>) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify(msg)); } catch { /* noop */ }
+  const sendInput = (event: CanvasInputEvent) => {
+    canvasSessionRef.current?.sendInput(event);
   };
 
   const canvasToViewport = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -278,12 +172,14 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     };
   };
 
-  const buildModifiers = (e: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean }) => ({
-    metaKey: !!e.metaKey,
-    ctrlKey: !!e.ctrlKey,
-    altKey: !!e.altKey,
-    shiftKey: !!e.shiftKey,
-  });
+  const buildModifiers = (e: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean }): string[] => {
+    const modifiers: string[] = [];
+    if (e.metaKey) modifiers.push('Meta');
+    if (e.ctrlKey) modifiers.push('Control');
+    if (e.altKey) modifiers.push('Alt');
+    if (e.shiftKey) modifiers.push('Shift');
+    return modifiers;
+  };
 
   const handleMouseAction = (
     e: React.MouseEvent<HTMLCanvasElement>,
@@ -297,41 +193,30 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     }
     const pos = canvasToViewport(e.clientX, e.clientY);
     if (!pos) return;
-    sendInput({
-      type: 'mouse',
-      x: pos.x,
-      y: pos.y,
-      button: MOUSE_BUTTON[e.button] ?? 'left',
-      action,
-      modifiers: buildModifiers(e),
-    });
+    if (action === 'down') {
+      sendInput({ type: 'mousedown', x: pos.x, y: pos.y, button: e.button });
+    } else if (action === 'up') {
+      sendInput({ type: 'mouseup', x: pos.x, y: pos.y, button: e.button });
+    } else {
+      sendInput({ type: 'mousemove', x: pos.x, y: pos.y });
+    }
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const pos = canvasToViewport(e.clientX, e.clientY);
     if (!pos) return;
-    sendInput({
-      type: 'mouse',
-      x: pos.x,
-      y: pos.y,
-      button: 'left',
-      action: 'wheel',
-      deltaX: e.deltaX,
-      deltaY: e.deltaY,
-      modifiers: buildModifiers(e),
-    });
+    sendInput({ type: 'wheel', x: pos.x, y: pos.y, deltaX: e.deltaX, deltaY: e.deltaY });
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLCanvasElement>, action: 'down' | 'up') => {
     e.preventDefault();
-    sendInput({
-      type: 'key',
-      code: e.code,
-      key: e.key,
-      action,
-      modifiers: buildModifiers(e),
-    });
+    const modifiers = buildModifiers(e);
+    if (action === 'down') {
+      sendInput({ type: 'keydown', key: e.key, code: e.code, modifiers });
+    } else {
+      sendInput({ type: 'keyup', key: e.key, code: e.code, modifiers });
+    }
   };
 
   const handleTouch = (
@@ -346,14 +231,13 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     if (!t) return;
     const pos = canvasToViewport(t.clientX, t.clientY);
     if (!pos) return;
-    sendInput({
-      type: 'mouse',
-      x: pos.x,
-      y: pos.y,
-      button: 'left',
-      action,
-      modifiers: { metaKey: false, ctrlKey: false, altKey: false, shiftKey: false },
-    });
+    if (action === 'down') {
+      sendInput({ type: 'mousedown', x: pos.x, y: pos.y, button: 0 });
+    } else if (action === 'up') {
+      sendInput({ type: 'mouseup', x: pos.x, y: pos.y, button: 0 });
+    } else {
+      sendInput({ type: 'mousemove', x: pos.x, y: pos.y });
+    }
   };
 
   // Block native context menu so right-click can be forwarded.
@@ -388,10 +272,4 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
       onContextMenu={handleContextMenu}
     />
   );
-}
-
-function appendToken(wsUrl: string, token: string): string {
-  if (!token) return wsUrl;
-  const sep = wsUrl.includes('?') ? '&' : '?';
-  return `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
 }

@@ -13,19 +13,39 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ShieldCheck, Clock, Download, RotateCcw, Eye, Save, AlertTriangle, Loader2, X,
 } from 'lucide-react';
-import {
-  getBackupStatus, downloadAppDataDump, previewBackupPoint, createBackupSnapshot,
-  restoreBackupPoint, type BackupStatus, type BackupRestorePoint, type AppDataDump,
-} from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
+import type { BackupStatus, AppDataDump } from '@ekoa/shared';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+
+// The typed BackupStatus core carries counts; the restore-point rows and the
+// human labels/kind ride the schema's passthrough. Read them defensively.
+interface UiRestorePoint {
+  pointId?: string;
+  source: string;
+  at?: string;
+  label?: string;
+  kind?: string;
+}
+
+function restorePointsOf(status: BackupStatus | null): UiRestorePoint[] {
+  return (status as { restorePoints?: UiRestorePoint[] } | null)?.restorePoints ?? [];
+}
+function lastBackupAtOf(status: BackupStatus): string | null {
+  const s = status as { lastBackupAt?: string | null; lastSnapshotAt?: string | null };
+  return s.lastBackupAt ?? s.lastSnapshotAt ?? null;
+}
+function pointKey(p: UiRestorePoint): string {
+  return p.pointId ?? '';
+}
 
 function reassurance(status: BackupStatus | null): string {
   if (!status) return 'A verificar as suas cópias de segurança…';
-  if (status.lastBackupAt) {
-    const d = new Date(status.lastBackupAt);
+  const last = lastBackupAtOf(status);
+  if (last) {
+    const d = new Date(last);
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
-    const pts = status.restorePoints.filter((p) => p.source === 'local');
+    const pts = restorePointsOf(status).filter((p) => p.source === 'local');
     const when = pts[0]?.label ?? `às ${hh}:${mm}`;
     return `Os seus dados são guardados automaticamente — última cópia de segurança ${when}.`;
   }
@@ -38,15 +58,15 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ point: BackupRestorePoint; dump: AppDataDump } | null>(null);
+  const [preview, setPreview] = useState<{ point: UiRestorePoint; dump: AppDataDump } | null>(null);
   const confirm = useConfirm();
 
   // Manual re-fetch (from event handlers — fine to setState synchronously here).
   const refresh = useCallback(async () => {
     setLoading(true);
-    const res = await getBackupStatus(appId);
-    if (res.success && res.data) { setStatus(res.data); setError(null); }
-    else setError(res.error?.message ?? 'Não foi possível carregar as cópias de segurança.');
+    const res = await tryCall(() => api.artifacts.backupStatus({ id: appId }));
+    if (res.ok) { setStatus(res.data); setError(null); }
+    else setError(res.error.message ?? 'Não foi possível carregar as cópias de segurança.');
     setLoading(false);
   }, [appId]);
 
@@ -55,10 +75,10 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await getBackupStatus(appId);
+      const res = await tryCall(() => api.artifacts.backupStatus({ id: appId }));
       if (cancelled) return;
-      if (res.success && res.data) { setStatus(res.data); setError(null); }
-      else setError(res.error?.message ?? 'Não foi possível carregar as cópias de segurança.');
+      if (res.ok) { setStatus(res.data); setError(null); }
+      else setError(res.error.message ?? 'Não foi possível carregar as cópias de segurança.');
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -66,16 +86,16 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
 
   const onSnapshot = useCallback(async () => {
     setBusy('snapshot'); setError(null); setNotice(null);
-    const res = await createBackupSnapshot(appId);
-    if (res.success) { setNotice('Cópia de segurança criada.'); await refresh(); }
-    else setError(res.error?.message ?? 'Não foi possível criar a cópia.');
+    const res = await tryCall(() => api.artifacts.backupSnapshot({ id: appId }));
+    if (res.ok) { setNotice('Cópia de segurança criada.'); await refresh(); }
+    else setError(res.error.message ?? 'Não foi possível criar a cópia.');
     setBusy(null);
   }, [appId, refresh]);
 
   const onDownload = useCallback(async () => {
     setBusy('download'); setError(null);
-    const res = await downloadAppDataDump(appId);
-    if (res.success && res.data) {
+    const res = await tryCall(() => api.artifacts.backupExport({ id: appId }));
+    if (res.ok) {
       const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -83,19 +103,21 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
       a.download = `${appName || appId}-dados.json`;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    } else setError(res.error?.message ?? 'Não foi possível descarregar os dados.');
+    } else setError(res.error.message ?? 'Não foi possível descarregar os dados.');
     setBusy(null);
   }, [appId, appName]);
 
-  const onPreview = useCallback(async (point: BackupRestorePoint) => {
-    setBusy(`preview:${point.id}`); setError(null);
-    const res = await previewBackupPoint(appId, point);
-    if (res.success && res.data) setPreview({ point, dump: res.data });
-    else setError(res.error?.message ?? 'Não foi possível pré-visualizar este ponto.');
+  const onPreview = useCallback(async (point: UiRestorePoint) => {
+    setBusy(`preview:${pointKey(point)}`); setError(null);
+    const res = await tryCall(() => api.artifacts.backupPreview({
+      id: appId, pointId: pointKey(point), source: point.source, at: point.at ?? '',
+    }));
+    if (res.ok) setPreview({ point, dump: res.data });
+    else setError(res.error.message ?? 'Não foi possível pré-visualizar este ponto.');
     setBusy(null);
   }, [appId]);
 
-  const onRestore = useCallback(async (point: BackupRestorePoint) => {
+  const onRestore = useCallback(async (point: UiRestorePoint) => {
     const ok = await confirm({
       title: `Restaurar os dados para "${point.label}"?`,
       description:
@@ -103,13 +125,15 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
         'para que possa desfazer esta ação.',
     });
     if (!ok) return;
-    setBusy(`restore:${point.id}`); setError(null); setNotice(null);
-    const res = await restoreBackupPoint(appId, point);
-    if (res.success) {
+    setBusy(`restore:${pointKey(point)}`); setError(null); setNotice(null);
+    const res = await tryCall(() => api.artifacts.backupRestore({
+      id: appId, pointId: pointKey(point), source: point.source, at: point.at ?? '',
+    }));
+    if (res.ok) {
       setNotice(`Dados restaurados para "${point.label}". O estado anterior foi guardado, pode desfazer.`);
       setPreview(null);
       await refresh();
-    } else setError(res.error?.message ?? 'Não foi possível restaurar.');
+    } else setError(res.error.message ?? 'Não foi possível restaurar.');
     setBusy(null);
   }, [appId, refresh, confirm]);
 
@@ -156,10 +180,10 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
       <h4 className="text-sm font-medium text-neutral-700 mb-2">Pontos para restaurar</h4>
       {loading ? (
         <p className="text-sm text-neutral-400 flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> A carregar…</p>
-      ) : status && status.restorePoints.length > 0 ? (
+      ) : status && restorePointsOf(status).length > 0 ? (
         <ul data-testid="restore-point-list" className="divide-y divide-neutral-100 rounded-lg border border-neutral-200">
-          {status.restorePoints.map((p) => (
-            <li key={`${p.source}:${p.id}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+          {restorePointsOf(status).map((p) => (
+            <li key={`${p.source}:${pointKey(p)}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-neutral-800 truncate">{p.label}</p>
                 <p className="text-xs text-neutral-400">{p.kind === 'safety-net' ? 'antes de um restauro' : p.source === 'pitr' ? 'automático' : 'cópia guardada'}</p>
@@ -169,7 +193,7 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
                   data-testid="restore-point-preview" onClick={() => onPreview(p)} disabled={!!busy}
                   className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
                 >
-                  {busy === `preview:${p.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                  {busy === `preview:${pointKey(p)}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
                   Pré-visualizar
                 </button>
                 <button
@@ -201,10 +225,10 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
               </button>
             </div>
             <div className="max-h-[55vh] overflow-auto px-5 py-4">
-              {Object.keys(preview.dump.collections).length === 0 ? (
+              {Object.keys(preview.dump.collections ?? {}).length === 0 ? (
                 <p className="text-sm text-neutral-400">Sem dados neste ponto.</p>
               ) : (
-                Object.entries(preview.dump.collections).map(([name, items]) => (
+                Object.entries(preview.dump.collections ?? {}).map(([name, items]) => (
                   <div key={name} className="mb-4">
                     <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1">
                       {name} <span className="text-neutral-400">({items.length})</span>

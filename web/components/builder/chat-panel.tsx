@@ -34,7 +34,7 @@ import { useOrchestrationStore, type ChatMessage, type OutputEntry } from "@/sto
 import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
-import { submitMemorySignal } from "@/lib/api/client";
+import { api } from "@/lib/api";
 
 // ============================================
 // MARKDOWN COMPONENTS
@@ -840,7 +840,7 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
     if (feedback || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await submitMemorySignal(traceId, type);
+      await api.memories.submitSignal({ runId: traceId, signal: type });
       setFeedback(type);
     } catch {
       // Silently fail - feedback is optional

@@ -14,14 +14,15 @@ function fmtTokens(n: number): string {
 
 export default function BillingWarningBanner() {
   const usage = useBillingStore((s) => s.usage);
-  const inflightDelta = useBillingStore((s) => s.inflightDelta);
   const warningDismissed = useBillingStore((s) => s.warningDismissed);
   const dismissWarning = useBillingStore((s) => s.dismissWarning);
   const { pages_billing, common } = useTranslation();
 
   if (!usage?.showWarning || warningDismissed) return null;
 
-  const used = usage.tokensUsed + inflightDelta;
+  // FC-033: the provisional mid-run ticker is dropped; the gauge reflects the
+  // last completed usage figure only.
+  const used = usage.tokensUsed;
 
   return (
     <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-between text-sm">

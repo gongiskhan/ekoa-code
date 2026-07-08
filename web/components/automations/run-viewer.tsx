@@ -5,10 +5,9 @@ import { Spinner } from '@/components/ui/spinner';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAutomationsStore } from '@/stores/automations';
 import { useTranslation } from '@/stores/i18n';
-import { resolveApiUrl } from '@/lib/cortex/connection';
+import { api, tryCall } from '@/lib/api';
 import { findLatestKnownStepIndex, findRunningStepIndex } from '@/lib/automations/activity-state';
 import type {
-  AutomationLiveEvent,
   AutomationRunPatchEvent,
   IntegrationErrorDetails,
   Step,
@@ -18,7 +17,6 @@ import ConsentDialog from './consent-dialog';
 import LocalCommandResultPanel from './results/local-command-result-panel';
 import ApiCallResultPanel from './results/api-call-result-panel';
 import EkoaActionResultPanel from './results/ekoa-action-result-panel';
-import { resolveAutomationConsent } from '@/lib/api/client';
 
 interface RunViewerProps {
   automationId: string;
@@ -251,17 +249,19 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
         </div>
       )}
 
-      {activeRun.status === 'awaiting_consent' && activeRun.consentRequest && activeRun.traceId && (
+      {activeRun.status === 'awaiting_consent' && activeRun.consentRequest && activeRun.runId && (
         <ConsentDialog
           shape={activeRun.consentRequest.shape}
           argv={activeRun.consentRequest.argv}
           description={activeRun.consentRequest.description}
           onDecision={async (decision) => {
-            await resolveAutomationConsent({
-              traceId: activeRun.traceId!,
-              decision,
-              shape: activeRun.consentRequest!.shape,
-            });
+            await tryCall(() =>
+              api.automations.consent({
+                id: activeRun.runId!,
+                decision,
+                shape: activeRun.consentRequest!.shape,
+              }),
+            );
           }}
         />
       )}
@@ -366,14 +366,14 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
 
               {live && live.type === 'automation_run_step' && live.screenshotUrl && (
                 <a
-                  href={resolveApiUrl(live.screenshotUrl)}
+                  href={api.resolveUrl(live.screenshotUrl)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block w-full max-w-md"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={resolveApiUrl(live.screenshotUrl)}
+                    src={api.resolveUrl(live.screenshotUrl)}
                     alt={t.stepScreenshotAlt(i + 1)}
                     className="rounded border border-neutral-200 hover:border-neutral-400 transition-colors"
                     loading="lazy"
@@ -540,14 +540,14 @@ function PauseForUserBanner({
         </div>
         {screenshotUrl && (
           <a
-            href={resolveApiUrl(screenshotUrl)}
+            href={api.resolveUrl(screenshotUrl)}
             target="_blank"
             rel="noopener noreferrer"
             className="block shrink-0"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={resolveApiUrl(screenshotUrl)}
+              src={api.resolveUrl(screenshotUrl)}
               alt={t.pausedAlt}
               className="h-32 rounded border border-cyan-200 hover:border-cyan-400"
               loading="lazy"

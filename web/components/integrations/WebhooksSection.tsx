@@ -12,10 +12,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Webhook, Plus, Trash2, Copy, Check } from 'lucide-react';
-import { useWebhooksStore, webhookCallbackUrl } from '@/stores/webhooks';
+import { useWebhooksStore } from '@/stores/webhooks';
 import { useIntegrationsStore, type IntegrationSkillScoped } from '@/stores/integrations';
 import { useTranslation } from '@/stores/i18n';
-import * as api from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 import { Button, IconButton } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog } from '@/components/ui/dialog';
@@ -95,12 +95,9 @@ export function WebhooksSection() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await api.listArtifactInstances();
-      if (cancelled || !res.success || !res.data) return;
-      const raw = res.data as unknown as
-        | { instances?: ArtifactOption[]; featured?: ArtifactOption[] }
-        | ArtifactOption[];
-      const merged = Array.isArray(raw) ? raw : [...(raw.instances ?? []), ...(raw.featured ?? [])];
+      const res = await tryCall(() => api.artifacts.list());
+      if (cancelled || !res.ok) return;
+      const merged = [...res.data.items, ...res.data.featured];
       const seen = new Set<string>();
       const opts: ArtifactOption[] = [];
       for (const a of merged) {
@@ -170,7 +167,9 @@ export function WebhooksSection() {
                 skill?.webhookConfig?.events?.find((e) => e.name === trigger.eventName)?.labelPt ??
                 trigger.eventName;
               const artifact = artifactById(trigger.target?.artifactId ?? trigger.artifactId);
-              const url = webhookCallbackUrl(trigger.id);
+              // FC-055: GET /triggers now returns the authoritative server publicUrl;
+              // no client-side hook-URL reconstruction.
+              const url = (trigger as { publicUrl?: string }).publicUrl ?? '';
               const enabled = !trigger.disabled;
               return (
                 <li

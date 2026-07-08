@@ -9,8 +9,8 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import * as api from '@/lib/api/client';
-import type { FileAttachment } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
+import type { FileAttachment } from '@/types/attachment';
 import type { ConversationMode, IntentClassification, InterviewQuestion, InterviewAnswer } from '@/lib/conversation-types';
 import { getSandboxDisplayPath } from '@/lib/file-utils';
 
@@ -506,7 +506,7 @@ function cleanupEmptySessions(
     return s.messageCount === 0 && (!job?.jobId);
   });
   for (const s of empties) {
-    api.deleteSession(s.id).catch(() => {});
+    api.sessions.delete({ id: s.id }).catch(() => {});
   }
   if (empties.length > 0) {
     const deleteIds = new Set(empties.map((s) => s.id));
@@ -587,9 +587,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       // ========================================
 
       createSession: async (params) => {
-        const response = await api.createSession(params);
-        if (response.success && response.data) {
-          const session = response.data as { id: string; name: string; createdAt: string; updatedAt: string; type?: string };
+        const result = await tryCall(() => api.sessions.create(params ?? {}));
+        if (result.ok) {
+          const session = result.data;
           const sessionState: SessionState = {
             id: session.id,
             name: session.name || 'New Session',
@@ -643,16 +643,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         // soft fallback mints a local-only session on failure, which would
         // strand an onboarding session that never reached the server. Here a
         // failure returns persisted:false and seeds no state.
-        const response = await api.createSession({ type: 'onboarding', name });
-        if (response.success && response.data) {
-          const session = response.data as {
-            id: string;
-            name: string;
-            createdAt: string;
-            updatedAt: string;
-            type?: string;
-            messageCount?: number;
-          };
+        const result = await tryCall(() => api.sessions.create({ type: 'onboarding', name }));
+        if (result.ok) {
+          const session = result.data;
           // The server create is idempotent for onboarding and may return a
           // session minted by another tab/device: never double-add it or reset
           // state the store already tracks for that id.
@@ -663,7 +656,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
               name: session.name || name,
               createdAt: session.createdAt || new Date().toISOString(),
               updatedAt: session.updatedAt || new Date().toISOString(),
-              messageCount: session.messageCount ?? 0,
+              messageCount: session.messages?.length ?? 0,
               type: session.type ?? 'onboarding',
             };
             set((state) => ({
@@ -715,7 +708,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       },
 
       deleteSession: async (sessionId: string) => {
-        await api.deleteSession(sessionId);
+        await api.sessions.delete({ id: sessionId });
         set((state) => {
           const sessions = state.sessions.filter((s) => s.id !== sessionId);
           const newMessages = { ...state.messages };
@@ -742,7 +735,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       },
 
       renameSession: async (sessionId: string, name: string) => {
-        await api.renameSession(sessionId, name);
+        await api.sessions.update({ id: sessionId, name });
         set((state) => ({
           sessions: state.sessions.map((s) =>
             s.id === sessionId ? { ...s, name, updatedAt: new Date().toISOString() } : s
@@ -751,21 +744,14 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       },
 
       loadSessions: async () => {
-        const response = await api.listSessions();
-        if (response.success && response.data) {
-          const sessions: SessionState[] = (response.data as Array<{
-            id: string;
-            name: string;
-            createdAt: string;
-            updatedAt: string;
-            messageCount?: number;
-            type?: string;
-          }>).map((s) => ({
+        const result = await tryCall(() => api.sessions.list());
+        if (result.ok) {
+          const sessions: SessionState[] = result.data.items.map((s) => ({
             id: s.id,
             name: s.name || 'Session',
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
-            messageCount: s.messageCount || 0,
+            messageCount: (s as { messageCount?: number }).messageCount || 0,
             type: s.type,
           }));
 
@@ -816,7 +802,8 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         }));
 
         // Persist to server (fire and forget)
-        api.addMessage(sessionId, {
+        api.sessions.addMessage({
+          id: sessionId,
           role: fullMessage.role,
           content: fullMessage.content,
           metadata: fullMessage.metadata,
@@ -826,26 +813,19 @@ export const useOrchestrationStore = create<OrchestrationState>()(
 
         // Persist auto-rename to server (fire and forget)
         if (autoName) {
-          api.renameSession(sessionId, autoName).catch(() => {});
+          api.sessions.update({ id: sessionId, name: autoName }).catch(() => {});
         }
       },
 
       loadSessionMessages: async (sessionId: string) => {
         try {
-          const response = await api.getMessages(sessionId);
-          if (response.success && response.data) {
-            const raw = response.data as Array<{
-              id: string | number;
-              role: string;
-              content: string;
-              timestamp: string;
-              metadata?: Record<string, unknown>;
-            }>;
-            const messages: ChatMessage[] = raw.map((m) => ({
+          const result = await tryCall(() => api.sessions.getMessages({ id: sessionId }));
+          if (result.ok) {
+            const messages: ChatMessage[] = result.data.items.map((m) => ({
               id: String(m.id),
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
-              timestamp: m.timestamp,
+              timestamp: m.createdAt,
               metadata: m.metadata as ChatMessage['metadata'],
             }));
             set((state) => ({
@@ -1345,18 +1325,13 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         // for any active session whose state was lost (cleared localStorage,
         // different browser). Without this the side panel renders empty even
         // though the artifact and its files are still on the backend.
-        const [sessionsResp, artifactsResp] = await Promise.all([
-          api.listSessions(),
-          api.listArtifactInstances().catch(() => ({ success: false, data: null })),
+        const [sessionsRes, artifactsRes] = await Promise.all([
+          tryCall(() => api.sessions.list()),
+          tryCall(() => api.artifacts.list()),
         ]);
-        if (!sessionsResp.success || !sessionsResp.data) return;
+        if (!sessionsRes.ok) return;
 
-        const artifactsRaw = (artifactsResp.success && artifactsResp.data)
-          ? (Array.isArray(artifactsResp.data)
-              ? artifactsResp.data
-              : (artifactsResp.data as { instances?: unknown[] }).instances || [])
-          : [];
-        const artifacts = artifactsRaw as ArtifactRef[];
+        const artifacts = (artifactsRes.ok ? artifactsRes.data.items : []) as unknown as ArtifactRef[];
         const artifactBySessionId = new Map<string, ArtifactRef>();
         const artifactById = new Map<string, ArtifactRef>();
         for (const a of artifacts) {
@@ -1367,19 +1342,12 @@ export const useOrchestrationStore = create<OrchestrationState>()(
           if (sid && !artifactBySessionId.has(sid)) artifactBySessionId.set(sid, a);
         }
 
-        const sessions: SessionState[] = (sessionsResp.data as Array<{
-          id: string;
-          name: string;
-          createdAt: string;
-          updatedAt: string;
-          messageCount?: number;
-          type?: string;
-        }>).map((s) => ({
+        const sessions: SessionState[] = sessionsRes.data.items.map((s) => ({
           id: s.id,
           name: s.name || 'Session',
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,
-          messageCount: s.messageCount || 0,
+          messageCount: (s as { messageCount?: number }).messageCount || 0,
           type: s.type,
         }));
 
@@ -1448,30 +1416,20 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         for (const session of sessions) {
           const job = sessionJobs[session.id];
           if (job?.jobId && (job.status === 'running' || job.status === 'queued')) {
-            try {
-              const res = await api.getJob(job.jobId);
-              if (res.success && res.data) {
-                const actual = res.data as { status: string };
-                if (actual.status !== 'running' && actual.status !== 'queued') {
-                  // Job finished since last page load -- update local state
-                  set((state) => ({
-                    sessionJobs: {
-                      ...state.sessionJobs,
-                      [session.id]: { ...(state.sessionJobs[session.id] || getDefaultSessionJob()), status: actual.status as SessionJobState['status'] },
-                    },
-                  }));
-                }
-              } else {
-                // Job not found on backend (server restarted, job expired) -- mark as failed
+            const res = await tryCall(() => api.jobs.get({ id: job.jobId! }));
+            if (res.ok) {
+              const actual = res.data;
+              if (actual.status !== 'running' && actual.status !== 'queued') {
+                // Job finished since last page load -- update local state
                 set((state) => ({
                   sessionJobs: {
                     ...state.sessionJobs,
-                    [session.id]: { ...(state.sessionJobs[session.id] || getDefaultSessionJob()), status: 'failed' },
+                    [session.id]: { ...(state.sessionJobs[session.id] || getDefaultSessionJob()), status: actual.status as SessionJobState['status'] },
                   },
                 }));
               }
-            } catch {
-              // Backend unreachable -- treat as not running
+            } else {
+              // Job not found (server restarted, job expired) or backend unreachable -- mark failed.
               set((state) => ({
                 sessionJobs: {
                   ...state.sessionJobs,
@@ -1507,7 +1465,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
 
           // Delete surplus empties (fire-and-forget)
           for (const s of toDelete) {
-            api.deleteSession(s.id).catch(() => {});
+            api.sessions.delete({ id: s.id }).catch(() => {});
           }
 
           // Remove deleted session state
@@ -1583,7 +1541,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
               s.id === empty.id ? { ...s, updatedAt: now } : s
             ),
           }));
-          void api.touchSession(empty.id);
+          void api.sessions.update({ id: empty.id });
         } else {
           _creatingEmptySession = true;
           try {
@@ -1601,41 +1559,22 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         // helper bails out cheaply if the tree is already populated.
         const hydrateFiles = (artifactId: string) => {
           void (async () => {
-            try {
-              const resp = await api.listArtifactFiles(artifactId);
-              if (!resp.success || !resp.data) return;
-              const data = resp.data as {
-                files?: Array<{ path: string; fullPath: string }>;
-                instance?: { updatedAt?: string; status?: string };
-              };
-              const files = data.files || [];
-              const instance = data.instance;
-              set((state) => {
-                const patch: Partial<OrchestrationState> = {};
-                // Files panel — only seed if SSE hasn't populated it.
-                if ((state.sessionFiles[sessionId] || []).length === 0 && files.length > 0) {
-                  let tree: FileNode[] = [];
-                  for (const f of files) {
-                    const displayPath = getSandboxDisplayPath(f.fullPath || f.path);
-                    tree = addFileToTree(tree, displayPath, 'created', f.fullPath);
-                  }
-                  patch.sessionFiles = { ...state.sessionFiles, [sessionId]: tree };
+            const res = await tryCall(() => api.artifacts.filesList({ id: artifactId }));
+            if (!res.ok) return;
+            const files = res.data.files || [];
+            set((state) => {
+              const patch: Partial<OrchestrationState> = {};
+              // Files panel — only seed if SSE hasn't populated it.
+              if ((state.sessionFiles[sessionId] || []).length === 0 && files.length > 0) {
+                let tree: FileNode[] = [];
+                for (const f of files) {
+                  const displayPath = getSandboxDisplayPath(f.path);
+                  tree = addFileToTree(tree, displayPath, 'created', f.path);
                 }
-                // Output panel status block — always refresh lastBuildAt
-                // from the server, so reload after a follow-up build shows
-                // the new timestamp.
-                if (instance?.updatedAt) {
-                  const job = state.sessionJobs[sessionId] || getDefaultSessionJob();
-                  patch.sessionJobs = {
-                    ...state.sessionJobs,
-                    [sessionId]: { ...job, lastBuildAt: instance.updatedAt },
-                  };
-                }
-                return Object.keys(patch).length > 0 ? patch : {};
-              });
-            } catch {
-              /* Files tab stays empty; not user-visible failure */
-            }
+                patch.sessionFiles = { ...state.sessionFiles, [sessionId]: tree };
+              }
+              return Object.keys(patch).length > 0 ? patch : {};
+            });
           })();
         };
 
@@ -1664,15 +1603,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         // reconcile identity to it on every load.
         let list = artifacts;
         if (!list) {
-          try {
-            const resp = await api.listArtifactInstances();
-            if (resp.success && resp.data) {
-              list = (Array.isArray(resp.data)
-                ? resp.data
-                : (resp.data as { instances?: unknown[] }).instances || []) as ArtifactRef[];
-            }
-          } catch {
-            /* fall through — handled by the no-list branch below */
+          const res = await tryCall(() => api.artifacts.list());
+          if (res.ok) {
+            list = res.data.items as unknown as ArtifactRef[];
           }
         }
 

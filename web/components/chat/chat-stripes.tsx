@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import * as api from "@/lib/api/client";
+import { api, tryCall } from "@/lib/api";
 import { forkFeaturedInto } from "@/lib/featured-fork";
 import { useTranslation } from "@/stores/i18n";
 import { useOrchestrationStore } from "@/stores/orchestration";
@@ -85,19 +85,13 @@ function useArtifactStripes() {
     let cancelled = false;
     (async () => {
       try {
-        const resp = await api.listArtifactInstances();
+        const res = await tryCall(() => api.artifacts.list());
         if (cancelled) return;
-        if (resp.success && resp.data) {
-          const data = resp.data as
-            | ArtifactLike[]
-            | { instances?: ArtifactLike[]; featured?: ArtifactLike[] };
-          if (Array.isArray(data)) {
-            setInstances(data.filter((i) => !i.featured));
-            setFeatured(data.filter((i) => i.featured));
-          } else {
-            setInstances(Array.isArray(data.instances) ? data.instances : []);
-            setFeatured(Array.isArray(data.featured) ? data.featured : []);
-          }
+        if (res.ok) {
+          const items = res.data.items as unknown as ArtifactLike[];
+          const featuredItems = res.data.featured as unknown as ArtifactLike[];
+          setInstances(items.filter((i) => !i.featured));
+          setFeatured(featuredItems);
         }
       } catch {
         // Soft-fail: empty state still renders the input and pills.

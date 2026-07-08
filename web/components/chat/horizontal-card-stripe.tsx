@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { resolveApiUrl } from "@/lib/cortex/connection";
+import { api } from "@/lib/api";
 
 export interface StripeCard {
   id: string;
@@ -153,7 +153,7 @@ export function HorizontalCardStripe({
             const visual = card.imageUrl ? (
               <div className="h-32 w-full overflow-hidden bg-neutral-100">
                 <img
-                  src={resolveApiUrl(card.imageUrl)}
+                  src={api.resolveUrl(card.imageUrl)}
                   alt=""
                   loading="lazy"
                   className="h-full w-full object-cover"

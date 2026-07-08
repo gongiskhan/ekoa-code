@@ -29,10 +29,6 @@ export const useI18nStore = create<I18nState>()(
 
       setLanguage: (lang: Language) => {
         set({ language: lang });
-        // Sync with the lightweight i18n module for non-React code
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('ekoa_locale', lang);
-        }
       },
 
       t: <K extends keyof Translations>(section: K): Translations[K] => {
@@ -43,12 +39,6 @@ export const useI18nStore = create<I18nState>()(
     {
       name: 'ekoa_language',
       partialize: (state) => ({ language: state.language }),
-      onRehydrateStorage: () => (state) => {
-        // Sync the lightweight i18n module on hydration
-        if (state && typeof window !== 'undefined') {
-          localStorage.setItem('ekoa_locale', state.language);
-        }
-      },
     }
   )
 );

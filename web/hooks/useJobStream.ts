@@ -9,7 +9,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getConnection } from '@/lib/cortex/connection';
+import { api, openJobStream, type EventStream } from '@/lib/api';
+import type { JobEvent } from '@ekoa/shared';
 import {
   useOrchestrationStore,
   type OutputEntry,
@@ -20,10 +21,7 @@ import {
   getFriendlyToolActivity,
   getFriendlySummary,
   getRotatingFillerMessage,
-  getFriendlySubagentMessage,
-  getFriendlySkillMessage,
 } from '@/lib/friendly-messages';
-import { getAppUrl } from '@/lib/api/client';
 import { sanitizeUserFacingError } from '@/lib/sanitize-error';
 
 // ============================================
@@ -99,7 +97,10 @@ export function useJobStream(
   const outputIdRef = useRef(0);
   const isCompleteRef = useRef(false);
   const unsubRef = useRef<(() => void) | null>(null);
-  const activeTraceIdRef = useRef<string | null>(null);
+  const streamRef = useRef<EventStream<JobEvent> | null>(null);
+  /** Count of `ready` events seen for the current job; >1 means a manual reconnect,
+   *  which loses ring-buffer position, so we re-sync via GET /jobs/:id (FC-026). */
+  const readyCountRef = useRef(0);
 
   // Filler timer refs
   const lastActivityUpdateRef = useRef(0);
@@ -233,35 +234,51 @@ export function useJobStream(
 
   // -- SSE Event Handler --
 
-  const handleStreamEvent = useCallback(
-    (event: { type: string; [key: string]: unknown }) => {
-      // Filter by trace_id when we're waiting for a specific job.
-      // Reject events that don't match OR have no trace_id at all — stale/system
-      // events without a trace_id must not bleed into the current session.
-      if (activeTraceIdRef.current && event.trace_id !== activeTraceIdRef.current) {
-        return;
-      }
-
+  const handleJobEvent = useCallback(
+    (event: JobEvent) => {
+      // The stream is already scoped to a single job (openJobStream), so there is
+      // no client-side trace filtering to do (FC-010).
       switch (event.type) {
-        case 'routing': {
-          const decision = event.decision as { path: string; confidence: number; reason: string };
-          setState(prev => ({ ...prev, status: 'routing', phase: decision?.path || prev.phase }));
+        case 'ready': {
+          // Connection (re)established. On a manual reconnect (2nd+ ready) the
+          // ring-buffer position is lost, so re-sync job status via GET /jobs/:id
+          // (FC-026). Native replay reconnects still keep Last-Event-ID.
+          readyCountRef.current += 1;
+          setState(prev => ({ ...prev, isConnecting: false, isConnected: true }));
+          if (readyCountRef.current > 1 && !isCompleteRef.current) {
+            void api.jobs
+              .get({ id: event.jobId })
+              .then((job) => {
+                if (!sessionId) return;
+                if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+                  useOrchestrationStore.getState().setSessionJob(sessionId, {
+                    status: job.status as 'completed' | 'failed' | 'cancelled',
+                  });
+                }
+              })
+              .catch(() => {});
+          }
+          break;
+        }
 
-          // Add routing decision as a system output entry
-          if (sessionId && decision) {
+        case 'routing': {
+          setState(prev => ({ ...prev, status: 'routing', phase: event.tier || prev.phase }));
+
+          // Add routing decision as a system output entry (FC-203).
+          if (sessionId) {
             const outputId = `${sessionId}-routing-${outputIdRef.current++}`;
             addOutputToStore({
               id: outputId,
               timestamp: new Date().toISOString(),
               type: 'system',
-              content: `Routing: ${decision.path} (${Math.round((decision.confidence || 0) * 100)}% confidence)${decision.reason ? ' - ' + decision.reason : ''}`,
+              content: `Routing: ${event.tier}${event.reason ? ' - ' + event.reason : ''}`,
             });
           }
           break;
         }
 
-        case 'stream': {
-          const content = event.content as string;
+        case 'text_chunk': {
+          const content = event.text;
           // Accumulate text into the last output entry instead of creating one per token
           setState(prev => {
             const outputs = [...prev.outputs];
@@ -286,17 +303,16 @@ export function useJobStream(
         }
 
         case 'tool_event': {
-          const toolEvent = event.event as string;
-          const toolName = event.tool as string;
-          const args = event.args as Record<string, unknown> | undefined;
+          const toolName = event.tool;
+          const args = event.args;
 
           // Flush streaming chat text as a permanent message before tool activity
-          if (toolEvent === 'tool_called' || toolEvent === 'tool_started') {
+          if (event.phase === 'started') {
             flushStreamingChatToMessage();
           }
           const outputId = sessionId ? `${sessionId}-tool-${outputIdRef.current++}` : `tool-${outputIdRef.current++}`;
 
-          if (toolEvent === 'tool_called' || toolEvent === 'tool_started') {
+          if (event.phase === 'started') {
             // Track tool start time for duration calculation
             if (toolName) {
               toolStartTimesRef.current.set(toolName + '-' + outputIdRef.current, Date.now());
@@ -335,17 +351,10 @@ export function useJobStream(
                 }
               }
             }
-          } else if (toolEvent === 'tool_finished') {
-            const result = event.result as unknown;
-            const isError = event.is_error === true || event.isError === true;
+          } else if (event.phase === 'finished') {
+            const result = event.result;
+            const isError = event.isError === true;
             const resultContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-
-            // Calculate duration from tracked start time
-            let duration: number | undefined;
-            const durationMs = event.duration_ms as number | undefined;
-            if (durationMs) {
-              duration = durationMs;
-            }
 
             addOutputToStore({
               id: outputId,
@@ -354,16 +363,21 @@ export function useJobStream(
               content: resultContent,
               toolName,
               phase: lastPhaseRef.current || undefined,
-              toolDuration: duration,
+              toolDuration: event.durationMs,
               isSuccess: !isError,
             });
-          } else if (toolEvent === 'tool_failed') {
-            const error = (event.error as string) || (event.result as string) || 'Tool execution failed';
+          } else if (event.phase === 'failed') {
+            const result = event.result;
+            const errorContent = typeof result === 'string'
+              ? result
+              : result
+                ? JSON.stringify(result)
+                : 'Tool execution failed';
             addOutputToStore({
               id: outputId,
               timestamp: new Date().toISOString(),
               type: 'tool_result',
-              content: typeof error === 'string' ? error : JSON.stringify(error),
+              content: errorContent,
               toolName,
               phase: lastPhaseRef.current || undefined,
               isSuccess: false,
@@ -372,77 +386,15 @@ export function useJobStream(
           break;
         }
 
-        case 'subagent_event': {
-          flushStreamingChatToMessage();
-          const agent = (event.agent || event.name || event.task_id || 'agent') as string;
-          const subEvent = (event.event || event.status) as string;
-          const description = event.description as string | undefined;
-          const summary = (event.summary || event.result) as string | undefined;
-          const outputId = sessionId ? `${sessionId}-subagent-${outputIdRef.current++}` : `subagent-${outputIdRef.current++}`;
-
-          const friendlyMsg = getFriendlySubagentMessage(agent, subEvent, description || summary);
-
-          addOutputToStore({
-            id: outputId,
-            timestamp: new Date().toISOString(),
-            type: 'subagent',
-            content: friendlyMsg,
-            agentName: agent,
-            agentEvent: subEvent,
-            summary: summary,
-            phase: lastPhaseRef.current || undefined,
-          });
-
-          // Add essential chat messages for started/completed so they surface in build mode chat panel
-          if (sessionId) {
-            const isStarted = subEvent === 'started' || subEvent === 'agent_started';
-            const isCompleted = subEvent === 'completed' || subEvent === 'agent_completed';
-            const isFailed = subEvent === 'failed';
-
-            if (isStarted || isCompleted || isFailed) {
-              useOrchestrationStore.getState().addMessage(sessionId, {
-                role: 'assistant',
-                content: friendlyMsg,
-                metadata: { isEssential: true, type: 'subagent' },
-              });
-            }
-
-            // Update activity message
-            const now = Date.now();
-            if (now - lastActivityUpdateRef.current >= ACTIVITY_THROTTLE_MS) {
-              lastActivityUpdateRef.current = now;
-              useOrchestrationStore.getState().setActivityMessage(sessionId, friendlyMsg);
-              startFillerTimer(lastPhaseRef.current);
-            }
-          }
-          break;
-        }
-
-        case 'skill_event': {
-          const skill = (event.skill || event.name || 'skill') as string;
-          const action = (event.action || event.event) as string;
-
-          // Only show invoked events, not internal loading
-          if (action !== 'invoked' && action !== 'used') break;
-
-          const outputId = sessionId ? `${sessionId}-skill-${outputIdRef.current++}` : `skill-${outputIdRef.current++}`;
-          const friendlyMsg = getFriendlySkillMessage(skill);
-
-          addOutputToStore({
-            id: outputId,
-            timestamp: new Date().toISOString(),
-            type: 'skill',
-            content: friendlyMsg,
-            skillName: skill,
-            phase: lastPhaseRef.current || undefined,
-          });
-
-          // Update activity message
+        case 'context_event': {
+          // FC-201: agent-context activity (loaded/used), rendered as a generic
+          // activity line. The subagent/skill event branches are dropped from the
+          // v1 contract (FC-027/007).
           if (sessionId) {
             const now = Date.now();
             if (now - lastActivityUpdateRef.current >= ACTIVITY_THROTTLE_MS) {
               lastActivityUpdateRef.current = now;
-              useOrchestrationStore.getState().setActivityMessage(sessionId, friendlyMsg);
+              useOrchestrationStore.getState().setActivityMessage(sessionId, event.name);
               startFillerTimer(lastPhaseRef.current);
             }
           }
@@ -485,15 +437,16 @@ export function useJobStream(
         }
 
         case 'preview_reload': {
-          // Hot-reload: esbuild watcher rebuilt the app — refresh the preview
+          // Hot-reload: esbuild watcher rebuilt the app — refresh the preview. The
+          // event is payload-free (§3.6.2); reuse the session's known artifact.
           if (sessionId) {
             const store = useOrchestrationStore.getState();
-            const artId = event.artifactInstanceId as string;
+            const current = store.sessionPreviews[sessionId];
+            const artId = current?.previewId || store.sessionJobs[sessionId]?.artifactInstanceId;
             if (artId) {
-              const current = store.sessionPreviews[sessionId];
               store.setSessionPreview(sessionId, {
                 previewId: artId,
-                appUrl: getAppUrl(artId),
+                appUrl: api.appUrl(artId),
                 status: 'running',
                 reloadCount: (current?.reloadCount || 0) + 1,
               });
@@ -515,10 +468,11 @@ export function useJobStream(
             useOrchestrationStore.getState().clearStreamingChat(sessionId);
           }
           isCompleteRef.current = true;
-          const duration = event.duration_ms as number;
-          const result = event.result as string;
-          const artifactInstanceId = event.artifactInstanceId as string | undefined;
-          const slug = event.slug as string | undefined;
+          const duration = event.durationMs;
+          const result = typeof event.result === 'string' ? event.result : '';
+          const artifactInstanceId = event.artifactId;
+          const slug = event.slug;
+          const appUrlFromEvent = event.appUrl;
 
           setState(prev => ({
             ...prev,
@@ -536,13 +490,13 @@ export function useJobStream(
               slug: slug || null,
             });
 
-            // Refresh preview when build completes -- prefer slug URL
+            // Refresh preview when build completes -- prefer the event's appUrl, else slug URL
             if (artifactInstanceId) {
               const appIdentifier = slug || artifactInstanceId;
               const current = store.sessionPreviews[sessionId];
               store.setSessionPreview(sessionId, {
                 previewId: appIdentifier,
-                appUrl: getAppUrl(appIdentifier),
+                appUrl: appUrlFromEvent || api.appUrl(appIdentifier),
                 status: 'running',
                 reloadCount: (current?.reloadCount || 0) + 1,
               });
@@ -565,12 +519,12 @@ export function useJobStream(
           isCompleteRef.current = true;
           // Strip any provider/engine leak before it reaches the user (backend
           // already sanitizes the wire; this guards replays / any bypass).
-          const error = sanitizeUserFacingError(event.error as string, getLocale());
+          const error = sanitizeUserFacingError(event.message, getLocale());
           setState(prev => ({
             ...prev,
             isComplete: true,
             isConnected: false,
-            error: { code: 'STREAM_ERROR', message: error },
+            error: { code: event.code || 'STREAM_ERROR', message: error },
           }));
 
           if (sessionId) {
@@ -598,7 +552,11 @@ export function useJobStream(
       unsubRef.current();
       unsubRef.current = null;
     }
-    activeTraceIdRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
+    }
+    readyCountRef.current = 0;
     setState(prev => ({
       ...prev,
       isConnecting: false,
@@ -622,37 +580,44 @@ export function useJobStream(
         error: null,
       }));
 
-      // Use the jobId as the trace_id filter
-      activeTraceIdRef.current = targetJobId;
+      // Open the scoped job stream (FC-026). It is already isolated to this job,
+      // so there is no client-side trace filtering.
+      const stream = openJobStream(targetJobId);
+      streamRef.current = stream;
 
-      // Subscribe to stream events from the SSE connection
-      const conn = getConnection();
-      const unsub = conn.onStream(handleStreamEvent);
-      unsubRef.current = unsub;
+      const eventTypes = [
+        'ready',
+        'routing',
+        'text_chunk',
+        'tool_event',
+        'context_event',
+        'plan_step',
+        'preview_reload',
+        'complete',
+        'error',
+      ] as const;
+      const unsubs = eventTypes.map((type) => stream.on(type, handleJobEvent));
+      unsubs.push(
+        stream.onStatusChange((status) => {
+          setState(prev => ({
+            ...prev,
+            isConnecting: status === 'connecting',
+            isConnected: status === 'connected',
+          }));
+        }),
+      );
 
-      // Also listen for specific event types
-      const unsubConnected = conn.on('connected', () => {
-        setState(prev => ({
-          ...prev,
-          isConnecting: false,
-          isConnected: true,
-        }));
-      });
-
-      // Compose cleanup
-      const originalUnsub = unsubRef.current;
       unsubRef.current = () => {
-        originalUnsub();
-        unsubConnected();
+        for (const u of unsubs) u();
       };
 
       setState(prev => ({
         ...prev,
-        isConnecting: false,
-        isConnected: conn.isConnected(),
+        isConnecting: stream.status === 'connecting',
+        isConnected: stream.status === 'connected',
       }));
     },
-    [jobId, disconnect, handleStreamEvent]
+    [jobId, disconnect, handleJobEvent]
   );
 
   const clearOutputs = useCallback(() => {

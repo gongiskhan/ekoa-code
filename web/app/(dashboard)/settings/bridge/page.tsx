@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { Terminal, AlertCircle, X } from 'lucide-react';
-import { listApprovedCommands, revokeApprovedCommand, type ApprovedLocalCommand } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
+
+/** Local view row for an approved command. Timestamps + note ride the endpoint's
+ *  passthrough contract, so they are accessed off this row shape, not the typed schema. */
+interface ApprovedLocalCommand {
+  shape: string;
+  approvedAt: string;
+  lastUsedAt?: string;
+  note?: string;
+}
 
 export default function BridgeSettingsPage() {
   const [approved, setApproved] = useState<ApprovedLocalCommand[]>([]);
@@ -12,19 +21,14 @@ export default function BridgeSettingsPage() {
 
   async function refresh() {
     setLoading(true);
-    try {
-      const res = await listApprovedCommands();
-      if (res.success && res.data) {
-        setApproved(res.data.approved ?? []);
-        setErr(null);
-      } else {
-        setErr(typeof res.error === 'string' ? res.error : (res.error?.message ?? 'failed to load approvals'));
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'failed to load approvals');
-    } finally {
-      setLoading(false);
+    const res = await tryCall(() => api.automations.approvedCommands());
+    if (res.ok) {
+      setApproved((res.data.items ?? []) as unknown as ApprovedLocalCommand[]);
+      setErr(null);
+    } else {
+      setErr(res.error.message ?? 'failed to load approvals');
     }
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -34,7 +38,7 @@ export default function BridgeSettingsPage() {
   async function revoke(shape: string) {
     setRevokingShape(shape);
     try {
-      await revokeApprovedCommand(shape);
+      await tryCall(() => api.automations.revokeApprovedCommand({ shape }));
       await refresh();
     } finally {
       setRevokingShape(null);

@@ -3,7 +3,7 @@
 import { Hand, Play, Square } from 'lucide-react';
 import { useEffect } from 'react';
 import { useAutomationsStore } from '@/stores/automations';
-import { resolveApiUrl } from '@/lib/cortex/connection';
+import { api } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useTranslation } from '@/stores/i18n';
 import PauseForUserCanvas from './pause-for-user-canvas';
@@ -60,7 +60,7 @@ export default function PauseForUserOverlay() {
   if (!open || !pauseRequest) return null;
 
   const screenshotSrc = pauseRequest.screenshotUrl
-    ? resolveApiUrl(pauseRequest.screenshotUrl)
+    ? api.resolveUrl(pauseRequest.screenshotUrl)
     : null;
 
   const streamingActive = !!streamingSession && streamingSession.status !== 'failed';

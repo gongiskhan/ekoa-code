@@ -28,7 +28,7 @@ import {
 import { useTranslation } from "@/stores/i18n";
 import { useIntegrationsStore } from "@/stores/integrations";
 import { copyToClipboard } from "@/lib/clipboard";
-import * as api from "@/lib/api/client";
+import { api, tryCall } from "@/lib/api";
 import { toast } from "@/stores/toast";
 import { Button, IconButton } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -40,7 +40,7 @@ import type {
   IntegrationAction,
   IntegrationActionHttpConfig,
   IntegrationTestResult,
-} from "@/lib/api/client";
+} from "@/types/integration";
 
 /* ============================================
    TYPES
@@ -477,7 +477,8 @@ function TestSection({ configFields, actions, integrationKey, t }: {
     try {
       // Load to get a session ID for testing
       const loadResult = await loadIntegrationPackage(integrationKey);
-      if (!loadResult.success || !loadResult.sessionId) {
+      const builderSessionId = loadResult.sessionId;
+      if (!loadResult.success || !builderSessionId) {
         setTestResults((prev) => [{ actionKey: selectedAction, success: false, error: "Failed to load integration for testing. Save first.", timestamp: new Date().toISOString() }, ...prev]);
         setIsTesting(false);
         return;
@@ -489,11 +490,16 @@ function TestSection({ configFields, actions, integrationKey, t }: {
         try { parsedArgs[key] = JSON.parse(value); } catch { parsedArgs[key] = value; }
       }
 
-      const response = await api.integrationBuilderTest(loadResult.sessionId, selectedAction, testCredentials, parsedArgs);
-      if (response.success && response.data) {
-        setTestResults((prev) => [{ ...response.data!, timestamp: new Date().toISOString() }, ...prev]);
+      const res = await tryCall(() => api.integrationBuilder.test({
+        builderSessionId,
+        actionKey: selectedAction,
+        testCredentials,
+        testInput: parsedArgs,
+      }));
+      if (res.ok) {
+        setTestResults((prev) => [{ ...res.data, timestamp: new Date().toISOString() }, ...prev]);
       } else {
-        setTestResults((prev) => [{ actionKey: selectedAction, success: false, error: response.error?.message || "Test failed", timestamp: new Date().toISOString() }, ...prev]);
+        setTestResults((prev) => [{ actionKey: selectedAction, success: false, error: res.error.message || "Test failed", timestamp: new Date().toISOString() }, ...prev]);
       }
     } catch (err) {
       setTestResults((prev) => [{ actionKey: selectedAction, success: false, error: err instanceof Error ? err.message : "Test failed", timestamp: new Date().toISOString() }, ...prev]);

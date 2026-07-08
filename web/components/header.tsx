@@ -8,8 +8,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useCompanyStore } from "@/stores/company";
 import { useBillingStore } from "@/stores/billing";
 import { useAuthStore } from "@/stores/auth";
-import { getApiBaseUrl } from "@/lib/api/client";
-import { getConnection } from "@/lib/cortex/connection";
+import { api } from "@/lib/api";
+import { useApi } from "@/components/providers/api-provider";
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -18,7 +18,7 @@ interface HeaderProps {
 function resolveLogoUrl(url: string | null): string | undefined {
   if (!url) return undefined;
   if (url.startsWith("data:") || url.startsWith("http")) return url;
-  if (url.startsWith("/brand-assets/")) return `${getApiBaseUrl()}${url}`;
+  if (url.startsWith("/brand-assets/")) return api.resolveUrl(url);
   return url;
 }
 
@@ -54,31 +54,25 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const logoUrl = useCompanyStore((s) => s.company?.branding?.logo ?? null);
   const usage = useBillingStore((s) => s.usage);
-  const inflightDelta = useBillingStore((s) => s.inflightDelta);
   const fetchUsage = useBillingStore((s) => s.fetchUsage);
-  const applyUsageProgress = useBillingStore((s) => s.applyUsageProgress);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const { notifications } = useApi();
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { fetchUsage(); }, [fetchUsage]);
 
-  // Live-refresh the gauge whenever the server reports usage has changed
-  // (after each agent turn, after admin resets) and tick provisionally
-  // during in-flight agent calls.
+  // Live-refresh the gauge whenever the server reports usage has changed (after each
+  // agent turn, after admin resets) via the notifications stream. FC-033: the cosmetic
+  // mid-run provisional ticker is dropped - the gauge updates on completion only.
   useEffect(() => {
-    const conn = getConnection();
-    const offUpdated = conn.on('usage_updated', () => {
+    if (!notifications) return;
+    return notifications.on('usage_updated', () => {
       fetchUsage();
     });
-    const offProgress = conn.on('usage_progress', (msg: unknown) => {
-      const d = (msg as { provisionalDelta?: unknown })?.provisionalDelta;
-      if (typeof d === 'number') applyUsageProgress(d);
-    });
-    return () => { offUpdated(); offProgress(); };
-  }, [fetchUsage, applyUsageProgress]);
+  }, [notifications, fetchUsage]);
 
   // Close user menu on click outside
   useEffect(() => {
@@ -99,12 +93,12 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     updateSettings({ general: { language: newLang } });
   }
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout();
     router.push('/login');
   }
 
-  const tokensUsedDisplayed = (usage?.tokensUsed ?? 0) + inflightDelta;
+  const tokensUsedDisplayed = usage?.tokensUsed ?? 0;
   const pct = usage && usage.tokensBase > 0
     ? Math.min(100, (tokensUsedDisplayed / usage.tokensBase) * 100)
     : 0;

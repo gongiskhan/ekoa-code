@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { getApiBaseUrl, getAppUrl } from "@/lib/api/client";
+import { api, resolveBaseUrl } from "@/lib/api";
 import { useDemosStore } from "@/stores/demos";
 import { createTourController, type TourController } from "@/lib/demo/tour-machine";
 import type { DemoSpec } from "@/lib/demo/types";
@@ -43,7 +43,9 @@ function DemoTourProviderInner() {
   const [iframeSrc, setIframeSrc] = useState<string>("");
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const apiBase = getApiBaseUrl();
+  // No `demos` namespace exists in the typed client (FC-063): these are plain
+  // fetches against /api/demos, built off the single base-URL resolver.
+  const apiBase = resolveBaseUrl();
 
   // Populate the gallery cards once (used by the future landing panel).
   useEffect(() => {
@@ -89,16 +91,16 @@ function DemoTourProviderInner() {
       .then((loaded: DemoSpec) => {
         if (cancelled) return;
         startTour(demoAppId, loaded);
-        setIframeSrc(getAppUrl(demoAppId));
+        setIframeSrc(api.appUrl(demoAppId));
 
-        const appOrigin = new URL(getAppUrl(demoAppId), window.location.href).origin;
+        const appOrigin = new URL(api.appUrl(demoAppId), window.location.href).origin;
         const controller = createTourController({
           spec: loaded,
           appOrigin,
           getIframe: () => iframeRef.current,
           navigateApp: (path: string) => {
             const clean = String(path || "").replace(/^\/+/, "");
-            setIframeSrc(getAppUrl(demoAppId) + clean);
+            setIframeSrc(api.appUrl(demoAppId) + clean);
           },
           injectPrompt: (prompt: string) => setInjectedPrompt(prompt),
           onState: (state) => setTour(state),

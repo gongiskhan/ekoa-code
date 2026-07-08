@@ -11,8 +11,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Plug, Loader2, Send, Save, X } from "lucide-react";
 import { useOrchestrationStore } from "@/stores/orchestration";
-import { integrationBuilderChat, integrationBuilderSave } from "@/lib/api/client";
-import type { IntegrationBuilderOutput } from "@/lib/api/client";
+import { api, tryCall } from "@/lib/api";
+import type { IntegrationBuilderOutput } from "@/types/integration";
 
 interface IntegrationBuildPanelProps {
   sessionId: string | null;
@@ -55,12 +55,14 @@ export default function IntegrationBuildPanel({ sessionId }: IntegrationBuildPan
       setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: text }]);
       setIsSending(true);
       try {
-        const response = await integrationBuilderChat(
-          text,
-          builderSessionIdRef.current || undefined,
-        );
-        if (response.success && response.data) {
-          const { sessionId: bsid, generatedPackage: pkg, validationErrors: errs } = response.data;
+        // FC-035: request-response chat (language auto-injected by the transport).
+        const res = await tryCall(() => api.integrationBuilder.chat({
+          message: text,
+          builderSessionId: builderSessionIdRef.current || undefined,
+        }));
+        if (res.ok) {
+          const { builderSessionId: bsid, generatedPackage, validationErrors: errs } = res.data;
+          const pkg = generatedPackage as unknown as IntegrationBuilderOutput | null;
           builderSessionIdRef.current = bsid;
           // Persist builder session id so the panel can resume on remount.
           setActiveIntegrationBuild(sessionId, {
@@ -68,10 +70,9 @@ export default function IntegrationBuildPanel({ sessionId }: IntegrationBuildPan
             builderSessionId: bsid,
           });
           setGeneratedPackage(pkg);
-          setValidationErrors(errs || []);
-          // The chat intent doesn't stream into this component (we use the
-          // synchronous response). Surface the assistant's natural text from
-          // the package summary if present; otherwise a generic ack.
+          setValidationErrors((errs ?? []).map((e) => e.message));
+          // The chat is synchronous with no streamed prose. Surface the assistant's
+          // natural text from the package summary if present; otherwise a generic ack.
           const assistantText =
             pkg?.skillMd?.split("\n").slice(0, 4).join(" ").trim() ||
             "Working on the integration...";
@@ -85,7 +86,7 @@ export default function IntegrationBuildPanel({ sessionId }: IntegrationBuildPan
             {
               id: `s-${Date.now()}`,
               role: "system",
-              content: response.error?.message || "Builder agent did not respond.",
+              content: res.error.message || "Builder agent did not respond.",
             },
           ]);
         }
@@ -122,11 +123,15 @@ export default function IntegrationBuildPanel({ sessionId }: IntegrationBuildPan
   }
 
   async function handleSave() {
-    if (!builderSessionIdRef.current || !generatedPackage) return;
+    const bsid = builderSessionIdRef.current;
+    if (!bsid || !generatedPackage) return;
     setIsSaving(true);
     try {
-      const response = await integrationBuilderSave(builderSessionIdRef.current, generatedPackage);
-      if (response.success) {
+      const res = await tryCall(() => api.integrationBuilder.save({
+        builderSessionId: bsid,
+        generatedPackage,
+      }));
+      if (res.ok) {
         // The backend emits an `integration_ready` SSE event on save; the chat
         // page picks it up and prompts the user to wire it in. We just mark
         // local state as saved.
@@ -144,7 +149,7 @@ export default function IntegrationBuildPanel({ sessionId }: IntegrationBuildPan
           {
             id: `s-${Date.now()}`,
             role: "system",
-            content: response.error?.message || "Save failed",
+            content: res.error.message || "Save failed",
           },
         ]);
       }

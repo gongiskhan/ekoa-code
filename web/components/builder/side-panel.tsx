@@ -24,8 +24,7 @@ import { VersionsPanel } from "@/components/artifacts/versions-panel";
 import { useOrchestrationStore, type FileNode } from "@/stores/orchestration";
 import { useSettingsStore } from "@/stores/settings";
 import { useAuthStore } from "@/stores/auth";
-import { getAppUrl, appendAuthTokenToUrl } from "@/lib/api/client";
-import { resolveApiUrl } from "@/lib/cortex/connection";
+import { api } from "@/lib/api";
 import { useTranslation } from "@/stores/i18n";
 import { isTextFile } from "@/lib/file-utils";
 import OutputPanel from "./output-panel";
@@ -128,25 +127,27 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
   // appUrls are stored as relative paths ("/apps/foo/"); resolve them against the
   // cortex API base so the iframe doesn't try to load them from the Next.js host.
   const rawPreviewUrl = preview?.appUrl
-    ? resolveApiUrl(preview.appUrl)
+    ? api.resolveUrl(preview.appUrl)
     : preview?.previewId
-      ? getAppUrl(preview.previewId)
+      ? api.appUrl(preview.previewId)
       : null;
   const appIdentifier = artifactSlug || artifactInstanceId;
-  const artifactUrl = appIdentifier ? getAppUrl(appIdentifier) : null;
+  const artifactUrl = appIdentifier ? api.appUrl(appIdentifier) : null;
   const previewUrl = rawPreviewUrl || artifactUrl;
 
   // Append the auth token via ?token= so cortex can verify ownership when
   // serving a non-shareable artifact preview. Required for cross-origin dev
-  // (frontend and cortex on different ports cannot share the ekoa_token
+  // (frontend and cortex on different ports cannot share the session-token
   // cookie). Subscribe to auth store so the URL updates on login/logout.
   // Shareable artifacts skip the token — the server serves them publicly,
   // and leaking a JWT in the iframe URL (browser history, referrer headers,
   // server logs) is needless exposure.
   const authToken = useAuthStore((s) => s.token);
-  const previewUrlWithToken = artifactShareable
+  const previewUrlWithToken = artifactShareable || !previewUrl
     ? previewUrl
-    : appendAuthTokenToUrl(previewUrl, authToken);
+    : authToken
+      ? api.withPreviewToken(previewUrl)
+      : previewUrl;
 
   // Derive effective preview status: if we have a URL and the job completed,
   // treat the preview as "running" regardless of what the SSE event chain set.
@@ -312,7 +313,7 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
     // keyed by instance id) so the opened tab shows the clean, shareable URL.
     const base = artifactUrl || previewUrl;
     if (!base) return;
-    const url = artifactShareable ? base : appendAuthTokenToUrl(base, authToken);
+    const url = artifactShareable ? base : api.withPreviewToken(base);
     window.open(url ?? base, "_blank");
   }
 
@@ -327,7 +328,7 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
     // that came from /chat?template=<id> and never produced an artifact yet.
     const restartAppId = appIdentifier;
     const restartUrl = restartAppId
-      ? getAppUrl(restartAppId)
+      ? api.appUrl(restartAppId)
       : preview?.templateId
         ? `/apps/template-${preview.templateId}/`
         : null;
@@ -342,7 +343,7 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
     // Reload iframe with token (skipped for shareable artifacts — public URL
     // doesn't need owner verification, and we avoid leaking the JWT).
     if (iframeRef.current) {
-      const absolute = restartAppId ? restartUrl : resolveApiUrl(restartUrl);
+      const absolute = restartAppId ? restartUrl : api.resolveUrl(restartUrl);
       const token = useAuthStore.getState().token;
       iframeRef.current.src = !artifactShareable && token
         ? `${absolute}${absolute.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
@@ -705,10 +706,11 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
       </>
 
       {/* File editor dialog */}
-      {editingFile && (
+      {editingFile && artifactInstanceId && (
         <FileEditorDialog
           open={!!editingFile}
           onOpenChange={(open) => { if (!open) setEditingFile(null); }}
+          artifactId={artifactInstanceId}
           filePath={editingFile}
           onSave={() => {
             if (iframeRef.current && previewUrl) {

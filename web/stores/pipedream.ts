@@ -5,13 +5,13 @@
  *
  * Drives the "Ligações externas alargadas" section on the integrations page:
  * the platform master toggle, connected-account list, and the Connect Link
- * flow. The toggle persists through the generic settings update intent
- * (`settings.integration.pipedreamEnabled`); everything else routes through the
- * `ekoa.pipedream` domain handler.
+ * flow. The toggle persists through the settings update endpoint
+ * (`settings.integration.pipedreamEnabled`, FC-044); everything else routes
+ * through the `pipedream` domain.
  */
 
 import { create } from 'zustand';
-import { wsAction } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 
 export interface PipedreamStatus {
   configured: boolean;
@@ -24,20 +24,6 @@ export interface PipedreamAccount {
   app: string;
   name: string;
   healthy: boolean;
-}
-
-interface ConnectToken {
-  token: string;
-  connectLinkUrl: string;
-  expiresAt: string;
-}
-
-/** The global Pipedream project keys an admin enters to enable Connect. */
-export interface PipedreamConfigInput {
-  clientId: string;
-  clientSecret: string;
-  projectId: string;
-  environment: 'development' | 'production';
 }
 
 interface PipedreamState {
@@ -56,6 +42,14 @@ interface PipedreamState {
   disconnectAccount: (accountId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
+/** The global Pipedream project keys an admin enters to enable Connect. */
+export interface PipedreamConfigInput {
+  clientId: string;
+  clientSecret: string;
+  projectId: string;
+  environment: 'development' | 'production';
+}
+
 export const usePipedreamStore = create<PipedreamState>()((set, get) => ({
   status: null,
   accounts: [],
@@ -65,18 +59,18 @@ export const usePipedreamStore = create<PipedreamState>()((set, get) => ({
 
   fetchStatus: async () => {
     set({ isLoading: true, error: null });
-    const res = await wsAction<PipedreamStatus>('ekoa.pipedream', 'status');
-    if (res.success && res.data) {
+    const res = await tryCall(() => api.pipedream.status());
+    if (res.ok) {
       set({ status: res.data, isLoading: false });
     } else {
-      set({ isLoading: false, error: res.error?.message || 'Falha ao obter o estado da Pipedream' });
+      set({ isLoading: false, error: res.error.message || 'Falha ao obter o estado da Pipedream' });
     }
   },
 
   fetchAccounts: async () => {
-    const res = await wsAction<{ accounts: PipedreamAccount[] }>('ekoa.pipedream', 'list-accounts');
-    if (res.success && res.data) {
-      set({ accounts: Array.isArray(res.data.accounts) ? res.data.accounts : [] });
+    const res = await tryCall(() => api.pipedream.listAccounts());
+    if (res.ok) {
+      set({ accounts: res.data.items as unknown as PipedreamAccount[] });
     }
   },
 
@@ -85,8 +79,10 @@ export const usePipedreamStore = create<PipedreamState>()((set, get) => ({
     // Optimistic: reflect the toggle immediately, reconcile from the server after.
     const prev = get().status;
     if (prev) set({ status: { ...prev, enabled } });
-    const res = await wsAction('ekoa.settings', 'update', { integration: { pipedreamEnabled: enabled } });
-    if (res.success) {
+    // FC-044: the pipedream enable flag is a settings field - persist it through the
+    // settings update endpoint, not a cross-domain write into the pipedream domain.
+    const res = await tryCall(() => api.settings.update({ integration: { pipedreamEnabled: enabled } }));
+    if (res.ok) {
       await get().fetchStatus();
       set({ isSaving: false });
       return { success: true };
@@ -94,53 +90,55 @@ export const usePipedreamStore = create<PipedreamState>()((set, get) => ({
     // Revert on failure.
     if (prev) set({ status: prev });
     set({ isSaving: false });
-    return { success: false, error: res.error?.message || 'Falha ao guardar a definição' };
+    return { success: false, error: res.error.message || 'Falha ao guardar a definição' };
   },
 
   configure: async (input: PipedreamConfigInput) => {
     set({ isSaving: true });
-    const res = await wsAction<{ id: string; configured: boolean }>('ekoa.pipedream', 'configure', {
-      clientId: input.clientId,
-      clientSecret: input.clientSecret,
-      projectId: input.projectId,
-      environment: input.environment,
-    });
-    if (res.success) {
+    const res = await tryCall(() =>
+      api.pipedream.configure({
+        clientId: input.clientId,
+        clientSecret: input.clientSecret,
+        projectId: input.projectId,
+        environment: input.environment,
+      }),
+    );
+    if (res.ok) {
       await get().fetchStatus();
       set({ isSaving: false });
       return { success: true };
     }
     set({ isSaving: false });
-    return { success: false, error: res.error?.message || 'Falha ao guardar a configuração' };
+    return { success: false, error: res.error.message || 'Falha ao guardar a configuração' };
   },
 
   removeConfig: async () => {
     set({ isSaving: true });
-    const res = await wsAction<{ deleted: boolean }>('ekoa.pipedream', 'remove-config');
-    if (res.success) {
+    const res = await tryCall(() => api.pipedream.removeConfig());
+    if (res.ok) {
       set({ accounts: [] });
       await get().fetchStatus();
       set({ isSaving: false });
       return { success: true };
     }
     set({ isSaving: false });
-    return { success: false, error: res.error?.message || 'Falha ao remover a configuração' };
+    return { success: false, error: res.error.message || 'Falha ao remover a configuração' };
   },
 
   getConnectToken: async () => {
-    const res = await wsAction<ConnectToken>('ekoa.pipedream', 'connect-token');
-    if (res.success && res.data?.connectLinkUrl) {
+    const res = await tryCall(() => api.pipedream.connectToken());
+    if (res.ok && res.data.connectLinkUrl) {
       return { success: true, connectLinkUrl: res.data.connectLinkUrl };
     }
-    return { success: false, error: res.error?.message || 'Não foi possível iniciar a ligação' };
+    return { success: false, error: res.ok ? 'Não foi possível iniciar a ligação' : res.error.message };
   },
 
   disconnectAccount: async (accountId: string) => {
-    const res = await wsAction<{ deleted: boolean }>('ekoa.pipedream', 'disconnect-account', { accountId });
-    if (res.success && res.data?.deleted) {
+    const res = await tryCall(() => api.pipedream.disconnectAccount({ accountId }));
+    if (res.ok) {
       set((state) => ({ accounts: state.accounts.filter((a) => a.id !== accountId) }));
       return { success: true };
     }
-    return { success: false, error: res.error?.message || 'Falha ao desligar o serviço' };
+    return { success: false, error: res.error.message || 'Falha ao desligar o serviço' };
   },
 }));

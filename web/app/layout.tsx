@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Lora } from "next/font/google";
 import "./globals.css";
-import { CortexProvider } from "@/components/providers/cortex-provider";
+import { ApiProvider } from "@/components/providers/api-provider";
 import { UiProvider } from "@/components/providers/ui-provider";
 import { getVerticalMetadataDescription } from "@/lib/verticals";
 
@@ -53,7 +53,7 @@ export default function RootLayout({
     >
       <body className="font-sans antialiased">
         <UiProvider>
-          <CortexProvider>{children}</CortexProvider>
+          <ApiProvider>{children}</ApiProvider>
         </UiProvider>
       </body>
     </html>

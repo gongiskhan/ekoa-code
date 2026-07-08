@@ -5,8 +5,8 @@
  * The agent always receives absolute filesystem paths and uses Read/Glob tools to access them.
  */
 
-import type { FileAttachment } from '@/lib/api/client';
-import { getApiBaseUrl } from '@/lib/api/client';
+import type { FileAttachment } from '@/types/attachment';
+import { api } from '@/lib/api';
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -14,30 +14,18 @@ function makeId(prefix: string): string {
 
 // -- Staging upload (browser fallback) --
 
-function getUploadUrl(): string {
-  return `${getApiBaseUrl()}/api/v1/upload`;
-}
-
-function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' };
-  const token = localStorage.getItem('ekoa_token');
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return headers;
-}
-
 async function stageFile(file: File, folder?: string): Promise<{ path: string; displayName: string; size: number; folderRoot?: string }> {
-  const headers: Record<string, string> = { ...getAuthHeaders(), 'X-Filename': file.name };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/octet-stream',
+    'X-Filename': file.name,
+  };
   if (folder) headers['X-Folder'] = folder;
 
   const buffer = await file.arrayBuffer();
-  const res = await fetch(getUploadUrl(), { method: 'POST', headers, body: buffer });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Upload failed' }));
-    throw new Error((err as { error?: string }).error || `Upload failed (${res.status})`);
-  }
-
-  return res.json() as Promise<{ path: string; displayName: string; size: number; folderRoot?: string }>;
+  // The uploads endpoint stages the file (auth + base URL handled by the request
+  // core) and returns an opaque uploadId, the attachment's reference in the new model.
+  const res = await api.uploads.create({}, { rawBody: buffer, headers });
+  return { path: res.uploadId, displayName: res.displayName, size: res.size, folderRoot: res.folderRoot };
 }
 
 /** Recursively collect files from a FileSystemDirectoryHandle */

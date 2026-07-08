@@ -35,7 +35,7 @@ import { WebhooksSection } from "@/components/integrations/WebhooksSection";
 import type {
   IntegrationSkill,
   IntegrationBuilderOutput,
-} from "@/lib/api/client";
+} from "@/types/integration";
 import { toast } from "@/stores/toast";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";

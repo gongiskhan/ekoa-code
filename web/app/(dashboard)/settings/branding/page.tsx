@@ -20,9 +20,8 @@ import {
 } from "lucide-react";
 import { useCompanyStore } from "@/stores/company";
 import { useTranslation } from "@/stores/i18n";
-import * as api from "@/lib/api/client";
-import { getApiBaseUrl } from "@/lib/api/client";
-import { getConnection } from "@/lib/cortex/connection";
+import { api, tryCall, openJobStream } from "@/lib/api";
+import { useApi } from "@/components/providers/api-provider";
 import { useI18nStore } from "@/stores/i18n";
 import { toast } from "@/stores/toast";
 import { PageShell } from "@/components/ui/page-shell";
@@ -52,7 +51,7 @@ type TabName = "Research" | "Branding" | "DesignSystem";
 function resolveLogoUrl(url: string | null): string | null {
   if (!url) return null;
   if (url.startsWith("data:")) return url;
-  if (url.startsWith("/brand-assets/")) return `${getApiBaseUrl()}${url}`;
+  if (url.startsWith("/brand-assets/")) return api.resolveUrl(url);
   // External URLs cause broken images due to CORS -- treat as missing
   if (url.startsWith("http")) return null;
   return url;
@@ -501,6 +500,9 @@ export default function BrandingSettingsPage() {
 
   const { company, isLoading, error, fetchCompany, updateBranding } =
     useCompanyStore();
+  // Connection status derives from the long-lived notifications stream (may be
+  // null before the session is authenticated).
+  const { notifications } = useApi();
 
   const [activeTab, setActiveTab] = useState<TabName>("Research");
 
@@ -513,7 +515,7 @@ export default function BrandingSettingsPage() {
   // Research state
   const [researchUrl, setResearchUrl] = useState("");
   const [isResearching, setIsResearching] = useState(false);
-  const [researchTraceId, setResearchTraceId] = useState<string | null>(null);
+  const [researchJobId, setResearchJobId] = useState<string | null>(null);
   const [researchStatus, setResearchStatus] = useState<"idle" | "running" | "complete" | "failed">("idle");
   const researchProgress = useResearchProgress(isResearching);
 
@@ -530,15 +532,15 @@ export default function BrandingSettingsPage() {
   // Track synced company ID for render-time state adjustment (React 19 pattern)
   const [prevCompanyId, setPrevCompanyId] = useState<string | null>(null);
 
-  // Fetch company on mount (with WS reconnect handling)
+  // Fetch company on mount, and refetch whenever the stream reconnects.
   useEffect(() => {
     fetchCompany();
-    const conn = getConnection();
-    const unsub = conn.onStatusChange((status) => {
+    if (!notifications) return;
+    const unsub = notifications.onStatusChange((status) => {
       if (status === "connected") fetchCompany();
     });
     return unsub;
-  }, [fetchCompany]);
+  }, [fetchCompany, notifications]);
 
   // Listen for research stream events.
   //
@@ -549,8 +551,9 @@ export default function BrandingSettingsPage() {
   // Any event for the matching trace re-arms the timer — so a slow-but-
   // progressing job never trips it, only true silence.
   useEffect(() => {
-    if (!researchTraceId) return;
-    const conn = getConnection();
+    if (!researchJobId) return;
+    // Brand research is a job; its dedicated stream reports progress/completion.
+    const stream = openJobStream(researchJobId);
     const WATCHDOG_MS = 3 * 60 * 1000;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
     const clear = () => {
@@ -568,33 +571,43 @@ export default function BrandingSettingsPage() {
       }, WATCHDOG_MS);
     };
     arm();
-    const unsub = conn.onStream((event) => {
-      if (event.trace_id !== researchTraceId) return;
-      arm();
-      if (event.type === "complete") {
-        clear();
-        setIsResearching(false);
-        setResearchStatus("complete");
-        toast.success(b.researchComplete);
-        fetchCompany();
-      } else if (event.type === "error") {
-        clear();
-        setIsResearching(false);
-        setResearchStatus("failed");
-        toast.error(b.researchFailed);
-      }
+    // Any progress event re-arms the watchdog, so a slow-but-progressing job never
+    // trips it - only true silence does.
+    const offProgress = (["ready", "routing", "text_chunk", "tool_event", "plan_step"] as const).map(
+      (type) => stream.on(type, arm),
+    );
+    const offComplete = stream.on("complete", () => {
+      clear();
+      setIsResearching(false);
+      setResearchStatus("complete");
+      toast.success(b.researchComplete);
+      fetchCompany();
+    });
+    const offError = stream.on("error", () => {
+      clear();
+      setIsResearching(false);
+      setResearchStatus("failed");
+      toast.error(b.researchFailed);
     });
     return () => {
       clear();
-      unsub();
+      offProgress.forEach((off) => off());
+      offComplete();
+      offError();
+      stream.close();
     };
-  }, [researchTraceId, b.researchComplete, b.researchFailed, fetchCompany]);
+  }, [researchJobId, b.researchComplete, b.researchFailed, fetchCompany]);
 
   // Sync local state from company data (render-time adjustment)
   // Use updatedAt as fingerprint so re-sync triggers after research updates the same company
   const companyFingerprint = company ? `${company.id}_${(company as unknown as Record<string, unknown>).updatedAt || ''}` : null;
   if (company && companyFingerprint && companyFingerprint !== prevCompanyId) {
-    const branding = company.branding || {} as Record<string, unknown>;
+    const branding = (company.branding ?? {}) as {
+      primaryColor?: string;
+      secondaryColor?: string;
+      logo?: string;
+      [key: string]: unknown;
+    };
     setPrevCompanyId(companyFingerprint);
     setLocalPrimaryColor(branding.primaryColor || "#0d9488");
     setLocalSecondaryColor(branding.secondaryColor || "#1e293b");
@@ -650,7 +663,12 @@ export default function BrandingSettingsPage() {
 
   function handleReset() {
     if (company) {
-      const branding = company.branding || {} as Record<string, unknown>;
+      const branding = (company.branding ?? {}) as {
+      primaryColor?: string;
+      secondaryColor?: string;
+      logo?: string;
+      [key: string]: unknown;
+    };
       setLocalPrimaryColor(branding.primaryColor || "#0d9488");
       setLocalSecondaryColor(branding.secondaryColor || "#1e293b");
       setLocalFontFamily(
@@ -672,16 +690,10 @@ export default function BrandingSettingsPage() {
     if (!researchUrl.trim()) return;
     setIsResearching(true);
     setResearchStatus("running");
-    try {
-      const result = await api.startBrandResearch(researchUrl.trim());
-      if (result.success && result.data) {
-        setResearchTraceId(result.data.traceId);
-      } else {
-        setIsResearching(false);
-        setResearchStatus("failed");
-        toast.error(b.researchFailed);
-      }
-    } catch {
+    const result = await tryCall(() => api.org.researchBranding({ websiteUrl: researchUrl.trim() }));
+    if (result.ok) {
+      setResearchJobId(result.data.jobId);
+    } else {
       setIsResearching(false);
       setResearchStatus("failed");
       toast.error(b.researchFailed);

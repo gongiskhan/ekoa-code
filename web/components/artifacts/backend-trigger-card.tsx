@@ -13,15 +13,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link2, Loader2, AlertTriangle, Trash2, Mail, Plus } from 'lucide-react';
-import { wsAction } from '@/lib/api/client';
-
-interface TriggerRow {
-  id: string;
-  integrationKey: string;
-  eventName: string;
-  registrationState?: string;
-  target?: { kind?: string; artifactId?: string; entrypoint?: string };
-}
+import { api, tryCall } from '@/lib/api';
+import type { Trigger } from '@ekoa/shared';
 
 const PROVIDER_LABEL: Record<string, string> = {
   'microsoft-365': 'Microsoft 365',
@@ -35,34 +28,30 @@ const HANDLER_LABEL: Record<string, string> = {
 
 export function BackendTriggerCard({ artifactId, handlers }: { artifactId: string; handlers: string[] }) {
   const [providers, setProviders] = useState<string[]>([]); // integrationKeys of connected mailboxes
-  const [triggers, setTriggers] = useState<TriggerRow[]>([]);
+  const [triggers, setTriggers] = useState<Trigger[]>([]);
   const [selected, setSelected] = useState<Record<string, string>>({}); // handler -> integrationKey
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [plat, trig] = await Promise.all([
-      wsAction<{ integrations?: Array<{ provider: string; connected: boolean }> }>(
-        'ekoa.platform-integrations', 'list', {},
-      ),
-      wsAction<TriggerRow[]>('ekoa.triggers', 'list', {}),
+    const [platRes, trigRes] = await Promise.all([
+      tryCall(() => api.platformIntegrations.list()),
+      tryCall(() => api.triggers.list()),
     ]);
     const connected: string[] = [];
-    if (plat.success && plat.data?.integrations) {
-      for (const it of plat.data.integrations) {
+    if (platRes.ok) {
+      for (const it of platRes.data.items) {
         if (!it.connected) continue;
         if (it.provider === 'microsoft') connected.push('microsoft-365');
         else if (it.provider === 'google') connected.push('google-workspace');
       }
     }
     setProviders(connected);
-    if (trig.success && Array.isArray(trig.data)) {
-      setTriggers(
-        trig.data.filter(
-          (t) => t.target?.kind === 'artifact-backend' && t.target?.artifactId === artifactId,
-        ),
-      );
+    if (trigRes.ok) {
+      // Artifact-backend triggers carry a top-level artifactId (automation
+      // triggers carry automationId instead).
+      setTriggers(trigRes.data.items.filter((t) => t.artifactId === artifactId));
     }
   }, [artifactId]);
 
@@ -76,7 +65,7 @@ export function BackendTriggerCard({ artifactId, handlers }: { artifactId: strin
   }, [load]);
 
   const triggerFor = useCallback(
-    (handler: string) => triggers.find((t) => t.target?.entrypoint === handler),
+    (handler: string) => triggers.find((t) => t.entrypoint === handler),
     [triggers],
   );
 
@@ -87,21 +76,21 @@ export function BackendTriggerCard({ artifactId, handlers }: { artifactId: strin
       return;
     }
     setBusy(handler); setError(null);
-    const res = await wsAction('ekoa.triggers', 'create', {
+    const res = await tryCall(() => api.triggers.create({
       integrationKey,
       eventName: 'email.received',
       target: { kind: 'artifact-backend', artifactId, entrypoint: handler },
-    });
-    if (res.success) await load();
-    else setError(res.error?.message ?? 'Não foi possível criar a ligação.');
+    }));
+    if (res.ok) await load();
+    else setError(res.error.message ?? 'Não foi possível criar a ligação.');
     setBusy(null);
   }, [selected, providers, artifactId, load]);
 
   const onDelete = useCallback(async (id: string) => {
     setBusy(id); setError(null);
-    const res = await wsAction('ekoa.triggers', 'delete', { id });
-    if (res.success) await load();
-    else setError(res.error?.message ?? 'Não foi possível remover a ligação.');
+    const res = await tryCall(() => api.triggers.delete({ id }));
+    if (res.ok) await load();
+    else setError(res.error.message ?? 'Não foi possível remover a ligação.');
     setBusy(null);
   }, [load]);
 

@@ -4,12 +4,18 @@
  * Auth Store
  *
  * Manages authentication state: login, logout, password change, token persistence.
+ * Transport is the typed client (ch12 §12.4.3 FC-037): `login` no longer sets the token
+ * as a side effect - the store calls `api.auth.login` then `setToken`; `logout` calls
+ * `api.auth.logout` (server-side revocation, RESOLVED P-03) then `clearToken`. Boot
+ * rehydrate re-injects the persisted token through the accessor (FC-067), which
+ * transitively re-authenticates the streams; boot validation uses `GET /auth/me` and
+ * renews with `POST /auth/refresh` (§12.2.3, RESOLVED P-03).
  */
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import * as api from '@/lib/api/client';
-import type { AuthUser } from '@/lib/api/client';
+import { api, setToken, clearToken, ApiError } from '@/lib/api';
+import type { AuthUser } from '@ekoa/shared';
 
 interface AuthState {
   // State
@@ -23,7 +29,7 @@ interface AuthState {
 
   // Actions
   login: (username: string, password: string, rememberMe?: boolean) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   checkAuth: () => Promise<boolean>;
   clearError: () => void;
@@ -46,30 +52,25 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true, error: null });
 
         try {
-          const response = await api.login({ username, password, rememberMe });
+          const { token, user, passwordChangeRequired } = await api.auth.login({
+            username,
+            password,
+            rememberMe,
+          });
 
-          if (response.success && response.data) {
-            const { token, user, passwordChangeRequired } = response.data;
+          // FC-037: setting the token is an explicit, separate step from the login call.
+          setToken(token);
 
-            api.setAuthToken(token);
+          set({
+            user,
+            token,
+            isAuthenticated: true,
+            isLoading: false,
+            passwordChangeRequired,
+            error: null,
+          });
 
-            set({
-              user,
-              token,
-              isAuthenticated: true,
-              isLoading: false,
-              passwordChangeRequired,
-              error: null,
-            });
-
-            return true;
-          } else {
-            set({
-              isLoading: false,
-              error: response.error?.message || 'Login failed',
-            });
-            return false;
-          }
+          return true;
         } catch (err) {
           set({
             isLoading: false,
@@ -79,8 +80,15 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      logout: () => {
-        api.clearAuthToken();
+      logout: async () => {
+        // RESOLVED (P-03): revoke the current token server-side before clearing it locally.
+        // Best-effort - a failed revoke must never trap the user in a signed-in state.
+        try {
+          await api.auth.logout({});
+        } catch {
+          /* ignore - clear local state regardless */
+        }
+        clearToken();
 
         set({
           user: null,
@@ -95,23 +103,13 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true, error: null });
 
         try {
-          const response = await api.changePassword({ oldPassword, newPassword });
-
-          if (response.success) {
-            set({
-              isLoading: false,
-              passwordChangeRequired: false,
-              error: null,
-            });
-            return { success: true };
-          } else {
-            const errorMsg = response.error?.message || 'Failed to change password';
-            set({
-              isLoading: false,
-              error: errorMsg,
-            });
-            return { success: false, error: errorMsg };
-          }
+          await api.auth.changePassword({ currentPassword: oldPassword, newPassword });
+          set({
+            isLoading: false,
+            passwordChangeRequired: false,
+            error: null,
+          });
+          return { success: true };
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : 'Failed to change password';
           set({
@@ -133,52 +131,44 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true });
 
         try {
-          const response = await api.getCurrentUser();
+          // Boot validation (§12.2.3, RESOLVED P-03): validate with GET /auth/me...
+          const user = await api.auth.me();
 
-          if (response.success && response.data) {
-            // Server may return a refreshed token when our role/scopes drifted
-            // (e.g. after the super-admin migration). Accept it so subsequent
-            // requests use the up-to-date claims.
-            const refreshedToken = response.data.token;
-            const { token: previousToken, ...userData } = response.data;
-            void previousToken; // discard from user state
-            const nextToken = refreshedToken ?? get().token;
-            if (refreshedToken && refreshedToken !== get().token) {
-              api.setAuthToken(refreshedToken);
-              const { reconnectWithToken } = await import('@/lib/cortex/connection');
-              reconnectWithToken(refreshedToken);
+          // ...then renew explicitly with POST /auth/refresh. Renewal failure is
+          // non-fatal: the just-validated token is still good for this session.
+          try {
+            const refreshed = await api.auth.refresh();
+            if (refreshed.token && refreshed.token !== get().token) {
+              setToken(refreshed.token);
+              set({ token: refreshed.token });
             }
-            set({
-              user: userData,
-              token: nextToken,
-              isAuthenticated: true,
-              isLoading: false,
-              passwordChangeRequired: response.data.passwordChangeRequired,
-            });
-            return true;
-          } else {
-            // Only clear auth if server explicitly rejected (not a network error)
-            const isAuthError = response.error?.message?.includes('Unauthorized') ||
-              response.error?.message?.includes('Authentication failed') ||
-              response.error?.message?.includes('expired');
-            if (isAuthError) {
-              api.clearAuthToken();
-              set({
-                user: null,
-                token: null,
-                isAuthenticated: false,
-                isLoading: false,
-                passwordChangeRequired: false,
-              });
-            } else {
-              // Network error -- keep existing auth state, just stop loading
-              set({ isLoading: false });
-            }
-            return false;
+          } catch {
+            /* keep the validated token */
           }
-        } catch {
-          // Network error -- keep existing auth, don't force logout
-          set({ isLoading: false });
+
+          set({
+            user,
+            isAuthenticated: true,
+            isLoading: false,
+            passwordChangeRequired: user.passwordChangeRequired ?? false,
+          });
+          return true;
+        } catch (err) {
+          // The core's 401 interceptor already cleared the token and redirected on an
+          // authentication failure; mirror that into store state. Network errors keep
+          // the existing auth so a flaky connection never forces a logout.
+          if (err instanceof ApiError && err.status === 401) {
+            clearToken();
+            set({
+              user: null,
+              token: null,
+              isAuthenticated: false,
+              isLoading: false,
+              passwordChangeRequired: false,
+            });
+          } else {
+            set({ isLoading: false });
+          }
           return false;
         }
       },
@@ -190,9 +180,10 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'ekoa_auth',
       onRehydrateStorage: () => (state) => {
-        // Restore the token to the API client
+        // FC-067: re-inject the persisted token through the single accessor, which
+        // transitively re-authenticates the streams.
         if (state?.token) {
-          api.setAuthToken(state.token);
+          setToken(state.token);
         }
         state?.setHasHydrated(true);
       },

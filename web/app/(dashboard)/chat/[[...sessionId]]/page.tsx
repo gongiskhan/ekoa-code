@@ -40,13 +40,9 @@ import { useOrchestrationStore } from "@/stores/orchestration";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useSettingsStore } from "@/stores/settings";
 import { useAgentExecution } from "@/hooks/useAgentExecution";
-import * as api from "@/lib/api/client";
-import { getConnection } from "@/lib/cortex/connection";
-import {
-  getFriendlyToolActivityBrief,
-  getFriendlySubagentMessage,
-  getFriendlySkillMessage,
-} from "@/lib/friendly-messages";
+import { api, tryCall, openChatRunStream } from "@/lib/api";
+import { useApi } from "@/components/providers/api-provider";
+import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
@@ -211,7 +207,8 @@ export default function UnifiedChatPage() {
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
 
-  const { execute, cancel, retry: retryBuild, execTraceRef } = useAgentExecution(activeSessionId);
+  const { execute, cancel, retry: retryBuild } = useAgentExecution(activeSessionId);
+  const { notifications } = useApi();
   const isExecuting = useOrchestrationStore((s) => s.isExecuting);
   const setIsExecutingStore = useOrchestrationStore((s) => s.setIsExecuting);
   const appendStreamingChat = useOrchestrationStore((s) => s.appendStreamingChat);
@@ -334,12 +331,12 @@ export default function UnifiedChatPage() {
     (async () => {
       const store = useOrchestrationStore.getState();
       try {
-        const resp = await api.getArtifactInstance(artifactId);
-        if (!resp.success || !resp.data) {
+        const res = await tryCall(() => api.artifacts.get({ id: artifactId }));
+        if (!res.ok) {
           router.replace("/chat");
           return;
         }
-        const artifact = resp.data as {
+        const artifact = res.data as unknown as {
           id: string;
           slug?: string;
           data?: { sessionId?: string; projectDir?: string; appUrl?: string };
@@ -357,7 +354,7 @@ export default function UnifiedChatPage() {
         } else {
           const newId = await store.createSession();
           targetSessionId = newId;
-          await api.wsAction("ekoa.templates", "update-instance", {
+          await api.artifacts.patch({
             id: artifact.id,
             data: {
               sessionId: newId,
@@ -418,10 +415,7 @@ export default function UnifiedChatPage() {
           return;
         }
         store.setActiveSession(sid);
-        await api.wsAction("ekoa.orchestrator", "seed-featured", {
-          sessionId: sid,
-          featuredArtifactId: featuredId,
-        }).catch(() => {});
+        await api.sessions.seedFeatured({ id: sid, artifactId: featuredId }).catch(() => {});
         store.setSidePanelState("build");
         router.replace(`/chat/${sid}`);
       } catch {
@@ -746,18 +740,15 @@ export default function UnifiedChatPage() {
   const buildIntentHandledRef = useRef(false);
   useEffect(() => {
     buildIntentHandledRef.current = false;
+    if (!notifications) return;
 
-    const conn = getConnection();
-    const unsub = conn.on("build_intent", (event) => {
-      const originalMessage = (event.original_message as string) || "";
+    return notifications.on("build_intent", (event) => {
+      const originalMessage = event.request.description || "";
       if (!originalMessage || buildIntentHandledRef.current) return;
-      // Origin filter: build_intent is broadcast to EVERY connected client of
-      // the user (other tabs, other browsers). Only the tab that sent the
-      // chat turn may kick the build — without this, each open tab fired its
-      // own execute-job (observed: three identical concurrent builds, all
-      // writing the same project directory, for one message).
-      const originTraceId = String((event as Record<string, unknown>).trace_id || "");
-      if (!originTraceId || originTraceId !== chatTraceIdRef.current) return;
+      // Origin filter: the notifications stream is per-user (every tab). Only the
+      // tab whose chat run triggered the delegation may kick the build — without
+      // this, each open tab fired its own build for one message.
+      if (!event.sourceRunId || event.sourceRunId !== chatTraceIdRef.current) return;
       buildIntentHandledRef.current = true;
 
       if (chatStreamCleanupRef.current) {
@@ -767,9 +758,6 @@ export default function UnifiedChatPage() {
       // Drop any partial streamed text so the build-started state is clean.
       const sid = useOrchestrationStore.getState().activeSessionId;
       if (sid) clearStreamingChat(sid);
-
-      // Forward the chat-agent's template choice to the build pipeline.
-      const templateId = (event.template_id as string | undefined) || undefined;
 
       if (sid) {
         addMessage(sid, {
@@ -781,124 +769,91 @@ export default function UnifiedChatPage() {
         });
       }
 
-      // From inside a conversation that already has a bound artifact (e.g. an
-      // onboarding session mid-flow), a redirect with NO template_id is a
-      // follow-up EDIT of that artifact - route it to the edit path so we don't
-      // mint a brand-new artifact. A redirect WITH a template_id is the agent
-      // proposing a NEW catalog build, so scaffold fresh.
+      // A redirect that names an artifact (or a session already bound to one) is a
+      // follow-up EDIT — route it to the edit path so we don't mint a new artifact.
+      // Otherwise scaffold fresh; the server resolves the base (client-side template
+      // choice retired, FC-107).
       const boundArtifact = sid
         ? useOrchestrationStore.getState().sessionJobs[sid]?.artifactInstanceId
         : null;
-      if (!templateId && boundArtifact) {
+      if (event.request.artifactId || boundArtifact) {
         handleBuildSendMessage(originalMessage, { skipUserMessage: true });
       } else {
-        handleBuildFirstMessage(originalMessage, { templateId, skipUserMessage: true });
+        handleBuildFirstMessage(originalMessage, { skipUserMessage: true });
       }
     });
-
-    return unsub;
-  }, [handleBuildFirstMessage, handleBuildSendMessage, addMessage, clearStreamingChat, language]);
+  }, [notifications, handleBuildFirstMessage, handleBuildSendMessage, addMessage, clearStreamingChat, language]);
 
   // R2 — chat_answer subscription. The in-build classifier emits this event
   // when the user's mid-build message is a question, ambiguous, or a meta
   // action that the orchestrator handled inline. We append the answer to the
   // active session's chat thread without flipping into building state.
   useEffect(() => {
-    const conn = getConnection();
-    const unsub = conn.on("chat_answer", (event) => {
-      const sid = useOrchestrationStore.getState().activeSessionId;
+    if (!notifications) return;
+    return notifications.on("chat_answer", (event) => {
+      const sid = event.sessionId || useOrchestrationStore.getState().activeSessionId;
       if (!sid) return;
-      // Drop answers for runs the user Stopped — the in-build classifier may have
-      // finished server-side before the cancel landed; this is the guarantee that
-      // a clarification never appears after Stop (Image #9).
-      const tid = String((event as Record<string, unknown>).trace_id || "");
-      if (tid && cancelledTracesRef.current.has(tid)) {
-        cancelledTracesRef.current.delete(tid);
+      // Drop answers for runs the user Stopped — the run may have finished
+      // server-side before the cancel landed; this is the guarantee that a
+      // clarification never appears after Stop.
+      if (event.sourceRunId && cancelledTracesRef.current.has(event.sourceRunId)) {
+        cancelledTracesRef.current.delete(event.sourceRunId);
         return;
       }
-      const text = String((event as Record<string, unknown>).text || "");
+      const text = event.text || "";
       if (!text) return;
-      const intent = (event as Record<string, unknown>).intent as string | undefined;
       const store = useOrchestrationStore.getState();
       store.addMessage(sid, {
         role: "assistant",
-        content: intent ? `${text}` : text,
+        content: text,
         metadata: {
           isEssential: true,
           type: "text",
         },
       });
     });
-    return unsub;
-  }, [activeSessionId]);
+  }, [notifications]);
 
   // Integration build intent — chat-agent emits <ekoa-integration-build-redirect/>,
   // server converts to integration_build_intent SSE. Switch the side panel to
   // the integration builder for this chat session.
   useEffect(() => {
-    const conn = getConnection();
-    const unsub = conn.on("integration_build_intent", (event) => {
-      const sid = useOrchestrationStore.getState().activeSessionId;
+    if (!notifications) return;
+    return notifications.on("integration_build_intent", (event) => {
+      const sid = event.sessionId || useOrchestrationStore.getState().activeSessionId;
       if (!sid) return;
-      const integrationKey = String((event as Record<string, unknown>).integration_key || "");
-      const integrationLabel = (event as Record<string, unknown>).integration_label as string | undefined;
-      if (!integrationKey) return;
 
-      setActiveIntegrationBuild(sid, {
-        key: integrationKey,
-        label: integrationLabel,
-      });
+      // The concrete integration key is not known at intent time (server-side
+      // marker parsing, FC-205); the hint labels the in-progress build until
+      // `integration_ready` delivers the key.
+      const hint = event.hint;
+      setActiveIntegrationBuild(sid, { key: hint ?? "", label: hint });
       setSidePanelState("integrate");
       addMessage(sid, {
         role: "system",
         content: language === "pt"
-          ? `A construir a integração ${integrationLabel || integrationKey}...`
-          : `Building the ${integrationLabel || integrationKey} integration...`,
+          ? `A construir a integração${hint ? ` ${hint}` : ""}...`
+          : `Building the ${hint ? `${hint} ` : ""}integration...`,
         metadata: { isEssential: true, type: "status" },
       });
     });
-    return unsub;
-  }, [activeSessionId, setActiveIntegrationBuild, setSidePanelState, addMessage, language]);
+  }, [notifications, setActiveIntegrationBuild, setSidePanelState, addMessage, language]);
 
-  // Orchestrator phase transitions — canonical signal for side-panel state.
-  // The backend (cortex/src/services/orchestrator.ts) broadcasts phase_changed
-  // whenever the persisted phase actually transitions. Map:
-  //   building / built                       → side panel 'build'
-  //   gathering / resolving-integrations
-  //     (no integration_build_intent active) → side panel 'none'
-  // integration_build_intent / integration_ready listeners (above/below) own
-  // the 'integrate' transitions independently.
-  useEffect(() => {
-    const conn = getConnection();
-    const unsub = conn.on("phase_changed", (event) => {
-      const sid = useOrchestrationStore.getState().activeSessionId;
-      if (!sid) return;
-      const currentPhase = String((event as Record<string, unknown>).current || "");
-      const currentSidePanel = useOrchestrationStore.getState().sidePanelState;
-      const executing = useOrchestrationStore.getState().isExecuting;
-      if (currentPhase === "building" || currentPhase === "built") {
-        if (currentSidePanel !== "build") setSidePanelState("build");
-      } else if (currentPhase === "gathering" || currentPhase === "idle") {
-        // Don't clobber 'integrate' — integration listeners drive that. And don't
-        // close mid-build: a stale "gathering" can arrive while a delegated build
-        // is already running — only honor it when nothing is executing.
-        if (currentSidePanel === "build" && !executing) setSidePanelState("none");
-      }
-    });
-    return unsub;
-  }, [activeSessionId, setSidePanelState]);
+  // (FC-030) The phase_changed subscription is removed: the event is dropped from
+  // the v1 contract (unreachable; phase info folds into job status events). The
+  // side panel is driven to 'build' directly by the build handlers and by
+  // setActiveSession's artifact check.
 
   // Integration ready — the integration-builder backend emits this on save.
   // Ask the user whether to wire the integration into the app. The user's
   // reply (yes) triggers the chat-agent to continue with the integration in
   // its catalog (next coding-agent invocation picks it up via the registry).
   useEffect(() => {
-    const conn = getConnection();
-    const unsub = conn.on("integration_ready", (event) => {
+    if (!notifications) return;
+    return notifications.on("integration_ready", (event) => {
       const sid = useOrchestrationStore.getState().activeSessionId;
       if (!sid) return;
-      const integrationKey = String((event as Record<string, unknown>).integration_key || "");
-      const integrationLabel = (event as Record<string, unknown>).integration_label as string | undefined;
+      const integrationKey = event.integrationKey || "";
       if (!integrationKey) return;
 
       markIntegrationBuildReady(sid);
@@ -912,14 +867,13 @@ export default function UnifiedChatPage() {
       addMessage(sid, {
         role: "assistant",
         content: language === "pt"
-          ? `A integração ${integrationLabel || integrationKey} está pronta. Queres que a adicione à tua app agora?`
-          : `The ${integrationLabel || integrationKey} integration is ready. Want me to add it to your app now?`,
+          ? `A integração ${integrationKey} está pronta. Queres que a adicione à tua app agora?`
+          : `The ${integrationKey} integration is ready. Want me to add it to your app now?`,
         metadata: { isEssential: true, type: "text" },
       });
     });
-    return unsub;
   }, [
-    activeSessionId,
+    notifications,
     markIntegrationBuildReady,
     setSidePanelState,
     setSidePanelTab,
@@ -954,11 +908,11 @@ export default function UnifiedChatPage() {
   // ========================================
   // CHAT-AGENT STREAM HANDLER
   // ========================================
-  // Free-form messages (no artifact attached yet) go through the chat-agent
-  // via cortex's /api/v1/request endpoint. Streams responses into the
-  // orchestration store (same path the coding-agent uses for builds), so the
-  // unified ChatPanel renders them without knowing or caring which agent is
-  // talking.
+  // Free-form messages (no artifact attached yet) go through the chat-agent via
+  // the chat runs resource (create run, then consume its scoped event stream).
+  // Streams responses into the orchestration store (same path the coding-agent
+  // uses for builds), so the unified ChatPanel renders them without knowing or
+  // caring which agent is talking.
 
   const handleChatSend = useCallback(async (textArg?: string) => {
     const text = (textArg ?? chatInput).trim();
@@ -992,128 +946,98 @@ export default function UnifiedChatPage() {
     clearStreamingChat(sessionId);
 
     try {
-      const conn = getConnection();
-      const metadata: Record<string, unknown> = {};
-      if (pendingAttachments.length > 0) {
-        metadata.attachments = pendingAttachments.map((a) => ({
-          attachmentId: a.attachmentId,
-          displayName: a.displayName,
-          path: a.path,
-          type: a.type,
-        }));
-        clearAttachments();
-      }
-      const traceId = conn.sendRequest(text, sessionId, { metadata });
-      chatTraceIdRef.current = traceId;
+      // Map file/folder attachments to upload references (FC-013/060); URL
+      // attachments are already prepended to the message text by the caller.
+      const uploadRefs = pendingAttachments
+        .filter((a) => a.type !== "url")
+        .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
+      if (pendingAttachments.length > 0) clearAttachments();
 
-      const finishStream = (unsub: () => void) => {
-        unsub();
+      // FC-013: create the run, await the server-minted runId, THEN subscribe to
+      // its scoped event stream. `language` is injected by the transport (§12.2.3).
+      const { runId } = await api.chat.createRun({
+        sessionId,
+        message: text,
+        ...(uploadRefs.length > 0 ? { attachments: uploadRefs } : {}),
+      });
+      chatTraceIdRef.current = runId;
+
+      const stream = openChatRunStream(runId);
+
+      const finishStream = () => {
+        stream.close();
         setIsExecutingStore(false);
         setActivityMessage(sessionId!, null);
         chatStreamCleanupRef.current = null;
         chatTraceIdRef.current = null;
       };
 
-      const unsubStream = conn.onStream((event) => {
-        if (event.trace_id !== traceId) return;
+      stream.on("text_chunk", (event) => {
+        if (event.text) appendStreamingChat(sessionId!, event.text);
+      });
 
-        if (event.type === "stream") {
-          const chunk = String(event.text || event.content || event.delta || "");
-          if (chunk) appendStreamingChat(sessionId!, chunk);
-        }
-
-        if (event.type === "tool_event") {
-          const toolEvent = (event.event || event.status) as string;
-          const toolName = (event.tool || event.name) as string;
-          const args = (event.args || {}) as Record<string, unknown>;
-          if (toolEvent === "tool_called" || toolEvent === "tool_started") {
-            const now = Date.now();
-            if (now - chatActivityThrottleRef.current >= 2000) {
-              chatActivityThrottleRef.current = now;
-              setActivityMessage(sessionId!, getFriendlyToolActivityBrief(toolName, args));
-            }
+      stream.on("tool_event", (event) => {
+        if (event.phase === "started") {
+          const now = Date.now();
+          if (now - chatActivityThrottleRef.current >= 2000) {
+            chatActivityThrottleRef.current = now;
+            setActivityMessage(sessionId!, getFriendlyToolActivityBrief(event.tool, event.args ?? {}));
           }
-        }
-
-        if (event.type === "subagent_event") {
-          const agent = ((event.agent || event.name || event.task_id || "agent") as string);
-          const subEvent = ((event.event || event.status) as string);
-          const description = event.description as string | undefined;
-          const summary = (event.summary || event.result) as string | undefined;
-          setActivityMessage(sessionId!, getFriendlySubagentMessage(agent, subEvent, description || summary));
-        }
-
-        if (event.type === "skill_event") {
-          const skill = ((event.skill || event.name || "skill") as string);
-          const action = ((event.action || event.event) as string);
-          if (action === "invoked" || action === "used") {
-            setActivityMessage(sessionId!, getFriendlySkillMessage(skill));
-          }
-        }
-
-        if (event.type === "complete") {
-          finishStream(unsubStream);
-
-          // Handle delegation BEFORE flushing — if the chat-agent delegated
-          // to a build, the build_intent listener has already migrated the
-          // prior conversation; we skip the assistant message append.
-          const delegate = (event as Record<string, unknown>).delegate as
-            | {
-                agent: string;
-                description: string;
-                templateId: string | null;
-                skipWizard: boolean;
-              }
-            | undefined;
-          if (delegate) {
-            clearStreamingChat(sessionId!);
-            setPendingDelegation({
-              description: delegate.description,
-              templateId: delegate.templateId,
-            });
-            return;
-          }
-
-          // Flush streaming buffer + persist the final assistant turn.
-          const buffered = flushStreamingChat(sessionId!);
-          // Defence-in-depth: never render raw provider/engine error text as the
-          // assistant message (backend already strips this; this catches replays
-          // / any bypass). Pass through normal responses unchanged.
-          const finalContent = sanitizeUserFacingError(
-            String(event.result || event.content || buffered || "No response received."),
-            language
-          );
-          addMessage(sessionId!, {
-            role: "assistant",
-            content: finalContent,
-            metadata: { isEssential: true, type: "text" },
-          });
-        }
-
-        if (event.type === "error") {
-          finishStream(unsubStream);
-          clearStreamingChat(sessionId!);
-          const rawError = (event as Record<string, unknown>).error as string | undefined;
-          // Strip any provider/engine leak; fall back to a generic branded message.
-          const errorText = rawError
-            ? sanitizeUserFacingError(rawError, language)
-            : language === "pt"
-              ? "Algo correu mal. Por favor tente novamente."
-              : "Something went wrong. Please try again.";
-          addMessage(sessionId!, {
-            role: "system",
-            content: errorText,
-            metadata: { isEssential: true, type: "status" },
-          });
         }
       });
 
-      // Register the stop handle immediately — not inside the stream callback —
-      // so the Stop button works even before the first event arrives (during
-      // routing/pre-stream). Previously this was assigned in the callback, so
-      // stopping early was a silent no-op (the "stopping not working" bug).
+      stream.on("complete", (event) => {
+        finishStream();
+
+        // Handle delegation BEFORE flushing — if the chat-agent delegated to a
+        // build, the build_intent notification migrates the prior conversation;
+        // we skip the assistant message append.
+        if (event.delegate) {
+          clearStreamingChat(sessionId!);
+          const request = event.delegate.request as { description?: unknown };
+          setPendingDelegation({
+            description: typeof request.description === "string" ? request.description : "",
+            templateId: null,
+          });
+          return;
+        }
+
+        // Flush streaming buffer + persist the final assistant turn.
+        const buffered = flushStreamingChat(sessionId!);
+        const resultText = typeof event.result === "string" ? event.result : "";
+        // Defence-in-depth: never render raw provider/engine error text as the
+        // assistant message (backend already strips this; this catches replays).
+        const finalContent = sanitizeUserFacingError(
+          resultText || buffered || "No response received.",
+          language
+        );
+        addMessage(sessionId!, {
+          role: "assistant",
+          content: finalContent,
+          metadata: { isEssential: true, type: "text" },
+        });
+      });
+
+      stream.on("error", (event) => {
+        finishStream();
+        clearStreamingChat(sessionId!);
+        // Strip any provider/engine leak; fall back to a generic branded message.
+        const errorText = event.message
+          ? sanitizeUserFacingError(event.message, language)
+          : language === "pt"
+            ? "Algo correu mal. Por favor tente novamente."
+            : "Something went wrong. Please try again.";
+        addMessage(sessionId!, {
+          role: "system",
+          content: errorText,
+          metadata: { isEssential: true, type: "status" },
+        });
+      });
+
+      // Register the stop handle immediately so the Stop button works even before
+      // the first event arrives (during routing/pre-stream).
       chatStreamCleanupRef.current = () => {
-        unsubStream();
+        stream.close();
         setIsExecutingStore(false);
         setActivityMessage(sessionId!, null);
         clearStreamingChat(sessionId!);
@@ -1383,22 +1307,14 @@ export default function UnifiedChatPage() {
     if (sessionJob?.jobId) {
       void cancel({ silent: true });
     }
-    // Tell the server to abort the in-flight chat-agent request. Tearing down
-    // the client SSE subscription alone left the server's SDK query running
-    // (the "stopped but still processed / asks again" bug). Capture the trace
-    // id BEFORE the cleanup closure nulls it.
-    const chatTraceId = chatTraceIdRef.current;
-    if (chatTraceId) {
-      void getConnection().cancelRequest(chatTraceId);
-    }
-    // Abort the in-build classifier window too: it runs server-side BEFORE any
-    // jobId exists, so cancel-job can't reach it. Cancel by the execute trace id
-    // AND mark it cancelled so a chat_answer that races through is suppressed
-    // client-side (Image #9: "stopped but still asked to confirm dates").
-    const execTraceId = execTraceRef?.current;
-    if (execTraceId) {
-      cancelledTracesRef.current.add(execTraceId);
-      void getConnection().cancelRequest(execTraceId);
+    // Tell the server to abort the in-flight chat run (FC-014). Tearing down the
+    // client SSE subscription alone leaves the server run going. Mark the run id
+    // cancelled BEFORE the cleanup closure nulls it, so a chat_answer that races
+    // through after Stop is suppressed client-side.
+    const chatRunId = chatTraceIdRef.current;
+    if (chatRunId) {
+      cancelledTracesRef.current.add(chatRunId);
+      void api.chat.cancelRun({ id: chatRunId }).catch(() => {});
     }
     // Chat cleanup is a no-op for builds; calling both is safe and covers the
     // build "preparing" phase where no jobId exists yet.
@@ -1414,7 +1330,6 @@ export default function UnifiedChatPage() {
     activeSessionId,
     sessionJob?.jobId,
     cancel,
-    execTraceRef,
     setIsExecutingStore,
     setActivityMessage,
     clearStreamingChat,

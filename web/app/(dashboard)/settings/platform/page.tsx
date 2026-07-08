@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Globe, AlertTriangle, Check, Trash2 } from "lucide-react";
 import { useSettingsStore, type PlatformSettings } from "@/stores/settings";
 import { useI18nStore, useTranslation } from "@/stores/i18n";
-import { wsAction } from "@/lib/api/client";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
@@ -299,6 +298,7 @@ function ChatSection({
 function AdvancedSection({ showSaved }: { showSaved: boolean }) {
   const { pages_platform } = useTranslation();
   const confirm = useConfirm();
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
 
   async function handleResetAll() {
     const ok = await confirm({
@@ -308,7 +308,8 @@ function AdvancedSection({ showSaved }: { showSaved: boolean }) {
       tone: "danger",
     });
     if (!ok) return;
-    wsAction("ekoa.settings", "update", {
+    // FC-044: settings writes funnel through the settings store's single update action.
+    updateSettings({
       general: { platformName: "", language: "en", timezone: "UTC" },
       chat: {
         defaultMode: "build",

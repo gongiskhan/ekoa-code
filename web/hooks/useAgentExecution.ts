@@ -8,14 +8,8 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import {
-  executeAgent,
-  cancelJob,
-  getJob,
-  getAppUrl,
-  type ExecuteRequest,
-  type JobInfo,
-} from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
+import type { Job } from '@ekoa/shared';
 import { useOrchestrationStore } from '@/stores/orchestration';
 import { useI18nStore } from '@/stores/i18n';
 import { useJobStream } from './useJobStream';
@@ -36,7 +30,7 @@ function resolveLanguage(explicit?: string): 'en' | 'pt' {
 export interface ExecutionState {
   isExecuting: boolean;
   jobId: string | null;
-  jobInfo: JobInfo | null;
+  jobInfo: Job | null;
   error: { code: string; message: string } | null;
 }
 
@@ -73,11 +67,6 @@ export function useAgentExecution(sessionId: string | null) {
 
   const jobIdRef = useRef<string | null>(null);
   const previewStartedRef = useRef(false);
-  /** trace_id of the in-flight execute run (sent to the backend in config).
-   *  Lets the UI cancel the in-build classifier window — which runs server-side
-   *  before any jobId exists, so cancel-job has nothing to abort — and correlate
-   *  the resulting chat_answer for client-side suppression after a Stop. */
-  const execTraceRef = useRef<string | null>(null);
 
   const [streamState, streamActions] = useJobStream(execState.jobId, sessionId);
 
@@ -102,7 +91,7 @@ export function useAgentExecution(sessionId: string | null) {
         const appIdentifier = sessionJob.slug || sessionJob.artifactInstanceId;
         store.getState().setSessionPreview(sessionId, {
           previewId: appIdentifier,
-          appUrl: getAppUrl(appIdentifier),
+          appUrl: api.appUrl(appIdentifier),
           status: 'running',
         });
       }
@@ -140,38 +129,26 @@ export function useAgentExecution(sessionId: string | null) {
       store.getState().clearSessionJobOutput(sessionId);
       streamActions.clearOutputs();
 
-      // Client-generated trace id: lets Stop cancel the in-build classifier
-      // window server-side and lets the chat_answer handler suppress a late
-      // answer after a Stop.
-      const execTraceId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-        ? crypto.randomUUID()
-        : `exec-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      execTraceRef.current = execTraceId;
-
-      // Build execution request. URL-type attachments don't go to the backend
-      // (they're prepended to the message text by the caller); only file/folder
-      // attachments are real on-disk paths the agent can read.
-      const isFollowUp = !!(options.artifactInstanceId && options.projectPath);
-      const backendAttachments = (options.attachments || []).filter((a) => a.type !== 'url');
-      const request: ExecuteRequest = {
-        agent: options.agent || 'coding-agent',
-        project: options.project || `session-${sessionId}`,
-        config: {
-          description: message,
-          templateId: options.templateId || undefined,
-          integrationKeys: options.integrationKeys || undefined,
-          traceId: execTraceId,
-          ...(options.artifactFieldValues || {}),
-          ...(options.configValues ? { configValues: options.configValues } : {}),
-          attachments: backendAttachments,
-          // Follow-up build: reuse existing artifact instead of creating new
-          ...(isFollowUp ? {
-            artifactInstanceId: options.artifactInstanceId,
-            projectDir: options.projectPath,
-          } : {}),
-        },
+      // Build the job-create request (FC-045). URL-type attachments don't go to the
+      // backend (they're prepended to the message text by the caller); file/folder
+      // attachments ride as uploadId references (never absolute server paths, §3.4).
+      // A follow-up build is keyed by the existing artifact id; the server resolves
+      // its project dir, so no client-side path is sent.
+      const isFollowUp = !!options.artifactInstanceId;
+      const backendAttachments = (options.attachments || [])
+        .filter((a) => a.type !== 'url')
+        .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
+      const fieldValues = options.artifactFieldValues;
+      const request = {
+        kind: 'build' as const,
+        description: message,
         sessionId,
-        language: options.language || 'en',
+        ...(options.templateId ? { templateId: options.templateId } : {}),
+        ...(options.integrationKeys ? { integrationKeys: options.integrationKeys } : {}),
+        ...(options.artifactInstanceId ? { artifactId: options.artifactInstanceId } : {}),
+        ...(backendAttachments.length > 0 ? { attachments: backendAttachments } : {}),
+        ...(fieldValues ? { fieldValues } : {}),
+        ...(options.configValues ? { configValues: options.configValues } : {}),
       };
 
       // Add user message to chat (include attachment info for display).
@@ -188,10 +165,10 @@ export function useAgentExecution(sessionId: string | null) {
       }
 
       try {
-        const response = await executeAgent(request);
+        const result = await tryCall(() => api.jobs.create(request));
 
-        if (!response.success || !response.data) {
-          const error = response.error || { code: 'EXECUTE_ERROR', message: 'Failed to start agent' };
+        if (!result.ok) {
+          const error = { code: result.error.code, message: result.error.message };
           setExecState((prev) => ({
             ...prev,
             isExecuting: false,
@@ -207,37 +184,33 @@ export function useAgentExecution(sessionId: string | null) {
           return;
         }
 
-        // R2: in-build classifier skip path. When the orchestrator decides the
-        // follow-up message is a question / ambiguous / meta-action, the
-        // backend returns { skipped: true, reason, ... } instead of starting
-        // a job. The chat_answer SSE event carries the actual text; we also
-        // ensure visible feedback here in case the SSE is delayed.
-        const responseData = response.data as { skipped?: boolean; reason?: string };
-        if (responseData.skipped) {
-          // Mark execution as no-op; the chat_answer SSE handler in the
-          // cortex provider will append the assistant turn.
+        // R2: in-build classifier answered path. When the orchestrator decides the
+        // follow-up message is a question / ambiguous / meta-action, the endpoint
+        // returns { status: 'answered', reason } instead of starting a job. The
+        // chat_answer notification carries the actual text.
+        if (result.data.status === 'answered') {
           setExecState((prev) => ({ ...prev, isExecuting: false }));
           store.getState().setIsExecuting(false);
           return;
         }
 
-        const jobInfo = response.data;
-        const jobId = jobInfo.jobId;
+        const job = result.data.job;
+        const jobId = job.id;
         jobIdRef.current = jobId;
 
         setExecState((prev) => ({
           ...prev,
           jobId,
-          jobInfo,
+          jobInfo: job,
         }));
 
-        // Update store with job info
+        // Update store with job info. The server resolves the project dir from the
+        // artifact id, so no client-side path is tracked (FC-045).
         store.getState().setSessionJob(sessionId, {
           jobId,
           status: 'queued',
           phase: 'preparing',
-          artifactInstanceId: jobInfo.artifactInstanceId || null,
-          projectPath: jobInfo.projectPath || null,
+          artifactInstanceId: job.artifactId || null,
         });
 
         // Add build started message (localized — must match the user's language
@@ -248,27 +221,16 @@ export function useAgentExecution(sessionId: string | null) {
           metadata: { isEssential: true, type: 'status', jobId },
         });
 
-        // Process template files as file operations
-        if (jobInfo.templateFiles && jobInfo.templateFiles.length > 0) {
-          for (const file of jobInfo.templateFiles) {
-            store.getState().addFileOperation(sessionId, file, 'created');
-          }
-        }
-
         // Set up app URL (static serving).
-        // - First builds with templateFiles: scaffoldApp + initial esbuild already
-        //   ran, preview is immediately servable.
-        // - Follow-up builds: the app from the previous build is still served at
-        //   the same /apps/{id}/ URL; esbuild hot-reload refreshes it as files
-        //   change. Do NOT flip back to 'building' — that would hide the running
-        //   iframe and flash the loading screen between messages.
-        // - First builds without templateFiles (rare): fall through to 'building'.
-        if (jobInfo.artifactInstanceId) {
-          const hasTemplateFiles = jobInfo.templateFiles && jobInfo.templateFiles.length > 0;
-          const previewReady = isFollowUp || hasTemplateFiles;
+        // - Follow-up builds: the app from the previous build is still served at the
+        //   same /apps/{id}/ URL; esbuild hot-reload refreshes it as files change.
+        //   Do NOT flip back to 'building' — that would hide the running iframe.
+        // - First builds: fall through to 'building' until the stream reports ready.
+        if (job.artifactId) {
+          const previewReady = isFollowUp;
           store.getState().setSessionPreview(sessionId, {
-            previewId: jobInfo.artifactInstanceId,
-            appUrl: getAppUrl(jobInfo.artifactInstanceId),
+            previewId: job.artifactId,
+            appUrl: api.appUrl(job.artifactId),
             status: previewReady ? 'running' : 'building',
           });
           if (previewReady) {
@@ -282,9 +244,8 @@ export function useAgentExecution(sessionId: string | null) {
           return;
         }
 
-        // Subscribe to WS stream events using the trace_id from the execute response
-        const streamTraceId = jobInfo.traceId || jobId;
-        streamActions.connect(streamTraceId);
+        // Subscribe to the scoped job event stream.
+        streamActions.connect(jobId);
       } catch (err) {
         const error = {
           code: 'NETWORK_ERROR',
@@ -316,7 +277,7 @@ export function useAgentExecution(sessionId: string | null) {
     const silent = opts?.silent === true;
 
     try {
-      await cancelJob(currentJobId);
+      await api.jobs.cancel({ id: currentJobId });
       streamActions.disconnect();
 
       setExecState((prev) => ({
@@ -391,8 +352,8 @@ export function useAgentExecution(sessionId: string | null) {
     if (!sessionJob?.jobId || sessionJob.status === 'idle') return;
 
     if (sessionJob.status === 'running' || sessionJob.status === 'queued') {
-      getJob(sessionJob.jobId).then((res) => {
-        if (res.success && res.data) {
+      void tryCall(() => api.jobs.get({ id: sessionJob.jobId! })).then((res) => {
+        if (res.ok) {
           const job = res.data;
           if (job.status === 'running' || job.status === 'queued') {
             setExecState({
@@ -410,12 +371,9 @@ export function useAgentExecution(sessionId: string | null) {
             });
           }
         } else {
-          // Job not found on backend (server restarted, job expired) -- mark as failed
+          // Job not found (server restarted / expired) or unreachable -- mark failed.
           store.getState().setSessionJob(sessionId, { status: 'failed' });
         }
-      }).catch(() => {
-        // Backend unreachable -- mark as failed so UI doesn't stay stuck
-        store.getState().setSessionJob(sessionId, { status: 'failed' });
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -476,8 +434,6 @@ export function useAgentExecution(sessionId: string | null) {
     cancel,
     reset,
     retry,
-    /** Ref to the in-flight execute run's trace_id (for Stop → server cancel). */
-    execTraceRef,
   };
 }
 

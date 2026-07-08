@@ -15,7 +15,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { ShieldCheck, Terminal, Check, X, AlertTriangle } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
-import * as api from "@/lib/api/client";
+import { api, tryCall } from "@/lib/api";
 
 type Phase = "loading" | "ready" | "working" | "approved" | "denied" | "error";
 
@@ -57,12 +57,12 @@ function Activate() {
   const decide = useCallback(
     async (deny: boolean) => {
       setPhase("working");
-      const res = await api.approveDevice(code, deny);
-      if (res.success && res.data?.ok) {
+      const res = await tryCall(() => api.auth.deviceApprove({ userCode: code, deny }));
+      if (res.ok) {
         setPhase(deny ? "denied" : "approved");
       } else {
         setPhase("error");
-        setMessage(res.error?.message || "Could not authorize the device. The code may have expired.");
+        setMessage(res.error.message || "Could not authorize the device. The code may have expired.");
       }
     },
     [code],

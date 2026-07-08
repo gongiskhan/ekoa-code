@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import { wsAction } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 
 /* ---------- Types ---------- */
 
@@ -73,12 +73,6 @@ interface BillingState {
   isAllUsageLoading: boolean;
   error: string | null;
   warningDismissed: boolean;
-  /**
-   * Provisional in-flight token delta from streaming usage_progress SSE
-   * events. Added to displayed totals only; reset to 0 by fetchUsage and
-   * by usage_updated. Never persisted server-side.
-   */
-  inflightDelta: number;
 
   // Actions
   fetchUsage: () => Promise<void>;
@@ -91,8 +85,6 @@ interface BillingState {
   toggleOverage: (enabled: boolean) => Promise<void>;
   toggleGlobalOverage: (enabled: boolean) => Promise<void>;
   dismissWarning: () => void;
-  applyUsageProgress: (provisionalDelta: number) => void;
-  resetInflightDelta: () => void;
 }
 
 export const useBillingStore = create<BillingState>((set, get) => ({
@@ -106,23 +98,34 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   isAllUsageLoading: false,
   error: null,
   warningDismissed: false,
-  inflightDelta: 0,
 
   fetchUsage: async () => {
     set({ isLoading: true, error: null });
-    const result = await wsAction<BillingUsage>('ekoa.billing', 'get-usage');
-    if (result.success && result.data) {
-      set({ usage: result.data, isLoading: false, inflightDelta: 0 });
+    const result = await tryCall(() => api.billing.getUsage());
+    if (result.ok) {
+      // The wire contract is a passthrough superset; the UI consumes the rich
+      // shape the server sends alongside the typed fields.
+      set({ usage: result.data as unknown as BillingUsage, isLoading: false });
     } else {
-      set({ isLoading: false, error: result.error?.message || 'Failed to fetch usage' });
+      set({ isLoading: false, error: result.error.message || 'Failed to fetch usage' });
     }
   },
 
   fetchHistory: async (page = 1) => {
     set({ isHistoryLoading: true });
-    const result = await wsAction<HistoryPage>('ekoa.billing', 'get-history', { page, limit: 10 });
-    if (result.success && result.data) {
-      set({ history: result.data, isHistoryLoading: false });
+    const result = await tryCall(() => api.billing.getHistory({ page, limit: 10 }));
+    if (result.ok) {
+      const total = result.data.total;
+      set({
+        history: {
+          entries: result.data.items as unknown as DailyUsage[],
+          total,
+          page,
+          limit: 10,
+          totalPages: Math.max(1, Math.ceil(total / 10)),
+        },
+        isHistoryLoading: false,
+      });
     } else {
       set({ isHistoryLoading: false });
     }
@@ -130,27 +133,27 @@ export const useBillingStore = create<BillingState>((set, get) => ({
 
   fetchBreakdown: async () => {
     set({ isBreakdownLoading: true });
-    const result = await wsAction<{ breakdown: UsageBreakdown[] }>('ekoa.billing', 'get-breakdown');
-    if (result.success && result.data) {
-      set({ breakdown: result.data.breakdown, isBreakdownLoading: false });
+    const result = await tryCall(() => api.billing.getBreakdown());
+    if (result.ok) {
+      set({ breakdown: result.data.items, isBreakdownLoading: false });
     } else {
       set({ isBreakdownLoading: false });
     }
   },
 
   purchaseCredits: async (amountUsd: number) => {
-    const result = await wsAction<{ success: boolean; newBalance: number }>('ekoa.billing', 'purchase-credits', { amountUsd });
-    if (result.success && result.data) {
+    const result = await tryCall(() => api.billing.purchaseCredits({ amountUsd }));
+    if (result.ok) {
       // Refresh usage to reflect new balance
       get().fetchUsage();
       return { success: true };
     }
-    return { success: false, error: result.error?.message || 'Purchase failed' };
+    return { success: false, error: result.error.message || 'Purchase failed' };
   },
 
   toggleOverage: async (enabled: boolean) => {
-    const result = await wsAction<{ overageEnabled: boolean }>('ekoa.billing', 'toggle-overage', { enabled });
-    if (result.success) {
+    const result = await tryCall(() => api.billing.toggleOverage({ enabled }));
+    if (result.ok) {
       const usage = get().usage;
       if (usage) {
         set({ usage: { ...usage, overageEnabled: enabled } });
@@ -159,8 +162,8 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   },
 
   toggleGlobalOverage: async (enabled: boolean) => {
-    const result = await wsAction<{ globalOverageEnabled: boolean }>('ekoa.billing', 'admin-global-overage', { enabled });
-    if (result.success) {
+    const result = await tryCall(() => api.billing.adminGlobalOverage({ enabled }));
+    if (result.ok) {
       const usage = get().usage;
       if (usage) {
         set({ usage: { ...usage, globalOverageEnabled: enabled } });
@@ -174,45 +177,29 @@ export const useBillingStore = create<BillingState>((set, get) => ({
 
   fetchAllUsage: async () => {
     set({ isAllUsageLoading: true });
-    const result = await wsAction<{ rows: AdminUsageRow[] }>('ekoa.billing', 'admin-list-usage');
-    if (result.success && result.data) {
-      set({ allUsage: result.data.rows, isAllUsageLoading: false });
+    const result = await tryCall(() => api.billing.adminListUsage());
+    if (result.ok) {
+      set({ allUsage: result.data.items as unknown as AdminUsageRow[], isAllUsageLoading: false });
     } else {
-      set({ isAllUsageLoading: false, error: result.error?.message || 'Failed to load usage' });
+      set({ isAllUsageLoading: false, error: result.error.message || 'Failed to load usage' });
     }
   },
 
   resetUsageForUser: async (userId: string) => {
-    const result = await wsAction<{ userId: string; tokensUsed: number }>('ekoa.billing', 'admin-reset-usage', { userId });
-    if (result.success) {
+    const result = await tryCall(() => api.billing.adminResetUsage({ userId }));
+    if (result.ok) {
       await get().fetchAllUsage();
       return { success: true };
     }
-    return { success: false, error: result.error?.message || 'Reset failed' };
+    return { success: false, error: result.error.message || 'Reset failed' };
   },
 
   setLimitForUser: async (userId: string, tokenLimit: number | null) => {
-    const result = await wsAction<{ userId: string; tokenLimit: number | null }>(
-      'ekoa.billing',
-      'admin-set-limit',
-      { userId, tokenLimit },
-    );
-    if (result.success) {
+    const result = await tryCall(() => api.billing.adminSetLimit({ userId, tokenLimit }));
+    if (result.ok) {
       await get().fetchAllUsage();
       return { success: true };
     }
-    return { success: false, error: result.error?.message || 'Failed to update limit' };
-  },
-
-  applyUsageProgress: (provisionalDelta: number) => {
-    if (!Number.isFinite(provisionalDelta) || provisionalDelta < 0) return;
-    // Each usage_progress carries the cumulative provisional delta for the
-    // active call, so replace rather than add. Keeps the meter monotonic
-    // even if events arrive out of order (Math.max).
-    set({ inflightDelta: Math.max(get().inflightDelta, Math.floor(provisionalDelta)) });
-  },
-
-  resetInflightDelta: () => {
-    set({ inflightDelta: 0 });
+    return { success: false, error: result.error.message || 'Failed to update limit' };
   },
 }));

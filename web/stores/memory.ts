@@ -8,7 +8,7 @@
  */
 
 import { create } from 'zustand';
-import * as api from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 
 // ============================================
 // Types
@@ -120,8 +120,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const params: api.MemorySearchParamsAPI = {
-        page,
+      const params: Record<string, unknown> = {
+        offset: (page - 1) * limit,
         limit,
         sortBy,
         sortOrder,
@@ -132,19 +132,20 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
       if (filters.tags.length > 0) params.tags = filters.tags.join(',');
       if (filters.search) params.search = filters.search;
 
-      const response = await api.getMemories(params);
-      if (response.success && response.data) {
-        const data = response.data as any;
+      const response = await tryCall(() => api.memories.list(params));
+      if (response.ok) {
+        const data = response.data;
+        const total = data.total ?? 0;
         set({
-          memories: data.memories ?? [],
-          total: data.total ?? 0,
-          totalPages: data.totalPages ?? 0,
-          page: data.page ?? page,
+          memories: data.items ?? [],
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          page,
           isLoading: false,
         });
       } else {
         set({
-          error: response.error?.message || 'Failed to fetch memories',
+          error: response.error.message || 'Failed to fetch memories',
           isLoading: false,
         });
       }
@@ -162,8 +163,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   fetchStats: async () => {
     set({ isLoadingStats: true });
     try {
-      const response = await api.getMemoryStats();
-      if (response.success && response.data) {
+      const response = await tryCall(() => api.memories.stats());
+      if (response.ok) {
         set({ stats: response.data, isLoadingStats: false });
       } else {
         set({ isLoadingStats: false });
@@ -178,9 +179,9 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   // -------------------------------------------
   fetchTags: async () => {
     try {
-      const response = await api.getMemoryTags();
-      if (response.success && response.data) {
-        set({ tags: (response.data as any).tags ?? response.data ?? [] });
+      const response = await tryCall(() => api.memories.listTags());
+      if (response.ok) {
+        set({ tags: response.data.items ?? [] });
       }
     } catch {
       // silently fail
@@ -193,8 +194,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   createMemory: async (data) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await api.createMemory(data);
-      if (response.success) {
+      const response = await tryCall(() => api.memories.create(data));
+      if (response.ok) {
         set({ isLoading: false });
         // Re-fetch to get updated list and stats
         get().fetchMemories();
@@ -202,7 +203,7 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
         get().fetchTags();
         return { success: true };
       } else {
-        const errorMsg = response.error?.message || 'Failed to create memory';
+        const errorMsg = response.error.message || 'Failed to create memory';
         set({ error: errorMsg, isLoading: false });
         return { success: false, error: errorMsg };
       }
@@ -219,15 +220,15 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   updateMemory: async (id, data) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await api.updateMemory(id, data);
-      if (response.success) {
+      const response = await tryCall(() => api.memories.update({ id, ...data }));
+      if (response.ok) {
         set({ isLoading: false });
         get().fetchMemories();
         get().fetchStats();
         get().fetchTags();
         return { success: true };
       } else {
-        const errorMsg = response.error?.message || 'Failed to update memory';
+        const errorMsg = response.error.message || 'Failed to update memory';
         set({ error: errorMsg, isLoading: false });
         return { success: false, error: errorMsg };
       }
@@ -244,8 +245,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   deleteMemory: async (id) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await api.deleteMemory(id);
-      if (response.success) {
+      const response = await tryCall(() => api.memories.delete({ id }));
+      if (response.ok) {
         set((state) => ({
           memories: state.memories.filter((m: any) => m.id !== id),
           selectedIds: (() => {
@@ -259,7 +260,7 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
         get().fetchTags();
         return { success: true };
       } else {
-        const errorMsg = response.error?.message || 'Failed to delete memory';
+        const errorMsg = response.error.message || 'Failed to delete memory';
         set({ error: errorMsg, isLoading: false });
         return { success: false, error: errorMsg };
       }
@@ -280,8 +281,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const ids = Array.from(selectedIds);
-      const response = await api.bulkDeleteMemories(ids);
-      if (response.success) {
+      const response = await tryCall(() => api.memories.bulkDelete({ ids }));
+      if (response.ok) {
         set((state) => ({
           memories: state.memories.filter((m: any) => !selectedIds.has(m.id)),
           selectedIds: new Set<string>(),
@@ -291,7 +292,7 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
         get().fetchTags();
         return { success: true };
       } else {
-        const errorMsg = response.error?.message || 'Failed to delete memories';
+        const errorMsg = response.error.message || 'Failed to delete memories';
         set({ error: errorMsg, isLoading: false });
         return { success: false, error: errorMsg };
       }
@@ -308,13 +309,13 @@ export const useMemoryStore = create<MemoryState>()((set, get) => ({
   updateMemoryTier: async (id, tier) => {
     set({ error: null });
     try {
-      const response = await api.updateMemory(id, { tier });
-      if (response.success) {
+      const response = await tryCall(() => api.memories.update({ id, tier }));
+      if (response.ok) {
         get().fetchMemories();
         get().fetchStats();
         return { success: true };
       } else {
-        const errorMsg = response.error?.message || 'Failed to update memory tier';
+        const errorMsg = response.error.message || 'Failed to update memory tier';
         set({ error: errorMsg });
         return { success: false, error: errorMsg };
       }

@@ -3,16 +3,18 @@
 /**
  * Company Store
  *
- * Manages company configuration and branding.
+ * Manages company configuration and branding. The UI label stays "Escritório";
+ * the transport now targets the org domain (FC-040): getOrg / updateOrg /
+ * saveBranding. The store's public method and field names are unchanged.
  */
 
 import { create } from 'zustand';
-import * as api from '@/lib/api/client';
-import type { CompanyConfig, CompanyBranding } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
+import type { OrgConfig, OrgBranding } from '@ekoa/shared';
 
 interface CompanyState {
   // State
-  company: CompanyConfig | null;
+  company: OrgConfig | null;
   isLoading: boolean;
   error: string | null;
 
@@ -20,10 +22,10 @@ interface CompanyState {
   fetchCompany: () => Promise<void>;
   updateCompany: (data: {
     displayName?: string;
-    branding?: Partial<CompanyBranding>;
-    settings?: Partial<CompanyConfig['settings']>;
+    branding?: Partial<OrgBranding>;
+    settings?: Record<string, unknown>;
   }) => Promise<{ success: boolean; error?: string }>;
-  updateBranding: (branding: Partial<CompanyBranding>, displayName?: string) => Promise<{ success: boolean; error?: string }>;
+  updateBranding: (branding: Record<string, unknown>, displayName?: string) => Promise<{ success: boolean; error?: string }>;
   clearError: () => void;
 }
 
@@ -34,60 +36,40 @@ export const useCompanyStore = create<CompanyState>()((set) => ({
 
   fetchCompany: async () => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.getCompany();
-      if (response.success && response.data) {
-        set({ company: response.data, isLoading: false });
-      } else {
-        set({
-          error: response.error?.message || 'Failed to fetch company',
-          isLoading: false,
-        });
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch company',
-        isLoading: false,
-      });
+    const response = await tryCall(() => api.org.getOrg());
+    if (response.ok) {
+      set({ company: response.data, isLoading: false });
+    } else {
+      set({ error: response.error.message || 'Failed to fetch company', isLoading: false });
     }
   },
 
   updateCompany: async (data) => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.updateCompany(data);
-      if (response.success && response.data) {
-        set({ company: response.data, isLoading: false });
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to update company';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to update company';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() =>
+      api.org.updateOrg(data as unknown as Parameters<typeof api.org.updateOrg>[0]),
+    );
+    if (response.ok) {
+      set({ company: response.data, isLoading: false });
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Failed to update company';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   updateBranding: async (branding, displayName) => {
     set({ isLoading: true, error: null });
-    try {
-      const response = await api.updateCompanyBranding(branding, displayName);
-      if (response.success && response.data) {
-        set({ company: response.data, isLoading: false });
-        return { success: true };
-      } else {
-        const errorMsg = response.error?.message || 'Failed to update branding';
-        set({ error: errorMsg, isLoading: false });
-        return { success: false, error: errorMsg };
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to update branding';
-      set({ error: errorMsg, isLoading: false });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() =>
+      api.org.saveBranding({ branding: branding as OrgBranding, displayName }),
+    );
+    if (response.ok) {
+      set({ company: response.data, isLoading: false });
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Failed to update branding';
+    set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
   },
 
   clearError: () => set({ error: null }),

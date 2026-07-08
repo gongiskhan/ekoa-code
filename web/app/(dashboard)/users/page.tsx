@@ -1,24 +1,21 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   Plus,
   Trash2,
   Users2,
   Shield,
   AlertTriangle,
-  FolderPlus,
   KeyRound,
   RotateCcw,
   Gauge,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useUsersStore } from "@/stores/users";
-import { useTeamsStore } from "@/stores/teams";
 import { useBillingStore, type AdminUsageRow } from "@/stores/billing";
 import { useTranslation } from "@/stores/i18n";
-import type { AuthUser, TeamWithMemberCount } from "@/lib/api/client";
+import type { AuthUser } from "@ekoa/shared";
 import { AdminGate } from "@/components/admin-gate";
 import { fmtTokens } from "@/lib/format/tokens";
 import { PageShell } from "@/components/ui/page-shell";
@@ -31,21 +28,18 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { SearchInput } from "@/components/ui/search-input";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 
 /* ---------- Stable refs for selectors ---------- */
 
 const EMPTY_USERS: AuthUser[] = [];
-const EMPTY_TEAMS: TeamWithMemberCount[] = [];
 
 /* ---------- Types ---------- */
 
 type DialogState =
   | { kind: "none" }
   | { kind: "addUser" }
-  | { kind: "addTeam" }
   | { kind: "resetPassword"; user: AuthUser }
   | { kind: "setLimit"; user: AuthUser; usage?: AdminUsageRow };
 
@@ -69,56 +63,10 @@ function RoleBadge({ role }: { role: string }) {
   if (role === "super-admin") {
     return <Badge tone="warning">{t.roleSuperAdmin}</Badge>;
   }
-  if (role === "admin") {
+  if (role === "org-admin") {
     return <Badge tone="brand">{t.roleAdmin}</Badge>;
   }
   return <Badge tone="neutral">{t.roleBuilder}</Badge>;
-}
-
-function TeamCard({
-  team,
-  index,
-  onDelete,
-}: {
-  team: TeamWithMemberCount;
-  index: number;
-  onDelete: () => void;
-}) {
-  const { pages } = useTranslation();
-  const t = pages.users;
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0, transition: { delay: index * 0.04, duration: 0.2 } }}
-      exit={{ opacity: 0, transition: { duration: 0.15 } }}
-    >
-      <Card hover className="group">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center space-x-3">
-            <Users2 size={20} className="text-neutral-900 flex-shrink-0" aria-hidden />
-            <div>
-              <CardTitle>{team.name}</CardTitle>
-              {team.description && (
-                <p className="text-xs text-neutral-500 mt-0.5">{team.description}</p>
-              )}
-            </div>
-          </div>
-          <IconButton
-            icon={Trash2}
-            label={t.deleteTeam}
-            variant="ghost"
-            size="sm"
-            onClick={onDelete}
-            className="opacity-0 group-hover:opacity-100 hover:text-red-600 hover:bg-red-50"
-          />
-        </div>
-        <div className="text-xs text-neutral-500">
-          {team.memberCount} {t.members.toLowerCase()}
-        </div>
-      </Card>
-    </motion.div>
-  );
 }
 
 /* ---------- Dialogs ---------- */
@@ -133,14 +81,14 @@ function AddUserDialog({
   onAdd: (data: {
     username: string;
     password: string;
-    role: "admin" | "builder";
+    role: "org-admin" | "builder";
   }) => void;
 }) {
   const { pages, common } = useTranslation();
   const t = pages.users;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"admin" | "builder">("builder");
+  const [role, setRole] = useState<"org-admin" | "builder">("builder");
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -201,73 +149,14 @@ function AddUserDialog({
             </Button>
             <Button
               type="button"
-              variant={role === "admin" ? "primary" : "secondary"}
+              variant={role === "org-admin" ? "primary" : "secondary"}
               className="flex-1 justify-center"
-              onClick={() => setRole("admin")}
+              onClick={() => setRole("org-admin")}
             >
               {t.roleAdmin}
             </Button>
           </div>
         </div>
-      </form>
-    </Dialog>
-  );
-}
-
-function AddTeamDialog({
-  open,
-  onClose,
-  onAdd,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onAdd: (data: { name: string; description: string }) => void;
-}) {
-  const { pages, common } = useTranslation();
-  const t = pages.users;
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-    onAdd({ name: name.trim(), description: description.trim() });
-    setName("");
-    setDescription("");
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t.addTeam}
-      size="sm"
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            {common.cancel}
-          </Button>
-          <Button type="submit" form="add-team-form" variant="primary">
-            {t.addTeam}
-          </Button>
-        </>
-      }
-    >
-      <form id="add-team-form" onSubmit={handleSubmit} className="space-y-4">
-        <Input
-          label={t.teamName}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t.teamNamePlaceholder}
-          required
-        />
-        <Textarea
-          label={t.teamDescription}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={t.whatDoesTeamDo}
-          rows={3}
-        />
       </form>
     </Dialog>
   );
@@ -466,14 +355,6 @@ export default function UsersPage() {
   const resetPassword = useUsersStore((s) => s.resetPassword);
   const clearUsersError = useUsersStore((s) => s.clearError);
 
-  const teams = useTeamsStore((s) => s.teams) || EMPTY_TEAMS;
-  const teamsLoading = useTeamsStore((s) => s.isLoading);
-  const teamsError = useTeamsStore((s) => s.error);
-  const fetchTeams = useTeamsStore((s) => s.fetchTeams);
-  const addTeam = useTeamsStore((s) => s.addTeam);
-  const removeTeam = useTeamsStore((s) => s.removeTeam);
-  const clearTeamsError = useTeamsStore((s) => s.clearError);
-
   const allUsage = useBillingStore((s) => s.allUsage);
   const fetchAllUsage = useBillingStore((s) => s.fetchAllUsage);
   const resetUsageForUser = useBillingStore((s) => s.resetUsageForUser);
@@ -489,9 +370,8 @@ export default function UsersPage() {
   // Fetch on mount
   useEffect(() => {
     fetchUsers();
-    fetchTeams();
     fetchAllUsage();
-  }, [fetchUsers, fetchTeams, fetchAllUsage]);
+  }, [fetchUsers, fetchAllUsage]);
 
   const usageByUserId = new Map<string, AdminUsageRow>(
     (allUsage ?? []).map((row) => [row.userId, row]),
@@ -501,20 +381,18 @@ export default function UsersPage() {
     u.username.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const isLoading = usersLoading || teamsLoading;
-  const error = usersError || teamsError;
+  const isLoading = usersLoading;
+  const error = usersError;
 
   const handleRetry = useCallback(() => {
     clearUsersError();
-    clearTeamsError();
     fetchUsers();
-    fetchTeams();
-  }, [clearUsersError, clearTeamsError, fetchUsers, fetchTeams]);
+  }, [clearUsersError, fetchUsers]);
 
   async function handleAddUser(data: {
     username: string;
     password: string;
-    role: "admin" | "builder";
+    role: "org-admin" | "builder";
   }) {
     setActionLoading(true);
     const result = await addUser({
@@ -523,15 +401,6 @@ export default function UsersPage() {
       role: data.role,
       passwordChangeRequired: true,
     });
-    setActionLoading(false);
-    if (result.success) {
-      setDialog({ kind: "none" });
-    }
-  }
-
-  async function handleAddTeam(data: { name: string; description: string }) {
-    setActionLoading(true);
-    const result = await addTeam({ name: data.name, description: data.description });
     setActionLoading(false);
     if (result.success) {
       setDialog({ kind: "none" });
@@ -547,17 +416,6 @@ export default function UsersPage() {
     });
     if (!ok) return;
     await removeUser(user.id);
-  }
-
-  async function handleDeleteTeam(team: TeamWithMemberCount) {
-    const ok = await confirm({
-      title: t.deleteTeam,
-      description: t.deleteConfirmation,
-      confirmLabel: common.delete,
-      tone: "danger",
-    });
-    if (!ok) return;
-    await removeTeam(team.id);
   }
 
   async function handleResetPassword(userId: string, newPassword: string) {
@@ -593,14 +451,9 @@ export default function UsersPage() {
           description={t.subtitle}
           icon={Users2}
           actions={
-            <>
-              <Button variant="secondary" icon={FolderPlus} onClick={() => setDialog({ kind: "addTeam" })}>
-                {t.addTeam}
-              </Button>
-              <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: "addUser" })}>
-                {t.addUser}
-              </Button>
-            </>
+            <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: "addUser" })}>
+              {t.addUser}
+            </Button>
           }
         />
 
@@ -618,7 +471,7 @@ export default function UsersPage() {
         )}
 
         {/* Loading state */}
-        {isLoading && users.length === 0 && teams.length === 0 ? (
+        {isLoading && users.length === 0 ? (
           <LoadingState label={common.loading} />
         ) : (
           <>
@@ -631,43 +484,15 @@ export default function UsersPage() {
                     {users.length} {t.users.toLowerCase()}
                   </span>
                   <span>
-                    {users.filter((u) => u.role === "admin" || u.role === "super-admin").length}{" "}
+                    {users.filter((u) => u.role === "org-admin" || u.role === "super-admin").length}{" "}
                     {t.roleAdmin.toLowerCase()}
                   </span>
                   <span>
-                    {users.filter((u) => u.isActive).length} {common.active.toLowerCase()}
-                  </span>
-                  <span>
-                    {teams.length} {t.teams.toLowerCase()}
+                    {users.filter((u) => u.active).length} {common.active.toLowerCase()}
                   </span>
                 </div>
               </div>
             </Card>
-
-            {/* Teams Section */}
-            <section>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-xs font-bold text-neutral-400 tracking-wider">
-                  {t.teams.toUpperCase()}
-                </h2>
-              </div>
-              {teams.length === 0 ? (
-                <EmptyState icon={Users2} title={t.noTeamsYet} />
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  <AnimatePresence mode="popLayout">
-                    {teams.map((team, i) => (
-                      <TeamCard
-                        key={team.id}
-                        team={team}
-                        index={i}
-                        onDelete={() => handleDeleteTeam(team)}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </div>
-              )}
-            </section>
 
             {/* Users Section */}
             <section>
@@ -706,6 +531,9 @@ export default function UsersPage() {
                     {filteredUsers.map((user) => {
                       const usage = usageByUserId.get(user.id);
                       const isUserSuperAdmin = user.role === "super-admin";
+                      // createdAt / lastLoginAt ride the AuthUser passthrough contract.
+                      const createdAt = (user as { createdAt?: string }).createdAt;
+                      const lastLoginAt = (user as { lastLoginAt?: string }).lastLoginAt;
                       const tokensTone: BadgeTone = !usage
                         ? "neutral"
                         : usage.percentage >= 100
@@ -729,8 +557,8 @@ export default function UsersPage() {
                             <RoleBadge role={user.role} />
                           </TD>
                           <TD>
-                            <Badge tone={user.isActive ? "success" : "neutral"} dot>
-                              {user.isActive ? common.active : common.inactive}
+                            <Badge tone={user.active ? "success" : "neutral"} dot>
+                              {user.active ? common.active : common.inactive}
                             </Badge>
                           </TD>
                           <TD>
@@ -746,11 +574,11 @@ export default function UsersPage() {
                             </div>
                           </TD>
                           <TD className="text-xs text-neutral-500">
-                            {new Date(user.createdAt).toLocaleDateString()}
+                            {createdAt ? new Date(createdAt).toLocaleDateString() : "—"}
                           </TD>
                           <TD className="text-xs text-neutral-500">
-                            {user.lastLoginAt
-                              ? new Date(user.lastLoginAt).toLocaleDateString()
+                            {lastLoginAt
+                              ? new Date(lastLoginAt).toLocaleDateString()
                               : "—"}
                           </TD>
                           <TD>
@@ -812,12 +640,6 @@ export default function UsersPage() {
         open={dialog.kind === "addUser"}
         onClose={() => setDialog({ kind: "none" })}
         onAdd={handleAddUser}
-      />
-
-      <AddTeamDialog
-        open={dialog.kind === "addTeam"}
-        onClose={() => setDialog({ kind: "none" })}
-        onAdd={handleAddTeam}
       />
 
       <ResetPasswordDialog

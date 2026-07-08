@@ -4,8 +4,7 @@
  * Knowledge Store -- "O que a Ekoa sabe" (the KNOWLEDGE vault editor).
  *
  * Mirrors stores/memory.ts: no localStorage persistence, all data comes from the
- * backend via wsAction('ekoa.knowledge', intent, params). The backend handler
- * supersedes the stale ekoa.knowledge recipe app.
+ * backend via the typed `knowledge` domain client.
  *
  * Semantics: knowledge is explicit-write-only (every doc is ingested
  * intentionally with provenance) and search is CITED-OR-SILENT -- an empty or
@@ -13,7 +12,7 @@
  */
 
 import { create } from 'zustand';
-import { wsAction, getApiBaseUrl } from '@/lib/api/client';
+import { api, tryCall, getToken } from '@/lib/api';
 
 // ============================================
 // Types
@@ -227,50 +226,36 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   // Fetch collection names
   // -------------------------------------------
   fetchCollections: async () => {
-    try {
-      const response = await wsAction<{ collections: string[] }>('ekoa.knowledge', 'list-collections');
-      if (response.success && response.data) {
-        set({ collections: response.data.collections ?? [] });
-      }
-    } catch {
-      // silently fail -- the docs fetch surfaces a visible error if needed
+    const response = await tryCall(() => api.knowledge.listCollections());
+    if (response.ok) {
+      set({ collections: response.data.items ?? [] });
     }
+    // silently fail otherwise -- the docs fetch surfaces a visible error if needed
   },
 
   // -------------------------------------------
-  // Browse docs — paginated over the whole base (Fornecido tab). Uses the `list`
-  // intent (collection filter + offset/limit), a filesystem browse — NOT a search.
+  // Browse docs — paginated over the whole base (Fornecido tab). Uses the
+  // documents list (collection filter + offset/limit), a filesystem browse — NOT a search.
   // -------------------------------------------
   fetchDocs: async (page = 0) => {
     const { activeCollection, DOCS_PAGE_SIZE } = get();
     set({ loading: true, error: null });
-    try {
-      const params: Record<string, unknown> = {
-        offset: page * DOCS_PAGE_SIZE,
-        limit: DOCS_PAGE_SIZE,
-      };
-      if (activeCollection) params.collection = activeCollection;
-      const response = await wsAction<{ docs: KnowledgeDocSummary[]; total: number }>(
-        'ekoa.knowledge',
-        'list',
-        params,
-      );
-      if (response.success && response.data) {
-        set({
-          docs: response.data.docs ?? [],
-          docsTotal: response.data.total ?? 0,
-          docsPage: page,
-          loading: false,
-        });
-      } else {
-        set({
-          error: response.error?.message || 'Falha ao carregar a base de conhecimento',
-          loading: false,
-        });
-      }
-    } catch (error) {
+    const params: Record<string, unknown> = {
+      offset: page * DOCS_PAGE_SIZE,
+      limit: DOCS_PAGE_SIZE,
+    };
+    if (activeCollection) params.collection = activeCollection;
+    const response = await tryCall(() => api.knowledge.listDocuments(params));
+    if (response.ok) {
       set({
-        error: error instanceof Error ? error.message : 'Falha ao carregar a base de conhecimento',
+        docs: (response.data.items ?? []) as unknown as KnowledgeDocSummary[],
+        docsTotal: response.data.total ?? 0,
+        docsPage: page,
+        loading: false,
+      });
+    } else {
+      set({
+        error: response.error.message || 'Falha ao carregar a base de conhecimento',
         loading: false,
       });
     }
@@ -281,23 +266,19 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   // -------------------------------------------
   ingest: async (input) => {
     set({ loading: true, error: null });
-    try {
-      const response = await wsAction('ekoa.knowledge', 'ingest', input);
-      if (response.success) {
-        set({ loading: false });
-        // Refresh the visible list + collections (a new collection may exist now).
-        await get().fetchCollections();
-        await get().fetchDocs(0);
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao guardar o documento';
-      set({ error: errorMsg, loading: false });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao guardar o documento';
-      set({ error: errorMsg, loading: false });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() =>
+      api.knowledge.createDocument(input as unknown as Parameters<typeof api.knowledge.createDocument>[0]),
+    );
+    if (response.ok) {
+      set({ loading: false });
+      // Refresh the visible list + collections (a new collection may exist now).
+      await get().fetchCollections();
+      await get().fetchDocs(0);
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao guardar o documento';
+    set({ error: errorMsg, loading: false });
+    return { success: false, error: errorMsg };
   },
 
   // -------------------------------------------
@@ -305,25 +286,19 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   // -------------------------------------------
   remove: async (collection, id) => {
     set({ error: null });
-    try {
-      const response = await wsAction<{ deleted: boolean }>('ekoa.knowledge', 'delete', { collection, id });
-      if (response.success) {
-        // Refresh collections, then refetch the page — CLAMPED, so deleting the
-        // last item on the last page doesn't leave us past the end (empty page).
-        await get().fetchCollections();
-        const newTotal = Math.max(0, get().docsTotal - 1);
-        const lastPage = Math.max(0, Math.ceil(newTotal / get().DOCS_PAGE_SIZE) - 1);
-        await get().fetchDocs(Math.min(get().docsPage, lastPage));
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao eliminar o documento';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao eliminar o documento';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() => api.knowledge.deleteDocument({ collection, id }));
+    if (response.ok) {
+      // Refresh collections, then refetch the page — CLAMPED, so deleting the
+      // last item on the last page doesn't leave us past the end (empty page).
+      await get().fetchCollections();
+      const newTotal = Math.max(0, get().docsTotal - 1);
+      const lastPage = Math.max(0, Math.ceil(newTotal / get().DOCS_PAGE_SIZE) - 1);
+      await get().fetchDocs(Math.min(get().docsPage, lastPage));
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao eliminar o documento';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 
   // -------------------------------------------
@@ -341,125 +316,88 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   // -------------------------------------------
   fetchSources: async () => {
     set({ sourcesLoading: true });
-    try {
-      const response = await wsAction<{ sources: KnowledgeSource[] }>('ekoa.knowledge', 'list-sources');
-      if (response.success && response.data) {
-        set({ sources: response.data.sources ?? [], sourcesLoading: false });
-      } else {
-        set({ sourcesLoading: false, error: response.error?.message || 'Falha ao carregar as fontes' });
-      }
-    } catch (error) {
-      set({
-        sourcesLoading: false,
-        error: error instanceof Error ? error.message : 'Falha ao carregar as fontes',
-      });
+    const response = await tryCall(() => api.knowledge.listSources());
+    if (response.ok) {
+      set({ sources: (response.data.items ?? []) as unknown as KnowledgeSource[], sourcesLoading: false });
+    } else {
+      set({ sourcesLoading: false, error: response.error.message || 'Falha ao carregar as fontes' });
     }
   },
 
   addSource: async (input) => {
     set({ error: null });
-    try {
-      const response = await wsAction('ekoa.knowledge', 'add-source', { ...input });
-      if (response.success) {
-        await get().fetchSources();
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao adicionar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao adicionar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() =>
+      api.knowledge.createSource({ ...input } as unknown as Parameters<typeof api.knowledge.createSource>[0]),
+    );
+    if (response.ok) {
+      await get().fetchSources();
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao adicionar a fonte';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 
   updateSource: async (id, input) => {
     set({ error: null });
-    try {
-      const response = await wsAction('ekoa.knowledge', 'update-source', { id, ...input });
-      if (response.success) {
-        await get().fetchSources();
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao atualizar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao atualizar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() =>
+      api.knowledge.updateSource({ id, ...input } as unknown as Parameters<typeof api.knowledge.updateSource>[0]),
+    );
+    if (response.ok) {
+      await get().fetchSources();
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao atualizar a fonte';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 
   deleteSource: async (id) => {
     set({ error: null });
-    try {
-      const response = await wsAction<{ deleted: boolean }>('ekoa.knowledge', 'delete-source', { id });
-      if (response.success) {
-        set((state) => ({ sources: state.sources.filter((s) => s.id !== id) }));
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao eliminar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao eliminar a fonte';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() => api.knowledge.deleteSource({ id }));
+    if (response.ok) {
+      set((state) => ({ sources: state.sources.filter((s) => s.id !== id) }));
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao eliminar a fonte';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 
   startCrawl: async (id) => {
     set({ error: null });
-    try {
-      const response = await wsAction<{ started: boolean; alreadyRunning: boolean }>(
-        'ekoa.knowledge',
-        'crawl-source',
-        { id },
-      );
-      if (response.success) {
-        return { success: true, alreadyRunning: response.data?.alreadyRunning };
-      }
-      const errorMsg = response.error?.message || 'Falha ao iniciar a atualização';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao iniciar a atualização';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() => api.knowledge.crawlSource({ id }));
+    if (response.ok) {
+      return { success: true, alreadyRunning: response.data.alreadyRunning };
     }
+    const errorMsg = response.error.message || 'Falha ao iniciar a atualização';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 
   fetchCrawlStatus: async (id) => {
-    try {
-      const response = await wsAction<{ running: boolean; progress: CrawlProgress | null; stats: CrawlStats | null }>(
-        'ekoa.knowledge',
-        'crawl-status',
-        { id },
-      );
-      if (response.success && response.data) {
-        return {
-          running: response.data.running,
-          progress: response.data.progress,
-          stats: response.data.stats ?? null,
-        };
-      }
-    } catch {
-      // transient — caller keeps polling
+    const response = await tryCall(() => api.knowledge.crawlStatus({ id }));
+    if (response.ok) {
+      const data = response.data as unknown as {
+        running: boolean;
+        progress?: CrawlProgress | null;
+        stats?: CrawlStats | null;
+      };
+      return {
+        running: data.running,
+        progress: data.progress ?? null,
+        stats: data.stats ?? null,
+      };
     }
     return { running: false, progress: null, stats: null };
   },
 
   fetchSchedule: async () => {
-    try {
-      const response = await wsAction<{ schedule: ScheduleInfo }>('ekoa.knowledge', 'refresh-schedule');
-      if (response.success && response.data) {
-        set({ schedule: response.data.schedule });
-      }
-    } catch {
-      // non-fatal — schedule banner just won't show
+    const response = await tryCall(() => api.knowledge.refreshSchedule());
+    if (response.ok) {
+      set({ schedule: (response.data.schedule ?? null) as unknown as ScheduleInfo | null });
     }
+    // non-fatal — schedule banner just won't show
   },
 
   // -------------------------------------------
@@ -467,81 +405,54 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   // -------------------------------------------
   fetchUploads: async () => {
     set({ uploadsLoading: true });
-    try {
-      const response = await wsAction<{ uploads: UploadDoc[] }>('ekoa.knowledge', 'list-uploads');
-      if (response.success && response.data) {
-        set({ uploads: response.data.uploads ?? [], uploadsLoading: false });
-      } else {
-        set({ uploadsLoading: false, error: response.error?.message || 'Falha ao carregar os documentos' });
-      }
-    } catch (error) {
-      set({
-        uploadsLoading: false,
-        error: error instanceof Error ? error.message : 'Falha ao carregar os documentos',
-      });
+    const response = await tryCall(() => api.knowledge.listUploads());
+    if (response.ok) {
+      set({ uploads: (response.data.items ?? []) as unknown as UploadDoc[], uploadsLoading: false });
+    } else {
+      set({ uploadsLoading: false, error: response.error.message || 'Falha ao carregar os documentos' });
     }
   },
 
   uploadDocument: async (file, collection) => {
     set({ error: null });
-    try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('ekoa_token') : null;
-      if (!token) return { success: false, error: 'Sessão expirada' };
-      const res = await fetch(`${getApiBaseUrl()}/api/v1/knowledge/upload`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': file.type || 'application/octet-stream',
-          'x-filename': encodeURIComponent(file.name),
-          'x-collection': collection,
+    if (!getToken()) return { success: false, error: 'Sessão expirada' };
+    const response = await tryCall(() =>
+      api.knowledge.createUpload(
+        {},
+        {
+          rawBody: file,
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-filename': encodeURIComponent(file.name),
+            'x-collection': collection,
+          },
         },
-        body: file,
-      });
-      if (!res.ok) {
-        let msg = `Falha no carregamento (${res.status})`;
-        try {
-          const body = await res.json();
-          if (body?.error) msg = body.error;
-        } catch {
-          /* keep default */
-        }
-        set({ error: msg });
-        return { success: false, error: msg };
-      }
-      await get().fetchUploads();
-      // A new collection + new docs now exist; refresh both so the Fornecido
-      // browse (list, count, pagination) reflects the upload immediately.
-      await get().fetchCollections();
-      await get().fetchDocs(0);
-      return { success: true };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Falha no carregamento';
+      ),
+    );
+    if (!response.ok) {
+      const msg = response.error.message || 'Falha no carregamento';
       set({ error: msg });
       return { success: false, error: msg };
     }
+    await get().fetchUploads();
+    // A new collection + new docs now exist; refresh both so the Fornecido
+    // browse (list, count, pagination) reflects the upload immediately.
+    await get().fetchCollections();
+    await get().fetchDocs(0);
+    return { success: true };
   },
 
   unindexDocument: async (id) => {
     set({ error: null });
-    try {
-      const response = await wsAction<{ removed: boolean; docsRemoved: number }>(
-        'ekoa.knowledge',
-        'unindex-document',
-        { id },
-      );
-      if (response.success) {
-        set((state) => ({ uploads: state.uploads.filter((u) => u.id !== id) }));
-        await get().fetchCollections();
-        await get().fetchDocs(0); // the removed doc leaves the Fornecido browse too
-        return { success: true };
-      }
-      const errorMsg = response.error?.message || 'Falha ao remover o documento';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Falha ao remover o documento';
-      set({ error: errorMsg });
-      return { success: false, error: errorMsg };
+    const response = await tryCall(() => api.knowledge.deleteUpload({ id }));
+    if (response.ok) {
+      set((state) => ({ uploads: state.uploads.filter((u) => u.id !== id) }));
+      await get().fetchCollections();
+      await get().fetchDocs(0); // the removed doc leaves the Fornecido browse too
+      return { success: true };
     }
+    const errorMsg = response.error.message || 'Falha ao remover o documento';
+    set({ error: errorMsg });
+    return { success: false, error: errorMsg };
   },
 }));

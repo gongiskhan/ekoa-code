@@ -39,10 +39,10 @@ import {
   Upload,
   type LucideIcon,
 } from "lucide-react";
-import * as api from "@/lib/api/client";
+import { api, tryCall, ApiError } from "@/lib/api";
+import type { ArtifactBundle, BundleUpdateResponse } from "@ekoa/shared";
 import { readBundleFile } from "@/lib/artifact-bundle";
 import { copyToClipboard } from "@/lib/clipboard";
-import { resolveApiUrl } from "@/lib/cortex/connection";
 import { useAuthStore } from "@/stores/auth";
 import { useTranslation } from "@/stores/i18n";
 import { useVerticalProfile, partitionStartingPoints } from "@/lib/verticals";
@@ -187,7 +187,7 @@ function getTemplateId(artifact: ArtifactInstance): string | undefined {
 function getArtifactAppUrl(artifact: ArtifactInstance): string | null {
   if (artifact.id && (artifact.status === "ready" || artifact.status === "running" || artifact.status === "active")) {
     // Prefer slug-based URL when available
-    return api.getAppUrl(artifact.slug || artifact.id);
+    return api.appUrl(artifact.slug || artifact.id);
   }
   return null;
 }
@@ -289,9 +289,9 @@ function LogViewer({ artifactId, onClose }: { artifactId: string; onClose: () =>
     async function fetchInfo() {
       setIsLoadingLogs(true);
       try {
-        const res = await api.wsAction('ekoa.company-space', 'get', { id: artifactId });
-        if (!cancelled && res.success && res.data) {
-          const data = res.data as { serving?: boolean; url?: string | null; status?: string; registeredAt?: string | null };
+        const res = await tryCall(() => api.companySpace.get({ artifactId }));
+        if (!cancelled && res.ok) {
+          const data = res.data as unknown as { serving?: boolean; url?: string | null; status?: string; registeredAt?: string | null };
           const lines: string[] = [];
           lines.push(`Status: ${data.status ?? 'unknown'}`);
           lines.push(`Serving: ${data.serving ? 'yes' : 'no'}`);
@@ -430,7 +430,7 @@ function ArtifactCard({
       {/* Screenshot thumbnail */}
       {artifact.screenshotUrl && (
         <img
-          src={resolveApiUrl(artifact.screenshotUrl)}
+          src={api.resolveUrl(artifact.screenshotUrl)}
           alt={getArtifactTitle(artifact)}
           loading="lazy"
           className="mb-3 h-32 w-full rounded-lg border border-line object-cover"
@@ -786,15 +786,12 @@ function SlugEditor({
     setSaving(true);
     setError(null);
     try {
-      const result = await api.wsAction("ekoa.templates", "update-instance", {
-        id: artifact.id,
-        slug: trimmed,
-      });
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.patch({ id: artifact.id, slug: trimmed }));
+      if (result.ok) {
         onSlugSaved(trimmed);
         setEditing(false);
       } else {
-        setError(result.error?.message || "Failed to save slug");
+        setError(result.error.message || "Failed to save slug");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save slug");
@@ -858,7 +855,7 @@ function SlugEditor({
             </button>
             <button
               onClick={() => {
-                const slugUrl = api.getAppUrl(artifact.slug || artifact.id);
+                const slugUrl = api.appUrl(artifact.slug || artifact.id);
                 void copyToClipboard(slugUrl);
               }}
               className="p-0.5 text-neutral-300 hover:text-teal-600 rounded hover:bg-teal-50 transition-colors cursor-pointer"
@@ -904,15 +901,12 @@ function TitleEditor({
     setSaving(true);
     setError(null);
     try {
-      const result = await api.wsAction("ekoa.templates", "update-instance", {
-        id: artifact.id,
-        name: trimmed,
-      });
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.patch({ id: artifact.id, name: trimmed }));
+      if (result.ok) {
         onNameSaved(trimmed);
         setEditing(false);
       } else {
-        setError(result.error?.message || "Não foi possível guardar o nome");
+        setError(result.error.message || "Não foi possível guardar o nome");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível guardar o nome");
@@ -1052,21 +1046,12 @@ function ArtifactDetail({
     setDownloading(true);
     setDownloadError(null);
     try {
-      const token =
-        typeof window !== "undefined" ? localStorage.getItem("ekoa_token") || "" : "";
-      const res = await fetch(
-        `${api.getApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(artifact.id)}/download`,
-        { headers: { Authorization: `Bearer ${token}` } },
+      // The request core attaches the token via the accessor and surfaces the
+      // 422 secret-guard block as a typed ApiError (FC-062/FC-066).
+      const blob = await api.artifacts.download<Blob>(
+        { id: artifact.id },
+        { responseType: "blob" },
       );
-      if (!res.ok) {
-        setDownloadError(
-          res.status === 422
-            ? "A transferência foi bloqueada: a aplicação contém uma credencial que deve ser removida primeiro."
-            : "Não foi possível transferir o código. Tente novamente.",
-        );
-        return;
-      }
-      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1076,8 +1061,13 @@ function ArtifactDetail({
       link.remove();
       URL.revokeObjectURL(url);
       setShowDownloadInfo(false);
-    } catch {
-      setDownloadError("Não foi possível transferir o código. Tente novamente.");
+    } catch (err) {
+      const blocked = err instanceof ApiError && err.status === 422;
+      setDownloadError(
+        blocked
+          ? "A transferência foi bloqueada: a aplicação contém uma credencial que deve ser removida primeiro."
+          : "Não foi possível transferir o código. Tente novamente.",
+      );
     } finally {
       setDownloading(false);
     }
@@ -1610,13 +1600,10 @@ export default function ArtifactsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await api.listArtifactInstances();
-      if (response.success && response.data) {
-        const data = response.data as
-          | ArtifactInstance[]
-          | { instances: ArtifactInstance[]; featured?: ArtifactInstance[] };
-        const raw = Array.isArray(data) ? data : data.instances || [];
-        const featuredRaw = Array.isArray(data) ? [] : data.featured || [];
+      const response = await tryCall(() => api.artifacts.list());
+      if (response.ok) {
+        const raw = response.data.items as unknown as ArtifactInstance[];
+        const featuredRaw = response.data.featured as unknown as ArtifactInstance[];
         // Normalize: backend uses `name` and `typeId`, frontend expects `title` and `templateId`
         const normalize = (item: ArtifactInstance) => ({
           ...item,
@@ -1626,9 +1613,7 @@ export default function ArtifactsPage() {
         setInstances(raw.map(normalize));
         setFeaturedArtifacts(featuredRaw.map(normalize));
       } else {
-        setError(
-          response.error?.message || a.failedToLoad,
-        );
+        setError(response.error.message || a.failedToLoad);
       }
     } catch (err) {
       setError(
@@ -1715,13 +1700,13 @@ export default function ArtifactsPage() {
     if (!updateDialogFeatured || isUpdatingFeatured) return;
     setIsUpdatingFeatured(true);
     try {
-      const result = await api.updateFeaturedFromSource(updateDialogFeatured.id);
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.featuredUpdateApply({ id: updateDialogFeatured.id }));
+      if (result.ok) {
         toast.success(a.startingPoints.updateApplied, { testId: "featured-update-toast", duration: 8000 });
         setUpdateDialogFeatured(null);
         await fetchInstances();
       } else {
-        toast.error(result.error?.message || a.startingPoints.updateFailed);
+        toast.error(result.error.message || a.startingPoints.updateFailed);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : a.startingPoints.updateFailed);
@@ -1735,13 +1720,13 @@ export default function ArtifactsPage() {
     if (!updateDialogFeatured || isUpdatingFeatured) return;
     setIsUpdatingFeatured(true);
     try {
-      const result = await api.ignoreFeaturedUpdate(updateDialogFeatured.id);
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.featuredUpdateIgnore({ id: updateDialogFeatured.id }));
+      if (result.ok) {
         toast.info(a.startingPoints.keptVersion, { testId: "featured-update-toast", duration: 5000 });
         setUpdateDialogFeatured(null);
         await fetchInstances();
       } else {
-        toast.error(result.error?.message || a.startingPoints.updateFailed);
+        toast.error(result.error.message || a.startingPoints.updateFailed);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : a.startingPoints.updateFailed);
@@ -1762,7 +1747,7 @@ export default function ArtifactsPage() {
 
   function handleCopyBuildLink(artifact: ArtifactInstance) {
     const slug = artifact.slug || artifact.id;
-    const url = `${api.getApiBaseUrl()}/build/${encodeURIComponent(slug)}`;
+    const url = api.resolveUrl(`/build/${encodeURIComponent(slug)}`);
     void copyToClipboard(url).then(() => {
       setCopiedBuildId(artifact.id);
       setTimeout(() => setCopiedBuildId(null), 3000);
@@ -1811,15 +1796,15 @@ export default function ArtifactsPage() {
     if (isImporting) return;
     setIsImporting(true);
     try {
-      const result = await api.importArtifact(bundle);
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.import({ bundle: bundle as ArtifactBundle }));
+      if (result.ok) {
         toast.success(
           `Artefacto importado: "${(result.data as { name?: string })?.name || "sem nome"}".`,
           { testId: "build-link-toast", duration: 4000 },
         );
         await fetchInstances();
       } else {
-        setError(result.error?.message || "Falha ao importar.");
+        setError(result.error.message || "Falha ao importar.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao importar.");
@@ -1833,17 +1818,19 @@ export default function ArtifactsPage() {
     if (!pendingImport || isImporting) return;
     setIsImporting(true);
     try {
-      const result = await api.updateArtifactFromBundle(pendingImport.match.id, pendingImport.bundle);
-      if (result.success) {
-        const name = ((result.data as { instance?: { name?: string } })?.instance?.name)
-          || getArtifactTitle(pendingImport.match);
+      const result = await tryCall(() => api.artifacts.bundleUpdate({
+        id: pendingImport.match.id,
+        bundle: pendingImport.bundle as ArtifactBundle,
+      }));
+      if (result.ok) {
+        const name = result.data.artifact.name || getArtifactTitle(pendingImport.match);
         toast.success(
           `Aplicação "${name}" atualizada. Pode repor a versão anterior em Versões e os dados em Dados e cópias de segurança.`,
           { testId: "build-link-toast", duration: 8000 },
         );
         await fetchInstances();
       } else {
-        toast.error(result.error?.message || "Falha ao atualizar a partir do bundle.");
+        toast.error(result.error.message || "Falha ao atualizar a partir do bundle.");
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Falha ao atualizar a partir do bundle.");
@@ -1856,10 +1843,8 @@ export default function ArtifactsPage() {
   // Shared success path for both the gallery match-update and the per-artifact
   // upload-update: toast pointing at the rollback surfaces, refresh, and keep
   // the open detail view's name in sync.
-  function afterBundleUpdate(artifact: ArtifactInstance, result: { data?: unknown }) {
-    const name =
-      ((result.data as { instance?: { name?: string } } | undefined)?.instance?.name) ||
-      getArtifactTitle(artifact);
+  function afterBundleUpdate(artifact: ArtifactInstance, data: BundleUpdateResponse) {
+    const name = data.artifact.name || getArtifactTitle(artifact);
     toast.success(
       `Aplicação "${name}" atualizada. Pode repor a versão anterior em Versões e os dados em Dados e cópias de segurança.`,
       { testId: "build-link-toast", duration: 8000 },
@@ -1879,11 +1864,15 @@ export default function ArtifactsPage() {
     setIsUpdating(true);
     try {
       const bundle = await readBundleFile(file); // JSON bundle or downloaded .zip
-      const result = await api.updateArtifactFromBundle(artifact.id, bundle, false);
-      if (result.success) {
-        afterBundleUpdate(artifact, result);
+      const result = await tryCall(() => api.artifacts.bundleUpdate({
+        id: artifact.id,
+        bundle: bundle as ArtifactBundle,
+        force: false,
+      }));
+      if (result.ok) {
+        afterBundleUpdate(artifact, result.data);
       } else {
-        const msg = result.error?.message || "";
+        const msg = result.error.message || "";
         if (/ManifestIdMismatch/i.test(msg)) {
           setForceUpdate({ artifact, bundle });
         } else {
@@ -1907,12 +1896,16 @@ export default function ArtifactsPage() {
     const { artifact, bundle } = forceUpdate;
     setIsUpdating(true);
     try {
-      const result = await api.updateArtifactFromBundle(artifact.id, bundle, true);
-      if (result.success) {
-        afterBundleUpdate(artifact, result);
+      const result = await tryCall(() => api.artifacts.bundleUpdate({
+        id: artifact.id,
+        bundle: bundle as ArtifactBundle,
+        force: true,
+      }));
+      if (result.ok) {
+        afterBundleUpdate(artifact, result.data);
         setForceUpdate(null);
       } else {
-        toast.error(result.error?.message || "Falha ao atualizar a partir do ficheiro.");
+        toast.error(result.error.message || "Falha ao atualizar a partir do ficheiro.");
       }
     } catch (err) {
       toast.error(
@@ -1936,8 +1929,8 @@ export default function ArtifactsPage() {
     if (!deletingArtifact) return;
     setIsDeleting(true);
     try {
-      const result = await api.deleteArtifactInstance(deletingArtifact.id);
-      if (result.success) {
+      const result = await tryCall(() => api.artifacts.remove({ id: deletingArtifact.id }));
+      if (result.ok) {
         setInstances((prev) =>
           prev.filter((i) => i.id !== deletingArtifact.id),
         );
@@ -1946,7 +1939,7 @@ export default function ArtifactsPage() {
           setSelectedArtifact(null);
         }
       } else {
-        toast.error(result.error?.message || a.failedToDelete);
+        toast.error(result.error.message || a.failedToDelete);
       }
     } catch (err) {
       setError(
@@ -1967,10 +1960,7 @@ export default function ArtifactsPage() {
       setSelectedArtifact(prev => prev ? { ...prev, shareable: newShareable } : prev);
     }
     try {
-      await api.wsAction('ekoa.templates', 'update-instance', {
-        id: artifact.id,
-        shareable: newShareable,
-      });
+      await api.artifacts.patch({ id: artifact.id, shareable: newShareable });
     } catch {
       // Revert on failure
       setInstances(prev => prev.map(i =>
@@ -1985,8 +1975,8 @@ export default function ArtifactsPage() {
   async function handleStart(artifact: ArtifactInstance) {
     setStartingId(artifact.id);
     try {
-      const res = await api.wsAction('ekoa.company-space', 'start', { id: artifact.id });
-      if (res.success) {
+      const res = await tryCall(() => api.companySpace.start({ artifactId: artifact.id }));
+      if (res.ok) {
         setInstances(prev => prev.map(i =>
           i.id === artifact.id ? { ...i, status: 'running' } : i
         ));
@@ -2004,8 +1994,8 @@ export default function ArtifactsPage() {
   async function handleStop(artifact: ArtifactInstance) {
     setStoppingId(artifact.id);
     try {
-      const res = await api.wsAction('ekoa.company-space', 'stop', { id: artifact.id });
-      if (res.success) {
+      const res = await tryCall(() => api.companySpace.stop({ artifactId: artifact.id }));
+      if (res.ok) {
         setInstances(prev => prev.map(i =>
           i.id === artifact.id ? { ...i, status: 'stopped' } : i
         ));
@@ -2295,7 +2285,7 @@ export default function ArtifactsPage() {
                             >
                               {f.screenshotUrl ? (
                                 <img
-                                  src={resolveApiUrl(f.screenshotUrl)}
+                                  src={api.resolveUrl(f.screenshotUrl)}
                                   alt={f.title || f.name}
                                   loading="lazy"
                                   className="mb-3 h-32 w-full rounded-lg border border-line object-cover"
@@ -2338,7 +2328,7 @@ export default function ArtifactsPage() {
                                   </button>
                                 )}
                                 <a
-                                  href={api.getAppUrl(f.slug || f.id)}
+                                  href={api.appUrl(f.slug || f.id)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()}
@@ -2534,10 +2524,10 @@ export default function ArtifactsPage() {
         // Shareable artifacts are served publicly — skip the ?token= append so
         // we don't leak the JWT into browser history / referrers. Non-shareable
         // artifacts still need the token for the owner-of-revoked edge case +
-        // cross-origin dev (ekoa_token cookie can't cross the cortex port).
-        const iframeUrl = previewArtifact.shareable === true
+        // cross-origin dev (the session-token cookie can't cross the cortex port).
+        const iframeUrl = previewArtifact.shareable === true || !authToken
           ? previewBaseUrl
-          : (api.appendAuthTokenToUrl(previewBaseUrl, authToken) || previewBaseUrl);
+          : api.withPreviewToken(previewBaseUrl);
         return (
           <ArtifactPreviewOverlay
             artifactId={previewArtifact.id}

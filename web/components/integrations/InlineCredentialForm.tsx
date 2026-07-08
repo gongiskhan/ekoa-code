@@ -6,7 +6,7 @@ import { Eye, EyeOff, Key, Pencil, Lock, ShieldCheck, AlertCircle } from 'lucide
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from '@/stores/i18n';
-import type { IntegrationSkill, IntegrationConfigField } from '@/lib/api/client';
+import type { IntegrationSkill, IntegrationConfigField } from '@/types/integration';
 
 interface InlineCredentialFormProps {
   skill: IntegrationSkill;

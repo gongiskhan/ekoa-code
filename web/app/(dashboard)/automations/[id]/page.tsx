@@ -15,7 +15,7 @@ import { useTranslation } from '@/stores/i18n';
 import { useAutomationRun } from '@/hooks/useAutomationRun';
 import { useDocumentTitleAlert } from '@/hooks/useDocumentTitleAlert';
 import { buildPatchInfoByIndex } from '@/lib/automations/activity-state';
-import { wsAction } from '@/lib/api/client';
+import { api, tryCall } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button, IconButton } from '@/components/ui/button';
 import { Tabs } from '@/components/ui/tabs';
@@ -48,6 +48,7 @@ export default function AutomationEditorPage() {
   const remove = useAutomationsStore((s) => s.remove);
   const planFromGoal = useAutomationsStore((s) => s.planFromGoal);
   const resetActiveRun = useAutomationsStore((s) => s.resetActiveRun);
+  const recoverActiveRun = useAutomationsStore((s) => s.recoverActiveRun);
   const activeRunAutomationId = useAutomationsStore((s) => s.activeRun.automationId);
   const activeRunStatus = useAutomationsStore((s) => s.activeRun.status);
   const activeRunKind = useAutomationsStore((s) => s.activeRun.kind);
@@ -71,8 +72,8 @@ export default function AutomationEditorPage() {
   useEffect(() => {
     if (!id) return;
     void (async () => {
-      const r = await wsAction<TriggerRow[]>('ekoa.triggers', 'list-for-automation', { automationId: id });
-      setStoredTrigger(r.success && Array.isArray(r.data) && r.data.length > 0 ? r.data[0] : null);
+      const r = await tryCall(() => api.triggers.listForAutomation({ id }));
+      setStoredTrigger(r.ok && r.data.items.length > 0 ? (r.data.items[0] as unknown as TriggerRow) : null);
     })();
   }, [id]);
 
@@ -97,6 +98,13 @@ export default function AutomationEditorPage() {
       resetActiveRun();
     }
   }, [id, activeRunAutomationId, resetActiveRun]);
+
+  // After a reload the in-memory store is empty, so an in-flight run for this
+  // automation has to be recovered explicitly (per-run SSE streams need a run
+  // id to subscribe to). No-op when a run for this automation is already live.
+  useEffect(() => {
+    if (id) void recoverActiveRun(id);
+  }, [id, recoverActiveRun]);
 
   // Detect rehearsal completion: when a run targeted at this automation
   // transitions out of 'running', refetch so the refined steps land in

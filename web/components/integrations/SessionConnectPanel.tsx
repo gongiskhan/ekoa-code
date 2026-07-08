@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { useIntegrationsStore } from '@/stores/integrations';
 import { useTranslation } from '@/stores/i18n';
-import type { IntegrationSkill } from '@/lib/api/client';
+import type { IntegrationSkill } from '@/types/integration';
 
 interface SessionConnectPanelProps {
   skill: IntegrationSkill;
