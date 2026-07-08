@@ -31,14 +31,15 @@ code. Everything committed as produced.
 | J5 | Org isolation | PASS end to end - cross-org 404s exact; design-tokens neutral default + per-org overlay both correct; Registo org-scoped. |
 | J6 | Anonymisation round trip | PARTIAL - privacy HELD (tokens-only egress proven), but the user-visible de-anon reply is broken by model whitespace (F26); deny-list unwired (F10). |
 | J7 | Brand research | FAIL - `POST /branding/research` unimplemented (F4). |
-| J8 | Automation + webhooks | PASS admission plane (HMAC/dedup byte-exact); automation-plan ran + billed; webhook-run terminal state not captured (harness-gap). |
+| J8 | Automation + webhooks | MIXED - admission plane + webhook->run pipeline PASS (byte-exact HMAC/dedup; manual automation fires + runs to completed); but plan-from-goal (NL authoring) deterministically 500s (F29). |
 | J9 | Billing truth | PASS - ledger reconciles to the token (37387 metered, sum-per-user == sum-per-agentType), no orphan/empty-billee rows, anomalies=0. |
 
-Passed: J5, J9 (clean); J2, J8 (pass with a noted bug/gap). Failed or partial: J1, J3, J4, J6, J7.
+Passed clean: J5, J9. Pass with a noted bug: J2. Mixed (core works, an authoring/lifecycle path
+fails): J8. Failed or partial: J1, J3, J4, J6, J7.
 
-## Findings: 25, classified (F1-F28; F15/F17/F18 folded)
+## Findings: 27, classified (F1-F30; F15/F17/F18 folded)
 
-17 bug, 3 judgment, 3 docs-gap, 1 harness-gap, 1 verified-pass. 9 high-severity.
+18 bug, 4 judgment, 3 docs-gap, 1 harness-gap, 1 verified-pass. 10 high-severity.
 
 High-severity, ranked by operator impact:
 1. **F16 + F28** - build serves the scaffold not the built app, and per-build verify passes it (the
@@ -48,6 +49,7 @@ High-severity, ranked by operator impact:
 4. **F20** - chat result truncated AND the truncated text is persisted as history (data corruption).
 5. **F21, F22, F26, F25** - memory recall fails; memory UI dead on a schema violation; anon reply
    shows the token not the value; host-context bleed (high IF reproduced against prod).
+6. **F29** - plan-from-goal automation authoring deterministically 500s (webhooks themselves work).
 
 Also structural: **F5** - 31 of 167 contract-declared endpoints unmounted, incl. 4 whole domains
 (uploads, app-assistant, integration-builder, ekoa-local); **F6** - no JSON-envelope 404; **F3** -
@@ -74,15 +76,17 @@ deactivation at every plane. The generated app CODE is correct - the build syste
 5. F22 (memoryView schema violation) + F21 (memory recall) + F23 (memory UI console errors).
 6. F26 (de-anon whitespace round-trip).
 7. F25 (host-context bleed - reproduce-or-dismiss first).
-8. F5 (unmounted endpoints triage) + F6 (JSON 404 + disabled-message).
-9. F3 (audit-log CRUD mutations), F4 (branding research), F7 (failed-build shell), F9 (trigger
+8. F29 (plan-from-goal 500 - and unmask the swallowed error cause).
+9. F5 (unmounted endpoints triage) + F6 (JSON 404 + disabled-message).
+10. F3 (audit-log CRUD mutations), F4 (branding research), F7 (failed-build shell), F9 (trigger
    disable), F10 (deny-list resolver), F11 (apply the stashed sessions fix).
 
 ## Open threads for the operator
 
 - `stash@{0}` holds the sessions-contract fix + its untracked contract test (recover the test from
   `stash@{0}^3`); F11 brief covers applying it.
-- worker-b-build did not report J8b's webhook-run terminal state or the J1 served-plane deactivation
-  check - noted as harness-gaps; both underlying paths are otherwise evidenced.
+- worker-b-build's full report landed after the first summary (it crossed the wire): it confirms the
+  J3/J9 findings independently, closes the J1 served-plane deactivation check (403 ACCOUNT_DISABLED on
+  app-data, PASS), and surfaced F29 (plan-from-goal 500) + F30 (builds do not bill memory-extract).
 - The `/config` safeguard switch was set to `false` for this supervised run per the mission brief;
   restore it to `true`.
