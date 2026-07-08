@@ -15,6 +15,9 @@ playwright-report/
 # server featured-builds/sandboxes also land here). Not source - never committed.
 ekoa-data/
 
+# run-ekoa-code driver screenshots (.claude/skills/run-ekoa-code). Local proof only.
+.ekoa-run/
+
 # >>> autothing >>>
 # evidence binaries + liveness state (resume-critical small files stay versioned)
 **/*.cast
