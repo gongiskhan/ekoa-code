@@ -57,6 +57,8 @@ const COVERED = new Set<string>([
   // G7B — agent execution: chat runs + build jobs (chat.test.ts, jobs.test.ts)
   'chat.createRun', 'chat.getRun', 'chat.runEvents', 'chat.cancelRun',
   'jobs.create', 'jobs.get', 'jobs.cancel', 'jobs.events',
+  // batch1 F2 — model-credential provisioning (credentials.test.ts)
+  'credentials.set',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

@@ -22,6 +22,7 @@ import { automationsEndpoints } from './automations.js';
 import { memoriesEndpoints } from './memories.js';
 import { knowledgeEndpoints } from './knowledge.js';
 import { billingEndpoints } from './billing.js';
+import { credentialsEndpoints } from './credentials.js';
 import { uploadsEndpoints } from './uploads.js';
 import { registoEndpoints } from './registo.js';
 import { appAssistantEndpoints } from './app-assistant.js';
@@ -51,6 +52,7 @@ export * from './automations.js';
 export * from './memories.js';
 export * from './knowledge.js';
 export * from './billing.js';
+export * from './credentials.js';
 export * from './uploads.js';
 export * from './registo.js';
 export * from './app-assistant.js';
@@ -79,6 +81,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   memories: memoriesEndpoints,
   knowledge: knowledgeEndpoints,
   billing: billingEndpoints,
+  credentials: credentialsEndpoints,
   uploads: uploadsEndpoints,
   registo: registoEndpoints,
   appAssistant: appAssistantEndpoints,
