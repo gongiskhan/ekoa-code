@@ -20,6 +20,7 @@ import {
 } from '@ekoa/shared';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
+import { loadConfig } from '../config.js';
 import {
   listArtifacts, createArtifact, getVisibleArtifact, patchArtifact, deleteArtifact,
   artifactView, stripReservedDataKeys, type ArtifactDoc,
@@ -267,7 +268,10 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
     if (!isSafePdfBasename(id)) return sendError(res, 'VALIDATION_FAILED', 'Identificador inválido.');
     const art = await readable(req, res);
     if (!art) return;
-    const origin = `${req.protocol}://${req.get('host') ?? `localhost`}`;
+    // Render against the api's OWN loopback origin, NEVER the client-controlled Host header (Codex
+    // checkpoint): a spoofed Host would point the server-side render browser at an attacker origin
+    // (SSRF + attacker-controlled PDF content). The served-app plane is on this same process.
+    const origin = process.env.RENDER_ORIGIN ?? `http://127.0.0.1:${loadConfig().port}`;
     try {
       const result = await renderArtifactPdf({ url: `${origin}/apps/${id}/` }, id);
       res.redirect(302, result.url);

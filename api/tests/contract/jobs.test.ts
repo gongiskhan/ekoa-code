@@ -76,4 +76,19 @@ describe('build jobs contract (§3.8.8)', () => {
     expect(res.status).toBe(401);
     expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
   });
+
+  it("GET events for ANOTHER user's job → 403 (cross-user ownership, Codex checkpoint)", async () => {
+    // u1 owns the job; u2 holds a valid SSE token but must NOT be able to stream u1's job events.
+    const t1 = await tokenFor();
+    const created = await api('/api/v1/jobs', t1, { method: 'POST', body: JSON.stringify({ kind: 'build', description: 'u1 private job', sessionId: 'sOwn', language: 'pt' }) });
+    const jobId = ((await created.json()) as { job: { id: string } }).job.id;
+    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'o2', active: true });
+    setActivation('u2', { active: true, billingLocked: false });
+    await userSettings.put({ _id: 'u2', memory: { autoExtract: false }, build: { verifyBuilds: false } });
+    const t2 = (await login('u2', 'pw123456', false, deps)).token;
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/jobs/${jobId}/events?token=${t2}`);
+    expect(res.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
+    await drain();
+  });
 });

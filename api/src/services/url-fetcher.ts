@@ -31,7 +31,13 @@ async function assertResolvedIpsSafe(hostname: string): Promise<void> {
       if (isBlockedIpv4Octets(o[0] as number, o[1] as number)) throw new SsrfError(`Resolved to blocked address: ${address}`);
     } else if (family === 6) {
       const a = address.toLowerCase();
-      if (a === '::1' || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('fe80') || a.includes('::ffff:7f')) {
+      // IPv4-mapped IPv6 (::ffff:a.b.c.d): apply the SAME IPv4 block list, not just the 127/8 case
+      // (Codex checkpoint: ::ffff:10/8, 172.16/12, 192.168/16, 169.254/16 were bypassing the guard).
+      const mapped = /^::ffff:(\d+)\.(\d+)\.(\d+)\.\d+$/.exec(a);
+      if (mapped && isBlockedIpv4Octets(Number(mapped[1]), Number(mapped[2]))) {
+        throw new SsrfError(`Resolved to blocked address: ${address}`);
+      }
+      if (a === '::1' || a === '::' || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('fe80')) {
         throw new SsrfError(`Resolved to blocked address: ${address}`);
       }
     }

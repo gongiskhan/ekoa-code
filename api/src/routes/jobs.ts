@@ -15,11 +15,19 @@ import { actorOf, notFound, parseBody, sendError } from './helpers.js';
 export function jobsRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
 
-  r.get('/:id/events', (req: Request, res: Response) => {
+  r.get('/:id/events', async (req: Request, res: Response) => {
     const auth = verifySseToken(req.query.token as string | undefined);
     if (!auth.ok) return res.status(auth.status).json({ error: { code: auth.code, message: 'Não autorizado.' } });
+    const id = req.params.id as string;
+    // Ownership check BEFORE attach (Codex checkpoint): a valid SSE token must NOT subscribe to
+    // another user's job stream (cross-user event/output leak). Mirrors the guarded GET /:id + the
+    // chat SSE route. A missing job attaches (nothing streams); only a foreign OWNED job is refused.
+    const job = await getJob(id);
+    if (job && job.userId !== auth.claims.sub) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Sem permissão.' } });
+    }
     const lastEventId = req.header('last-event-id');
-    sseManager.attach(res, auth.claims.sub, 'job', req.params.id as string, lastEventId ? Number(lastEventId) : undefined);
+    sseManager.attach(res, auth.claims.sub, 'job', id, lastEventId ? Number(lastEventId) : undefined);
   });
 
   r.use(requireAuth);

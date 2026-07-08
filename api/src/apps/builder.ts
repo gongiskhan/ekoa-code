@@ -121,6 +121,18 @@ function extractPackageFromCdnUrl(url: string): string | null {
  * Normalize a CDN URL to a canonical esm.sh URL for fetching.
  * esm.sh is preferred because it returns ESM modules that esbuild can bundle.
  */
+/** The known public CDN hosts a build may fetch ESM from. Anything else (a raw app-authored
+ *  import URL, an internal host) is refused - the build-time fetch is an SSRF sink otherwise. */
+const ALLOWED_CDN_HOSTS = new Set(['esm.sh', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.skypack.dev']);
+function isAllowedCdnUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && ALLOWED_CDN_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function toEsmShUrl(url: string): string {
   // Already esm.sh - use as-is
   if (url.match(/^https?:\/\/esm\.sh\//)) return url;
@@ -182,6 +194,14 @@ function cdnResolverPlugin(): esbuild.Plugin {
       // Step 2: Fetch CDN modules at build time
       build.onLoad({ filter: /.*/, namespace: 'cdn-fetch' }, async (args) => {
         const url = args.path;
+
+        // SSRF guard (Codex checkpoint): app-authored imports reach here; toEsmShUrl falls through
+        // to the raw URL for unknown hosts, so a `import x from 'http://internal/'` would otherwise
+        // be fetched server-side. Only fetch from the known public CDN hosts - reject anything else
+        // rather than let a build reach an internal service.
+        if (!isAllowedCdnUrl(url)) {
+          return { contents: `/* Blocked non-CDN import ${url} */\nexport default {};`, loader: 'js' };
+        }
 
         // Check cache
         const cached = fetchCache.get(url);
