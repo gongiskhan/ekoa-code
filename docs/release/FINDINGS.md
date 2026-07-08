@@ -14,8 +14,10 @@ covers it) | `judgment` (works, result is poor) | `docs-gap`. Severity: high | m
 
 ## Summary
 
-28 findings across 9 journeys (F1-F28; F15 folded into F16/F20). By class: ~21 `bug`, 2 `judgment`,
-3 `docs-gap`, plus harness-gaps noted inline. By severity: **9 high, ~11 medium, the rest minor.**
+25 findings across 9 journeys (numbered F1-F28; the umbrella rows F15/F17/F18 were folded into the
+granular Boot-B findings F20-F27). By class: **17 `bug`, 3 `judgment`, 3 `docs-gap`, 1 `harness-gap`,
+plus F19 = a verified PASS (billing) recorded for the trail.** By severity: **9 high, ~10 medium, the
+rest minor.**
 
 The high-severity set, ranked by operator impact:
 1. **F16 + F28 (J3, the priority journey):** builds report `completed` but serve the untouched
