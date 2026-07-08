@@ -1,0 +1,5 @@
+{ "slice":"phase-9","gate":"G9","status":"passed",
+  "greenCondition":"ci:lane exit 0 (lint 0-err, chokepoint clean, shared 24 + api 888/1-skip + web 103 tests, typecheck+build x3); e2e:server 127/127 + suite-ledger OK; all 17 §12.8 criteria grep-green; diagrams 02/03/04 FIXED-12 module-granularity",
+  "stages":"W1 copy / W2 typed client / W3-foundation shared as-const-satisfies / W3 transport replacement + old-client delete / W4 dead-code cleanup / W5 tests+sharp+§12.9+§12.6 surfaces",
+  "reviews":{"claudeFreshContext":"done - 6 findings fixed+re-verified (masking-claim gate, FIXED-1 deep-import pattern, login base-URL resolver, build safety, orphan delete, em-dash)","codexCrossModel":"deferred to the run final security phase (credit-exhausted; with G8A)"},
+  "checkpoint":"tag gate-9" }
