@@ -30,7 +30,7 @@ Brief: build production-ready rc-1 of the rebuilt Ekoa platform (api/, web/, sha
 | 12 | phase-8 | G8 Automation engine + canvas streaming carve-out | mixed | serial | passed |
 | 13 | phase-8a | G8A Delegation + bridge + provider endpoint + fake-daemon harness (S1-S6) | mixed | serial | passed |
 | 14 | phase-9 | G9 Web client migration into web/ (typed client, FC fates, Amendment 2 surfaces; full ledger due) | ui | serial | passed |
-| 15 | phase-10 | G10 Migration + parity tooling: import scripts, ledger replay, parity workload | mixed | serial | pending |
+| 15 | phase-10 | G10 Migration + parity tooling: import scripts, ledger replay, parity workload | mixed | serial | passed |
 | 16 | phase-11 | G11 Discovery pass + regression expansion (100% triage closure) | ui | serial | pending |
 | 17 | phase-12 | G12 Dual-model whole-repo review + final security pass (F1-F4, cross-org suite, docs/security/) | mixed | serial | pending |
 | 18 | phase-13 | G13 Docs/diagrams reconciled, deviation annex, Dockerfiles + CI deploy lane, tag rc-1 | mixed | serial | pending |

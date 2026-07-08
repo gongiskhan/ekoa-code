@@ -118,7 +118,8 @@
     },
     "phase-8": "passed",
     "phase-8a": "passed",
-    "phase-9": "passed"
+    "phase-9": "passed",
+    "phase-10": "passed"
   },
   "globalGate": {
     "status": "in-progress",

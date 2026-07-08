@@ -2,7 +2,7 @@
   "$comment": "Suite ledger (chapter 14 \u00a714.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
   "version": 1,
   "runId": "20260706-182515-9080f2cb",
-  "currentGate": "G9",
+  "currentGate": "G10",
   "playwright": {
     "band1_zero_change": {
       "targetGate": "G9",
