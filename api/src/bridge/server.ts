@@ -193,7 +193,7 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
 
     ws.on('pong', () => markAlive(ctx.pairingId));
     ws.on('message', (data) => {
-      void onMessage(ctx.pairingId, typeof data === 'string' ? data : (data as Buffer).toString());
+      void onMessage(ctx.pairingId, typeof data === 'string' ? data : (data as Buffer).toString(), ws);
     });
     ws.on('close', () => {
       managed.delete(ws);
@@ -206,7 +206,7 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     });
   }
 
-  async function onMessage(pairingId: string, raw: string): Promise<void> {
+  async function onMessage(pairingId: string, raw: string, ws: WebSocket): Promise<void> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -217,11 +217,11 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     if (!res.success) return; // drop invalid frames (§18.3.1)
     const frame = res.data;
 
-    // Liveness guard (§18.3.5, S4): drop any inbound frame from a pairing that is no longer the
-    // live connection - a socket that was revoked or replaced. Its 'close' handler runs the teardown
-    // (removeLiveConnection + failDelegationsForPairing), but a frame already dispatched into the
-    // loop before that must not still resolve a delegation / emit a ledger row post-revoke.
-    if (!isLive(pairingId)) return;
+    // Liveness guard (§18.3.5, S4): drop any inbound frame that did NOT come from the pairing's
+    // CURRENT live socket - one that was revoked or REPLACED by a redial. Checking isLive(pairingId)
+    // alone is insufficient: after a redial the replacement socket keeps the pairingId live, so a
+    // late frame from the retired socket would still pass. Bind to the exact delivering ws.
+    if (getLiveConnection(pairingId)?.ws !== ws) return;
 
     switch (frame.type) {
       case 'provider_request': {
