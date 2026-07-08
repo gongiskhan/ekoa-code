@@ -58,15 +58,23 @@ export async function registerPairing(
     org: input.org,
     ownerUserId: input.ownerUserId,
     createdAt: existing?.createdAt ?? nowIso,
-    revokedAt: null,
+    // Preserve a revocation tombstone (§18.3.5, S4): a revoked pairingId stays revoked forever - a
+    // reconnect must NEVER resurrect it (that would defeat the kill switch). Re-pairing is an
+    // explicit NEW pairing with a fresh pairingId (ch10 §10.2 row 12), not a reset of this row.
+    revokedAt: existing?.revokedAt ?? null,
     ...(existing?._rev !== undefined ? { _rev: existing._rev } : {}),
   };
   return (await bridgePairings.put(row)) as PairingRow;
 }
 
-/** Read a pairing row by id (durable). Null when the pairing was never registered. */
-export async function getPairingById(pairingId: string): Promise<PairingRow | null> {
-  return (await bridgePairings.get(pairingId)) as PairingRow | null;
+/** Read a pairing row by id (durable). Null when the pairing was never registered. When
+ *  `expectedOrg` is given, a row from a DIFFERENT org reads as null - org-scoped resolution can
+ *  never return another org's pairing (§18.3.4, S2 cross-org isolation). */
+export async function getPairingById(pairingId: string, expectedOrg?: string): Promise<PairingRow | null> {
+  const row = (await bridgePairings.get(pairingId)) as PairingRow | null;
+  if (!row) return null;
+  if (expectedOrg !== undefined && row.org !== expectedOrg) return null;
+  return row;
 }
 
 /** Is the pairing durably revoked? A missing row counts as "not a live pairing" for the caller. */
@@ -126,10 +134,13 @@ export function isLive(pairingId: string): boolean {
  * org-safe: every returned connection is one this owner registered, carrying that owner's org —
  * a caller for an owner in org A can never receive an org-B pairing here.
  */
-export function getConnectionByOwner(ownerUserId: string): LiveConnection | undefined {
+export function getConnectionByOwner(ownerUserId: string, expectedOrg?: string): LiveConnection | undefined {
   let best: LiveConnection | undefined;
   for (const conn of live.values()) {
     if (conn.ownerUserId !== ownerUserId) continue;
+    // Enforce (not just document) org-safety: when the caller names its org, never return a
+    // connection from a different org (§18.3.4, S2).
+    if (expectedOrg !== undefined && conn.org !== expectedOrg) continue;
     if (!best || conn.registeredAt > best.registeredAt) best = conn;
   }
   return best;

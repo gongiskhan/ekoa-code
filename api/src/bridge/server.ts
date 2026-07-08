@@ -31,6 +31,7 @@ import {
   removeLiveConnection,
   getLiveConnection,
   getPairingById,
+  isRevoked,
   sendToPairing,
   markAlive,
   markStale,
@@ -156,6 +157,16 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       const org = await resolveUserOrg(claims.sub);
       if (!org) return refuse(socket, 401, 'UNAUTHENTICATED', 'Não foi possível determinar a organização.', 'org-unresolved');
 
+      // Revocation is terminal (§18.3.5, S4): a revoked pairingId must NEVER reconnect - the kill
+      // switch would be meaningless otherwise. Re-pairing after a revoke uses a FRESH pairingId
+      // (ch10 §10.2 row 12), not this one. Only an EXISTING revoked row blocks - a first-time connect
+      // has no row yet (registerPairing runs below), so check the row directly, not isRevoked (which
+      // treats a missing row as "not live" = true).
+      const priorRow = await getPairingById(pairingId);
+      if (priorRow && priorRow.revokedAt !== null) {
+        return refuse(socket, 401, 'UNAUTHENTICATED', 'Este emparelhamento foi revogado. Emparelhe de novo.', 'pairing-revoked');
+      }
+
       // Persist the durable pairing row BEFORE accepting, so the provider credential chain (§18.4.4)
       // and delegation resolution never race an unwritten row.
       try {
@@ -200,7 +211,9 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
 
     switch (frame.type) {
       case 'provider_request': {
-        const outcome = await provider.handle(frame);
+        // Bind the credential to THIS socket's pairing (§18.4.4): the frame's credential must
+        // resolve to the pairing whose live socket it arrived on.
+        const outcome = await provider.handle(frame, pairingId);
         sendToPairing(pairingId, outcome.frame);
         break;
       }

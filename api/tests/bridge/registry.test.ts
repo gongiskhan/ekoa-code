@@ -6,6 +6,8 @@ import { bridgePairings } from '../../src/data/stores.js';
 import {
   registerPairing,
   getPairingById,
+  isRevoked,
+  revokePairing,
   attachLiveConnection,
   getConnectionByOwner,
   getLiveConnection,
@@ -58,12 +60,29 @@ describe('durable rows (§18.3.4)', () => {
     expect((await getPairingById('p2'))?.org).toBe('org-B');
   });
 
-  it('redial preserves createdAt and clears any revocation', async () => {
+  it('redial preserves createdAt', async () => {
     const first = await registerPairing({ pairingId: 'p1', org: 'org-A', ownerUserId: 'owner-A' }, { now: () => 1000 });
-    await bridgePairings.update('p1', (cur) => ({ ...cur, revokedAt: 'someday' }));
     const again = await registerPairing({ pairingId: 'p1', org: 'org-A', ownerUserId: 'owner-A' }, { now: () => 9999 });
     expect(again.createdAt).toBe(first.createdAt);
     expect(again.revokedAt).toBeNull();
+  });
+
+  it('revocation is TERMINAL: a redial NEVER resurrects a revoked pairing (§18.3.5, S4)', async () => {
+    // Codex checkpoint finding (G12): registerPairing previously reset revokedAt to null on redial,
+    // so a revoked pairing was resurrected by reconnecting - defeating the kill switch. The tombstone
+    // must survive a redial; re-pairing is a NEW pairingId, not a reset of this row.
+    await registerPairing({ pairingId: 'p1', org: 'org-A', ownerUserId: 'owner-A' });
+    await revokePairing('p1');
+    expect(await isRevoked('p1')).toBe(true);
+    const again = await registerPairing({ pairingId: 'p1', org: 'org-A', ownerUserId: 'owner-A' });
+    expect(again.revokedAt).not.toBeNull(); // tombstone preserved
+    expect(await isRevoked('p1')).toBe(true); // still revoked - not resurrected
+  });
+
+  it('getPairingById is org-scoped: a foreign-org expectation reads as null (§18.3.4)', async () => {
+    await registerPairing({ pairingId: 'p1', org: 'org-A', ownerUserId: 'owner-A' });
+    expect(await getPairingById('p1', 'org-A')).not.toBeNull();
+    expect(await getPairingById('p1', 'org-B')).toBeNull(); // cross-org read denied
   });
 });
 

@@ -39,12 +39,31 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
         return { status: 200, body: '{}' };
       },
     });
-    const out = await handler.handle(reqFrame());
+    const out = await handler.handle(reqFrame(), 'p-A');
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('no-live-pairing');
     expect(out.frame.type).toBe('provider_response');
     expect((out.frame.body as { type?: string }).type).toBe('error');
     expect(called).toBe(false);
+  });
+
+  it('rejects a credential presented on a DIFFERENT socket than its pairing (§18.4.4 credential-socket binding)', async () => {
+    // The credential resolves to pairing p-A, but the frame arrived on socket pairing p-other -
+    // a stolen/replayed credential cannot address its own pairing's org/vault from another socket.
+    let called = false;
+    const handler = createProviderHandler({
+      resolvePairingByCredential: async () => pairingA, // credential -> p-A
+      resolveSessionOrg: async () => 'org-A',
+      getActivation: active,
+      runCompletion: async () => {
+        called = true;
+        return { status: 200, body: '{}' };
+      },
+    });
+    const out = await handler.handle(reqFrame(), 'p-other'); // ...but the socket is p-other
+    expect(out.ok).toBe(false);
+    expect(out.reason).toBe('credential-socket-mismatch');
+    expect(called).toBe(false); // rejected before any model call
   });
 
   it('rejects a conversation from another org BEFORE any model call (cross-org)', async () => {
@@ -58,7 +77,7 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
         return { status: 200, body: '{}' };
       },
     });
-    const out = await handler.handle(reqFrame());
+    const out = await handler.handle(reqFrame(), 'p-A');
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('cross-org-session');
     expect(called).toBe(false);
@@ -77,7 +96,7 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
         return { status: 200, body: '{}' };
       },
     });
-    const out = await handler.handle(reqFrame({ session: 'conv-B' }));
+    const out = await handler.handle(reqFrame({ session: 'conv-B' }), 'p-A');
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('cross-org-session');
     expect(called).toBe(false);
@@ -94,7 +113,7 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
         return { status: 200, body: '{}' };
       },
     });
-    const out = await handler.handle(reqFrame());
+    const out = await handler.handle(reqFrame(), 'p-A');
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('ACCOUNT_DISABLED');
     expect((out.frame.body as { error?: { type?: string } }).error?.type).toBe('ACCOUNT_DISABLED');
@@ -108,7 +127,7 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
       getActivation: () => ({ active: true, billingLocked: true }),
       runCompletion: async () => ({ status: 200, body: '{}' }),
     });
-    const out = await handler.handle(reqFrame());
+    const out = await handler.handle(reqFrame(), 'p-A');
     expect(out.reason).toBe('BILLING_LOCKED');
   });
 
@@ -125,7 +144,7 @@ describe('provider endpoint credential -> pairing -> org chain (§18.4.4)', () =
         return { status: 200, body: JSON.stringify({ type: 'message', content: [{ type: 'text', text: 'olá' }] }) };
       },
     });
-    const out = await handler.handle(reqFrame());
+    const out = await handler.handle(reqFrame(), 'p-A');
     expect(out.ok).toBe(true);
     // Session-identity propagation (§18.4.3): the conversation id is set as the vault key.
     expect((seenBody?.metadata as { session_id?: string } | undefined)?.session_id).toBe('conv-1');

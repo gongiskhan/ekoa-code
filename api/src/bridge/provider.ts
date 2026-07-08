@@ -54,7 +54,10 @@ export interface ProviderOutcome {
 }
 
 export interface ProviderHandler {
-  handle(frame: ProviderRequestFrame): Promise<ProviderOutcome>;
+  /** `senderPairingId` is the pairing of the LIVE socket the frame arrived on (§18.4.4): the
+   *  credential must resolve to THAT pairing, so a credential cannot be replayed from another
+   *  socket to address a different pairing's org/vault. */
+  handle(frame: ProviderRequestFrame, senderPairingId: string): Promise<ProviderOutcome>;
 }
 
 /** Default credential resolution (§18.4.4 step 1). The pairing-bound provider credential is the
@@ -121,7 +124,7 @@ export function createProviderHandler(deps: ProviderDeps = {}): ProviderHandler 
   const getActivation = deps.getActivation ?? defaultGetActivation;
 
   return {
-    async handle(frame: ProviderRequestFrame): Promise<ProviderOutcome> {
+    async handle(frame: ProviderRequestFrame, senderPairingId: string): Promise<ProviderOutcome> {
       const { correlationId, session, credential, body } = frame;
 
       // 1. credential -> live, non-revoked pairing (§18.4.4 step 1).
@@ -130,6 +133,14 @@ export function createProviderHandler(deps: ProviderDeps = {}): ProviderHandler 
         pairing = await resolvePairing(credential);
       } catch {
         return { frame: errorFrame(correlationId, 'authentication_error', 'no live pairing for credential'), ok: false, reason: 'no-live-pairing' };
+      }
+
+      // Bind the credential to the SENDING socket (§18.4.4): the credential must resolve to the
+      // pairing whose live socket this frame arrived on. Otherwise a daemon could present a
+      // credential minted for a different pairing (another org's) over its own socket and address
+      // that org's session/vault - the socket auth would say pairing A while the credential names B.
+      if (pairing.pairingId !== senderPairingId) {
+        return { frame: errorFrame(correlationId, 'permission_error', 'credential does not match this connection'), ok: false, reason: 'credential-socket-mismatch' };
       }
 
       // Activation admission BEFORE any model call (§18.3.2, §18.4.4). Fail closed on a cache miss.
