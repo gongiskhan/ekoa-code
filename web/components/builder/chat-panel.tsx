@@ -30,6 +30,8 @@ import {
   Pencil,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
+import { ComposerAttachMenu } from "@/components/privacy/composer-attach-menu";
+import { TrustChip } from "@/components/privacy/trust-chip";
 import { useOrchestrationStore, type ChatMessage, type OutputEntry } from "@/stores/orchestration";
 import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
@@ -556,24 +558,12 @@ export default function ChatPanel({
               >
                 <Paperclip size={16} />
               </button>
-              {showAttachMenu && (
-                <div className="absolute bottom-full left-0 mb-1 bg-white border border-neutral-200 rounded-lg shadow-lg py-1 min-w-[140px] z-50">
-                  <button
-                    onClick={handleAttachFile}
-                    className="flex items-center w-full px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 transition-colors"
-                  >
-                    <File size={14} className="mr-2 text-neutral-400" />
-                    Attach File
-                  </button>
-                  <button
-                    onClick={handleAttachFolder}
-                    className="flex items-center w-full px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 transition-colors"
-                  >
-                    <FolderOpen size={14} className="mr-2 text-neutral-400" />
-                    Attach Folder
-                  </button>
-                </div>
-              )}
+              <ComposerAttachMenu
+                open={showAttachMenu}
+                onClose={() => setShowAttachMenu(false)}
+                onUploadFile={handleAttachFile}
+                onUploadFolder={handleAttachFolder}
+              />
             </div>
             {isExecuting ? (
               <div className="flex items-center gap-1">
@@ -774,6 +764,12 @@ function MessageBubble({
               {stripCodeBlocks(message.content)}
             </ReactMarkdown>
           </div>
+        )}
+
+        {/* FC-402: per-turn trust chip. Renders only on assistant turns that
+            touched local files (dormant in the hosted-only build). */}
+        {message.role === "assistant" && !isError && (
+          <TrustChip activity={message.metadata?.localFileActivity} />
         )}
 
         {/* Copy/Retry/Feedback actions + memory usage (assistant messages only) */}

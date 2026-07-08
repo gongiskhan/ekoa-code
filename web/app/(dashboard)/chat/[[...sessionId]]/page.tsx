@@ -36,6 +36,8 @@ import MobileSessionsDrawer from "@/components/chat/mobile-sessions-drawer";
 import MobileSidePanelDrawer from "@/components/chat/mobile-side-panel-drawer";
 import { ShortcutsModal } from "@/components/chat/shortcuts-modal";
 import { AnimatedTagline } from "@/components/chat/animated-tagline";
+import { ComposerAttachMenu } from "@/components/privacy/composer-attach-menu";
+import { LegalOnboardingCard } from "@/components/privacy/legal-onboarding-card";
 import { useOrchestrationStore } from "@/stores/orchestration";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useSettingsStore } from "@/stores/settings";
@@ -201,6 +203,10 @@ export default function UnifiedChatPage() {
   const language = useI18nStore((s) => s.language);
   const guidedMode = useSettingsStore((s) => s.settings.chat.guidedMode ?? true);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
+  // FC-412: the one-time privacy onboarding card is Ekoa Legal only.
+  const isLegalOrg = useSettingsStore((s) =>
+    s.isLoaded ? s.settings.general.vertical === "legal" : false,
+  );
   const { common, chatPanel, emptyState, onboarding, language: uiLanguage } = useTranslation();
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
@@ -1426,6 +1432,8 @@ export default function UnifiedChatPage() {
 
                     <OnboardingCard />
 
+                    {isLegalOrg && <LegalOnboardingCard />}
+
                     <ChatStripes />
                   </>
                 )}
@@ -1459,24 +1467,12 @@ export default function UnifiedChatPage() {
                           <Paperclip size={14} />
                           <span className="hidden sm:inline">{emptyState.composeControls.attach}</span>
                         </button>
-                        {showAttachMenu && (
-                          <div className="absolute bottom-full left-0 mb-1 bg-white border border-neutral-200 rounded-lg shadow-lg py-1 min-w-[160px] z-50">
-                            <button
-                              onClick={handleAttachFile}
-                              className="flex items-center w-full px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 transition-colors"
-                            >
-                              <File size={14} className="mr-2 text-neutral-400" />
-                              {emptyState.composeControls.file}
-                            </button>
-                            <button
-                              onClick={handleAttachFolder}
-                              className="flex items-center w-full px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 transition-colors"
-                            >
-                              <FolderOpen size={14} className="mr-2 text-neutral-400" />
-                              {emptyState.composeControls.folder}
-                            </button>
-                          </div>
-                        )}
+                        <ComposerAttachMenu
+                          open={showAttachMenu}
+                          onClose={() => setShowAttachMenu(false)}
+                          onUploadFile={handleAttachFile}
+                          onUploadFolder={handleAttachFolder}
+                        />
                       </div>
 
                       {/* Captura (screen capture) */}

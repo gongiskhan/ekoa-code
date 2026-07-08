@@ -9,6 +9,7 @@ import {
   Users,
   ScrollText,
   Building2,
+  ShieldCheck,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -57,6 +58,15 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/registo", icon: ScrollText, label: "Registo", adminOnly: true },
   // FC-501: super-admin org management.
   { href: "/orgs", icon: Building2, label: "Escritórios", superAdminOnly: true },
+  // FC-404 (RESOLVED Q-07): the "Privacidade e ponte local" surface, absorbing the
+  // old orphan /settings/bridge. One settings-navigation entry.
+  {
+    href: "/settings/privacy",
+    icon: ShieldCheck,
+    label: "Privacidade e ponte local",
+    bottom: true,
+    activePrefix: "/settings/privacy",
+  },
   {
     href: "/settings/platform",
     icon: SettingsIcon,

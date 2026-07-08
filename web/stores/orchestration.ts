@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api, tryCall } from '@/lib/api';
 import type { FileAttachment } from '@/types/attachment';
+import type { LocalFileActivity } from '@/lib/privacy-claims';
 import { getSandboxDisplayPath } from '@/lib/file-utils';
 
 // ============================================
@@ -32,6 +33,10 @@ export interface ChatMessage {
     toolInput?: Record<string, unknown>;
     memoriesUsed?: number;
     attachments?: Array<{ displayName: string; type: 'file' | 'folder' | 'url' }>;
+    /** FC-402: local-file activity for this turn (daemon egress ledger + hosted
+     *  anonymisation audit, joined by correlation id). Absent on turns that never
+     *  touched local files; drives the per-turn trust chip when present. */
+    localFileActivity?: LocalFileActivity;
   };
 }
 
