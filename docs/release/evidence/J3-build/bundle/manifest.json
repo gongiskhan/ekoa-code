@@ -1,0 +1,9 @@
+{
+  "id": "5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+  "name": "Uma página simples que mostra uma citação aleatória de Ferna",
+  "version": "1.0.0",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "description": "Uma página simples que mostra uma citação aleatória de Fernando Pessoa a cada clique num botão. Sem backend."
+}

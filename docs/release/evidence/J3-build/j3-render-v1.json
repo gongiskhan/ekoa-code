@@ -1,0 +1,13 @@
+{
+  "url": "/apps/uma-pagina-simples-que/?token=<bc-u1>",
+  "pageTitle": "Uma página simples que mostra uma citação aleatória de Ferna",
+  "screenshot": "j3-app-v1.png",
+  "rendered": "Ekoa SCAFFOLD placeholder — heading 'Let's build something that will change', rotating phrase, 'Your app is being created right now. Watch it come to life.', 'Powered by Ekoa'",
+  "quoteButtonPresent": false,
+  "buttonCount": 0,
+  "pessoaContentPresent": false,
+  "quoteChangesOnClick": "N/A — no button exists; the scaffold rotates a phrase on its own 3s timer, not click-driven",
+  "consoleErrors": 1,
+  "consoleErrorDetail": "GET /favicon.ico 404 (cosmetic, not an app error). One INFO log (React DevTools hint). No app-level JS errors.",
+  "conclusion": "Confirms build1-analysis.json: the served bundle is the untouched scaffold, not the requested Pessoa quote app."
+}

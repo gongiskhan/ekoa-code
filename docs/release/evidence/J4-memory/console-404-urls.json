@@ -1,0 +1,10 @@
+{
+  "note": "Model-free re-capture of the response>=400 URLs behind the /memory console errors (QA bar is zero).",
+  "failing": [
+    "404 POST /api/v1/auth/refresh",
+    "404 GET /api/v1/memories/stats",
+    "404 GET /api/v1/memories/tags"
+  ],
+  "memoryCardsRendered": 0,
+  "padariaVisible": false
+}

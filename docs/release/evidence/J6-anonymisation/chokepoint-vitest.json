@@ -1,0 +1,18 @@
+{
+  "note": "J6 step 4 — committed tokens-only chokepoint spec (in-process, injected transport, no live model, no api.anthropic.com). Proves every chokepoint entry routes outbound through anonymize BEFORE the transport (tokens only), user-visible response is cleartext, tool_use round-trips locally, tool DEFINITIONS are anonymised, and audit folds into the single Registo write path as metadata only.",
+  "spec": "api/tests/llm/anonymise-chokepoint.test.ts",
+  "command": "cd api && npx vitest run tests/llm/anonymise-chokepoint.test.ts --reporter=dot",
+  "result": "PASS — 9/9 tests, 1 file (10.06s)",
+  "reporterNote": "--reporter=basic from the brief is unavailable in vitest v4.1.10 (removed); used --reporter=dot/verbose.",
+  "tests": [
+    "tests/llm/anonymise-chokepoint.test.ts > payload-capture: every entry tokenizes the outbound payload (§17.8, §17.11) > completeFast: outbound is tokens-only; the de-tokenized response is cleartext",
+    "tests/llm/anonymise-chokepoint.test.ts > payload-capture: every entry tokenizes the outbound payload (§17.8, §17.11) > runOneShot (SDK one-shot): outbound prompt is tokens-only; result is cleartext",
+    "tests/llm/anonymise-chokepoint.test.ts > payload-capture: every entry tokenizes the outbound payload (§17.8, §17.11) > runAgent (SDK stream): outbound prompt is tokens-only; streamed text is cleartext",
+    "tests/llm/anonymise-chokepoint.test.ts > payload-capture: every entry tokenizes the outbound payload (§17.8, §17.11) > proxyGatewayMessages: outbound is tokens-only; tool_use arguments de-tokenize locally",
+    "tests/llm/anonymise-chokepoint.test.ts > payload-capture: every entry tokenizes the outbound payload (§17.8, §17.11) > tool DEFINITIONS are anonymised too - PII in a tool description does not leak (dual-review Critical)",
+    "tests/llm/anonymise-chokepoint.test.ts > encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b), D3) > decrypts an org-scoped-encrypted deny-list and tokenizes the party",
+    "tests/llm/anonymise-chokepoint.test.ts > encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b), D3) > org-scoping is enforced: another org's ciphertext cannot be decrypted here (§17.4 b, fail-closed)",
+    "tests/llm/anonymise-chokepoint.test.ts > encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b), D3) > encrypted deny-list access is audit-logged as a COUNT on the persisted row (§17.4 b, D3)",
+    "tests/llm/anonymise-chokepoint.test.ts > audit folds into the single Registo write path, metadata only (§17.6, §17.11) > writes an anonymisation activity row with classes/counts/correlation-id/hash, no bodies"
+  ]
+}

@@ -1,0 +1,168 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J3.verifyOn",
+      "detail": "verifyBuilds=true confirmed"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.build2.create",
+      "detail": "202 created job 6422018f-fbcf-4992-8fe1-1f9008c3120c"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.build2.verify",
+      "detail": "verification plan_step present: \"A testar a aplicação...\""
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.build2.terminal",
+      "detail": "SSE complete in 315s"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.billing.buildVerify",
+      "detail": "billing history has 'build-verify' row (types={\"build-verify\":1,\"build\":2,\"classify-in-build-intent\":1})"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.billing.build",
+      "detail": "billing history has 'build' row(s)"
+    }
+  ],
+  "create": {
+    "status": 202,
+    "body": {
+      "status": "created",
+      "job": {
+        "id": "6422018f-fbcf-4992-8fe1-1f9008c3120c",
+        "status": "created",
+        "artifactId": "5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+        "createdAt": "2026-07-08T18:33:30.522Z"
+      }
+    }
+  },
+  "wallSec": 315,
+  "frameCounts": {
+    "routing": 1,
+    "ready": 1,
+    "tool_event": 6,
+    "text_chunk": 2,
+    "plan_step": 1,
+    "complete": 1
+  },
+  "frames": [
+    {
+      "type": "routing",
+      "tier": "EXPERT",
+      "reason": "follow-up build"
+    },
+    {
+      "type": "ready"
+    },
+    {
+      "type": "tool_event",
+      "phase": "started",
+      "tool": "Edit"
+    },
+    {
+      "type": "tool_event",
+      "phase": "finished",
+      "tool": "tool"
+    },
+    {
+      "type": "tool_event",
+      "phase": "started",
+      "tool": "Edit"
+    },
+    {
+      "type": "tool_event",
+      "phase": "finished",
+      "tool": "tool"
+    },
+    {
+      "type": "tool_event",
+      "phase": "started",
+      "tool": "Edit"
+    },
+    {
+      "type": "tool_event",
+      "phase": "finished",
+      "tool": "tool"
+    },
+    {
+      "type": "text_chunk",
+      "text": "Pronto! Acrescentei um **contador por baixo do botão** que começa em `Citações mostradas: 0` e incrementa a cada clique "
+    },
+    {
+      "type": "text_chunk",
+      "text": "a ver o contador em ação."
+    },
+    {
+      "type": "plan_step",
+      "status": "verifying",
+      "description": "A testar a aplicação..."
+    },
+    {
+      "type": "complete",
+      "durationMs": 314675,
+      "artifactId": "5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+      "slug": "",
+      "appUrl": "",
+      "result": "Pronto! Acrescentei um **contador por baixo do botão** que começa em `Citações mostradas: 0` e incrementa a cada clique em \"Nova citação\".\n\nAlterações feitas:\n- **HTML:** novo `<p class=\"counter\" id=\"counter\">` logo abaixo do botão.\n- **CSS:** estilo `.counter` discreto (cor esbatida, mais pequeno) a condizer com o tema.\n- **JS:** variável `contador` que aumenta e atualiza o texto sempre que uma citação é mostrada.\n\nÉ só recarregar a página no navegador para ver o contador em ação."
+    }
+  ],
+  "terminal": {
+    "type": "complete",
+    "durationMs": 314675,
+    "artifactId": "5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+    "slug": "",
+    "appUrl": "",
+    "result": "Pronto! Acrescentei um **contador por baixo do botão** que começa em `Citações mostradas: 0` e incrementa a cada clique em \"Nova citação\".\n\nAlterações feitas:\n- **HTML:** novo `<p class=\"counter\" id=\"counter\">` logo abaixo do botão.\n- **CSS:** estilo `.counter` discreto (cor esbatida, mais pequeno) a condizer com o tema.\n- **JS:** variável `contador` que aumenta e atualiza o texto sempre que uma citação é mostrada.\n\nÉ só recarregar a página no navegador para ver o contador em ação."
+  },
+  "verifyBanner": "A testar a aplicação...",
+  "billing": {
+    "status": 200,
+    "typeCounts": {
+      "build-verify": 1,
+      "build": 2,
+      "classify-in-build-intent": 1
+    },
+    "total": 4,
+    "items": [
+      {
+        "id": "d4b8efc2-97b6-4aa4-a3da-12ec6a911f54",
+        "type": "build-verify",
+        "amountUsd": 0,
+        "createdAt": "2026-07-08T18:38:45.190Z",
+        "description": "8155 tokens",
+        "tokens": 8155
+      },
+      {
+        "id": "0707f86b-ce02-4513-a69e-e76c6353f785",
+        "type": "build",
+        "amountUsd": 0,
+        "createdAt": "2026-07-08T18:33:54.393Z",
+        "description": "8390 tokens",
+        "tokens": 8390
+      },
+      {
+        "id": "98099263-2e1f-4fee-a368-ca6051f7ebf1",
+        "type": "classify-in-build-intent",
+        "amountUsd": 0,
+        "createdAt": "2026-07-08T18:33:30.511Z",
+        "description": "2 tokens",
+        "tokens": 2
+      },
+      {
+        "id": "bf823ca4-6650-48d2-8144-f3d4b7a29708",
+        "type": "build",
+        "amountUsd": 0,
+        "createdAt": "2026-07-08T18:29:22.706Z",
+        "description": "11013 tokens",
+        "tokens": 11013
+      }
+    ]
+  }
+}

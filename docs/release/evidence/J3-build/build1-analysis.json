@@ -1,0 +1,16 @@
+{
+  "finding": "BUILD#1 served-vs-source mismatch (honest-completion violation)",
+  "severity": "high",
+  "summary": "Build job reported status=completed and SSE emitted a `complete` frame, but the served application at /apps/<slug>/ is the UNTOUCHED Ekoa scaffold placeholder, not the requested Fernando Pessoa quote app.",
+  "evidence": {
+    "request": "Uma página simples que mostra uma citação aleatória de Fernando Pessoa a cada clique num botão. Sem backend.",
+    "jobStatus": "completed",
+    "buildCommit": "1c6da6b added ONLY: pessoa.html (128 lines, the real app), .claude.json, agent session jsonl. It did NOT modify frontend/src/App.jsx, frontend/src/index.jsx, or rebuild dist/.",
+    "manifestEntryPoint": "frontend/src/index.jsx -> outputDir dist/ (type jsx-app)",
+    "servedEntry": "dist/index.html -> ./bundle.js (compiled from frontend/src/App.jsx = the scaffold)",
+    "bundleJsContent": "0 occurrences of 'Fernando Pessoa'/'Pessoa'; 9 occurrences of scaffold copy; scaffold-root/scaffold-title CSS classes present",
+    "appScaffoldCopy": "\"Let's build something that will change\" / \"Your app is being created right now. Watch it come to life.\" / \"Powered by Ekoa\"",
+    "orphanedRealApp": "pessoa.html at project root IS the correct app (title 'Citações de Fernando Pessoa', dark theme, quote + button), but it is NOT the served entrypoint and is not reachable at /apps/<slug>/"
+  },
+  "impact": "The operator's priority journey (build -> served app) produces a served bundle that does not fulfil the request while the job claims success. The real work landed in an un-served standalone HTML file and dist/ was never rebuilt."
+}

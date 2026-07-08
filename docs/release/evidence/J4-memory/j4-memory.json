@@ -1,0 +1,516 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J4.setup",
+      "detail": "MemCo + m-u1(d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5) + m-u2(1e9f74fe-6a66-4383-8c40-62b95a6291c5) ready"
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.autoExtract",
+      "detail": "settings.memory.autoExtract default = true"
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.turnA",
+      "detail": "session-A turn complete: \"Anotado! Aqui estão as suas preferências registadas: - **Respostas**: listas curtas - **Empresa**: Padaria Central Estou\""
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.extracted",
+      "detail": "2 extracted memory(ies); e.g. visibility=private tier=active type=extracted content=\"**\""
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.turnB",
+      "detail": "session-B recall turn complete: \"Não encontrei informação sobre o nome da tua empresa na base de conhecimento. Com base no contexto disponível, vejo refe\""
+    },
+    {
+      "kind": "INFO",
+      "id": "J4.recall",
+      "detail": "session-B reply does not clearly name the company (director judges): \"Não encontrei informação sobre o nome da tua empresa na base de conhecimento. Com base no contexto disponível, vejo refe\""
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.isoList",
+      "detail": "m-u2 list (0) contains NONE of m-u1's private memories"
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.isoGet",
+      "detail": "m-u2 GET m-u1 private memory -> 404 (2d6b5281-a34a-42f4-93a1-d4064ee43f05)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J4.isoGetExtracted",
+      "detail": "m-u2 GET m-u1 EXTRACTED memory -> 404"
+    },
+    {
+      "kind": "INFO",
+      "id": "J4.registo",
+      "detail": "registo total=29 items=29; memory_auto_extracted present=true"
+    },
+    {
+      "kind": "INFO",
+      "id": "J4.uiText",
+      "detail": "needle \"Padaria\" not found in page text (extracted count=2); screenshot saved"
+    },
+    {
+      "kind": "FAIL",
+      "id": "J4.uiConsole",
+      "detail": "7 console error(s): Failed to load resource: the server responded with a status of 404 (Not Found) | Failed to load resource: the server responded with a status of 404 (Not Found) "
+    },
+    {
+      "kind": "INFO",
+      "id": "J4.uiShot",
+      "detail": "screenshot -> /Users/ggomes/dev/ekoa-code/docs/release/evidence/J4-memory/memory-page.png"
+    }
+  ],
+  "detail": {
+    "setup": {
+      "orgId": "2d3cee25-c67f-49eb-a626-2aee8830e785",
+      "u1": {
+        "userId": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5",
+        "status": 201
+      },
+      "u2": {
+        "userId": "1e9f74fe-6a66-4383-8c40-62b95a6291c5",
+        "status": 201
+      }
+    },
+    "settings": {
+      "status": 200,
+      "memory": {
+        "autoExtract": true
+      }
+    },
+    "turnA": {
+      "create": {
+        "status": 202,
+        "body": {
+          "runId": "5f7f48ff-c407-42b1-9e4e-0d858d9b74d7"
+        }
+      },
+      "runId": "5f7f48ff-c407-42b1-9e4e-0d858d9b74d7",
+      "sseClosedReason": "until",
+      "frames": [
+        {
+          "event": "ready",
+          "id": "49",
+          "data": {
+            "stream": "chat",
+            "id": "5f7f48ff-c407-42b1-9e4e-0d858d9b74d7"
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "50",
+          "data": {
+            "type": "tool_event",
+            "phase": "started",
+            "tool": "ToolSearch",
+            "args": {
+              "query": "select:TodoWrite",
+              "max_results": 1
+            }
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "51",
+          "data": {
+            "type": "tool_event",
+            "phase": "finished",
+            "tool": "tool",
+            "result": "[{\"type\":\"tool_reference\",\"tool_name\":\"TodoWrite\"}]",
+            "isError": false
+          }
+        },
+        {
+          "event": "text_chunk",
+          "id": "55",
+          "data": {
+            "type": "text_chunk",
+            "text": "Anotado! Aqui estão as suas preferências registadas:\n\n- **Respostas**: listas curtas\n- **Empresa**: Padaria Central\n\n"
+          }
+        },
+        {
+          "event": "text_chunk",
+          "id": "57",
+          "data": {
+            "type": "text_chunk",
+            "text": "Estou pronto para ajudar!"
+          }
+        },
+        {
+          "event": "complete",
+          "id": "58",
+          "data": {
+            "type": "complete",
+            "result": "Estou pronto para ajudar!",
+            "durationMs": 12431
+          }
+        }
+      ],
+      "terminalFrame": {
+        "event": "complete",
+        "id": "58",
+        "data": {
+          "type": "complete",
+          "result": "Estou pronto para ajudar!",
+          "durationMs": 12431
+        }
+      },
+      "terminalType": "complete",
+      "reply": "Anotado! Aqui estão as suas preferências registadas:\n\n- **Respostas**: listas curtas\n- **Empresa**: Padaria Central\n\nEstou pronto para ajudar!",
+      "replyFromComplete": "Estou pronto para ajudar!",
+      "replyFromChunks": "Anotado! Aqui estão as suas preferências registadas:\n\n- **Respostas**: listas curtas\n- **Empresa**: Padaria Central\n\nEstou pronto para ajudar!",
+      "contextEvents": [],
+      "toolEvents": [
+        {
+          "type": "tool_event",
+          "phase": "started",
+          "tool": "ToolSearch",
+          "args": {
+            "query": "select:TodoWrite",
+            "max_results": 1
+          }
+        },
+        {
+          "type": "tool_event",
+          "phase": "finished",
+          "tool": "tool",
+          "result": "[{\"type\":\"tool_reference\",\"tool_name\":\"TodoWrite\"}]",
+          "isError": false
+        }
+      ],
+      "notif": {
+        "status": 200,
+        "errorBody": null,
+        "frames": [
+          {
+            "event": "ready",
+            "id": "48",
+            "data": {
+              "stream": "notifications",
+              "id": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5"
+            }
+          },
+          {
+            "event": "usage_updated",
+            "id": "56",
+            "data": {}
+          }
+        ],
+        "sawUsageUpdated": true,
+        "sawChatAnswer": false
+      }
+    },
+    "extracted": {
+      "count": 2,
+      "totalMems": 2,
+      "docs": [
+        {
+          "id": "e4becf26-fce1-4fa2-bd73-274303005eeb",
+          "title": "Suas preferências configuradas",
+          "content": "**",
+          "type": "extracted",
+          "tier": "active",
+          "visibility": "private",
+          "userId": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5"
+        },
+        {
+          "id": "b7377e2e-a842-4c49-bcaa-e925569b6569",
+          "title": "Empresa",
+          "content": "Padaria Central",
+          "type": "extracted",
+          "tier": "active",
+          "visibility": "private",
+          "userId": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5"
+        }
+      ]
+    },
+    "manual": {
+      "status": 201,
+      "id": "2d6b5281-a34a-42f4-93a1-d4064ee43f05"
+    },
+    "turnB": {
+      "create": {
+        "status": 202,
+        "body": {
+          "runId": "0dc16250-ce65-4b5b-84a7-d963d5302a16"
+        }
+      },
+      "runId": "0dc16250-ce65-4b5b-84a7-d963d5302a16",
+      "sseClosedReason": "until",
+      "frames": [
+        {
+          "event": "ready",
+          "id": "65",
+          "data": {
+            "stream": "chat",
+            "id": "0dc16250-ce65-4b5b-84a7-d963d5302a16"
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "66",
+          "data": {
+            "type": "tool_event",
+            "phase": "started",
+            "tool": "ToolSearch",
+            "args": {
+              "query": "select:mcp__ekoa__knowledge_search",
+              "max_results": 1
+            }
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "67",
+          "data": {
+            "type": "tool_event",
+            "phase": "finished",
+            "tool": "tool",
+            "result": "[{\"type\":\"tool_reference\",\"tool_name\":\"mcp__ekoa__knowledge_search\"}]",
+            "isError": false
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "70",
+          "data": {
+            "type": "tool_event",
+            "phase": "started",
+            "tool": "mcp__ekoa__knowledge_search",
+            "args": {
+              "query": "nome da empresa"
+            }
+          }
+        },
+        {
+          "event": "tool_event",
+          "id": "71",
+          "data": {
+            "type": "tool_event",
+            "phase": "finished",
+            "tool": "tool",
+            "result": "[{\"type\":\"text\",\"text\":\"Sem resultados na base de conhecimento.\"}]",
+            "isError": false
+          }
+        },
+        {
+          "event": "text_chunk",
+          "id": "76",
+          "data": {
+            "type": "text_chunk",
+            "text": "Não encontrei informação sobre o nome da tua empresa na base de conhecimento. Com base no contexto disponível, vejo referências a **\"Ekoa\"** — o teu projeto de código está em `~/dev/ekoa-code` e há memórias relacionadas com um \"Ekoa rebuild\". Poderá ser esse o nome da tua empresa ou projeto?\n\nSe quiseres, podes confirmar ou adicionar essa informação à base de conheciment"
+          }
+        },
+        {
+          "event": "text_chunk",
+          "id": "78",
+          "data": {
+            "type": "text_chunk",
+            "text": "o para futuras consultas!"
+          }
+        },
+        {
+          "event": "complete",
+          "id": "79",
+          "data": {
+            "type": "complete",
+            "result": "o para futuras consultas!",
+            "durationMs": 13086
+          }
+        }
+      ],
+      "terminalFrame": {
+        "event": "complete",
+        "id": "79",
+        "data": {
+          "type": "complete",
+          "result": "o para futuras consultas!",
+          "durationMs": 13086
+        }
+      },
+      "terminalType": "complete",
+      "reply": "Não encontrei informação sobre o nome da tua empresa na base de conhecimento. Com base no contexto disponível, vejo referências a **\"Ekoa\"** — o teu projeto de código está em `~/dev/ekoa-code` e há memórias relacionadas com um \"Ekoa rebuild\". Poderá ser esse o nome da tua empresa ou projeto?\n\nSe quiseres, podes confirmar ou adicionar essa informação à base de conhecimento para futuras consultas!",
+      "replyFromComplete": "o para futuras consultas!",
+      "replyFromChunks": "Não encontrei informação sobre o nome da tua empresa na base de conhecimento. Com base no contexto disponível, vejo referências a **\"Ekoa\"** — o teu projeto de código está em `~/dev/ekoa-code` e há memórias relacionadas com um \"Ekoa rebuild\". Poderá ser esse o nome da tua empresa ou projeto?\n\nSe quiseres, podes confirmar ou adicionar essa informação à base de conhecimento para futuras consultas!",
+      "contextEvents": [],
+      "toolEvents": [
+        {
+          "type": "tool_event",
+          "phase": "started",
+          "tool": "ToolSearch",
+          "args": {
+            "query": "select:mcp__ekoa__knowledge_search",
+            "max_results": 1
+          }
+        },
+        {
+          "type": "tool_event",
+          "phase": "finished",
+          "tool": "tool",
+          "result": "[{\"type\":\"tool_reference\",\"tool_name\":\"mcp__ekoa__knowledge_search\"}]",
+          "isError": false
+        },
+        {
+          "type": "tool_event",
+          "phase": "started",
+          "tool": "mcp__ekoa__knowledge_search",
+          "args": {
+            "query": "nome da empresa"
+          }
+        },
+        {
+          "type": "tool_event",
+          "phase": "finished",
+          "tool": "tool",
+          "result": "[{\"type\":\"text\",\"text\":\"Sem resultados na base de conhecimento.\"}]",
+          "isError": false
+        }
+      ],
+      "notif": {
+        "status": 200,
+        "errorBody": null,
+        "frames": [
+          {
+            "event": "ready",
+            "id": "64",
+            "data": {
+              "stream": "notifications",
+              "id": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5"
+            }
+          },
+          {
+            "event": "usage_updated",
+            "id": "77",
+            "data": {}
+          }
+        ],
+        "sawUsageUpdated": true,
+        "sawChatAnswer": false
+      }
+    },
+    "isolation": {
+      "u2Count": 0,
+      "leaked": [],
+      "getExtractedStatus": 404
+    },
+    "registo": {
+      "status": 200,
+      "total": 29,
+      "itemCount": 29,
+      "firstRows": [
+        {
+          "id": "act_1783534409789_0",
+          "actor": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "username": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "actionType": "anonymisation.egress-mask",
+          "timestamp": "2026-07-08T18:13:29.789Z",
+          "targetIds": {
+            "correlationId": "anon_c55f6193-0636-41ae-8fbf-4b82846b9e77",
+            "classes": {},
+            "entityCount": 0,
+            "payloadHash": "a14b326181c33f95801b0b0cb2a5b4de844e76a6f6f480dda24b7321dfcf5c95",
+            "nerAvailable": true,
+            "chainSeq": 0,
+            "prevChainHash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "chainHash": "8dd9ff097820b917b46a25cb7e15bddd1ab297012bf2ddd6f01d2bcb6ddc8470"
+          },
+          "orgId": "a568efe3-1ce3-47fe-bba5-0b2668d7d139"
+        },
+        {
+          "id": "act_1783534409791_1",
+          "actor": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "username": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "actionType": "anonymisation.egress-mask",
+          "timestamp": "2026-07-08T18:13:29.791Z",
+          "targetIds": {
+            "correlationId": "anon_c55f6193-0636-41ae-8fbf-4b82846b9e77",
+            "classes": {},
+            "entityCount": 0,
+            "payloadHash": "ff898cfa58dfa0f74abda1e90afce6a136d3e144b77e6694d480292b159b9c57",
+            "nerAvailable": true,
+            "chainSeq": 1,
+            "prevChainHash": "8dd9ff097820b917b46a25cb7e15bddd1ab297012bf2ddd6f01d2bcb6ddc8470",
+            "chainHash": "e569ca4ff1d7f532172beb6fdbcefe1322662c9d8b565e1d2bfc5ff68223583b"
+          },
+          "orgId": "a568efe3-1ce3-47fe-bba5-0b2668d7d139"
+        },
+        {
+          "id": "act_1783534413592_2",
+          "actor": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "username": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "actionType": "anonymisation.egress-mask",
+          "timestamp": "2026-07-08T18:13:33.592Z",
+          "targetIds": {
+            "correlationId": "anon_ccd6d4d6-7919-486f-9e6f-34570ed2fc1b",
+            "classes": {},
+            "entityCount": 0,
+            "payloadHash": "5cc8666399a5d3d06477129be553171369800a8630a491b8c8cb004617d9d75b",
+            "nerAvailable": true,
+            "chainSeq": 2,
+            "prevChainHash": "e569ca4ff1d7f532172beb6fdbcefe1322662c9d8b565e1d2bfc5ff68223583b",
+            "chainHash": "4399abfc24d9cd0024eebe42700dc1cc01816cbd3a12f44355c52499e5f03334"
+          },
+          "orgId": "a568efe3-1ce3-47fe-bba5-0b2668d7d139"
+        },
+        {
+          "id": "act_1783534413592_3",
+          "actor": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "username": "1f6956b7-4f59-4f5b-9768-17e161c2c69f",
+          "actionType": "anonymisation.egress-mask",
+          "timestamp": "2026-07-08T18:13:33.592Z",
+          "targetIds": {
+            "correlationId": "anon_ccd6d4d6-7919-486f-9e6f-34570ed2fc1b",
+            "classes": {},
+            "entityCount": 0,
+            "payloadHash": "8316879d4fd44458b11c0daa703412189c506205dba99db07e7e4977c29ac6de",
+            "nerAvailable": true,
+            "chainSeq": 3,
+            "prevChainHash": "4399abfc24d9cd0024eebe42700dc1cc01816cbd3a12f44355c52499e5f03334",
+            "chainHash": "1658a8a6e99be8622f149ccdd38c57e56c2ee2405a51e9222133469a9ac815b9"
+          },
+          "orgId": "a568efe3-1ce3-47fe-bba5-0b2668d7d139"
+        },
+        {
+          "id": "act_1783535304490_4",
+          "actor": "68271b09-6e60-49f0-a228-993413a9733a",
+          "username": "68271b09-6e60-49f0-a228-993413a9733a",
+          "actionType": "anonymisation.egress-mask",
+          "timestamp": "2026-07-08T18:28:24.490Z",
+          "targetIds": {
+            "correlationId": "anon_f4680473-47fa-4831-b0f6-050428e01a9a",
+            "classes": {},
+            "entityCount": 0,
+            "payloadHash": "a2a44f258528c7ccec0e475c52bf8c646f37bb14a4bf49649ad1a3e2a5650999",
+            "nerAvailable": true,
+            "chainSeq": 4,
+            "prevChainHash": "1658a8a6e99be8622f149ccdd38c57e56c2ee2405a51e9222133469a9ac815b9",
+            "chainHash": "b54786b580e4a1543c7df7f141498e3f4de4ee1ca4001afa43f276b827c64641"
+          },
+          "orgId": "cc1851b5-fd7f-41a4-a298-b7ec0e606db9"
+        }
+      ],
+      "hasMemoryAutoExtracted": true
+    },
+    "ui": {
+      "shot": "/Users/ggomes/dev/ekoa-code/docs/release/evidence/J4-memory/memory-page.png",
+      "needle": "Padaria",
+      "textVisible": false,
+      "consoleErrorCount": 7,
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    }
+  }
+}

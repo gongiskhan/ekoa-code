@@ -1,0 +1,111 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J3.github.off",
+      "detail": "no git remote configured (honest GitHub-off)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.serve",
+      "detail": "anon=410 owner=200 (sharing default)"
+    },
+    {
+      "kind": "INFO",
+      "id": "J3.serve.csp",
+      "detail": "CSP present (frame-ancestors 'self'...)"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.appdata.post",
+      "detail": "POST probe-notes -> 201 {success:true}"
+    },
+    {
+      "kind": "PASS",
+      "id": "J3.appdata.get",
+      "detail": "GET probe-notes -> row with nota=probe (1 row/s)"
+    }
+  ],
+  "slug": "uma-pagina-simples-que",
+  "projectDir": "/Users/ggomes/.ekoa/sandboxes/user-32c2e8cf-1498-49a0-99b9-c6894c837bd3/5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+  "detail": {
+    "filesEndpoint": {
+      "status": 200,
+      "projectDir": "/Users/ggomes/.ekoa/sandboxes/user-32c2e8cf-1498-49a0-99b9-c6894c837bd3/5f41baa8-0d2e-4fbc-9606-afa2cba92d8d",
+      "fileCount": 6
+    },
+    "gitLog": "1c6da6b Build\n3493259 Initial scaffold",
+    "ls": "dist\nfrontend\nmanifest.json\npessoa.html",
+    "lsDist": "bundle.css\nbundle.css.map\nbundle.js\nbundle.js.map\nindex.html",
+    "gitRemote": "",
+    "sourceTree": "./frontend/src/index.css\n./frontend/src/App.jsx\n./frontend/src/index.jsx\n./pessoa.html\n./.claude/projects/-Users-ggomes--ekoa-sandboxes-user-32c2e8cf-1498-49a0-99b9-c6894c837bd3-5f41baa8-0d2e-4fbc-9606-afa2cba92d8d/21d9a711-50e9-4b4a-81bf-1a0d22ed224c.jsonl\n./.claude/backups/.claude.json.backup.1783535318160\n./.gitignore\n./manifest.json\n./.claude.json",
+    "copiedSource": [],
+    "serve": {
+      "anon": {
+        "status": 410,
+        "contentType": "text/html; charset=utf-8"
+      },
+      "owner": {
+        "status": 200,
+        "contentType": "text/html; charset=utf-8"
+      },
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-headers": "Authorization,Content-Type,X-Filename",
+        "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        "access-control-allow-origin": "*, *",
+        "access-control-expose-headers": "*",
+        "cache-control": "no-cache, no-store, must-revalidate",
+        "connection": "keep-alive",
+        "content-length": "10952",
+        "content-security-policy": "frame-ancestors 'self'",
+        "content-type": "text/html; charset=utf-8",
+        "date": "Wed, 08 Jul 2026 18:29:44 GMT",
+        "etag": "W/\"2ac8-9sBAsw03E3IXlEpFbGewJsv4+6Y\"",
+        "keep-alive": "timeout=5",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=63072000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN"
+      }
+    },
+    "assets": [
+      "/__ekoa/demo-bridge.js",
+      "./bundle.js"
+    ],
+    "mainJs": {
+      "url": "/apps/uma-pagina-simples-que/bundle.js",
+      "status": 200,
+      "bytes": 1128895
+    },
+    "appData": {
+      "post": {
+        "status": 201,
+        "body": {
+          "success": true,
+          "data": {
+            "id": "2a5f69f6-5a9f-47a1-a70a-9cb409a05c88",
+            "createdAt": "2026-07-08T18:29:44.878Z",
+            "updatedAt": "2026-07-08T18:29:44.878Z",
+            "nota": "probe"
+          }
+        }
+      },
+      "get": {
+        "status": 200,
+        "body": {
+          "success": true,
+          "data": [
+            {
+              "id": "2a5f69f6-5a9f-47a1-a70a-9cb409a05c88",
+              "createdAt": "2026-07-08T18:29:44.878Z",
+              "updatedAt": "2026-07-08T18:29:44.878Z",
+              "nota": "probe"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

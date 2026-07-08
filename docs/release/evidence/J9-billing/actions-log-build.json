@@ -1,0 +1,23 @@
+[
+  {
+    "ts": "2026-07-08T18:28:35.574Z",
+    "journey": "J3-build",
+    "username": "bc-u1",
+    "action": "build#1 POST /jobs (Pessoa quotes, verify OFF)",
+    "expectedAgentTypes": [
+      "build",
+      "memory-extract"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:33:29.233Z",
+    "journey": "J3-build",
+    "username": "bc-u1",
+    "action": "build#2 POST /jobs follow-up (counter, verify ON)",
+    "expectedAgentTypes": [
+      "build",
+      "build-verify",
+      "memory-extract"
+    ]
+  }
+]

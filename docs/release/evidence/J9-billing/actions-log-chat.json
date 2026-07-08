@@ -1,0 +1,97 @@
+[
+  {
+    "ts": "2026-07-08T18:28:24.388Z",
+    "journey": "J2-grounding",
+    "username": "gc-u1",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:28:59.233Z",
+    "journey": "J2-grounding",
+    "username": "gc-u1",
+    "action": "memory-extract",
+    "expectedAgentTypes": [
+      "memory-extract"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:30:39.487Z",
+    "journey": "J2-grounding",
+    "username": "gc-u1",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:30:57.432Z",
+    "journey": "J2-grounding",
+    "username": "gc-u1",
+    "action": "memory-extract",
+    "expectedAgentTypes": [
+      "memory-extract"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:33:20.129Z",
+    "journey": "J4-memory",
+    "username": "m-u1",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:33:32.578Z",
+    "journey": "J4-memory",
+    "username": "m-u1",
+    "action": "memory-extract",
+    "expectedAgentTypes": [
+      "memory-extract"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:33:43.212Z",
+    "journey": "J4-memory",
+    "username": "m-u1",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:33:56.301Z",
+    "journey": "J4-memory",
+    "username": "m-u1",
+    "action": "memory-extract",
+    "expectedAgentTypes": [
+      "memory-extract"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:41:04.963Z",
+    "journey": "J6-anonymisation",
+    "username": "az-u1",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-08T18:41:09.782Z",
+    "journey": "J6-anonymisation",
+    "username": "az-u1",
+    "action": "memory-extract",
+    "expectedAgentTypes": [
+      "memory-extract"
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "note": "Model-free root-cause analysis for the J4 UI findings (no model calls). Explains why m-u1's /memory page rendered 0 memory cards despite the API returning 4 memories, and why 7 browser console errors fired.",
+  "finding_1_memoryView_contract_invalid": {
+    "summary": "GET /api/v1/memories items violate the shared `Memory` zod schema: `orgId` (required) is omitted by memoryView, and `tags` (required, z.array(z.string())) is `undefined` for tag-less extracted/manual memories.",
+    "memoryView_returns_keys": ["id", "title", "content", "type", "tier", "visibility", "userId"],
+    "shared_Memory_requires": ["id", "type", "tier", "tags", "orgId", "visibility"],
+    "missing_required": ["orgId (always)", "tags (for memories with no tags — e.g. auto-extracted)"],
+    "sample_item": {"id": "e4becf26-fce1-4fa2-bd73-274303005eeb", "title": "Suas preferências configuradas", "content": "**", "type": "extracted", "tier": "active", "visibility": "private", "userId": "d98d2aa5-dcf0-4a9c-8909-86afb7d12fe5"},
+    "source": "api/src/memory/resolver.ts memoryView() — returns `{ id, title, content, type, tags, tier, visibility, userId }`; `m.tags` is undefined for extracted docs and `orgId` is never included.",
+    "consequence": "The web memory store (fetchMemories -> api.memories.list) does not populate `memories`; the /memory overview tab renders 0 cards. Re-verified: 0 `.line-clamp-2` content cards on the page though the API returns 4 items.",
+    "qa_gap": "The contract suite (QA layer 3: every shared schema exercised) should reject this Memory list body but does not — a coverage gap for the memories list response."
+  },
+  "finding_2_console_404s": {
+    "summary": "The /memory page fires requests to declared-but-unmounted endpoints on mount, producing browser console 404 errors (QA bar for dashboard pages = zero console errors).",
+    "failing_responses": [
+      "404 GET /api/v1/memories/stats  (memoriesEndpoints.stats declared; router only mounts GET '/:id' so it falls through to a NOT_FOUND envelope — fetchStats() hits it)",
+      "404 GET /api/v1/memories/tags   (memoriesEndpoints.listTags declared; same fall-through — fetchTags() hits it)",
+      "404 POST /api/v1/auth/refresh   (auth router mounts only login+me; Boot-A already flagged /auth/refresh unmounted — here it has a live web-side consequence)"
+    ],
+    "note": "The 7 raw console-error lines collapse to these 3 distinct failing endpoints (some fire more than once)."
+  },
+  "finding_3_extraction_parse_artifact": {
+    "summary": "One auto-extracted memory stored content = '**' (a stray markdown artifact) with title 'Suas preferências configuradas'; the companion memory stored correctly (title 'Empresa', content 'Padaria Central').",
+    "source": "api/src/memory/extraction.ts parseFacts() line-parser mis-parsed the FAST model's markdown-bulleted output into a title with an empty/'**' content.",
+    "docs": [
+      {"title": "Suas preferências configuradas", "content": "**"},
+      {"title": "Empresa", "content": "Padaria Central"}
+    ]
+  }
+}
