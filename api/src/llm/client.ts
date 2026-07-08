@@ -701,6 +701,9 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       if (tail) yield { type: 'text', text: tail };
     } catch (err) {
       if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      // Clear the ephemeral vault on the ERROR/abort path too (§17.5, Codex checkpoint M1): the
+      // token->value map is a re-identification key and must not linger to TTL after a failed call.
+      if (sk.ephemeral) endSession(handle);
       rejectResult(err);
       throw err;
     }
@@ -748,24 +751,29 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const promptAnon = anonymize(opts.prompt, ctx);
   const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
   const env = await buildSubprocessEnv();
-  const res = await transport.oneShot({
-    prompt: promptAnon.text,
-    model: decision.model,
-    effort: decision.effort,
-    env,
-    systemPrompt: systemAnon?.text,
-    images: opts.images,
-    disallowedTools: ['*'], // no tools on a one-shot
-    maxTurns: 1,
-    signal: opts.signal,
-  });
-  // Bill the reported usage even on abort (P-19), THEN reject abort as abort.
-  const metered = await meter(attribution, decision.tier, decision.model, res.usage);
-  recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
-  const text = deanonymize(res.text, promptAnon.handle);
-  if (sk.ephemeral) endSession(promptAnon.handle); // session-less: no vault past the call (§17.5)
-  if (res.aborted) throw new LlmAbortedError();
-  return { text, usage: res.usage };
+  try {
+    const res = await transport.oneShot({
+      prompt: promptAnon.text,
+      model: decision.model,
+      effort: decision.effort,
+      env,
+      systemPrompt: systemAnon?.text,
+      images: opts.images,
+      disallowedTools: ['*'], // no tools on a one-shot
+      maxTurns: 1,
+      signal: opts.signal,
+    });
+    // Bill the reported usage even on abort (P-19), THEN reject abort as abort.
+    const metered = await meter(attribution, decision.tier, decision.model, res.usage);
+    recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
+    const text = deanonymize(res.text, promptAnon.handle);
+    if (res.aborted) throw new LlmAbortedError();
+    return { text, usage: res.usage };
+  } finally {
+    // Clear the ephemeral vault on EVERY exit - success, transport error, or abort (§17.5, Codex
+    // checkpoint M1): the re-identification key must not linger to TTL after a failed call.
+    if (sk.ephemeral) endSession(promptAnon.handle);
+  }
 }
 
 export interface MessagesOptions {
@@ -899,14 +907,19 @@ export async function proxyGatewayMessages(
   };
 
   let resp: RawRestResponse;
-  resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await getSecret(), payload, stream: isStream });
-  if (resp.status === 401) {
-    resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await forceRefresh(), payload, stream: isStream });
+  try {
+    resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await getSecret(), payload, stream: isStream });
+    if (resp.status === 401) {
+      resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await forceRefresh(), payload, stream: isStream });
+    }
+    // De-tokenize the response body (text + tool_use argument blocks, §17.3 step 5) so the local
+    // loop acts on the REAL value, not a placeholder that does not exist on disk.
+    resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
+  } finally {
+    // Clear the no-session vault on EVERY exit incl. a transport error (§17.5, Codex checkpoint M1):
+    // the re-identification key must not linger to TTL after a failed gateway call.
+    if (!hasSession) endSession(anon.handle);
   }
-  // De-tokenize the response body (text + tool_use argument blocks, §17.3 step 5) so the local
-  // loop acts on the REAL value, not a placeholder that does not exist on disk.
-  resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
-  if (!hasSession) endSession(anon.handle); // no propagated conversation: no vault past the call (§17.5)
 
   // Meter only successful responses; a 4xx/5xx carries no billable usage (carried).
   let unmetered = false;
