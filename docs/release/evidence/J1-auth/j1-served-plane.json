@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "kind": "INFO",
+      "id": "J1s.deactivate",
+      "detail": "PATCH bc-u1 active:false -> 200"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1s.appdata403",
+      "detail": "disabled owner -> 403 ACCOUNT_DISABLED"
+    },
+    {
+      "kind": "INFO",
+      "id": "J1s.servedAnon",
+      "detail": "anon /apps/uma-pagina-simples-que/ while owner disabled -> 410 text/html; charset=utf-8"
+    },
+    {
+      "kind": "PASS",
+      "id": "J1s.reactivate",
+      "detail": "bc-u1 reactivated"
+    }
+  ],
+  "slug": "uma-pagina-simples-que",
+  "appData403": {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "ACCOUNT_DISABLED",
+        "message": "A sua conta está bloqueada. Contacte o suporte."
+      }
+    }
+  },
+  "servedAnon": {
+    "status": 410,
+    "contentType": "text/html; charset=utf-8"
+  }
+}

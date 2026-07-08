@@ -1,0 +1,12 @@
+{
+  "url": "/apps/uma-pagina-simples-que/?token=<bc-u1> (after build#2, verify ON)",
+  "screenshot": "j3-app-v2.png",
+  "rendered": "IDENTICAL scaffold placeholder as v1 — 'Let's build something that will change' / 'Your app is being created right now' / 'Powered by Ekoa'",
+  "counterPresent": false,
+  "buttonCount": 0,
+  "counterWorks": "N/A — no button/counter in the served app; the served bundle is still the compiled scaffold",
+  "servedBundleVsDisk": "served bundle.js is BYTE-IDENTICAL to on-disk dist/bundle.js (cmp identical, 1128895 bytes); 0 pessoa/counter/citação occurrences, 11 scaffold markers — so v2 render is NOT a browser-cache artifact",
+  "verifyVsServed": "build#2 verification emitted 'A testar a aplicação...' and the job COMPLETED (verify passed), yet the served/built deliverable is the non-functional scaffold, not the requested counter app. Verification gave false assurance — it did not catch that the served app is the placeholder.",
+  "realWorkLocation": "the counter WAS correctly added, but only to the orphaned standalone pessoa.html (button 'Nova citação' + 'Citações mostradas' counter), which is never the served entrypoint",
+  "consoleErrors": "1 (favicon.ico 404, cosmetic)"
+}

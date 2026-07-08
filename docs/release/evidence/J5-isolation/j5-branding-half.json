@@ -1,0 +1,25 @@
+{
+  "results": [
+    {
+      "kind": "PASS",
+      "id": "J5b.put",
+      "detail": "PUT /org/branding primaryColor=#AB2244 -> 200"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5b.appToken",
+      "detail": "design-tokens?app=uma-pagina-simples-que --color-primary=#AB2244"
+    },
+    {
+      "kind": "PASS",
+      "id": "J5b.neutral",
+      "detail": "design-tokens (no app) --color-primary=#0F766E (neutral)"
+    }
+  ],
+  "slug": "uma-pagina-simples-que",
+  "put": {
+    "status": 200
+  },
+  "appColor": "#AB2244",
+  "neutralColor": "#0F766E"
+}

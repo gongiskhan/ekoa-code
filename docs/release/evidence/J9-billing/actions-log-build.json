@@ -19,5 +19,25 @@
       "build-verify",
       "memory-extract"
     ]
+  },
+  {
+    "ts": "2026-07-08T19:07:19.559Z",
+    "journey": "J8-webhooks",
+    "username": "bc-adm",
+    "action": "POST /automations/plan (wt-real)",
+    "expectedAgentTypes": [
+      "automation-plan",
+      "automation-rehearse"
+    ]
+  },
+  {
+    "ts": "2026-07-08T19:08:56.017Z",
+    "journey": "J8-webhooks",
+    "username": "bc-adm",
+    "action": "POST /automations/plan (wt-real)",
+    "expectedAgentTypes": [
+      "automation-plan",
+      "automation-rehearse"
+    ]
   }
 ]
