@@ -482,3 +482,10 @@ Third cross-model scope complete. **Whole-repo authz/tenant/injection - issues-f
 **G12 tally so far: 11 real security findings fixed + regression-tested across 3 cross-model scopes** (bridge 6, anonymisation 1 + 4 rebuttals, whole-repo authz 4). Commits 3127f42..0faeb0d.
 
 **REMAINING (next iteration):** the migration-tooling Codex scope (api/scripts - G10 deferred, low risk: offline CLIs) + the shared/ contract scope (b, type-only) + optionally the dedicated auth-middleware scope (d, largely covered by the whole-repo pass); Claude Code's built-in full-repo security-review (F1, same-model pass); the 3 docs/security/ one-pagers (E.5); record the codexCheckpoint evidence-index block + all verdicts; final ci:lane green; tag gate-12.
+
+### 2026-07-08T06:28:57Z - G12: verified the G8 adversarial-review security findings stay closed
+
+The parallel g8-adv-review (needs-work verdict during G8) flagged two security-relevant findings; the final security phase re-confirms BOTH are closed in the current tree (not just at G8 tag time):
+- MED (authz): cancel/resume/consent were owner-scoped at G8. Current src/automation/service.ts: cancelRun/resumeRun/resolveConsent all gate on isRunOwner (owner-only), NOT the read-scoped canSeeRun; resolveConsent persists a standing command approval ('always') ONLY when run.status==='awaiting_consent' (defense-in-depth vs an org-admin injecting a local-command approval into another user's account). Closed.
+- LOW (credential hygiene): the interpolated URL is redacted at every persist/error site - api-call.ts:115 (resolved action) + :198 (error details) via redactSecretValues; integrations/action-executor.ts:211 via redactUrl. Closed.
+The third g8-adv-review item (an intermittent engine-test flake under full-suite load) was a test-infra concern, not a security finding; the objective security suites run green in the G12 census. No new work owed from these - recorded as a security-phase cross-check of a prior review.
