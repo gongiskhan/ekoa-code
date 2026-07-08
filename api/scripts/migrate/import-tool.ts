@@ -101,6 +101,8 @@ export interface DecryptSample {
   id: string;
   field: string;
   ok: boolean;
+  /** On failure, the underlying reason (wrong/missing key vs malformed ciphertext) for diagnostics. */
+  reason?: string;
 }
 
 export interface BlobPlan {
@@ -309,13 +311,17 @@ function decryptSample(rows: PlainDoc[], field: string): DecryptSample[] {
   const sorted = [...withField].sort((a, b) => a._id.localeCompare(b._id)).slice(0, DECRYPT_SAMPLE_N);
   return sorted.map((r) => {
     let ok = false;
+    let reason: string | undefined;
     try {
       decrypt(String(r[field]));
       ok = true;
-    } catch {
+    } catch (err) {
       ok = false;
+      // Keep the underlying reason so the operator can tell a wrong/missing ENCRYPTION_KEY from a
+      // malformed ciphertext on the fail-loud path (§10.3 rule 4).
+      reason = err instanceof Error ? err.message : String(err);
     }
-    return { id: r._id, field, ok };
+    return { id: r._id, field, ok, ...(reason ? { reason } : {}) };
   });
 }
 

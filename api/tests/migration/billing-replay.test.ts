@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { replay, type ReplayLedger, type ExpectedAggregates } from '../../scripts/billing-replay/replay.js';
 import { computeMetered } from '../../src/billing/tracker.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
-import { __resetBillingConfigForTests } from '../../src/billing/constants.js';
+import { __resetBillingConfigForTests, periodMs } from '../../src/billing/constants.js';
 
 /**
  * ch10 §10.4 Part A - deterministic ledger replay, tolerance ZERO. The replay binds to the real
@@ -34,6 +34,29 @@ describe('exact ledger replay (tolerance zero)', () => {
       expect(p.diff, `${p.userId} diff`).toBe(0);
       expect(p.recomputed).toBe(p.expected);
     }
+  });
+
+  it('crosses a billing-period boundary: applyLazyReset zeroes the meter so only the current period counts (§6.6.2)', () => {
+    const P = 1_700_000_000_000;
+    const raw1 = { input: 5000, output: 0, cacheCreate: 0, cacheRead: 0 };
+    const raw2 = { input: 1000, output: 0, cacheCreate: 0, cacheRead: 0 };
+    // One event in period 1, one in period 2 (crossing P + periodMs()). After the reset, only the
+    // period-2 event survives in the current-period meter.
+    const multi: ReplayLedger = {
+      periodStart: P,
+      events: [
+        { billeeUserId: 'u-multi', tier: 'FAST', raw: raw1, timestamp: P + 1000 },
+        { billeeUserId: 'u-multi', tier: 'FAST', raw: raw2, timestamp: P + periodMs() + 1000 },
+      ],
+    };
+    const currentPeriodOnly = computeMetered('FAST', raw2);
+    // Correct expected (post-reset) matches exactly.
+    expect(replay(multi, { 'u-multi': currentPeriodOnly }).match).toBe(true);
+    // If the reset did NOT fire (naive sum of both periods), the total would be larger - so the
+    // sum-of-both expected must MISMATCH, proving the period boundary is really exercised.
+    const naiveSum = computeMetered('FAST', raw1) + currentPeriodOnly;
+    expect(naiveSum).toBeGreaterThan(currentPeriodOnly);
+    expect(replay(multi, { 'u-multi': naiveSum }).match).toBe(false);
   });
 
   it('binds to computeMetered: the aggregate is exactly the sum of the §6.5.2 formula per event', () => {

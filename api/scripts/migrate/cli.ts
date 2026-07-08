@@ -34,7 +34,9 @@ function parseArgs(argv: string[]): Args {
   return {
     source,
     execute: argv.includes('--execute'),
-    journal: get('--journal') ?? join(source, 'RUN_LOG.migration.txt'),
+    // NEVER default into the source dir - that would WRITE to the source and break read-only-on-
+    // source (§10.3 rule 1). Default to the CWD (the run repo, per §10.3 rule 5); --journal overrides.
+    journal: get('--journal') ?? join(process.cwd(), 'RUN_LOG.migration.txt'),
     contentDataDir: get('--content-data-dir'),
     json: argv.includes('--json'),
   };
