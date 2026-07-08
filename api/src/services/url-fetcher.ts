@@ -7,6 +7,24 @@
 import { lookup } from 'node:dns/promises';
 import { assertSafeUrl, isBlockedIpv4Octets, SsrfError } from './url-safety.js';
 
+/** The first two octets of an IPv4-mapped IPv6 address, in EITHER form, or null if not mapped:
+ *   ::ffff:10.0.0.1        (dotted)   and   ::ffff:0a00:0001 / ::ffff:a00:1   (hex groups).
+ *  Node's dns.lookup usually returns the dotted form, but a resolver may hand back hex - the
+ *  hex form was bypassing the dotted-only guard (Codex checkpoint recheck). We normalize both to
+ *  the mapped IPv4's first two octets so the private-IPv4 block list applies uniformly. */
+function mappedIpv4FirstOctets(a: string): [number, number] | null {
+  if (!a.startsWith('::ffff:')) return null;
+  const rest = a.slice('::ffff:'.length);
+  if (rest.includes('.')) {
+    const p = rest.split('.');
+    return p.length === 4 ? [Number(p[0]), Number(p[1])] : null;
+  }
+  const hex = rest.replace(/:/g, '');
+  if (!/^[0-9a-f]{1,8}$/.test(hex)) return null;
+  const h = hex.padStart(8, '0');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16)];
+}
+
 export interface GuardedFetchOptions {
   method?: string;
   headers?: Record<string, string>;
@@ -31,10 +49,11 @@ async function assertResolvedIpsSafe(hostname: string): Promise<void> {
       if (isBlockedIpv4Octets(o[0] as number, o[1] as number)) throw new SsrfError(`Resolved to blocked address: ${address}`);
     } else if (family === 6) {
       const a = address.toLowerCase();
-      // IPv4-mapped IPv6 (::ffff:a.b.c.d): apply the SAME IPv4 block list, not just the 127/8 case
-      // (Codex checkpoint: ::ffff:10/8, 172.16/12, 192.168/16, 169.254/16 were bypassing the guard).
-      const mapped = /^::ffff:(\d+)\.(\d+)\.(\d+)\.\d+$/.exec(a);
-      if (mapped && isBlockedIpv4Octets(Number(mapped[1]), Number(mapped[2]))) {
+      // IPv4-mapped IPv6 (::ffff:a.b.c.d OR the hex form ::ffff:0a00:0001): apply the SAME IPv4
+      // block list, not just the 127/8 case (Codex checkpoint: ::ffff:10/8, 172.16/12, 192.168/16,
+      // 169.254/16 - in either notation - were bypassing the guard).
+      const mapped = mappedIpv4FirstOctets(a);
+      if (mapped && isBlockedIpv4Octets(mapped[0], mapped[1])) {
         throw new SsrfError(`Resolved to blocked address: ${address}`);
       }
       if (a === '::1' || a === '::' || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('fe80')) {
