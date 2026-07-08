@@ -12,16 +12,21 @@ import { assertSafeUrl, isBlockedIpv4Octets, SsrfError } from './url-safety.js';
  *  Node's dns.lookup usually returns the dotted form, but a resolver may hand back hex - the
  *  hex form was bypassing the dotted-only guard (Codex checkpoint recheck). We normalize both to
  *  the mapped IPv4's first two octets so the private-IPv4 block list applies uniformly. */
-function mappedIpv4FirstOctets(a: string): [number, number] | null {
+export function mappedIpv4FirstOctets(a: string): [number, number] | null {
   if (!a.startsWith('::ffff:')) return null;
   const rest = a.slice('::ffff:'.length);
   if (rest.includes('.')) {
     const p = rest.split('.');
     return p.length === 4 ? [Number(p[0]), Number(p[1])] : null;
   }
-  const hex = rest.replace(/:/g, '');
-  if (!/^[0-9a-f]{1,8}$/.test(hex)) return null;
-  const h = hex.padStart(8, '0');
+  // Hex form: the mapped IPv4 is the last 32 bits = two hextets. Each `:`-separated group is one
+  // hextet and MUST be left-padded to 4 digits BEFORE concatenation (::ffff:a00:1 is 0a00:0001 =
+  // 10.0.0.1, NOT a0:01) - concatenating the raw groups mis-decodes the octets.
+  const groups = rest.split(':');
+  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  const padded = groups.map((g) => g.padStart(4, '0'));
+  while (padded.length < 2) padded.unshift('0000');
+  const h = padded.slice(-2).join(''); // last two hextets = the 32-bit mapped IPv4
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16)];
 }
 
