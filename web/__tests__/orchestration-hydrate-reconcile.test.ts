@@ -20,13 +20,24 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Controllable artifact list. hydrateSessionFromArtifact only calls these two
-// client functions; the rest of the store isn't exercised by these tests.
+// Controllable artifact list. hydrateSessionFromArtifact calls the typed client's
+// api.artifacts.list (-> { items }) and api.artifacts.filesList (-> { files }) via tryCall;
+// the rest of the store isn't exercised by these tests. (FC-307: mock the new client.)
 let mockInstances: unknown[] = [];
-vi.mock('@/lib/api/client', () => ({
-  listArtifactInstances: () => Promise.resolve({ success: true, data: mockInstances }),
-  listArtifactFiles: () =>
-    Promise.resolve({ success: true, data: { files: [], instance: {} } }),
+vi.mock('@/lib/api', () => ({
+  api: {
+    artifacts: {
+      list: () => Promise.resolve({ items: mockInstances }),
+      filesList: () => Promise.resolve({ files: [] }),
+    },
+  },
+  tryCall: async (fn: () => Promise<unknown>) => {
+    try {
+      return { ok: true as const, data: await fn() };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  },
 }));
 
 import { useOrchestrationStore, type SessionJobState } from '@/stores/orchestration';

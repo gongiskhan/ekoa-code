@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { bundleFromZip, readBundleFile, looksLikeZip, type ArtifactBundle } from './artifact-bundle';
+import { bundleFromZip, readBundleFile, looksLikeZip, type ArtifactBundle } from '@/lib/artifact-bundle';
 
 /** Build a zip shaped like "Transferir código" output: files at the root, manifest.json included. */
 function makeAppZip(opts?: { prefix?: string; withRuntimeNoise?: boolean }): Uint8Array {

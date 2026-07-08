@@ -11,27 +11,41 @@ import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { DataBackupsPanel } from '@/components/artifacts/data-backups-panel';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
-import * as client from '@/lib/api/client';
+import { api } from '@/lib/api';
+import type { BackupStatus, BackupRestorePoint } from '@ekoa/shared';
 
 function renderPanel(ui: ReactElement) {
   return render(<ConfirmProvider>{ui}</ConfirmProvider>);
 }
 
-vi.mock('@/lib/api/client', () => ({
-  getBackupStatus: vi.fn(),
-  downloadAppDataDump: vi.fn(),
-  previewBackupPoint: vi.fn(),
-  createBackupSnapshot: vi.fn(),
-  restoreBackupPoint: vi.fn(),
+// FC-307: mock the typed client. The panel calls api.artifacts.backup* via tryCall, so the mocked
+// methods resolve the RAW payload (tryCall wraps it as { ok, data }); tryCall is the real wrapper.
+vi.mock('@/lib/api', () => ({
+  api: {
+    artifacts: {
+      backupStatus: vi.fn(),
+      backupExport: vi.fn(),
+      backupPreview: vi.fn(),
+      backupSnapshot: vi.fn(),
+      backupRestore: vi.fn(),
+    },
+  },
+  tryCall: async (fn: () => Promise<unknown>) => {
+    try {
+      return { ok: true as const, data: await fn() };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  },
 }));
 
-const mocked = client as unknown as {
-  getBackupStatus: ReturnType<typeof vi.fn>;
-  downloadAppDataDump: ReturnType<typeof vi.fn>;
-  createBackupSnapshot: ReturnType<typeof vi.fn>;
+const mocked = api.artifacts as unknown as {
+  backupStatus: ReturnType<typeof vi.fn>;
+  backupExport: ReturnType<typeof vi.fn>;
+  backupSnapshot: ReturnType<typeof vi.fn>;
 };
 
-function statusWith(points: Array<Partial<client.BackupRestorePoint>>): client.BackupStatus {
+function statusWith(points: Array<Partial<BackupRestorePoint>>): BackupStatus {
   return {
     appId: 'app1',
     lastBackupAt: points[0]?.at ?? null,
@@ -48,10 +62,9 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('DataBackupsPanel', () => {
   it('shows the PT-PT reassurance line and restore points from status', async () => {
-    mocked.getBackupStatus.mockResolvedValue({
-      success: true,
-      data: statusWith([{ label: 'hoje, 09:14', at: '2026-06-08T09:14:00Z' }, { id: 'p2', label: 'ontem, 18:00', kind: 'nightly' }]),
-    });
+    mocked.backupStatus.mockResolvedValue(
+      statusWith([{ label: 'hoje, 09:14', at: '2026-06-08T09:14:00Z' }, { id: 'p2', label: 'ontem, 18:00', kind: 'nightly' }]),
+    );
     renderPanel(<DataBackupsPanel appId="app1" appName="Conexão" />);
 
     await waitFor(() => expect(screen.getByTestId('backup-reassurance')).toHaveTextContent(/última cópia de segurança/i));
@@ -62,32 +75,31 @@ describe('DataBackupsPanel', () => {
   });
 
   it('renders the empty state when there are no restore points', async () => {
-    mocked.getBackupStatus.mockResolvedValue({ success: true, data: statusWith([]) });
+    mocked.backupStatus.mockResolvedValue(statusWith([]));
     renderPanel(<DataBackupsPanel appId="app1" />);
     expect(await screen.findByTestId('no-restore-points')).toBeInTheDocument();
     expect(screen.getByTestId('backup-reassurance')).toHaveTextContent(/primeira cópia de segurança/i);
   });
 
   it('creates a snapshot then refreshes', async () => {
-    mocked.getBackupStatus
-      .mockResolvedValueOnce({ success: true, data: statusWith([]) })
-      .mockResolvedValueOnce({ success: true, data: statusWith([{ label: 'hoje, 10:00' }]) });
-    mocked.createBackupSnapshot.mockResolvedValue({ success: true, data: { id: 'p1', at: '2026-06-08T10:00:00Z', kind: 'manual', source: 'local', label: 'hoje, 10:00' } });
+    mocked.backupStatus
+      .mockResolvedValueOnce(statusWith([]))
+      .mockResolvedValueOnce(statusWith([{ label: 'hoje, 10:00' }]));
+    mocked.backupSnapshot.mockResolvedValue({ id: 'p1', at: '2026-06-08T10:00:00Z', kind: 'manual', source: 'local', label: 'hoje, 10:00' });
 
     renderPanel(<DataBackupsPanel appId="app1" />);
     await screen.findByTestId('no-restore-points');
     await userEvent.click(screen.getByTestId('backup-snapshot-btn'));
 
-    await waitFor(() => expect(mocked.createBackupSnapshot).toHaveBeenCalledWith('app1'));
+    await waitFor(() => expect(mocked.backupSnapshot).toHaveBeenCalledWith({ id: 'app1' }));
     await waitFor(() => expect(screen.getByTestId('restore-point-list')).toHaveTextContent('hoje, 10:00'));
   });
 
   it('downloads the current data as a JSON blob', async () => {
-    mocked.getBackupStatus.mockResolvedValue({ success: true, data: statusWith([]) });
-    mocked.downloadAppDataDump.mockResolvedValue({
-      success: true,
-      data: { appId: 'app1', exportedAt: '2026-06-08T10:00:00Z', collections: { clientes: [] }, counts: { clientes: 0 }, totalItems: 0 },
-    });
+    mocked.backupStatus.mockResolvedValue(statusWith([]));
+    mocked.backupExport.mockResolvedValue(
+      { appId: 'app1', exportedAt: '2026-06-08T10:00:00Z', collections: { clientes: [] }, counts: { clientes: 0 }, totalItems: 0 },
+    );
     const createUrl = vi.fn(() => 'blob:fake');
     const revokeUrl = vi.fn();
     (URL as unknown as { createObjectURL: unknown }).createObjectURL = createUrl;
@@ -98,7 +110,7 @@ describe('DataBackupsPanel', () => {
     await screen.findByTestId('no-restore-points');
     await userEvent.click(screen.getByTestId('backup-download-btn'));
 
-    await waitFor(() => expect(mocked.downloadAppDataDump).toHaveBeenCalledWith('app1'));
+    await waitFor(() => expect(mocked.backupExport).toHaveBeenCalledWith({ id: 'app1' }));
     expect(createUrl).toHaveBeenCalled();
     expect(clickSpy).toHaveBeenCalled();
     clickSpy.mockRestore();
