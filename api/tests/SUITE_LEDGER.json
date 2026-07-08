@@ -96,7 +96,6 @@
     "targetGate": "G9",
     "source": "ekoa-dev/ekoa/__tests__/ (+ ekoa/lib/)",
     "surviving": [
-      "conversation-types",
       "execute-skip-user-message",
       "navigation",
       "orchestration-hydrate-reconcile",
@@ -120,7 +119,8 @@
       "orchestration-queue-stop"
     ],
     "retired_as_static_audit": [
-      "artifacts-page-wiring"
+      "artifacts-page-wiring",
+      "conversation-types (FC-109: deleted in W4 with its subject, the FC-107/108 client-side mode classifier + conversation-types module; \u00a712.5)"
     ]
   },
   "node_drivers": {
