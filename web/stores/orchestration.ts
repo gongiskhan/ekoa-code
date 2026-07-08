@@ -4,14 +4,13 @@
  * Orchestration Store for Builder Page
  *
  * Manages sessions, messages, job state, preview state,
- * file tree, execution options, and wizard state.
+ * and file tree.
  */
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api, tryCall } from '@/lib/api';
 import type { FileAttachment } from '@/types/attachment';
-import type { ConversationMode, IntentClassification, InterviewQuestion, InterviewAnswer } from '@/lib/conversation-types';
 import { getSandboxDisplayPath } from '@/lib/file-utils';
 
 // ============================================
@@ -28,7 +27,7 @@ export interface ChatMessage {
     traceId?: string;
     phase?: string;
     isEssential?: boolean;
-    type?: 'text' | 'tool_use' | 'tool_result' | 'status' | 'progress' | 'error' | 'result' | 'subagent' | 'skill' | 'activity' | 'agent_text';
+    type?: 'text' | 'tool_use' | 'tool_result' | 'status' | 'progress' | 'error' | 'result' | 'skill' | 'activity' | 'agent_text';
     toolName?: string;
     toolInput?: Record<string, unknown>;
     memoriesUsed?: number;
@@ -50,15 +49,13 @@ export interface SessionState {
 export interface OutputEntry {
   id: string;
   timestamp: string;
-  type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'progress' | 'error' | 'system' | 'terminal' | 'subagent' | 'skill';
+  type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'progress' | 'error' | 'system' | 'terminal' | 'skill';
   content: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
   phase?: string;
   toolDuration?: number;
   isSuccess?: boolean;
-  agentName?: string;
-  agentEvent?: string;
   skillName?: string;
   summary?: string;
 }
@@ -113,29 +110,6 @@ export interface FileNode {
   children?: FileNode[];
 }
 
-export interface PendingModeSwitch {
-  from: ConversationMode;
-  to: ConversationMode;
-  confidence: number;
-  classification: IntentClassification;
-}
-
-export interface InterviewState {
-  active: boolean;
-  mode: ConversationMode;
-  questions: InterviewQuestion[];
-  answers: InterviewAnswer[];
-  currentIndex: number;
-}
-
-export interface SessionRoutingContext {
-  mode: ConversationMode;
-  interviewAnswers: InterviewAnswer[];
-  routingHistory: Array<{ from: ConversationMode; to: ConversationMode; timestamp: string }>;
-}
-
-export type { ConversationMode, InterviewQuestion, InterviewAnswer };
-
 /**
  * Canonical side-panel state. The frontend renders a single uniform chat
  * layout; side panels open/close in response to backend signals
@@ -162,13 +136,6 @@ export interface ActiveIntegrationBuild {
   builderSessionId?: string;
   /** True after the integration was saved and is ready to wire into the app. */
   ready?: boolean;
-}
-
-export interface ExecutionOptions {
-  selectedTemplateId: string | null;
-  selectedIntegrationKeys: string[];
-  templateFieldValues: Record<string, unknown>;
-  configValues: Record<string, unknown>;
 }
 
 // Per-session retry payload — set when an agent execution starts, cleared on success,
@@ -218,16 +185,6 @@ interface OrchestrationState {
   // Per-session file tree
   sessionFiles: Record<string, FileNode[]>;
 
-  // Execution options
-  executionOptions: ExecutionOptions;
-
-  // Wizard state
-  showWizard: boolean;
-  pendingFirstMessage: string | null;
-  suggestedTemplateId: string | null;
-  suggestedTemplateConfidence: string | null;
-  suggestedIntegrations: Array<{ id: string; relevance: string; reasoning: string }>;
-
   // UI state
   /** Canonical side-panel state, driven by cortex SSE events. */
   sidePanelState: SidePanelState;
@@ -259,12 +216,6 @@ interface OrchestrationState {
 
   // Pending attachments
   pendingAttachments: FileAttachment[];
-
-  // Conversation mode & intent detection
-  conversationMode: ConversationMode;
-  pendingModeSwitch: PendingModeSwitch | null;
-  interviewState: InterviewState | null;
-  perSessionContext: Record<string, SessionRoutingContext>;
 
   // Pending delegation from chat page (triggers builder execution)
   pendingDelegation: {
@@ -298,18 +249,6 @@ interface OrchestrationState {
   // File tree
   addFileOperation: (sessionId: string, path: string, action: 'created' | 'modified' | 'deleted') => void;
 
-  // Wizard
-  setShowWizard: (show: boolean) => void;
-  setPendingFirstMessage: (message: string | null) => void;
-  setSuggestedTemplate: (id: string | null, confidence: string | null) => void;
-  setSuggestedIntegrations: (integrations: Array<{ id: string; relevance: string; reasoning: string }>) => void;
-
-  // Execution options
-  setSelectedTemplate: (id: string | null) => void;
-  setSelectedIntegrations: (keys: string[]) => void;
-  setTemplateFieldValues: (values: Record<string, unknown>) => void;
-  setConfigValues: (values: Record<string, unknown>) => void;
-
   // UI state
   /** Set the canonical side-panel state. Persists per active session. */
   setSidePanelState: (state: SidePanelState) => void;
@@ -334,7 +273,6 @@ interface OrchestrationState {
 
   // Message queue (queue-while-building instead of rejecting)
   enqueueMessage: (sessionId: string, text: string) => void;
-  dequeueMessage: (sessionId: string) => string | undefined;
   /** Remove and return ALL queued messages at once (for merge-on-flush). */
   drainQueue: (sessionId: string) => string[];
   removeQueuedMessage: (sessionId: string, index: number) => void;
@@ -353,15 +291,6 @@ interface OrchestrationState {
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
 
-  // Conversation mode & intent detection
-  setConversationMode: (mode: ConversationMode) => void;
-  setPendingModeSwitch: (suggestion: PendingModeSwitch | null) => void;
-  startInterview: (mode: ConversationMode, questions: InterviewQuestion[]) => void;
-  answerInterviewQuestion: (answer: InterviewAnswer) => void;
-  skipInterviewQuestion: () => void;
-  completeInterview: () => void;
-  cancelInterview: () => void;
-
   // Delegation
   setPendingDelegation: (delegation: { description: string; templateId: string | null } | null) => void;
 
@@ -377,9 +306,6 @@ interface OrchestrationState {
   // (no localStorage), where the side panel would otherwise show no preview/files
   // because the artifact link only lived in client state.
   hydrateSessionFromArtifact: (sessionId: string, artifacts?: ArtifactRef[]) => Promise<boolean>;
-
-  // Reset
-  resetWizard: () => void;
 }
 
 // Shape returned by ekoa.templates list-instances, only the fields we use here.
@@ -550,19 +476,6 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       sessionPreviews: {},
       sessionFiles: {},
 
-      executionOptions: {
-        selectedTemplateId: null,
-        selectedIntegrationKeys: [],
-        templateFieldValues: {},
-        configValues: {},
-      },
-
-      showWizard: false,
-      pendingFirstMessage: null,
-      suggestedTemplateId: null,
-      suggestedTemplateConfidence: null,
-      suggestedIntegrations: [],
-
       sidePanelState: 'none' as SidePanelState,
       sessionSidePanelStates: {},
       sidePanelTab: 'preview',
@@ -576,11 +489,6 @@ export const useOrchestrationStore = create<OrchestrationState>()(
 
       pendingAttachments: [],
       pendingDelegation: null,
-
-      conversationMode: 'chat' as ConversationMode,
-      pendingModeSwitch: null,
-      interviewState: null,
-      perSessionContext: {},
 
       // ========================================
       // SESSION ACTIONS
@@ -956,55 +864,6 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       },
 
       // ========================================
-      // WIZARD ACTIONS
-      // ========================================
-
-      setShowWizard: (show: boolean) => set({ showWizard: show }),
-      setPendingFirstMessage: (message: string | null) => set({ pendingFirstMessage: message }),
-
-      setSuggestedTemplate: (id: string | null, confidence: string | null) => {
-        set({
-          suggestedTemplateId: id,
-          suggestedTemplateConfidence: confidence,
-        });
-      },
-
-      setSuggestedIntegrations: (
-        integrations: Array<{ id: string; relevance: string; reasoning: string }>
-      ) => {
-        set({ suggestedIntegrations: integrations });
-      },
-
-      // ========================================
-      // EXECUTION OPTIONS ACTIONS
-      // ========================================
-
-      setSelectedTemplate: (id: string | null) => {
-        set((state) => {
-          if (state.executionOptions.selectedTemplateId === id) return state;
-          return { executionOptions: { ...state.executionOptions, selectedTemplateId: id } };
-        });
-      },
-
-      setSelectedIntegrations: (keys: string[]) => {
-        set((state) => ({
-          executionOptions: { ...state.executionOptions, selectedIntegrationKeys: keys },
-        }));
-      },
-
-      setTemplateFieldValues: (values: Record<string, unknown>) => {
-        set((state) => ({
-          executionOptions: { ...state.executionOptions, templateFieldValues: values },
-        }));
-      },
-
-      setConfigValues: (values: Record<string, unknown>) => {
-        set((state) => ({
-          executionOptions: { ...state.executionOptions, configValues: values },
-        }));
-      },
-
-      // ========================================
       // UI STATE ACTIONS
       // ========================================
 
@@ -1098,16 +957,6 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         }));
       },
 
-      dequeueMessage: (sessionId: string): string | undefined => {
-        const queue = get().queuedMessages[sessionId] || [];
-        if (queue.length === 0) return undefined;
-        const [next, ...rest] = queue;
-        set((state) => ({
-          queuedMessages: { ...state.queuedMessages, [sessionId]: rest },
-        }));
-        return next;
-      },
-
       drainQueue: (sessionId: string): string[] => {
         const queue = get().queuedMessages[sessionId] || [];
         if (queue.length === 0) return [];
@@ -1192,131 +1041,16 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       // RESET
       // ========================================
 
-      // ========================================
-      // CONVERSATION MODE & INTENT DETECTION
-      // ========================================
-
-      setConversationMode: (mode: ConversationMode) => {
-        const prev = get().conversationMode;
-        const activeId = get().activeSessionId;
-        set({ conversationMode: mode, pendingModeSwitch: null });
-
-        // Record routing history
-        if (activeId && prev !== mode) {
-          set((state) => {
-            const ctx = state.perSessionContext[activeId] || {
-              mode,
-              interviewAnswers: [],
-              routingHistory: [],
-            };
-            return {
-              perSessionContext: {
-                ...state.perSessionContext,
-                [activeId]: {
-                  ...ctx,
-                  mode,
-                  routingHistory: [
-                    ...ctx.routingHistory.slice(-19),
-                    { from: prev, to: mode, timestamp: new Date().toISOString() },
-                  ],
-                },
-              },
-            };
-          });
-        }
-      },
-
-      setPendingModeSwitch: (suggestion: PendingModeSwitch | null) => {
-        set({ pendingModeSwitch: suggestion });
-      },
-
-      startInterview: (mode: ConversationMode, questions: InterviewQuestion[]) => {
-        set({
-          interviewState: {
-            active: true,
-            mode,
-            questions,
-            answers: [],
-            currentIndex: 0,
-          },
-        });
-      },
-
-      answerInterviewQuestion: (answer: InterviewAnswer) => {
-        set((state) => {
-          const iv = state.interviewState;
-          if (!iv) return state;
-          const answers = [...iv.answers, answer];
-          const nextIndex = iv.currentIndex + 1;
-          return {
-            interviewState: {
-              ...iv,
-              answers,
-              currentIndex: nextIndex,
-              active: nextIndex < iv.questions.length,
-            },
-          };
-        });
-      },
-
-      skipInterviewQuestion: () => {
-        set((state) => {
-          const iv = state.interviewState;
-          if (!iv) return state;
-          const nextIndex = iv.currentIndex + 1;
-          return {
-            interviewState: {
-              ...iv,
-              currentIndex: nextIndex,
-              active: nextIndex < iv.questions.length,
-            },
-          };
-        });
-      },
-
-      completeInterview: () => {
-        const { interviewState, activeSessionId } = get();
-        if (!interviewState) return;
-
-        // Store answers in per-session context
-        if (activeSessionId) {
-          set((state) => {
-            const ctx = state.perSessionContext[activeSessionId] || {
-              mode: interviewState.mode,
-              interviewAnswers: [],
-              routingHistory: [],
-            };
-            return {
-              interviewState: null,
-              perSessionContext: {
-                ...state.perSessionContext,
-                [activeSessionId]: {
-                  ...ctx,
-                  interviewAnswers: interviewState.answers,
-                },
-              },
-            };
-          });
-        } else {
-          set({ interviewState: null });
-        }
-      },
-
-      cancelInterview: () => {
-        set({ interviewState: null });
-      },
-
       setPendingDelegation: (delegation) => set({ pendingDelegation: delegation }),
 
       initializeBuilderSession: async () => {
         // Reset global executing flag on init (stale from previous page load).
-        // Reset conversationMode + sidePanelState to defaults — per-session
-        // panel state is restored by setActiveSession via
-        // sessionSidePanelStates after sessions load.
+        // Reset sidePanelState to its default — per-session panel state is
+        // restored by setActiveSession via sessionSidePanelStates after
+        // sessions load.
         set({
           isExecuting: false,
           sidePanelState: 'none',
-          conversationMode: 'chat',
         });
 
         // 1. Refresh sessions from server, plus artifact instances in parallel.
@@ -1691,52 +1425,14 @@ export const useOrchestrationStore = create<OrchestrationState>()(
 
         return true;
       },
-
-      resetWizard: () => {
-        set({
-          showWizard: false,
-          pendingFirstMessage: null,
-          suggestedTemplateId: null,
-          suggestedTemplateConfidence: null,
-          suggestedIntegrations: [],
-          executionOptions: {
-            selectedTemplateId: null,
-            selectedIntegrationKeys: [],
-            templateFieldValues: {},
-            configValues: {},
-          },
-        });
-      },
     }),
     {
       name: 'ekoa_orchestration',
       version: 4,
-      migrate: (persistedState: unknown, version: number) => {
-        const state = persistedState as Record<string, unknown>;
-        if (version < 1) {
-          return { ...state, sidePanelTab: 'preview' };
-        }
-        if (version < 2) {
-          return { ...state, sessionChatModes: {} };
-        }
-        if (version < 3) {
-          const { chatMode: _cm, conversationMode: _cvm, ...rest } = state;
-          return rest;
-        }
-        if (version < 4) {
-          // Drop the legacy sessionChatModes / chatMode persistence — replaced
-          // by sessionSidePanelStates which the backend's phase_changed event
-          // drives. Stale modes from older builds would mis-render side panels.
-          const { sessionChatModes: _scm, chatMode: _cm2, ...rest } = state;
-          return { ...rest, sessionSidePanelStates: {}, sidePanelState: 'none' };
-        }
-        return state;
-      },
       partialize: (state) => ({
         sessionSidePanelStates: state.sessionSidePanelStates,
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
-        perSessionContext: state.perSessionContext,
         // Strip output arrays from sessionJobs -- they can be massive (SSE streaming)
         // and would exceed localStorage's ~5MB quota.
         // Also sanitize running/queued status to idle -- these transient states cannot
@@ -1753,7 +1449,6 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         ),
         sessionPreviews: state.sessionPreviews,
         sessionFiles: state.sessionFiles,
-        executionOptions: state.executionOptions,
         sidePanelTab: state.sidePanelTab,
         // Persist so the Resend button on the latest user message survives reloads / cross-tab.
         retryContexts: state.retryContexts,

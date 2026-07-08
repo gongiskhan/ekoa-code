@@ -28,20 +28,13 @@ export interface PlatformSettings {
     vertical?: 'generic' | 'legal';
   };
   chat: {
-    defaultMode: string;
-    autoOpenSidePanel: boolean;
     showExampleCards: boolean;
-    enableContextDividers: boolean;
     guidedMode: boolean;
     /** R2 — Guidance dial. Optional for backward-compat. Defaults to 'guide-me' for new accounts. */
     guidance?: 'guide-me' | 'standard' | 'just-build-it';
   };
   build: {
     showFileTreeByDefault: boolean;
-  };
-  integration: {
-    autoTestAfterCreation: boolean;
-    defaultConfigExpanded: boolean;
   };
 }
 
@@ -74,19 +67,12 @@ const DEFAULT_SETTINGS: PlatformSettings = {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   },
   chat: {
-    defaultMode: 'build',
-    autoOpenSidePanel: false,
     showExampleCards: true,
-    enableContextDividers: true,
     guidedMode: true,
     guidance: 'guide-me',
   },
   build: {
     showFileTreeByDefault: false,
-  },
-  integration: {
-    autoTestAfterCreation: false,
-    defaultConfigExpanded: false,
   },
 };
 
@@ -128,10 +114,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             ...DEFAULT_SETTINGS.build,
             ...(data.build as Partial<PlatformSettings['build']> || {}),
           },
-          integration: {
-            ...DEFAULT_SETTINGS.integration,
-            ...(data.integration as Partial<PlatformSettings['integration']> || {}),
-          },
         };
         // Mirror the resolved vertical to localStorage so pre-auth surfaces
         // (e.g. /login) can present the right skin without refetching settings.
@@ -155,7 +137,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       general: { ...current.general, ...(patch.general || {}) },
       chat: { ...current.chat, ...(patch.chat || {}) },
       build: { ...current.build, ...(patch.build || {}) },
-      integration: { ...current.integration, ...(patch.integration || {}) },
     };
     set({ settings: merged, saveError: null });
     // Keep the pre-auth vertical mirror in sync with in-memory changes too,

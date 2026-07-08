@@ -89,7 +89,6 @@ interface IntegrationsState {
     enabled: boolean
   ) => Promise<{ success: boolean; error?: string }>;
   deleteSkill: (integrationKey: string) => Promise<{ success: boolean; error?: string }>;
-  refreshRegistry: () => Promise<{ success: boolean; error?: string }>;
   loadIntegrationPackage: (integrationKey: string) => Promise<{ success: boolean; data?: IntegrationBuilderOutput; sessionId?: string; error?: string }>;
   saveIntegrationPackage: (pkg: IntegrationBuilderOutput) => Promise<{ success: boolean; error?: string }>;
   clearError: () => void;
@@ -233,19 +232,6 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
       return { success: true };
     }
     const errorMsg = res.error.message || 'Failed to delete integration skill';
-    set({ error: errorMsg, isLoading: false });
-    return { success: false, error: errorMsg };
-  },
-
-  refreshRegistry: async () => {
-    set({ isLoading: true, error: null });
-    const res = await tryCall(() => api.integrations.refresh());
-    if (res.ok) {
-      await get().fetchSkills();
-      set({ isLoading: false });
-      return { success: true };
-    }
-    const errorMsg = res.error.message || 'Failed to refresh registry';
     set({ error: errorMsg, isLoading: false });
     return { success: false, error: errorMsg };
   },

@@ -51,32 +51,6 @@ export interface Translations {
   };
 
   // ============================================
-  // NAVIGATION
-  // ============================================
-
-  nav: {
-    sections: {
-      commandCenter: string;
-      config: string;
-    };
-    items: {
-      builder: string;
-      chat: string;
-      myArtifacts: string;
-      companySpace: string;
-      settings: string;
-      platform: string;
-      branding: string;
-      users: string;
-      integrations: string;
-      resources: string;
-      appManagement: string;
-      tunnel: string;
-      memory: string;
-    };
-  };
-
-  // ============================================
   // LOGIN & AUTH
   // ============================================
 
@@ -586,49 +560,6 @@ export interface Translations {
   };
 
   // ============================================
-  // SYNTHETIC PROGRESS (Rotating filler messages)
-  // ============================================
-
-  syntheticProgress: {
-    analyzingProject: string;
-    readingConfigs: string;
-    preparingComponents: string;
-    applyingBranding: string;
-    creatingLayout: string;
-    buildingNavigation: string;
-    stylingTailwind: string;
-    optimizingAssets: string;
-    generatingCode: string;
-    processingRequest: string;
-    workingOnIt: string;
-    almostThere: string;
-    settingUpInterface: string;
-    configuringProject: string;
-    installingDependencies: string;
-    compilingProject: string;
-    checkingEverything: string;
-    makingAdjustments: string;
-    creatingFiles: string;
-    workingOnDesign: string;
-  };
-
-  // ============================================
-  // TOOL ACTIVITY MESSAGES
-  // ============================================
-
-  toolActivity: {
-    settingUpInterface: string;
-    workingOnDesign: string;
-    configuringProject: string;
-    installingNeeded: string;
-    compilingProject: string;
-    checkingWorks: string;
-    reviewingWork: string;
-    makingAdjustments: string;
-    creatingFiles: string;
-  };
-
-  // ============================================
   // SIDE PANEL
   // ============================================
 
@@ -837,82 +768,6 @@ export interface Translations {
   };
 
   // ============================================
-  // TUNNEL
-  // ============================================
-
-  pages_tunnel: {
-    title: string;
-    subtitle: string;
-    loadingConfig: string;
-    connected: string;
-    disconnected: string;
-    notConfigured: string;
-    tunnelConfig: string;
-    tunnelId: string;
-    accountId: string;
-    apiToken: string;
-    baseDomain: string;
-    stopping: string;
-    stopTunnel: string;
-    starting: string;
-    startTunnel: string;
-    saving: string;
-    saveConfig: string;
-    externalDeployments: string;
-    route: string;
-    routes: string;
-    noDeployments: string;
-    noDeploymentsDesc: string;
-    copyUrl: string;
-    openInBrowser: string;
-    clickToConfirm: string;
-  };
-
-  // ============================================
-  // APP MANAGEMENT
-  // ============================================
-
-  pages_appManagement: {
-    loadingData: string;
-    totalApps: string;
-    running: string;
-    agents: string;
-    exempt: string;
-    unused30d: string;
-    section: string;
-    all: string;
-    apps: string;
-    name: string;
-    category: string;
-    creator: string;
-    lastRun: string;
-    duration: string;
-    memory: string;
-    actions: string;
-    stop: string;
-    archive: string;
-    clickToConfirm: string;
-    removeExemption: string;
-    noEntries: string;
-    cleanupActions: string;
-    unusedOver30d: string;
-    unusedOver30dDesc: (n: number) => string;
-    neverUsed: string;
-    neverUsedDesc: (n: number) => string;
-    exemptList: string;
-    noExemptApps: string;
-    agent: string;
-    app: string;
-    stopped: string;
-    failed: string;
-    never: string;
-    justNow: string;
-    minutesAgo: (n: number) => string;
-    hoursAgo: (n: number) => string;
-    daysAgo: (n: number) => string;
-  };
-
-  // ============================================
   // PLATFORM SETTINGS
   // ============================================
 
@@ -1077,45 +932,6 @@ export interface Translations {
       scrollPrev: string;
       scrollNext: string;
     };
-  };
-
-  // ============================================
-  // COMPANY SPACE
-  // ============================================
-
-  pages_agentConfig: {
-    title: string;
-    subtitle: string;
-  };
-
-  // ============================================
-  // CHAT PAGE
-  // ============================================
-
-  pages_chat: {
-    conversations: string;
-    searchConversations: string;
-    newConversation: string;
-    noConversationsSearch: string;
-    noConversationsYet: string;
-    loadingMessages: string;
-    howCanIHelp: string;
-    askAnythingSubtitle: string;
-    reviewCode: string;
-    reviewCodePrompt: string;
-    generateTests: string;
-    generateTestsPrompt: string;
-    explainConcept: string;
-    explainConceptPrompt: string;
-    askAnythingPlaceholder: string;
-    shiftEnterNewLine: string;
-    noResponseError: string;
-    requestError: string;
-    justNow: string;
-    minutesAgo: (n: number) => string;
-    hoursAgo: (n: number) => string;
-    yesterday: string;
-    daysAgo: (n: number) => string;
   };
 
   // ============================================
@@ -1390,29 +1206,6 @@ export interface Translations {
   };
 
   // ============================================
-  // MODE SELECTOR
-  // ============================================
-
-  modeSelector: {
-    build: {
-      label: string;
-      description: string;
-    };
-    chat: {
-      label: string;
-      description: string;
-    };
-    integrate: {
-      label: string;
-      description: string;
-    };
-    branding: {
-      label: string;
-      description: string;
-    };
-  };
-
-  // ============================================
   // BACKEND ERRORS
   // ============================================
 
@@ -1473,14 +1266,6 @@ export interface Translations {
 
     // Rotating filler messages
     fillers: string[];
-
-    // Subagent messages
-    subagentDelegating: (name: string) => string;
-    subagentProgress: (name: string, desc: string) => string;
-    subagentFinished: (name: string) => string;
-    subagentFinishedWith: (name: string, desc: string) => string;
-    subagentFailed: (name: string) => string;
-    subagentDefault: (name: string, event: string) => string;
 
     // Skill messages
     usingSkill: (name: string) => string;

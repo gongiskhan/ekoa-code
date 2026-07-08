@@ -45,28 +45,6 @@ export const en: Translations = {
     cancelBuild: 'Cancel build',
   },
 
-  nav: {
-    sections: {
-      commandCenter: 'COMMAND CENTER',
-      config: 'CONFIG',
-    },
-    items: {
-      builder: 'Builder',
-      chat: 'Chat',
-      myArtifacts: 'My Artifacts',
-      companySpace: 'Company Space',
-      settings: 'Settings',
-      platform: 'Platform',
-      branding: 'Branding',
-      users: 'Users',
-      integrations: 'Integrations',
-      resources: 'Resources',
-      appManagement: 'App Management',
-      tunnel: 'Cloudflare Tunnel',
-      memory: 'Memory',
-    },
-  },
-
   pages: {
     login: {
       title: 'Sign in',
@@ -546,41 +524,6 @@ export const en: Translations = {
       `Something didn't go quite as planned. Here's what happened: ${reason}`,
   },
 
-  syntheticProgress: {
-    analyzingProject: 'Analyzing project structure...',
-    readingConfigs: 'Reading configuration files...',
-    preparingComponents: 'Preparing component structure...',
-    applyingBranding: 'Applying brand colors...',
-    creatingLayout: 'Creating responsive layout...',
-    buildingNavigation: 'Building navigation component...',
-    stylingTailwind: 'Styling with Tailwind CSS...',
-    optimizingAssets: 'Optimizing assets...',
-    generatingCode: 'Generating code...',
-    processingRequest: 'Processing your request...',
-    workingOnIt: 'Working on it...',
-    almostThere: 'Almost there...',
-    settingUpInterface: 'Setting up the interface...',
-    configuringProject: 'Configuring the project...',
-    installingDependencies: 'Installing dependencies...',
-    compilingProject: 'Compiling the project...',
-    checkingEverything: 'Checking everything works...',
-    makingAdjustments: 'Making a few adjustments...',
-    creatingFiles: 'Creating project files...',
-    workingOnDesign: 'Working on the design...',
-  },
-
-  toolActivity: {
-    settingUpInterface: 'Setting up the interface...',
-    workingOnDesign: 'Working on the design...',
-    configuringProject: 'Configuring the project...',
-    installingNeeded: "Installing what's needed...",
-    compilingProject: 'Compiling the project...',
-    checkingWorks: 'Checking everything works...',
-    reviewingWork: 'Reviewing existing work...',
-    makingAdjustments: 'Making a few adjustments...',
-    creatingFiles: 'Creating project files...',
-  },
-
   sidePanel: {
     files: 'Files',
     output: 'Output',
@@ -742,74 +685,6 @@ export const en: Translations = {
     daysAgo: (n: number) => `${n}d ago`,
   },
 
-  pages_tunnel: {
-    title: 'Cloudflare Tunnel',
-    subtitle: 'Expose local services securely through Cloudflare\'s network',
-    loadingConfig: 'Loading tunnel configuration...',
-    connected: 'Connected',
-    disconnected: 'Disconnected',
-    notConfigured: 'Not Configured',
-    tunnelConfig: 'Tunnel Configuration',
-    tunnelId: 'Tunnel ID',
-    accountId: 'Account ID',
-    apiToken: 'API Token',
-    baseDomain: 'Base Domain',
-    stopping: 'Stopping...',
-    stopTunnel: 'Stop Tunnel',
-    starting: 'Starting...',
-    startTunnel: 'Start Tunnel',
-    saving: 'Saving...',
-    saveConfig: 'Save Configuration',
-    externalDeployments: 'External Deployments',
-    route: 'route',
-    routes: 'routes',
-    noDeployments: 'No deployments configured',
-    noDeploymentsDesc: 'Deployments route external hostnames to your local services through the Cloudflare tunnel. Start the tunnel to add routes.',
-    copyUrl: 'Copy URL',
-    openInBrowser: 'Open in browser',
-    clickToConfirm: 'Click again to confirm',
-  },
-
-  pages_appManagement: {
-    loadingData: 'Loading app management data...',
-    totalApps: 'Total Apps',
-    running: 'Running',
-    agents: 'Agents',
-    exempt: 'Exempt',
-    unused30d: 'Unused (30d)',
-    section: 'Section',
-    all: 'All',
-    apps: 'Apps',
-    name: 'Name',
-    category: 'Category',
-    creator: 'Creator',
-    lastRun: 'Last Run',
-    duration: 'Duration',
-    memory: 'Memory',
-    actions: 'Actions',
-    stop: 'Stop',
-    archive: 'Archive',
-    clickToConfirm: 'Click again to confirm',
-    removeExemption: 'Remove exemption',
-    noEntries: 'No entries match the current filters.',
-    cleanupActions: 'Cleanup Actions',
-    unusedOver30d: 'Unused >30 days',
-    unusedOver30dDesc: (n: number) => `${n} non-exempt app${n !== 1 ? 's' : ''} unused for over 30 days.`,
-    neverUsed: 'Never Used',
-    neverUsedDesc: (n: number) => `${n} non-exempt app${n !== 1 ? 's' : ''} have never been run.`,
-    exemptList: 'Exempt List',
-    noExemptApps: 'No apps are currently exempt from cleanup.',
-    agent: 'Agent',
-    app: 'App',
-    stopped: 'Stopped',
-    failed: 'Failed',
-    never: 'Never',
-    justNow: 'Just now',
-    minutesAgo: (n: number) => `${n}m ago`,
-    hoursAgo: (n: number) => `${n}h ago`,
-    daysAgo: (n: number) => `${n}d ago`,
-  },
-
   pages_platform: {
     title: 'Platform Settings',
     subtitle: 'Configure platform defaults and agent guardrails.',
@@ -854,7 +729,6 @@ export const en: Translations = {
     confirmReset: 'Confirm Reset',
     saved: 'Saved',
   },
-
 
   pages_artifacts: {
     title: 'My Artifacts',
@@ -969,37 +843,6 @@ export const en: Translations = {
       scrollPrev: 'Previous',
       scrollNext: 'Next',
     },
-  },
-
-  pages_agentConfig: {
-    title: 'Agent Configuration',
-    subtitle: 'Configure global and agent-specific settings',
-  },
-
-  pages_chat: {
-    conversations: 'CONVERSATIONS',
-    searchConversations: 'Search conversations...',
-    newConversation: 'New Conversation',
-    noConversationsSearch: 'No conversations match your search.',
-    noConversationsYet: 'No conversations yet. Start a new one.',
-    loadingMessages: 'Loading messages...',
-    howCanIHelp: 'How can I help you today?',
-    askAnythingSubtitle: 'Ask me anything about your projects, code, architecture, or technical challenges.',
-    reviewCode: 'Review code',
-    reviewCodePrompt: 'Review my latest code changes and suggest improvements',
-    generateTests: 'Generate tests',
-    generateTestsPrompt: 'Generate unit tests for the authentication module',
-    explainConcept: 'Explain concept',
-    explainConceptPrompt: 'Explain how the event-driven architecture works in this project',
-    askAnythingPlaceholder: 'Ask anything...',
-    shiftEnterNewLine: 'Shift+Enter for new line',
-    noResponseError: 'I apologize, but I could not generate a response.',
-    requestError: 'Sorry, I encountered an error processing your request. Please try again.',
-    justNow: 'Just now',
-    minutesAgo: (n: number) => `${n}m ago`,
-    hoursAgo: (n: number) => `${n}h ago`,
-    yesterday: 'Yesterday',
-    daysAgo: (n: number) => `${n}d ago`,
   },
 
   pages_memory: {
@@ -1297,29 +1140,6 @@ What would make your day easier?`,
   },
 
   // ============================================
-  // MODE SELECTOR
-  // ============================================
-
-  modeSelector: {
-    build: {
-      label: 'Build',
-      description: 'Create apps and artifacts',
-    },
-    chat: {
-      label: 'Chat',
-      description: 'Ask questions and get help',
-    },
-    integrate: {
-      label: 'Integrate',
-      description: 'Connect external services',
-    },
-    branding: {
-      label: 'Branding',
-      description: 'Define your brand identity',
-    },
-  },
-
-  // ============================================
   // BACKEND ERRORS
   // ============================================
 
@@ -1385,13 +1205,6 @@ What would make your day easier?`,
       'Generating code...',
       'Analyzing...',
     ],
-
-    subagentDelegating: (name: string) => `Delegating to ${name}...`,
-    subagentProgress: (name: string, desc: string) => `${name}: ${desc}`,
-    subagentFinished: (name: string) => `${name} finished.`,
-    subagentFinishedWith: (name: string, desc: string) => `${name} finished: ${desc}`,
-    subagentFailed: (name: string) => `${name} encountered an issue.`,
-    subagentDefault: (name: string, event: string) => `${name}: ${event}`,
 
     usingSkill: (name: string) => `Using ${name}`,
 

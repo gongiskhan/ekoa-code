@@ -80,39 +80,6 @@ export function isTextFile(filename: string): boolean {
 }
 
 /**
- * Get a display language label for a file
- */
-export function getFileLanguage(filename: string): string {
-  const ext = getExtension(filename);
-  const name = getBasename(filename).toLowerCase();
-
-  const languageMap: Record<string, string> = {
-    '.ts': 'TypeScript', '.tsx': 'TypeScript', '.js': 'JavaScript',
-    '.jsx': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
-    '.json': 'JSON', '.html': 'HTML', '.htm': 'HTML',
-    '.css': 'CSS', '.scss': 'SCSS', '.sass': 'SCSS', '.less': 'LESS',
-    '.md': 'Markdown', '.mdx': 'Markdown',
-    '.yaml': 'YAML', '.yml': 'YAML', '.xml': 'XML',
-    '.sql': 'SQL', '.py': 'Python', '.pyi': 'Python',
-    '.rb': 'Ruby', '.go': 'Go', '.rs': 'Rust',
-    '.java': 'Java', '.kt': 'Kotlin', '.kts': 'Kotlin',
-    '.c': 'C', '.cpp': 'C++', '.cc': 'C++', '.h': 'C',
-    '.hpp': 'C++', '.cs': 'C#', '.php': 'PHP', '.swift': 'Swift',
-    '.sh': 'Shell', '.bash': 'Shell', '.zsh': 'Shell',
-    '.graphql': 'GraphQL', '.gql': 'GraphQL',
-    '.vue': 'Vue', '.svelte': 'Svelte', '.astro': 'Astro',
-    '.prisma': 'Prisma', '.dockerfile': 'Dockerfile',
-    '.toml': 'TOML', '.env': 'Environment',
-  };
-
-  if (languageMap[ext]) return languageMap[ext];
-  if (name === 'dockerfile') return 'Dockerfile';
-  if (name === 'makefile') return 'Makefile';
-
-  return 'Plain Text';
-}
-
-/**
  * Get Monaco Editor language identifier for a file
  */
 export function getMonacoLanguage(filename: string): string {

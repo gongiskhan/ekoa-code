@@ -100,9 +100,9 @@ describe('Chat surfaces — no chatMode branches in render paths', () => {
 describe('Chat surfaces — locale strings carry no mode-picker phrasing', () => {
   it('ekoa/locales/pt.ts has no "select mode" phrasing aimed at the user', () => {
     const pt = readFileSync(join(REPO_ROOT, 'locales/pt.ts'), 'utf-8');
-    // The keys themselves may exist (modeTaglines, modeSubtitles, modeSelector)
-    // because they label the *system-chosen* mode, not a picker. The value
-    // strings must not invite the user to choose.
+    // The surviving mode labels (emptyState.modeTaglines / modeSubtitles) label
+    // the *system-chosen* mode, not a picker. The value strings must not invite
+    // the user to choose.
     const forbidden = [
       /escolha o modo/i,
       /selecione o modo/i,

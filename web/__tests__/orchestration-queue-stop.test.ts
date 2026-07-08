@@ -49,16 +49,6 @@ describe('message queue (queue-while-building)', () => {
     expect(useOrchestrationStore.getState().queuedMessages[SID] ?? []).toEqual([]);
   });
 
-  it('dequeues FIFO and returns undefined when empty', () => {
-    const s = useOrchestrationStore.getState();
-    s.enqueueMessage(SID, 'a');
-    s.enqueueMessage(SID, 'b');
-    expect(s.dequeueMessage(SID)).toBe('a');
-    expect(s.dequeueMessage(SID)).toBe('b');
-    expect(s.dequeueMessage(SID)).toBeUndefined();
-    expect(useOrchestrationStore.getState().queuedMessages[SID]).toEqual([]);
-  });
-
   it('removes a queued message by index', () => {
     const s = useOrchestrationStore.getState();
     s.enqueueMessage(SID, 'a');

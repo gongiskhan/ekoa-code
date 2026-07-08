@@ -64,33 +64,6 @@ function formatAgentName(name: string): string {
   return clean || name;
 }
 
-export function getFriendlySubagentMessage(
-  agent: string,
-  event: string,
-  description?: string,
-  _locale?: string,
-): string {
-  const t = getTranslations();
-  const fm = t.friendlyMessages;
-  const name = formatAgentName(agent);
-  switch (event) {
-    case 'started':
-    case 'agent_started':
-      return fm.subagentDelegating(name);
-    case 'progress':
-      return fm.subagentProgress(name, description || fm.fillers[0]);
-    case 'completed':
-    case 'agent_completed':
-      return description
-        ? fm.subagentFinishedWith(name, description)
-        : fm.subagentFinished(name);
-    case 'failed':
-      return fm.subagentFailed(name);
-    default:
-      return fm.subagentDefault(name, event);
-  }
-}
-
 export function getFriendlySkillMessage(
   skill: string,
   _locale?: string,

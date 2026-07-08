@@ -53,6 +53,14 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_API_URL: resolveApiUrl(),
     NEXT_PUBLIC_EKOA_VERTICAL: resolveVertical(),
   },
+  // The single carried redirect (FC-100): `/settings` is a natural URL users
+  // type. The other eight deleted stub routes had zero inbound links and get
+  // no redirect.
+  async redirects() {
+    return [
+      { source: "/settings", destination: "/settings/platform", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

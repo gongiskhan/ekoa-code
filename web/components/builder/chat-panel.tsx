@@ -697,10 +697,9 @@ function MessageBubble({
 
   const isError = message.metadata?.type === "error";
   const isStatus = message.metadata?.type === "status";
-  const isSubagent = message.metadata?.type === "subagent";
   const isSkill = message.metadata?.type === "skill";
   const isActivity = message.metadata?.type === "activity";
-  const isSubtle = isStatus || isSubagent || isSkill || isActivity;
+  const isSubtle = isStatus || isSkill || isActivity;
   const hasDetails = outputEntries && outputEntries.length > 0;
 
   return (
@@ -923,7 +922,6 @@ function MessageDetail({ entries }: { entries: OutputEntry[] }) {
       e.type === "error" ||
       e.type === "status" ||
       e.type === "terminal" ||
-      e.type === "subagent" ||
       e.type === "skill"
   );
 
@@ -1001,11 +999,6 @@ function DetailLine({ entry }: { entry: OutputEntry }) {
       {isTerminal && (
         <div className="text-neutral-300">
           <span className="text-neutral-500 select-none">$ </span>
-          {entry.content}
-        </div>
-      )}
-      {entry.type === "subagent" && (
-        <div className="text-purple-400 italic">
           {entry.content}
         </div>
       )}

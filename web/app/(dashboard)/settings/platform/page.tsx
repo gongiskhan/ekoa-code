@@ -312,14 +312,10 @@ function AdvancedSection({ showSaved }: { showSaved: boolean }) {
     updateSettings({
       general: { platformName: "", language: "en", timezone: "UTC" },
       chat: {
-        defaultMode: "build",
-        autoOpenSidePanel: false,
         showExampleCards: true,
-        enableContextDividers: true,
         guidedMode: true,
       },
       build: { showFileTreeByDefault: false },
-      integration: { autoTestAfterCreation: false, defaultConfigExpanded: false },
     });
   }
 

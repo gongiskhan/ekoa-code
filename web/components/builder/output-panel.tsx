@@ -18,7 +18,6 @@ import {
   Info,
   Zap,
   Clock,
-  GitBranch,
   BookOpen,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -121,8 +120,6 @@ function getEntryBorderColor(type: OutputEntry["type"]): string {
       return "border-l-blue-500";
     case "terminal":
       return "border-l-neutral-500";
-    case "subagent":
-      return "border-l-purple-500";
     case "skill":
       return "border-l-amber-500";
     default:
@@ -139,8 +136,6 @@ function getEntryBgColor(type: OutputEntry["type"]): string {
       return "bg-red-950/30";
     case "system":
       return "bg-blue-950/20";
-    case "subagent":
-      return "bg-purple-950/20";
     default:
       return "";
   }
@@ -351,26 +346,6 @@ function SystemEntry({ entry }: { entry: OutputEntry }) {
       <span className="text-blue-300 text-xs">
         {entry.content}
       </span>
-    </div>
-  );
-}
-
-/** Subagent entry with purple accent */
-function SubagentEntry({ entry }: { entry: OutputEntry }) {
-  const isFailed = entry.agentEvent === 'failed';
-  return (
-    <div className="flex items-start gap-2">
-      <GitBranch size={12} className={`flex-shrink-0 mt-0.5 ${isFailed ? 'text-red-400' : 'text-purple-400'}`} />
-      <div className="flex-1 min-w-0">
-        <span className={`text-xs ${isFailed ? 'text-red-300' : 'text-purple-300'}`}>
-          {entry.content}
-        </span>
-        {entry.summary && !isFailed && (
-          <div className="mt-0.5 text-[11px] text-neutral-400 truncate">
-            {entry.summary}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -604,8 +579,6 @@ export default function OutputPanel({ sessionId }: OutputPanelProps) {
               <ErrorEntry entry={entry} />
             ) : entry.type === "system" ? (
               <SystemEntry entry={entry} />
-            ) : entry.type === "subagent" ? (
-              <SubagentEntry entry={entry} />
             ) : entry.type === "skill" ? (
               <SkillEntry entry={entry} />
             ) : entry.type === "progress" ? (

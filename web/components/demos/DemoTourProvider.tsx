@@ -36,7 +36,6 @@ function DemoTourProviderInner() {
   const setTour = useDemosStore((s) => s.setTour);
   const setInjectedPrompt = useDemosStore((s) => s.setInjectedPrompt);
   const endTour = useDemosStore((s) => s.endTour);
-  const setCards = useDemosStore((s) => s.setCards);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const controllerRef = useRef<TourController | null>(null);
@@ -46,22 +45,6 @@ function DemoTourProviderInner() {
   // No `demos` namespace exists in the typed client (FC-063): these are plain
   // fetches against /api/demos, built off the single base-URL resolver.
   const apiBase = resolveBaseUrl();
-
-  // Populate the gallery cards once (used by the future landing panel).
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${apiBase}/api/demos`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (!cancelled && json && Array.isArray(json.demos)) setCards(json.demos);
-      })
-      .catch(() => {
-        /* non-fatal: the panel simply shows nothing */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [apiBase, setCards]);
 
   const close = useCallback(() => {
     controllerRef.current?.cancel();

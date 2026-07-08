@@ -45,28 +45,6 @@ export const pt: Translations = {
     cancelBuild: 'Cancelar build',
   },
 
-  nav: {
-    sections: {
-      commandCenter: 'CENTRAL DE COMANDO',
-      config: 'CONFIGURAÇÃO',
-    },
-    items: {
-      builder: 'Construir',
-      chat: 'Conversa',
-      myArtifacts: 'Artefactos',
-      companySpace: 'Espaço da Empresa',
-      settings: 'Configurações',
-      platform: 'Plataforma',
-      branding: 'Marca',
-      users: 'Utilizadores',
-      integrations: 'Integrações',
-      resources: 'Recursos',
-      appManagement: 'Gestão de Apps',
-      tunnel: 'Cloudflare Tunnel',
-      memory: 'Memória',
-    },
-  },
-
   pages: {
     login: {
       title: 'Iniciar sessão',
@@ -547,41 +525,6 @@ export const pt: Translations = {
       `Algo não correu como esperado. Eis o que aconteceu: ${reason}`,
   },
 
-  syntheticProgress: {
-    analyzingProject: 'Analisando estrutura do projeto...',
-    readingConfigs: 'Lendo ficheiros de configuração...',
-    preparingComponents: 'Preparando estrutura de componentes...',
-    applyingBranding: 'Aplicando cores da marca...',
-    creatingLayout: 'Criando layout responsivo...',
-    buildingNavigation: 'Construindo componente de navegação...',
-    stylingTailwind: 'Estilizando com Tailwind CSS...',
-    optimizingAssets: 'Otimizando recursos...',
-    generatingCode: 'Gerando código...',
-    processingRequest: 'Processando o seu pedido...',
-    workingOnIt: 'Trabalhando nisso...',
-    almostThere: 'Quase pronto...',
-    settingUpInterface: 'Configurando a interface...',
-    configuringProject: 'Configurando o projeto...',
-    installingDependencies: 'Instalando dependências...',
-    compilingProject: 'Compilando o projeto...',
-    checkingEverything: 'Verificando que tudo funciona...',
-    makingAdjustments: 'Fazendo uns ajustes...',
-    creatingFiles: 'Criando ficheiros do projeto...',
-    workingOnDesign: 'Trabalhando no design...',
-  },
-
-  toolActivity: {
-    settingUpInterface: 'Configurando a interface...',
-    workingOnDesign: 'Trabalhando no design...',
-    configuringProject: 'Configurando o projeto...',
-    installingNeeded: 'Instalando o necessário...',
-    compilingProject: 'Compilando o projeto...',
-    checkingWorks: 'Verificando que tudo funciona...',
-    reviewingWork: 'Revisando o trabalho existente...',
-    makingAdjustments: 'Fazendo uns ajustes...',
-    creatingFiles: 'Criando ficheiros do projeto...',
-  },
-
   sidePanel: {
     files: 'Ficheiros',
     output: 'Output',
@@ -743,74 +686,6 @@ export const pt: Translations = {
     daysAgo: (n: number) => `Há ${n}d`,
   },
 
-  pages_tunnel: {
-    title: 'Cloudflare Tunnel',
-    subtitle: 'Expor serviços locais de forma segura através da rede Cloudflare',
-    loadingConfig: 'Carregando configuração do tunnel...',
-    connected: 'Ligado',
-    disconnected: 'Desligado',
-    notConfigured: 'Não Configurado',
-    tunnelConfig: 'Configuração do Tunnel',
-    tunnelId: 'ID do Tunnel',
-    accountId: 'ID da Conta',
-    apiToken: 'Token da API',
-    baseDomain: 'Domínio Base',
-    stopping: 'Parando...',
-    stopTunnel: 'Parar Tunnel',
-    starting: 'Iniciando...',
-    startTunnel: 'Iniciar Tunnel',
-    saving: 'A guardar...',
-    saveConfig: 'Guardar Configuração',
-    externalDeployments: 'Implementações Externas',
-    route: 'rota',
-    routes: 'rotas',
-    noDeployments: 'Sem implementações configuradas',
-    noDeploymentsDesc: 'As implementações encaminham hostnames externos para os seus serviços locais através do tunnel Cloudflare. Inicie o tunnel para adicionar rotas.',
-    copyUrl: 'Copiar URL',
-    openInBrowser: 'Abrir no browser',
-    clickToConfirm: 'Clique novamente para confirmar',
-  },
-
-  pages_appManagement: {
-    loadingData: 'Carregando dados de gestão de apps...',
-    totalApps: 'Total de Apps',
-    running: 'Em Execução',
-    agents: 'Agentes',
-    exempt: 'Isentas',
-    unused30d: 'Sem uso (30d)',
-    section: 'Secção',
-    all: 'Todas',
-    apps: 'Apps',
-    name: 'Nome',
-    category: 'Categoria',
-    creator: 'Criador',
-    lastRun: 'Última Exec.',
-    duration: 'Duração',
-    memory: 'Memória',
-    actions: 'Ações',
-    stop: 'Parar',
-    archive: 'Arquivar',
-    clickToConfirm: 'Clique novamente para confirmar',
-    removeExemption: 'Remover isenção',
-    noEntries: 'Nenhuma entrada corresponde aos filtros atuais.',
-    cleanupActions: 'Ações de Limpeza',
-    unusedOver30d: 'Sem uso há mais de 30 dias',
-    unusedOver30dDesc: (n: number) => `${n} app${n !== 1 ? 's' : ''} não isenta${n !== 1 ? 's' : ''} sem uso há mais de 30 dias.`,
-    neverUsed: 'Nunca Utilizadas',
-    neverUsedDesc: (n: number) => `${n} app${n !== 1 ? 's' : ''} não isenta${n !== 1 ? 's' : ''} nunca foram executada${n !== 1 ? 's' : ''}.`,
-    exemptList: 'Lista de Isenções',
-    noExemptApps: 'Nenhuma app está atualmente isenta de limpeza.',
-    agent: 'Agente',
-    app: 'App',
-    stopped: 'Parada',
-    failed: 'Falhou',
-    never: 'Nunca',
-    justNow: 'Agora mesmo',
-    minutesAgo: (n: number) => `Há ${n}m`,
-    hoursAgo: (n: number) => `Há ${n}h`,
-    daysAgo: (n: number) => `Há ${n}d`,
-  },
-
   pages_platform: {
     title: 'Configurações da Plataforma',
     subtitle: 'Configurar padroes da plataforma e guardrails dos agentes.',
@@ -855,7 +730,6 @@ export const pt: Translations = {
     confirmReset: 'Confirmar Reposição',
     saved: 'Guardado',
   },
-
 
   pages_artifacts: {
     title: 'Os Meus Artefactos',
@@ -970,37 +844,6 @@ export const pt: Translations = {
       scrollPrev: 'Anterior',
       scrollNext: 'Seguinte',
     },
-  },
-
-  pages_agentConfig: {
-    title: 'Configuração do Agente',
-    subtitle: 'Configure as configurações globais e específicas do agente',
-  },
-
-  pages_chat: {
-    conversations: 'CONVERSAS',
-    searchConversations: 'Pesquisar conversas...',
-    newConversation: 'Nova Conversa',
-    noConversationsSearch: 'Nenhuma conversa corresponde à pesquisa.',
-    noConversationsYet: 'Sem conversas ainda. Inicie uma nova.',
-    loadingMessages: 'Carregando mensagens...',
-    howCanIHelp: 'Como posso ajudar hoje?',
-    askAnythingSubtitle: 'Pergunte-me sobre os seus projetos, código, arquitetura ou desafios técnicos.',
-    reviewCode: 'Rever código',
-    reviewCodePrompt: 'Revê as minhas últimas alterações de código e sugere melhorias',
-    generateTests: 'Gerar testes',
-    generateTestsPrompt: 'Gera testes unitários para o módulo de autenticação',
-    explainConcept: 'Explicar conceito',
-    explainConceptPrompt: 'Explica como funciona a arquitetura orientada a eventos neste projeto',
-    askAnythingPlaceholder: 'O que quer fazer?',
-    shiftEnterNewLine: 'Shift+Enter para nova linha',
-    noResponseError: 'Não foi possível gerar uma resposta.',
-    requestError: 'Ocorreu um erro ao processar o seu pedido. Por favor, tente novamente.',
-    justNow: 'Agora mesmo',
-    minutesAgo: (n: number) => `Há ${n}m`,
-    hoursAgo: (n: number) => `Há ${n}h`,
-    yesterday: 'Ontem',
-    daysAgo: (n: number) => `Há ${n}d`,
   },
 
   pages_memory: {
@@ -1298,29 +1141,6 @@ O que tornaria o seu dia mais fácil?`,
   },
 
   // ============================================
-  // MODE SELECTOR
-  // ============================================
-
-  modeSelector: {
-    build: {
-      label: 'Construir',
-      description: 'Criar apps e artefactos',
-    },
-    chat: {
-      label: 'Chat',
-      description: 'Fazer perguntas e obter ajuda',
-    },
-    integrate: {
-      label: 'Integrar',
-      description: 'Conectar servicos externos',
-    },
-    branding: {
-      label: 'Marca',
-      description: 'Definir a identidade da marca',
-    },
-  },
-
-  // ============================================
   // BACKEND ERRORS
   // ============================================
 
@@ -1386,13 +1206,6 @@ O que tornaria o seu dia mais fácil?`,
       'A gerar codigo...',
       'A analisar...',
     ],
-
-    subagentDelegating: (name: string) => `A delegar para ${name}...`,
-    subagentProgress: (name: string, desc: string) => `${name}: ${desc}`,
-    subagentFinished: (name: string) => `${name} terminou.`,
-    subagentFinishedWith: (name: string, desc: string) => `${name} terminou: ${desc}`,
-    subagentFailed: (name: string) => `${name} encontrou um problema.`,
-    subagentDefault: (name: string, event: string) => `${name}: ${event}`,
 
     usingSkill: (name: string) => `A usar ${name}`,
 

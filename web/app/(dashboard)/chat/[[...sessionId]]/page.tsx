@@ -174,8 +174,6 @@ export default function UnifiedChatPage() {
   // -- Orchestration store --
   const activeSessionId = useOrchestrationStore((s) => s.activeSessionId);
   const sessions = useOrchestrationStore((s) => s.sessions);
-  const showWizard = useOrchestrationStore((s) => s.showWizard);
-  const executionOptions = useOrchestrationStore((s) => s.executionOptions);
   const pendingAttachments = useOrchestrationStore((s) => s.pendingAttachments);
   const messages = useOrchestrationStore((s) =>
     activeSessionId ? s.messages[activeSessionId] : undefined
@@ -383,7 +381,6 @@ export default function UnifiedChatPage() {
           });
         }
         store.setSidePanelState("build");
-        store.resetWizard();
         await store.loadSessionMessages(targetSessionId);
         router.replace(`/chat/${targetSessionId}`);
       } catch {
@@ -582,7 +579,7 @@ export default function UnifiedChatPage() {
       sessionPreviews[activeSessionId]?.appUrl)
   );
   const showEmptyState =
-    !hasMessages && messagesReady && !showWizard && !isExecuting && !hasArtifactContext;
+    !hasMessages && messagesReady && !isExecuting && !hasArtifactContext;
 
   // ========================================
   // ATTACH FILE / FOLDER HANDLERS
@@ -651,8 +648,7 @@ export default function UnifiedChatPage() {
       // and resolved integrations server-side; the build resolver picks the
       // base (or extends from a chosen template) at scaffold time. The
       // build_intent SSE event carries the chat-agent's template choice via
-      // `overrides`; fall back to executionOptions when called from a
-      // template-card click that pre-populated the store.
+      // `overrides`.
       //
       // We set sidePanelState='build' explicitly here: the orchestrator
       // phase_changed signal only fires for paths that call setOrchestratorState
@@ -667,13 +663,9 @@ export default function UnifiedChatPage() {
       // Drop URL attachments here — they were already prepended to the message
       // text by handleSendMessage. Only file/folder atts go through execute().
       const attachments = pendingAttachments.filter((a) => a.type !== "url");
-      const templateId = overrides?.templateId || executionOptions.selectedTemplateId || undefined;
-      const integrationKeys = executionOptions.selectedIntegrationKeys.length > 0
-        ? executionOptions.selectedIntegrationKeys
-        : undefined;
+      const templateId = overrides?.templateId || undefined;
       execute(message, {
         templateId,
-        integrationKeys,
         attachments: attachments.length > 0 ? attachments : undefined,
         language,
         // When the chat-agent delegated to a build (build_intent / delegate),
@@ -688,8 +680,6 @@ export default function UnifiedChatPage() {
       createSession,
       execute,
       pendingAttachments,
-      executionOptions.selectedTemplateId,
-      executionOptions.selectedIntegrationKeys,
       setSidePanelState,
       setSidePanelTab,
       clearAttachments,
