@@ -1,0 +1,4 @@
+[
+  { "_id": "al-1", "userId": "u-alice", "username": "alice", "orgId": "org-u-alice", "category": "auth", "type": "login", "timestamp": "2025-06-01T09:00:00.000Z" },
+  { "_id": "al-2", "userId": "u-bob", "username": "bob", "orgId": "org-u-bob", "category": "build", "type": "artifact.created", "timestamp": "2025-06-01T11:00:00.000Z", "metadata": { "artifactId": "art-2" } }
+]

@@ -1,0 +1,3 @@
+[
+  { "_id": "job-1", "userId": "u-alice", "kind": "build", "status": "completed", "artifactId": "art-1", "createdAt": "2025-06-01T10:30:00.000Z" }
+]

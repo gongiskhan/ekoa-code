@@ -1,0 +1,6 @@
+[
+  { "_id": "te-1", "billeeUserId": "u-alice", "attributionKind": "user_work", "agentType": "chat", "model": "claude-haiku-4-5-20251001", "tier": "FAST", "tierWeight": 0.02, "raw": { "input": 1000, "output": 0, "cacheCreate": 0, "cacheRead": 0 }, "metered": 20, "timestamp": 1700000000000 },
+  { "_id": "te-2", "billeeUserId": "u-alice", "attributionKind": "user_work", "agentType": "build", "model": "claude-opus-4-8[1m]", "tier": "EXPERT", "tierWeight": 0.4, "raw": { "input": 200000, "output": 30000, "cacheCreate": 0, "cacheRead": 800000 }, "metered": 172000, "timestamp": 1700000100000 },
+  { "_id": "te-3", "billeeUserId": "u-bob", "attributionKind": "classifier", "agentType": "chat-classifier", "model": "claude-haiku-4-5-20251001", "tier": "FAST", "tierWeight": 0.02, "raw": { "input": 500, "output": 20, "cacheCreate": 0, "cacheRead": 0 }, "metered": 10, "timestamp": 1700000200000 },
+  { "_id": "te-4", "billeeUserId": "u-founder", "attributionKind": "user_work", "agentType": "automation", "model": "claude-sonnet-4-6", "tier": "WORKHORSE", "tierWeight": 0.1, "raw": { "input": 4000, "output": 1000, "cacheCreate": 2000, "cacheRead": 10000 }, "metered": 950, "timestamp": 1700000300000 }
+]

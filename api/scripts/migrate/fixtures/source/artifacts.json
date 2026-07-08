@@ -1,0 +1,5 @@
+[
+  { "_id": "art-1", "slug": "contract", "title": "Contract A", "ownerId": "u-alice", "screenshotPath": "blobs/source/art-1.png" },
+  { "_id": "art-2", "slug": "contract", "title": "Contract B", "ownerId": "u-bob" },
+  { "_id": "art-3", "slug": "invoice", "title": "Invoice", "ownerId": "u-founder", "screenshotPath": "blobs/source/art-3.png" }
+]

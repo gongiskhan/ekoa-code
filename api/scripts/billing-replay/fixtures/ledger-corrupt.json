@@ -1,0 +1,11 @@
+{
+  "periodStart": 1700000000000,
+  "events": [
+    { "billeeUserId": "u-alice", "tier": "FAST", "raw": { "input": 1000, "output": 0, "cacheCreate": 0, "cacheRead": 0 }, "timestamp": 1700000001000, "metered": 20 },
+    { "billeeUserId": "u-alice", "tier": "EXPERT", "raw": { "input": 200000, "output": 40000, "cacheCreate": 0, "cacheRead": 800000 }, "timestamp": 1700000002000, "metered": 172000 },
+    { "billeeUserId": "u-alice", "tier": "WORKHORSE", "raw": { "input": 4000, "output": 1000, "cacheCreate": 2000, "cacheRead": 10000 }, "timestamp": 1700000003000, "metered": 950 },
+    { "billeeUserId": "u-bob", "tier": "FAST", "raw": { "input": 500, "output": 20, "cacheCreate": 0, "cacheRead": 0 }, "timestamp": 1700000001500, "metered": 10 },
+    { "billeeUserId": "u-bob", "tier": "FAST", "raw": { "input": 100000, "output": 0, "cacheCreate": 0, "cacheRead": 50000 }, "timestamp": 1700000002500, "metered": 2250 },
+    { "billeeUserId": "u-carol", "tier": "WORKHORSE", "raw": { "input": 10000, "output": 5000, "cacheCreate": 1000, "cacheRead": 20000 }, "timestamp": 1700000003500, "metered": 2100 }
+  ]
+}

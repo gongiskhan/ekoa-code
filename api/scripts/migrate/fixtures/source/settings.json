@@ -1,0 +1,4 @@
+[
+  { "_id": "default", "billing": { "globalOverageEnabled": true }, "theme": "system" },
+  { "_id": "branding-defaults", "designSystem": "default" }
+]

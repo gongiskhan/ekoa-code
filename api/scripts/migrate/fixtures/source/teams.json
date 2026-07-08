@@ -1,0 +1,3 @@
+[
+  { "_id": "team-1", "name": "Legacy Team", "memberIds": ["u-alice", "u-bob"] }
+]

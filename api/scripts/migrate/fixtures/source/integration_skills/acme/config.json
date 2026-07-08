@@ -1,0 +1,7 @@
+{
+  "integrationKey": "acme",
+  "displayName": "Acme",
+  "authType": "apiKey",
+  "configSchema": [],
+  "actions": [ { "actionName": "sync", "description": "Sync records", "mutates": false } ]
+}

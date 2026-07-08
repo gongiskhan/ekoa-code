@@ -1,0 +1,560 @@
+{
+  "note": "Adversarial variant: chat-1 second call mis-attributed as platform, to prove the zero-platform structural invariant bites.",
+  "operations": [
+    {
+      "id": "chat-1",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Simple question about the product.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "platform",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-2",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Knowledge-grounded legal question about NDA clauses.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-3",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Simple question about the product.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-4",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Knowledge-grounded legal question about NDA clauses.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-5",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Simple question about the product.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-6",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Knowledge-grounded legal question about NDA clauses.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-7",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Simple question about the product.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-8",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Knowledge-grounded legal question about NDA clauses.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-9",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Simple question about the product.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat-10",
+      "class": "chat",
+      "billeeUserId": "u-workload",
+      "prompt": "Knowledge-grounded legal question about NDA clauses.",
+      "calls": [
+        {
+          "attributionKind": "classifier",
+          "agentType": "chat-classifier",
+          "tier": "FAST",
+          "raw": {
+            "input": 400,
+            "output": 15,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        },
+        {
+          "attributionKind": "user_work",
+          "agentType": "chat",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 2000,
+            "output": 800,
+            "cacheCreate": 1000,
+            "cacheRead": 8000
+          }
+        }
+      ]
+    },
+    {
+      "id": "build-1",
+      "class": "build",
+      "billeeUserId": "u-workload",
+      "prompt": "Build one small artifact from a fixed prompt.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "build",
+          "tier": "EXPERT",
+          "raw": {
+            "input": 150000,
+            "output": 20000,
+            "cacheCreate": 5000,
+            "cacheRead": 400000
+          }
+        }
+      ]
+    },
+    {
+      "id": "build-2",
+      "class": "build",
+      "billeeUserId": "u-workload",
+      "prompt": "Follow-up edit to the prior artifact.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "build",
+          "tier": "EXPERT",
+          "raw": {
+            "input": 150000,
+            "output": 20000,
+            "cacheCreate": 5000,
+            "cacheRead": 400000
+          }
+        }
+      ]
+    },
+    {
+      "id": "build-3",
+      "class": "build",
+      "billeeUserId": "u-workload",
+      "prompt": "Build one small artifact from a fixed prompt.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "build",
+          "tier": "EXPERT",
+          "raw": {
+            "input": 150000,
+            "output": 20000,
+            "cacheCreate": 5000,
+            "cacheRead": 400000
+          }
+        }
+      ]
+    },
+    {
+      "id": "build-4",
+      "class": "build",
+      "billeeUserId": "u-workload",
+      "prompt": "Build one small artifact from a fixed prompt.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "build",
+          "tier": "EXPERT",
+          "raw": {
+            "input": 150000,
+            "output": 20000,
+            "cacheCreate": 5000,
+            "cacheRead": 400000
+          }
+        }
+      ]
+    },
+    {
+      "id": "auto-cached-1",
+      "class": "automation",
+      "billeeUserId": "u-workload",
+      "cached": true,
+      "prompt": "Cached automation replay (no model call).",
+      "calls": []
+    },
+    {
+      "id": "auto-1",
+      "class": "automation",
+      "billeeUserId": "u-workload",
+      "prompt": "Vision-resolving automation run.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "automation",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 3000,
+            "output": 500,
+            "cacheCreate": 0,
+            "cacheRead": 12000
+          }
+        }
+      ]
+    },
+    {
+      "id": "auto-2",
+      "class": "automation",
+      "billeeUserId": "u-workload",
+      "prompt": "Vision-resolving automation run.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "automation",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 3000,
+            "output": 500,
+            "cacheCreate": 0,
+            "cacheRead": 12000
+          }
+        }
+      ]
+    },
+    {
+      "id": "auto-3",
+      "class": "automation",
+      "billeeUserId": "u-workload",
+      "prompt": "Vision-resolving automation run.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "automation",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 3000,
+            "output": 500,
+            "cacheCreate": 0,
+            "cacheRead": 12000
+          }
+        }
+      ]
+    },
+    {
+      "id": "intbuilder-1",
+      "class": "integration-builder",
+      "billeeUserId": "u-workload",
+      "prompt": "Integration-builder session.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "integration-builder",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 5000,
+            "output": 1500,
+            "cacheCreate": 2000,
+            "cacheRead": 15000
+          }
+        }
+      ]
+    },
+    {
+      "id": "intbuilder-2",
+      "class": "integration-builder",
+      "billeeUserId": "u-workload",
+      "prompt": "Integration-builder session.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "integration-builder",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 5000,
+            "output": 1500,
+            "cacheCreate": 2000,
+            "cacheRead": 15000
+          }
+        }
+      ]
+    },
+    {
+      "id": "gw-1",
+      "class": "gateway",
+      "billeeUserId": "u-workload",
+      "prompt": "Gateway call via ekoa-local.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "gateway",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 1200,
+            "output": 300,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "gw-2",
+      "class": "gateway",
+      "billeeUserId": "u-workload",
+      "prompt": "Gateway call via ekoa-local.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "gateway",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 1200,
+            "output": 300,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "gw-3",
+      "class": "gateway",
+      "billeeUserId": "u-workload",
+      "prompt": "Gateway call via ekoa-local.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "gateway",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 1200,
+            "output": 300,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "gw-4",
+      "class": "gateway",
+      "billeeUserId": "u-workload",
+      "prompt": "Gateway call via ekoa-local.",
+      "calls": [
+        {
+          "attributionKind": "user_work",
+          "agentType": "gateway",
+          "tier": "WORKHORSE",
+          "raw": {
+            "input": 1200,
+            "output": 300,
+            "cacheCreate": 0,
+            "cacheRead": 0
+          }
+        }
+      ]
+    }
+  ]
+}

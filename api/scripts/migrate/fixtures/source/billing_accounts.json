@@ -1,0 +1,5 @@
+[
+  { "_id": "u-founder", "monthlyBaseTokensUsed": 950, "creditBalanceUsd": 0, "overageEnabled": false, "currentPeriodStart": 1700000000000, "tokenLimit": null },
+  { "_id": "u-alice", "monthlyBaseTokensUsed": 172020, "creditBalanceUsd": 5, "overageEnabled": true, "currentPeriodStart": 1700000000000, "tokenLimit": null },
+  { "_id": "u-bob", "monthlyBaseTokensUsed": 10, "creditBalanceUsd": 0, "overageEnabled": false, "currentPeriodStart": 1700000000000, "tokenLimit": 5000000 }
+]

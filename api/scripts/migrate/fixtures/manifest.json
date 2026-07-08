@@ -1,0 +1,171 @@
+{
+  "note": "Committed oracle for the ch10 import tool. Counts are hand-authored from the synthetic source fixture; checksums are the canonical-projection hashes the dry-run must reproduce (regression lock). The --execute round-trip re-derives the target-side checksum and asserts it equals the source-side value (the real parity check).",
+  "nonImports": [
+    "teams.json",
+    "company.json"
+  ],
+  "families": [
+    {
+      "family": "orgs",
+      "targetCollection": "orgs",
+      "kind": "collection",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "2f05e8fae9c61f29ccc3ed02cf70b87c400a39ad3dc1e29a5faa51422b13d339",
+      "sampled": false
+    },
+    {
+      "family": "users",
+      "targetCollection": "users",
+      "kind": "collection",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "c59074a1b7c917e534b35be2b27099f4ef98d8da928b1f96cb0b69901fa0e96c",
+      "sampled": false
+    },
+    {
+      "family": "settings",
+      "targetCollection": "settings",
+      "kind": "collection",
+      "sourceCount": 2,
+      "plannedCount": 2,
+      "checksum": "f46b51cc0a7557cc2eecee5a6c2987045519bd413f765d720d9ad22b7b351de1",
+      "sampled": false
+    },
+    {
+      "family": "artifacts",
+      "targetCollection": "artifacts",
+      "kind": "collection",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "3e94c1f29b3f42a699230d675f9f37054a6e65e241539aea86aebbaaef767367",
+      "sampled": false
+    },
+    {
+      "family": "slugs",
+      "targetCollection": "slugs",
+      "kind": "collection",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "0cc52b18b136cd443fe5a1ad9558eac16fee579c900af9531c1f499a4711cc5e",
+      "sampled": false
+    },
+    {
+      "family": "integration_configs",
+      "targetCollection": "integration_configs",
+      "kind": "collection",
+      "sourceCount": 2,
+      "plannedCount": 2,
+      "checksum": "ecc4a1712f0e11d260e203d89f3ab1d118e1c109d7f8668744713cf7532539c6",
+      "sampled": false
+    },
+    {
+      "family": "app_sessions",
+      "targetCollection": "app_sessions",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "66ad7b8c5e834cde3240770ca9f41c49b43f898dca88dde5697d7a322f8f5af7",
+      "sampled": false
+    },
+    {
+      "family": "adobe_agreements",
+      "targetCollection": "adobe_agreements",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "f15435862f9aa3d5fc96ec574618761c3324aac95ab9d50e3d2ef599b63fbb36",
+      "sampled": false
+    },
+    {
+      "family": "integration_definitions (typed)",
+      "targetCollection": "integration_configs",
+      "kind": "collection",
+      "sourceCount": 2,
+      "plannedCount": 2,
+      "checksum": "03194a580f3ad132ecd15927c41fbed02693cc7155d332d0f965838257afc58e",
+      "sampled": false
+    },
+    {
+      "family": "integration_definitions (prose)",
+      "targetCollection": null,
+      "kind": "prose",
+      "sourceCount": 2,
+      "plannedCount": 2,
+      "checksum": "3288b066d429288e0add5a2c9e0842015f634e2a71407c536f59138a90cd8925",
+      "sampled": false
+    },
+    {
+      "family": "token_events",
+      "targetCollection": "token_events",
+      "kind": "collection",
+      "sourceCount": 4,
+      "plannedCount": 4,
+      "checksum": "5f73fa0033a14f85cd10c06f808a10cfef49207407f987d6f9e9ab7feec98527",
+      "sampled": false
+    },
+    {
+      "family": "billing_accounts",
+      "targetCollection": "billing_accounts",
+      "kind": "collection",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "d5ad14d170af479a9d5dc634bcde41bdaa700824d5772757190b4b1b3d410ed8",
+      "sampled": false
+    },
+    {
+      "family": "activity_logs",
+      "targetCollection": "activity_logs",
+      "kind": "collection",
+      "sourceCount": 2,
+      "plannedCount": 2,
+      "checksum": "cb05eb33d70e22d8628d96ade298012290f69b287492d23316083f8eebc5d47b",
+      "sampled": false
+    },
+    {
+      "family": "jobs",
+      "targetCollection": "jobs",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "f62f7457271471a1929b6c8a6e008e182c456a7fb1cdd7fbb565b8068c581215",
+      "sampled": false
+    },
+    {
+      "family": "knowledge_sources",
+      "targetCollection": "knowledge_sources",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "fdaf450427cb6d8bc6b7f8d31ec335112a38cda4178b1b9c7dd42979d22b9000",
+      "sampled": false
+    },
+    {
+      "family": "knowledge_uploads",
+      "targetCollection": "knowledge_uploads",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "e37f76d49b5bcd122ed13c389a5bcc4c6a8dcb2b9a71f4f75d541d29e3b416ef",
+      "sampled": false
+    },
+    {
+      "family": "credentials",
+      "targetCollection": "credentials",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "4ce1be6bf862c0e31174ca74bd6bfb40c6f56af0411bd3b991b3c3da16721039",
+      "sampled": false
+    },
+    {
+      "family": "blobs",
+      "targetCollection": null,
+      "kind": "blobs",
+      "sourceCount": 3,
+      "plannedCount": 3,
+      "checksum": "d46c0b11c9ab5fe4be4f60a8d5e2c6137e43dad5270ce24107cdf15a14359ce8",
+      "sampled": false
+    }
+  ]
+}

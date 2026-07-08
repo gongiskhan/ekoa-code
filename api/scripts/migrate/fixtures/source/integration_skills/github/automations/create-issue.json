@@ -1,0 +1,1 @@
+{ "id": "auto-create-issue", "name": "Create GitHub issue", "steps": [ { "id": "call", "action": "createIssue" } ] }

@@ -1,0 +1,12 @@
+{
+  "integrationKey": "github",
+  "displayName": "GitHub",
+  "authType": "token",
+  "configSchema": [
+    { "key": "token", "label": "Personal access token", "type": "password", "required": true, "secret": true }
+  ],
+  "actions": [
+    { "actionName": "createIssue", "description": "Create an issue", "mutates": true },
+    { "actionName": "listIssues", "description": "List issues", "mutates": false }
+  ]
+}

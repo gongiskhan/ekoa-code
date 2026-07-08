@@ -1,0 +1,16 @@
+[
+  {
+    "_id": "cfg-1",
+    "orgId": "org-u-alice",
+    "integrationKey": "github",
+    "enabled": true,
+    "credentialCiphertext": "TtfKmYTF/eZEJ6/W.O6hjpX7d3BbKvFk8/U0ctA==.WD4st033Iag35kiJbD/Evxrck0bc98e6YX9SDntj1kPmRGfbMwEgfawV1/KxJoDkVFM1iWSQrWHeByhtaEsaLdjCx3w="
+  },
+  {
+    "_id": "cfg-2",
+    "orgId": "org-u-bob",
+    "integrationKey": "acme",
+    "enabled": false,
+    "credentialCiphertext": "E7Chm2QU3mNo5Vm2.15R7caUb6/WsVQfJK1GdbQ==.trnGp06muLlukqMpXgq+KvrtRCz0cRLERLnlKWq0exPyJ0XB7mHmqae5U3RxMg=="
+  }
+]

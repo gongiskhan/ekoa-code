@@ -1,0 +1,28 @@
+[
+  {
+    "_id": "u-founder",
+    "username": "founder",
+    "passwordHash": "$2a$12$fixtureHashFounderXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "role": "super-admin",
+    "active": true,
+    "isFounder": true,
+    "createdAt": "2025-01-01T00:00:00.000Z"
+  },
+  {
+    "_id": "u-alice",
+    "username": "alice",
+    "passwordHash": "$2a$12$fixtureHashAliceXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "role": "org-admin",
+    "active": true,
+    "createdAt": "2025-02-01T00:00:00.000Z",
+    "preferences": { "locale": "pt-PT" }
+  },
+  {
+    "_id": "u-bob",
+    "username": "bob",
+    "passwordHash": "$2a$12$fixtureHashBobXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "role": "builder",
+    "active": false,
+    "createdAt": "2025-03-01T00:00:00.000Z"
+  }
+]
