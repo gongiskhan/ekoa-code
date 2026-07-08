@@ -1,13 +1,27 @@
 "use client";
 
+import { useEffect } from "react";
 import { Settings, Sparkles, Star } from "lucide-react";
 import { useTranslation } from "@/stores/i18n";
+import { useUserSettingsStore } from "@/stores/user-settings";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 
 export function MemorySettings() {
   const { pages_memory: t } = useTranslation();
+
+  // FC-504: the auto-extract affordance is governed by the per-user
+  // `memory.autoExtract` toggle (default ON), written via PATCH /settings/me.
+  const autoExtract = useUserSettingsStore((s) => s.autoExtract);
+  const isLoaded = useUserSettingsStore((s) => s.isLoaded);
+  const isSaving = useUserSettingsStore((s) => s.isSaving);
+  const fetchUserSettings = useUserSettingsStore((s) => s.fetchUserSettings);
+  const setAutoExtract = useUserSettingsStore((s) => s.setAutoExtract);
+
+  useEffect(() => {
+    if (!isLoaded) fetchUserSettings();
+  }, [isLoaded, fetchUserSettings]);
 
   return (
     <div className="max-w-xl space-y-6">
@@ -33,8 +47,12 @@ export function MemorySettings() {
             </div>
           </div>
           <div className="ml-4 shrink-0">
-            {/* Display-only: always-on system behavior */}
-            <Switch checked disabled onChange={() => {}} />
+            <Switch
+              checked={autoExtract}
+              disabled={isSaving}
+              onChange={setAutoExtract}
+              data-testid="memory-auto-extract-toggle"
+            />
           </div>
         </div>
       </Card>

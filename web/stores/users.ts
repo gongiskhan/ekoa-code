@@ -8,7 +8,7 @@
 
 import { create } from 'zustand';
 import { api, tryCall } from '@/lib/api';
-import type { AuthUser } from '@ekoa/shared';
+import type { AuthUser, Role } from '@ekoa/shared';
 
 interface UsersState {
   // State
@@ -22,8 +22,18 @@ interface UsersState {
     username: string;
     password?: string;
     role: 'org-admin' | 'builder';
+    orgId?: string;
     passwordChangeRequired?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Amendment 2 (FC-500): activate/deactivate and the builder<->org-admin role
+   * toggle. `PATCH /users/:id { role?, active? }` (auth `org-admin`; the server
+   * scopes an org-admin to its own org). super-admin is never a toggle target.
+   */
+  updateUser: (
+    userId: string,
+    patch: { role?: Extract<Role, 'org-admin' | 'builder'>; active?: boolean },
+  ) => Promise<{ success: boolean; error?: string }>;
   removeUser: (userId: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   clearError: () => void;
@@ -51,6 +61,7 @@ export const useUsersStore = create<UsersState>()((set) => ({
         username: data.username,
         password: data.password || data.username.padEnd(6, '0'),
         role: data.role,
+        ...(data.orgId ? { orgId: data.orgId } : {}),
       }),
     );
     if (response.ok) {
@@ -62,6 +73,20 @@ export const useUsersStore = create<UsersState>()((set) => ({
     }
     const errorMsg = response.error.message || 'Failed to create user';
     set({ error: errorMsg, isLoading: false });
+    return { success: false, error: errorMsg };
+  },
+
+  updateUser: async (userId, patch) => {
+    set({ error: null });
+    const response = await tryCall(() => api.users.update({ id: userId, ...patch }));
+    if (response.ok) {
+      set((state) => ({
+        users: state.users.map((user) => (user.id === userId ? response.data : user)),
+      }));
+      return { success: true };
+    }
+    const errorMsg = response.error.message || 'Failed to update user';
+    set({ error: errorMsg });
     return { success: false, error: errorMsg };
   },
 

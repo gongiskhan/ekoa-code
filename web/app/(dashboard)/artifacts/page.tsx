@@ -60,6 +60,7 @@ import { VersionsPanel } from "@/components/artifacts/versions-panel";
 import { DataBackupsPanel } from "@/components/artifacts/data-backups-panel";
 import { ArtifactBackendPanel } from "@/components/artifacts/artifact-backend-panel";
 import { BackendTriggerCard } from "@/components/artifacts/backend-trigger-card";
+import { VisibilityControl, type Visibility } from "@/components/sharing/visibility-control";
 
 /* ---------- Types ---------- */
 
@@ -76,6 +77,8 @@ interface ArtifactInstance {
   updatedAt?: string;
   data?: Record<string, unknown>;
   shareable?: boolean;
+  /** Org sharing visibility (Amendment 2, FC-503): 'private' | 'org'. */
+  visibility?: Visibility;
   screenshotUrl?: string;
   /** Declared Layer-2 backend handler names (enriched by the artifacts handler). */
   backendHandlers?: string[];
@@ -984,6 +987,7 @@ function ArtifactDetail({
   onOpenInNewTab,
   onSlugSaved,
   onNameSaved,
+  onVisibilitySaved,
   onCopyBuildLink,
   onUploadUpdate,
   onDelete,
@@ -1007,6 +1011,7 @@ function ArtifactDetail({
   onOpenInNewTab: (e: React.MouseEvent) => void;
   onSlugSaved: (artifactId: string, slug: string) => void;
   onNameSaved: (artifactId: string, name: string) => void;
+  onVisibilitySaved: (artifactId: string, visibility: Visibility) => void;
   onUploadUpdate: (file: File) => void;
   onDelete: (e: React.MouseEvent) => void;
   isUpdating: boolean;
@@ -1041,6 +1046,24 @@ function ArtifactDetail({
   const [downloadError, setDownloadError] = useState<string | null>(null);
   // Hidden picker for "Atualizar a partir de ficheiro" (per-artifact upload-update).
   const updateInputRef = useRef<HTMLInputElement | null>(null);
+
+  // FC-503: manual owner promotion/demotion of org-visibility.
+  const [savingVisibility, setSavingVisibility] = useState(false);
+  const visibility: Visibility = artifact.visibility ?? "private";
+
+  async function handleVisibilityChange(next: Visibility) {
+    if (next === visibility || savingVisibility) return;
+    setSavingVisibility(true);
+    const result = await tryCall(() =>
+      api.artifacts.patch({ id: artifact.id, visibility: next }),
+    );
+    setSavingVisibility(false);
+    if (result.ok) {
+      onVisibilitySaved(artifact.id, next);
+    } else {
+      toast.error(result.error.message || "Não foi possível alterar a visibilidade.");
+    }
+  }
 
   async function handleDownloadCode() {
     setDownloading(true);
@@ -1299,6 +1322,18 @@ function ArtifactDetail({
               >
                 {a.deleteArtifact}
               </Button>
+            </div>
+
+            {/* FC-503: org-visibility sharing (distinct from the public share
+                link above). Promotion/demotion are manual owner actions. */}
+            <div className="mt-4">
+              <div className="mb-1.5 text-xs font-medium text-neutral-600">Visibilidade</div>
+              <VisibilityControl
+                value={visibility}
+                onChange={handleVisibilityChange}
+                disabled={savingVisibility}
+                showSafetyNote
+              />
             </div>
           </div>
         </div>
@@ -2079,6 +2114,12 @@ export default function ArtifactsPage() {
                 i.id === artifactId ? { ...i, name, title: name } : i
               ));
               setSelectedArtifact(prev => prev && prev.id === artifactId ? { ...prev, name, title: name } : prev);
+            }}
+            onVisibilitySaved={(artifactId, visibility) => {
+              setInstances(prev => prev.map(i =>
+                i.id === artifactId ? { ...i, visibility } : i
+              ));
+              setSelectedArtifact(prev => prev && prev.id === artifactId ? { ...prev, visibility } : prev);
             }}
             onUploadUpdate={(file) => void handleUploadUpdate(selectedArtifact, file)}
             onDelete={(e) => {

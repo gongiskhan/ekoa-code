@@ -4,14 +4,24 @@ import { ShieldAlert } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 
 /**
- * AdminGate wraps pages that require admin access.
- * When the current user is an admin, renders children normally.
- * When not admin, shows an access-denied message.
+ * AdminGate wraps pages that require elevated access. By default only a
+ * super-admin passes. Amendment 2 (FC-500/FC-502): pass `allowOrgAdmin` for the
+ * surfaces an org-admin also manages (scoped server-side to its own org) - the
+ * users page and the Registo admin page.
  */
-export function AdminGate({ children }: { children: React.ReactNode }) {
+export function AdminGate({
+  children,
+  allowOrgAdmin = false,
+}: {
+  children: React.ReactNode;
+  allowOrgAdmin?: boolean;
+}) {
   const user = useAuthStore((s) => s.user);
 
-  if (user?.role === "super-admin") {
+  const allowed =
+    user?.role === "super-admin" || (allowOrgAdmin && user?.role === "org-admin");
+
+  if (allowed) {
     return <>{children}</>;
   }
 
@@ -21,9 +31,10 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
         <div className="w-12 h-12 rounded-xl bg-neutral-50 border border-neutral-200 flex items-center justify-center">
           <ShieldAlert size={24} className="text-neutral-400" />
         </div>
-        <h2 className="text-lg font-semibold text-neutral-900">Access Restricted</h2>
+        <h2 className="text-lg font-semibold text-neutral-900">Acesso restrito</h2>
         <p className="text-sm text-neutral-500 leading-relaxed">
-          This page is only available to administrators. Contact your admin if you need access.
+          Esta página está disponível apenas para administradores. Contacte o administrador da sua
+          organização se precisar de acesso.
         </p>
       </div>
     </div>

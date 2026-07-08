@@ -24,6 +24,7 @@ import {
   LayoutGrid,
   Settings,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { useMemoryStore } from "@/stores/memory";
 import { useTranslation } from "@/stores/i18n";
@@ -336,9 +337,19 @@ function MemoryCard({
           </div>
         </div>
 
-        {/* Origin badge */}
-        <div className="mb-2">
+        {/* Origin badge + FC-504 automatic-write affordance. Every automatic
+            memory write surfaces this affordance; such writes are always private. */}
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <OriginBadge origin={memory.origin} t={t} />
+          {memory.origin === "auto-extraction" && (
+            <span
+              data-testid="memory-auto-affordance"
+              className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+            >
+              <Sparkles size={10} aria-hidden />
+              Memória automática
+            </span>
+          )}
         </div>
 
         {/* Content preview */}
@@ -405,7 +416,8 @@ function MemoryFormDialog({
   const [type, setType] = useState(initialData?.type || "lesson");
   const [content, setContent] = useState(initialData?.content || "");
   const [tagsStr, setTagsStr] = useState(initialData?.tags?.join(", ") || "");
-  const [visibility, setVisibility] = useState(initialData?.visibility || "shared");
+  // FC-503: visibility is the shared 'private' | 'org' field.
+  const [visibility, setVisibility] = useState(initialData?.visibility || "org");
   const [scope, setScope] = useState(initialData?.scope || "company");
 
   useEffect(() => {
@@ -414,7 +426,7 @@ function MemoryFormDialog({
       setType(initialData?.type || "lesson");
       setContent(initialData?.content || "");
       setTagsStr(initialData?.tags?.join(", ") || "");
-      setVisibility(initialData?.visibility || "shared");
+      setVisibility(initialData?.visibility || "org");
       setScope(initialData?.scope || "company");
     }
   }, [open, initialData]);
@@ -491,9 +503,10 @@ function MemoryFormDialog({
             label={t.form.visibility}
             value={visibility}
             onChange={(e) => setVisibility(e.target.value)}
+            data-testid="memory-visibility-select"
           >
-            <option value="shared">{t.visibility.shared}</option>
-            <option value="private">{t.visibility.private}</option>
+            <option value="private">Privado</option>
+            <option value="org">Partilhado com o escritório</option>
           </Select>
           <Select label={t.form.scope} value={scope} onChange={(e) => setScope(e.target.value)}>
             {MEMORY_SCOPES.map((ms) => (
@@ -834,8 +847,8 @@ export default function MemoryPage() {
                 className="py-1.5"
               >
                 <option value="">{t.filters.allVisibility}</option>
-                <option value="shared">{t.visibility.shared}</option>
-                <option value="private">{t.visibility.private}</option>
+                <option value="private">Privado</option>
+                <option value="org">Partilhado com o escritório</option>
               </Select>
 
               {/* Search */}

@@ -26,6 +26,7 @@ import type { Components } from "react-markdown";
 import { useOrchestrationStore, type OutputEntry } from "@/stores/orchestration";
 import { useTranslation } from "@/stores/i18n";
 import { copyToClipboard } from "@/lib/clipboard";
+import { VerificationBanner } from "@/components/verification/verification-banner";
 
 // ============================================
 // CONSTANTS
@@ -628,6 +629,10 @@ export default function OutputPanel({ sessionId }: OutputPanelProps) {
           )}
         </div>
       </div>
+
+      {/* FC-505: per-build verification banner, shown while the verification
+          (testing) stage of the build runs. */}
+      {job?.status === "running" && job?.phase === "testing" && <VerificationBanner />}
 
       {/* Output area */}
       <div

@@ -82,6 +82,7 @@ export default function Sidebar({ isExpanded, onToggle, onNavigate }: SidebarPro
   const user = useAuthStore((s) => s.user);
   const hasHydrated = useAuthStore((s) => s.hasHydrated);
   const isSuperAdmin = user?.role === "super-admin";
+  const isAdmin = isSuperAdmin || user?.role === "org-admin";
   const { sidebar } = useTranslation();
 
   const activeHref = activeNavHref(pathname);
@@ -90,9 +91,11 @@ export default function Sidebar({ isExpanded, onToggle, onNavigate }: SidebarPro
     return activeHref === href;
   }
 
-  const visibleItems = NAV_ITEMS.filter(
-    (item) => !item.superAdminOnly || (hasHydrated && isSuperAdmin),
-  );
+  const visibleItems = NAV_ITEMS.filter((item) => {
+    if (item.superAdminOnly) return hasHydrated && isSuperAdmin;
+    if (item.adminOnly) return hasHydrated && isAdmin;
+    return true;
+  });
   const topItems = visibleItems.filter((item) => !item.bottom);
   const bottomItems = visibleItems.filter((item) => item.bottom);
 
@@ -146,7 +149,7 @@ export default function Sidebar({ isExpanded, onToggle, onNavigate }: SidebarPro
             <NavItem
               key={item.href}
               icon={item.icon}
-              label={sidebar[item.labelKey]}
+              label={item.label ?? sidebar[item.labelKey!]}
               href={item.href}
               isActive={isRouteActive(item.href)}
               isExpanded={isExpanded}
@@ -170,7 +173,7 @@ export default function Sidebar({ isExpanded, onToggle, onNavigate }: SidebarPro
               <NavItem
                 key={item.href}
                 icon={item.icon}
-                label={sidebar[item.labelKey]}
+                label={item.label ?? sidebar[item.labelKey!]}
                 href={item.href}
                 isActive={isRouteActive(item.href)}
                 isExpanded={isExpanded}

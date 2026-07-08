@@ -50,9 +50,13 @@ function getInitials(name: string): string {
 export default function Header({ onToggleSidebar }: HeaderProps) {
   const { language, setLanguage, header } = useTranslation();
   const router = useRouter();
-  const platformName = useSettingsStore((s) => s.settings.general.platformName);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const logoUrl = useCompanyStore((s) => s.company?.branding?.logo ?? null);
+  // FC-509: with the default design system (no org logo) the header falls back
+  // to the org DISPLAY NAME, never the vendor's brand.
+  const orgName = useCompanyStore((s) => s.company?.displayName ?? s.company?.name ?? null);
+  const hasCompany = useCompanyStore((s) => s.company !== null);
+  const fetchCompany = useCompanyStore((s) => s.fetchCompany);
   const usage = useBillingStore((s) => s.usage);
   const fetchUsage = useBillingStore((s) => s.fetchUsage);
   const user = useAuthStore((s) => s.user);
@@ -63,6 +67,10 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { fetchUsage(); }, [fetchUsage]);
+
+  // FC-509: ensure the org config is loaded so the no-logo fallback (org display
+  // name) is available on every page, not only after visiting branding.
+  useEffect(() => { if (!hasCompany) fetchCompany(); }, [hasCompany, fetchCompany]);
 
   // Live-refresh the gauge whenever the server reports usage has changed (after each
   // agent turn, after admin resets) via the notifications stream. FC-033: the cosmetic
@@ -114,15 +122,20 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         >
           <Menu size={20} />
         </button>
-        {(logoUrl || platformName) && (
+        {(logoUrl || orgName) && (
           logoUrl ? (
             <img
               src={resolveLogoUrl(logoUrl)}
-              alt={platformName || "Logo"}
+              alt={orgName || "Logo"}
               className="h-6 max-w-[120px] object-contain"
             />
           ) : (
-            <span className="text-xs font-semibold text-neutral-400 tracking-wide">{platformName}</span>
+            <span
+              data-testid="header-org-name"
+              className="text-xs font-semibold text-neutral-400 tracking-wide"
+            >
+              {orgName}
+            </span>
           )
         )}
       </div>

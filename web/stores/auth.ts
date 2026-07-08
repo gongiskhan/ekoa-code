@@ -25,6 +25,17 @@ interface AuthState {
   isLoading: boolean;
   passwordChangeRequired: boolean;
   error: string | null;
+  /**
+   * CONV-2 code of the last failure, when the transport surfaced one (FC-508).
+   * Drives the activation-error copy on login (`ACCOUNT_DISABLED` / `BILLING_LOCKED`).
+   */
+  errorCode: string | null;
+  /**
+   * In-session block detected while validating the session (FC-508): the CONV-2
+   * code (`ACCOUNT_DISABLED` 403 / `BILLING_LOCKED` 402) that a protected call
+   * returned. Read by the blocked-state guard.
+   */
+  blockedCode: string | null;
   hasHydrated: boolean;
 
   // Actions
@@ -46,10 +57,12 @@ export const useAuthStore = create<AuthState>()(
       isLoading: false,
       passwordChangeRequired: false,
       error: null,
+      errorCode: null,
+      blockedCode: null,
       hasHydrated: false,
 
       login: async (username: string, password: string, rememberMe = false) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, error: null, errorCode: null });
 
         try {
           const { token, user, passwordChangeRequired } = await api.auth.login({
@@ -68,6 +81,7 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             passwordChangeRequired,
             error: null,
+            errorCode: null,
           });
 
           return true;
@@ -75,6 +89,9 @@ export const useAuthStore = create<AuthState>()(
           set({
             isLoading: false,
             error: err instanceof Error ? err.message : 'Login failed',
+            // FC-508: keep the CONV-2 code so the login page can render the
+            // dedicated PT copy for ACCOUNT_DISABLED / BILLING_LOCKED.
+            errorCode: err instanceof ApiError ? err.code : null,
           });
           return false;
         }
@@ -151,6 +168,8 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: true,
             isLoading: false,
             passwordChangeRequired: user.passwordChangeRequired ?? false,
+            // A successful validation clears any prior block (e.g. after re-activation).
+            blockedCode: null,
           });
           return true;
         } catch (err) {
@@ -165,7 +184,16 @@ export const useAuthStore = create<AuthState>()(
               isAuthenticated: false,
               isLoading: false,
               passwordChangeRequired: false,
+              blockedCode: null,
             });
+          } else if (
+            err instanceof ApiError &&
+            (err.code === 'ACCOUNT_DISABLED' || err.code === 'BILLING_LOCKED')
+          ) {
+            // FC-508: the session is valid but the account is blocked (403/402).
+            // Surface the code for the blocked-state guard; keep the user signed in
+            // so the guard can render over the app.
+            set({ isLoading: false, blockedCode: err.code });
           } else {
             set({ isLoading: false });
           }
@@ -173,7 +201,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      clearError: () => set({ error: null }),
+      clearError: () => set({ error: null, errorCode: null }),
 
       setHasHydrated: (hydrated: boolean) => set({ hasHydrated: hydrated }),
     }),

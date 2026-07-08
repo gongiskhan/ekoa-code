@@ -10,18 +10,22 @@ describe('lib/navigation NAV_ITEMS', () => {
     for (const href of hrefs) expect(href.startsWith('/')).toBe(true);
   });
 
-  it('every item carries an icon and a labelKey that exists in the sidebar locale slice', () => {
+  it('every item carries an icon and a resolvable label (a sidebar locale key or a raw label)', () => {
     for (const item of NAV_ITEMS) {
       expect(item.icon).toBeTruthy();
-      expect(en.sidebar[item.labelKey]).toBeTruthy();
+      // An item labels itself either by a sidebar i18n key OR a raw `label` (admin items kept out
+      // of the locale files, by design - Amendment 2 FC-502/FC-501 registo/orgs).
+      const label = item.labelKey ? en.sidebar[item.labelKey] : item.label;
+      expect(label).toBeTruthy();
     }
   });
 
-  it('leads with chat and anchors settings at the bottom; users is super-admin only', () => {
+  it('leads with chat and anchors settings at the bottom; users is admin-visible (Amendment 2 FC-500)', () => {
     expect(NAV_ITEMS[0].href).toBe('/chat');
     const settings = NAV_ITEMS.find((i) => i.href === '/settings/platform');
     expect(settings?.bottom).toBe(true);
+    // FC-500: the users page is now visible to org-admins (manage own org), not super-admin only.
     const users = NAV_ITEMS.find((i) => i.href === '/users');
-    expect(users?.superAdminOnly).toBe(true);
+    expect(users?.adminOnly).toBe(true);
   });
 });

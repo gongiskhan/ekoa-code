@@ -8,6 +8,8 @@ import Sidebar from "@/components/sidebar";
 import Header from "@/components/header";
 import BillingWarningBanner from "@/components/billing-warning-banner";
 import PauseForUserOverlay from "@/components/automations/pause-for-user-overlay";
+import { BlockedAccountGuard } from "@/components/blocked-account-guard";
+import { FirstBuildDialog } from "@/components/verification/first-build-dialog";
 import { DemoTourProvider } from "@/components/demos/DemoTourProvider";
 import { LoadingState } from "@/components/ui/spinner";
 import { useAuthStore } from "@/stores/auth";
@@ -152,6 +154,12 @@ export default function DashboardLayout({
 
       {/* Tutorial Bridge: activates on ?demo=<appId>, renders nothing otherwise. */}
       <DemoTourProvider />
+
+      {/* FC-506: first-ever build asks once whether to verify builds. */}
+      <FirstBuildDialog />
+
+      {/* FC-508: blocking overlay when the account is disabled / billing-locked. */}
+      <BlockedAccountGuard />
     </div>
   );
 }

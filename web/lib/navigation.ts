@@ -7,6 +7,8 @@ import {
   Library,
   Palette,
   Users,
+  ScrollText,
+  Building2,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -20,8 +22,16 @@ import type { Translations } from "@/locales/types";
 export interface NavItem {
   href: string;
   icon: LucideIcon;
-  labelKey: keyof Translations["sidebar"];
+  /** i18n key into the sidebar slice. Omit when a raw PT-PT `label` is supplied. */
+  labelKey?: keyof Translations["sidebar"];
+  /**
+   * Raw PT-PT label for net-new Amendment 2 surfaces that have no sidebar i18n
+   * key (kept out of the locale files). Takes precedence over `labelKey`.
+   */
+  label?: string;
   superAdminOnly?: boolean;
+  /** Visible to org-admin AND super-admin (Amendment 2 admin surfaces). */
+  adminOnly?: boolean;
   /** Bottom-anchored items (e.g. Settings) render below the flex spacer. */
   bottom?: boolean;
   /**
@@ -41,7 +51,12 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/memory", icon: Brain, labelKey: "memory" },
   { href: "/knowledge", icon: Library, labelKey: "knowledge" },
   { href: "/settings/branding", icon: Palette, labelKey: "branding" },
-  { href: "/users", icon: Users, labelKey: "users", superAdminOnly: true },
+  // FC-500: the users page is now managed by org-admins (own org) and super-admins.
+  { href: "/users", icon: Users, labelKey: "users", adminOnly: true },
+  // FC-502: the Registo admin read surface (metadata + artifacts only).
+  { href: "/registo", icon: ScrollText, label: "Registo", adminOnly: true },
+  // FC-501: super-admin org management.
+  { href: "/orgs", icon: Building2, label: "Escritórios", superAdminOnly: true },
   {
     href: "/settings/platform",
     icon: SettingsIcon,

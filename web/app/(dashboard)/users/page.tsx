@@ -13,9 +13,11 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useUsersStore } from "@/stores/users";
+import { useOrgsStore } from "@/stores/orgs";
+import { useCompanyStore } from "@/stores/company";
 import { useBillingStore, type AdminUsageRow } from "@/stores/billing";
 import { useTranslation } from "@/stores/i18n";
-import type { AuthUser } from "@ekoa/shared";
+import type { AuthUser, OrgConfig } from "@ekoa/shared";
 import { AdminGate } from "@/components/admin-gate";
 import { fmtTokens } from "@/lib/format/tokens";
 import { PageShell } from "@/components/ui/page-shell";
@@ -23,6 +25,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import { LoadingState } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
@@ -69,19 +73,75 @@ function RoleBadge({ role }: { role: string }) {
   return <Badge tone="neutral">{t.roleBuilder}</Badge>;
 }
 
+/**
+ * FC-500 role toggle between 'builder' and 'org-admin'. A super-admin is never a
+ * toggle target - its badge is shown read-only. Available to org-admins (own
+ * org) and super-admins.
+ */
+function RoleToggle({
+  user,
+  disabled,
+  onToggle,
+}: {
+  user: AuthUser;
+  disabled: boolean;
+  onToggle: (role: "org-admin" | "builder") => void;
+}) {
+  const { pages } = useTranslation();
+  const t = pages.users;
+  if (user.role === "super-admin") {
+    return <RoleBadge role={user.role} />;
+  }
+  const options: { value: "builder" | "org-admin"; label: string }[] = [
+    { value: "builder", label: t.roleBuilder },
+    { value: "org-admin", label: t.roleAdmin },
+  ];
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-lg border border-line"
+      role="group"
+      aria-label={t.role}
+      data-testid={`role-toggle-${user.username}`}
+    >
+      {options.map((opt) => {
+        const selected = user.role === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            disabled={disabled || selected}
+            onClick={() => onToggle(opt.value)}
+            aria-pressed={selected}
+            className={`px-2.5 py-1 text-xs font-medium transition-colors focus-ring ${
+              selected
+                ? "bg-teal-600 text-white"
+                : "bg-surface text-neutral-500 hover:text-neutral-900"
+            } ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------- Dialogs ---------- */
 
 function AddUserDialog({
   open,
+  orgs,
   onClose,
   onAdd,
 }: {
   open: boolean;
+  orgs: OrgConfig[];
   onClose: () => void;
   onAdd: (data: {
     username: string;
     password: string;
     role: "org-admin" | "builder";
+    orgId?: string;
   }) => void;
 }) {
   const { pages, common } = useTranslation();
@@ -89,6 +149,7 @@ function AddUserDialog({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"org-admin" | "builder">("builder");
+  const [orgId, setOrgId] = useState("");
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,10 +158,12 @@ function AddUserDialog({
       username: username.trim(),
       password: password.trim() || username.trim().padEnd(6, "0"),
       role,
+      orgId: orgId || undefined,
     });
     setUsername("");
     setPassword("");
     setRole("builder");
+    setOrgId("");
   }
 
   return (
@@ -157,6 +220,21 @@ function AddUserDialog({
             </Button>
           </div>
         </div>
+        {orgs.length > 0 && (
+          <Select
+            label="Escritório"
+            value={orgId}
+            onChange={(e) => setOrgId(e.target.value)}
+            data-testid="add-user-org"
+          >
+            <option value="">Por omissão (o seu escritório)</option>
+            {orgs.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.displayName ?? org.name}
+              </option>
+            ))}
+          </Select>
+        )}
       </form>
     </Dialog>
   );
@@ -351,6 +429,7 @@ export default function UsersPage() {
   const usersError = useUsersStore((s) => s.error);
   const fetchUsers = useUsersStore((s) => s.fetchUsers);
   const addUser = useUsersStore((s) => s.addUser);
+  const updateUser = useUsersStore((s) => s.updateUser);
   const removeUser = useUsersStore((s) => s.removeUser);
   const resetPassword = useUsersStore((s) => s.resetPassword);
   const clearUsersError = useUsersStore((s) => s.clearError);
@@ -363,15 +442,39 @@ export default function UsersPage() {
   const currentUserRole = useAuthStore((s) => s.user?.role ?? null);
   const isSuperAdmin = currentUserRole === "super-admin";
 
+  // FC-500 org-assignment column. A super-admin resolves org names from the full
+  // orgs list; an org-admin cannot list orgs, so its own org name comes from the
+  // company store (its users are all in that one org).
+  const orgs = useOrgsStore((s) => s.orgs);
+  const fetchOrgs = useOrgsStore((s) => s.fetchOrgs);
+  const ownOrg = useCompanyStore((s) => s.company);
+  const hasOwnOrg = useCompanyStore((s) => s.company !== null);
+  const fetchCompany = useCompanyStore((s) => s.fetchCompany);
+
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [searchQuery, setSearchQuery] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Fetch on mount
+  // Fetch on mount. Admin usage figures and the orgs list are super-admin only.
   useEffect(() => {
     fetchUsers();
-    fetchAllUsage();
-  }, [fetchUsers, fetchAllUsage]);
+    if (!hasOwnOrg) fetchCompany();
+  }, [fetchUsers, fetchCompany, hasOwnOrg]);
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      fetchAllUsage();
+      fetchOrgs();
+    }
+  }, [isSuperAdmin, fetchAllUsage, fetchOrgs]);
+
+  const orgById = new Map<string, OrgConfig>(orgs.map((org) => [org.id, org]));
+  function resolveOrgName(orgId: string): string {
+    const fromList = orgById.get(orgId);
+    if (fromList) return fromList.displayName ?? fromList.name;
+    if (ownOrg && ownOrg.id === orgId) return ownOrg.displayName ?? ownOrg.name;
+    return orgId;
+  }
 
   const usageByUserId = new Map<string, AdminUsageRow>(
     (allUsage ?? []).map((row) => [row.userId, row]),
@@ -393,18 +496,29 @@ export default function UsersPage() {
     username: string;
     password: string;
     role: "org-admin" | "builder";
+    orgId?: string;
   }) {
     setActionLoading(true);
     const result = await addUser({
       username: data.username,
       password: data.password,
       role: data.role,
+      orgId: data.orgId,
       passwordChangeRequired: true,
     });
     setActionLoading(false);
     if (result.success) {
       setDialog({ kind: "none" });
     }
+  }
+
+  // FC-500: activate/deactivate and the builder<->org-admin role toggle.
+  async function handleToggleActive(user: AuthUser, active: boolean) {
+    await updateUser(user.id, { active });
+  }
+
+  async function handleToggleRole(user: AuthUser, role: "org-admin" | "builder") {
+    await updateUser(user.id, { role });
   }
 
   async function handleDeleteUser(user: AuthUser) {
@@ -444,16 +558,19 @@ export default function UsersPage() {
   }
 
   return (
-    <AdminGate>
+    <AdminGate allowOrgAdmin>
       <PageShell width="wide" testId="users-page">
         <PageHeader
           title={t.title}
           description={t.subtitle}
           icon={Users2}
           actions={
-            <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: "addUser" })}>
-              {t.addUser}
-            </Button>
+            // Creating users is a super-admin action (`POST /users`, 3.8.2).
+            isSuperAdmin ? (
+              <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: "addUser" })}>
+                {t.addUser}
+              </Button>
+            ) : undefined
           }
         />
 
@@ -519,12 +636,13 @@ export default function UsersPage() {
                   <THead>
                     <TR>
                       <TH>{t.username}</TH>
+                      <TH>Escritório</TH>
                       <TH>{t.role}</TH>
                       <TH>{common.active}</TH>
-                      <TH>{t.tokensUsed}</TH>
+                      {isSuperAdmin && <TH>{t.tokensUsed}</TH>}
                       <TH>{t.created}</TH>
                       <TH>{t.lastLogin}</TH>
-                      <TH className="text-right">{t.action}</TH>
+                      {isSuperAdmin && <TH className="text-right">{t.action}</TH>}
                     </TR>
                   </THead>
                   <TBody>
@@ -553,26 +671,45 @@ export default function UsersPage() {
                               </span>
                             </div>
                           </TD>
-                          <TD>
-                            <RoleBadge role={user.role} />
+                          <TD className="text-sm text-neutral-600" data-testid={`user-org-${user.username}`}>
+                            {resolveOrgName(user.orgId)}
                           </TD>
                           <TD>
-                            <Badge tone={user.active ? "success" : "neutral"} dot>
-                              {user.active ? common.active : common.inactive}
-                            </Badge>
+                            <RoleToggle
+                              user={user}
+                              disabled={false}
+                              onToggle={(role) => handleToggleRole(user, role)}
+                            />
                           </TD>
                           <TD>
-                            <div className="flex items-center gap-1.5">
-                              <Badge tone={tokensTone}>
-                                {usage
-                                  ? `${fmtTokens(usage.tokensUsed)} / ${fmtTokens(usage.tokensBase)} (${usage.percentage}%)`
-                                  : "—"}
-                              </Badge>
-                              {usage?.isCustomLimit && (
-                                <span className="text-[11px] text-teal-700">{t.customLimit}</span>
-                              )}
+                            <div
+                              className="flex items-center gap-2"
+                              data-testid={`user-active-${user.username}`}
+                            >
+                              <Switch
+                                checked={user.active}
+                                disabled={isUserSuperAdmin}
+                                onChange={(v) => handleToggleActive(user, v)}
+                              />
+                              <span className="text-xs text-neutral-500">
+                                {user.active ? common.active : common.inactive}
+                              </span>
                             </div>
                           </TD>
+                          {isSuperAdmin && (
+                            <TD>
+                              <div className="flex items-center gap-1.5">
+                                <Badge tone={tokensTone}>
+                                  {usage
+                                    ? `${fmtTokens(usage.tokensUsed)} / ${fmtTokens(usage.tokensBase)} (${usage.percentage}%)`
+                                    : "—"}
+                                </Badge>
+                                {usage?.isCustomLimit && (
+                                  <span className="text-[11px] text-teal-700">{t.customLimit}</span>
+                                )}
+                              </div>
+                            </TD>
+                          )}
                           <TD className="text-xs text-neutral-500">
                             {createdAt ? new Date(createdAt).toLocaleDateString() : "—"}
                           </TD>
@@ -581,9 +718,9 @@ export default function UsersPage() {
                               ? new Date(lastLoginAt).toLocaleDateString()
                               : "—"}
                           </TD>
-                          <TD>
-                            <div className="flex items-center justify-end gap-1">
-                              {isSuperAdmin && (
+                          {isSuperAdmin && (
+                            <TD>
+                              <div className="flex items-center justify-end gap-1">
                                 <IconButton
                                   icon={Gauge}
                                   label={t.setTokenLimit}
@@ -593,8 +730,6 @@ export default function UsersPage() {
                                     setDialog({ kind: "setLimit", user, usage })
                                   }
                                 />
-                              )}
-                              {isSuperAdmin && (
                                 <IconButton
                                   icon={RotateCcw}
                                   label={t.resetUsageAction}
@@ -602,27 +737,27 @@ export default function UsersPage() {
                                   size="sm"
                                   onClick={() => handleResetUsage(user)}
                                 />
-                              )}
-                              <IconButton
-                                icon={KeyRound}
-                                label={t.resetPassword}
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDialog({ kind: "resetPassword", user })}
-                              />
-                              {!isUserSuperAdmin && (
                                 <IconButton
-                                  icon={Trash2}
-                                  label={t.deleteUser}
+                                  icon={KeyRound}
+                                  label={t.resetPassword}
                                   variant="ghost"
                                   size="sm"
-                                  className="hover:text-red-600 hover:bg-red-50"
-                                  onClick={() => handleDeleteUser(user)}
-                                  data-testid="delete-user-button"
+                                  onClick={() => setDialog({ kind: "resetPassword", user })}
                                 />
-                              )}
-                            </div>
-                          </TD>
+                                {!isUserSuperAdmin && (
+                                  <IconButton
+                                    icon={Trash2}
+                                    label={t.deleteUser}
+                                    variant="ghost"
+                                    size="sm"
+                                    className="hover:text-red-600 hover:bg-red-50"
+                                    onClick={() => handleDeleteUser(user)}
+                                    data-testid="delete-user-button"
+                                  />
+                                )}
+                              </div>
+                            </TD>
+                          )}
                         </TR>
                       );
                     })}
@@ -638,6 +773,7 @@ export default function UsersPage() {
       {/* Dialogs */}
       <AddUserDialog
         open={dialog.kind === "addUser"}
+        orgs={orgs}
         onClose={() => setDialog({ kind: "none" })}
         onAdd={handleAddUser}
       />

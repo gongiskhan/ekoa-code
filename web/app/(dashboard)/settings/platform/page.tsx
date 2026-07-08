@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { UserPreferencesSection } from "@/components/settings/user-preferences-section";
 
 type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
@@ -404,6 +405,7 @@ export default function PlatformSettingsPage() {
       />
       <GeneralSection settings={settings} onUpdate={handleUpdate} showSaved={showSaved} />
       <ChatSection settings={settings} onUpdate={handleUpdate} showSaved={showSaved} />
+      <UserPreferencesSection />
       <AdvancedSection showSaved={showSaved} />
     </PageShell>
   );

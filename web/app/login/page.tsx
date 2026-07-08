@@ -92,6 +92,7 @@ function LoginForm() {
     isAuthenticated,
     isLoading,
     error,
+    errorCode,
     clearError,
     passwordChangeRequired,
     hasHydrated,
@@ -107,6 +108,16 @@ function LoginForm() {
   const [rememberMe, setRememberMe] = useState(true);
 
   const nextParam = safeNextUrl(searchParams.get("next"));
+
+  // FC-508: the CONV-2 activation codes render their dedicated PT-PT copy on
+  // login; any other failure shows the server-provided (already PT-aware) message.
+  const ACTIVATION_COPY: Record<string, string> = {
+    ACCOUNT_DISABLED: "A sua conta está bloqueada. Contacte o suporte.",
+    BILLING_LOCKED: "A sua conta tem um problema de faturação. Contacte o suporte.",
+  };
+  const displayError = error
+    ? (errorCode ? ACTIVATION_COPY[errorCode] : undefined) ?? error
+    : null;
 
   const redirectAfterAuth = useCallback(
     (latestToken: string | null) => {
@@ -188,9 +199,12 @@ function LoginForm() {
           </div>
 
           {/* Error */}
-          {error && (
-            <div className="mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-600">
-              {error}
+          {displayError && (
+            <div
+              data-testid="login-error"
+              className="mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-600"
+            >
+              {displayError}
             </div>
           )}
 
