@@ -39,6 +39,9 @@ export interface SessionDoc extends Doc {
   title?: string;
   status?: string;
   messageCount?: number;
+  /** ISO timestamps required by the shared `Session`/`SessionSummary` contract. */
+  createdAt?: string;
+  updatedAt?: string;
 }
 export interface ActivityLogDoc extends Doc {
   userId: string;

@@ -29,11 +29,14 @@ export function sessionsRouter(deps: { now: () => number; genId: () => string })
   });
 
   r.patch('/:id', async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, SessionPatch, req.body);
+    const body = parseBody(res, SessionPatch, req.body) as { name?: string } | undefined;
     if (!body) return;
     const s = await ownedSession(actorOf(req).userId, req.params.id as string);
     if (!s) return notFound(res);
-    const updated = await updateSession(s._id, body as Record<string, unknown>);
+    // The contract patches `name`; the stored doc field is `title` (createSession
+    // maps the same way). Without this translation a rename silently no-ops.
+    const patch = body.name !== undefined ? { title: body.name } : {};
+    const updated = await updateSession(s._id, patch, deps);
     res.json(sessionView(updated!));
   });
 

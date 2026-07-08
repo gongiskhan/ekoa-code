@@ -49,7 +49,23 @@ export async function patchUserSettings(userId: string, patch: Record<string, un
 }
 
 // ---- Sessions (user-scoped; ownership miss → null → uniform 404) ----
-export const sessionView = (s: SessionDoc) => ({ id: s._id, userId: s.userId, title: s.title, status: s.status, messageCount: s.messageCount ?? 0 });
+/** Epoch fallback so a legacy/timestamp-less doc still satisfies the required
+ *  `createdAt`/`updatedAt` in the shared contract instead of failing validation. */
+const EPOCH_ISO = new Date(0).toISOString();
+/** `name` mirrors `title` for the shared `Session`/`SessionSummary` shape (which
+ *  names the field `name`); `title` is kept for any legacy reader (passthrough). */
+export const sessionView = (s: SessionDoc) => ({
+  id: s._id,
+  userId: s.userId,
+  // `name` is `z.string().optional()` in the contract - it rejects null, so a
+  // titleless session must OMIT name (undefined), never send null.
+  name: s.title ?? undefined,
+  title: s.title,
+  status: s.status,
+  messageCount: s.messageCount ?? 0,
+  createdAt: s.createdAt ?? EPOCH_ISO,
+  updatedAt: s.updatedAt ?? s.createdAt ?? EPOCH_ISO,
+});
 export const listSessions = (userId: string) => sessions.find({ userId });
 export async function ownedSession(userId: string, id: string): Promise<SessionDoc | null> {
   const s = await sessions.get(id);
@@ -57,18 +73,20 @@ export async function ownedSession(userId: string, id: string): Promise<SessionD
 }
 export async function createSession(userId: string, name: string | undefined, deps: Deps): Promise<SessionDoc> {
   const id = deps.genId();
-  const doc: SessionDoc = { _id: id, userId, title: name, status: 'active', messageCount: 0 };
+  const nowIso = new Date(deps.now()).toISOString();
+  const doc: SessionDoc = { _id: id, userId, title: name, status: 'active', messageCount: 0, createdAt: nowIso, updatedAt: nowIso };
   await sessions.insert(doc);
   return doc;
 }
-export const updateSession = (id: string, patch: Partial<SessionDoc>) => sessions.update(id, (x) => ({ ...x, ...patch }));
+export const updateSession = (id: string, patch: Partial<SessionDoc>, deps: Deps) =>
+  sessions.update(id, (x) => ({ ...x, ...patch, updatedAt: new Date(deps.now()).toISOString() }));
 export const deleteSession = (id: string) => sessions.delete(id);
 export const listMessages = (sessionId: string) => messages.find({ sessionId }, { timestamp: 1 });
 export async function addMessage(session: SessionDoc, body: { role: unknown; content: unknown; metadata?: unknown }, deps: Deps): Promise<Doc> {
   const id = deps.genId();
   const doc: Doc = { _id: id, sessionId: session._id, role: body.role, content: body.content, timestamp: new Date(deps.now()).toISOString(), ...(body.metadata ? { metadata: body.metadata } : {}) };
   await messages.insert(doc);
-  await sessions.update(session._id, (x) => ({ ...x, messageCount: (x.messageCount ?? 0) + 1 }));
+  await sessions.update(session._id, (x) => ({ ...x, messageCount: (x.messageCount ?? 0) + 1, updatedAt: new Date(deps.now()).toISOString() }));
   return doc;
 }
 
