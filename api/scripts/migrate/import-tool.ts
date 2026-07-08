@@ -27,7 +27,7 @@
  * but is not part of the deployed service bundle (it lives under api/scripts/, outside src/).
  */
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
-import { join, dirname, basename, relative, sep } from 'node:path';
+import { join, dirname, basename, relative, resolve, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   users,
@@ -70,6 +70,25 @@ export interface LoadedSource {
   exists(name: string): boolean;
 }
 
+/** Ingestion boundary: a hostile or corrupt export fails fast with a clean error, before any
+ *  row can reach a checksum, a journal, or a Mongo upsert. `_id` must be a plain non-empty
+ *  string - a non-string `_id` would become an OPERATOR object in the upsert FILTER
+ *  (`replaceOne({_id: {$gt: ''}}, ...)` matches an arbitrary row) - and no top-level key may
+ *  start with `$` (operator-shaped fields). */
+function validateSourceRow(file: string, row: PlainDoc): void {
+  const id = (row as { _id?: unknown })?._id;
+  if (typeof id !== 'string' || id === '' || id.includes('\0')) {
+    throw new Error(
+      `hostile source: ${file} has a row whose _id is not a plain non-empty string (${JSON.stringify(id)}) - refusing to build an upsert filter from it`,
+    );
+  }
+  for (const key of Object.keys(row)) {
+    if (key.startsWith('$')) {
+      throw new Error(`hostile source: ${file} row ${id} has a top-level '$'-prefixed key (${key}) - refusing operator-shaped fields`);
+    }
+  }
+}
+
 /** Open a source directory read-only. Every accessor reads; nothing writes back (§10.3 rule 1). */
 export function loadSource(root: string): LoadedSource {
   const abs = (name: string): string => join(root, name);
@@ -86,6 +105,7 @@ export function loadSource(root: string): LoadedSource {
       if (!existsSync(p)) return [];
       const parsed = JSON.parse(readFileSync(p, 'utf8'));
       if (!Array.isArray(parsed)) throw new Error(`source ${name} is not a JSON array`);
+      for (const row of parsed as PlainDoc[]) validateSourceRow(name, row);
       return parsed as PlainDoc[];
     },
   };
@@ -248,7 +268,9 @@ function buildArtifacts(rows: PlainDoc[]): FamilyPlan {
   const docs: PlainDoc[] = rows.map((a) => {
     const out: PlainDoc = { ...a };
     if (typeof a.screenshotPath === 'string' && a.screenshotPath) {
-      out.screenshotPath = `artifacts/${a._id}/${basename(a.screenshotPath)}`;
+      // The rewritten value is later resolved against the storage root, so the id must stay
+      // ONE path segment - a source id carrying separators or dot-segments would escape it.
+      out.screenshotPath = `artifacts/${safePathSegment(a._id, 'artifacts._id')}/${basename(a.screenshotPath)}`;
     }
     return out;
   });
@@ -534,6 +556,73 @@ export const NON_IMPORT_SCRIPT_ROWS: Array<{ row: number; family: string; dispos
 ];
 
 // ---------------------------------------------------------------------------
+// Hostile-source hardening (G12 security phase): fail fast, before any write
+// ---------------------------------------------------------------------------
+
+/** A source-derived value embedded as ONE storage path segment must stay one segment. */
+function safePathSegment(value: unknown, label: string): string {
+  if (
+    typeof value !== 'string' ||
+    value === '' ||
+    value === '.' ||
+    value === '..' ||
+    value.includes('/') ||
+    value.includes('\\') ||
+    value.includes('\0')
+  ) {
+    throw new Error(`hostile source: ${label} ${JSON.stringify(value)} is not a safe path segment`);
+  }
+  return value;
+}
+
+/** Reject a tool OUTPUT path that sits inside (or equals) the source export - the tool is
+ *  read-only on the source (§10.3 rule 1), including its own journal and blob/prose targets. */
+export function assertOutsideSource(sourceDir: string, label: string, outputPath: string): void {
+  const rel = relative(resolve(sourceDir), resolve(outputPath));
+  const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (rel !== '' && outside) return;
+  throw new Error(
+    `${label} ${resolve(outputPath)} is inside the source dir ${resolve(sourceDir)} - the tool is read-only on the source (§10.3 rule 1); pass a path outside the export`,
+  );
+}
+
+/**
+ * Validate the built plan before ANY write (both modes). The ingestion boundary
+ * (validateSourceRow) already vetted raw rows; this pass covers DERIVED docs and the
+ * cross-family invariant: no two planned docs may share an `_id` within one target
+ * collection (e.g. a source integration_config forging an `intdef:` id would silently
+ * clobber a derived integration-definition doc, or vice versa, on upsert).
+ */
+export function validatePlan(plan: FamilyPlan[]): void {
+  const byCollection = new Map<string, Map<string, string>>(); // collection -> _id -> family
+  for (const p of plan) {
+    if (p.kind !== 'collection' || !p.targetCollection) continue;
+    let ids = byCollection.get(p.targetCollection);
+    if (!ids) {
+      ids = new Map();
+      byCollection.set(p.targetCollection, ids);
+    }
+    for (const doc of p.docs) {
+      const id = (doc as { _id?: unknown })._id;
+      if (typeof id !== 'string' || id === '' || id.includes('\0')) {
+        throw new Error(
+          `hostile source: family ${p.family} plans a doc whose _id is not a plain non-empty string (${JSON.stringify(id)}) - refusing to build an upsert filter from it`,
+        );
+      }
+      const holder = ids.get(id);
+      if (holder !== undefined) {
+        throw new Error(
+          holder === p.family
+            ? `plan collision: family ${p.family} plans _id ${id} twice in collection ${p.targetCollection}`
+            : `plan collision: _id ${id} in collection ${p.targetCollection} is produced by both '${holder}' and '${p.family}' - one would silently overwrite the other on upsert`,
+        );
+      }
+      ids.set(id, p.family);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Store registry (execute + verify)
 // ---------------------------------------------------------------------------
 
@@ -661,8 +750,15 @@ async function executeProse(plan: FamilyPlan, contentDataDir: string): Promise<{
  * or checksum mismatch flips `ok` to false and is journaled as an anomaly.
  */
 export async function runImport(opts: RunOptions): Promise<RunResult> {
+  // Read-only-on-source guards (§10.3 rule 1): every output path this run can write - the
+  // journal and, on execute, the blob/prose target - must live OUTSIDE the source export.
+  assertOutsideSource(opts.sourceDir, 'journal path', opts.journalPath);
+  if (opts.execute && opts.contentDataDir) {
+    assertOutsideSource(opts.sourceDir, 'content data dir', opts.contentDataDir);
+  }
   const source = loadSource(opts.sourceDir);
   const plan = buildPlan(source);
+  validatePlan(plan);
   const journal = new Journal(opts.journalPath);
   const started = new Date(opts.now?.() ?? Date.now()).toISOString();
   const mode: RunResult['mode'] = opts.execute ? 'execute' : 'dry-run';

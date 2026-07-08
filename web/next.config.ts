@@ -61,6 +61,46 @@ const nextConfig: NextConfig = {
       { source: "/settings", destination: "/settings/platform", permanent: false },
     ];
   },
+
+  // Security-headers baseline for the dashboard (ch09 §9.8 D1, FIXED-14) — the web half of
+  // D1; the api sets its own via composition-root middleware. A dashboard-scoped CSP (self +
+  // the inline styles/scripts Next emits; connect to the API origin; frame-ancestors 'none'
+  // so the authenticated dashboard cannot be framed by a served app or hostile origin), plus
+  // HSTS / nosniff / referrer / X-Frame-Options.
+  async headers() {
+    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || "";
+    const connectSrc = ["'self'", apiOrigin].filter(Boolean).join(" ");
+    // Next's dev server (fast-refresh/HMR) and the webpack runtime evaluate code via eval, so
+    // 'unsafe-eval' is required for the app to run; 'unsafe-inline' covers Next's inline
+    // bootstrap. Websocket dev-HMR needs ws: in connect-src. The security-load-bearing directives
+    // here are frame-ancestors 'none' (anti-clickjacking, the D1 requirement) + base-uri 'none';
+    // script tightening to nonces is a certification-phase hardening (§9.9), not this run.
+    const isDev = process.env.NODE_ENV !== "production";
+    const scriptSrc = isDev ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+    const connect = isDev ? `connect-src ${connectSrc} ws: wss:` : `connect-src ${connectSrc}`;
+    const csp = [
+      "default-src 'self'",
+      scriptSrc,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      connect,
+      "frame-ancestors 'none'",
+      "base-uri 'none'",
+    ].join("; ");
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: csp },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

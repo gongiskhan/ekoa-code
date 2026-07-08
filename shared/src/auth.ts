@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { OkResponse, Role } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
+// `.strict()`, NOT `.passthrough()`: AuthUser is a RESPONSE shape (`/auth/me`, `login.user`,
+// `devicePoll.user`). Passthrough would let a secret-bearing field (`passwordHash`, a reset
+// token) validate as a legal AuthUser body; strict makes the contract itself forbid any field
+// not listed here, so the contract test catches a future leak (ch09 §9.3 invariant 2). The
+// server already whitelists these fields explicitly (auth/service.ts `view()`); this makes the
+// guard structural, not disciplinary.
 export const AuthUser = z
   .object({
     id: z.string(),
@@ -13,7 +19,7 @@ export const AuthUser = z
     passwordChangeRequired: z.boolean().optional(),
     preferences: z.record(z.unknown()).optional(),
   })
-  .passthrough();
+  .strict();
 export type AuthUser = z.infer<typeof AuthUser>;
 
 export const LoginRequest = z.object({

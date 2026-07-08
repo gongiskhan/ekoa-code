@@ -11,6 +11,9 @@ coverage/
 !.env.example
 test-results/
 playwright-report/
+# Runtime data working dir (e2e harness mirrors the canonical api/assets/demos spine here;
+# server featured-builds/sandboxes also land here). Not source - never committed.
+ekoa-data/
 
 # >>> autothing >>>
 # evidence binaries + liveness state (resume-critical small files stay versioned)

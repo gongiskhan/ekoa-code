@@ -30,7 +30,12 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LEDGER = join(ROOT, 'api/tests/SUITE_LEDGER.json');
 
 // Gate ordering (chapter 14). Index = "has arrived by".
-const GATE_ORDER = ['G-P', 'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G7A', 'G7B', 'G8', 'G8A', 'G9', 'G10', 'G11', 'G12', 'G13'];
+// 'CUTOVER' is a post-run milestone (spec §14.4: staging/parity/cutover are the founder-gated
+// procedure OUTSIDE this run). Artifacts targeting it are AWAITING at every in-run gate (G-P..G13)
+// and report "skipped (awaiting CUTOVER)" — used for the erp-* drivers that exercise the
+// brasilsalomão customer TENANT FORK, which is not in the ported reference catalog (§14.1) and is
+// reconstituted only at cutover. See the RUN_LOG DEVIATION (2026-07-08, Phase 12).
+const GATE_ORDER = ['G-P', 'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G7A', 'G7B', 'G8', 'G8A', 'G9', 'G10', 'G11', 'G12', 'G13', 'CUTOVER'];
 const gateIndex = (g) => {
   const i = GATE_ORDER.indexOf(g);
   if (i < 0) throw new Error(`Unknown gate: ${g}`);

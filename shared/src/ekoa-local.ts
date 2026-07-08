@@ -141,7 +141,11 @@ export const DelegatedTask = z.object({
   pairingId: z.string(),
   grantRefs: z.array(z.string()),
   task: z.string(),
-  budget: z.object({ egressBytes: z.number(), modelSpend: AllowanceRef }),
+  // egressBytes is a SIGNED cap. `.finite().nonnegative()` rejects Infinity/-Infinity (zod 3's
+  // z.number() accepts Infinity) - a non-finite number would canonicalise to the JSON bytes
+  // `null` (see stableStringify) and collapse two distinct budgets onto identical signing bytes
+  // (§18.1 canonicalisation must be injective over accepted values).
+  budget: z.object({ egressBytes: z.number().finite().nonnegative(), modelSpend: AllowanceRef }),
   expiry: z.string(),
   nonce: z.string(),
   sig: z.string(),
@@ -201,6 +205,13 @@ export type BridgeFrame = z.infer<typeof BridgeFrame>;
  * NOT here (each side holds its own); this is only the bytes.
  */
 function stableStringify(value: unknown): string {
+  // A non-finite number (NaN/Infinity) JSON.stringifies to `null`, which would make
+  // canonicalisation non-injective (two distinct tasks → identical signing bytes). Refuse it
+  // loudly rather than sign ambiguous bytes; the DelegatedTask schema already rejects a
+  // non-finite egressBytes, so this is a belt-and-braces guard for any future signed field.
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error('canonicalTaskBinding: refusing to sign a non-finite number (ambiguous canonical bytes)');
+  }
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   const obj = value as Record<string, unknown>;

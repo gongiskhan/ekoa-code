@@ -29,11 +29,25 @@ export const ErrorCode = z.enum([
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
+/**
+ * `details` is bounded to plain JSON values (scalars, arrays, nested records) - NOT `unknown`.
+ * This is a contract-level egress guard (ch09 §9.3 invariant 2, error sanitisation to clients):
+ * a raw driver error, an `Error` instance, a stack-trace object, a `Buffer`, or any class
+ * instance carries non-plain / non-enumerable / circular structure and does NOT satisfy this
+ * schema, so it cannot validate as a legal error body. Legitimate details - zod validation
+ * `issues`, a `billingUrl`, a `reason`, a `retryAfter` - are all plain JSON and pass. Runtime
+ * sanitisation (FIXED-8) remains the primary control; this makes the contract test a guard too.
+ */
+export const JsonValue: z.ZodType<unknown> = z.lazy(() =>
+  z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(JsonValue), z.record(JsonValue)]),
+);
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
+
 export const ErrorEnvelope = z.object({
   error: z.object({
     code: ErrorCode,
     message: z.string(),
-    details: z.record(z.unknown()).optional(),
+    details: z.record(JsonValue).optional(),
   }),
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelope>;

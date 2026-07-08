@@ -42,11 +42,22 @@ export const IntegrationConfigSummary = z
   .passthrough();
 export type IntegrationConfigSummary = z.infer<typeof IntegrationConfigSummary>;
 
+/** Capture STATUS metadata only (ch05 session-connect). The captured Playwright storageState /
+ *  cookies are SECRET, consumed in-memory by the automation engine (§5.6.7, invariant I2), and
+ *  MUST NEVER be serialized to a client - so this nested shape is bounded to status metadata, not
+ *  an open record that could carry the storageState. */
+export const SessionSnapshot = z.object({
+  status: z.enum(['none', 'waiting_login', 'captured', 'failed']),
+  capturedAt: z.string().nullable().optional(),
+  message: z.string().optional(),
+});
+export type SessionSnapshot = z.infer<typeof SessionSnapshot>;
+
 export const SessionCaptureStatus = z
   .object({
     integrationKey: z.string().optional(),
     status: z.string(),
-    session: z.record(z.unknown()).optional(),
+    session: SessionSnapshot.optional(),
     updatedAt: IsoTimestamp.optional(),
   })
   .passthrough();
@@ -81,7 +92,11 @@ export type RefreshRegistryResponse = z.infer<typeof RefreshRegistryResponse>;
 
 export const ConnectSessionResponse = z.object({
   started: z.boolean(),
-  session: z.record(z.unknown()),
+  // Status metadata only (see SessionSnapshot) - never the captured storageState.
+  session: z.object({
+    status: z.enum(['waiting_login', 'failed']),
+    message: z.string().optional(),
+  }),
 });
 export type ConnectSessionResponse = z.infer<typeof ConnectSessionResponse>;
 

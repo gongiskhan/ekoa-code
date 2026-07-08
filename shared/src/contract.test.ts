@@ -110,3 +110,60 @@ describe('shared contract', () => {
     }
   });
 });
+
+/**
+ * G12 security phase - contract-level egress/injection guards (the shared/ Codex scope).
+ * Each test pins a fix so the class is machine-caught forever (the determinism ratchet).
+ */
+describe('shared contract - security ratchet (G12)', () => {
+  it('the error envelope details is bounded to plain JSON - non-JSON internal objects cannot validate', () => {
+    // Accidental internal objects (a Date, a Buffer, a bigint) in details are exactly the
+    // careless-`sendError` leak shapes; the JsonValue bound rejects them at the contract boundary
+    // (ch09 §9.3 invariant 2 is the runtime control; this makes the contract test a guard too).
+    const buf = { error: { code: 'INTERNAL', message: 'x', details: { blob: Buffer.from('secret') } } };
+    expect(ErrorEnvelope.safeParse(buf).success).toBe(false);
+    const date = { error: { code: 'INTERNAL', message: 'x', details: { at: new Date() } } };
+    expect(ErrorEnvelope.safeParse(date).success).toBe(false);
+    const big = { error: { code: 'INTERNAL', message: 'x', details: { n: 10n } } };
+    expect(ErrorEnvelope.safeParse(big).success).toBe(false);
+    // legitimate structured details (validation issues, a billingUrl) still pass
+    const okDetails = { error: { code: 'VALIDATION_FAILED', message: 'x', details: { issues: [{ code: 'invalid_type', path: ['a'], message: 'req' }], billingUrl: 'https://x' } } };
+    expect(ErrorEnvelope.safeParse(okDetails).success).toBe(true);
+  });
+
+  it('AuthUser is strict - a passwordHash-bearing object cannot validate as an AuthUser (no secret leak)', async () => {
+    const { AuthUser } = await import('./auth.js');
+    const base = { id: 'u1', username: 'a', role: 'builder', orgId: 'o1', active: true };
+    expect(AuthUser.safeParse(base).success).toBe(true);
+    expect(AuthUser.safeParse({ ...base, passwordHash: '$2b$...' }).success).toBe(false);
+    expect(AuthUser.safeParse({ ...base, resetToken: 'deadbeef' }).success).toBe(false);
+  });
+
+  it('session-capture responses carry status metadata only, never the captured storageState', async () => {
+    const { SessionCaptureStatus, ConnectSessionResponse } = await import('./integrations.js');
+    expect(SessionCaptureStatus.safeParse({ status: 'ok', session: { status: 'captured', capturedAt: '2026-07-08T00:00:00Z' } }).success).toBe(true);
+    // a raw Playwright storageState (cookies) is not a legal session snapshot
+    expect(
+      SessionCaptureStatus.safeParse({ status: 'ok', session: { cookies: [{ name: 'sid', value: 'secret' }] } }).success,
+    ).toBe(false);
+    expect(ConnectSessionResponse.safeParse({ started: true, session: { status: 'waiting_login' } }).success).toBe(true);
+    expect(ConnectSessionResponse.safeParse({ started: true, session: { storageState: { cookies: [] } } }).success).toBe(false);
+  });
+
+  it('DelegatedTask signing bytes are injective - a non-finite egress budget cannot be signed (§18.1)', async () => {
+    const { DelegatedTask, canonicalTaskBinding } = await import('./ekoa-local.js');
+    const base = {
+      taskId: 't', org: 'o', user: 'u', session: 's', pairingId: 'p', grantRefs: ['g'],
+      task: 'read', budget: { egressBytes: 1000, modelSpend: { userId: 'u' } }, expiry: '2026-07-08T00:00:00Z', nonce: 'n', sig: 'x',
+    };
+    expect(DelegatedTask.safeParse(base).success).toBe(true);
+    // an Infinity egress cap is rejected at the schema boundary (would canonicalise to `null`)
+    expect(DelegatedTask.safeParse({ ...base, budget: { egressBytes: Infinity, modelSpend: { userId: 'u' } } }).success).toBe(false);
+    // and the canonicaliser refuses a non-finite number defensively
+    expect(() => canonicalTaskBinding({ ...base, budget: { egressBytes: Infinity, modelSpend: { userId: 'u' } } } as never)).toThrow(/non-finite/);
+    // two distinct finite budgets produce distinct signing bytes (injective)
+    const a = canonicalTaskBinding({ ...base, budget: { egressBytes: 1000, modelSpend: { userId: 'u' } } });
+    const b = canonicalTaskBinding({ ...base, budget: { egressBytes: 2000, modelSpend: { userId: 'u' } } });
+    expect(a).not.toBe(b);
+  });
+});

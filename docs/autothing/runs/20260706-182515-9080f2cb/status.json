@@ -1,9 +1,0 @@
-{
- "slice": "phase-12",
- "gate": "in-progress-3of5-codex-scopes-done",
- "lastAction": "G12: 3 cross-model scopes done (bridge 6 findings, anonymisation 1+4rebut, whole-repo authz 4 - all CLEAN/fixed+tested). 11 real security findings fixed. Remaining: migration-tooling+shared Codex scopes + Claude built-in security-review + 3 docs/security + gate",
- "at": "2026-07-08T06:26:38Z",
- "model": "claude-fable-5",
- "iteration": 45,
- "resumePosture": "clean: gate-P..gate-11 tagged + G12 partial (3 Codex scopes CLEAN: bridge/anonymisation/whole-repo-authz, 11 findings fixed+tested, 4 rebutted, all committed 3127f42..0faeb0d; objective suites green); Codex credits BACK; remaining = migration-tooling+shared Codex scopes + Claude built-in security-review + 3 docs/security one-pagers + record verdicts + ci:lane + tag gate-12"
-}

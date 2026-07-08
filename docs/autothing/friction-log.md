@@ -1,0 +1,1 @@
+- 2026-07-08T09:11:32Z [autothing/e2e] SIGKILLing the e2e-with-server parent orphans its playwright chromium children (12 leftover), which then starve later ci:lane runs of CPU -> add explicit child-browser cleanup on e2e teardown, or sweep ms-playwright orphans before a fresh lane.

@@ -13,6 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import express, { type Express, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
+import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
 import { users } from './data/stores.js';
 import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
@@ -173,6 +174,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const app = express();
   app.set('env', config.nodeEnv);
   app.disable('x-powered-by');
+
+  // Security-headers baseline (ch09 §9.8 D1, FIXED-14) — before any route so every response
+  // (JSON API + served-app plane) inherits nosniff/HSTS/referrer + a surface-appropriate CSP
+  // and frame policy. A served-app handler may override before emit.
+  app.use(securityHeaders);
 
   // Usage push seam (§6.7, ch02 §2.8 seam 1): billing/ never imports events/, so the composition
   // root injects the notifier that pushes `usage_updated` on the billee's notifications channel.

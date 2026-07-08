@@ -238,3 +238,82 @@ describe('the zero-tolerance checks bite', () => {
     expect(a.checksum).toBe(b.checksum); // order-independent
   });
 });
+
+describe('hostile-source hardening (G12 security phase)', () => {
+  let n = 0;
+  const journalOutside = (): string => join(tmpRoot, `hostile-${n++}.log`);
+
+  /** Copy the clean fixture and mutate one file - the hostile export under test. */
+  function hostileCopy(name: string, mutate: (dir: string) => void): string {
+    const dir = join(tmpRoot, `hostile-src-${name}`);
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    cpSync(SOURCE, dir, { recursive: true });
+    mutate(dir);
+    return dir;
+  }
+
+  it('rejects a journal path inside the source export (read-only-on-source, §10.3 rule 1)', async () => {
+    const journalInSource = join(SOURCE, 'RUN_LOG.migration.txt');
+    await expect(
+      runImport({ sourceDir: SOURCE, execute: false, journalPath: journalInSource }),
+    ).rejects.toThrow(/read-only on the source/);
+    expect(existsSync(journalInSource)).toBe(false); // nothing was written into the source
+  });
+
+  it('rejects a content data dir inside (or equal to) the source export on execute', async () => {
+    await expect(
+      runImport({ sourceDir: SOURCE, execute: true, journalPath: journalOutside(), contentDataDir: join(SOURCE, 'out') }),
+    ).rejects.toThrow(/read-only on the source/);
+    await expect(
+      runImport({ sourceDir: SOURCE, execute: true, journalPath: journalOutside(), contentDataDir: SOURCE }),
+    ).rejects.toThrow(/read-only on the source/);
+  });
+
+  it('rejects a row whose _id is not a plain string (an object _id would become a Mongo operator filter)', async () => {
+    const dir = hostileCopy('objid', (d) => {
+      const p = join(d, 'settings.json');
+      const rows = JSON.parse(readFileSync(p, 'utf8')) as PlainDoc[];
+      rows.push({ _id: { $gt: '' } as unknown as string, theme: 'evil' });
+      writeFileSync(p, JSON.stringify(rows));
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/_id is not a plain non-empty string/);
+  });
+
+  it("rejects a row carrying a top-level '$'-prefixed key (operator smuggling)", async () => {
+    const dir = hostileCopy('dollarkey', (d) => {
+      const p = join(d, 'settings.json');
+      const rows = JSON.parse(readFileSync(p, 'utf8')) as PlainDoc[];
+      rows.push({ _id: 'evil-1', $set: { role: 'super-admin' } } as unknown as PlainDoc);
+      writeFileSync(p, JSON.stringify(rows));
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/'\$'-prefixed key/);
+  });
+
+  it('rejects a cross-family _id collision instead of silently overwriting (intdef forgery)', async () => {
+    const dir = hostileCopy('collision', (d) => {
+      const p = join(d, 'integration_configs.json');
+      const rows = JSON.parse(readFileSync(p, 'utf8')) as PlainDoc[];
+      rows.push({ _id: 'intdef:github', provider: 'forged' });
+      writeFileSync(p, JSON.stringify(rows));
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/plan collision/);
+  });
+
+  it('rejects an artifact _id that is not a safe path segment (screenshotPath rewrite containment)', async () => {
+    const dir = hostileCopy('traversal', (d) => {
+      const p = join(d, 'artifacts.json');
+      const rows = JSON.parse(readFileSync(p, 'utf8')) as PlainDoc[];
+      rows.push({ _id: '../../etc', title: 'evil', screenshotPath: '/tmp/x/shot.png' });
+      writeFileSync(p, JSON.stringify(rows));
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/not a safe path segment/);
+  });
+});

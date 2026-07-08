@@ -20,10 +20,34 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync } from 'node:fs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PREBUILD_TIMEOUT_MS = 10 * 60_000;
 const READY_TIMEOUT_MS = 90_000;
+
+/**
+ * Zero-machine-setup provisioning (this harness's contract): the demos.spec Tutorial-Bridge
+ * suite is data-driven over `ekoa-data/demos`, but in the rebuild the canonical demo spine
+ * lives at `api/assets/demos` (demo-registry.ts: "the Fonseca spine the demo-spine spec drives").
+ * `ekoa-data/` is a local runtime working dir, not committed, so a fresh checkout has no
+ * `ekoa-data/demos` and the ported spec ENOENTs. Mirror the canonical specs into it here so the
+ * e2e is reproducible on any checkout without touching the ported spec. Idempotent: copies only
+ * missing/newer files.
+ */
+function ensureDemosSpine() {
+  const src = join(ROOT, 'api', 'assets', 'demos');
+  const dst = join(ROOT, 'ekoa-data', 'demos');
+  if (!existsSync(src)) return;
+  mkdirSync(dst, { recursive: true });
+  for (const name of readdirSync(src)) {
+    const s = join(src, name);
+    if (!statSync(s).isFile()) continue;
+    const d = join(dst, name);
+    if (!existsSync(d) || statSync(s).mtimeMs > statSync(d).mtimeMs) copyFileSync(s, d);
+  }
+}
+ensureDemosSpine();
 
 function waitForLine(child, pattern, timeoutMs, label) {
   return new Promise((resolvePromise, reject) => {
