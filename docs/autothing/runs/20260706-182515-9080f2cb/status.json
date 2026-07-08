@@ -1,9 +1,9 @@
 {
  "slice": "phase-12",
- "gate": "ready-to-start",
- "lastAction": "G11 PASSED + tagged gate-11 (discovery + \u00a713.6 gap census + 10 platform-page specs). 16/18 done. Next: G12 the SECURITY PHASE (whole-repo: Claude built-in security-review + the deferred Codex adversarial+security passes for G8A/G9/G10 + objective suites + 3 docs/security one-pagers)",
- "at": "2026-07-08T05:26:30Z",
+ "gate": "in-progress-2of4-codex-scopes-done",
+ "lastAction": "G12 security phase: Codex credits BACK. Bridge scope (6 findings fixed) + anonymisation scope (M1 fixed, 4 rebutted) done. Objective suites green. Remaining: whole-repo+tooling+shared Codex scopes + Claude security-review + 3 docs/security + gate",
+ "at": "2026-07-08T06:03:36Z",
  "model": "claude-fable-5",
- "iteration": 43,
- "resumePosture": "clean: gate-P..gate-11 tagged (17 tags), all suites green (ci:lane 0); next = G12 final security phase (needs Codex credits for the cross-model passes - check first; the objective cross-org/rate-spend/new-surface suites + Claude security-review + docs are runnable regardless)"
+ "iteration": 44,
+ "resumePosture": "clean: gate-P..gate-11 tagged + G12 partial (bridge+anonymise Codex scopes done, 7 findings fixed+tested, 4 rebutted, all committed; objective suites green); Codex credits BACK; remaining = whole-repo/tooling/shared Codex scopes + Claude built-in security-review + 3 docs/security one-pagers + record 4 verdicts + ci:lane + tag gate-12"
 }
