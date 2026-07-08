@@ -12,6 +12,30 @@ CUTOVER deferral) is already documented in RUN_LOG.md (2026-07-08 DEVIATIONs) an
 Class vocabulary (per mission): `bug` (product defect) | `harness-gap` (works, nothing automated
 covers it) | `judgment` (works, result is poor) | `docs-gap`. Severity: high | medium | minor.
 
+## Summary
+
+28 findings across 9 journeys (F1-F28; F15 folded into F16/F20). By class: ~21 `bug`, 2 `judgment`,
+3 `docs-gap`, plus harness-gaps noted inline. By severity: **9 high, ~11 medium, the rest minor.**
+
+The high-severity set, ranked by operator impact:
+1. **F16 + F28 (J3, the priority journey):** builds report `completed` but serve the untouched
+   scaffold placeholder - the real generated app lands in an unserved file, the manifest entrypoint is
+   never edited - AND per-build verification passes the scaffold and bills for it. The build-to-served
+   product does not deliver on its core promise, and its safety net does not catch that.
+2. **F2 (LLM egress):** no credential-provisioning surface at all, and the default gateway topology
+   401s even when credentialed - the platform cannot talk to a model without out-of-band wiring.
+3. **F1 (auth):** the entire auth lifecycle past login/me is unimplemented; logout does not revoke.
+4. **F20 (chat):** the terminal result is truncated and the truncated text is what gets PERSISTED as
+   chat history - stored data corruption, not just a display bug.
+5. **F21 (memory recall), F22 (memory UI dead on a schema violation), F26 (anon reply shows the token
+   not the NIF), F25 (host-context bleed - high IF reproduced against prod).**
+
+What is genuinely SOUND (verified, not findings): tenant isolation held everywhere probed (J5);
+tokens-only anonymisation egress proven (32 audit rows + 9/9 chokepoint spec); billing arithmetic
+reconciles to the token with no orphan rows (J9); the webhook admission plane is byte-exact to spec
+(J8); deactivation is immediate and fail-closed at every plane (J1). The generated app CODE is correct
+- the build system just serves the wrong file.
+
 ## Findings
 
 | # | Journey | Class | Sev | Finding | Evidence | Suggested fix scope |

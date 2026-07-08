@@ -1,3 +1,8 @@
+<!-- ARCHIVE-MARK (2026-07-08, rc-1 hardening): HISTORICAL run scaffolding, kept as the audit
+record - NOT edited or deleted. This is the gate G-P traceability deliverable that drove the build;
+it is superseded as a status source by docs/spec-status-annex.md (as-built chapter status) and
+docs/release/FINDINGS.md (the live delta list). Read those for what the rc-1 code actually does. -->
+
 # PLAN.md — Ekoa rebuild implementation run
 
 The chapter-14 §14.4 phase ordering, adopted as recommended (no reorder). This is the gate G-P deliverable: a traceability table assigning every acceptance criterion of chapters 02-14, 17, 18 to exactly one phase, plus the census reconciliation and the §14.3 constraint check. Chapters 01, 11, 15, 16 carry no numbered acceptance criteria (01 is the one-page overview; 11 is the glossary; 15/16 are the P/Q registers, all resolved — verified below).

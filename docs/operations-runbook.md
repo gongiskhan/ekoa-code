@@ -98,7 +98,11 @@ provider credential is a single AES-encrypted document in the `credentials` Mong
 `api/src/llm/credentials.ts`. There is no env var, no HTTP route, and no migration that seeds it. A
 fresh boot is therefore honestly un-credentialed: `GET /health` reports `claudeAuth.configured=false`
 and `claudeAuth.ok=false`, and every chat/build call errors with "No model credential configured"
-until the credential is seeded out-of-band. Remediation brief: `docs/release/FINDINGS.md`.
+until the credential is seeded out-of-band. Remediation brief: `docs/release/FINDINGS.md` (F2). To run
+real chat/build in dev today, `docs/release/probes/boot-b.mjs` seeds the credential from the operator's
+Keychain into an ephemeral mongo before boot; note the DEFAULT chokepoint topology still 401s even
+credentialed (the gateway key is never provisioned - F2), so that harness sets
+`LLM_CHOKEPOINT_BASE_URL=https://api.anthropic.com` via `EKOA_LLM_DIRECT=1`.
 
 Env names the API reads, with dev defaults:
 
