@@ -22,6 +22,11 @@ module.exports = {
     '**/*.js',
     '**/*.cjs',
     '**/*.mjs',
+    // web/ is a Next.js app with its own flat config (web/eslint.config.mjs: next + react-hooks
+    // plugins this legacy-eslintrc config does not load). It self-lints via `npm run lint
+    // --workspace web` (root `lint` script), which also enforces the web->api FIXED-1 boundary
+    // there. The root config keeps api->web and shared->web (those files are still linted here).
+    'web/**',
     'web/.next/**',
     // Data trees, not platform source: app scaffold templates and the versioned
     // featured-artifact scaffolds (user-app JSX built by the apps/ pipeline, ch07).

@@ -14,7 +14,7 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace api && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "eslint .",
+    "lint": "eslint . && npm run lint --workspace web",
     "test": "npm run test --workspaces --if-present",
     "test:contract": "npm run test:contract --workspace api --if-present",
     "e2e": "node scripts/suite-ledger-run.mjs --run",
