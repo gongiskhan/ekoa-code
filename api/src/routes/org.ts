@@ -25,15 +25,20 @@ export function orgRouter(_deps: { now: () => number; genId: () => string }): Ro
     res.json(orgView(updated));
   });
 
-  r.put('/branding', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, BrandingSaveRequest, req.body) as { branding: unknown; displayName?: string } | undefined;
-    if (!body) return;
-    const updated = await updateOrg(actorOf(req).orgId, { branding: body.branding as Record<string, unknown>, ...(body.displayName ? { displayName: body.displayName } : {}) });
-    if (!updated) return notFound(res);
-    res.json(orgView(updated));
-  });
+  // Mounted at BOTH /api/v1/org/branding (legacy, carried) and /api/v1/branding (the contract
+  // path, via routes/branding.ts) — ONE handler, aliased, never duplicated (F4).
+  r.put('/branding', requireRole('org-admin', 'super-admin'), saveBrandingHandler);
 
   return r;
+}
+
+/** The branding save (F4). Exported so the contract-path router aliases this exact handler. */
+export async function saveBrandingHandler(req: AuthedRequest, res: Response): Promise<void> {
+  const body = parseBody(res, BrandingSaveRequest, req.body) as { branding: unknown; displayName?: string } | undefined;
+  if (!body) return;
+  const updated = await updateOrg(actorOf(req).orgId, { branding: body.branding as Record<string, unknown>, ...(body.displayName ? { displayName: body.displayName } : {}) });
+  if (!updated) return notFound(res);
+  res.json(orgView(updated));
 }
 
 export function orgsRouter(deps: { now: () => number; genId: () => string }): Router {

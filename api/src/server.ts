@@ -24,6 +24,7 @@ import { sendError } from './routes/helpers.js';
 import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
 import { orgRouter, orgsRouter } from './routes/org.js';
+import { brandingRouter } from './routes/branding.js';
 import { settingsRouter } from './routes/settings.js';
 import { sessionsRouter } from './routes/sessions.js';
 import { memoriesRouter } from './routes/memories.js';
@@ -486,6 +487,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G3 — platform CRUD domains.
   app.use('/api/v1/users', usersRouter(deps));
   app.use('/api/v1/org', orgRouter(deps));
+  // F4: the contract branding paths (PUT /api/v1/branding + POST /api/v1/branding/research).
+  app.use('/api/v1/branding', brandingRouter(deps));
   app.use('/api/v1/orgs', orgsRouter(deps));
   app.use('/api/v1/settings', settingsRouter(deps));
   app.use('/api/v1/sessions', sessionsRouter(deps));
@@ -520,6 +523,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G6 — artifacts (platform) + the byte-compatible served-app plane (outside /api/v1).
   app.use('/api/v1/artifacts', artifactsRouter(deps));
   app.use('/api/v1/company-space', companySpaceRouter(deps));
+
+  // F6: terminal JSON-404 for the platform API. Every non-2xx body must validate against the
+  // shared error envelope (QA block); an unmounted /api/v1/* path previously fell through to
+  // Express's default HTML 404, so clients that parse JSON got HTML. SCOPED TO /api/v1 on
+  // purpose: the served-app data plane (/api/app-data, /api/app-shared), /api/design-tokens.css,
+  // /api/m365 and the /apps/* SPA fallbacks own their own not-found behavior. It sits AFTER every
+  // /api/v1 router, so a mounted route still answers (a 401 stays a 401, never a 404).
+  app.use('/api/v1', (_req: Request, res: Response) => {
+    sendError(res, 'NOT_FOUND', 'Não encontrado.');
+  });
+
   app.use('/api', servedDataRouter(deps));
   // Legal vertical services + e-signature (full paths carried inside the routers).
   // The owner-spine seams read/write the app owner's SHARED collections (usr.<owner>)

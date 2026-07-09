@@ -17,6 +17,8 @@ const COVERED = new Set<string>([
   'auth.refresh', 'auth.logout', 'auth.changePassword', 'auth.deviceStart', 'auth.devicePoll', 'auth.deviceApprove',
   'users.list', 'users.create', 'users.update', 'users.remove', 'users.resetPassword',
   'org.getOrg', 'org.updateOrg', 'org.saveBranding', 'org.createOrg', 'org.listOrgs', 'org.patchOrg',
+  // batch1 F4 — brand research at the contract path (branding.test.ts)
+  'org.researchBranding',
   'settings.get', 'settings.update', 'settings.updateMe',
   'sessions.create', 'sessions.list', 'sessions.get', 'sessions.update', 'sessions.delete', 'sessions.getMessages', 'sessions.addMessage',
   'memories.list', 'memories.get', 'memories.create', 'memories.update', 'memories.delete',
@@ -72,7 +74,7 @@ const COVERED = new Set<string>([
 // documents list/ingest/delete, uploads create/delete, reindex, index-status). Knowledge crawl
 // endpoints (updateSource, crawlSource, crawlStatus, refreshSchedule) remain PENDING for the crawl gate.
 // G7B agent-execution: 80->72 as chat runs (4) + build jobs (4) landed with their contract tests.
-const EXPECTED_PENDING_COUNT = 65; // batch1 F1 landed all 7 auth-lifecycle endpoints (72 -> 65)
+const EXPECTED_PENDING_COUNT = 64; // F1 landed 7 (72->65); F4 landed org.researchBranding (65->64)
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {

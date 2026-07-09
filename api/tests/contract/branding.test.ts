@@ -29,6 +29,17 @@ const authed = (p: string, t: string, init: RequestInit = {}) =>
   fetch(`http://127.0.0.1:${port}${p}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${t}`, ...(init.headers ?? {}) } });
 const readJson = async (r: Response): Promise<Record<string, unknown>> => (await r.json()) as Record<string, unknown>;
 
+/** The job is persisted asynchronously after the 202 (the agent fires off the response path),
+ *  so poll briefly rather than assume the write already landed. */
+async function awaitJob(jobId: string): Promise<Record<string, unknown> | null> {
+  for (let i = 0; i < 50; i++) {
+    const job = await jobs.get(jobId);
+    if (job) return job as unknown as Record<string, unknown>;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return null;
+}
+
 async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
@@ -100,7 +111,7 @@ describe('POST /api/v1/branding/research', () => {
     expect(typeof body.jobId).toBe('string');
 
     // the job really exists and is a brand-research job owned by the caller
-    const job = (await jobs.get(body.jobId as string)) as unknown as { kind: string; userId: string } | null;
+    const job = (await awaitJob(body.jobId as string)) as unknown as { kind: string; userId: string } | null;
     expect(job?.kind).toBe('brand-research');
     expect(job?.userId).toBe('admin');
   });
@@ -110,7 +121,7 @@ describe('POST /api/v1/branding/research', () => {
     const t = await tokenFor('admin');
     const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://marca-unica.example' }) });
     const body = await readJson(res);
-    const job = (await jobs.get(body.jobId as string)) as unknown as { request?: Record<string, unknown> } | null;
+    const job = (await awaitJob(body.jobId as string)) as unknown as { request?: Record<string, unknown> } | null;
     expect(JSON.stringify(job?.request ?? {})).toContain('marca-unica.example');
   });
 
