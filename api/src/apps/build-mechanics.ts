@@ -9,9 +9,11 @@
  * (the same structural-binding pattern content/ uses for `assembleAgentContext`). apps/ MAY
  * import data/ (store access) — done the way artifacts-service.ts does it.
  */
-import { rm } from 'node:fs/promises';
+import { rm, readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { artifacts, slugs, users } from '../data/stores.js';
 import { generateSlug, type ArtifactDoc } from './artifacts-service.js';
 import { newProjectDir, projectDirFor, patchArtifactData } from './app-paths.js';
@@ -26,6 +28,12 @@ export interface BuildMechanicsDeps {
   now: () => number;
   genId: () => string;
 }
+
+const execFileAsync = promisify(execFile);
+
+/** Content fingerprints of the Ekoa scaffold placeholder (assets/scaffold-templates/App.jsx).
+ *  A built output still carrying any of these is serving the scaffold, not the user's app. */
+const SCAFFOLD_MARKERS = ['scaffold-root', "Let's build something that will change", 'Powered by Ekoa'] as const;
 
 /**
  * Build the real BuildMechanics over the G6 pipeline. A factory because the mechanics need the
@@ -205,6 +213,76 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         const data = { ...((a.data as Record<string, unknown> | undefined) ?? {}), appUrl: input.appUrl };
         return { ...a, status: 'active', slug: input.slug, data };
       });
+    },
+
+    /**
+     * Honest-completion gate (F16, ch05 §5.6.2 step 5a). Three deterministic signals over the
+     * project tree the moment the completion sequence runs:
+     *   1. entrypoint-untouched — `git diff` from the scaffold baseline (the repo ROOT commit,
+     *      "Initial scaffold", scaffold.ts seedGit) to the WORKING TREE shows no change under
+     *      `frontend/src/`;
+     *   2. scaffold-fingerprinted output — the built `dist/bundle.js` (or, for a plain-HTML app,
+     *      `dist/index.html`) still carries a scaffold marker;
+     *   3. orphan top-level HTML — a `*.html` other than `index.html` at the project root (the
+     *      builder never serves those; builder.ts entry resolution).
+     * NOT clean when 1 or 2 holds (3 sharpens the reason). Infra hiccups (no git, unreadable
+     * dist) degrade that signal to "no evidence" rather than failing the build on gate plumbing —
+     * the gate exists to catch the model's miss, never to fabricate one.
+     */
+    async assertProgress(input: { artifactId: string; projectDir: string }): Promise<{ clean: boolean; reasons: string[] }> {
+      const reasons: string[] = [];
+
+      // Signal 1: entrypoint subtree unchanged vs the scaffold baseline (root commit).
+      let entrypointUntouched = false;
+      try {
+        const { stdout: root } = await execFileAsync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: input.projectDir });
+        const base = root.trim().split('\n')[0];
+        if (base) {
+          const { stdout: diff } = await execFileAsync('git', ['diff', '--name-only', base, '--', 'frontend/src'], { cwd: input.projectDir });
+          entrypointUntouched = diff.trim() === '';
+        }
+      } catch {
+        /* no git / no baseline: no evidence either way — rely on the output fingerprint */
+      }
+
+      // Signal 2: built output still fingerprints as the scaffold. Also note whether the app is
+      // still a BUNDLE app — a valid plain-HTML app (§7.2.1: served index, no bundle.js) never
+      // touches frontend/src, so signal 1 only applies while a bundle is what is served.
+      let outputIsScaffold = false;
+      let bundleExists = false;
+      try {
+        const distDir = await distDirOf(input.projectDir);
+        const bundlePath = join(distDir, 'bundle.js');
+        const htmlPath = join(distDir, 'index.html');
+        bundleExists = existsSync(bundlePath);
+        const target = bundleExists ? bundlePath : existsSync(htmlPath) ? htmlPath : null;
+        if (target) {
+          const content = await readFile(target, 'utf-8');
+          outputIsScaffold = SCAFFOLD_MARKERS.some((m) => content.includes(m));
+        }
+      } catch {
+        /* unreadable output: no evidence */
+      }
+
+      // Signal 3: orphan top-level HTML (the classic miss: the real app written where it is never served).
+      let orphanHtml: string[] = [];
+      try {
+        const entries = await readdir(input.projectDir, { withFileTypes: true });
+        orphanHtml = entries
+          .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.html') && e.name.toLowerCase() !== 'index.html')
+          .map((e) => e.name);
+      } catch {
+        /* unreadable root: no evidence */
+      }
+
+      const entrypointSignal = entrypointUntouched && bundleExists;
+      if (entrypointSignal) reasons.push('frontend/src está inalterado desde o modelo inicial');
+      if (outputIsScaffold) reasons.push('a aplicação compilada continua o modelo Ekoa');
+      if (orphanHtml.length > 0 && (entrypointSignal || outputIsScaffold)) {
+        reasons.push(`ficheiro(s) HTML solto(s) na raiz nunca servidos: ${orphanHtml.join(', ')}`);
+      }
+
+      return { clean: !entrypointSignal && !outputIsScaffold, reasons };
     },
   };
 }

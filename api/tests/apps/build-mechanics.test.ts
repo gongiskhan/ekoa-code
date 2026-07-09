@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, rm, access } from 'node:fs/promises';
+import { mkdtemp, rm, access, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
@@ -108,6 +108,54 @@ describe('createBuildMechanics — first build (ch05 §5.6.2, ch07 §7.3/§7.4)'
 
   it('resolveFollowUp returns null for an unknown artifact', async () => {
     expect(await mech.resolveFollowUp('nope')).toBeNull();
+  });
+});
+
+describe('assertProgress — the honest-completion gate over the real pipeline (F16, §5.6.2 step 5a)', () => {
+  it('flags a scaffold build: entrypoint untouched, dist fingerprints as scaffold, orphan HTML named', async () => {
+    // prepareFirstBuild scaffolds + runs the initial build — dist/bundle.js IS the compiled
+    // scaffold and frontend/src is exactly the baseline commit: the J3 miss, reproduced for real.
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 'sess-f16a', description: 'A pessoa manager', language: 'pt' });
+    await writeFile(join(prep.projectDir, 'pessoa.html'), '<html><body>the REAL app, orphaned</body></html>', 'utf-8');
+    await mech.finalizeBundle({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+
+    const verdict = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(verdict.clean).toBe(false);
+    const all = verdict.reasons.join(' | ');
+    expect(all).toContain('frontend/src');
+    expect(all).toContain('modelo');
+    expect(all).toContain('pessoa.html');
+  });
+
+  it('passes a build that really edited the entrypoint and rebuilt', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 'sess-f16b', description: 'A counter', language: 'pt' });
+    const appPath = join(prep.projectDir, 'frontend', 'src', 'App.jsx');
+    await writeFile(appPath, [
+      "import React from 'react';",
+      'export default function App() {',
+      "  const [n, setN] = React.useState(0);",
+      "  return <button onClick={() => setN(n + 1)}>Contador: {n}</button>;",
+      '}',
+    ].join('\n'), 'utf-8');
+    const bundle = await mech.finalizeBundle({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(bundle.ok).toBe(true);
+
+    const verdict = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(verdict.clean).toBe(true);
+    expect(verdict.reasons).toEqual([]);
+  });
+
+  it('does not flag a valid plain-HTML app (§7.2.1): served index, no bundle, frontend/src untouched', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 'sess-f16c', description: 'A static page', language: 'pt' });
+    // Simulate the plain-HTML posture the builder produces: dist/index.html with REAL content,
+    // no bundle.js — frontend/src never touched (its legit shape per bundleValid).
+    const distDir = join(prep.projectDir, 'dist');
+    await rm(distDir, { recursive: true, force: true });
+    await mkdir(distDir, { recursive: true });
+    await writeFile(join(distDir, 'index.html'), '<html><body><h1>A landing page users asked for</h1></body></html>', 'utf-8');
+
+    const verdict = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(verdict.clean).toBe(true);
   });
 });
 

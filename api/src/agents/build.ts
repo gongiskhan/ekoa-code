@@ -203,6 +203,21 @@ interface ExecOpts {
 }
 
 /**
+ * F16 steering: the build agent's system prompt names the served entrypoint and forbids the
+ * orphan-HTML failure mode (the app compiled and served is ALWAYS the manifest entrypoint —
+ * `frontend/src/index.jsx` importing `App.jsx`; a standalone top-level HTML file is never
+ * served). The honest-completion gate below is the SYSTEM's catch for when the model errs
+ * anyway — this prompt just makes the miss rare.
+ */
+const BUILD_SYSTEM_PROMPT = [
+  'You are building a web app inside an Ekoa app workspace.',
+  'The served application is compiled from the manifest entrypoint: frontend/src/index.jsx, which renders frontend/src/App.jsx.',
+  'Make ALL user-visible changes by editing frontend/src/App.jsx (and files it imports under frontend/src/).',
+  'NEVER write a standalone top-level *.html file as the deliverable - top-level HTML files are not served; only the compiled entrypoint bundle is.',
+  'Do not edit dist/ by hand - it is build output, regenerated from frontend/src/.',
+].join('\n');
+
+/**
  * Run the build job through the chokepoint and drive the completion sequence (§5.6.2). Terminal
  * state is owned by the finalize path (dual-fire guarded). The in-process zombie net lives in the
  * `finally`: a run left non-terminal is flipped to `failed { PIPELINE_STUCK }` and the artifact
@@ -293,6 +308,11 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const handle = runAgent(
       {
         prompt: input.description,
+        // F16: pin the agent to the served entrypoint. Nothing else names it (settingSources is
+        // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
+        // never served while the scaffold keeps being compiled. Flows through runAgent's
+        // anonymise path like every prompt (client.ts systemPrompt handling).
+        systemPrompt: BUILD_SYSTEM_PROMPT,
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,
@@ -336,6 +356,24 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     await mech.snapshot({ artifactId, projectDir, broken: !bundle.ok });
 
     // Step 4: slug — preserved on follow-ups, generated on first builds (already resolved in prep).
+
+    // Step 5a (F16): honest-completion gate. Deterministic evidence the work reached the SERVED
+    // surface — an untouched entrypoint subtree / scaffold-fingerprinted dist means the user's
+    // app was never built (the classic miss: the real app written to an orphan top-level HTML
+    // that is never served). A gate hit is a DISTINCT non-success terminal: it surfaces to the
+    // user and the job fails — never a clean `completed` over a scaffold. Runs before the model
+    // verification (step 5) so a scaffold build is never billed a verification pass.
+    const progress = await mech.assertProgress({ artifactId, projectDir });
+    if (!progress.clean) {
+      if (finalizeOnce(jobId)) {
+        const detail = progress.reasons.join('; ');
+        const message = `A construção não chegou à aplicação servida (a página continua o modelo inicial). ${detail}`.trim();
+        sink.error('BUILD_UNFULFILLED', message);
+        await patchJob(jobId, { status: 'failed', error: { code: 'BUILD_UNFULFILLED', message }, endedAt: new Date(input.deps.now()).toISOString() });
+      }
+      terminalReached = true;
+      return;
+    }
 
     // Step 5: per-build verification (default ON per user's build.verifyBuilds). Full acceptance
     // pass on a first build; scoped tests + smoke on a follow-up. A stage that did not cleanly
