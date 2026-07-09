@@ -376,17 +376,28 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     }
 
     // Step 5: per-build verification (default ON per user's build.verifyBuilds). Full acceptance
-    // pass on a first build; scoped tests + smoke on a follow-up. A stage that did not cleanly
-    // pass — a real ran+failed it could not fix, OR an honest not-run (e.g. credential-skip) —
-    // surfaces its note on the complete event (billed user_work build-verify inside the runner).
-    // Only a real ran+passed adds no note. A not-run is NOT a build failure: the build still
-    // completes, just with the honest visible note.
+    // pass on a first build; scoped tests + smoke on a follow-up. The runner receives the user's
+    // REQUEST and asserts request-fulfilment (F28), not mere rendering. Verdict semantics:
+    //   - ran+passed  → clean, no note.
+    //   - ran+FAILED  → GATES completion (F28): a distinct non-success terminal that surfaces to
+    //     the user — never a silent `completed` with a note (that was verification theater: the
+    //     gate that exists to catch a served scaffold passed it and billed for the pass).
+    //   - not-run (e.g. credential-skip) → honest note-only, never a failure (§5.6.2 step 5).
     let verifyNote: string | undefined;
     const verifyEnabled = (await userSettings.get(input.actor.userId))?.build?.verifyBuilds ?? true;
     if (verifyEnabled) {
       sink.planStep('verifying', 'A testar a aplicação...');
       const verdict = await verifyRunner({ artifactId, projectDir, appUrl, userId: input.actor.userId, depth: opts.firstBuild ? 'full' : 'scoped', request: input.description });
-      if (!verdict.passed && verdict.note) verifyNote = verdict.note;
+      if (verdict.ran && !verdict.passed) {
+        if (finalizeOnce(jobId)) {
+          const message = `A verificação da aplicação falhou. ${verdict.note ?? ''}`.trim();
+          sink.error('VERIFY_FAILED', message);
+          await patchJob(jobId, { status: 'failed', error: { code: 'VERIFY_FAILED', message }, endedAt: new Date(input.deps.now()).toISOString() });
+        }
+        terminalReached = true;
+        return;
+      }
+      if (!verdict.ran && verdict.note) verifyNote = verdict.note;
     }
 
     // Step 6: complete event (bundle error + any unresolved verification failure appended).

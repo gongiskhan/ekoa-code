@@ -80,19 +80,36 @@ export async function verifyRunner(input: VerifyRunInput): Promise<VerifyRunResu
 }
 
 /** The medium-depth playwright-cli instruction. Depth selects a full acceptance pass (first
- *  build) vs a scoped change + smoke pass (follow-up), per ch07 §7.2.6. */
-function buildPrompt(input: VerifyRunInput): string {
+ *  build) vs a scoped change + smoke pass (follow-up), per ch07 §7.2.6. F28: the verifier is
+ *  told WHAT the app should do (the user's request) and must assert request-FULFILMENT — a
+ *  scaffold placeholder rendering cleanly is a FAIL, not a pass. Exported for the unit test
+ *  (a pure function; the deterministic contract lives in the prompt text). */
+export function buildPrompt(input: VerifyRunInput): string {
   const scope =
     input.depth === 'full'
       ? 'Run a FULL acceptance pass: exercise the primary user flows end to end.'
       : 'Run a SCOPED pass: exercise the recently changed area, plus a short smoke test of the core flow.';
   return [
     `Exercise the web application served at ${input.appUrl} using playwright-cli at medium depth.`,
+    '',
+    'The application was built from this user request:',
+    `<request>${input.request}</request>`,
+    '',
     scope,
     'Drive the real UI: navigate, click, fill forms, and assert the app renders and responds without console errors or crashes.',
+    '',
+    'You must verify REQUEST-FULFILMENT, not merely that a page renders:',
+    '1. SCAFFOLD CHECK (mandatory, first): if the served page is the Ekoa scaffold placeholder — it',
+    '   contains any of: "Powered by Ekoa", "Your app is being created", "Let\'s build something',
+    '   that will change", or an element with class "scaffold-root" — the build did NOT produce the',
+    '   requested app. Output FAIL immediately.',
+    '2. ACCEPTANCE CHECK: the interactive elements the request implies must exist and work (e.g. a',
+    '   requested counter has a working button; a requested form submits). Missing expected',
+    '   functionality is a FAIL even if the page renders without errors.',
+    '',
     'When you are done, output your verdict as the FINAL line, in exactly this form:',
-    '  PASS - <short note>   (all checks passed)',
-    '  FAIL - <short note>   (a check could not be made to pass)',
+    '  PASS - <short note>   (the app fulfils the request and all checks passed)',
+    '  FAIL - <short note>   (scaffold placeholder, missing requested functionality, or a failed check)',
   ].join('\n');
 }
 

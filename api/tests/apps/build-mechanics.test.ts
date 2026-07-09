@@ -8,7 +8,7 @@ import { artifacts, slugs, users } from '../../src/data/stores.js';
 import { appBuilder } from '../../src/apps/builder.js';
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { createBuildMechanics } from '../../src/apps/build-mechanics.js';
-import { verifyRunner } from '../../src/apps/verify-runner.js';
+import { verifyRunner, buildPrompt } from '../../src/apps/verify-runner.js';
 import { __resetCredentialsForTests } from '../../src/llm/credentials.js';
 import type { ArtifactDoc } from '../../src/apps/artifacts-service.js';
 
@@ -156,6 +156,33 @@ describe('assertProgress — the honest-completion gate over the real pipeline (
 
     const verdict = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
     expect(verdict.clean).toBe(true);
+  });
+});
+
+describe('verifyRunner buildPrompt — request-fulfilment contract (F28, ch07 §7.2.6)', () => {
+  const base = { artifactId: 'a1', projectDir: '/pd', appUrl: '/apps/a1/', userId: USER, depth: 'full' as const };
+
+  it('carries the user request so the verifier can assert fulfilment, not mere rendering', () => {
+    const prompt = buildPrompt({ ...base, request: 'a pessoa manager with an add-person form' });
+    expect(prompt).toContain('a pessoa manager with an add-person form');
+    expect(prompt.toLowerCase()).toContain('request');
+  });
+
+  it('mandates the scaffold check: every scaffold marker is named and maps to FAIL', () => {
+    const prompt = buildPrompt({ ...base, request: 'anything' });
+    expect(prompt).toContain('Powered by Ekoa');
+    expect(prompt).toContain('Your app is being created');
+    expect(prompt).toContain('scaffold-root');
+    expect(prompt).toContain('FAIL');
+    // scaffold detection is mandatory and ordered before the acceptance pass
+    expect(prompt.toLowerCase()).toContain('scaffold check');
+  });
+
+  it('keeps the machine-parseable PASS/FAIL final-line contract intact', () => {
+    const prompt = buildPrompt({ ...base, request: 'x', depth: 'scoped' });
+    expect(prompt).toContain('PASS - ');
+    expect(prompt).toContain('FAIL - ');
+    expect(prompt).toContain('FINAL line');
   });
 });
 
