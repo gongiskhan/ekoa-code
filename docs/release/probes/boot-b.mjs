@@ -8,12 +8,15 @@
  * egress path is actually authenticated.
  *
  * SECRET HYGIENE IS THE ACCEPTANCE BAR (read before editing):
- *   - The operator's OAuth access token is read from the macOS Keychain and seeded ONLY in-process
- *     via setCredential(), which AES-encrypts it at rest in the throwaway mem-mongo. It is NEVER
- *     written to stdout/stderr/any file/any log, NEVER placed in a child process argv, and NEVER
- *     put in a spawned child's environment. The token dies with the in-memory mongo at teardown.
- *   - We deliberately seed ONLY { mode:'oauth', secret } — NO refreshToken / expiresAt — so the
- *     credential module never takes a refresh path that could rotate the operator's live token.
+ *   - The Cortex model credential comes from a DEDICATED account file (~/.config/ekoa/
+ *     claude-credentials.json or $EKOA_CLAUDE_CREDENTIALS — see readCortexCredential()), NEVER
+ *     the local Claude Code login by default (concurrent use of that token invalidated the
+ *     operator's session — known flake). It is seeded ONLY in-process via setCredential(), which
+ *     AES-encrypts it at rest in the throwaway mem-mongo. It is NEVER written to stdout/stderr/
+ *     any file/any log, NEVER placed in a child process argv, and NEVER put in a spawned child's
+ *     environment. The credential dies with the in-memory mongo at teardown.
+ *   - We deliberately seed ONLY { mode, secret } — NO refreshToken / expiresAt — so the
+ *     credential module never takes a refresh path that could rotate anyone's live token.
  *   - Every error this harness rethrows/logs is run through redact() so a stray token substring
  *     can never leak into the terminal.
  *
@@ -89,59 +92,102 @@ async function waitForHttp(url, { timeoutMs = 120_000, okBelow = 500 } = {}) {
   return false;
 }
 
-// --- Read the operator's Claude Code OAuth credential -----------------------------------------
-// macOS: the Keychain item 'Claude Code-credentials' (`security ... -w` prints ONLY the stored
-// value). Linux (and any host without `security`): Claude Code stores the SAME JSON blob at
-// ~/.claude/.credentials.json. Both paths parse the same shape. On failure we throw a CLEAR
-// message and NEVER echo the raw credential material (it is the secret).
-function readOperatorToken() {
-  let raw = null;
-  if (process.platform === 'darwin') {
+// --- Read the CORTEX model credential (a DEDICATED account, never the local Claude Code one) --
+//
+// WHY: seeding the LOCAL Claude Code account's OAuth token into the test stack and firing live
+// chat turns from the gateway repeatedly invalidated the operator's Claude Code session mid-work
+// (concurrent use of one subscription token from two clients; see docs/autothing/known-flakes.md).
+// Cortex test stacks therefore authenticate with their OWN account, resolved in this order:
+//
+//   1. $EKOA_CLAUDE_CREDENTIALS            — explicit path to a Cortex credential JSON file
+//   2. ~/.config/ekoa/claude-credentials.json  — the dedicated default location
+//   3. legacy local-Claude-Code sources    — ONLY with EKOA_USE_LOCAL_CLAUDE_CREDS=1, loudly
+//      warned (macOS Keychain item / ~/.claude/.credentials.json). Never the default.
+//
+// Accepted JSON shapes in the Cortex credential file (all values are secrets — never logged):
+//   { "claudeAiOauth": { "accessToken": "sk-ant-oat01-..." } }   (a Claude Code credentials blob)
+//   { "accessToken": "sk-ant-oat01-..." }                        (bare OAuth/long-lived token)
+//   { "apiKey": "sk-ant-api03-..." }                             (Anthropic API key -> mode api-key)
+//
+// PROVISIONING the dedicated account (one-time):
+//   - Subscription (Pro/Max) account: on any machine logged into THAT account, run
+//     `claude setup-token` and paste the printed long-lived token:
+//       mkdir -p ~/.config/ekoa && cat > ~/.config/ekoa/claude-credentials.json <<'J'
+//       { "accessToken": "<the setup-token output>" }
+//       J
+//       chmod 600 ~/.config/ekoa/claude-credentials.json
+//   - Or an API-key account: { "apiKey": "sk-ant-api03-..." } in the same file.
+function readCortexCredential() {
+  const explicit = process.env.EKOA_CLAUDE_CREDENTIALS;
+  const dedicated = join(process.env.HOME || '', '.config', 'ekoa', 'claude-credentials.json');
+  const candidates = [explicit, dedicated].filter(Boolean);
+
+  for (const credFile of candidates) {
+    if (!existsSync(credFile)) continue;
+    let parsed;
     try {
-      raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' });
+      parsed = JSON.parse(readFileSync(credFile, 'utf8').trim());
     } catch {
-      // Do NOT include the caught error — its output could carry the secret. Fall through to the
-      // file path (some macOS setups use it too), then fail with guidance.
+      throw new Error(`${credFile} is not valid JSON — see the provisioning notes at the top of boot-b.mjs`);
     }
+    const oauth = (parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken) || (parsed && parsed.accessToken);
+    if (typeof oauth === 'string' && oauth.length > 0) {
+      log(`Cortex credential: dedicated oauth token from ${credFile === explicit ? '$EKOA_CLAUDE_CREDENTIALS' : '~/.config/ekoa/claude-credentials.json'} (not the local Claude Code account)`);
+      return { mode: 'oauth', secret: oauth };
+    }
+    const apiKey = parsed && parsed.apiKey;
+    if (typeof apiKey === 'string' && apiKey.length > 0) {
+      log(`Cortex credential: dedicated api-key from ${credFile === explicit ? '$EKOA_CLAUDE_CREDENTIALS' : '~/.config/ekoa/claude-credentials.json'} (not the local Claude Code account)`);
+      return { mode: 'api-key', secret: apiKey };
+    }
+    throw new Error(`${credFile} carries no usable credential (expected accessToken, claudeAiOauth.accessToken, or apiKey)`);
   }
-  if (raw === null) {
-    const credFile = join(process.env.HOME || '', '.claude', '.credentials.json');
-    if (existsSync(credFile)) {
+
+  // Legacy path: the LOCAL Claude Code account. Explicit opt-in only — this is the behavior
+  // that kept killing the operator's Claude Code session.
+  if (process.env.EKOA_USE_LOCAL_CLAUDE_CREDS === '1') {
+    log('WARNING: EKOA_USE_LOCAL_CLAUDE_CREDS=1 — seeding the LOCAL Claude Code account token.');
+    log('WARNING: live turns from this stack can invalidate your Claude Code login (known flake).');
+    let raw = null;
+    if (process.platform === 'darwin') {
       try {
-        raw = readFileSync(credFile, 'utf8');
+        raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' });
       } catch {
-        throw new Error(`could not read ${credFile} — check file permissions`);
+        /* fall through to the file */
       }
     }
+    if (raw === null) {
+      const legacyFile = join(process.env.HOME || '', '.claude', '.credentials.json');
+      if (existsSync(legacyFile)) raw = readFileSync(legacyFile, 'utf8');
+    }
+    if (raw !== null) {
+      let parsed;
+      try {
+        parsed = JSON.parse(raw.trim());
+      } catch {
+        throw new Error('the local Claude Code credential store was not the expected JSON shape');
+      }
+      const token = (parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken) || (parsed && parsed.accessToken);
+      if (typeof token === 'string' && token.length > 0) return { mode: 'oauth', secret: token };
+    }
+    throw new Error('EKOA_USE_LOCAL_CLAUDE_CREDS=1 but no local Claude Code credential was found');
   }
-  if (raw === null) {
-    throw new Error(
-      "no Claude Code credential found — tried the macOS Keychain item 'Claude Code-credentials' " +
-        'and ~/.claude/.credentials.json. Is Claude Code logged in on this machine?',
-    );
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch {
-    throw new Error('the Claude Code credential store was not the expected JSON shape');
-  }
-  // Accept the token under .claudeAiOauth.accessToken (current shape) or a top-level .accessToken.
-  const token = (parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken) || (parsed && parsed.accessToken);
-  if (typeof token !== 'string' || token.length === 0) {
-    throw new Error(
-      'no OAuth access token in the Claude Code credential store ' +
-        '(expected .claudeAiOauth.accessToken or a top-level .accessToken)',
-    );
-  }
-  return token;
+
+  throw new Error(
+    'no Cortex model credential configured. Provision the DEDICATED account file (never the local ' +
+      'Claude Code login): put { "accessToken": "<claude setup-token output>" } or ' +
+      '{ "apiKey": "sk-ant-api03-..." } at ~/.config/ekoa/claude-credentials.json (chmod 600), or ' +
+      'point $EKOA_CLAUDE_CREDENTIALS at such a file. See the notes above readCortexCredential() ' +
+      'in boot-b.mjs. (Legacy escape hatch: EKOA_USE_LOCAL_CLAUDE_CREDS=1 — NOT recommended, it ' +
+      'invalidates your Claude Code session.)',
+  );
 }
 
 // --- Seed the credential into mem-mongo BEFORE the server boots -----------------------------
 // In-process: connect to the mem-mongo, encrypt+persist the credential singleton, disconnect.
 // process.env must carry the mem URI + ENCRYPTION_KEY + JWT_SECRET BEFORE importing the dist
 // modules, because config reads env (and crypto derives its key from ENCRYPTION_KEY).
-async function seedCredential(token) {
+async function seedCredential(cred) {
   process.env.MONGODB_URI = mem.getUri();
   process.env.ENCRYPTION_KEY = ENCRYPTION_KEY;
   process.env.JWT_SECRET = JWT_SECRET;
@@ -151,12 +197,12 @@ async function seedCredential(token) {
 
   await mongoMod.connectMongo(); // reads process.env.MONGODB_URI, db 'ekoa' (same as the server)
   try {
-    // Deliberately OMIT refreshToken/expiresAt: no refresh path can rotate the operator's token.
-    await credMod.setCredential({ mode: 'oauth', secret: token });
+    // Deliberately OMIT refreshToken/expiresAt: no refresh path can rotate anyone's live token.
+    await credMod.setCredential({ mode: cred.mode, secret: cred.secret });
   } finally {
     await mongoMod.closeMongo();
   }
-  log('credential seeded into mem-mongo (oauth, no-refresh)');
+  log(`credential seeded into mem-mongo (${cred.mode}, no-refresh)`);
 }
 
 // --- API (node api/dist/server.js against our seeded mem-mongo) -----------------------------
@@ -255,10 +301,10 @@ async function bootStack() {
   log('starting mongodb-memory-server ...');
   mem = await MongoMemoryServer.create({ instance: { launchTimeout: 60_000 } });
 
-  const token = readOperatorToken();
-  CRED_TOKEN = token; // arm the redactor
-  log('operator OAuth token read from the local credential store (not logged)');
-  await seedCredential(token);
+  const cred = readCortexCredential();
+  CRED_TOKEN = cred.secret; // arm the redactor
+  log('Cortex model credential loaded (not logged)');
+  await seedCredential(cred);
 
   bootApi();
   if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 60_000 }))) {
