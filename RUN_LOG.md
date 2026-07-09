@@ -639,3 +639,15 @@ a client that attached GET /api/v1/chat/runs/:id/events a beat after createRun r
 events flushed before subscribe are not replayed. If real, a user connecting late sees a spinner over a
 completed run. Folded into the same OPEN chat-SSE/hang disposition bucket as the S1 GATE entry findings
 (close by deterministic test or written dismissal - operator/batch-2).
+
+### DECISION - 2026-07-09T18:29:00Z - boot-b decoupled from the local Claude Code account (operator-directed)
+
+The repeated mid-run loss of the operator's Claude Code login was traced to boot-b seeding the LOCAL
+Claude Code OAuth token into the test stack and the gateway exercising it live from a second client.
+Operator directive: stop that behavior and support a separate account. boot-b (16172b8) now reads its
+model credential ONLY from a dedicated file ($EKOA_CLAUDE_CREDENTIALS or
+~/.config/ekoa/claude-credentials.json; accepts a `claude setup-token` long-lived oauth token or an
+api key - both modes already supported by setCredential/F2) and fails with provisioning guidance when
+absent. Legacy local-token behavior is an explicit opt-in (EKOA_USE_LOCAL_CLAUDE_CREDS=1) with loud
+warnings. Live-turn evidence (S2 J3 probe, S7 boot) BLOCKS until the operator provisions the dedicated
+credential; deterministic gates unaffected.

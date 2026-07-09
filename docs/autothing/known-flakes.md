@@ -9,3 +9,12 @@ the file rotates after boot, the seeded token is invalidated upstream: chat turn
 401 -> gateway `forward failed: OAuth refresh not configured` -> client 502. NOT a code defect.
 Remedy: re-run `node docs/release/probes/boot-b.mjs up` (re-seeds the current token) and re-drive the
 turn promptly; avoid long-lived boot-b stacks for live-turn evidence while a Claude session is active.
+
+## RESOLVED (2026-07-09): boot-b now uses a DEDICATED Cortex account, never the local Claude Code login
+Root cause of the token-rotation flake above: boot-b seeded the LOCAL Claude Code account's OAuth
+access token and the gateway then used it live from a second client, which invalidated the
+operator's Claude Code session (repeated forced /login mid-run). boot-b now resolves its credential
+from `$EKOA_CLAUDE_CREDENTIALS` or `~/.config/ekoa/claude-credentials.json` (a dedicated account:
+`claude setup-token` output or an API key) and REFUSES to boot without it; the legacy local-token
+path is behind an explicit `EKOA_USE_LOCAL_CLAUDE_CREDS=1` with loud warnings. Provisioning notes
+live at the top of docs/release/probes/boot-b.mjs.
