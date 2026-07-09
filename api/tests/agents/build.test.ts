@@ -27,6 +27,7 @@ function fakeMechanics(over: Partial<BuildMechanics> = {}): { mech: BuildMechani
     screenshot() {},
     async persistSdkSessionId(id, sid) { calls.persistSdkSessionId.push([id, sid]); },
     async activateArtifact() { calls.activate++; },
+    async assertProgress() { return { clean: true, reasons: [] }; },
     ...over,
   };
   return { mech, calls };
@@ -194,5 +195,59 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build', language: 'pt', deps: deps() });
     expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
     expect(calls.activate).toBe(1);
+  });
+});
+
+describe('honest-completion gate (F16, §5.6.2 step 5a) — a scaffold build never cleanly completes', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_build_f16'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => { await seedUser('u1', 'o1'); });
+  afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); });
+
+  it('a build whose entrypoint is untouched / dist scaffold-fingerprinted FAILS with a distinct terminal, even with verification passing (F16 alone catches it)', async () => {
+    const t = resetAgentState({ finalText: 'created pessoa.html with the app' });
+    const { events } = startEvents();
+    // Verification (F28's gate) PASSES — proving the honest-completion gate alone catches the miss.
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
+    const { mech, calls } = fakeMechanics({
+      async assertProgress() {
+        return { clean: false, reasons: ['frontend/src inalterado desde o modelo inicial', 'dist/bundle.js ainda é o modelo Ekoa', 'ficheiro solto pessoa.html na raiz'] };
+      },
+    });
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a pessoa manager', language: 'pt', deps: deps() });
+
+    const job = (await jobs.get(jobId)) as unknown as { status: string; error?: { code: string; message?: string } };
+    expect(job.status).not.toBe('completed'); // never a clean completed over a scaffold
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('BUILD_UNFULFILLED');
+    // the failure surfaces to the user as the terminal event — not a complete
+    expect(events.find((e) => e.stream === 'job' && e.type === 'complete')).toBeUndefined();
+    const errEv = events.find((e) => e.stream === 'job' && e.type === 'error');
+    expect(errEv).toBeTruthy();
+    expect(JSON.stringify(errEv!.data)).toContain('BUILD_UNFULFILLED');
+    // a gate-failed build is not activated as the served app
+    expect(calls.activate).toBe(0);
+  });
+
+  it('a build that really edited the entrypoint (assertProgress clean) still completes (positive case)', async () => {
+    const t = resetAgentState({ finalText: 'edited App.jsx' });
+    startEvents();
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
+    const { mech, calls } = fakeMechanics(); // default assertProgress: clean
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a form', language: 'pt', deps: deps() });
+    expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
+    expect(calls.activate).toBe(1);
+  });
+
+  it('the build agent is steered: runAgent carries a system prompt naming the manifest entrypoint and forbidding standalone top-level HTML', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a tracker', language: 'pt', deps: deps() });
+    const call = t.streamCalls[0]!;
+    expect(call.systemPrompt).toBeTruthy();
+    expect(call.systemPrompt).toContain('frontend/src/App.jsx');
+    expect(call.systemPrompt!.toLowerCase()).toContain('html');
   });
 });

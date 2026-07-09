@@ -202,6 +202,14 @@ export interface BuildMechanics {
   persistSdkSessionId(artifactId: string, sdkSessionId: string): Promise<void>;
   /** Activate the artifact with a MERGE onto its existing data bag (§5.6.2 step 7). */
   activateArtifact(input: { artifactId: string; slug: string; appUrl: string }): Promise<void>;
+  /**
+   * Honest-completion gate (F16, ch05 §5.6.2 step 5a): deterministic evidence the agent's work
+   * reached the SERVED surface. NOT clean when the manifest-entrypoint subtree (`frontend/src/`)
+   * is unchanged vs the scaffold baseline commit, or the built output still fingerprints as the
+   * Ekoa scaffold — especially when an orphan top-level `*.html` was written instead. A gate hit
+   * is a distinct non-success terminal in build.ts, never a clean `completed`.
+   */
+  assertProgress(input: { artifactId: string; projectDir: string }): Promise<{ clean: boolean; reasons: string[] }>;
 }
 
 const noopBuildMechanics: BuildMechanics = {
@@ -218,6 +226,9 @@ const noopBuildMechanics: BuildMechanics = {
   screenshot() {},
   async persistSdkSessionId() {},
   async activateArtifact() {},
+  async assertProgress() {
+    return { clean: true, reasons: [] };
+  },
 };
 let buildMechanics: BuildMechanics = noopBuildMechanics;
 export function setBuildMechanics(fn: BuildMechanics): void {
