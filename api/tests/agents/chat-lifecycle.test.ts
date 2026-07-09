@@ -91,6 +91,25 @@ describe('chat run pipeline + streaming contract', () => {
     expect((await messages.find({ sessionId: 's1', role: 'assistant' }))).toHaveLength(0);
   });
 
+  it('a STREAMED answer whose prose mentions an error term is NOT rerouted as a provider error (S3 review finding)', async () => {
+    // The §5.3.7 error-as-result reroute exists for the nothing-streamed failure shape. F20 made
+    // result.text the FULL answer, so scanning it after real deltas streamed would discard a
+    // legitimate KB answer like this one ("429" trips /\b429\b/) and show "provider unavailable".
+    const full = 'O erro HTTP 429 significa demasiados pedidos. Aguarde e tente novamente.';
+    const runId = await runChat({
+      stream: [
+        { kind: 'text', text: 'O erro HTTP 429 significa demasiados pedidos. ' },
+        { kind: 'text', text: 'Aguarde e tente novamente.' },
+      ],
+      finalText: full,
+    });
+    const evs = chatEventsFor(runId);
+    expect(evs.some((e) => e.type === 'error')).toBe(false);
+    expect((evs.find((e) => e.type === 'complete')!.data as { result: string }).result).toBe(full);
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
+    expect((assistant[0] as unknown as { content: string }).content).toBe(full);
+  });
+
   it('a build marker at start-of-stream → build_intent on notifications + complete.delegate, with clean text (§5.7.2)', async () => {
     const runId = await runChat({ finalText: `${BUILD_MARKER} a todo list app` });
     const chat = chatEventsFor(runId);
