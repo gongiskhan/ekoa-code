@@ -11,8 +11,9 @@ import { Router, type Response } from 'express';
 import { BrandingResearchRequest } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { runBrandResearch } from '../agents/brand-research.js';
+import { assertSafeUrl, SsrfError } from '../services/url-safety.js';
 import { saveBrandingHandler } from './org.js';
-import { actorOf, parseBody } from './helpers.js';
+import { actorOf, parseBody, sendError } from './helpers.js';
 
 export function brandingRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
@@ -24,6 +25,15 @@ export function brandingRouter(deps: { now: () => number; genId: () => string })
   r.post('/research', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, BrandingResearchRequest, req.body);
     if (body === undefined) return;
+    // SSRF guard (ch09 invariant 8): url-safety.ts names the brand-research target as a URL the
+    // platform must guard. Even though the agent is tool-less today, validate at the boundary so
+    // this does not become a live SSRF the moment a fetch/web tool is added to the run class.
+    try {
+      assertSafeUrl(body.websiteUrl);
+    } catch (e) {
+      if (e instanceof SsrfError) return sendError(res, 'VALIDATION_FAILED', 'URL não permitido.');
+      throw e;
+    }
     const actor = actorOf(req);
     // Map the contract's `websiteUrl` onto the agent's prompt — the agent takes free text.
     const prompt = `Investiga a identidade de marca do sítio web ${body.websiteUrl} e propõe uma paleta, tipografia e tom de voz.`;

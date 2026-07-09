@@ -101,6 +101,12 @@ describe('mount-coverage: every declared /api/v1 path is mounted (F5 drift gate)
       'ekoaLocal.agentFaceRun', 'ekoaLocal.agentFaceCancel',
       'ekoaLocal.bridgeConnect', 'ekoaLocal.bridgeDebugInvoke', 'ekoaLocal.tuiEvents',
     ]);
+    // Declared in shared/ but UNMOUNTED, and — because they are SUB-PATHS under a requireAuth
+    // router (sessions, automations) — INVISIBLE to this unauthenticated probe (it sees the
+    // router's 401, not the terminal 404). They cannot appear in `unmounted`; the separate
+    // authenticated test below proves them unmounted. Listed so the drift is not hidden.
+    // (S6 review finding 2.) Both are out of batch-1's named scope.
+    const DESCOPED_SUBPATH = new Set<string>(['sessions.seedFeatured', 'triggers.listTriggers']);
 
     const real = unmounted.filter((u) => {
       const name = u.split('  ')[0] as string;
@@ -108,10 +114,33 @@ describe('mount-coverage: every declared /api/v1 path is mounted (F5 drift gate)
     });
     expect(real, `declared but UNMOUNTED (fell through to the terminal 404):\n${real.join('\n')}`).toEqual([]);
 
-    // The de-scoped set must be EXACTLY what is unmounted: if one gets mounted, shrink this list.
+    // The top-level de-scoped set must be EXACTLY what is unmounted: if one gets mounted, shrink it.
     const stillUnmounted = new Set(unmounted.map((u) => u.split('  ')[0] as string).filter((n) => DESCOPED.has(n)));
     expect([...DESCOPED].filter((n) => !stillUnmounted.has(n)), 'DESCOPED entries that are now mounted — remove them from the list').toEqual([]);
+    // Sub-path de-scoped endpoints must NOT have leaked into the unauthenticated unmounted list
+    // (they can't be seen here); if one does, it means the router itself was removed — investigate.
+    expect(unmounted.map((u) => u.split('  ')[0]).filter((n) => DESCOPED_SUBPATH.has(n as string)), 'a sub-path de-scoped endpoint became visibly unmounted').toEqual([]);
   }, 120_000);
+
+  it('the two SUB-PATH de-scoped endpoints are genuinely unmounted (authenticated probe sees the terminal 404, not a handler)', async () => {
+    // The unauthenticated gate above cannot see these (401 shadows them). Prove them unmounted
+    // WITH a token: if either is later mounted, this fails and the DESCOPED list must shrink.
+    process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's';
+    const { users } = await import('../../src/data/stores.js');
+    const { setActivation } = await import('../../src/data/activation.js');
+    const { login } = await import('../../src/auth/service.js');
+    const { hashPassword } = await import('../../src/auth/password.js');
+    await users.insert({ _id: 'mc-u', username: 'mc-u', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'o', active: true } as never);
+    setActivation('mc-u', { active: true, billingLocked: false });
+    const { token } = await login('mc-u', 'pw123456', false, { now: () => Date.now(), genId: () => `id-${Math.random()}` });
+    for (const path of ['/api/v1/sessions/probe/seed-featured', '/api/v1/automations/probe/triggers']) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, { method: path.endsWith('triggers') ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } });
+      const body = (await res.json().catch(() => ({}))) as { error?: { code?: string } };
+      expect(res.status, `${path} should be an unmounted 404 today`).toBe(404);
+      expect(body.error?.code).toBe('NOT_FOUND');
+    }
+    await users.deleteMany({});
+  });
 
   it('the exclusion list only carries written reasons (no silent skips)', () => {
     for (const [name, reason] of EXCLUDED) {

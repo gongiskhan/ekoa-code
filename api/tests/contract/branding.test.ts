@@ -125,6 +125,15 @@ describe('POST /api/v1/branding/research', () => {
     expect(JSON.stringify(job?.request ?? {})).toContain('marca-unica.example');
   });
 
+  it('an SSRF websiteUrl (link-local metadata) is rejected with a 400 envelope, no job created (url-safety.ts names brand-research a guarded target)', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'http://169.254.169.254/latest/meta-data/' }) });
+    expect(res.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+    expect(await jobs.find({})).toHaveLength(0);
+  });
+
   it('a builder gets a 403 envelope and NO job is created', async () => {
     await mkUser('bob', 'builder');
     const t = await tokenFor('bob');
