@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import express, { type Express, type Request, type Response } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
@@ -20,6 +20,7 @@ import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
+import { sendError } from './routes/helpers.js';
 import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
 import { orgRouter, orgsRouter } from './routes/org.js';
@@ -450,6 +451,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 
   app.use(express.json({ limit: '1mb' }));
+  // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
+  // without this, Express's default handler returns an HTML page with the full stack trace and
+  // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;
+  // guarded by tests/contract/malformed-json.test.ts).
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    const e = err as { type?: string; status?: number } | null;
+    if (e?.type === 'entity.too.large') { sendError(res, 'PAYLOAD_TOO_LARGE', 'Corpo do pedido demasiado grande.'); return; }
+    if (e && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
+      sendError(res, 'VALIDATION_FAILED', 'Corpo do pedido inválido.');
+      return;
+    }
+    next(err);
+  });
 
   // Public health surface (ch03 §3.8.23) — field shape carried; external watchdogs depend on it.
   // G7: the LLM-chokepoint slice (claudeAuth field carried verbatim as the watchdog contract,
