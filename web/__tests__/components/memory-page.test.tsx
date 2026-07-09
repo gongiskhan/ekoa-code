@@ -50,6 +50,7 @@ const mocked = api as unknown as {
     stats: ReturnType<typeof vi.fn>;
     listTags: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
   };
 };
 

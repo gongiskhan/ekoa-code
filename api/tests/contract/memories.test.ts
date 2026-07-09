@@ -210,6 +210,34 @@ describe('F5 subset: memory endpoints the UI calls', () => {
     expect(body.adjustedScores).toBe(0);
   });
 
+  it('an unknown tier is REJECTED at the request boundary (S5 re-review finding 6: both taxonomy bugs grew in this gap)', async () => {
+    await seedMemories();
+    const t = await tokenFor();
+    // 'archived' is a plausible typo for 'archive'. Unconstrained, it persisted and the memory was
+    // injected into prompts forever, because nothing matches it.
+    const create = await authed('/api/v1/memories', t, { method: 'POST', body: JSON.stringify({ type: 'fact', content: 'C', tier: 'archived' }) });
+    expect(create.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await readJson(create)).success).toBe(true);
+    const patch = await authed('/api/v1/memories/m-full', t, { method: 'PATCH', body: JSON.stringify({ tier: 'archived' }) });
+    expect(patch.status).toBe(400);
+    // the real tiers still pass
+    for (const tier of ['core', 'active', 'archive', 'guardrail']) {
+      const ok = await authed('/api/v1/memories/m-full', t, { method: 'PATCH', body: JSON.stringify({ tier }) });
+      expect(ok.status, `tier ${tier} must be accepted`).toBe(200);
+    }
+  });
+
+  it('GET /memories/stats counts VERIFIED memories from the rows (it was hardcoded to 0)', async () => {
+    await seedMemories();
+    const t = await tokenFor();
+    await authed('/api/v1/memories/m-full', t, { method: 'PATCH', body: JSON.stringify({ verified: true }) });
+    const body = await readJson(await authed('/api/v1/memories/stats', t));
+    expect(body.verified).toBe(1);
+    // and the value round-trips on the memory itself (memoryView never emitted it -> dead badge)
+    const m = await readJson(await authed('/api/v1/memories/m-full', t));
+    expect(m.verified).toBe(true);
+  });
+
   it('POST /memories/signals rejects an invalid signal value with a 400 envelope', async () => {
     const t = await tokenFor();
     const res = await authed('/api/v1/memories/signals', t, { method: 'POST', body: JSON.stringify({ runId: 'r', signal: 'maybe' }) });

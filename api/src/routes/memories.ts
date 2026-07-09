@@ -31,7 +31,9 @@ export function memoriesRouter(deps: { now: () => number; genId: () => string })
       byType: tally((m) => m.type ?? 'unknown'),
       byTier: tally((m) => m.tier ?? 'active'), // the same honest default memoryView reports
       byVisibility: tally((m) => m.visibility),
-      verified: 0, // `verified` is not persisted today — reported honestly as zero, never guessed
+      // `verified` IS persisted (MemoryPatch declares it and updateMemory spreads the patch), so
+      // count it. It was hardcoded to 0 behind a comment that claimed it was not stored — false.
+      verified: rows.filter((m) => m.verified === true).length,
     });
   });
 
@@ -62,7 +64,9 @@ export function memoriesRouter(deps: { now: () => number; genId: () => string })
     if (body === undefined) return;
     // HONEST minimal (F5 brief): there is no per-run memory-scoring store yet, so no memory can be
     // adjusted. Answer the contract shape with real zeros rather than fabricating a success count.
-    res.json({ affectedMemories: 0, adjustedScores: 0, accepted: true, signal: body.signal, runId: body.runId });
+    // Do NOT report `accepted: true` — the signal is discarded, and saying otherwise is the exact
+    // fabrication the F5 brief forbids. The zeros carry the whole truth.
+    res.json({ affectedMemories: 0, adjustedScores: 0, signal: body.signal, runId: body.runId });
   });
 
   r.get('/:id', async (req: AuthedRequest, res: Response) => {

@@ -12,6 +12,7 @@ import type { Doc } from '../data/store.js';
 export interface MemoryDoc extends Doc {
   orgId: string;
   userId?: string;
+  verified?: boolean;
   visibility: 'private' | 'org';
   title?: string;
   content?: string;
@@ -49,6 +50,8 @@ export function memoryView(m: MemoryDoc) {
     visibility: m.visibility,
     userId: m.userId,
     orgId: m.orgId,
+    // `verified` is written by PATCH but was never read back, so the dashboard's badge was dead.
+    ...(m.verified !== undefined ? { verified: m.verified } : {}),
   };
 }
 
@@ -64,11 +67,28 @@ export async function memoryWriteGuard(actor: Actor, id: string) {
   return scoped.writeGuard(actor, id);
 }
 
-/** Resolver injection block (ch03 §3.8.19): own + org-shared, formatted for a prompt section. */
+/**
+ * Resolver injection block (ch03 §3.8.19): own + org-shared, formatted for a prompt section.
+ * Shares the ONE taxonomy with `resolveMemoryInjection` — archived memories are never injected and
+ * guardrails render as RULE lines. Keeping a second, laxer copy here is how the archived-memory
+ * bug would silently reopen the moment this function is wired up.
+ */
 export async function resolveMemoryBlock(actor: Actor): Promise<string> {
-  const visible = await listVisibleMemories(actor);
+  const visible = (await listVisibleMemories(actor)).filter(isInjectable);
   if (visible.length === 0) return '';
-  return visible.map((m) => `- ${m.title ?? ''}: ${m.content ?? ''}`).join('\n');
+  const lines: string[] = [];
+  for (const m of visible.filter(isGuardrail)) lines.push(`RULE: ${m.content ?? m.title ?? ''}`);
+  for (const m of visible.filter((m) => !isGuardrail(m))) lines.push(`- ${m.title ?? ''}: ${m.content ?? ''}`);
+  return lines.join('\n');
+}
+
+/** The ONE guardrail predicate: the dashboard writes `tags:['guardrail']`; legacy rows use type/tier. */
+function isGuardrail(m: MemoryDoc): boolean {
+  return m.type === 'guardrail' || m.tier === 'guardrail' || (m.tags ?? []).includes('guardrail');
+}
+/** Archived memories are hidden in the dashboard and must not steer the model either. */
+function isInjectable(m: MemoryDoc): boolean {
+  return m.tier !== 'archive';
 }
 
 /** Split text into a lowercase term set for the deterministic overlap resolver (no model call). */
@@ -100,9 +120,7 @@ export async function resolveMemoryInjection(actor: Actor, query: string, deps: 
   // matching only `type`/`tier` classified every UI-created guardrail as an ordinary memory and
   // injected it as a plain bullet instead of a non-negotiable RULE line: the user saw it listed
   // under "Guardrails" and believed it was enforced. The three writers must agree.
-  const isGuardrail = (m: MemoryDoc) => m.type === 'guardrail' || m.tier === 'guardrail' || (m.tags ?? []).includes('guardrail');
-  // An ARCHIVED memory is hidden in the dashboard; it must not keep steering the model either.
-  const injectable = visible.filter((m) => m.tier !== 'archive');
+  const injectable = visible.filter(isInjectable);
   const guardrails = injectable.filter(isGuardrail);
   const core = injectable.filter((m) => m.tier === 'core' && !guardrails.includes(m));
   const active = injectable.filter((m) => !guardrails.includes(m) && !core.includes(m));

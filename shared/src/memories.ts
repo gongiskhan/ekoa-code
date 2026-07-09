@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { Id, IsoTimestamp, listResponse, itemsResponse, OkResponse, Visibility } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
+/** The memory tiers the product actually branches on (resolver + dashboard). Responses stay a
+ *  permissive string so legacy documents keep validating; REQUESTS are constrained, which is what
+ *  stops a client writing `tier: 'archived'` and having it injected forever. */
+export const MemoryTier = z.enum(['core', 'active', 'archive', 'guardrail']);
+export type MemoryTier = z.infer<typeof MemoryTier>;
+
 export const Memory = z
   .object({
     id: Id,
@@ -27,7 +33,7 @@ export const MemoryCreateRequest = z.object({
   // rendered `memory.title`: zod stripped it on every create, so API-created memories were
   // untitled. Additive + optional, so no existing client breaks.
   title: z.string().optional(),
-  tier: z.string().optional(),
+  tier: MemoryTier.optional(),
   tags: z.array(z.string()).optional(),
   content: z.string(),
   visibility: Visibility.optional(),
@@ -39,7 +45,7 @@ export const MemoryPatch = z.object({
   // `title` was missing here too (see MemoryCreateRequest): a PATCH { title } was stripped by zod,
   // so renaming a memory silently no-op'd with a 200 while the dashboard's edit modal sends it.
   title: z.string().optional(),
-  tier: z.string().optional(),
+  tier: MemoryTier.optional(),
   tags: z.array(z.string()).optional(),
   content: z.string().optional(),
   verified: z.boolean().optional(),
