@@ -29,6 +29,8 @@ export interface VerifyRunInput {
   appUrl: string;
   userId: string;
   depth: 'full' | 'scoped';
+  /** The user's build request (F28): the verifier asserts request-FULFILMENT, not mere rendering. */
+  request: string;
 }
 
 export interface VerifyRunResult {

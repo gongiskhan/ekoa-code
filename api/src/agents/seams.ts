@@ -144,6 +144,10 @@ export interface VerifyRunInput {
   userId: string;
   /** first build → full acceptance pass; follow-up → scoped tests + smoke pass. */
   depth: 'full' | 'scoped';
+  /** The user's build request (F28): the verifier asserts request-FULFILMENT — the served DOM is
+   *  not the Ekoa scaffold placeholder and the requested interactive elements exist — not merely
+   *  that "something renders". */
+  request: string;
 }
 
 export interface VerifyRunResult {

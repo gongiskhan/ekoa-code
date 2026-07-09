@@ -385,7 +385,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const verifyEnabled = (await userSettings.get(input.actor.userId))?.build?.verifyBuilds ?? true;
     if (verifyEnabled) {
       sink.planStep('verifying', 'A testar a aplicação...');
-      const verdict = await verifyRunner({ artifactId, projectDir, appUrl, userId: input.actor.userId, depth: opts.firstBuild ? 'full' : 'scoped' });
+      const verdict = await verifyRunner({ artifactId, projectDir, appUrl, userId: input.actor.userId, depth: opts.firstBuild ? 'full' : 'scoped', request: input.description });
       if (!verdict.passed && verdict.note) verifyNote = verdict.note;
     }
 

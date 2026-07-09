@@ -151,16 +151,41 @@ describe('build execution (§5.4, §5.6.2)', () => {
     void t;
   });
 
-  it('runs verification full-depth on a first build and appends the honest note when unfixable', async () => {
+  it('a genuine ran+failed verification GATES completion: full-depth on a first build, the request threaded to the runner, failure a distinct terminal (F28)', async () => {
+    // REWRITTEN for F28: this test previously asserted the BUGGY behavior — a ran+failed verify
+    // verdict still completed the build with a note (verification theater: the gate that exists
+    // to catch a scaffold serving as the app never gated anything). Now a real ran+failed is a
+    // distinct non-success terminal, and the runner receives the user's request so it can assert
+    // request-fulfilment rather than mere rendering.
     const t = resetAgentState({ finalText: 'built' });
     const { events } = startEvents();
-    const depths: string[] = [];
-    setVerifyRunner(async (i): Promise<VerifyRunResult> => { depths.push(i.depth); return { ran: true, passed: false, note: 'Formulário não submete.' }; });
+    const inputs: Array<{ depth: string; request: string }> = [];
+    setVerifyRunner(async (i): Promise<VerifyRunResult> => { inputs.push({ depth: i.depth, request: i.request }); return { ran: true, passed: false, note: 'Formulário não submete.' }; });
+    const { mech, calls } = fakeMechanics();
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a form', language: 'pt', deps: deps() });
+
+    expect(inputs).toEqual([{ depth: 'full', request: 'build a form' }]);
+    const job = (await jobs.get(jobId)) as unknown as { status: string; error?: { code: string; message?: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('VERIFY_FAILED');
+    expect(job.error?.message).toContain('Formulário não submete.');
+    // the failure surfaces as the terminal event — never a clean complete over a failed verify
+    expect(events.find((e) => e.stream === 'job' && e.type === 'complete')).toBeUndefined();
+    const errEv = events.find((e) => e.stream === 'job' && e.type === 'error');
+    expect(JSON.stringify(errEv!.data)).toContain('VERIFY_FAILED');
+    expect(calls.activate).toBe(0); // a verify-failed build is not activated
+  });
+
+  it('F28 alone catches a scaffold build: honest-completion gate clean, verify ran+failed still gates completion', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    // assertProgress reports clean (F16 disabled-equivalent) — the verify gate must catch it alone.
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: false, note: 'A página servida ainda é o modelo Ekoa.' }));
     const { mech } = fakeMechanics();
-    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a form', language: 'pt', deps: deps() });
-    expect(depths).toEqual(['full']);
-    const complete = events.find((e) => e.stream === 'job' && e.type === 'complete');
-    expect((complete!.data as { result?: string }).result).toContain('Formulário não submete.');
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a tracker', language: 'pt', deps: deps() });
+    const job = (await jobs.get(jobId)) as unknown as { status: string; error?: { code: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('VERIFY_FAILED');
   });
 
   it('an honest not-run (e.g. credential-skip) COMPLETES the build with the note surfaced, never fails it', async () => {
