@@ -651,3 +651,18 @@ api key - both modes already supported by setCredential/F2) and fails with provi
 absent. Legacy local-token behavior is an explicit opt-in (EKOA_USE_LOCAL_CLAUDE_CREDS=1) with loud
 warnings. Live-turn evidence (S2 J3 probe, S7 boot) BLOCKS until the operator provisions the dedicated
 credential; deterministic gates unaffected.
+
+### GATE - S2 f16-f28-honest-build (batch1-f16-f28) - PASSED
+
+- **When:** 2026-07-09T18:39:44Z (UTC). ~1.5h wall. Models: implement claude-fable-5; fresh-context review claude-fable-5.
+- **Green condition met:** F16+F28 briefs implemented as TWO commits, each regression-test-FIRST (red committed before fix: a4010b6 -> c33a562, 82c89d4 -> 8766172).
+- **F16:** completion was UNGATED (worse than brief - only bundle.ok guarded it). Now: assertProgress seam (BuildMechanics) checks entrypoint-subtree-unchanged-vs-scaffold-baseline (git root-commit diff, only while a bundle is served), scaffold output fingerprint (the 3 template markers), and orphan top-level HTML; a hit is a distinct BUILD_UNFULFILLED terminal surfaced to the user, artifact never activated, run before verification so a scaffold is never billed a verify pass. Plain-HTML apps (7.2.1) stay valid (tested). Build agent now carries BUILD_SYSTEM_PROMPT naming frontend/src/App.jsx + forbidding top-level HTML - flows through the anonymise path (client.ts:644).
+- **F28:** the verifier was never told what the app should do and a real FAIL only became a note. Now: request threaded into BOTH VerifyRunInput copies + buildPrompt mandates an ordered scaffold check (markers => FAIL) + acceptance check; {ran:true,passed:false} is a distinct VERIFY_FAILED terminal (artifact not activated); the honest not-run (credential-skip) stays note-only per 5.6.2. The old test that encoded ran+failed-still-completes was REWRITTEN (test-bug class, logged at planning).
+- **Shared gate proven:** committed tests show EACH gate alone fails a scaffold build (F16-alone with verify passing; F28-alone with assertProgress clean).
+- **Deterministic wall:** lint 0 errors; typecheck 0; all 6 grep/security gates exit 0. **Suites:** shared 32, api 961/1-skip (114 files), web 113 - all green.
+- **Fresh-context adversarial review:** APPROVE, zero material findings (agent s2-adv-review2; independently ran suites/gates/typecheck, verified module direction, diagram, anonymise path, zombie-net). Two non-blocking observations logged in its report (theoretical marker false-positive - fails closed; finishError-vs-gate artifact-status asymmetry - judged defensible: serving resolves via appRegistry, not artifact.status).
+- **Kind/profile-conditional skips (visible, never silent):** codexSliceReview skipped (feature profile, not security-boundary); per-slice adversarialTest skipped (api slice -> batched run-level pass owed before the verdict); design skipped (no UI).
+- **J3 priority-journey probe:** DEFERRED to S7's boot per the FLOW_PLAN meter-aware option - and currently blocked anyway: live boots now require the dedicated Cortex account credential (operator directive, 16172b8); the operator has not yet provisioned ~/.config/ekoa/claude-credentials.json.
+- **Diagram:** 04-agent-job.excalidraw updated - "completion gates (build jobs)" box + failed { BUILD_UNFULFILLED | VERIFY_FAILED } branch (FIXED-12).
+- **Walkthrough:** asciinema cast (committed gate tests running green, 25 tests), self-verified by content grep; sha256 in gate-status.json.
+- **Checkpoint:** checkpoint: batch1 f16-f28 honest build completion + request-fulfilment verification. Tag: batch1-f16-f28.

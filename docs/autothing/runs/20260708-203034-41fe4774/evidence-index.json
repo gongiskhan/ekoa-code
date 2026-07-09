@@ -22,6 +22,11 @@
       "status": "passed",
       "tag": "batch1-f2",
       "note": "all gates green: deterministic wall, committed tests + live F2-E2E PASS on final code, fresh-context review approve, adversarial test pass-with-findings (1 fixed in-slice, 1 routed to S4, chat findings logged OPEN), walkthrough cast verified, codexSliceReview degraded (codex-unavailable)"
+    },
+    "f16-f28-honest-build": {
+      "status": "passed",
+      "tag": "batch1-f16-f28",
+      "note": "both gates land regression-test-first; fresh-context review approve (0 findings); full suite green; J3 live probe deferred to S7 boot (blocked on the dedicated Cortex credential, operator to provision)"
     }
   },
   "globalGate": {
