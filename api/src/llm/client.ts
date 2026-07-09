@@ -924,6 +924,16 @@ export async function proxyGatewayMessages(
     if (GATEWAY_FORWARD_FIELDS.has(key)) forwarded[key] = value;
     else droppedFields.push(key);
   }
+  // The gateway clamps `model` to the FAST wire tier (§6.5.4), so the client's model-tuned
+  // reasoning params target THEIR model, not the wire model - the FAST model can reject them
+  // outright (observed live: 400 "adaptive thinking is not supported on <model>"). Clamp them
+  // with the model; the wire call runs the tier's defaults.
+  for (const key of ['thinking', 'output_config']) {
+    if (key in forwarded) {
+      delete forwarded[key];
+      droppedFields.push(`${key} (fast-clamp)`);
+    }
+  }
   if (droppedFields.length > 0) {
     console.warn(`[llm] gateway forward: dropped unknown top-level fields: ${droppedFields.join(', ')}`);
   }
