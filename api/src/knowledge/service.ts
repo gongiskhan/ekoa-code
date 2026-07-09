@@ -25,6 +25,9 @@ export interface KnowledgeSourceDoc extends Doc {
   url: string;
   kind?: string;
   seedId?: string;
+  collection?: string;
+  enabled?: boolean;
+  lastCrawledAt?: string;
   crawlConfig?: Record<string, unknown>;
 }
 
@@ -50,8 +53,22 @@ export class KnowledgeError extends Error {
 
 // --- Sources (G4, unchanged) ---------------------------------------------------------------
 
+/**
+ * Aligned to the shared `KnowledgeSource` contract (F5): the store's `kind`/`seedId` surface under
+ * the contract's names `type`/`seedTemplate`, and `collection`/`enabled`/`lastCrawledAt` are
+ * emitted so a client that validates the response does not reject it. `enabled` defaults to true —
+ * a source with no explicit flag has always been crawled/considered, so `true` is the honest read.
+ */
 export function sourceView(s: KnowledgeSourceDoc) {
-  return { id: s._id, url: s.url, kind: s.kind, seedId: s.seedId };
+  return {
+    id: s._id,
+    url: s.url,
+    type: s.kind,
+    collection: s.collection,
+    seedTemplate: s.seedId ?? null,
+    enabled: s.enabled ?? true,
+    ...(s.lastCrawledAt ? { lastCrawledAt: s.lastCrawledAt } : {}),
+  };
 }
 
 export async function listSources(actor: Actor): Promise<KnowledgeSourceDoc[]> {
@@ -76,6 +93,36 @@ export async function getVisibleSource(actor: Actor, id: string): Promise<Knowle
   const s = (await knowledgeSources.get(id)) as KnowledgeSourceDoc | null;
   if (!s || s.orgId !== actor.orgId) return null; // cross-org → uniform 404
   return s;
+}
+
+/**
+ * Patch a source (F5). Cross-org reads as not-found (uniform 404) before any write. The contract's
+ * `type`/`seedTemplate` names are mapped back onto the store's `kind`/`seedId`. A changed `url` is
+ * SSRF-validated exactly as `addSource` does — a patch must not be a bypass of that gate.
+ */
+export async function updateSource(
+  actor: Actor,
+  id: string,
+  patch: { url?: string; type?: string; collection?: string; seedTemplate?: string | null; enabled?: boolean },
+): Promise<KnowledgeSourceDoc | null> {
+  const s = await getVisibleSource(actor, id);
+  if (!s) return null;
+  if (patch.url !== undefined) {
+    try {
+      assertSafeUrl(patch.url);
+    } catch (e) {
+      if (e instanceof SsrfError) throw new KnowledgeError('VALIDATION_FAILED', 400, 'URL não permitido.');
+      throw e;
+    }
+  }
+  const next: Partial<KnowledgeSourceDoc> = {
+    ...(patch.url !== undefined ? { url: patch.url } : {}),
+    ...(patch.type !== undefined ? { kind: patch.type } : {}),
+    ...(patch.collection !== undefined ? { collection: patch.collection } : {}),
+    ...(patch.seedTemplate !== undefined ? { seedId: patch.seedTemplate ?? undefined } : {}),
+    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+  };
+  return (await knowledgeSources.update(id, (cur) => ({ ...cur, ...next } as never))) as unknown as KnowledgeSourceDoc | null;
 }
 
 export async function deleteSource(actor: Actor, id: string): Promise<boolean> {

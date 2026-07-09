@@ -63,6 +63,10 @@ const COVERED = new Set<string>([
   'jobs.create', 'jobs.get', 'jobs.cancel', 'jobs.events',
   // batch1 F2 — model-credential provisioning (credentials.test.ts)
   'credentials.set',
+  // batch1 F5 subset — the UI-called endpoints (memories.test.ts, f5-ui-endpoints.test.ts)
+  'memories.bulkDelete', 'memories.submitSignal', 'memories.listTags', 'memories.stats',
+  'knowledge.updateSource', 'knowledge.crawlSource', 'knowledge.crawlStatus', 'knowledge.refreshSchedule',
+  'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
@@ -74,7 +78,7 @@ const COVERED = new Set<string>([
 // documents list/ingest/delete, uploads create/delete, reindex, index-status). Knowledge crawl
 // endpoints (updateSource, crawlSource, crawlStatus, refreshSchedule) remain PENDING for the crawl gate.
 // G7B agent-execution: 80->72 as chat runs (4) + build jobs (4) landed with their contract tests.
-const EXPECTED_PENDING_COUNT = 64; // F1 landed 7 (72->65); F4 landed org.researchBranding (65->64)
+const EXPECTED_PENDING_COUNT = 53; // F1 -7 (72->65); F4 -1 (->64); F5 subset -11 (->53)
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {

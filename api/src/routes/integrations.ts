@@ -72,5 +72,35 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
     res.json({ ok: true });
   });
 
+  /**
+   * F5 session-capture endpoints. There is NO server-side session-capture orchestration in this
+   * build (the browser capture lives on the ekoa-local bridge, de-scoped for rc-1). Per the F5
+   * brief these answer their declared shape with truthful values and never claim a captured
+   * session. SECRET HYGIENE (shared/src/integrations.ts SessionSnapshot): the captured Playwright
+   * storageState/cookies are consumed in-memory by the automation engine and MUST NEVER be
+   * serialized to a client — these responses carry STATUS METADATA ONLY.
+   */
+  r.get('/:key/session', async (req: AuthedRequest, res: Response) => {
+    res.json({
+      integrationKey: req.params.key as string,
+      status: 'none',
+      session: { status: 'none', capturedAt: null },
+    });
+  });
+
+  r.post('/:key/session', async (req: AuthedRequest, res: Response) => {
+    res.json({
+      started: false,
+      session: { status: 'failed', message: 'Captura de sessão não disponível nesta versão.' },
+    });
+    void req;
+  });
+
+  r.post('/:key/provision-automations', async (req: AuthedRequest, res: Response) => {
+    // No automation-provisioning infrastructure: real zeros, never a fabricated created/updated count.
+    res.json({ provisioned: false, created: 0, updated: 0, actions: [] });
+    void req;
+  });
+
   return r;
 }

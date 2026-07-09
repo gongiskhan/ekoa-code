@@ -5,10 +5,10 @@
  */
 import { Router, raw as expressRaw, type Response } from 'express';
 import { z } from 'zod';
-import { CreateDocumentRequest } from '@ekoa/shared';
+import { CreateDocumentRequest, SourceInput as SourceInputSchema } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import {
-  listSources, addSource, deleteSource, sourceView, KnowledgeError,
+  listSources, addSource, deleteSource, updateSource, getVisibleSource, sourceView, KnowledgeError,
   ingestDocument, listDocuments, listCollections, deleteDocument,
   createUpload, listUploads, deleteUpload, reindexOrg, indexStatus,
 } from '../knowledge/service.js';
@@ -72,6 +72,42 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
       if (e instanceof KnowledgeError) return sendError(res, e.code as 'VALIDATION_FAILED', e.message);
       throw e;
     }
+  });
+
+  // F5: patch a source (contract path). Cross-org reads as 404 before any write.
+  r.patch('/sources/:id', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, SourceInputSchema.partial(), req.body);
+    if (body === undefined) return;
+    try {
+      const s = await updateSource(actorOf(req), req.params.id as string, body as never);
+      if (!s) return notFound(res);
+      res.json(sourceView(s));
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'VALIDATION_FAILED', e.message);
+      throw e;
+    }
+  });
+
+  /**
+   * F5 crawl endpoints. There is NO crawler in this build. Per the F5 brief these answer their
+   * declared shape with truthful "nothing happened" values — never a fabricated completed crawl.
+   * A source the caller cannot see 404s first, so these do not leak another org's source ids.
+   */
+  r.post('/sources/:id/crawl', async (req: AuthedRequest, res: Response) => {
+    const s = await getVisibleSource(actorOf(req), req.params.id as string);
+    if (!s) return notFound(res);
+    res.json({ started: false, alreadyRunning: false });
+  });
+
+  r.get('/sources/:id/crawl', async (req: AuthedRequest, res: Response) => {
+    const s = await getVisibleSource(actorOf(req), req.params.id as string);
+    if (!s) return notFound(res);
+    res.json({ running: false, stats: { reason: 'crawler not implemented in this build' } });
+  });
+
+  // F5: no refresh scheduler exists — `null` is the honest schedule, not an invented cadence.
+  r.get('/refresh-schedule', async (_req: AuthedRequest, res: Response) => {
+    res.json({ schedule: null });
   });
 
   r.delete('/sources/:id', async (req: AuthedRequest, res: Response) => {
