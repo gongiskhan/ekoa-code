@@ -23,6 +23,10 @@ export type Memory = z.infer<typeof Memory>;
 
 export const MemoryCreateRequest = z.object({
   type: z.string(),
+  // `title` was absent from this schema while the server read `body.title` and the dashboard
+  // rendered `memory.title`: zod stripped it on every create, so API-created memories were
+  // untitled. Additive + optional, so no existing client breaks.
+  title: z.string().optional(),
   tier: z.string().optional(),
   tags: z.array(z.string()).optional(),
   content: z.string(),

@@ -41,7 +41,9 @@ export default function GuardrailsSection() {
       verified: true,
       score: 100,
       scope: "company",
-      visibility: "shared",
+      // The shared Visibility enum is private | org. "shared" was never a legal value, so every
+      // "Adicionar guardrail" click 400'd with VALIDATION_FAILED — the only UI create path was dead.
+      visibility: "org",
       source: "manual",
       origin: "manual",
     });

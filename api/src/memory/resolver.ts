@@ -28,10 +28,15 @@ const scoped = new OwnerVisibilityScoped<MemoryDoc>(memories as never);
  * The ONE memory response shape — all four memory routes emit through it, so it alone decides
  * whether they satisfy the shared `Memory` contract (shared/src/memories.ts). Three fields the
  * contract requires were wrong: `orgId` was never emitted; `tags` and `tier` were passed straight
- * through and are `undefined` on real documents (extraction writes no `tags`; the UI create path
- * sends no `tier`). Defaults are honest, not cosmetic: `[]` is the true empty tag set, and
- * `'active'` is exactly what extraction assigns, so it is the truthful tier for a doc that never
- * declared one. The web /memory page rejected every item client-side until this was fixed.
+ * through and are `undefined` on real documents. `tags` is absent on every extracted memory
+ * (extraction writes none). `tier` is absent because the contract itself sanctions omitting it:
+ * `MemoryCreateRequest.tier` is optional while `Memory.tier` is required, so any client may
+ * legitimately create a tier-less memory — and legacy documents already exist without one.
+ *
+ * The defaults are honest, not cosmetic: `[]` is the true empty tag set, and `'active'` is what
+ * extraction itself assigns and what every existing reader (this module's own bucketing below,
+ * the dashboard) already infers for a missing tier. An explicit `'archive'` is passed through
+ * untouched. `createMemory` persists the same default, so the store and the wire agree.
  */
 export function memoryView(m: MemoryDoc) {
   return {
@@ -138,7 +143,10 @@ export async function createMemory(actor: Actor, body: Record<string, unknown>, 
     content: body.content as string | undefined,
     type: body.type as string | undefined,
     tags: body.tags as string[] | undefined,
-    tier: body.tier as string | undefined,
+    // Persist the SAME tier the response reports (memoryView defaults a missing one to 'active').
+    // Defaulting only at read time left the store and the wire disagreeing: a future byTier
+    // aggregation reading documents would bucket these rows as undefined.
+    tier: (body.tier as string | undefined) ?? 'active',
     createdAt: now,
     updatedAt: now,
   };
