@@ -166,10 +166,14 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     // Abort handling (§5.3.1, §5.3.6): a user Stop is silent; a timeout surfaces an error.
     if (result.aborted) { settleAborted(); return; }
 
-    // Authoritative marker pass over the final result text (success text wins over stream text).
+    // Authoritative marker pass over the final result text (the full accumulated answer, F20).
+    // push() RETURNS the marker-safe prefix and holds back a split-marker tail that end() then
+    // flushes — the clean text is push() + end() concatenated. Discarding push()'s return (the
+    // old code) kept only the ~25-char hold-back tail: the F20 truncation's second leg.
     const finalMarkers = new MarkerProcessor();
-    finalMarkers.push(result.text);
-    const { text: cleanText, findings } = finalMarkers.end();
+    const cleanHead = finalMarkers.push(result.text);
+    const { text: cleanTail, findings } = finalMarkers.end();
+    const cleanText = cleanHead + cleanTail;
 
     // Provider-error-as-result reroute (§5.3.7): never a fake "completed", never persisted.
     const provErr = scanProviderError(result.text);

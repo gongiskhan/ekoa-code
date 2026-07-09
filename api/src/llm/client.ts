@@ -362,7 +362,10 @@ const defaultTransport: ChokepointTransport = {
           yield { kind: 'plan' };
         } else if (msg.type === 'result') {
           usage = rawFromSdkUsage((msg as { usage?: unknown }).usage);
-          if (msg.subtype === 'success') text = (msg as { result: string }).result;
+          // F20: the accumulated deltas ARE the answer — the SDK result field can carry only the
+          // LAST delta, and overwriting the accumulation truncated complete.result + the persisted
+          // assistant message to a tail. Fall back to it only when nothing streamed.
+          if (msg.subtype === 'success' && !text) text = (msg as { result: string }).result;
         }
       }
     } catch (err) {
@@ -386,7 +389,8 @@ const defaultTransport: ChokepointTransport = {
         if (msg.type === 'assistant') text += textOfSdkMessage(msg);
         else if (msg.type === 'result') {
           usage = rawFromSdkUsage((msg as { usage?: unknown }).usage);
-          if (msg.subtype === 'success') text = (msg as { result: string }).result;
+          // F20 parity: prefer the accumulated assistant text; the result field only as fallback.
+          if (msg.subtype === 'success' && !text) text = (msg as { result: string }).result;
         }
       }
     } catch (err) {
@@ -691,7 +695,10 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
             cb?.onPlanNotification?.();
             break;
           case 'final':
-            rawText = msg.text || rawText;
+            // F20: keep the accumulated streamed deltas — the final frame's text can be just the
+            // last delta (SDK result field), and clobbering here truncated the persisted assistant
+            // message + complete.result to a tail. Final text only when nothing streamed.
+            rawText = rawText || msg.text;
             usage = msg.usage;
             aborted = !!msg.aborted;
             break;
