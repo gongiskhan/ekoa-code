@@ -4,9 +4,10 @@
  * auth users-service, never data/ (ch02 §2.7).
  */
 import { Router, type Response } from 'express';
-import { CreateUserRequest, UserPatch, type Role } from '@ekoa/shared';
+import { CreateUserRequest, UserPatch, ResetPasswordRequest, type Role } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { listUsers, createUser, getUser, patchUser, deleteUser } from '../auth/users-service.js';
+import { resetPassword } from '../auth/service.js';
 import { actorOf, sendError, notFound, parseBody } from './helpers.js';
 
 export function usersRouter(deps: { now: () => number; genId: () => string }): Router {
@@ -38,6 +39,16 @@ export function usersRouter(deps: { now: () => number; genId: () => string }): R
 
   r.delete('/:id', requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const ok = await deleteUser(req.params.id as string);
+    if (!ok) return notFound(res);
+    res.json({ ok: true });
+  });
+
+  // F1: admin password reset (shared users.resetPassword) — super-admin sets a new password
+  // and FORCES a change on next login (passwordChangeRequired: true).
+  r.post('/:id/password', requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, ResetPasswordRequest, req.body) as { newPassword: string } | undefined;
+    if (!body) return;
+    const ok = await resetPassword(req.params.id as string, body.newPassword);
     if (!ok) return notFound(res);
     res.json({ ok: true });
   });

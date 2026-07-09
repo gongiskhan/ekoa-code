@@ -224,7 +224,7 @@ describe('POST /api/v1/users/:id/password (super-admin reset)', () => {
     await mkUser('root', 'super-admin');
     await mkUser('u1', 'builder', { passwordChangeRequired: false });
     const rootT = await tokenFor('root');
-    const res = await authed('/api/v1/users/u1/password', rootT, { method: 'POST', body: JSON.stringify({ password: 'resetpw99' }) });
+    const res = await authed('/api/v1/users/u1/password', rootT, { method: 'POST', body: JSON.stringify({ newPassword: 'resetpw99' }) });
     expect(res.status).toBe(200);
     expect(OkResponse.safeParse(await readJson(res)).success).toBe(true);
     const relogin = await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: 'u1', password: 'resetpw99' }) });
@@ -236,7 +236,7 @@ describe('POST /api/v1/users/:id/password (super-admin reset)', () => {
     await mkUser('orgadmin', 'org-admin');
     await mkUser('u1', 'builder');
     const t = await tokenFor('orgadmin');
-    const res = await authed('/api/v1/users/u1/password', t, { method: 'POST', body: JSON.stringify({ password: 'resetpw99' }) });
+    const res = await authed('/api/v1/users/u1/password', t, { method: 'POST', body: JSON.stringify({ newPassword: 'resetpw99' }) });
     expect(res.status).toBe(403);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
     expect((await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: 'u1', password: 'pw123456' }) })).status).toBe(200);

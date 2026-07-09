@@ -4,9 +4,9 @@
  * the activation map, and revokes the user's tokens — ch09 §9.7.1).
  */
 import { users, orgs, type UserDoc } from '../data/stores.js';
-import { setActivation, getActivation } from '../data/activation.js';
+import { setActivation, getActivation, bumpTokenEpoch } from '../data/activation.js';
 import { hashPassword, verifyPassword } from './password.js';
-import { signToken } from './jwt.js';
+import { signToken, type JwtClaims } from './jwt.js';
 import { revoke } from './revocation.js';
 
 export interface Deps {
@@ -78,6 +78,58 @@ export async function login(username: string, password: string, rememberMe: bool
     rememberMe,
   );
   return { token, user: view(u), passwordChangeRequired: !!u.passwordChangeRequired, expiresIn };
+}
+
+/**
+ * Logout (F1, ch03 §3.8.1). Self: revoke the caller's jti (the middleware checks isRevoked on
+ * every request, so the token dies immediately). Admin variant: super-admin anywhere, org-admin
+ * scoped to its own org — the target's outstanding jtis are unknown (no per-user jti index), so
+ * the target's token EPOCH is bumped, invalidating every outstanding token at once (same
+ * mechanism as deactivation, ch09 §9.6). Cross-org for an org-admin reads as 'not-found' — no
+ * user enumeration across orgs.
+ */
+export async function logoutSelf(claims: JwtClaims, deps: Deps): Promise<void> {
+  await revoke(claims.jti, claims.sub, claims.exp ?? Math.floor(deps.now() / 1000) + 24 * 3600, deps.now());
+}
+
+export async function logoutOther(
+  caller: Pick<JwtClaims, 'role' | 'orgId'>,
+  targetUserId: string,
+): Promise<'ok' | 'forbidden' | 'not-found'> {
+  if (caller.role !== 'super-admin' && caller.role !== 'org-admin') return 'forbidden';
+  const target = await users.get(targetUserId);
+  if (!target) return 'not-found';
+  if (caller.role === 'org-admin' && target.orgId !== caller.orgId) return 'not-found';
+  // Epoch shares the JWT iat clock (real seconds), strictly after any token minted this second
+  // (the setUserActive rule): every outstanding token for the target dies at once.
+  bumpTokenEpoch(targetUserId, Math.floor(Date.now() / 1000) + 1);
+  return 'ok';
+}
+
+/**
+ * Self password change (F1, ch03 §3.8.1): verify the CURRENT password, hash + store the new
+ * one, and clear `passwordChangeRequired` (the forced-change flow's exit). Wrong current
+ * password is an AuthError 401 — never a silent overwrite.
+ */
+export async function changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  const u = await users.get(userId);
+  if (!u) throw new AuthError('UNAUTHENTICATED', 401, 'Sessão expirada. Inicie sessão novamente.');
+  if (!(await verifyPassword(currentPassword, u.passwordHash))) {
+    throw new AuthError('UNAUTHENTICATED', 401, 'A palavra-passe atual está incorreta.');
+  }
+  const passwordHash = await hashPassword(newPassword);
+  await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: false }));
+}
+
+/**
+ * Admin password reset (F1, shared users.resetPassword): super-admin sets a new password and
+ * FORCES a change on next login (`passwordChangeRequired: true`). Returns false when the user
+ * does not exist (the router 404s).
+ */
+export async function resetPassword(userId: string, newPassword: string): Promise<boolean> {
+  const passwordHash = await hashPassword(newPassword);
+  const updated = await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: true }));
+  return updated !== null;
 }
 
 /**
