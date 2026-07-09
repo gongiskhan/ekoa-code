@@ -38,7 +38,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -89,31 +89,48 @@ async function waitForHttp(url, { timeoutMs = 120_000, okBelow = 500 } = {}) {
   return false;
 }
 
-// --- Read the operator's Claude Code OAuth credential from the macOS Keychain ---------------
-// `security ... -w` prints ONLY the stored generic-password value (the JSON blob), which we parse.
-// On failure we throw a CLEAR message and NEVER echo the raw keychain output (it is the secret).
+// --- Read the operator's Claude Code OAuth credential -----------------------------------------
+// macOS: the Keychain item 'Claude Code-credentials' (`security ... -w` prints ONLY the stored
+// value). Linux (and any host without `security`): Claude Code stores the SAME JSON blob at
+// ~/.claude/.credentials.json. Both paths parse the same shape. On failure we throw a CLEAR
+// message and NEVER echo the raw credential material (it is the secret).
 function readOperatorToken() {
-  let raw;
-  try {
-    raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' });
-  } catch {
-    // Do NOT include the caught error — its output could carry the secret. Fail with guidance.
+  let raw = null;
+  if (process.platform === 'darwin') {
+    try {
+      raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' });
+    } catch {
+      // Do NOT include the caught error — its output could carry the secret. Fall through to the
+      // file path (some macOS setups use it too), then fail with guidance.
+    }
+  }
+  if (raw === null) {
+    const credFile = join(process.env.HOME || '', '.claude', '.credentials.json');
+    if (existsSync(credFile)) {
+      try {
+        raw = readFileSync(credFile, 'utf8');
+      } catch {
+        throw new Error(`could not read ${credFile} — check file permissions`);
+      }
+    }
+  }
+  if (raw === null) {
     throw new Error(
-      "could not read 'Claude Code-credentials' from the macOS Keychain " +
-        '(security find-generic-password failed) — is Claude Code logged in on this machine?',
+      "no Claude Code credential found — tried the macOS Keychain item 'Claude Code-credentials' " +
+        'and ~/.claude/.credentials.json. Is Claude Code logged in on this machine?',
     );
   }
   let parsed;
   try {
     parsed = JSON.parse(raw.trim());
   } catch {
-    throw new Error("keychain item 'Claude Code-credentials' was not the expected JSON shape");
+    throw new Error('the Claude Code credential store was not the expected JSON shape');
   }
   // Accept the token under .claudeAiOauth.accessToken (current shape) or a top-level .accessToken.
   const token = (parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken) || (parsed && parsed.accessToken);
   if (typeof token !== 'string' || token.length === 0) {
     throw new Error(
-      "no OAuth access token in 'Claude Code-credentials' " +
+      'no OAuth access token in the Claude Code credential store ' +
         '(expected .claudeAiOauth.accessToken or a top-level .accessToken)',
     );
   }
@@ -240,7 +257,7 @@ async function bootStack() {
 
   const token = readOperatorToken();
   CRED_TOKEN = token; // arm the redactor
-  log('operator OAuth token read from Keychain (not logged)');
+  log('operator OAuth token read from the local credential store (not logged)');
   await seedCredential(token);
 
   bootApi();
