@@ -858,6 +858,22 @@ export async function completeFast(opts: MessagesOptions, attribution: LlmAttrib
  * the skip (the caller increments `gateway_unmetered_call`). `billeeUserId` is the resolved
  * principal ('' bills the platform admin via the tracker).
  */
+/**
+ * Top-level Messages API request fields the gateway forwards upstream (F2 live-turn fix).
+ * The Anthropic OAuth beta endpoint (/v1/messages?beta=true) validates request bodies STRICTLY
+ * and 400s on any key outside its schema ("context_management: Extra inputs are not permitted",
+ * observed live from the installed Agent SDK subprocess). An ALLOWLIST - not a blocklist - so
+ * the next unknown field a future SDK version adds is dropped instead of breaking every
+ * default-topology turn. Dropped KEY NAMES are logged for observability; values never are.
+ * `model` and `metadata` are set explicitly by the gateway below (clamp + attribution), so they
+ * need not be listed, but are included for clarity.
+ */
+const GATEWAY_FORWARD_FIELDS: ReadonlySet<string> = new Set([
+  'model', 'messages', 'max_tokens', 'system', 'metadata', 'stop_sequences', 'stream',
+  'temperature', 'top_k', 'top_p', 'tools', 'tool_choice', 'thinking', 'output_config',
+  'service_tier', 'betas', 'mcp_servers', 'container', 'cache_control',
+]);
+
 export interface GatewayForwardResult {
   status: number;
   headers: Record<string, string | string[]>;
@@ -900,8 +916,19 @@ export async function proxyGatewayMessages(
     actor: { userId: billeeUserId, orgId, username: billeeUserId },
   };
   const anon = anonymizeRequestBody(reqBody, anonCtx);
+  // Forward ONLY the documented Messages API top-level fields (see GATEWAY_FORWARD_FIELDS):
+  // the OAuth beta endpoint rejects unknown keys with a 400, killing the whole turn.
+  const forwarded: Record<string, unknown> = {};
+  const droppedFields: string[] = [];
+  for (const [key, value] of Object.entries(anon.body)) {
+    if (GATEWAY_FORWARD_FIELDS.has(key)) forwarded[key] = value;
+    else droppedFields.push(key);
+  }
+  if (droppedFields.length > 0) {
+    console.warn(`[llm] gateway forward: dropped unknown top-level fields: ${droppedFields.join(', ')}`);
+  }
   const payload: Record<string, unknown> = {
-    ...anon.body,
+    ...forwarded,
     model: decision.model,
     metadata: { ...meta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
   };
