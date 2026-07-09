@@ -93,5 +93,25 @@
     "expectedAgentTypes": [
       "memory-extract"
     ]
+  },
+  {
+    "ts": "2026-07-09T07:11:55.682Z",
+    "journey": "batch1-f2",
+    "username": "f2user14570",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
+  },
+  {
+    "ts": "2026-07-09T07:25:11.267Z",
+    "journey": "batch1-f2",
+    "username": "f2user10094",
+    "action": "chat",
+    "expectedAgentTypes": [
+      "chat",
+      "classifier:*"
+    ]
   }
 ]

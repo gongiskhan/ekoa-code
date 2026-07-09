@@ -28,6 +28,7 @@ import { sessionsRouter } from './routes/sessions.js';
 import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
+import { credentialsRouter } from './routes/credentials.js';
 import { llmHealth, registerGateway, loadCredential } from './llm/index.js';
 import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
@@ -477,6 +478,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/memories', memoriesRouter(deps));
   app.use('/api/v1/registo', registoRouter(deps));
   app.use('/api/v1/billing', billingRouter(deps));
+  // F2 — model-credential provisioning (super-admin, write-only, audit-logged; ch06 §6.2).
+  app.use('/api/v1/credentials', credentialsRouter(deps));
   // G7B — agent execution: chat runs + build/brand-research jobs (ch03 §3.8.7-8). The router
   // internal paths determine the surface: /api/v1/chat/runs, /api/v1/jobs.
   app.use('/api/v1/chat', chatRouter(deps));

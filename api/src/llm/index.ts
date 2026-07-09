@@ -48,14 +48,17 @@ export {
 // cross the boundary — createSdkMcpServer/tool stay inside llm/.
 export { mcpToolName, type SdkToolSpec } from './sdk-tools.js';
 
-// Central credential custody: boot load, the /health claudeAuth field, admin set.
+// Central credential custody: boot load, the /health claudeAuth field, admin set +
+// the audit-logged HTTP provisioning path (F2).
 export {
   loadCredential,
   setCredential,
+  provisionCredential,
   claudeAuthStatus,
   currentMode,
   type ClaudeAuthStatus,
   type CredentialMode,
+  type DecryptedCredential,
 } from './credentials.js';
 
 // The ekoa-local gateway sub-app + its /health counter.

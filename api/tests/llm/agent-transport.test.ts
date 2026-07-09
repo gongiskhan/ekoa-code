@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { runAgent, decideForTier } from '../../src/llm/index.js';
 import { setCredential } from '../../src/llm/credentials.js';
-import { loadConfig } from '../../src/config.js';
+import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from '../agents/_setup.js';
 import type { FakeTransport } from '../agents/_fake-transport.js';
 
@@ -13,8 +13,21 @@ import type { FakeTransport } from '../agents/_fake-transport.js';
 describe('SDK env + transport extension (§5.4.1, §5.4.6)', () => {
   beforeAll(() => bootAgentTestDb('ekoa_agent_transport'));
   afterAll(shutdownAgentTestDb);
-  beforeEach(() => seedUser('u1', 'o1'));
-  afterEach(restoreTransport);
+  // The credential-injection cases pin the EXPLICIT external-chokepoint posture: the
+  // configured MODEL credential rides into the subprocess env. The DEFAULT local-gateway
+  // topology presents the boot-provisioned gateway key instead (F2; gateway-boot-auth.test.ts).
+  beforeEach(async () => {
+    process.env.LLM_CHOKEPOINT_BASE_URL = 'https://chokepoint.example/api/v1/llm';
+    __resetConfigForTests();
+    loadConfig();
+    await seedUser('u1', 'o1');
+  });
+  afterEach(() => {
+    delete process.env.LLM_CHOKEPOINT_BASE_URL;
+    __resetConfigForTests();
+    loadConfig();
+    restoreTransport();
+  });
 
   async function runToEnd(t: FakeTransport, opts: Parameters<typeof runAgent>[0]): Promise<void> {
     const handle = runAgent(opts, { kind: 'user_work', agentType: 'chat', billeeUserId: 'u1' });

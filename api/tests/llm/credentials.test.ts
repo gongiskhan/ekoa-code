@@ -100,6 +100,20 @@ describe('persistent failure latches lastRefreshError and flips claudeAuth.ok', 
 });
 
 describe('buildSubprocessEnv scrubs inherited provider env and injects per mode', () => {
+  // These cases pin the EXPLICIT-external-chokepoint posture (the sanctioned dev/direct
+  // topology): the configured MODEL credential is injected. The DEFAULT local-gateway
+  // topology (gateway principal instead; F2) is covered by gateway-boot-auth.test.ts.
+  beforeEach(() => {
+    process.env.LLM_CHOKEPOINT_BASE_URL = 'https://chokepoint.example/api/v1/llm';
+    __resetConfigForTests();
+    loadConfig();
+  });
+  afterEach(() => {
+    delete process.env.LLM_CHOKEPOINT_BASE_URL;
+    __resetConfigForTests();
+    loadConfig();
+  });
+
   it('oauth mode injects CLAUDE_CODE_OAUTH_TOKEN + chokepoint base URL, scrubs ANTHROPIC_API_KEY', async () => {
     process.env.ANTHROPIC_API_KEY = 'leaked-key';
     process.env.ANTHROPIC_BASE_URL = 'https://provider.example';

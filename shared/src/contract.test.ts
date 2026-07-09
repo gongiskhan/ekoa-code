@@ -13,8 +13,9 @@ import {
  * validation lands with the contract suite from G2 onward.
  */
 describe('shared contract', () => {
-  it('loads all 24 domain descriptor maps', () => {
-    expect(Object.keys(ALL_ENDPOINTS).length).toBe(24);
+  it('loads all 25 domain descriptor maps', () => {
+    // 24 rc-1 domains + credentials (F2, batch1).
+    expect(Object.keys(ALL_ENDPOINTS).length).toBe(25);
   });
 
   it('every endpoint descriptor is well-formed', () => {

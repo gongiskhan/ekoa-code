@@ -1,0 +1,33 @@
+{
+  "runId": "20260708-203034-41fe4774",
+  "project": "ekoa-code",
+  "branch": "batch1-testable",
+  "profile": "feature",
+  "gatesConfig": {
+    "test": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "codexSliceReview": true,
+    "design": true,
+    "walkthrough": true,
+    "deliberateRed": false,
+    "mutation": false,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true,
+    "askQuestions": false
+  },
+  "slices": {
+    "f2-credentials": {
+      "status": "in_progress-paused",
+      "tag": null,
+      "note": "impl+tests green; gateway auth works; live turn blocked on provider 400 (context_management), NOT tagged; owed: adversarial review/test/walkthrough/codex-slice"
+    }
+  },
+  "globalGate": {
+    "status": "paused",
+    "reason": "operator-directed stop (machine issues); F2 impl done, live turn blocked on out-of-scope provider context_management 400"
+  },
+  "runLog": "RUN_LOG.md",
+  "flowPlan": "docs/autothing/runs/20260708-203034-41fe4774/FLOW_PLAN.md"
+}

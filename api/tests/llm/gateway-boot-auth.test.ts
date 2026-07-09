@@ -29,7 +29,9 @@ const providerBody = JSON.stringify({
 const stub: ChokepointTransport = {
   async *streamAgent() { yield { kind: 'final', text: '', usage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 }, aborted: false }; },
   async oneShot() { return { text: '', usage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 } }; },
-  async messages() { return { status: 200, headers: { 'content-type': 'application/json' }, body: providerBody }; },
+  // The upstream fetch DECODES bodies but still reports the provider's content-encoding —
+  // the gateway must strip it or the SDK client dies with ZlibError on a plaintext body.
+  async messages() { return { status: 200, headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: providerBody }; },
 };
 
 beforeAll(async () => {
@@ -75,6 +77,9 @@ describe('default topology self-authentication (F2 b)', () => {
     });
     expect(res.status).toBe(200);
     expect(gatewayUnmeteredCount()).toBe(0);
+    // Already-decoded body ⇒ the stale gzip label must not pass through (ZlibError guard).
+    expect(res.headers.get('content-encoding')).toBeNull();
+    await res.text(); // body is consumable as plaintext
     __resetTransportForTests();
   });
 

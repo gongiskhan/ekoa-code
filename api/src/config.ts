@@ -1,11 +1,12 @@
 /**
  * config.ts — the env-derived typed configuration singleton (ch02 §2.6).
  * Loaded once at boot; every other module reads typed values from here instead of
- * touching process.env. Imports nothing (tier 0).
+ * touching process.env. Imports nothing but Node builtins (tier 0).
  *
  * Boot validation gates (ch09 §9.7): ENCRYPTION_KEY and JWT_SECRET are mandatory and
  * fail closed. This is the stub for G0; the full store/backend config lands at G2.
  */
+import { randomBytes } from 'node:crypto';
 
 /** Per-tier model routing config (ch06 §6.2.3). Model ids + billing weights live here,
  *  env-overridable, and NOWHERE else outside api/src/llm/. Tier configs carry `effort`
@@ -78,6 +79,20 @@ function envFloat(name: string, dflt: number): number {
 
 /** Build the LLM routing config from env (ch06 §6.2.3). Exported so tests that construct a
  *  bare `Config` literal share the one source of tier/model/weight truth. */
+/**
+ * Boot-provisioned gateway key (F2): when the operator sets no `LLM_GATEWAY_API_KEY`, the
+ * process derives one random key at first config load, so the DEFAULT chokepoint topology
+ * (subprocess → local gateway) self-authenticates. The key never leaves the process except
+ * into SDK subprocess envs (`buildSubprocessEnv`); external ekoa-local tools still need the
+ * operator to set the env var explicitly. Generated once per process; an explicit env var
+ * always wins.
+ */
+let bootGatewayKey: string | undefined;
+function provisionedGatewayKey(): string {
+  if (!bootGatewayKey) bootGatewayKey = randomBytes(32).toString('hex');
+  return bootGatewayKey;
+}
+
 export function defaultLlmConfig(): LlmConfig {
   return {
     tiers: {
@@ -87,7 +102,7 @@ export function defaultLlmConfig(): LlmConfig {
     },
     cacheReadFactor: envFloat('LLM_CACHE_READ_FACTOR', 0.25),
     providerBaseUrl: process.env.LLM_PROVIDER_BASE_URL ?? '',
-    gatewayApiKey: process.env.LLM_GATEWAY_API_KEY || undefined,
+    gatewayApiKey: process.env.LLM_GATEWAY_API_KEY || provisionedGatewayKey(),
     gatewayEnabled: process.env.LLM_GATEWAY_ENABLED !== 'false',
   };
 }

@@ -106,10 +106,13 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     try {
       const result = await proxyGatewayMessages((req.body ?? {}) as Record<string, unknown>, billeeUserId);
       if (result.unmetered) gatewayUnmeteredCalls++;
-      // Pass the provider response through, minus hop-by-hop headers.
+      // Pass the provider response through, minus hop-by-hop headers. `content-encoding`
+      // must also drop: the upstream fetch already DECODED the body (result.body is
+      // plaintext), so forwarding the gzip label makes the SDK client fail with ZlibError
+      // (F2 — surfaced the first time an authenticated turn crossed the gateway).
       for (const [k, v] of Object.entries(result.headers)) {
         const lower = k.toLowerCase();
-        if (['connection', 'transfer-encoding', 'keep-alive', 'content-length'].includes(lower)) continue;
+        if (['connection', 'transfer-encoding', 'keep-alive', 'content-length', 'content-encoding'].includes(lower)) continue;
         res.setHeader(k, v);
       }
       res.status(result.status).send(result.body);

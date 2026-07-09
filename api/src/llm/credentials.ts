@@ -1,7 +1,7 @@
 /**
  * llm/credentials.ts — central model-credential custody (ch06 §6.2, §6.2.4; FIXED-8 as
  * amended by Amendment 2). One credential per environment, held in the `credentials`
- * Firestore singleton (`_id: 'default'`), AES-encrypted at rest through the one crypto
+ * Mongo singleton (`_id: 'default'`), AES-encrypted at rest through the one crypto
  * module (ch04 §4.7). Two per-environment auth modes:
  *   - `oauth`   — subscription OAuth token, proactively refreshed before expiry; injected to
  *                 the SDK subprocess as `CLAUDE_CODE_OAUTH_TOKEN`.
@@ -17,6 +17,7 @@
 import { loadConfig } from '../config.js';
 import { credentials as credentialsStore } from '../data/stores.js';
 import { encrypt, decrypt } from '../data/crypto.js';
+import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 
 const SINGLETON_ID = 'default';
 /** Refresh proactively when the token is within this window of expiry (oauth mode). */
@@ -42,7 +43,7 @@ const SCRUBBED_PROVIDER_ENV = [
 export type CredentialMode = 'oauth' | 'api-key';
 
 /** The decrypted credential blob (the plaintext stored in `credentialCiphertext`). */
-interface DecryptedCredential {
+export interface DecryptedCredential {
   mode: CredentialMode;
   /** oauth: the OAuth access token; api-key: the API key. */
   secret: string;
@@ -152,6 +153,24 @@ export async function setCredential(cred: DecryptedCredential): Promise<void> {
   alertLatched = false;
 }
 
+/**
+ * The HTTP provisioning path (F2): persist the credential AND write the `credential.set`
+ * audit row through the single Registo write path. Secret material never reaches the log —
+ * only the mode and whether a refresh token was supplied.
+ */
+export async function provisionCredential(
+  cred: DecryptedCredential,
+  actor: ActivityActor,
+  deps: LogActivityDeps,
+): Promise<void> {
+  await setCredential(cred);
+  await logActivity(actor, 'credential', 'set', deps, {
+    mode: cred.mode,
+    hasRefreshToken: cred.refreshToken !== undefined,
+    expiresAt: cred.expiresAt ?? null,
+  });
+}
+
 function latchAlert(message: string): void {
   lastRefreshError = message;
   if (!alertLatched) {
@@ -253,14 +272,30 @@ export interface SubprocessEnvOptions {
   streamCloseTimeoutMs?: number;
 }
 
+/** True when the chokepoint base URL is this server's own local gateway (loopback host) —
+ *  the DEFAULT topology (`LLM_CHOKEPOINT_BASE_URL` unset resolves to 127.0.0.1). */
+function isLocalGatewayChokepoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname;
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Build the SDK subprocess env for the current mode: start from a scrubbed clone of the
- * inherited env (no provider auth/base-url leaks), inject the configured credential
- * (`CLAUDE_CODE_OAUTH_TOKEN` for oauth, `ANTHROPIC_API_KEY` for api-key), and point the
- * subprocess at the chokepoint via `ANTHROPIC_BASE_URL` (ch05 §5.4.1; FIXED-13). Every SDK
- * subprocess call thereby funnels through the chokepoint. Additionally (§5.4.1): `CLAUDECODE`
- * is deleted (prevents nested-session detection), `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS='1'`
- * is set, build runs get `HOME = projectDir`, and agent-face runs raise the stream-close timeout.
+ * Build the SDK subprocess env: start from a scrubbed clone of the inherited env (no provider
+ * auth/base-url leaks) and point the subprocess at the chokepoint via `ANTHROPIC_BASE_URL`
+ * (ch05 §5.4.1; FIXED-13). The credential the subprocess presents depends on the topology (F2):
+ *   - DEFAULT (chokepoint = the local gateway): inject the boot-provisioned GATEWAY key as
+ *     `ANTHROPIC_API_KEY` — the gateway authenticates that principal and re-injects the real
+ *     model credential upstream itself (client.proxyGatewayMessages), so the model secret
+ *     never enters the subprocess env.
+ *   - EXPLICIT external chokepoint (the sanctioned dev/direct posture): inject the configured
+ *     model credential (`CLAUDE_CODE_OAUTH_TOKEN` for oauth, `ANTHROPIC_API_KEY` for api-key).
+ * Additionally (§5.4.1): `CLAUDECODE` is deleted (prevents nested-session detection),
+ * `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS='1'` is set, build runs get `HOME = projectDir`,
+ * and agent-face runs raise the stream-close timeout.
  */
 export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promise<Record<string, string>> {
   const secret = await getSecret();
@@ -271,10 +306,17 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
     if (k === 'CLAUDECODE') continue; // deleted: prevents nested-session detection (§5.4.1)
     env[k] = v;
   }
+  const cfg = loadConfig();
   const mode = cached!.mode;
-  if (mode === 'oauth') env.CLAUDE_CODE_OAUTH_TOKEN = secret;
-  else env.ANTHROPIC_API_KEY = secret;
-  env.ANTHROPIC_BASE_URL = loadConfig().llmChokepointBaseUrl;
+  if (isLocalGatewayChokepoint(cfg.llmChokepointBaseUrl) && cfg.llm.gatewayApiKey) {
+    // Default topology: present the gateway principal; the model secret stays server-side.
+    env.ANTHROPIC_API_KEY = cfg.llm.gatewayApiKey;
+  } else if (mode === 'oauth') {
+    env.CLAUDE_CODE_OAUTH_TOKEN = secret;
+  } else {
+    env.ANTHROPIC_API_KEY = secret;
+  }
+  env.ANTHROPIC_BASE_URL = cfg.llmChokepointBaseUrl;
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
   if (opts.homeDir) env.HOME = opts.homeDir;
   if (opts.streamCloseTimeoutMs !== undefined) env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(opts.streamCloseTimeoutMs);
