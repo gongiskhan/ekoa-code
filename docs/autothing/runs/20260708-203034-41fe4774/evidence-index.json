@@ -37,6 +37,16 @@
       "status": "passed",
       "tag": "batch1-f1",
       "note": "seven endpoints + 3 security findings hardened in-slice; review approve; codexSliceReview degraded (codex-unavailable); the F2 tester /auth/refresh 404 finding closes here"
+    },
+    "f22-memory-view": {
+      "status": "passed",
+      "tag": "batch1-f22",
+      "note": "F22 + all S5 re-review findings; review approve (mutation-verified)"
+    },
+    "routes-ui-called": {
+      "status": "passed",
+      "tag": "batch1-routes",
+      "note": "F4+F5 subset+F6; SECURITY-BOUNDARY review APPROVE (re-verified by exit code); codexSliceReview degraded"
     }
   },
   "globalGate": {
