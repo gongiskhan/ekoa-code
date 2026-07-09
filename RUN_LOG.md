@@ -779,3 +779,14 @@ Also recorded from the two S6/S5 reviews (both CLOSED in-slice, noted for the au
 - **S6 (batch1-routes) [SECURITY-BOUNDARY]:** F6 terminal /api/v1 JSON-404 (scoped) + F4 branding contract paths (aliased save, SSRF-guarded research) + F5 UI subset (11 endpoints, honest where infra absent) + mount-coverage drift gate. 12 new endpoints. Review cleared Q1-Q9 (per-endpoint authz matches declared class, org-scoping, no existence oracle, no secret echo, SSRF-on-PATCH, atomic bulk-delete, 404-scoping, route order) and re-verified all 6 findings fixed: the HIGH unhandled-rejection (chokepoint pre-handle - also the CI-lane blocker), sub-path drift visibility, signals/stats honesty, brand-research SSRF guard, and the pre-existing web/shared SourceInput divergence logged OPEN. codexSliceReview DEGRADED (codex unavailable; the F5 brief names adversarial review - the fresh-context Anthropic review covered it, recorded honestly).
 - **Deterministic wall (both):** npm test EXIT=0 (verified by exit code, not the summary line): shared 32, api 1036/1-skip, web 115; typecheck 0; lint 0 errors; all 6 grep/security gates exit 0. schema-coverage 72->53 pending across the batch.
 - **Checkpoints:** `checkpoint: batch1 f22 ...` (tag batch1-f22) and `checkpoint: batch1 routes ...` (tag batch1-routes).
+
+### DEVIATION - 2026-07-09T23:46:02Z - S5 final verdict APPROVE (exit-code verified); tsconfig-test-exclusion logged OPEN
+
+The S5 fresh-context reviewer returned a definitive APPROVE after re-verifying every fix BY EXIT CODE at
+HEAD 1abed9e (contract 206 tests / 0 unhandled / EXIT 0; the S5 trio 21 tests EXIT 0). This confirms the
+batch1-f22 tag already placed. One non-blocking residual added to the OPEN list: web/tsconfig.json excludes
+__tests__ from tsc, so web test files are never typechecked - the next mock-cast drift also would not be
+caught. Deferred to batch-2 (enabling tsc over the test tree risks surfacing latent type errors; not worth
+destabilizing the web build at run-tail). The reviewer noted the F25 subprocess-isolation commits riding on
+the same HEAD are outside its S5 scope - they carry their OWN slice (S7) and review (in flight); the S5
+verdict transfers cleanly because no S5 source file changed.
