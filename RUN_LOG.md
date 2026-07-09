@@ -666,3 +666,14 @@ credential; deterministic gates unaffected.
 - **Diagram:** 04-agent-job.excalidraw updated - "completion gates (build jobs)" box + failed { BUILD_UNFULFILLED | VERIFY_FAILED } branch (FIXED-12).
 - **Walkthrough:** asciinema cast (committed gate tests running green, 25 tests), self-verified by content grep; sha256 in gate-status.json.
 - **Checkpoint:** checkpoint: batch1 f16-f28 honest build completion + request-fulfilment verification. Tag: batch1-f16-f28.
+
+### GATE - S3 f20-stream-text (batch1-f20) - PASSED
+
+- **When:** 2026-07-09T21:25:28Z (UTC). Models: implement + orchestration claude-fable-5; fresh-context review claude-fable-5.
+- **DEVIATION (beyond the brief's client.ts-only scope, verified necessary by the reviewer):** chat.ts's final marker pass discarded MarkerProcessor.push()'s return, keeping only the ~25-char hold-back tail (exactly the truncation length observed in J2/J4). With client.ts fixed, the acceptance (complete.result == full answer) was unreachable without also reading push()+end() correctly. Reviewer verified single-push semantics: disjoint slices, no duplication, no marker leak; bonus - findings extraction (context blocks, build/integration markers) now sees the WHOLE answer, not the tail.
+- **Fixes:** client.ts streamAgent/oneShot no longer clobber the accumulation with the SDK result field (fallback only when nothing streamed); runAgent final keeps the accumulation; chat.ts cleanText = push() + end(). Review finding fixed in-slice (regression-test-first): the §5.3.7 provider-error scan is gated on the nothing-streamed shape in chat.ts AND build.ts - F20 had widened it to the whole answer, so legitimate prose mentioning "429"/"401" would have been discarded as a provider outage.
+- **Tests:** rewritten chat-lifecycle case asserts complete.result === join(text_chunks) === persisted message (the old test encoded the clobber - test-bug class, planned); nothing-streamed fallback case; streamed-429-prose case. agents+llm+streaming 181/181; full workspace 32/962+1skip/113; wall all exit 0.
+- **Review:** APPROVE (s3-adv-review). One medium finding (above) - fixed. Non-goals verified respected (sink.text/detok/metering untouched; shared/events.ts unchanged); anonymise ordering + abort semantics intact; all downstream result.text consumers (build notes, brand-research, verify-runner PASS/FAIL parse) strictly improve.
+- **Skips (visible):** codexSliceReview profile-conditional (not a security boundary; codex also unavailable); per-slice adversarialTest kind-conditional (api -> batched run-level pass owed); design kind-conditional.
+- **Walkthrough:** asciinema cast (chat-lifecycle suite green incl. the F20 cases), self-verified; sha256 in gate-status.json.
+- **Checkpoint:** checkpoint: batch1 f20 streamed-text integrity. Tag: batch1-f20.

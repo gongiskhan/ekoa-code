@@ -27,6 +27,11 @@
       "status": "passed",
       "tag": "batch1-f16-f28",
       "note": "both gates land regression-test-first; fresh-context review approve (0 findings); full suite green; J3 live probe deferred to S7 boot (blocked on the dedicated Cortex credential, operator to provision)"
+    },
+    "f20-stream-text": {
+      "status": "passed",
+      "tag": "batch1-f20",
+      "note": "three clobber sites + chat.ts marker-pass deviation (logged); review approve, 1 medium finding fixed in-slice; full suite green"
     }
   },
   "globalGate": {
