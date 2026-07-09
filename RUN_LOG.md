@@ -677,3 +677,17 @@ credential; deterministic gates unaffected.
 - **Skips (visible):** codexSliceReview profile-conditional (not a security boundary; codex also unavailable); per-slice adversarialTest kind-conditional (api -> batched run-level pass owed); design kind-conditional.
 - **Walkthrough:** asciinema cast (chat-lifecycle suite green incl. the F20 cases), self-verified; sha256 in gate-status.json.
 - **Checkpoint:** checkpoint: batch1 f20 streamed-text integrity. Tag: batch1-f20.
+
+### GATE - S4 f1-auth-lifecycle (batch1-f1) - PASSED [SECURITY-BOUNDARY]
+
+- **When:** 2026-07-09T22:02:56Z (UTC). Models: implement claude-fable-5; fresh-context security review claude-fable-5.
+- **Landed (regression-test-first, 13 red contract cases before a line of impl):** POST /auth/refresh (re-sign verified claims, fresh jti; old token valid to ITS expiry per the brief's non-goal), POST /auth/logout (self: revoke(jti); admin {userId}: super-admin anywhere, org-admin own-org only with cross-org reading as NOT_FOUND - no user enumeration - via tokenEpoch bump), POST /auth/password (verify current, clear passwordChangeRequired), device flow (mongo device_auth: pending -> approved/denied/expired, single-use approved poll, 5s slow_down, unknown code = expired, deviceCode ~244 bits), POST /users/:id/password (super-admin reset, forces change). All logic in auth/ domain modules; routes/ import no data/.
+- **Fresh-context adversarial review: APPROVE** with 3 findings + 1 observation - ALL fixed in-slice, each with its own red test first:
+  1. (MEDIUM) deleteUser left a stale {active:true} activation entry, so a deleted user's token stayed admissible - and the NEW /auth/refresh let it be re-signed indefinitely (bounded -> unbounded session). Fix: deleteUser clearActivation()s; unknown subject fails closed everywhere.
+  2. (LOW) approved device poll used findOne-then-deleteOne with an await between: a concurrent double poll could mint two tokens. Fix: findOneAndDelete claims the row in one operation.
+  3. (LOW/MEDIUM) password change + admin reset left tokens minted under the OLD password valid to expiry. Fix: both bump the token epoch. Because JWT iat has one-second granularity, an epoch bump would make a same-second re-login born-invalid - so mints after a credential/approval check pin iat = max(now, epoch) (signToken now accepts iat; jsonwebtoken derives exp from it). No new token scheme (F1 non-goal held).
+  4. (observation) the ch03 diagram update was a text panel; replaced with a real state graph (login/refresh/live-session nodes, four kill paths to token-dead, device sub-flow) - FIXED-12 bar.
+- **codexSliceReview: DEGRADED (codex-unavailable).** The F1 brief names an adversarial Codex review for this significance-labelled area. codex CLI is 'Not logged in' on this host (exit 2), no API-key auth, interactive login impossible mid-run. Recorded degraded per Part 3: never blocks, never faked. Owed at the run-level checkpoint if credentials appear.
+- **Tests/gates:** contract auth 17/17; full api 980 passed/1 skipped (115 files); shared 32; web 113; schema-coverage 72->65 pending (7 endpoints COVERED); lint 0 errors; all 6 grep/security gates exit 0.
+- **Closes:** the S1 adversarial tester's "/auth/refresh 404 on every dashboard load" finding (routed here at the S1 gate).
+- **Checkpoint:** checkpoint: batch1 f1 auth lifecycle + hardening. Tag: batch1-f1.

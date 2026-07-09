@@ -32,6 +32,11 @@
       "status": "passed",
       "tag": "batch1-f20",
       "note": "three clobber sites + chat.ts marker-pass deviation (logged); review approve, 1 medium finding fixed in-slice; full suite green"
+    },
+    "f1-auth-lifecycle": {
+      "status": "passed",
+      "tag": "batch1-f1",
+      "note": "seven endpoints + 3 security findings hardened in-slice; review approve; codexSliceReview degraded (codex-unavailable); the F2 tester /auth/refresh 404 finding closes here"
     }
   },
   "globalGate": {
