@@ -630,3 +630,12 @@ FLOW_PLAN at docs/autothing/runs/20260708-203034-41fe4774/FLOW_PLAN.md (7 serial
 - **Walkthrough:** asciinema cast at slices/f2-credentials/f2-walkthrough.cast, self-verified by content grep (F2-E2E: PASS + terminalType complete + claudeAuth ok:true) on the FINAL slice code. sha256 in gate-status.json.
 - **Infra flakes hit + logged (known-flakes.md):** boot-b seeded OAuth token invalidated within minutes by external Claude Code credential rotation (multiple live sessions on this host); musl Agent SDK binary needed /lib/ld-musl loader (apt musl installed); stale tsc incremental dist after cross-machine pull (clean rebuild).
 - **Checkpoint:** checkpoint: batch1 f2 credential endpoint + default-topology gateway self-auth + payload allowlist. Tag: batch1-f2.
+
+### DEVIATION - 2026-07-09T15:56:08Z - additional OPEN discovery finding from the F2 adversarial tester (post-gate FYI)
+
+Late-subscriber SSE gap (possible): on a GO-run where the chat run reached status=complete server-side,
+a client that attached GET /api/v1/chat/runs/:id/events a beat after createRun received only the
+`ready` frame - no text_chunk/complete replay. Either a token-rotation race at that instant or SSE
+events flushed before subscribe are not replayed. If real, a user connecting late sees a spinner over a
+completed run. Folded into the same OPEN chat-SSE/hang disposition bucket as the S1 GATE entry findings
+(close by deterministic test or written dismissal - operator/batch-2).
