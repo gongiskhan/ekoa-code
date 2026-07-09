@@ -749,3 +749,25 @@ independent of any UI. The earlier DEVIATION entry naming that finding is supers
 allowlist and cannot detect a FALSE entry - which is exactly how F22 shipped green through CI. Structural;
 deferred with the reviewer's agreement. Note it bit again this window: EXPECTED_PENDING_COUNT was edited
 by two slices concurrently (F1 72->65, F4 65->64).
+
+### DEVIATION - 2026-07-09T23:33:25Z - S6 review finding 6 (web/shared SourceInput divergence) logged OPEN
+
+The S6 fresh-context review (needs-work -> fixes applied) surfaced a pre-existing defect outside the
+F5 brief's scope: the dashboard's knowledge `updateSource` (web/stores/knowledge.ts) sends a web-side
+`SourceInput` shape ({label, levels, maxPages, scope, render, userAgent, seeds, seedTemplate as an
+OBJECT}) that does not match the shared `SourceInput` the S6 endpoint validates against (`seedTemplate`
+is z.string().nullable()). Consequence: a source WITH a seed template 400s from the UI, and the other
+web-only fields validate but are silently dropped. The endpoint itself is contract-honest and its
+contract test passes; S6 correctly followed the shared contract. Closing this needs a web<->shared
+`SourceInput` reconciliation (a shared-schema change + web store change), which is larger than the F5
+subset and out of its named scope. Logged OPEN for operator/batch-2 - the "UI-called endpoint" goal is
+met at the contract layer; full end-to-end save of every web field is the follow-up.
+
+Also recorded from the two S6/S5 reviews (both CLOSED in-slice, noted for the audit trail):
+- S6 finding 1 == the unhandled-rejection both reviewers found: fixed in the F25 commit (0dc4293),
+  which is why the F4 branding contract suite now exits 0 (it was EXIT=1 on 2 unhandled rejections).
+- S6 findings 3/4 (signals accepted:true; stats verified:0) overlapped the S5 re-review and are fixed
+  in 1c9e5ca.
+- **Process note (self-correction):** an earlier summary of mine cited "green: 25 files / 201 tests"
+  for `npx vitest run tests/contract/` when the process EXIT was 1 (2 unhandled rejections). I had read
+  vitest's summary line instead of $?. All suite results in this batch are now confirmed by exit code.
