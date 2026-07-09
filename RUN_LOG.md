@@ -691,3 +691,25 @@ credential; deterministic gates unaffected.
 - **Tests/gates:** contract auth 17/17; full api 980 passed/1 skipped (115 files); shared 32; web 113; schema-coverage 72->65 pending (7 endpoints COVERED); lint 0 errors; all 6 grep/security gates exit 0.
 - **Closes:** the S1 adversarial tester's "/auth/refresh 404 on every dashboard load" finding (routed here at the S1 gate).
 - **Checkpoint:** checkpoint: batch1 f1 auth lifecycle + hardening. Tag: batch1-f1.
+
+### DEVIATION - 2026-07-09T22:27:41Z - S5 review surfaced two OPEN findings outside the F22 brief (operator disposition owed)
+
+The S5 fresh-context review (approve) surfaced two real defects the F22 brief explicitly non-goals.
+Logged OPEN, not silently dropped (QA layer 2: close by test or written dismissal):
+
+1. **Archived memories are still injected into model prompts** (api/src/memory/resolver.ts, the
+   `active` bucket filter). `tier: 'archive'` hides a memory in the dashboard but does not exclude
+   it from scoring/injection: archiving is a UI-only affordance today. Behaviour decision, not a
+   typo - needs an operator call on whether archive means "hidden" or "not used".
+2. **The schema-coverage gate cannot detect a FALSE 'COVERED' entry** (api/tests/contract/schema-coverage.test.ts).
+   COVERED is a hand-maintained name allowlist; memories.* sat in it on the strength of a cross-org
+   test that never validated a response body - which is exactly how F22 shipped green through CI.
+   The slice closed the test gap, not the gate weakness. Follow-up: derive COVERED from actual
+   schema assertions rather than a name set.
+
+Also fixed IN-slice (regression-test-first) though pre-existing and outside the brief, because both
+made a user-visible surface dead and the operator's standing rule is to fix defects on sight:
+POST /memories silently stripped `title` (shared/ MemoryCreateRequest never declared it) and the
+guardrail button posted `visibility: "shared"`, absent from the Visibility enum - together, the only
+UI memory-create path was 400-ing on every click. shared/ changed (significance area) -> sent back to
+the same fresh-context reviewer for verification before the tag.
