@@ -47,11 +47,51 @@
       "status": "passed",
       "tag": "batch1-routes",
       "note": "F4+F5 subset+F6; SECURITY-BOUNDARY review APPROVE (re-verified by exit code); codexSliceReview degraded"
+    },
+    "f25-disposition": {
+      "status": "passed",
+      "tag": "batch1-f25",
+      "note": "mechanism reproduced+hardened+tested; disposition committed; security review APPROVE (5 findings closed); codexSliceReview degraded; live reproduce deferred (credential)"
     }
   },
   "globalGate": {
-    "status": "in-progress",
-    "reason": "S1 tagged batch1-f2; S2-S7 pending"
+    "status": "completed-with-blockers",
+    "at": "2026-07-09T23:59:14Z",
+    "buildableRemaining": 0,
+    "slicesTagged": 7,
+    "builtinSecurityReview": {
+      "status": "clean",
+      "by": "batch-security-review",
+      "at": "2026-07-09T23:59:14Z"
+    },
+    "codexCheckpoint": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "at": "2026-07-09T23:59:14Z"
+    },
+    "blockers": [
+      {
+        "cause": "codex-unavailable",
+        "detail": "codexSliceReview (4 boundary slices) + run-level codexCheckpoint could not run - codex not logged in on this host",
+        "remediation": "codex login with an API key + budget cap"
+      },
+      {
+        "cause": "credential-unprovisioned",
+        "detail": "S2 J3 build probe + S7 live host-context reproduce deferred - no dedicated Cortex credential",
+        "remediation": "provision ~/.config/ekoa/claude-credentials.json (claude setup-token output or an api key)"
+      }
+    ],
+    "openFindings": [
+      "schema-coverage COVERED allowlist cannot detect a false entry",
+      "web/shared SourceInput divergence",
+      "chat SSE/UI discovery findings (temp-session 404, run-hang, init race, late-subscriber gap)",
+      "web/tsconfig excludes __tests__ from tsc",
+      "gateway apikey principal skips checkAllowance (platform-billed, plausible billing bypass)"
+    ],
+    "videos": "7/7",
+    "profile": "feature",
+    "codexSlice": "0/4 (degraded)",
+    "modelFallbacks": 0
   },
   "runLog": "RUN_LOG.md",
   "flowPlan": "docs/autothing/runs/20260708-203034-41fe4774/FLOW_PLAN.md"

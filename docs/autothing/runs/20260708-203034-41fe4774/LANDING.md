@@ -3,8 +3,9 @@
 **Off:** rc-1 · **Branch:** main (no feature branches; commit-straight-to-main, operator-directed)
 **Profile:** feature (operator-forced; 7 slices would size as build) · **Sessions:** origin
 `41fe4774` (paused, machine issues) → resumed `5d5ac4d5` on a new Linux/GCP host.
-**Status at write:** 6/7 slices tagged; S7 (F25) code-complete + green, its fresh-context security
-review in flight (the last gate before the terminal verdict). This packet finalizes on that verdict.
+**Status:** 7/7 slices tagged. Both final-phase security gates in: S7's fresh-context review APPROVE,
+and the whole-batch cross-cutting security sweep CLEAN. Terminal verdict: completed-with-blockers
+(codex-unavailable + live-turn evidence deferred; both external, both remediable).
 
 ## Gates summary
 
@@ -16,7 +17,7 @@ review in flight (the last gate before the terminal verdict). This packet finali
 | 4 | F1 auth lifecycle | `batch1-f1` | approve (3 findings, all fixed) | **degraded** | committed tests |
 | 5 | F22 memory-view contract | `batch1-f22` | approve (mutation-verified) | skipped (profile) | committed tests |
 | 6 | Scoped F4+F5 mounts + F6 404 | `batch1-routes` | approve (6 findings, all fixed) | **degraded** | committed tests |
-| 7 | F25 host-context-bleed disposition | *pending tag* | *in flight* | **degraded** | mechanism proven; live deferred |
+| 7 | F25 host-context-bleed disposition | `batch1-f25` | approve (5 findings, all closed) | **degraded** | mechanism proven+tested; live deferred |
 
 Deterministic wall (whole batch, verified by EXIT CODE): `npm test` EXIT=0 — shared 32, api
 1036/1-skip, web 115. typecheck 0; lint 0 errors (212 pre-existing warnings); all 6 grep/security
@@ -61,10 +62,15 @@ gates exit 0. schema-coverage PENDING 72 → 53 across the batch.
    late-subscriber SSE gap. Not in any batch-1 slice's scope; owed a test or written dismissal (QA L2).
 4. **resolveMemoryInjection taxonomy** and archived-memory injection — CLOSED this batch (folded into one
    fix), listed here for the audit trail.
-5. **web/tsconfig.json excludes `__tests__`** — the web test files are never typechecked, so a wrong
-   mock-cast (the exact drift the F22 ratchet fixed) would not be caught by `npm run typecheck`. Enabling
-   tsc over the test tree risks surfacing latent type errors; deferred to batch-2 rather than destabilize
-   the web build at run-tail. (S5 reviewer residual, non-blocking.)
+5. **web/tsconfig.json excludes `__tests__`** — web test files are never typechecked, so a wrong
+   mock-cast (the exact drift the F22 ratchet fixed) would escape `npm run typecheck`. Deferred to batch-2
+   rather than destabilize the web build at run-tail. (S5 reviewer residual, non-blocking.)
+6. **Gateway `apikey` principal skips checkAllowance** (batch-security sweep, by-design, plausible-but-
+   unconfirmed) — the F2 boot-provisioned gateway key is in every SDK subprocess env; its principal is
+   platform-billed and uncapped, so a tenant who exfiltrates it from a build run could make FAST calls
+   billed to the platform, bypassing their own allowance. Inherent to subprocess-must-present-a-credential;
+   the default topology deliberately exposes only a FAST-clamped key (not the real secret). Fix if desired:
+   the `apikey` principal honors a quota. Operator decision owed; not held for the batch.
 
 ## NEEDS HUMAN EYES (blockers with external causes, each with its remediation)
 
