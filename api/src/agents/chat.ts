@@ -154,7 +154,9 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     );
 
     // Live stream: marker-filter every delta so no marker leaks on the wire (§5.7.2).
+    let streamedAny = false;
     for await (const ev of handle.events) {
+      streamedAny = true;
       const clean = liveMarkers.push(ev.text);
       if (clean) sink.text(clean);
     }
@@ -176,7 +178,11 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const cleanText = cleanHead + cleanTail;
 
     // Provider-error-as-result reroute (§5.3.7): never a fake "completed", never persisted.
-    const provErr = scanProviderError(result.text);
+    // Scanned ONLY on the nothing-streamed fallback shape (a provider failure aborts the request,
+    // so an error-as-result arrives with no deltas): with F20 making result.text the FULL answer,
+    // scanning a streamed answer would discard legitimate prose that mentions an error term
+    // ("o erro HTTP 429 significa...") as a fake provider outage.
+    const provErr = streamedAny ? undefined : scanProviderError(result.text);
     if (provErr) {
       finishError(provErr === 'auth' ? 'AUTH_ERROR' : 'PROVIDER_UNAVAILABLE', 'O fornecedor de modelo está indisponível.');
       return;

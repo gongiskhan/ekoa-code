@@ -331,7 +331,9 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       { kind: 'user_work', agentType: 'build', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId: jobId, artifactId },
     );
 
+    let streamedAny = false;
     for await (const ev of handle.events) {
+      streamedAny = true;
       resetInactivity();
       const clean = liveMarkers.push(ev.text);
       if (clean) sink.text(clean);
@@ -343,8 +345,10 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
 
     if (result.aborted) { await settleAborted(); return; }
 
-    // §5.6.2 completion sequence, step 1: provider-error-as-result reroute (§5.3.7).
-    if (scanProviderError(result.text)) { await finishError('ADAPTER_ERROR'); return; }
+    // §5.6.2 completion sequence, step 1: provider-error-as-result reroute (§5.3.7). Scanned only
+    // on the nothing-streamed fallback shape — same reasoning as chat.ts (F20 made result.text the
+    // full accumulation; legitimate build narration can mention error terms).
+    if (!streamedAny && scanProviderError(result.text)) { await finishError('ADAPTER_ERROR'); return; }
 
     // Session resume (§5.4.5): persist sdkSessionId ONLY when it differs from what we resumed with.
     if (capturedSessionId && capturedSessionId !== resumeSessionId) {
