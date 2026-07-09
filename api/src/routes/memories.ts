@@ -3,7 +3,7 @@
  * Reads inject own + org-shared; another user's private memory → 404; writing it → 403.
  */
 import { Router, type Response } from 'express';
-import { MemoryCreateRequest, MemoryPatch } from '@ekoa/shared';
+import { MemoryCreateRequest, MemoryPatch, MemoryBulkDeleteRequest, MemorySignalRequest } from '@ekoa/shared';
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import {
   listVisibleMemories, getVisibleMemory, memoryWriteGuard, memoryView,
@@ -18,6 +18,51 @@ export function memoriesRouter(deps: { now: () => number; genId: () => string })
   r.get('/', async (req: AuthedRequest, res: Response) => {
     const rows = await listVisibleMemories(actorOf(req));
     res.json({ items: rows.map(memoryView), total: rows.length });
+  });
+
+  // F5 subset. These MUST be registered before `GET /:id` or that route swallows them ('stats'
+  // and 'tags' would be read as memory ids).
+  r.get('/stats', async (req: AuthedRequest, res: Response) => {
+    const rows = await listVisibleMemories(actorOf(req));
+    const tally = (pick: (m: (typeof rows)[number]) => string) =>
+      rows.reduce<Record<string, number>>((acc, m) => { const k = pick(m); acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+    res.json({
+      total: rows.length,
+      byType: tally((m) => m.type ?? 'unknown'),
+      byTier: tally((m) => m.tier ?? 'active'), // the same honest default memoryView reports
+      byVisibility: tally((m) => m.visibility),
+      verified: 0, // `verified` is not persisted today — reported honestly as zero, never guessed
+    });
+  });
+
+  r.get('/tags', async (req: AuthedRequest, res: Response) => {
+    const rows = await listVisibleMemories(actorOf(req));
+    const counts = new Map<string, number>();
+    for (const m of rows) for (const tag of m.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    const items = [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+    res.json({ items });
+  });
+
+  r.post('/bulk-delete', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, MemoryBulkDeleteRequest, req.body);
+    if (body === undefined) return;
+    const actor = actorOf(req);
+    // Check EVERY id before deleting any: a partial delete on a forbidden id is worse than a refusal.
+    for (const id of body.ids) {
+      const guard = await memoryWriteGuard(actor, id);
+      if (guard.verdict === 'notfound') return notFound(res);
+      if (guard.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    }
+    for (const id of body.ids) await deleteMemory(id);
+    res.json({ ok: true });
+  });
+
+  r.post('/signals', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, MemorySignalRequest, req.body);
+    if (body === undefined) return;
+    // HONEST minimal (F5 brief): there is no per-run memory-scoring store yet, so no memory can be
+    // adjusted. Answer the contract shape with real zeros rather than fabricating a success count.
+    res.json({ affectedMemories: 0, adjustedScores: 0, accepted: true, signal: body.signal, runId: body.runId });
   });
 
   r.get('/:id', async (req: AuthedRequest, res: Response) => {

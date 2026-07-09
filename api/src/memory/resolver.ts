@@ -95,9 +95,17 @@ export async function resolveMemoryInjection(actor: Actor, query: string, deps: 
   if (visible.length === 0) return '';
   const q = terms(query);
 
-  const guardrails = visible.filter((m) => m.type === 'guardrail' || m.tier === 'guardrail');
-  const core = visible.filter((m) => m.tier === 'core' && !guardrails.includes(m));
-  const active = visible.filter((m) => !guardrails.includes(m) && !core.includes(m));
+  // A guardrail is anything the product calls a guardrail. The dashboard writes them as
+  // `{ type:'preference', tier:'core', tags:['guardrail'] }` and lists them by that tag, so
+  // matching only `type`/`tier` classified every UI-created guardrail as an ordinary memory and
+  // injected it as a plain bullet instead of a non-negotiable RULE line: the user saw it listed
+  // under "Guardrails" and believed it was enforced. The three writers must agree.
+  const isGuardrail = (m: MemoryDoc) => m.type === 'guardrail' || m.tier === 'guardrail' || (m.tags ?? []).includes('guardrail');
+  // An ARCHIVED memory is hidden in the dashboard; it must not keep steering the model either.
+  const injectable = visible.filter((m) => m.tier !== 'archive');
+  const guardrails = injectable.filter(isGuardrail);
+  const core = injectable.filter((m) => m.tier === 'core' && !guardrails.includes(m));
+  const active = injectable.filter((m) => !guardrails.includes(m) && !core.includes(m));
 
   const scored = active
     .map((m) => {

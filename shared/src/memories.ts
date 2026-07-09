@@ -36,6 +36,9 @@ export type MemoryCreateRequest = z.infer<typeof MemoryCreateRequest>;
 
 export const MemoryPatch = z.object({
   type: z.string().optional(),
+  // `title` was missing here too (see MemoryCreateRequest): a PATCH { title } was stripped by zod,
+  // so renaming a memory silently no-op'd with a 200 while the dashboard's edit modal sends it.
+  title: z.string().optional(),
   tier: z.string().optional(),
   tags: z.array(z.string()).optional(),
   content: z.string().optional(),

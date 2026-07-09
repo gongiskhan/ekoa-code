@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import MemoryPage from '@/app/(dashboard)/memory/page';
+import GuardrailsSection from '@/components/memory/guardrails';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { useMemoryStore } from '@/stores/memory';
 import { api } from '@/lib/api';
@@ -96,21 +97,26 @@ describe('memory-page fixtures are contract-valid stubs (F22 ratchet)', () => {
     }
   });
 
-  it('the guardrail create payload validates against MemoryCreateRequest (S5 review finding 4: the only UI create path was dead)', () => {
-    // web/components/memory/guardrails.tsx posts this shape. It sent visibility:"shared", which is
-    // not in the Visibility enum (private | org) — so "Adicionar guardrail" 400'd, every time.
-    const guardrailPayload = {
-      type: 'preference',
-      content: 'Nunca usar jQuery.',
-      title: 'Nunca usar jQuery.',
-      tier: 'core',
-      tags: ['guardrail'],
-      visibility: 'org',
-    };
-    const parsed = MemoryCreateRequest.safeParse(guardrailPayload);
-    expect(parsed.success, JSON.stringify(parsed.success ? {} : parsed.error.issues)).toBe(true);
-    // and the title the button sends must survive the schema (it was stripped)
-    expect((parsed.success ? parsed.data : ({} as Record<string, unknown>)).title).toBe('Nunca usar jQuery.');
+  /**
+   * S5 RE-REVIEW: this assertion used to validate a hand-copied object literal, so reverting the
+   * component to the broken `visibility: "shared"` left it green — a stub nobody sends is not a
+   * stub. It now DRIVES the real component and validates the payload the store actually passes to
+   * `api.memories.create`.
+   */
+  it('the guardrail button sends a payload that validates against MemoryCreateRequest (S5 finding 4)', async () => {
+    render(<GuardrailsSection />);
+    await userEvent.type(screen.getByRole('textbox'), 'Nunca usar jQuery.');
+    await userEvent.click(screen.getByRole('button', { name: /adicionar/i }));
+
+    await waitFor(() => expect(mocked.memories.create).toHaveBeenCalledTimes(1));
+    const sent = mocked.memories.create.mock.calls[0]![0] as Record<string, unknown>;
+    const parsed = MemoryCreateRequest.safeParse(sent);
+    expect(parsed.success, `the component's real payload must validate: ${JSON.stringify(parsed.success ? {} : parsed.error.issues)}`).toBe(true);
+    // the two fields that were broken end-to-end
+    expect(sent.visibility).toBe('org');
+    expect(sent.title).toBe('Nunca usar jQuery.');
+    // and the tag the resolver now classifies guardrails by
+    expect(sent.tags).toEqual(['guardrail']);
   });
 });
 

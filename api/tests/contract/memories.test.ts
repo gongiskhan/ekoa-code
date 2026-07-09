@@ -9,7 +9,7 @@ import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
-import { Memory, MemoryListResponse, ErrorEnvelope } from '@ekoa/shared';
+import { Memory, MemoryListResponse, MemoryStats, MemoryTagsResponse, MemorySignalResponse, OkResponse, ErrorEnvelope } from '@ekoa/shared';
 
 /**
  * F22 (batch-1 S5): every memory RESPONSE must validate against the shared `Memory` schema.
@@ -106,13 +106,16 @@ describe('GET /api/v1/memories — every item validates against the shared Memor
     expect(body.tier).toBe('active');
   });
 
-  it('PATCH /memories/:id returns a contract-valid Memory', async () => {
+  it('PATCH /memories/:id APPLIES the title and returns a contract-valid Memory (S5 re-review: MemoryPatch dropped title, so rename silently no-op\'d with a 200)', async () => {
     await seedMemories();
     const t = await tokenFor();
     const res = await authed('/api/v1/memories/m-notags', t, { method: 'PATCH', body: JSON.stringify({ title: 'Renomeado' }) });
     expect(res.status).toBe(200);
-    const p = Memory.safeParse(await readJson(res));
-    expect(p.success).toBe(true);
+    const body = await readJson(res);
+    expect(Memory.safeParse(body).success).toBe(true);
+    // The old assertion checked only schema-validity, so a stripped title passed. Assert the rename.
+    expect(body.title).toBe('Renomeado');
+    expect((await memories.get('m-notags') as unknown as { title?: string }).title).toBe('Renomeado');
   });
 
   it('POST persists the tier it reports: the store and the wire agree (S5 review finding 2)', async () => {
@@ -141,6 +144,76 @@ describe('GET /api/v1/memories — every item validates against the shared Memor
     const t = await tokenFor();
     const res = await authed('/api/v1/memories/nope', t);
     expect(res.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+  });
+});
+
+/**
+ * F5 subset (batch-1 S6): the four memory endpoints the dashboard actually calls. `stats` and
+ * `tags` MUST be registered before `GET /:id` or that route shadows them (they would be read as
+ * a memory id). `signals` has no scoring infrastructure yet: it answers a contract-valid,
+ * HONEST zero-affected response rather than fabricating adjustments.
+ */
+describe('F5 subset: memory endpoints the UI calls', () => {
+  it('GET /memories/stats returns MemoryStats (not shadowed by GET /:id)', async () => {
+    await seedMemories();
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/stats', t);
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(MemoryStats.safeParse(body).success).toBe(true);
+    expect(body.total).toBe(3);
+    expect((body.byTier as Record<string, number>).active).toBe(3); // the tier-less doc reads active
+    expect((body.byVisibility as Record<string, number>).private).toBe(2);
+  });
+
+  it('GET /memories/tags returns MemoryTagsResponse with counts (not shadowed by GET /:id)', async () => {
+    await seedMemories();
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/tags', t);
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(MemoryTagsResponse.safeParse(body).success).toBe(true);
+    const items = body.items as Array<{ tag: string; count: number }>;
+    expect(items.find((i) => i.tag === 'legal')?.count).toBe(1);
+    expect(items.find((i) => i.tag === 'cliente')?.count).toBe(1);
+  });
+
+  it('POST /memories/bulk-delete removes only the caller-visible ids it was given', async () => {
+    await seedMemories();
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/bulk-delete', t, { method: 'POST', body: JSON.stringify({ ids: ['m-full', 'm-notags'] }) });
+    expect(res.status).toBe(200);
+    expect(OkResponse.safeParse(await readJson(res)).success).toBe(true);
+    const left = await memories.find({});
+    expect(left.map((m) => m._id)).toEqual(['m-notier']);
+  });
+
+  it('POST /memories/bulk-delete refuses ids the caller cannot write (another org) and deletes nothing', async () => {
+    await seedMemories();
+    await memories.insert({ _id: 'm-other', orgId: 'orgB', userId: 'someone', visibility: 'org', type: 'fact', tier: 'active', createdAt: 'x', updatedAt: 'x' } as never);
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/bulk-delete', t, { method: 'POST', body: JSON.stringify({ ids: ['m-full', 'm-other'] }) });
+    expect([403, 404]).toContain(res.status);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+    expect(await memories.get('m-other')).toBeTruthy(); // the other org's memory is untouched
+    expect(await memories.get('m-full')).toBeTruthy(); // and nothing was partially deleted
+  });
+
+  it('POST /memories/signals answers a contract-valid HONEST response (no scoring infra: zero affected, never fabricated)', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/signals', t, { method: 'POST', body: JSON.stringify({ runId: 'run-1', signal: 'positive' }) });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(MemorySignalResponse.safeParse(body).success).toBe(true);
+    expect(body.affectedMemories).toBe(0);
+    expect(body.adjustedScores).toBe(0);
+  });
+
+  it('POST /memories/signals rejects an invalid signal value with a 400 envelope', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories/signals', t, { method: 'POST', body: JSON.stringify({ runId: 'r', signal: 'maybe' }) });
+    expect(res.status).toBe(400);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
   });
 });
