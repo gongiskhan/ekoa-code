@@ -40,6 +40,18 @@ export class AuthError extends Error {
   }
 }
 
+/**
+ * The `iat` a freshly-minted session must carry (ch09 §9.6). Epoch bumps invalidate every token
+ * with `iat < tokenEpoch`; because JWT `iat` has ONE-SECOND granularity, a login in the same
+ * second as a bump (password change, admin reset, admin logout) would be born invalid. Pinning a
+ * fresh mint to `max(now, epoch)` keeps every PRE-bump token dead while letting the user in
+ * immediately. Only sites that mint after a credential/approval check may use it.
+ */
+export function mintIat(userId: string): number {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return Math.max(nowSec, getActivation(userId)?.tokenEpoch ?? 0);
+}
+
 /** First-boot super-admin seeding: creates the founder's org + super-admin account if absent. */
 export async function seedAdmin(username: string, password: string, deps: Deps): Promise<void> {
   const existing = await users.find({ role: 'super-admin' });
@@ -74,7 +86,7 @@ export async function login(username: string, password: string, rememberMe: bool
   setActivation(u._id, { active: u.active, billingLocked: cached?.billingLocked ?? false });
   if (!u.active) throw new AuthError('ACCOUNT_DISABLED', 403, 'A sua conta está bloqueada. Contacte o suporte.');
   const { token, expiresIn } = signToken(
-    { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}` },
+    { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}`, iat: mintIat(u._id) },
     rememberMe,
   );
   return { token, user: view(u), passwordChangeRequired: !!u.passwordChangeRequired, expiresIn };
@@ -119,6 +131,10 @@ export async function changePassword(userId: string, currentPassword: string, ne
   }
   const passwordHash = await hashPassword(newPassword);
   await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: false }));
+  // Changing a password invalidates EVERY token minted under the old one — including the caller's
+  // (they re-login). A password change is the standard response to a suspected compromise; leaving
+  // a stolen token admissible would defeat it. Epoch bump, not a new token scheme (F1 non-goal).
+  bumpTokenEpoch(userId, Math.floor(Date.now() / 1000) + 1);
 }
 
 /**
@@ -129,7 +145,11 @@ export async function changePassword(userId: string, currentPassword: string, ne
 export async function resetPassword(userId: string, newPassword: string): Promise<boolean> {
   const passwordHash = await hashPassword(newPassword);
   const updated = await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: true }));
-  return updated !== null;
+  if (!updated) return false;
+  // An admin reset is the offboarding / compromised-account lever: the target's outstanding
+  // tokens must die with the old password, not linger to their JWT expiry.
+  bumpTokenEpoch(userId, Math.floor(Date.now() / 1000) + 1);
+  return true;
 }
 
 /**

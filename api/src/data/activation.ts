@@ -23,6 +23,14 @@ export function loadActivation(entries: Array<{ userId: string; active: boolean;
   for (const e of entries) map.set(e.userId, { active: e.active, billingLocked: e.billingLocked ?? false, tokenEpoch: e.tokenEpoch ?? 0 });
 }
 
+/** Drop a user from the map entirely (account DELETION). `getActivation` then returns undefined
+ *  and every admission plane fails CLOSED (an unknown subject is never active), so a deleted
+ *  user's outstanding tokens die at once instead of surviving to their JWT expiry — and, with
+ *  /auth/refresh mounted (F1), instead of being re-signable indefinitely. */
+export function clearActivation(userId: string): void {
+  map.delete(userId);
+}
+
 /** Bump the user's token epoch to `epochSec`, invalidating every token issued earlier. */
 export function bumpTokenEpoch(userId: string, epochSec: number): void {
   const cur = map.get(userId) ?? { active: true, billingLocked: false, tokenEpoch: 0 };

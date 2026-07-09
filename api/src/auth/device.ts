@@ -17,7 +17,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { getDb } from '../data/mongo.js';
 import { users } from '../data/stores.js';
 import { signToken } from './jwt.js';
-import { authUserView, type AuthUserView, type Deps } from './service.js';
+import { authUserView, mintIat, type AuthUserView, type Deps } from './service.js';
 
 const COLLECTION = 'device_auth';
 const EXPIRES_IN_SEC = 600; // 10 min approval window
@@ -92,12 +92,15 @@ export async function pollDeviceAuth(deviceCode: string, deps: Deps): Promise<De
     await col().deleteOne({ _id: deviceCode });
     return { status: 'denied' };
   }
-  // approved: mint the token for the APPROVER's identity and CONSUME the row (single-use).
-  const u = row.userId ? await users.get(row.userId) : null;
-  await col().deleteOne({ _id: deviceCode });
+  // approved: CONSUME the row atomically FIRST, then mint. findOneAndDelete is the single
+  // mongo operation that both claims and removes it, so two concurrent polls of the same
+  // approved code can never both mint a token (the loser sees no row).
+  const claimed = await col().findOneAndDelete({ _id: deviceCode, status: 'approved' });
+  if (!claimed) return { status: 'expired' }; // another poll already consumed it
+  const u = claimed.userId ? await users.get(claimed.userId) : null;
   if (!u || !u.active) return { status: 'expired' }; // approver vanished/deactivated: fail closed
   const { token, expiresIn } = signToken(
-    { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}` },
+    { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}`, iat: mintIat(u._id) },
     false,
   );
   return { status: 'approved', token, user: authUserView(u), expiresIn };

@@ -21,9 +21,15 @@ export interface JwtClaims {
 }
 
 /** Mint a token. A `jti` is ALWAYS set (generated if the caller omits it) so every token
- *  is revocable (P-03) — a token without a jti is a revocation bypass and is forbidden. */
+ *  is revocable (P-03) — a token without a jti is a revocation bypass and is forbidden.
+ *
+ *  `iat` may be pinned by the caller (jsonwebtoken honours an explicit `iat` and derives `exp`
+ *  from it). A fresh session minted right after a token-epoch bump MUST carry `iat >= epoch`,
+ *  or the middleware's `iat < tokenEpoch` check rejects it: JWT `iat` has one-second
+ *  granularity, so a re-login in the same second as a password change would otherwise 401
+ *  (ch09 §9.6). Only the mint-after-credential-check sites pin it. */
 export function signToken(
-  claims: Omit<JwtClaims, 'exp' | 'iat' | 'jti'> & { jti?: string },
+  claims: Omit<JwtClaims, 'exp' | 'jti'> & { jti?: string; iat?: number },
   rememberMe = false,
 ): { token: string; expiresIn: number; jti: string } {
   const expiresIn = rememberMe ? 30 * 24 * 3600 : 24 * 3600; // 30d / 24h (ch03 §3.2)

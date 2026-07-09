@@ -5,7 +5,7 @@
  */
 import type { Actor } from '@ekoa/shared';
 import { users, orgs, type UserDoc } from '../data/stores.js';
-import { setActivation, bumpTokenEpoch } from '../data/activation.js';
+import { setActivation, bumpTokenEpoch, clearActivation } from '../data/activation.js';
 import { hashPassword } from './password.js';
 import { setUserActive, authUserView, type AuthUserView, type Deps } from './service.js';
 
@@ -61,6 +61,15 @@ export async function patchUser(
   return authUserView((await users.get(target._id)) as UserDoc);
 }
 
+/**
+ * Delete a user AND drop their activation entry in the same operation (ch09 §9.7.1 write-through).
+ * Without the clear, `getActivation` keeps returning the stale `{active:true}` row, so a deleted
+ * account's outstanding tokens stay admissible to their JWT expiry — and with `/auth/refresh`
+ * mounted (F1) an attacker holding one could re-sign it indefinitely: an unbounded session for a
+ * deleted account. Clearing the entry makes every admission plane fail closed immediately.
+ */
 export async function deleteUser(id: string): Promise<boolean> {
-  return users.delete(id);
+  const ok = await users.delete(id);
+  if (ok) clearActivation(id);
+  return ok;
 }
