@@ -43,13 +43,23 @@ blocked. The inherited **cwd/HOME** was the open channel underneath them, and it
 gets an EMPTY per-run sandbox (`mkdtemp`): `cwd = sandbox`, `HOME = sandbox`, removed when the run ends.
 An explicit caller value (build/verify) is never overridden.
 
-`api/src/llm/credentials.ts` `buildSubprocessEnv` — HOME alone was insufficient: the inherited env
-carries the server's working-directory path on several channels. The scrub is now value-based against
-the server cwd AND the npm-declared root:
+`api/src/llm/credentials.ts` `buildSubprocessEnv` — HOME alone was insufficient on TWO axes:
+
+Path axis — the inherited env carries the server's working-directory path on several channels. The
+scrub is value-based against the server cwd AND the npm-declared root:
 - `PWD` / `OLDPWD` / `INIT_CWD` dropped/re-pointed at the sandbox;
 - all `npm_*` dropped (`npm_config_local_prefix` is the repo ROOT — an ancestor of cwd, which a
   cwd-substring check would miss — and `npm_package_name` is literally the checkout's directory name);
 - `PATH` segments under the server root filtered out (PATH is kept, not dropped, so the spawn still works).
+
+Memory/identity axis (the operator AUTO-MEMORY half of the original leak, not just the path) — a
+sandboxed HOME does not stop an inherited `XDG_*_HOME` from redirecting config/state/memory reads
+OUTSIDE HOME, nor does it strip the operator's Claude Code SESSION identity. So the clone loop now
+also drops every inherited `CLAUDE_*` (the operator session context: `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_EFFORT`, entrypoint, ...) and every `XDG_*_HOME`. The few `CLAUDE_*` the chokepoint needs
+(the credential, `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, the stream-close timeout) are re-set
+explicitly AFTER the loop, so dropping the inherited ones is safe. This closes the load-bearing
+unknown the brief named — how an operator auto-memory reached the model despite `settingSources:[]`.
 
 FIXED-13 intact: no new base URL, the chokepoint stays the sole transport, and the tool allow-list is
 unchanged (chat tools were NOT widened).

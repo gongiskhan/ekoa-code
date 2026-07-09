@@ -304,6 +304,14 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
     if (v === undefined) continue;
     if (SCRUBBED_PROVIDER_ENV.includes(k)) continue;
     if (k === 'CLAUDECODE') continue; // deleted: prevents nested-session detection (§5.4.1)
+    // F25 memory vector: never propagate the operator's Claude Code SESSION IDENTITY or its
+    // per-user XDG config/data/state/cache dirs into a tenant subprocess. HOME-sandboxing closes
+    // `~/.claude`, but an inherited XDG_*_HOME redirects config/memory reads OUTSIDE HOME (defeating
+    // the sandbox), and the CLAUDE_* session vars ARE operator context. The few CLAUDE_* the
+    // chokepoint legitimately needs (the credential, EMIT_SESSION_STATE, STREAM_CLOSE_TIMEOUT) are
+    // re-set explicitly AFTER this loop, so dropping the inherited ones here is safe.
+    if (/^CLAUDE_/i.test(k)) continue;
+    if (/^XDG_.*_HOME$/i.test(k)) continue;
     env[k] = v;
   }
   const cfg = loadConfig();

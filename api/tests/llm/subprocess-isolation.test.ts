@@ -174,3 +174,46 @@ describe('runAgent: a failing stream never produces an UNHANDLED rejection', () 
     await expect(handle.result).rejects.toThrow('transport exploded');
   });
 });
+
+/**
+ * F25 memory-vector (S7 review question 5): the ORIGINAL leak included an operator AUTO-MEMORY,
+ * not just a path. HOME=sandbox + settingSources:[] close the `~/.claude` path, but the inherited
+ * env still carries the operator's Claude Code SESSION IDENTITY (`CLAUDE_CODE_SESSION_ID` and the
+ * other CLAUDE_*), and `XDG_*_HOME` can point config/state/memory reads OUTSIDE HOME — defeating
+ * the HOME sandbox. A tenant subprocess must carry NONE of the operator's session/config identity.
+ */
+import { buildSubprocessEnv } from '../../src/llm/credentials.js';
+
+describe('F25: the subprocess env carries no operator Claude-Code session or XDG identity', () => {
+  it('strips inherited CLAUDE_*/XDG_*_HOME while keeping the vars the chokepoint sets', async () => {
+    const saved = { ...process.env };
+    try {
+      process.env.CLAUDE_CODE_SESSION_ID = 'operator-session-xyz';
+      process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+      process.env.CLAUDE_EFFORT = 'ultracode';
+      process.env.XDG_CONFIG_HOME = '/home/operator/.config'; // would redirect ~/.claude reads
+      process.env.XDG_DATA_HOME = '/home/operator/.local/share';
+      const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-xyz' });
+
+      // operator session identity is gone
+      expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+      expect(env.CLAUDE_EFFORT).toBeUndefined();
+      // XDG per-user home vars cannot escape the sandbox
+      expect(env.XDG_CONFIG_HOME).not.toBe('/home/operator/.config');
+      expect(env.XDG_DATA_HOME).not.toBe('/home/operator/.local/share');
+      const serialized = JSON.stringify(env);
+      expect(serialized).not.toContain('operator-session-xyz');
+      expect(serialized).not.toContain('/home/operator');
+
+      // the vars the chokepoint itself sets survive
+      expect(env.ANTHROPIC_BASE_URL).toBeTruthy();
+      expect(env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe('1');
+      expect(env.HOME).toBe('/tmp/ekoa-run-xyz');
+    } finally {
+      for (const k of ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_EFFORT', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) {
+        if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+      }
+    }
+  });
+});
