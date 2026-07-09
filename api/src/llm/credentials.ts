@@ -318,7 +318,31 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
   }
   env.ANTHROPIC_BASE_URL = cfg.llmChokepointBaseUrl;
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
-  if (opts.homeDir) env.HOME = opts.homeDir;
+  if (opts.homeDir) {
+    // F25: HOME alone is not enough. The inherited env hands the subprocess the API server's
+    // installation on several channels, any one of which reveals the operator's checkout path to
+    // the model (the Agent SDK also reports its cwd):
+    //   PWD / OLDPWD / INIT_CWD   — the server's working directory
+    //   npm_*                     — npm_config_local_prefix (repo ROOT, an ANCESTOR of cwd, so a
+    //                               cwd-substring check misses it), npm_package_json, and even
+    //                               npm_package_name (the checkout's directory name)
+    //   PATH                      — npm prepends `<repo>/node_modules/.bin`
+    // So the scrub is value-based against the server cwd AND its npm-declared root, plus a
+    // wholesale drop of npm_* (the server's own package metadata is never a tenant's business).
+    // PATH is FILTERED, not dropped: removing it would break the spawn.
+    const roots = [process.cwd(), env.npm_config_local_prefix, env.INIT_CWD].filter((r): r is string => !!r);
+    const underRoot = (value: string) => roots.some((r) => value.startsWith(r));
+
+    for (const k of Object.keys(env)) {
+      if (k.startsWith('npm_')) { delete env[k]; continue; }
+      if (k === 'PWD' || k === 'OLDPWD' || k === 'INIT_CWD') { delete env[k]; continue; }
+      const v = env[k] as string;
+      if (k === 'PATH') { env.PATH = v.split(':').filter((seg) => seg && !underRoot(seg)).join(':'); continue; }
+      if (roots.some((r) => v.includes(r))) delete env[k];
+    }
+    env.HOME = opts.homeDir;
+    env.PWD = opts.homeDir;
+  }
   if (opts.streamCloseTimeoutMs !== undefined) env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(opts.streamCloseTimeoutMs);
   return env;
 }

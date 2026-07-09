@@ -131,3 +131,46 @@ describe('F25: a tenant subprocess never inherits the host cwd or HOME', () => {
     if (home && home !== '/') expect(serialized).not.toContain(`"${home}"`);
   });
 });
+
+/**
+ * A separate hazard found while proving F25 (S5 re-review finding 1): when the SDK stream throws,
+ * `runAgent` rejects BOTH the events generator and the `result` promise. Every consumer drains
+ * `handle.events` first and only then awaits `handle.result`, so on a stream error the `for await`
+ * throws and `result`'s rejection is never handled — an unhandled rejection on every failed run
+ * (chat, build, brand-research). In tests it turns a green suite into a non-zero exit; in prod it
+ * is swallowed by the process-level handler, masking the real error. The chokepoint must mark the
+ * promise handled without swallowing it for genuine awaiters.
+ */
+describe('runAgent: a failing stream never produces an UNHANDLED rejection', () => {
+  it('draining only the events generator (never awaiting result) leaves no unhandled rejection', async () => {
+    __setTransportForTests({
+      // eslint-disable-next-line require-yield
+      async *streamAgent() { throw new Error('transport exploded'); },
+      async oneShot() { throw new Error('nope'); },
+      async messages() { return { status: 500, headers: {}, body: '{}' }; },
+    });
+    const handle = runAgent({ prompt: 'x', decision: decideForTier('WORKHORSE') }, tenant);
+    // Exactly what every consumer does: drain the stream, and on a throw never reach `await result`.
+    try {
+      for await (const _ of handle.events) { /* drain */ }
+    } catch (e) {
+      expect((e as Error).message).toContain('transport exploded');
+    }
+    // Turn the microtask/macrotask queue. Pre-fix, `result`'s rejection is unhandled here and
+    // vitest exits non-zero even though every assertion passed (which is how this hid).
+    await new Promise((r) => setTimeout(r, 30));
+  });
+
+  it('`result` still rejects for a genuine awaiter (pre-handling must not swallow the error)', async () => {
+    __setTransportForTests({
+      // eslint-disable-next-line require-yield
+      async *streamAgent() { throw new Error('transport exploded'); },
+      async oneShot() { throw new Error('nope'); },
+      async messages() { return { status: 500, headers: {}, body: '{}' }; },
+    });
+    const handle = runAgent({ prompt: 'x', decision: decideForTier('WORKHORSE') }, tenant);
+    // `events` is a lazy generator: nothing runs (and `result` cannot settle) until it is drained.
+    try { for await (const _ of handle.events) { /* drain */ } } catch { /* expected */ }
+    await expect(handle.result).rejects.toThrow('transport exploded');
+  });
+});

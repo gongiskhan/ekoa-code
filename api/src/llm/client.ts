@@ -13,6 +13,9 @@
  * The transport is injectable (a seam) so tests exercise metering + attribution + abort +
  * retry WITHOUT a live model; the default transport is the real SDK + provider REST.
  */
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { loadConfig } from '../config.js';
 import { recordTokenEvent, resolvePlatformBillee, type TokenEventInput } from '../billing/tracker.js';
@@ -606,6 +609,25 @@ export interface AgentRunHandle {
 }
 
 /**
+ * F25 subprocess isolation (ch05 §5.4.1). A spawn that supplies neither `cwd` nor `homeDir` used
+ * to inherit the API server's `process.cwd()` (the repo checkout — which the Agent SDK reports to
+ * the model as its working directory) and `HOME` (the operator's home, putting `~/.claude` in
+ * reach). Both are host/operator context with no business inside a tenant run.
+ *
+ * Every run therefore gets an EMPTY per-run sandbox for whatever the caller did not pin: `cwd`
+ * falls back to the sandbox, and `HOME` follows `cwd` (build runs already set both to their
+ * project dir, and this must never override an explicit caller value). The directory is removed
+ * when the run ends. Defense-in-depth: `settingSources: []` and the per-agent tool allow-list are
+ * the primary gates; this removes the inherited-path vector underneath them.
+ */
+async function runSandbox(): Promise<string> {
+  return mkdtemp(join(tmpdir(), 'ekoa-run-'));
+}
+function discardSandbox(dir: string | undefined): void {
+  if (dir) void rm(dir, { recursive: true, force: true }).catch(() => {});
+}
+
+/**
  * Claude Agent SDK streaming run — all tiers, tools, session resume. Used by every streaming
  * user_work site (chat, build, brand research, agent-face, ...). The chokepoint meters the run
  * once the stream finishes (§6.5.5: agent-face folds in here, no second meter).
@@ -624,6 +646,11 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
   let resolveResult!: (r: AgentRunResult) => void;
   let rejectResult!: (e: unknown) => void;
   const result = new Promise<AgentRunResult>((res, rej) => { resolveResult = res; rejectResult = rej; });
+  // Every consumer drains `events` first and only then awaits `result`, so a stream error throws
+  // out of the `for await` and `result`'s rejection is never observed — an UNHANDLED rejection on
+  // every failed run. Pre-handle it here: a genuine awaiter still sees the rejection (this creates
+  // a derived promise; the original is unchanged), but the process no longer reports it as unhandled.
+  void result.catch(() => {});
 
   async function* run(): AsyncGenerator<{ type: 'text'; text: string }, AgentRunResult, void> {
     let text = '';
@@ -649,9 +676,15 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     const detok = createDetokenizer(handle);
     let rawText = ''; // the tokenized text as it comes off the transport
     const cb = opts.callbacks;
+    // F25: never let the subprocess inherit the host cwd/HOME. A caller that pins them (build,
+    // verify) keeps its own; everyone else gets an empty per-run sandbox, removed at run end.
+    let sandbox: string | undefined;
+    if (!opts.cwd || !opts.homeDir) sandbox = await runSandbox();
+    const runCwd = opts.cwd ?? sandbox!;
+    const runHome = opts.homeDir ?? runCwd;
     try {
       const env = await buildSubprocessEnv({
-        ...(opts.homeDir ? { homeDir: opts.homeDir } : {}),
+        homeDir: runHome,
         ...(opts.streamCloseTimeoutMs !== undefined ? { streamCloseTimeoutMs: opts.streamCloseTimeoutMs } : {}),
       });
       const stream = transport.streamAgent({
@@ -665,7 +698,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
         // Plain §5.4.4 names become MCP wire names for every mounted in-process tool (§5.4.4).
         allowedTools: translateAllowedTools(opts.allowedTools, opts.sdkTools),
         disallowedTools: opts.disallowedTools,
-        cwd: opts.cwd,
+        cwd: runCwd,
         maxTurns: opts.maxTurns,
         sdkTools: opts.sdkTools,
         signal: ac.signal,
@@ -708,6 +741,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       if (tail) yield { type: 'text', text: tail };
     } catch (err) {
       if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      discardSandbox(sandbox);
       // Clear the ephemeral vault on the ERROR/abort path too (§17.5, Codex checkpoint M1): the
       // token->value map is a re-identification key and must not linger to TTL after a failed call.
       if (sk.ephemeral) endSession(handle);
@@ -715,6 +749,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       throw err;
     }
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+    discardSandbox(sandbox);
     text = deanonymize(rawText, handle); // final result is cleartext (incl any tool_use values)
     if (sk.ephemeral) endSession(handle); // a session-less run keeps no vault past the call (§17.5)
     // Single metering point: bill the reported usage even on abort (P-19); zero => nothing billed.
@@ -757,7 +792,9 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
   const promptAnon = anonymize(opts.prompt, ctx);
   const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
-  const env = await buildSubprocessEnv();
+  // F25: a one-shot spawns a subprocess too — isolate its cwd/HOME from the host (see runSandbox).
+  const sandbox = await runSandbox();
+  const env = await buildSubprocessEnv({ homeDir: sandbox });
   try {
     const res = await transport.oneShot({
       prompt: promptAnon.text,
@@ -766,6 +803,7 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
       env,
       systemPrompt: systemAnon?.text,
       images: opts.images,
+      cwd: sandbox,
       disallowedTools: ['*'], // no tools on a one-shot
       maxTurns: 1,
       signal: opts.signal,
@@ -777,6 +815,7 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
     if (res.aborted) throw new LlmAbortedError();
     return { text, usage: res.usage };
   } finally {
+    discardSandbox(sandbox); // F25: the per-run sandbox never outlives the run
     // Clear the ephemeral vault on EVERY exit - success, transport error, or abort (§17.5, Codex
     // checkpoint M1): the re-identification key must not linger to TTL after a failed call.
     if (sk.ephemeral) endSession(promptAnon.handle);
