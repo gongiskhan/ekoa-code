@@ -43,16 +43,44 @@ describe('chat run pipeline + streaming contract', () => {
   beforeEach(async () => { await seedUser('u1', 'o1'); await sessions.insert({ _id: 's1', userId: 'u1', title: 't', status: 'active', messageCount: 0 }); });
   afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await messages.deleteMany({}); await sessions.deleteMany({}); });
 
-  it('completes normally, persists the assistant message, and every event validates against ChatRunEvent', async () => {
-    const runId = await runChat({ stream: [{ kind: 'text', text: 'Here is ' }], finalText: 'Here is your answer.' });
+  it('completes with the FULL concatenated stream: complete.result + the persisted assistant message equal the joined deltas, never the final-frame tail (F20)', async () => {
+    // REWRITTEN for F20: this test previously scripted a final frame carrying MORE than the
+    // stream and asserted the final frame won — encoding the clobber bug (the SDK result field
+    // held only the last delta live, so complete.result and the persisted message were a ~25-char
+    // tail of the real answer; J2/J4 evidence). New semantics: the accumulated streamed deltas
+    // ARE the answer; the final frame is a fallback only when nothing streamed.
+    const runId = await runChat({
+      stream: [
+        { kind: 'text', text: 'Com base na base de conhecimento, ' },
+        { kind: 'text', text: 'a referência do processo é ' },
+        { kind: 'text', text: '**RX-417**.' },
+      ],
+      finalText: '**RX-417**.', // the SDK result field: only the LAST delta (the live-observed shape)
+    });
+    const full = 'Com base na base de conhecimento, a referência do processo é **RX-417**.';
     const evs = chatEventsFor(runId);
     for (const e of evs) expect(ChatRunEvent.safeParse(e.data).success, `event ${e.type} validates`).toBe(true);
-    expect(evs.some((e) => e.type === 'complete')).toBe(true);
     expect(evs.some((e) => e.type === 'error')).toBe(false);
+
+    // (a) the complete frame carries the full answer == the concatenated text_chunks (§13 streaming gate)
+    const chunks = evs.filter((e) => e.type === 'text_chunk').map((e) => (e.data as { text: string }).text).join('');
+    expect(chunks).toBe(full);
+    const complete = evs.find((e) => e.type === 'complete');
+    expect((complete!.data as { result: string }).result).toBe(full);
+
+    // (b) the persisted assistant message is the full answer (loadHistory context integrity)
     const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
     expect(assistant).toHaveLength(1);
-    expect((assistant[0] as unknown as { content: string }).content).toBe('Here is your answer.');
+    expect((assistant[0] as unknown as { content: string }).content).toBe(full);
     expect(getRun(runId)?.status).toBe('complete');
+  });
+
+  it('falls back to the final frame when NOTHING streamed (no deltas -> final text is the answer)', async () => {
+    const runId = await runChat({ finalText: 'Resposta directa.' });
+    const evs = chatEventsFor(runId);
+    expect((evs.find((e) => e.type === 'complete')!.data as { result: string }).result).toBe('Resposta directa.');
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
+    expect((assistant[0] as unknown as { content: string }).content).toBe('Resposta directa.');
   });
 
   it('provider-error-as-result → terminal ERROR, never complete, and the assistant message is NOT persisted (§5.3.7)', async () => {
