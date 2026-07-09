@@ -219,6 +219,75 @@ describe('device flow: /auth/device -> /auth/device/poll -> /auth/device/approve
   });
 });
 
+describe('lifecycle hardening (S4 security-review findings)', () => {
+  it('a DELETED user cannot refresh: their token dies immediately, no unbounded session (review finding 1)', async () => {
+    await mkUser('root', 'super-admin');
+    await mkUser('victim', 'builder');
+    const rootT = await tokenFor('root');
+    const victimT = await tokenFor('victim');
+    expect((await authed('/api/v1/auth/refresh', victimT, { method: 'POST' })).status).toBe(200);
+
+    const del = await authed('/api/v1/users/victim', rootT, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+
+    // Before F1 the exposure was bounded by token expiry; /auth/refresh would have let a deleted
+    // user (or an attacker holding their token) re-sign forever. The token must be dead NOW.
+    const ref = await authed('/api/v1/auth/refresh', victimT, { method: 'POST' });
+    expect([401, 403]).toContain(ref.status);
+    expect(ErrorEnvelope.safeParse(await readJson(ref)).success).toBe(true);
+    expect([401, 403]).toContain((await authed('/api/v1/auth/me', victimT)).status);
+  });
+
+  it('an admin password RESET kills the target\'s outstanding sessions (review finding 3)', async () => {
+    await mkUser('root', 'super-admin');
+    await mkUser('u1', 'builder');
+    const rootT = await tokenFor('root');
+    const u1T = await tokenFor('u1');
+    expect((await authed('/api/v1/auth/me', u1T)).status).toBe(200);
+
+    // Resetting a possibly-compromised account must not leave the attacker's token valid.
+    const res = await authed('/api/v1/users/u1/password', rootT, { method: 'POST', body: JSON.stringify({ newPassword: 'resetpw99' }) });
+    expect(res.status).toBe(200);
+    expect((await authed('/api/v1/auth/me', u1T)).status).toBe(401);
+    // the reset itself still works: new password logs in
+    expect((await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: 'u1', password: 'resetpw99' }) })).status).toBe(200);
+  });
+
+  it('a self password change kills EVERY outstanding session for that user (a stolen token dies with the old password)', async () => {
+    await mkUser('u1', 'builder');
+    const stolenT = await tokenFor('u1'); // an attacker's copy of an older session
+    const curT = await tokenFor('u1');    // the session performing the change
+    const res = await authed('/api/v1/auth/password', curT, {
+      method: 'POST', body: JSON.stringify({ currentPassword: 'pw123456', newPassword: 'newpw9999' }),
+    });
+    expect(res.status).toBe(200);
+    expect(OkResponse.safeParse(await readJson(res)).success).toBe(true); // contract unchanged: no new token scheme
+    // Every token minted before the change is dead — including the caller's (re-login with the
+    // new password). This is the point of changing a password on a suspected compromise.
+    expect((await authed('/api/v1/auth/me', stolenT)).status).toBe(401);
+    expect((await authed('/api/v1/auth/me', curT)).status).toBe(401);
+    const relogin = await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: 'u1', password: 'newpw9999' }) });
+    expect(relogin.status).toBe(200);
+    expect((await authed('/api/v1/auth/me', (await readJson(relogin)).token as string)).status).toBe(200);
+  });
+
+  it('the approved device poll is single-use under a CONCURRENT double poll (review finding 2)', async () => {
+    await mkUser('approver', 'builder');
+    const s = await readJson(await api('/api/v1/auth/device', { method: 'POST', body: JSON.stringify({}) }));
+    const t = await tokenFor('approver');
+    await authed('/api/v1/auth/device/approve', t, { method: 'POST', body: JSON.stringify({ userCode: s.userCode }) });
+
+    // Two polls fired together: exactly ONE may mint a token.
+    const [a, b] = await Promise.all([
+      api('/api/v1/auth/device/poll', { method: 'POST', body: JSON.stringify({ deviceCode: s.deviceCode }) }).then(readJson),
+      api('/api/v1/auth/device/poll', { method: 'POST', body: JSON.stringify({ deviceCode: s.deviceCode }) }).then(readJson),
+    ]);
+    for (const r of [a, b]) expect(DevicePollResponse.safeParse(r).success).toBe(true);
+    const approved = [a, b].filter((r) => r.status === 'approved');
+    expect(approved).toHaveLength(1);
+  });
+});
+
 describe('POST /api/v1/users/:id/password (super-admin reset)', () => {
   it('super-admin resets a user password and sets passwordChangeRequired', async () => {
     await mkUser('root', 'super-admin');
