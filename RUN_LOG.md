@@ -713,3 +713,39 @@ POST /memories silently stripped `title` (shared/ MemoryCreateRequest never decl
 guardrail button posted `visibility: "shared"`, absent from the Visibility enum - together, the only
 UI memory-create path was 400-ing on every click. shared/ changed (significance area) -> sent back to
 the same fresh-context reviewer for verification before the tag.
+
+### DECISION - 2026-07-09T22:49:54Z - S5 re-review: three blockers closed; record corrected; OPEN findings consolidated
+
+The S5 reviewer re-reviewed the follow-up (shared/ is a significance area) and returned **needs-work**
+with three blockers. All three are now closed, each regression-test-first, and the re-review's own
+correction is recorded:
+
+- **Blocker 1 (test gave false assurance).** The web guardrail test validated a hand-copied object
+  literal, not the component: reverting `visibility: "shared"` left it GREEN. Rewritten to render
+  `GuardrailsSection`, click the button, and validate the payload the store actually passes to
+  `api.memories.create`. **Verified by reintroducing the bug**: the test fails, then passes on revert.
+- **Blocker 2 (half-fix).** `title` was added to `MemoryCreateRequest` but not `MemoryPatch`, so
+  PATCH { title } was still stripped - renaming a memory no-op'd with a 200 while the dashboard's edit
+  modal sends it. The pre-existing PATCH test asserted only schema-validity, so a stripped title passed:
+  the same false-assurance pattern that let F22 ship. Fixed + the test now asserts the rename lands in
+  the response AND the store.
+- **Blocker 3 (dead button -> misleading button).** Fixing the guardrail button surfaced that
+  `resolveMemoryInjection` classifies guardrails by `type`/`tier` only, while the dashboard writes and
+  lists them by `tags:['guardrail']`. A user's guardrail was injected as an ordinary bullet, not a
+  `RULE:` line - listed as enforced, silently not. Per the reviewer, this is the SAME defect as the
+  earlier OPEN finding that archived memories are still injected: one taxonomy, one function. Both
+  fixed together (guardrail matched by tag too; `tier:'archive'` excluded from injection) with
+  api/tests/memory/injection-taxonomy.test.ts. **The earlier OPEN "archived memories injected" finding
+  is therefore CLOSED, not deferred.**
+
+**Record correction (the reviewer retracted its own finding 1).** The original review claimed "there is
+no generic memory-create form; the comment's claim that the UI create path sends no tier is false". It
+withdrew that: `MemoryModal` (web memory page) IS a generic create form and sends no `tier`, so the
+original comment was accurate. Its grep missed the store action's import alias. No code was owed; the
+rewritten comment (grounding the default in the contract asymmetry) is kept because it is true
+independent of any UI. The earlier DEVIATION entry naming that finding is superseded by this line.
+
+**Still OPEN (one item, unchanged):** the schema-coverage gate's COVERED set is a hand-maintained name
+allowlist and cannot detect a FALSE entry - which is exactly how F22 shipped green through CI. Structural;
+deferred with the reviewer's agreement. Note it bit again this window: EXPECTED_PENDING_COUNT was edited
+by two slices concurrently (F1 72->65, F4 65->64).
