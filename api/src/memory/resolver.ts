@@ -24,8 +24,27 @@ export interface MemoryDoc extends Doc {
 
 const scoped = new OwnerVisibilityScoped<MemoryDoc>(memories as never);
 
+/**
+ * The ONE memory response shape — all four memory routes emit through it, so it alone decides
+ * whether they satisfy the shared `Memory` contract (shared/src/memories.ts). Three fields the
+ * contract requires were wrong: `orgId` was never emitted; `tags` and `tier` were passed straight
+ * through and are `undefined` on real documents (extraction writes no `tags`; the UI create path
+ * sends no `tier`). Defaults are honest, not cosmetic: `[]` is the true empty tag set, and
+ * `'active'` is exactly what extraction assigns, so it is the truthful tier for a doc that never
+ * declared one. The web /memory page rejected every item client-side until this was fixed.
+ */
 export function memoryView(m: MemoryDoc) {
-  return { id: m._id, title: m.title, content: m.content, type: m.type, tags: m.tags, tier: m.tier, visibility: m.visibility, userId: m.userId };
+  return {
+    id: m._id,
+    title: m.title,
+    content: m.content,
+    type: m.type,
+    tags: m.tags ?? [],
+    tier: m.tier ?? 'active',
+    visibility: m.visibility,
+    userId: m.userId,
+    orgId: m.orgId,
+  };
 }
 
 export async function listVisibleMemories(actor: Actor): Promise<MemoryDoc[]> {

@@ -15,6 +15,7 @@ import MemoryPage from '@/app/(dashboard)/memory/page';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { useMemoryStore } from '@/stores/memory';
 import { api } from '@/lib/api';
+import { Memory } from '@ekoa/shared';
 
 // FC-307: mock the typed client; the real memory store calls it through tryCall.
 vi.mock('@/lib/api', () => ({
@@ -53,6 +54,7 @@ const mocked = api as unknown as {
 
 const M_AUTO = {
   id: 'm1',
+  orgId: 'orgA',
   title: 'Cliente prefere email',
   type: 'preference',
   scope: 'individual',
@@ -67,6 +69,7 @@ const M_AUTO = {
 
 const M_MANUAL = {
   id: 'm2',
+  orgId: 'orgA',
   title: 'Usar Tailwind',
   type: 'lesson',
   scope: 'company',
@@ -78,6 +81,21 @@ const M_MANUAL = {
   createdAt: '2026-06-02T00:00:00Z',
   metadata: {},
 };
+
+/**
+ * F22 determinism ratchet (QA rule: "Test stubs for API responses must be validated against the
+ * shared/ schemas"). These fixtures previously omitted `orgId`, so this suite stayed green while
+ * EVERY real /memories response was contract-invalid and the page rendered zero cards. Asserting
+ * the stubs against the real schema makes that class of drift machine-caught.
+ */
+describe('memory-page fixtures are contract-valid stubs (F22 ratchet)', () => {
+  it('every fixture validates against the shared Memory schema', () => {
+    for (const fixture of [M_AUTO, M_MANUAL]) {
+      const parsed = Memory.safeParse(fixture);
+      expect(parsed.success, `fixture ${fixture.id}: ${JSON.stringify(parsed.success ? {} : parsed.error.issues)}`).toBe(true);
+    }
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
