@@ -62,6 +62,7 @@ export async function verifyRunner(input: VerifyRunInput): Promise<VerifyRunResu
         allowedTools: ['Bash'],
         maxTurns: MAX_TURNS,
         cwd: scratch,
+        homeDir: scratch, // pin HOME too so the chokepoint does not allocate a second, unused sandbox (F25 finding 4)
       },
       { kind: 'user_work', agentType: 'build-verify', billeeUserId: input.userId, artifactId: input.artifactId },
     );

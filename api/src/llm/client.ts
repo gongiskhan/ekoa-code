@@ -624,7 +624,10 @@ async function runSandbox(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'ekoa-run-'));
 }
 function discardSandbox(dir: string | undefined): void {
-  if (dir) void rm(dir, { recursive: true, force: true }).catch(() => {});
+  // Fire-and-forget: the run result must not wait on cleanup. An rm failure is logged (not
+  // silently swallowed) so a persistently-failing tmpdir surfaces rather than accumulating empty
+  // per-run dirs invisibly (F25 finding 5). An empty dir lingering to reboot is not a data leak.
+  if (dir) void rm(dir, { recursive: true, force: true }).catch((err) => console.warn('[llm] sandbox cleanup failed:', err instanceof Error ? err.message : err));
 }
 
 /**
@@ -679,10 +682,13 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     // F25: never let the subprocess inherit the host cwd/HOME. A caller that pins them (build,
     // verify) keeps its own; everyone else gets an empty per-run sandbox, removed at run end.
     let sandbox: string | undefined;
-    if (!opts.cwd || !opts.homeDir) sandbox = await runSandbox();
-    const runCwd = opts.cwd ?? sandbox!;
-    const runHome = opts.homeDir ?? runCwd;
     try {
+      // F25 finding 2: create the sandbox INSIDE the try. A throw here (mkdtemp failure, or
+      // buildSubprocessEnv when the credential is unconfigured) must reach the catch — which
+      // rejects `result` and discards the sandbox — not hang `result` or orphan an empty dir.
+      if (!opts.cwd || !opts.homeDir) sandbox = await runSandbox();
+      const runCwd = opts.cwd ?? sandbox!;
+      const runHome = opts.homeDir ?? runCwd;
       const env = await buildSubprocessEnv({
         homeDir: runHome,
         ...(opts.streamCloseTimeoutMs !== undefined ? { streamCloseTimeoutMs: opts.streamCloseTimeoutMs } : {}),
@@ -794,8 +800,10 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
   // F25: a one-shot spawns a subprocess too — isolate its cwd/HOME from the host (see runSandbox).
   const sandbox = await runSandbox();
-  const env = await buildSubprocessEnv({ homeDir: sandbox });
   try {
+    // F25 finding 2: buildSubprocessEnv inside the try — if getSecret throws (unconfigured/
+    // unrefreshable credential) the finally still discards the sandbox instead of orphaning it.
+    const env = await buildSubprocessEnv({ homeDir: sandbox });
     const res = await transport.oneShot({
       prompt: promptAnon.text,
       model: decision.model,

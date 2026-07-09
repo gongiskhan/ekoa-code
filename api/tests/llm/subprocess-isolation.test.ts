@@ -35,6 +35,15 @@ import { setRulesetResolver, __resetRulesetResolverForTests, __resetVaultForTest
 let mem: MongoMemoryServer;
 const T0 = 1_800_000_000_000;
 
+function capturingTransportRejectOnly(): ChokepointTransport {
+  return {
+    // eslint-disable-next-line require-yield
+    async *streamAgent() { throw new Error('unreached'); },
+    async oneShot() { throw new Error('unreached'); },
+    async messages() { return { status: 200, headers: {}, body: '{}' }; },
+  };
+}
+
 function capturingTransport(sink: { calls: SdkCallParams[] }): ChokepointTransport {
   return {
     async *streamAgent(p) {
@@ -141,6 +150,29 @@ describe('F25: a tenant subprocess never inherits the host cwd or HOME', () => {
  * is swallowed by the process-level handler, masking the real error. The chokepoint must mark the
  * promise handled without swallowing it for genuine awaiters.
  */
+describe('F25 finding 2: an unconfigured credential REJECTS (never hangs) — sandbox lifecycle inside the try', () => {
+  it('runOneShot with no credential rejects rather than hanging', async () => {
+    __resetCredentialsForTests(); // getSecret now throws
+    __setTransportForTests(capturingTransportRejectOnly());
+    await expect(
+      Promise.race([
+        runOneShot({ prompt: 'q', decision: decideForTier('FAST') }, { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId: 'u' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('HUNG')), 3000)),
+      ]),
+    ).rejects.not.toThrow('HUNG');
+  });
+
+  it('runAgent with no credential rejects `result` rather than hanging', async () => {
+    __resetCredentialsForTests();
+    __setTransportForTests(capturingTransportRejectOnly());
+    const handle = runAgent({ prompt: 'q', decision: decideForTier('WORKHORSE') }, tenant);
+    try { for await (const _ of handle.events) { /* drain */ } } catch { /* expected */ }
+    await expect(
+      Promise.race([handle.result, new Promise((_, rej) => setTimeout(() => rej(new Error('HUNG')), 3000))]),
+    ).rejects.not.toThrow('HUNG');
+  });
+});
+
 describe('runAgent: a failing stream never produces an UNHANDLED rejection', () => {
   it('draining only the events generator (never awaiting result) leaves no unhandled rejection', async () => {
     __setTransportForTests({
@@ -214,6 +246,47 @@ describe('F25: the subprocess env carries no operator Claude-Code session or XDG
       for (const k of ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_EFFORT', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) {
         if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
       }
+    }
+  });
+
+  it('drops the operator HOME path from PATH + other vars, and the operator username (S7 finding 1)', async () => {
+    const saved = { ...process.env };
+    try {
+      process.env.HOME = '/home/operator';
+      process.env.USER = 'operator'; process.env.LOGNAME = 'operator'; process.env.USERNAME = 'operator';
+      process.env.NVM_DIR = '/home/operator/.nvm';
+      process.env.PATH = '/home/operator/.claude/skills/watch/bin:/home/operator/.nvm/v/bin:/usr/bin:/bin';
+      const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-z' });
+
+      // no operator home path survives anywhere (PATH segments, NVM_DIR, ...)
+      const serialized = JSON.stringify(env);
+      expect(serialized).not.toContain('/home/operator');
+      // the operator username identity is gone
+      expect(env.USER).toBeUndefined();
+      expect(env.LOGNAME).toBeUndefined();
+      expect(env.USERNAME).toBeUndefined();
+      // PATH is filtered, not emptied — the system dirs remain so the spawn can still find node
+      expect(env.PATH!.split(':')).toContain('/usr/bin');
+    } finally {
+      for (const k of ['HOME', 'USER', 'LOGNAME', 'USERNAME', 'NVM_DIR', 'PATH']) {
+        if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+      }
+    }
+  });
+
+  it('the PATH filter never empties PATH even if the server root is a short/edge path (S7 finding 3)', async () => {
+    const saved = { ...process.env };
+    try {
+      // a sibling dir must NOT be over-matched: /repo/ekoa filtering /repo/ekoa-2 out.
+      process.env.INIT_CWD = '/repo/ekoa';
+      process.env.PATH = '/repo/ekoa/node_modules/.bin:/repo/ekoa-2/bin:/usr/bin';
+      const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-p' });
+      const segs = env.PATH!.split(':');
+      expect(segs).not.toContain('/repo/ekoa/node_modules/.bin'); // under the root -> filtered
+      expect(segs).toContain('/repo/ekoa-2/bin');                 // a SIBLING -> kept (boundary, not startsWith)
+      expect(segs).toContain('/usr/bin');
+    } finally {
+      for (const k of ['INIT_CWD', 'PATH']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     }
   });
 });

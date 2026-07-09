@@ -76,6 +76,25 @@ unchanged (chat tools were NOT widened).
   consumer drains `events` before awaiting `result`, so a stream error left `result` orphaned; the
   chokepoint pre-handles it. This is what made the F4 brand-research contract suite exit vitest non-zero.
 
+## Fresh-context security review (S7) — approve, findings all addressed
+
+The slice's fresh-context reviewer (LLM-free probes, verified by exit code) returned **approve, no
+blockers**, confirming the mechanism reproduction, the memory-vector closure (CLAUDE_*/XDG_*_HOME),
+FIXED-13 intact, and the disposition honest. Its five LOW/INFO findings were then all closed in-slice:
+1. Scrub was cwd-anchored, so the operator HOME path (in PATH, NVM_*, ...) and USER/LOGNAME/USERNAME
+   still rode through. NOW: the scrub is anchored on the operator HOME too, drops the username
+   identity vars, and filters operator-home PATH segments. Regression-tested.
+2. runOneShot/runAgent created the sandbox (and called buildSubprocessEnv) BEFORE their try, so an
+   early throw (unconfigured credential, mkdtemp failure) orphaned an empty dir / hung `result`. NOW
+   the sandbox lifecycle is inside the try; a throw rejects rather than hangs. Regression-tested.
+3. The PATH filter used boundary-less startsWith (a sibling `/repo/ekoa-2` over-matched `/repo/ekoa`,
+   and a server cwd of `/` would empty PATH and break every run). NOW: a `/`-boundary match and a
+   guard discarding a root of '' or '/'. Regression-tested.
+4. verify-runner pinned cwd but not homeDir, so the chokepoint allocated a second unused sandbox.
+   NOW it pins homeDir too — no wasted dir.
+5. discardSandbox swallowed rm failures silently. NOW it logs the failure (still fire-and-forget;
+   an empty dir lingering to reboot is not a data leak).
+
 ## What remains owed (honest)
 
 - **Live end-to-end reproduce** against the credentialed prod posture (an empty-KB tenant turn returning

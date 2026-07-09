@@ -335,18 +335,29 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
     //                               cwd-substring check misses it), npm_package_json, and even
     //                               npm_package_name (the checkout's directory name)
     //   PATH                      — npm prepends `<repo>/node_modules/.bin`
-    // So the scrub is value-based against the server cwd AND its npm-declared root, plus a
-    // wholesale drop of npm_* (the server's own package metadata is never a tenant's business).
-    // PATH is FILTERED, not dropped: removing it would break the spawn.
-    const roots = [process.cwd(), env.npm_config_local_prefix, env.INIT_CWD].filter((r): r is string => !!r);
-    const underRoot = (value: string) => roots.some((r) => value.startsWith(r));
+    // So the scrub is value-based against the server cwd, its npm-declared root, AND the operator's
+    // HOME (the operator ~/.claude path rides PATH, and NVM_*/BUN_* carry the operator home) — plus
+    // a wholesale drop of npm_* (the server's package metadata is never a tenant's business) and the
+    // operator username identity (USER/LOGNAME/USERNAME). PATH is FILTERED not dropped: removing it
+    // would break the spawn, so only segments UNDER a root are removed.
+    //
+    // Roots are used with a PATH-BOUNDARY (a segment matches a root only at a `/` boundary, so a
+    // sibling `/repo/ekoa-2` is not over-matched by root `/repo/ekoa`), and a root of '' or '/' is
+    // discarded — otherwise a server started from '/' would filter EVERY absolute PATH segment and
+    // leave the subprocess unable to find node.
+    const rawRoots = [process.cwd(), env.npm_config_local_prefix, env.INIT_CWD, process.env.HOME];
+    const roots = rawRoots.filter((r): r is string => !!r && r !== '/' && r.length > 1);
+    const underRoot = (value: string) => roots.some((r) => value === r || value.startsWith(r.endsWith('/') ? r : `${r}/`));
+    const carriesRoot = (value: string) => roots.some((r) => value.includes(r));
+    const USERNAME_KEYS = new Set(['USER', 'LOGNAME', 'USERNAME']);
 
     for (const k of Object.keys(env)) {
       if (k.startsWith('npm_')) { delete env[k]; continue; }
       if (k === 'PWD' || k === 'OLDPWD' || k === 'INIT_CWD') { delete env[k]; continue; }
+      if (USERNAME_KEYS.has(k)) { delete env[k]; continue; }
       const v = env[k] as string;
       if (k === 'PATH') { env.PATH = v.split(':').filter((seg) => seg && !underRoot(seg)).join(':'); continue; }
-      if (roots.some((r) => v.includes(r))) delete env[k];
+      if (carriesRoot(v)) delete env[k];
     }
     env.HOME = opts.homeDir;
     env.PWD = opts.homeDir;
