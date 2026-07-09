@@ -15,7 +15,7 @@ import MemoryPage from '@/app/(dashboard)/memory/page';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { useMemoryStore } from '@/stores/memory';
 import { api } from '@/lib/api';
-import { Memory } from '@ekoa/shared';
+import { Memory, MemoryCreateRequest } from '@ekoa/shared';
 
 // FC-307: mock the typed client; the real memory store calls it through tryCall.
 vi.mock('@/lib/api', () => ({
@@ -94,6 +94,23 @@ describe('memory-page fixtures are contract-valid stubs (F22 ratchet)', () => {
       const parsed = Memory.safeParse(fixture);
       expect(parsed.success, `fixture ${fixture.id}: ${JSON.stringify(parsed.success ? {} : parsed.error.issues)}`).toBe(true);
     }
+  });
+
+  it('the guardrail create payload validates against MemoryCreateRequest (S5 review finding 4: the only UI create path was dead)', () => {
+    // web/components/memory/guardrails.tsx posts this shape. It sent visibility:"shared", which is
+    // not in the Visibility enum (private | org) — so "Adicionar guardrail" 400'd, every time.
+    const guardrailPayload = {
+      type: 'preference',
+      content: 'Nunca usar jQuery.',
+      title: 'Nunca usar jQuery.',
+      tier: 'core',
+      tags: ['guardrail'],
+      visibility: 'org',
+    };
+    const parsed = MemoryCreateRequest.safeParse(guardrailPayload);
+    expect(parsed.success, JSON.stringify(parsed.success ? {} : parsed.error.issues)).toBe(true);
+    // and the title the button sends must survive the schema (it was stripped)
+    expect((parsed.success ? parsed.data : ({} as Record<string, unknown>)).title).toBe('Nunca usar jQuery.');
   });
 });
 

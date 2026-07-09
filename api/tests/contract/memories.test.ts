@@ -115,6 +115,28 @@ describe('GET /api/v1/memories — every item validates against the shared Memor
     expect(p.success).toBe(true);
   });
 
+  it('POST persists the tier it reports: the store and the wire agree (S5 review finding 2)', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories', t, { method: 'POST', body: JSON.stringify({ type: 'fact', content: 'C' }) });
+    const body = await readJson(res);
+    expect(body.tier).toBe('active');
+    // The view defaulted at READ time only, so the document persisted with NO tier while the API
+    // reported 'active'. A future byTier aggregation reading documents would contradict the wire.
+    const doc = await memories.get(body.id as string);
+    expect((doc as unknown as { tier?: string }).tier).toBe('active');
+  });
+
+  it('POST round-trips the title the client sent (S5 review finding 3: it was silently stripped)', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/memories', t, { method: 'POST', body: JSON.stringify({ type: 'fact', title: 'Um título', content: 'C' }) });
+    expect(res.status).toBe(201);
+    const body = await readJson(res);
+    // MemoryCreateRequest never declared `title`, so zod stripped it and every API-created memory
+    // rendered untitled in the dashboard.
+    expect(body.title).toBe('Um título');
+    expect(Memory.safeParse(body).success).toBe(true);
+  });
+
   it('a non-2xx (unknown id) validates against the shared error envelope', async () => {
     const t = await tokenFor();
     const res = await authed('/api/v1/memories/nope', t);
