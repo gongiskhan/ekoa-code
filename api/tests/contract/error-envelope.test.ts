@@ -46,7 +46,6 @@ describe('terminal JSON-404 for unmounted /api/v1 paths (F6)', () => {
   for (const [method, path] of [
     ['GET', '/api/v1/does-not-exist'],
     ['POST', '/api/v1/does-not-exist'],
-    ['GET', '/api/v1/memories/deep/unknown/path'],
     ['PATCH', '/api/v1/nope'],
   ] as const) {
     it(`${method} ${path} -> shared error envelope, never Express HTML`, async () => {
@@ -60,6 +59,23 @@ describe('terminal JSON-404 for unmounted /api/v1 paths (F6)', () => {
       expect((body as { error: { code: string } }).error.code).toBe('NOT_FOUND');
     });
   }
+
+  it('an unknown SUBPATH under a mounted router answers with that router\'s auth gate (401 envelope), and 404 envelope once authenticated - never HTML either way', async () => {
+    // requireAuth runs before route matching inside the router, so an unauthenticated caller
+    // cannot probe which subpaths exist. Both bodies are envelopes; neither is HTML.
+    const anon = await api('/api/v1/memories/deep/unknown/path');
+    expect(anon.status).toBe(401);
+    expect(ErrorEnvelope.safeParse(await anon.json()).success).toBe(true);
+
+    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+    setActivation('u2', { active: true, billingLocked: false });
+    const { token } = await login('u2', 'pw123456', false, deps);
+    const res = await authed('/api/v1/memories/deep/unknown/path', token);
+    expect(res.status).toBe(404);
+    const text = await res.text();
+    expect(text).not.toContain('Cannot ');
+    expect(ErrorEnvelope.safeParse(JSON.parse(text)).success).toBe(true);
+  });
 
   it('an AUTHENTICATED caller on an unmounted /api/v1 path also gets the envelope', async () => {
     await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
