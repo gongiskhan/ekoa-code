@@ -1031,10 +1031,17 @@ export async function proxyGatewayMessages(
   if (droppedFields.length > 0) {
     console.warn(`[llm] gateway forward: dropped unknown top-level fields: ${droppedFields.join(', ')}`);
   }
+  // metadata.session_id is the chokepoint's own vault-key channel (bridge/provider.ts
+  // withSessionIdentity, §18.4.3) — consumed above to key the anonymisation session. The wire
+  // Messages API accepts ONLY metadata.user_id and 400s on any extra key (observed live:
+  // "metadata.session_id: Extra inputs are not permitted", which silently emptied every bridge
+  // compose answer). Strip it from the forwarded metadata; the client's other metadata passes.
+  const wireMeta: Record<string, unknown> = { ...meta };
+  delete wireMeta.session_id;
   const payload: Record<string, unknown> = {
     ...forwarded,
     model: decision.model,
-    metadata: { ...meta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
+    metadata: { ...wireMeta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
   };
 
   let resp: RawRestResponse;
