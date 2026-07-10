@@ -5,18 +5,27 @@
  */
 import type { Actor } from '@ekoa/shared';
 import { orgs, settings, userSettings, sessions, messages, activityLogs, type OrgDoc, type SettingsDoc, type UserSettingsDoc, type SessionDoc, type ActivityLogDoc } from '../data/stores.js';
-import { logActivity } from '../data/activity.js';
+import { logActivity, type ActivityActor } from '../data/activity.js';
 import type { Doc } from '../data/store.js';
 
 export interface Deps { now: () => number; genId: () => string }
+
+/** Registo (F3): emit an audit row for a covered CRUD mutation, metadata-only (ids only, never
+ *  names/content). Best-effort — the single audit write path (FIXED-8), never fails the mutation.
+ *  A missing actor (a direct service call in a test) skips logging. */
+function audit(actor: ActivityActor | undefined, category: string, type: string, deps: Deps, metadata?: Record<string, unknown>): void {
+  if (!actor) return;
+  void logActivity(actor, category, type, deps, metadata).catch(() => undefined);
+}
 
 // ---- Org ----
 export const orgView = (o: OrgDoc) => ({ id: o._id, name: o.name, displayName: o.displayName, branding: o.branding, settings: o.settings });
 export const getOrg = (id: string) => orgs.get(id);
 export const updateOrg = (id: string, patch: Partial<OrgDoc>) => orgs.update(id, (o) => ({ ...o, ...patch }));
-export async function createOrg(input: { name: string; displayName?: string }, deps: Deps): Promise<OrgDoc> {
+export async function createOrg(input: { name: string; displayName?: string }, deps: Deps, actor?: ActivityActor): Promise<OrgDoc> {
   const id = deps.genId();
   await orgs.insert({ _id: id, name: input.name, displayName: input.displayName, createdAt: new Date(deps.now()).toISOString() });
+  audit(actor, 'org', 'create', deps, { orgId: id });
   return (await orgs.get(id)) as OrgDoc;
 }
 export const listOrgs = () => orgs.find({});
@@ -87,6 +96,7 @@ export async function createSession(
   userId: string,
   input: { name?: string; type?: string; artifactId?: string },
   deps: Deps,
+  actor?: ActivityActor,
 ): Promise<SessionDoc> {
   const id = deps.genId();
   const ts = new Date(deps.now()).toISOString();
@@ -102,16 +112,24 @@ export async function createSession(
     updatedAt: ts,
   };
   await sessions.insert(doc);
+  audit(actor, 'session', 'create', deps, { sessionId: id });
   return doc;
 }
 /** Rename and/or touch. An empty patch stamps `updatedAt` only (ch03 §3.8.6, carried). */
-export const updateSession = (id: string, patch: { name?: string }, deps: Deps) =>
-  sessions.update(id, (x) => ({
+export async function updateSession(id: string, patch: { name?: string }, deps: Deps, actor?: ActivityActor) {
+  const updated = await sessions.update(id, (x) => ({
     ...x,
     ...(patch.name !== undefined ? { title: patch.name } : {}),
     updatedAt: new Date(deps.now()).toISOString(),
   }));
-export const deleteSession = (id: string) => sessions.delete(id);
+  audit(actor, 'session', 'update', deps, { sessionId: id });
+  return updated;
+}
+export async function deleteSession(id: string, deps?: Deps, actor?: ActivityActor) {
+  const ok = await sessions.delete(id);
+  if (deps) audit(actor, 'session', 'delete', deps, { sessionId: id });
+  return ok;
+}
 export const listMessages = (sessionId: string) => messages.find({ sessionId }, { timestamp: 1 });
 export async function addMessage(session: SessionDoc, body: { role: unknown; content: unknown; metadata?: unknown }, deps: Deps): Promise<Doc> {
   const id = deps.genId();
@@ -124,8 +142,24 @@ export async function addMessage(session: SessionDoc, body: { role: unknown; con
 }
 
 // ---- Registo (org-scoped activity read; metadata only) ----
+/** The shared `RegistoEntry` requires `targetIds` to be an ARRAY of ids (`z.array(Id).optional()`),
+ *  but the audit row's `metadata` is an OBJECT (`{ jobId, entryId, ... }`), so emitting it directly
+ *  as `targetIds` made every metadata-carrying row fail `RegistoListResponse` validation (F3/F22
+ *  class). Derive `targetIds` from the string-valued metadata fields (the ids) and carry the full
+ *  detail under the passthrough `metadata` key. */
 export function registoEntry(a: ActivityLogDoc) {
-  return { id: a._id, actor: a.userId, username: a.username, actionType: `${a.category}.${a.type}`, timestamp: a.timestamp, targetIds: a.metadata, orgId: a.orgId };
+  const meta = (a.metadata ?? {}) as Record<string, unknown>;
+  const targetIds = Object.values(meta).filter((v): v is string => typeof v === 'string');
+  return {
+    id: a._id,
+    actor: a.userId,
+    username: a.username,
+    actionType: `${a.category}.${a.type}`,
+    timestamp: a.timestamp,
+    ...(targetIds.length > 0 ? { targetIds } : {}),
+    ...(a.metadata ? { metadata: a.metadata } : {}),
+    orgId: a.orgId,
+  };
 }
 export async function readRegisto(actor: Actor, username: string, q: { userId?: string; type?: string; orgId?: string; limit?: number; offset?: number }, deps: Deps) {
   let rows = actor.role === 'super-admin' ? await activityLogs.find(q.orgId ? { orgId: q.orgId } : {}) : await activityLogs.find({ orgId: actor.orgId });

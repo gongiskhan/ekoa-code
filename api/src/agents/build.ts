@@ -39,6 +39,20 @@ import {
   type JobRecord,
 } from './jobs.js';
 import { getBuildMechanics, verifyRunner } from './seams.js';
+import { logActivity } from '../data/activity.js';
+
+/** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
+ *  or any prompt text). The single audit write path (FIXED-8); best-effort so bookkeeping never
+ *  fails a build. `type` is created | completed | failed | cancelled. */
+function auditBuild(input: BuildCreateInput, type: string, metadata: Record<string, unknown>): void {
+  void logActivity(
+    { userId: input.actor.userId, username: input.username, orgId: input.actor.orgId },
+    'build',
+    type,
+    input.deps,
+    metadata,
+  ).catch(() => undefined);
+}
 
 export interface BuildCreateInput {
   actor: Actor;
@@ -118,6 +132,7 @@ async function handleFirstBuild(input: BuildCreateInput): Promise<BuildCreateRes
   // Persist BEFORE responding so `GET /jobs/:id` finds the record as soon as the 202 returns
   // ("respond early once the record exists", §5.2 step 2).
   await persistJob(record);
+  auditBuild(input, 'created', { jobId }); // Registo (F3)
 
   return {
     status: 'created',
@@ -188,6 +203,7 @@ async function handleFollowUp(input: BuildCreateInput, artifactId: string): Prom
     createdAt: new Date(input.deps.now()).toISOString(),
   };
   await persistJob(record);
+  auditBuild(input, 'created', { jobId, artifactId }); // Registo (F3)
   return {
     status: 'created',
     job: jobView(record),
@@ -432,6 +448,13 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     }
     if (input.sessionId) releaseReservation(input.sessionId, jobId); // guarded by job id (§5.3.3)
     removeRun(jobId);
+    // Registo (F3): ONE terminal row per build, from the record's final status (guaranteed-once
+    // here — every terminal transition has already patched the store). Metadata is ids/codes only.
+    const finalJob = await getJob(jobId);
+    const st = finalJob?.status;
+    if (st === 'completed') auditBuild(input, 'completed', { jobId, ...(artifactId ? { artifactId } : {}) });
+    else if (st === 'failed') auditBuild(input, 'failed', { jobId, code: finalJob?.error?.code ?? 'UNKNOWN' });
+    else if (st === 'cancelled') auditBuild(input, 'cancelled', { jobId });
   }
 
   function clearTimers(): void {

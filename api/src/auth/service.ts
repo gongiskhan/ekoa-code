@@ -8,6 +8,7 @@ import { setActivation, getActivation, bumpTokenEpoch } from '../data/activation
 import { hashPassword, verifyPassword } from './password.js';
 import { signToken, type JwtClaims } from './jwt.js';
 import { revoke } from './revocation.js';
+import { logActivity } from '../data/activity.js';
 
 export interface Deps {
   now: () => number;
@@ -89,6 +90,9 @@ export async function login(username: string, password: string, rememberMe: bool
     { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}`, iat: mintIat(u._id) },
     rememberMe,
   );
+  // Registo (F3): a login is an org-visible activity — metadata-only, never the password. The
+  // single audit write path (FIXED-8); best-effort so a bookkeeping write never fails a login.
+  await logActivity({ userId: u._id, username: u.username, orgId: u.orgId }, 'auth', 'login', deps, { rememberMe }).catch(() => undefined);
   return { token, user: view(u), passwordChangeRequired: !!u.passwordChangeRequired, expiresIn };
 }
 

@@ -74,7 +74,7 @@ export function orgsRouter(deps: { now: () => number; genId: () => string }): Ro
   r.post('/', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, OrgCreateRequest, req.body) as { name: string; displayName?: string } | undefined;
     if (!body) return;
-    res.status(201).json(orgView(await createOrg(body, deps)));
+    res.status(201).json(orgView(await createOrg(body, deps, { userId: actorOf(req).userId, username: req.user!.username, orgId: actorOf(req).orgId })));
   });
 
   r.get('/', async (_req: AuthedRequest, res: Response) => {

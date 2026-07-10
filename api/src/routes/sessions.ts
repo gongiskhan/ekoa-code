@@ -12,6 +12,9 @@ export function sessionsRouter(deps: { now: () => number; genId: () => string })
   const r = Router();
   r.use(requireAuth);
 
+  /** The activity-log actor (Registo needs the real username, F3). */
+  const audActor = (req: AuthedRequest) => ({ userId: actorOf(req).userId, username: req.user!.username, orgId: actorOf(req).orgId });
+
   r.get('/', async (req: AuthedRequest, res: Response) => {
     res.json({ items: (await listSessions(actorOf(req).userId)).map(sessionView) });
   });
@@ -19,7 +22,7 @@ export function sessionsRouter(deps: { now: () => number; genId: () => string })
   r.post('/', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SessionCreateRequest, req.body) as { name?: string; type?: string; artifactId?: string } | undefined;
     if (!body) return;
-    res.status(201).json(sessionView(await createSession(actorOf(req).userId, body, deps)));
+    res.status(201).json(sessionView(await createSession(actorOf(req).userId, body, deps, audActor(req))));
   });
 
   r.get('/:id', async (req: AuthedRequest, res: Response) => {
@@ -33,14 +36,14 @@ export function sessionsRouter(deps: { now: () => number; genId: () => string })
     if (!body) return;
     const s = await ownedSession(actorOf(req).userId, req.params.id as string);
     if (!s) return notFound(res);
-    const updated = await updateSession(s._id, body as { name?: string }, deps);
+    const updated = await updateSession(s._id, body as { name?: string }, deps, audActor(req));
     res.json(sessionView(updated!));
   });
 
   r.delete('/:id', async (req: AuthedRequest, res: Response) => {
     const s = await ownedSession(actorOf(req).userId, req.params.id as string);
     if (!s) return notFound(res);
-    await deleteSession(s._id);
+    await deleteSession(s._id, deps, audActor(req));
     res.json({ ok: true });
   });
 

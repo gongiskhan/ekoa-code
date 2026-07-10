@@ -4,7 +4,7 @@ import { handleBuildCreate, executeBuildJob, type BuildCreateInput } from '../..
 import { registerRun, getRun, liveRunCount } from '../../src/agents/registry.js';
 import { persistJob, type JobRecord } from '../../src/agents/jobs.js';
 import { setBuildMechanics, setVerifyRunner, type BuildMechanics, type VerifyRunResult } from '../../src/agents/seams.js';
-import { jobs, userSettings } from '../../src/data/stores.js';
+import { jobs, userSettings, activityLogs } from '../../src/data/stores.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
 import type { FakeTransport, FakeTransportScript } from './_fake-transport.js';
 
@@ -220,6 +220,45 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build', language: 'pt', deps: deps() });
     expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
     expect(calls.activate).toBe(1);
+  });
+});
+
+describe('Registo build lifecycle rows (F3) — a terminal build audits exactly once, metadata-only', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_build_registo'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => { await seedUser('u1', 'o1'); await activityLogs.deleteMany({}); });
+  // The terminal build audit is fire-and-forget (production best-effort); settle it before
+  // clearing so a late write from one test never pollutes the next (both use jobId 'job-exec').
+  const settleAudit = () => new Promise((r) => setTimeout(r, 60));
+  afterEach(async () => { await settleAudit(); vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); await activityLogs.deleteMany({}); });
+
+  it('a COMPLETED build writes one build.completed row (orgId scoped, no description text)', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'segredo do cliente Petrova', language: 'pt', deps: deps() });
+    await settleAudit();
+    const rows = (await activityLogs.find({ category: 'build' })) as Array<{ type: string; orgId: string }>;
+    const completed = rows.filter((r) => r.type === 'completed');
+    expect(completed).toHaveLength(1);
+    expect(completed[0]!.orgId).toBe('o1');
+    expect(JSON.stringify(rows)).not.toContain('Petrova'); // description never reaches the audit row
+    expect(JSON.stringify(rows)).not.toContain('segredo');
+  });
+
+  it('a VERIFY_FAILED build writes one build.failed row carrying the code, not a completed row', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: false, note: 'scaffold servido' }));
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a form', language: 'pt', deps: deps() });
+    await settleAudit();
+    const rows = (await activityLogs.find({ category: 'build' })) as Array<{ type: string; metadata?: { code?: string } }>;
+    expect(rows.some((r) => r.type === 'completed')).toBe(false);
+    const failed = rows.filter((r) => r.type === 'failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.metadata?.code).toBe('VERIFY_FAILED');
   });
 });
 
