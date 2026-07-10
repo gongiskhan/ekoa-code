@@ -96,7 +96,8 @@ describe('token security (P-03, ch09 §9.6) — Codex-review regressions', () =>
     await new Promise<void>((r) => { server = app.listen(0, () => r()); });
     const port = (server!.address() as { port: number }).port;
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/auth/me`, { headers: { authorization: `Bearer ${token}` } });
-    expect(res.status).toBe(403); // NOT fail-open to 200
+    expect(res.status).toBe(401); // NOT fail-open to 200; UNAUTHENTICATED, not ACCOUNT_DISABLED (§3.3)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHENTICATED');
     server!.close(); server = undefined;
   });
 

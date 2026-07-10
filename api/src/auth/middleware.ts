@@ -37,9 +37,13 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
     return fail(res, 'UNAUTHENTICATED', 'Sessão expirada. Inicie sessão novamente.');
   }
   // Activation admission (write-through map; immediate, no TTL wait). Fail CLOSED on a
-  // cache miss: an unknown subject is a stale/forged token, never treated as active.
+  // cache miss, but as UNAUTHENTICATED: an unknown subject is a stale/forged token
+  // (deleted user, reset store), not a deactivated account. §3.3 reserves ACCOUNT_DISABLED
+  // for active=false; a 401 lets clients end the dead session instead of showing the
+  // blocked-account state for a user that no longer exists.
   const act = getActivation(claims.sub);
-  if (!act || !act.active) return fail(res, 'ACCOUNT_DISABLED', 'A sua conta está bloqueada. Contacte o suporte.');
+  if (!act) return fail(res, 'UNAUTHENTICATED', 'Sessão expirada. Inicie sessão novamente.');
+  if (!act.active) return fail(res, 'ACCOUNT_DISABLED', 'A sua conta está bloqueada. Contacte o suporte.');
   // Token-epoch check: a token issued before the user's current epoch is invalid (its role/
   // active state is stale — e.g. an admin demoted after this token was minted). ch09 §9.6.
   if (claims.iat !== undefined && claims.iat < act.tokenEpoch) {
@@ -62,7 +66,8 @@ export function verifySseToken(token: string | undefined): { ok: true; claims: J
   }
   if (!claims.jti || isRevoked(claims.jti)) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
   const act = getActivation(claims.sub);
-  if (!act || !act.active) return { ok: false, status: 403, code: 'ACCOUNT_DISABLED' };
+  if (!act) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
+  if (!act.active) return { ok: false, status: 403, code: 'ACCOUNT_DISABLED' };
   if (claims.iat !== undefined && claims.iat < act.tokenEpoch) return { ok: false, status: 401, code: 'UNAUTHENTICATED' };
   return { ok: true, claims };
 }

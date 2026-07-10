@@ -1,7 +1,9 @@
 "use client";
 
-import { ShieldAlert } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { LogOut, ShieldAlert } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
+import { useTranslation } from "@/stores/i18n";
 
 /**
  * Blocked-state guard (Amendment 2, FC-508). Renders a blocking overlay carrying
@@ -10,6 +12,9 @@ import { useAuthStore } from "@/stores/auth";
  *   - BILLING_LOCKED (402)
  * The code is captured by the auth store while validating the session
  * (`GET /auth/me`). Renders nothing when the account is in good standing.
+ * The overlay must never trap the session: logout stays reachable so the user
+ * can end the dead session and reach /login (the login page bounces
+ * still-authenticated visitors back into the dashboard).
  */
 
 const COPY: Record<string, string> = {
@@ -20,11 +25,19 @@ const COPY: Record<string, string> = {
 export function BlockedAccountGuard() {
   const blockedCode = useAuthStore((s) => s.blockedCode);
   const userInactive = useAuthStore((s) => s.user != null && s.user.active === false);
+  const logout = useAuthStore((s) => s.logout);
+  const router = useRouter();
+  const { header } = useTranslation();
 
   const code = blockedCode ?? (userInactive ? "ACCOUNT_DISABLED" : null);
   if (!code) return null;
 
   const message = COPY[code] ?? COPY.ACCOUNT_DISABLED;
+
+  async function handleLogout() {
+    await logout();
+    router.push("/login");
+  }
 
   return (
     <div
@@ -38,6 +51,15 @@ export function BlockedAccountGuard() {
           <ShieldAlert size={24} className="text-red-500" aria-hidden />
         </div>
         <p className="text-sm leading-relaxed text-neutral-700">{message}</p>
+        <button
+          type="button"
+          onClick={handleLogout}
+          data-testid="blocked-account-logout"
+          className="mx-auto mt-6 flex items-center space-x-2 text-xs text-neutral-500 transition-colors hover:text-red-600 cursor-pointer"
+        >
+          <LogOut size={14} aria-hidden />
+          <span>{header.logout}</span>
+        </button>
       </div>
     </div>
   );

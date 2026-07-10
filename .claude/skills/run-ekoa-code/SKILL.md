@@ -103,8 +103,11 @@ already — no proxy needed. With any stack up (or just the API), e.g.
   `Failed to fetch` + console `... violates the following Content Security Policy
   directive: "connect-src ..."` then a CORS preflight error to
   `/api/v1/auth/login`. Both are the two traps above; use the driver.
-- **`/api/v1/auth/refresh` 404 after login is benign.** The auth store treats it
-  as non-fatal ("the just-validated token is still good"). Not a login failure.
+- **`/api/v1/auth/refresh` 404 after login means a stale API build.** The
+  endpoint exists (`api/src/routes/auth.ts`, F1 auth-lifecycle fix, 2026-07-09);
+  a 404 means `api/dist` predates it — rerun the build step above and restart.
+  Login still succeeds (the auth store treats refresh failure as non-fatal), but
+  the console 404 violates the zero-console-error QA bar, so don't ship on it.
 - **Login lands on `/chat`, not `/`.** The success signal is
   `waitForURL(/\/chat/)`.
 - **`next dev` cold-compiles on first hit.** First `/login` (and each first route
