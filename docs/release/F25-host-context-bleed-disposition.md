@@ -130,12 +130,31 @@ spawn worked; that was wrong — F2-E2E (Slice 1) ran *before* `9805f6c` added `
 never exercised the regression. The reviewers' direct `spawnSync` repro at HEAD was authoritative. The
 re-confirm request (which I nearly skipped) is what caught it.
 
-FIX (both reviewers' recommended direction): filter PATH against the checkout roots ONLY; keep the
-aggressive `$HOME` scrub on the non-PATH channels; force-preserve `dirname(process.execPath)` in PATH.
-Regression-test-first, RED confirmed before the fix: three new tests including a **real `spawnSync("node")`**
-that ENOENT'd pre-fix and exits 7 post-fix (closing the injected-transport blind spot), plus a
-HOME-rooted-node-survives test (RED on every host pre-fix) and a `dirname(process.execPath)`-resolvable
-assertion; the old `/usr/bin`-assuming test was rewritten to the corrected contract.
+FIX (both reviewers' recommended direction, HEAD `af8b556`): filter PATH against the checkout roots
+ONLY; keep the aggressive `$HOME` scrub on the non-PATH channels; force-preserve
+`dirname(process.execPath)` in PATH. Regression-test-first, RED confirmed before the fix: three new
+tests including a **real `spawnSync("node")`** that ENOENT'd pre-fix and exits 7 post-fix (closing the
+injected-transport blind spot), plus a HOME-rooted-node-survives test (RED on every host pre-fix) and a
+`dirname(process.execPath)`-resolvable assertion; the old `/usr/bin`-assuming test was rewritten to the
+corrected contract.
+
+**Both fresh-context reviewers re-confirmed at `af8b556`, each running their OWN real spawn (not
+trusting the reported result): batch-security-review `clean@af8b556`, s7-adv-review `approve@af8b556`**
+— OLD-logic PATH → ENOENT, NEW-logic PATH → status 0/7, node bin dir present in the built PATH. All
+five original findings correctly disposed; no new findings; FIXED-13 intact.
+
+ACCEPTED RESIDUAL (by-design, both reviewers noted it, no action): the fix necessarily re-admits the
+operator `$HOME` path onto the subprocess PATH through the node/toolchain bin dir (`~/.nvm/.../bin`), so
+the operator home — and a username derivable from that segment — is visible to a tenant subprocess via
+that ONE PATH entry (reachable only by a Bash-enabled build/verify run; chat/one-shot have no shell
+tool). On a home-installed-node host, node-resolvable and home-path-fully-scrubbed are mutually
+exclusive, and a working agent wins. All OTHER home-carrying vars (NVM_DIR/BUN_INSTALL/`_`) and
+USER/LOGNAME/USERNAME stay scrubbed; the test documents the kept node dir as intentional. The full-scrub
+privacy goal holds on SYSTEM-NODE deployments (container `/usr/local/bin/node`) — the right place for it.
+
+OPERATIONAL HAZARD (both reviewers flagged): the published `batch1-f25` tag still points at the BROKEN
+`8a2a67b`; a deploy from the remote tag ships the ENOENT regression. Move the tag to `af8b556`
+(operator-authorized force-push) or pin the deploy to the commit.
 
 ## What remains owed (honest)
 
