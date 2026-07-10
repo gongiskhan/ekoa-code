@@ -1,0 +1,9 @@
+{
+  "slice": "s5-f7-failed-build", "runId": "20260710-100824-ee82acc1", "commit": "ce23566", "tag": "bf-f7",
+  "test": { "status": "passed", "detail": "F7 failed-build regression tests green; api suite green", "at": "2026-07-10T13:51:50Z" },
+  "securityWall": { "status": "passed", "detail": "typecheck/lint/chokepoint/sast/secrets 0", "at": "2026-07-10T13:51:50Z" },
+  "adversarialReview": { "verdict": "approve-after-fix", "by": "claude-fable-5", "detail": "store-error fall-through FIXED (full-suite catch); 4 non-blocking nits noted", "at": "2026-07-10T13:51:50Z" },
+  "codexSliceReview": { "status": "skipped", "reason": "profile-conditional (feature; F3/F29/F7 covered by fresh-context review; run-level codex checkpoint in phase 5)" },
+  "adversarialTest": { "status": "skipped", "reason": "kind-conditional (api; batched run-level pass in s6)" },
+  "video": { "mode": "asciinema", "status": "recorded", "file": "evidence.cast", "videoSha256": "3824f4c2119fbdee8a6f78b266385eccc50b16dd2ced4d142d9e4e76d4086372", "videoBytes": 788 }
+}

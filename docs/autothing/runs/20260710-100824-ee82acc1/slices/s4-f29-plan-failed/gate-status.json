@@ -1,0 +1,9 @@
+{
+  "slice": "s4-f29-plan-failed", "runId": "20260710-100824-ee82acc1", "commit": "1607aea", "tag": "bf-f29",
+  "test": { "status": "passed", "detail": "F29 plan_failed regression tests green; api suite green", "at": "2026-07-10T13:51:50Z" },
+  "securityWall": { "status": "passed", "detail": "typecheck/lint/chokepoint/sast/secrets 0", "at": "2026-07-10T13:51:50Z" },
+  "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "detail": "zero material findings; residual infra-500s out of scope", "at": "2026-07-10T13:51:50Z" },
+  "codexSliceReview": { "status": "skipped", "reason": "profile-conditional (feature; F3/F29/F7 covered by fresh-context review; run-level codex checkpoint in phase 5)" },
+  "adversarialTest": { "status": "skipped", "reason": "kind-conditional (api; batched run-level pass in s6)" },
+  "video": { "mode": "asciinema", "status": "recorded", "file": "evidence.cast", "videoSha256": "2d14a888975c488faa42f34a908aa707056406cc416525e42dd1e66eb64849d7", "videoBytes": 823 }
+}
