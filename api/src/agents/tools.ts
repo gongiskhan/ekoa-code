@@ -15,6 +15,10 @@ export const CODING_PRESET = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', '
 /** The context-loading tool the coding agent uses to pull agent-context content at runtime. */
 export const CONTEXT_LOADING_TOOL = 'load_context';
 
+/** The §5.4.8 local-bridge delegation tool (ch18 §18.2) — exposed to the hosted chat and build
+ *  run classes; derived output only, honest offline, never an upload. */
+export const DELEGATION_TOOL = 'delegate_to_local';
+
 /** Read-only file tools for a text run that carries attachments (§5.4.4). */
 export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 
@@ -27,18 +31,20 @@ export interface ToolPolicy {
 }
 
 /**
- * Resolve the tool policy for a run class. Chat is locked to exactly the two knowledge tools —
- * never Bash/Write/Edit (§5.4.4, acceptance criterion 5). Builds get the coding preset plus the
- * knowledge tools. Brand research is deliberately tool-less so a prompt-injected page cannot
- * launder server config back as "the brand" (§5.6.4).
+ * Resolve the tool policy for a run class. Chat is locked to the two knowledge tools plus the
+ * §5.4.8 local-bridge delegation tool — never Bash/Write/Edit on the hosted machine (§5.4.4,
+ * acceptance criterion 5; delegation runs on the USER's machine inside their grants, ch18).
+ * Builds get the coding preset plus the knowledge + delegation tools. Brand research is
+ * deliberately tool-less so a prompt-injected page cannot launder server config back as "the
+ * brand" (§5.6.4).
  */
 export function toolPolicyFor(runClass: RunToolClass): ToolPolicy {
   const cfg = loadAgentsConfig();
   switch (runClass) {
     case 'chat':
-      return { allowedTools: [...KNOWLEDGE_TOOLS], maxTurns: cfg.maxTurnsText };
+      return { allowedTools: [...KNOWLEDGE_TOOLS, DELEGATION_TOOL], maxTurns: cfg.maxTurnsText };
     case 'build':
-      return { allowedTools: [...CODING_PRESET, CONTEXT_LOADING_TOOL, ...KNOWLEDGE_TOOLS], maxTurns: cfg.maxTurnsBuild };
+      return { allowedTools: [...CODING_PRESET, CONTEXT_LOADING_TOOL, ...KNOWLEDGE_TOOLS, DELEGATION_TOOL], maxTurns: cfg.maxTurnsBuild };
     case 'text-attachments':
       return { allowedTools: [...ATTACHMENT_TOOLS], maxTurns: cfg.maxTurnsText };
     case 'pure-text':

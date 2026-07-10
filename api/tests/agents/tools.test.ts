@@ -1,18 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { toolPolicyFor, KNOWLEDGE_TOOLS, CODING_PRESET } from '../../src/agents/tools.js';
+import { toolPolicyFor, KNOWLEDGE_TOOLS, CODING_PRESET, DELEGATION_TOOL } from '../../src/agents/tools.js';
 
-/** Tool policy per run class (ch05 §5.4.4, acceptance criterion 5). */
+/** Tool policy per run class (ch05 §5.4.4, acceptance criterion 5; §5.4.8 delegation). */
 describe('toolPolicyFor (§5.4.4)', () => {
-  it('a chat run allows EXACTLY the two knowledge tools — never Bash/Write/Edit', () => {
+  it('a chat run allows EXACTLY the two knowledge tools + delegate_to_local — never Bash/Write/Edit', () => {
     const p = toolPolicyFor('chat');
-    expect(p.allowedTools).toEqual([...KNOWLEDGE_TOOLS]);
+    expect(p.allowedTools).toEqual([...KNOWLEDGE_TOOLS, DELEGATION_TOOL]);
     for (const banned of ['Bash', 'Write', 'Edit']) expect(p.allowedTools).not.toContain(banned);
   });
 
-  it('a build run includes the coding preset + knowledge tools', () => {
+  it('a build run includes the coding preset + knowledge tools + delegate_to_local (§5.4.8)', () => {
     const p = toolPolicyFor('build');
     for (const t of CODING_PRESET) expect(p.allowedTools).toContain(t);
     for (const t of KNOWLEDGE_TOOLS) expect(p.allowedTools).toContain(t);
+    expect(p.allowedTools).toContain(DELEGATION_TOOL);
     expect(p.maxTurns).toBe(100);
   });
 

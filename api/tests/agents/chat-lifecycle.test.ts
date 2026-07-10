@@ -139,11 +139,11 @@ describe('chat run pipeline + streaming contract', () => {
     expect(events.some((e) => e.stream === 'notifications' && e.type === 'integration_build_intent')).toBe(true);
   });
 
-  it('mounts the two §5.4.4 knowledge tools as in-process MCP and allowlists their wire names', async () => {
+  it('mounts the §5.4.4 knowledge tools + the §5.4.8 delegation tool as in-process MCP and allowlists their wire names', async () => {
     const { transport } = await runChatT({ finalText: 'ok' });
     const call = transport.streamCalls[0]!;
-    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read']);
-    expect(call.allowedTools).toEqual(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read']);
+    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'delegate_to_local']);
+    expect(call.allowedTools).toEqual(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__delegate_to_local']);
   });
 
   it('never emits subagent_event, phase_changed, or usage_progress on the wire (§5.7.3)', async () => {

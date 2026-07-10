@@ -23,7 +23,7 @@ import { ChatStreamSink, emitBuildIntent, emitIntegrationBuildIntent } from './s
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
-import { knowledgeToolSpecs } from './sdk-tools.js';
+import { knowledgeToolSpecs, delegateToolSpec } from './sdk-tools.js';
 import { assembleRunContext, renderPrompt } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 
@@ -132,9 +132,12 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const hasAttachments = !!input.attachments?.length;
     const decision = decideForTask(input.message, hasAttachments ? { complexityHint: 'high' } : undefined, 'WORKHORSE');
     const policy = hasAttachments ? toolPolicyFor('text-attachments') : toolPolicyFor('chat');
-    // Chat runs mount the two knowledge tools as in-process MCP (§5.4.4); the attachments
-    // variant is Read/Glob/Grep only and mounts nothing.
-    const sdkTools = hasAttachments ? undefined : knowledgeToolSpecs(input.actor);
+    // Chat runs mount the two knowledge tools + the §5.4.8 local-bridge delegation tool as
+    // in-process MCP (§5.4.4; ch18 §18.2); the attachments variant is Read/Glob/Grep only and
+    // mounts nothing.
+    const sdkTools = hasAttachments
+      ? undefined
+      : [...knowledgeToolSpecs(input.actor), delegateToolSpec(input.actor, input.sessionId)];
 
     const liveMarkers = new MarkerProcessor();
     const handle = runAgent(

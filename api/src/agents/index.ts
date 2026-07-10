@@ -25,6 +25,7 @@ export {
   setLoadContextContent,
   setIntegrationPrefetch,
   setCatalog,
+  setDelegateToLocal,
   setVerifyRunner,
   setBuildMechanics,
   type AssembleAgentContext,
@@ -33,6 +34,10 @@ export {
   type KnowledgeToolReadFn,
   type KnowledgeToolHit,
   type LoadContextContentFn,
+  type DelegateToLocalFn,
+  type DelegationToolActor,
+  type DelegationToolRequest,
+  type DelegationToolResult,
   type VerifyRunnerFn,
   type BuildMechanics,
 } from './seams.js';
