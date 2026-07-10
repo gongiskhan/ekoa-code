@@ -389,4 +389,53 @@ describe('F26: whitespace/format-tolerant de-tokenization (return path only)', (
     const r = anonymize(`NIF ${valid} e outro`, ctx());
     expect(deanonymize(r.text, r.handle)).toBe(`NIF ${valid} e outro`);
   });
+
+  // --- Review + Codex hardening (both reviewers, batch-final s2 round 2) ------------------
+  it('a DOUBLE-separator embedded run is NOT corrupted (guard covers 0-3 flank separators)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const dotted = `${token.slice(0, 3)}.${token.slice(3, 6)}.${token.slice(6)}`;
+    for (const embed of [`9.${dotted}`, `9..${dotted}`, `${dotted}..9`, `9  ${token.slice(0, 3)} ${token.slice(3, 6)} ${token.slice(6)}`]) {
+      const reply = `Ref ${embed} fim.`;
+      expect(deanonymize(reply, r.handle), embed).toBe(reply); // byte-exact; a fixed 1-sep guard missed this
+    }
+  });
+
+  it('STREAMING preserves edge context: an embedded run is not spliced across chunk boundaries', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const dotted = `${token.slice(0, 3)}.${token.slice(3, 6)}.${token.slice(6)}`;
+    for (const reply of [`Ref 9.${dotted} fim.`, `Ref ${dotted}.9 fim.`]) {
+      for (let step = 1; step <= 5; step++) {
+        const detok = createDetokenizer(r.handle);
+        let out = '';
+        for (let i = 0; i < reply.length; i += step) out += detok.push(reply.slice(i, i + step));
+        out += detok.end();
+        expect(out, `${reply} @ step ${step}`).toBe(reply); // the real NIF is never spliced into the run
+      }
+    }
+  });
+
+  it('STREAMING restores a newline-wrapped PARTY token at EVERY split (incl. mid-second-word)', () => {
+    const r = anonymize('Contrato com a Petrova Holdings hoje', ctx({ ruleset: { orgId: 'org1', denyList: ['Petrova Holdings'] } }));
+    const token = r.text.match(/[A-Z][a-z]+ [A-Z][a-z]+/)![0];
+    const wrapped = token.replace(' ', '\n');
+    const reply = `Assinou a ${wrapped} ontem.`;
+    for (let step = 1; step <= 8; step++) {
+      const detok = createDetokenizer(r.handle);
+      let out = '';
+      for (let i = 0; i < reply.length; i += step) out += detok.push(reply.slice(i, i + step));
+      out += detok.end();
+      expect(out, `party split step ${step}`).toBe('Assinou a Petrova Holdings ontem.');
+    }
+  });
+
+  it('a "$" in the restored value is emitted literally (function replacer, not a $-backref)', () => {
+    const r = anonymize('cliente Costa $& Silva Lda', ctx({ ruleset: { orgId: 'org1', denyList: ['Costa $& Silva Lda'] } }));
+    const token = r.text.match(/[A-Z][a-z]+ [A-Z][a-z]+/)![0]; // the fake two-word token
+    const wrapped = token.replace(' ', '\n');
+    expect(deanonymize(`assinou ${wrapped} hoje`, r.handle)).toBe('assinou Costa $& Silva Lda hoje');
+  });
 });

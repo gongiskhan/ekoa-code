@@ -245,10 +245,13 @@ function mapStringLeaves(value: unknown, fn: (s: string) => string): unknown {
  *  - where the token char itself is a SPACE (multi-word names): 1-4 whitespace chars incl. newline.
  *  - elsewhere (letters, the literal '/'/'.' inside a PROCESSO token): up to 2 plain-space/NBSP.
  *  - digit-EDGE guards so a tolerant match never begins/ends inside a longer grouped digit run:
- *    reject when the match is flanked by a digit, OR by a `<digit><sep>` / `<sep><digit>` pair
- *    (the `1.234.567` / `9.200.000.005` false-positive fence).
+ *    reject when the match is flanked by a digit that sits up to 3 separators away (a
+ *    variable-length lookbehind/ahead) - the `1.234.567` / `9.200.000.005` / `9..200.000.005`
+ *    false-positive fence. The separator budget in the guard (0-3) covers the gap budget (0-2)
+ *    plus slack, so a digit reachable through the grouping separators always rejects the match.
  */
-const DIGIT_GAP = "[ \\t\\u00A0\\u2009.'\\u2019]{0,2}"; // between two digits
+const SEP = " \\t\\u00A0\\u2009.'\\u2019"; // the grouping-separator class contents (regex-source)
+const DIGIT_GAP = `[${SEP}]{0,2}`; // between two digits
 const WORD_GAP = '[\\s\\u00A0]{1,4}'; // where the token has a literal space (name wrap)
 const PLAIN_GAP = '[ \\u00A0]{0,2}'; // between other adjacent chars
 const isDigit = (c: string): boolean => c >= '0' && c <= '9';
@@ -271,12 +274,14 @@ function tolerantTokenRe(token: string): RegExp | null {
     // a literal space in the token is consumed by the gap itself, so don't also emit it
     body += (cur === ' ' ? '' : gap + reEsc(cur));
   }
-  // Digit-edge guards: block a match flanked by a digit, or by a <digit><sep>/<sep><digit> run,
-  // so the token digits inside a LONGER grouped number (1.234.567 / 9.200.000.005) are untouched.
+  // Digit-edge guards (variable-length lookaround, V8): reject a match whose flank reaches a
+  // digit through 0-3 separators, so the token digits inside a LONGER grouped number
+  // (1.234.567 / 9.200.000.005 / 9..200.000.005) are left byte-exact. The 0-3 budget covers the
+  // guard-blind case where the model doubled a separator, which a fixed 1-separator guard missed.
   const startDigit = isDigit(chars[0]!);
   const endDigit = isDigit(chars[chars.length - 1]!);
-  const lead = startDigit ? "(?<!\\d)(?<!\\d[ \\t\\u00A0\\u2009.'\\u2019])" : '';
-  const trail = endDigit ? "(?!\\d)(?![ \\t\\u00A0\\u2009.'\\u2019]\\d)" : '';
+  const lead = startDigit ? `(?<![0-9][${SEP}]{0,3})` : '';
+  const trail = endDigit ? `(?![${SEP}]{0,3}[0-9])` : '';
   try {
     return new RegExp(lead + body + trail, 'g');
   } catch {
@@ -285,16 +290,18 @@ function tolerantTokenRe(token: string): RegExp | null {
 }
 
 /** Replace every token in a string: exact pass first (byte-parity for what already works), then
- *  a tolerant pass per token (longest first) for reflowed occurrences. */
+ *  a tolerant pass per token (longest first) for reflowed occurrences. The tolerant replacement
+ *  uses a FUNCTION replacer so a `$` in a restored value is never interpreted as a `$&`/`$1`
+ *  back-reference (the split/join exact pass is already literal). */
 function replaceTokens(s: string, tokens: Array<[string, string]>): string {
   let out = s;
   for (const [token, value] of tokens) {
-    if (out.includes(token)) out = out.split(token).join(value); // exact pass (unchanged)
+    if (out.includes(token)) out = out.split(token).join(value); // exact pass (unchanged, literal)
   }
   for (const [token, value] of tokens) {
     if (out.includes(token)) continue; // already fully restored by the exact pass
     const re = tolerantTokenRe(token);
-    if (re) out = out.replace(re, value);
+    if (re) out = out.replace(re, () => value); // function replacer: '$' in `value` stays literal
   }
   return out;
 }
@@ -310,40 +317,48 @@ export function deanonymize(text: string, handle: VaultHandle): string {
   return replaceTokens(text, tokensOf(handle));
 }
 
-/** The streaming de-tokenizer (§17.3 step 6): de-tokenizes text deltas incrementally, holding
- *  back only the minimum suffix that could be the start of a placeholder straddling the next
- *  chunk boundary. The straddle bound is WIDENED for F26: a reflowed token can be longer than
- *  its compact form (each gap adds up to a few separator chars), so the hold window and the
- *  could-be-a-prefix test both account for the tolerant form. */
+/**
+ * The streaming de-tokenizer (§17.3 step 6). De-tokenizes text deltas incrementally, but replaces
+ * ONLY the stable prefix of the retained RAW buffer — everything except a trailing "unsafe" run
+ * that future input could still change how it replaces. The buffer stays RAW (unreplaced) so the
+ * edge guards see full LEFT context: without this, a preceding `9.` emitted in an earlier chunk
+ * was invisible to the guard and a real number got spliced into an unrelated grouped run.
+ *
+ * A suffix is unsafe (held) when it is either (a) a partial reflowed token, or (b) a run starting
+ * at a DIGIT of digits+separators — the left-context a following token's edge guard needs, and
+ * the tail a following digit could extend a completed token into. The hold is bounded by
+ * `widenedMax` (a reflowed token's max length), so memory never grows unboundedly.
+ */
 export function createDetokenizer(handle: VaultHandle): { push(chunk: string): string; end(): string } {
   const tokens = tokensOf(handle); // longest first, snapshot for this response
   const max = maxTokenLength(handle);
   const MAX_GAP = 4; // an upper bound on separator chars a reflowed token can accumulate per gap
   const widenedMax = max > 0 ? max * (1 + MAX_GAP) : 0;
-  let pending = '';
+  let carry = ''; // retained RAW (unreplaced) tail — includes the left-context for the next match
 
-  /** Could `suffix` be the start of a REFLOWED token (so we must hold it for the next chunk)?
-   *  Walk the suffix consuming each token's chars in order, allowing up to MAX_GAP separators
-   *  per gap; a hold is warranted if the whole suffix is consumed with token chars remaining. */
+  const isSep = (c: string): boolean => {
+    const code = c.charCodeAt(0);
+    return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d
+      || code === 0xa0 || code === 0x2009
+      || c === '.' || c === "'" || code === 0x2019;
+  };
+
+  /** Could `suffix` be an in-progress REFLOWED token (hold it for the next chunk)? Walk the suffix
+   *  consuming each token's chars in order; a token space matches a RUN of >=1 separators and then
+   *  advances past the space. A hold is warranted if the whole suffix is consumed with token chars
+   *  remaining. (No compact-length early-out: a reflowed suffix is longer than the compact token.) */
   const couldBeTolerantPrefix = (suffix: string): boolean => {
-    const isSep = (c: string): boolean => {
-      const code = c.charCodeAt(0);
-      return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d
-        || code === 0xa0 || code === 0x2009
-        || c === '.' || c === "'" || code === 0x2019;
-    };
     for (const [token] of tokens) {
-      // NB: no `token.length <= suffix.length` early-out - a REFLOWED suffix is LONGER than the
-      // compact token (each gap adds separators), so a long partial (a grouped 8-of-9-digit run)
-      // is still a valid in-progress reflow of a 9-char token and must be held.
       let ti = 0;
       let si = 0;
       let ok = true;
       while (si < suffix.length && ti < token.length) {
         if (suffix[si] === token[ti]) { si++; ti++; continue; }
-        // token space is matched by any run of separators
-        if (token[ti] === ' ' && isSep(suffix[si]!)) { si++; continue; }
-        if (isSep(suffix[si]!)) { si++; continue; } // an inserted grouping separator
+        if (token[ti] === ' ') {
+          if (isSep(suffix[si]!)) { while (si < suffix.length && isSep(suffix[si]!)) si++; ti++; continue; }
+          ok = false; break;
+        }
+        if (isSep(suffix[si]!)) { si++; continue; } // an inserted grouping separator between non-space chars
         ok = false; break;
       }
       if (ok && si === suffix.length && ti < token.length) return true; // consumed all, token remains
@@ -351,21 +366,35 @@ export function createDetokenizer(handle: VaultHandle): { push(chunk: string): s
     return false;
   };
 
+  /** A trailing digit-run (starts at a digit, all digits/separators) — the edge-guard left-context
+   *  for a following token, or a completed token a following digit could extend. */
+  const isDigitRun = (suffix: string): boolean => {
+    if (!isDigit(suffix[0]!)) return false;
+    for (const c of suffix) if (!isDigit(c) && !isSep(c)) return false;
+    return true;
+  };
+
+  /** Length of the longest UNSAFE trailing suffix of `buf` (held for the next chunk). */
+  const unsafeSuffixLen = (buf: string): number => {
+    const maxHold = Math.min(widenedMax, buf.length);
+    for (let k = maxHold; k >= 1; k--) {
+      const suf = buf.slice(buf.length - k);
+      if (couldBeTolerantPrefix(suf) || isDigitRun(suf)) return k;
+    }
+    return 0;
+  };
+
   return {
     push(chunk: string): string {
-      const s = replaceTokens(pending + chunk, tokens);
-      let hold = 0;
-      const maxHold = Math.min(Math.max(widenedMax - 1, 0), s.length);
-      for (let k = maxHold; k >= 1; k--) {
-        if (couldBeTolerantPrefix(s.slice(s.length - k))) { hold = k; break; }
-      }
-      const emit = s.slice(0, s.length - hold);
-      pending = s.slice(s.length - hold);
-      return emit;
+      const buf = carry + chunk;
+      const hold = unsafeSuffixLen(buf);
+      const stable = buf.slice(0, buf.length - hold); // full left context; no match straddles the cut
+      carry = buf.slice(buf.length - hold); // kept RAW for the next chunk's guards
+      return replaceTokens(stable, tokens);
     },
     end(): string {
-      const out = replaceTokens(pending, tokens);
-      pending = '';
+      const out = replaceTokens(carry, tokens);
+      carry = '';
       return out;
     },
   };
