@@ -990,3 +990,14 @@ Run-level cross-model Codex security checkpoint (gpt-5.5/high) over the whole ba
 - (F29) plan_failed.reason could echo raw model output (a hallucinated auth header / api-key from a rejected api_call plan) on the wire. FIX: the wire reason is now a fixed GENERIC PT message; the detailed violations are logged SERVER-SIDE only (never returned to the client).
 - (F7) jobView.error.message surfaced the persisted message verbatim; a VERIFY_FAILED message embeds the verifier's model-derived note, which can quote app-data PII (a NIF/IBAN). FIX: jobView returns the structured error.code + a SAFE fixed generic message per code (SAFE_ERROR_MESSAGE map), NEVER the raw persisted message; the detail stays server-side. Regression test added asserting an IBAN in the persisted VERIFY_FAILED note never reaches GET /jobs/:id.
 Both were surfaces this run ADDED (jobView.error in F7, plan_failed.reason in F29). Re-verify pending.
+
+## GATE — RUN FINAL PHASE: Codex checkpoint RE-VERIFY CLEAN — 2026-07-10T14:23:29Z
+Both plan_failed.reason (F29) and jobView verify-note (F7) exposures re-verified CLEAN by Codex. All 5 checkpoint invariants now clean.
+
+## GATE — s6-proof — 2026-07-10T14:23:29Z (tag bf-proof @ f7fbfd1) — PASSED-DETERMINISTIC / BLOCKED-LIVE-MODEL
+Phase 3 proof. Full stack LEFT RUNNING: web http://localhost:3000, api http://localhost:4111, login admin/tmp12345.
+LIVE deterministic proof 15/15 against the real running stack: auth login+/me; F10 deny-list CRUD (literal never echoed, metadata-only); F3 Registo (auth.login + deny-list.add/remove rows, metadata-only); served-app plane (real app not scaffold, CSP frame-ancestors self); /health honesty (0 anomalies). Final ci:lane EXIT 0 (1102 api + 32 shared + 119 web + web build); sast/secrets/audit 0.
+BLOCKED (external): the live-model J3 build journey + live-turn probes require a model credential absent in this environment. Remediation (one command): export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) && node .claude/skills/run-ekoa-code/provision-credential.mjs. Keychain scan classifier-denied; local-token path invalidates the operator session - a legitimate external blocker.
+
+## RUN-END — 2026-07-10T14:23:29Z (run 20260710-100824-ee82acc1)
+GLOBAL GATE: completed-with-blockers. buildable-remaining 0. 6/6 code slices PASSED (bf-f10, bf-f26, bf-f3, bf-f29, bf-f7 + bf-reconciled); s6-proof deterministic-PASSED / live-model-BLOCKED on the credential. Codex checkpoint CLEAN. rc-1 untouched; NOT merged to main (operator gate). Stack left running.
