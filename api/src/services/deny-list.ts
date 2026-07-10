@@ -58,6 +58,10 @@ export async function listDenyList(orgId: string): Promise<DenyListEntryView[]> 
   return rows.map(view);
 }
 
+/** Defense-in-depth mirror of the shared `DenyListEntityClass` enum: the route's zod schema is
+ *  the boundary guard; this keeps a direct service caller from storing a free string either. */
+const ENTITY_CLASSES = new Set(['NIF', 'NIPC', 'NISS', 'IBAN', 'CC', 'UTENTE', 'PROCESSO', 'PARTY', 'PERSON']);
+
 export async function addDenyListEntry(
   orgId: string,
   value: string,
@@ -65,6 +69,7 @@ export async function addDenyListEntry(
   actor: ActivityActor,
   deps: LogActivityDeps,
 ): Promise<DenyListEntryView> {
+  if (!ENTITY_CLASSES.has(entityClass)) throw new Error(`invalid deny-list entityClass: not in the closed enum`);
   const doc: DenyListEntryDoc = {
     _id: deps.genId ? deps.genId() : `dl_${deps.now()}`,
     orgId,
@@ -112,5 +117,17 @@ export async function denyListRulesetFieldsFor(orgId: string): Promise<{ denyLis
       ? {}
       : { denyListCiphertext: encryptForScope(JSON.stringify(rows.map((r) => decryptForScope(r.value, orgId))), orgId) };
   cache.set(orgId, { at: Date.now(), fields });
+  // D3: this cache-fill decrypt is itself an access to secret material — logged metadata-only
+  // (count, never values), complementing the per-request denyListAccessed count on anon audit
+  // rows (codex s1 finding 2 mitigation). Best-effort: bookkeeping never fails egress.
+  if (rows.length > 0) {
+    await logActivity(
+      { userId: 'system', username: 'system', orgId },
+      'anonymisation',
+      'deny-list.load',
+      { now: () => Date.now() },
+      { entries: rows.length },
+    ).catch(() => undefined);
+  }
   return fields;
 }

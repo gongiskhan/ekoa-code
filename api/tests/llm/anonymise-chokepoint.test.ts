@@ -255,9 +255,15 @@ describe('encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b),
 });
 
 describe('F10 (batch-final s1): the STORE-BACKED resolver, wired by buildApp, masks at egress', () => {
+  // A party name deliberately NOT in the beforeEach DENY set: masking it can ONLY come from the
+  // store-backed resolver buildApp wires, so this bites if the server.ts wiring is lost (the
+  // review's mutation check: delete the wiring -> this test goes red).
+  const STORE_ONLY_PARTY = 'Fundacao Aurora do Norte';
+
   it('a deny-list entry seeded through the service is tokenized in the captured outbound payload', async () => {
+    expect(DENY).not.toContain(STORE_ONLY_PARTY); // guard: the hand-set resolver must NOT already mask it
     // Wire the REAL composition root: buildApp installs the store-backed ruleset resolver
-    // (server.ts -> services/deny-list.ts), replacing this suite's hand-set resolvers.
+    // (server.ts -> services/deny-list.ts), replacing this suite's hand-set resolver.
     const { buildApp } = await import('../../src/server.js');
     const { addDenyListEntry, __resetDenyListCacheForTests } = await import('../../src/services/deny-list.js');
     const { defaultLlmConfig } = await import('../../src/config.js');
@@ -268,7 +274,7 @@ describe('F10 (batch-final s1): the STORE-BACKED resolver, wired by buildApp, ma
       { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() },
       { now: () => T0, genId: () => `dl_${seq++}` },
     );
-    await addDenyListEntry('org1', PARTY, 'PARTY', { userId: 'adm1', username: 'adm1', orgId: 'org1' }, { now: () => T0 });
+    await addDenyListEntry('org1', STORE_ONLY_PARTY, 'PARTY', { userId: 'adm1', username: 'adm1', orgId: 'org1' }, { now: () => T0 });
 
     let captured = '';
     __setTransportForTests(fakeTransport({
@@ -277,9 +283,9 @@ describe('F10 (batch-final s1): the STORE-BACKED resolver, wired by buildApp, ma
         return { status: 200, headers: {}, body: bodyEcho((p.payload.messages as Array<{ content: string }>)[0]!.content) };
       },
     }));
-    const res = await completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr);
-    expect(captured).not.toContain(PARTY); // the literal never leaves egress
-    expect(res.text).toContain(PARTY); // the user-visible reply is cleartext
+    const res = await completeFast({ messages: [{ role: 'user', content: `reuniao com a ${STORE_ONLY_PARTY} hoje` }] }, attr);
+    expect(captured).not.toContain(STORE_ONLY_PARTY); // masked ONLY via the store-backed wiring
+    expect(res.text).toContain(STORE_ONLY_PARTY); // the user-visible reply is cleartext
   });
 });
 

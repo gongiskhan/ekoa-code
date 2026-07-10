@@ -77,10 +77,15 @@ export const DenyListEntry = z
   .passthrough();
 export type DenyListEntry = z.infer<typeof DenyListEntry>;
 
+/** The CLOSED set of entity classes (ch17 §17.5 token shapes). A free string here would let
+ *  the secret literal itself be laundered into plaintext rest/audit/responses via this field. */
+export const DenyListEntityClass = z.enum(['NIF', 'NIPC', 'NISS', 'IBAN', 'CC', 'UTENTE', 'PROCESSO', 'PARTY', 'PERSON']);
+export type DenyListEntityClass = z.infer<typeof DenyListEntityClass>;
+
 export const DenyListCreateRequest = z.object({
   /** The literal to mask at egress (a firm client/matter/party name — §17.4 (b)). */
-  value: z.string().min(1),
-  entityClass: z.string().optional(),
+  value: z.string().min(1).max(500),
+  entityClass: DenyListEntityClass.optional(),
 });
 export type DenyListCreateRequest = z.infer<typeof DenyListCreateRequest>;
 

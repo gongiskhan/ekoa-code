@@ -109,4 +109,15 @@ describe('POST/GET/DELETE /api/v1/org/deny-list (F10 CRUD contract)', () => {
     expect(res.status).toBe(400);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
   });
+
+  it('entityClass is a CLOSED enum - it cannot launder the literal into plaintext rest/audit/responses (codex s1 finding 1)', async () => {
+    const t = await tokenFor('admA');
+    // The laundering exploit: put the secret literal in the free-string entityClass field.
+    const res = await authed('/api/v1/org/deny-list', t, { method: 'POST', body: JSON.stringify({ value: LITERAL, entityClass: LITERAL }) });
+    expect(res.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+    // nothing stored, nothing audit-logged with the literal
+    expect((await anonymisationDenyLists.find({})).length).toBe(0);
+    expect(JSON.stringify(await activityLogs.find({}))).not.toContain('Petrova');
+  });
 });
