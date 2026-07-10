@@ -30,6 +30,8 @@ const COVERED = new Set<string>([
   'org.getOrg', 'org.updateOrg', 'org.saveBranding', 'org.createOrg', 'org.listOrgs', 'org.patchOrg',
   // batch1 F4 — brand research at the contract path (branding.test.ts)
   'org.researchBranding',
+  // F10 deny-list CRUD (batch-final s1) — exercised by tests/contract/denylist.test.ts
+  'org.listDenyList', 'org.addDenyListEntry', 'org.removeDenyListEntry',
   'settings.get', 'settings.update', 'settings.updateMe',
   'sessions.create', 'sessions.list', 'sessions.get', 'sessions.update', 'sessions.delete', 'sessions.getMessages', 'sessions.addMessage',
   'memories.list', 'memories.get', 'memories.create', 'memories.update', 'memories.delete',

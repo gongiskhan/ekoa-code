@@ -1,6 +1,7 @@
-/** Org and branding contract — ch03 §3.8.4 (`/api/v1/org`, `/orgs`, `/branding`). */
+/** Org and branding contract — ch03 §3.8.4 (`/api/v1/org`, `/orgs`, `/branding`),
+ *  plus the org anonymisation deny-list (ch17 §17.4 (b), ch04 §4.3; F10). */
 import { z } from 'zod';
-import { Id, itemsResponse } from './common.js';
+import { Id, itemsResponse, OkResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
 export const OrgBranding = z
@@ -64,6 +65,28 @@ export type OrgPatch = z.infer<typeof OrgPatch>;
 export const OrgListResponse = itemsResponse(OrgConfig);
 export type OrgListResponse = z.infer<typeof OrgListResponse>;
 
+/** One deny-list entry, METADATA ONLY — the cleartext party name is write-only and never
+ *  returned by any endpoint (ch04 §4.3.4; it is org-scoped-encrypted at rest). */
+export const DenyListEntry = z
+  .object({
+    id: Id,
+    entityClass: z.string(),
+    addedBy: z.string(),
+    addedAt: z.string(),
+  })
+  .passthrough();
+export type DenyListEntry = z.infer<typeof DenyListEntry>;
+
+export const DenyListCreateRequest = z.object({
+  /** The literal to mask at egress (a firm client/matter/party name — §17.4 (b)). */
+  value: z.string().min(1),
+  entityClass: z.string().optional(),
+});
+export type DenyListCreateRequest = z.infer<typeof DenyListCreateRequest>;
+
+export const DenyListListResponse = itemsResponse(DenyListEntry);
+export type DenyListListResponse = z.infer<typeof DenyListListResponse>;
+
 export const orgEndpoints = {
   getOrg: {
     method: 'GET',
@@ -111,5 +134,24 @@ export const orgEndpoints = {
     auth: 'super-admin',
     request: OrgPatch,
     response: OrgConfig,
+  },
+  listDenyList: {
+    method: 'GET',
+    path: '/api/v1/org/deny-list',
+    auth: 'org-admin',
+    response: DenyListListResponse,
+  },
+  addDenyListEntry: {
+    method: 'POST',
+    path: '/api/v1/org/deny-list',
+    auth: 'org-admin',
+    request: DenyListCreateRequest,
+    response: DenyListEntry,
+  },
+  removeDenyListEntry: {
+    method: 'DELETE',
+    path: '/api/v1/org/deny-list/:id',
+    auth: 'org-admin',
+    response: OkResponse,
   },
 } as const satisfies DomainDescriptorMap;

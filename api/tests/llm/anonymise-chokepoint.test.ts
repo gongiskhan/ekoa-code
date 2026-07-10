@@ -254,6 +254,35 @@ describe('encrypted per-org deny-list is resolved at the chokepoint (§17.4 (b),
   });
 });
 
+describe('F10 (batch-final s1): the STORE-BACKED resolver, wired by buildApp, masks at egress', () => {
+  it('a deny-list entry seeded through the service is tokenized in the captured outbound payload', async () => {
+    // Wire the REAL composition root: buildApp installs the store-backed ruleset resolver
+    // (server.ts -> services/deny-list.ts), replacing this suite's hand-set resolvers.
+    const { buildApp } = await import('../../src/server.js');
+    const { addDenyListEntry, __resetDenyListCacheForTests } = await import('../../src/services/deny-list.js');
+    const { defaultLlmConfig } = await import('../../src/config.js');
+    __resetDenyListCacheForTests();
+    await getDb().collection('anonymisation_deny_lists').deleteMany({});
+    let seq = 0;
+    buildApp(
+      { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() },
+      { now: () => T0, genId: () => `dl_${seq++}` },
+    );
+    await addDenyListEntry('org1', PARTY, 'PARTY', { userId: 'adm1', username: 'adm1', orgId: 'org1' }, { now: () => T0 });
+
+    let captured = '';
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) {
+        captured = JSON.stringify(p.payload);
+        return { status: 200, headers: {}, body: bodyEcho((p.payload.messages as Array<{ content: string }>)[0]!.content) };
+      },
+    }));
+    const res = await completeFast({ messages: [{ role: 'user', content: `party ${PARTY}` }] }, attr);
+    expect(captured).not.toContain(PARTY); // the literal never leaves egress
+    expect(res.text).toContain(PARTY); // the user-visible reply is cleartext
+  });
+});
+
 describe('audit folds into the single Registo write path, metadata only (§17.6, §17.11)', () => {
   it('writes an anonymisation activity row with classes/counts/correlation-id/hash, no bodies', async () => {
     __setTransportForTests(fakeTransport({

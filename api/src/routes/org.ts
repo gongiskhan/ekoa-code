@@ -2,12 +2,19 @@
  * Org + orgs router (ch03 §3.8.4). Persistence via the platform-crud service (ch02 §2.7).
  */
 import { Router, type Response } from 'express';
-import { OrgUpdateRequest, OrgCreateRequest, OrgPatch, BrandingSaveRequest } from '@ekoa/shared';
+import { OrgUpdateRequest, OrgCreateRequest, OrgPatch, BrandingSaveRequest, DenyListCreateRequest } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { getOrg, updateOrg, createOrg, listOrgs, orgView } from '../services/platform-crud.js';
+import { listDenyList, addDenyListEntry, removeDenyListEntry } from '../services/deny-list.js';
 import { actorOf, notFound, parseBody } from './helpers.js';
 
-export function orgRouter(_deps: { now: () => number; genId: () => string }): Router {
+/** The activity-log actor (data/activity.ts needs the real username, not just the id). */
+const activityActorOf = (req: AuthedRequest) => {
+  const a = actorOf(req);
+  return { userId: a.userId, username: req.user!.username, orgId: a.orgId };
+};
+
+export function orgRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
   r.use(requireAuth);
 
@@ -28,6 +35,25 @@ export function orgRouter(_deps: { now: () => number; genId: () => string }): Ro
   // Mounted at BOTH /api/v1/org/branding (legacy, carried) and /api/v1/branding (the contract
   // path, via routes/branding.ts) — ONE handler, aliased, never duplicated (F4).
   r.put('/branding', requireRole('org-admin', 'super-admin'), saveBrandingHandler);
+
+  // Org anonymisation deny-list (ch17 §17.4 (b), ch04 §4.3; F10): metadata-only reads,
+  // write-only values — the cleartext literal never appears in any response.
+  r.get('/deny-list', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
+    res.json({ items: await listDenyList(actorOf(req).orgId) });
+  });
+
+  r.post('/deny-list', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, DenyListCreateRequest, req.body);
+    if (!body) return;
+    const entry = await addDenyListEntry(actorOf(req).orgId, body.value, body.entityClass ?? 'PARTY', activityActorOf(req), deps);
+    res.status(201).json(entry);
+  });
+
+  r.delete('/deny-list/:id', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
+    const removed = await removeDenyListEntry(actorOf(req).orgId, req.params.id as string, activityActorOf(req), deps);
+    if (!removed) return notFound(res);
+    res.json({ ok: true });
+  });
 
   return r;
 }

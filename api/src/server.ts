@@ -31,7 +31,7 @@ import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
 import { billingRouter } from './routes/billing.js';
 import { credentialsRouter } from './routes/credentials.js';
-import { llmHealth, registerGateway, loadCredential } from './llm/index.js';
+import { llmHealth, registerGateway, loadCredential, setRulesetResolver } from './llm/index.js';
 import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { knowledgeRouter } from './routes/knowledge.js';
@@ -119,6 +119,7 @@ import { decrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
+import { denyListRulesetFieldsFor } from './services/deny-list.js';
 
 export interface RuntimeDeps {
   now: () => number;
@@ -198,6 +199,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   );
   setVerifyRunner(verifyRunner); // per-build verification (ch07 §7.2.6)
   setBuildMechanics(createBuildMechanics(deps)); // the G6 build pipeline (ch07 §7.2-§7.4)
+  // Anonymisation ruleset resolver (ch17 §17.7; F10): every egress request resolves the org's
+  // ruleset through this seam — the store-backed loader hands the anonymiser the org's
+  // deny-list as org-scoped ciphertext, so decryption stays on the pipeline's access-logged
+  // path. Without this wiring every org ran the default EMPTY deny-list.
+  setRulesetResolver(async (orgId) => ({ orgId, ...(await denyListRulesetFieldsFor(orgId)) }));
   // The §5.4.4 in-process knowledge tools: org partitioning rides the seam signature — the
   // orgId reaches these from the run's actor, never from tool arguments (agents/sdk-tools.ts).
   setKnowledgeToolSearch(async ({ orgId, query, limit }) =>

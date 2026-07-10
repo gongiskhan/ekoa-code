@@ -64,6 +64,10 @@ export {
 // The ekoa-local gateway sub-app + its /health counter.
 export { registerGateway, gatewayRouter, gatewayUnmeteredCount, type GatewayDeps, type VerifyToken } from './gateway.js';
 
+// The anonymisation ruleset seam (ch17 §17.7; F10): the composition root injects the per-org
+// deny-list loader here. Only the seam crosses the boundary — pipeline internals stay inside.
+export { setRulesetResolver, type RulesetResolver, type OrgRuleset } from './anonymise/index.js';
+
 import { claudeAuthStatus, type ClaudeAuthStatus } from './credentials.js';
 import { meteringAnomalyCount } from './attribution.js';
 import { gatewayUnmeteredCount } from './gateway.js';

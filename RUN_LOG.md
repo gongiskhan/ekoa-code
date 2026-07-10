@@ -916,3 +916,9 @@ gate:ledger EXCLUDED from this run's deterministic wall: the bare census lane fa
 
 ## GATE — s0-reconcile PASSED — 2026-07-10T11:02:16Z (run 20260710-100824-ee82acc1, tag bf-reconciled @ 5cff007)
 Green: FINDINGS.md status column complete (27 rows + 9 post-batch-1 items); F21 wiring test backfilled (4/4, reviewer mutation-verified: wiring deleted -> 2/4 red); stash archived+dropped; local batch1-f25 -> af8b556 (remote = operator action); ci:lane EXIT 0; sast/secrets/audit 0. Fresh-context adversarial review: APPROVE, zero material findings (model claude-fable-5, ~9 min; ran its own clean-worktree typecheck + 58 targeted tests). codexSliceReview skipped (not security-boundary); adversarialTest batched to s6; design kind-skipped. Evidence: slices/s0-reconcile/s0-evidence.cast (sha256 c63c65a1dfa5d9ab2abcb2252d754783d7493e377b49fe95e5540cc265b4af3b).
+
+## NOTE — 2026-07-10T11:10:11Z (correction)
+The s0 GATE entry above says "tag bf-reconciled @ 5cff007"; the gate-status/RUN_LOG amend moved the checkpoint commit to aac67e6 and the tag was re-pointed there. bf-reconciled = aac67e6.
+
+## DECISION — 2026-07-10T11:10:11Z (s1-f10-denylist)
+(1) Deny-list persistence = the spec-defined encrypted anonymisation_deny_lists collection (ch04 §4.3), NOT the brief's org-settings sketch — spec wins (RUN_SPEC A5). (2) The resolver loads entries in services/deny-list.ts (decrypt per-entry, re-wrap as ONE org-scoped denyListCiphertext) so resolveDenyList keeps its decrypt+access-log semantics byte-identical and anonymise/ gains no store import (§17.7 seam preserved). (3) Staleness bound: 30s per-org TTL cache, invalidated synchronously by in-process writes; cross-process changes surface within the TTL. (4) llm/index.ts re-exports setRulesetResolver so the composition root wires the seam through the public entry (lint rule 3 respected). RED evidence: both new test files failed at collection pre-implementation (missing module + schemas), 11:54 UTC.
