@@ -113,31 +113,23 @@ describe('planFromGoal', () => {
     expect(call.prompt).toContain('google-workspace.list_emails');
   });
 
-  it('rejects an empty steps array', async () => {
-    hoisted.responses.push(
-      JSON.stringify({ status: 'ok', name: 'x', description: '', inputs: [], steps: [], reasoning: '' }),
-    );
+  it('F29: an empty steps array returns a STRUCTURED failed (after a corrective retry), never throws', async () => {
+    const empty = JSON.stringify({ status: 'ok', name: 'x', description: '', inputs: [], steps: [], reasoning: '' });
+    hoisted.responses.push(empty, empty); // pass 1 fails -> retry -> pass 2 fails -> failed
 
-    await expect(
-      planFromGoal({ goal: 'do nothing', userId: 'u1', catalog: emptyCatalog }),
-    ).rejects.toThrow(/no steps/);
+    const result = await planFromGoal({ goal: 'do nothing', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('failed');
+    expect(result.status === 'failed' && result.violations.join(' ')).toMatch(/passos/);
+    expect(runOneShot).toHaveBeenCalledTimes(2); // pass-1 failure fed the corrective retry
   });
 
-  it('rejects an invalid step type', async () => {
-    hoisted.responses.push(
-      JSON.stringify({
-        status: 'ok',
-        name: 'x',
-        description: '',
-        inputs: [],
-        steps: [{ id: 's', description: 'do something', type: 'magic' }],
-        reasoning: '',
-      }),
-    );
+  it('F29: an invalid step type returns a STRUCTURED failed (after a corrective retry), never throws', async () => {
+    const bad = JSON.stringify({ status: 'ok', name: 'x', description: '', inputs: [], steps: [{ id: 's', description: 'do something', type: 'magic' }], reasoning: '' });
+    hoisted.responses.push(bad, bad);
 
-    await expect(
-      planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog }),
-    ).rejects.toThrow(/invalid type/);
+    const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('failed');
+    expect(result.status === 'failed' && result.violations.join(' ')).toMatch(/invalid type|passo/);
   });
 
   it('routes through the chokepoint at EXPERT tier, billed to the run owner', async () => {
@@ -163,11 +155,12 @@ describe('planFromGoal', () => {
     expect(decideForTier).toHaveBeenCalledWith('EXPERT');
   });
 
-  it('throws on non-JSON output', async () => {
-    hoisted.responses.push('I cannot help');
-    await expect(
-      planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog }),
-    ).rejects.toThrow(/non-JSON/);
+  it('F29: non-JSON output returns a STRUCTURED failed (after a corrective retry), never throws', async () => {
+    hoisted.responses.push('I cannot help', 'still not JSON');
+    const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('failed');
+    expect(result.status === 'failed' && result.violations.join(' ')).toMatch(/JSON/);
+    expect(runOneShot).toHaveBeenCalledTimes(2);
   });
 
   it('cross-validation: rejects browser step whose description names a connected integration; retries with feedback', async () => {
@@ -328,9 +321,9 @@ describe('planFromGoal', () => {
       ekoaActions: [],
     };
 
-    await expect(
-      planFromGoal({ goal: 'send an email', userId: 'u1', catalog }),
-    ).rejects.toThrow(/could not produce a valid plan/);
+    const result = await planFromGoal({ goal: 'send an email', userId: 'u1', catalog });
+    expect(result.status).toBe('failed'); // F29: cross-validation failure after the retry is structured, not a throw
+    expect(result.status === 'failed' && result.violations.length).toBeGreaterThan(0);
     expect(runOneShot).toHaveBeenCalledTimes(2);
   });
 

@@ -232,6 +232,11 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     if (plan.status === 'awaiting_integration') {
       return { ok: false, awaiting: { service: plan.service ?? '', reason: plan.reason ?? '' } };
     }
+    // F29: the model could not produce a usable plan — an honest, structured failure (not the
+    // opaque "planner returned no automation" that a swallowed 500 used to fall through to).
+    if (plan.status === 'plan_failed') {
+      return { ok: false, error: plan.reason || 'O modelo não conseguiu criar um plano utilizável. Tente reformular o objetivo.' };
+    }
     // The backend persisted the automation and kicked off the rehearsal
     // run. Surface both so the caller can navigate to the editor and
     // subscribe to the live rehearsal events.

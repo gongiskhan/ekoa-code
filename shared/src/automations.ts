@@ -30,11 +30,14 @@ export const PlanStep = z
   .passthrough();
 export type PlanStep = z.infer<typeof PlanStep>;
 
-/** The planned step sequence for an automation. */
+/** The planned step sequence for an automation. `status` carries the outcome: `ok` |
+ *  `awaiting_integration` | `plan_failed` (F29 — the model could not produce a usable plan; the
+ *  human-readable cause is on `reason`). */
 export const Plan = z
   .object({
     steps: z.array(PlanStep).optional(),
     status: z.string().optional(),
+    reason: z.string().optional(),
   })
   .passthrough();
 export type Plan = z.infer<typeof Plan>;

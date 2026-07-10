@@ -114,6 +114,18 @@ describe('automation service surface (§3.8.18)', () => {
     await expect(svc.planFromGoal(builder, { goal: 'x', language: 'pt-PT' })).rejects.toThrow(/not authorized/);
   });
 
+  it('F29: an unusable model plan yields plan_failed with a reason, nothing persisted, no run', async () => {
+    resetAgentState({ oneShotText: 'this is not a plan, just prose' }); // both passes get non-JSON
+    const res = await svc.planFromGoal(admin, { goal: 'faz algo impossível', language: 'pt-PT' });
+    expect(PlanResponseSchema.safeParse(res).success).toBe(true);
+    expect(res.plan.status).toBe('plan_failed');
+    expect(typeof res.plan.reason).toBe('string');
+    expect(res.rehearsing).toBe(false);
+    expect(res.automation).toBeUndefined();
+    expect(res.runId).toBeUndefined();
+    expect(await automations.find({})).toHaveLength(0); // nothing persisted
+  });
+
   it('planFromGoal persists the automation AND starts a rehearsal run (landmine 9)', async () => {
     // Builder with the org's builder-authoring setting enabled (the creation gate) — owns the result.
     const res = await svc.planFromGoal(builder, { goal: 'abre example.com e guarda', language: 'pt-PT' }, { allowBuilderAutomations: true });

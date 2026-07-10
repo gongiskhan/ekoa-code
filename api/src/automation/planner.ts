@@ -53,7 +53,15 @@ export interface PlanFromGoalNeedsIntegration {
   reason: string;
 }
 
-export type PlanFromGoalResult = PlanFromGoalSuccess | PlanFromGoalNeedsIntegration;
+/** F29: the model could not produce a usable plan (non-JSON, no steps, invalid step, or it
+ *  failed cross-validation after the corrective retry). A STRUCTURED outcome — the caller maps it
+ *  to a `plan_failed` wire plan — instead of a thrown Error the route masked as an opaque 500. */
+export interface PlanFromGoalFailed {
+  status: 'failed';
+  violations: string[];
+}
+
+export type PlanFromGoalResult = PlanFromGoalSuccess | PlanFromGoalNeedsIntegration | PlanFromGoalFailed;
 
 // ============================================================================
 // System prompt
@@ -190,11 +198,13 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
 
   // Pass 1
   const firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
-  if (firstResult.status !== 'ok') {
-    return firstResult;
-  }
-  const firstViolations = crossValidatePlan(firstResult, input.goal, input.catalog);
-  if (firstViolations.length === 0) {
+  if (firstResult.status === 'awaiting_integration') return firstResult;
+  // A pass-1 FAILURE (unparseable / invalid model output) feeds the corrective retry the same way a
+  // cross-validation violation does — the feedback is what makes the retry actually fix it (F29).
+  const firstViolations = firstResult.status === 'failed'
+    ? firstResult.violations
+    : crossValidatePlan(firstResult, input.goal, input.catalog);
+  if (firstResult.status === 'ok' && firstViolations.length === 0) {
     return firstResult;
   }
 
@@ -212,18 +222,16 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
     input,
     baseUserText + feedbackSection + `\n\nReturn the corrected JSON plan now.`,
   );
-  if (secondResult.status !== 'ok') {
-    return secondResult;
-  }
+  if (secondResult.status === 'awaiting_integration') return secondResult;
+  if (secondResult.status === 'failed') return secondResult;
   const secondViolations = crossValidatePlan(secondResult, input.goal, input.catalog);
   if (secondViolations.length === 0) {
     return secondResult;
   }
-  // Hard fail — surface the violations to the user rather than silently
-  // shipping a malformed plan that will go off the rails at run time.
-  throw new Error(
-    `planner could not produce a valid plan after a corrective retry. Violations:\n${secondViolations.map((v) => `- ${v}`).join('\n')}`,
-  );
+  // Structured failure — surface the violations to the user (as a `plan_failed` wire plan) rather
+  // than silently shipping a malformed plan, and rather than throwing an Error the route masks as
+  // a 500 (F29).
+  return { status: 'failed', violations: secondViolations };
 }
 
 async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Promise<PlanFromGoalResult> {
@@ -234,7 +242,7 @@ async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Prom
 
   const parsed = parseFirstJsonObject(res.text);
   if (!parsed) {
-    throw new Error(`planner returned non-JSON output: ${res.text.slice(0, 200)}`);
+    return { status: 'failed', violations: [`o modelo não devolveu um plano em JSON válido: ${res.text.slice(0, 120)}`] };
   }
   return validatePlanOutput(parsed);
 }
@@ -249,8 +257,11 @@ const VALID_STEP_TYPES: ReadonlySet<StepType> = new Set([
 ]);
 
 function validatePlanOutput(value: unknown): PlanFromGoalResult {
+  // F29: an unusable model output is a STRUCTURED `failed`, never a thrown Error the route masks
+  // as a 500. Each `fail` is a user-surfaceable violation string.
+  const fail = (msg: string): PlanFromGoalFailed => ({ status: 'failed', violations: [msg] });
   if (!value || typeof value !== 'object') {
-    throw new Error('planner output must be an object');
+    return fail('a saída do modelo não é um objeto de plano');
   }
   const obj = value as Record<string, unknown>;
 
@@ -263,15 +274,20 @@ function validatePlanOutput(value: unknown): PlanFromGoalResult {
   }
 
   if (obj.status !== 'ok') {
-    throw new Error(`planner returned unexpected status: ${String(obj.status)}`);
+    return fail(`o modelo devolveu um estado inesperado: ${String(obj.status)}`);
   }
 
   const stepsRaw = obj.steps;
   if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) {
-    throw new Error('planner returned no steps');
+    return fail('o plano do modelo não tem passos');
   }
 
-  const steps: Step[] = stepsRaw.map((s, i) => normaliseStep(s, i));
+  let steps: Step[];
+  try {
+    steps = stepsRaw.map((s, i) => normaliseStep(s, i));
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : 'passo inválido no plano do modelo');
+  }
 
   const inputs = Array.isArray(obj.inputs) ? obj.inputs : [];
   const inputSchema: { fields: AutomationInputField[] } | undefined = inputs.length > 0

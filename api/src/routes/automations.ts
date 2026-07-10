@@ -57,7 +57,10 @@ function handle(fn: (req: AuthedRequest, res: Response) => Promise<void>) {
       await fn(req, res);
     } catch (err) {
       if (err instanceof AutomationServiceError) return sendServiceError(res, err);
-      console.error('[automations] route failed:', err instanceof Error ? err.message : err);
+      // F29: log the FULL error (stack + cause), not just err.message — a swallowed cause was
+      // exactly why the plan-from-goal 500s were undiagnosable from the server logs.
+      console.error('[automations] route failed:', err);
+      if (err instanceof Error && err.cause) console.error('[automations] cause:', err.cause);
       sendError(res, 'INTERNAL', 'Erro interno.');
     }
   };

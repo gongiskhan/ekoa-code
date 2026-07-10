@@ -161,6 +161,29 @@ describe('automations contract (§3.8.18)', () => {
     expect(body.rehearsing).toBe(true);
   });
 
+  it('F29: an unusable model plan returns 200 plan_failed (never an opaque 500)', async () => {
+    const t = await adminToken();
+    // Each of these makes the planner unable to produce a valid plan. Pre-F29 they threw a plain
+    // Error the route wrapper masked as 500 INTERNAL; now each is a structured plan_failed.
+    for (const bad of [
+      'this is not JSON at all, just prose',
+      JSON.stringify({ status: 'ok', steps: [] }), // no steps
+      JSON.stringify({ status: 'ok', steps: [{ type: 'not_a_real_step' }] }), // invalid step type
+      JSON.stringify({ status: 'weird' }), // unexpected status
+    ]) {
+      hoisted.planText = bad;
+      const res = await api('/api/v1/automations/plan', t, { method: 'POST', body: JSON.stringify({ goal: 'faz algo', language: 'pt' }) });
+      expect(res.status, `input: ${bad}`).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(PlanResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+      expect((body.plan as { status?: string }).status).toBe('plan_failed');
+      expect(typeof (body.plan as { reason?: string }).reason).toBe('string');
+      expect(body.automation).toBeUndefined(); // nothing persisted
+      expect(body.runId).toBeUndefined(); // no rehearsal run started
+      expect((body as { code?: string }).code).toBeUndefined(); // NOT an error envelope
+    }
+  });
+
   it('plan-from-goal honours the creation-authority gate: a builder is 403 by default (Codex G8)', async () => {
     hoisted.planText = JSON.stringify({ status: 'ok', name: 'X', description: '', inputs: [], steps: [{ type: 'wait', durationMs: 1 }], reasoning: '' });
     const t = await builderToken();

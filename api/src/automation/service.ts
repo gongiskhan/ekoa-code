@@ -254,6 +254,12 @@ export async function planFromGoal(
   const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
   const result = await plannerPlanFromGoal({ goal: input.goal, userId: actor.userId, catalog, ...(input.name ? { automationName: input.name } : {}) });
 
+  if (result.status === 'failed') {
+    // F29: the model could not produce a usable plan. A STRUCTURED outcome (mirrors the
+    // awaiting_integration branch): nothing persisted, no run started, an honest reason surfaced —
+    // NOT a thrown Error the route would mask as an opaque 500.
+    return { plan: { status: 'plan_failed', steps: [], reason: result.violations.join('; ') }, rehearsing: false };
+  }
   if (result.status !== 'ok') {
     // Needs an integration: no automation persisted, no run started.
     return { plan: { status: 'awaiting_integration', steps: [] }, rehearsing: false };
