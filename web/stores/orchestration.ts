@@ -239,7 +239,7 @@ interface OrchestrationState {
   renameSession: (sessionId: string, name: string) => Promise<void>;
   loadSessions: () => Promise<void>;
 
-  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
+  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }) => void;
   loadSessionMessages: (sessionId: string) => Promise<void>;
 
   // Job state management
@@ -683,7 +683,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       // MESSAGE ACTIONS
       // ========================================
 
-      addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
+      addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }) => {
         const fullMessage: ChatMessage = {
           ...message,
           id: generateId(),
@@ -714,15 +714,20 @@ export const useOrchestrationStore = create<OrchestrationState>()(
           ),
         }));
 
-        // Persist to server (fire and forget)
-        api.sessions.addMessage({
-          id: sessionId,
-          role: fullMessage.role,
-          content: fullMessage.content,
-          metadata: fullMessage.metadata,
-        }).catch(() => {
-          // Silent fail - local state is source of truth during session
-        });
+        // Persist to server (fire and forget). Callers mirroring a chat-run
+        // turn pass persist:false - the run pipeline already persists those
+        // server-side (ch05 §5.6.1 steps 1 and 7); a second POST here doubled
+        // every run message in the stored transcript.
+        if (opts?.persist !== false) {
+          api.sessions.addMessage({
+            id: sessionId,
+            role: fullMessage.role,
+            content: fullMessage.content,
+            metadata: fullMessage.metadata,
+          }).catch(() => {
+            // Silent fail - local state is source of truth during session
+          });
+        }
 
         // Persist auto-rename to server (fire and forget)
         if (autoName) {

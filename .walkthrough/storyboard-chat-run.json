@@ -1,0 +1,122 @@
+{
+  "title": "Ekoa: login, run a job, verified result",
+  "project": "ekoa-code",
+  "folder": "chat-run",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    {
+      "type": "title",
+      "id": "intro",
+      "text": "Ekoa: login, run a job, see the verified result",
+      "subtitle": "ekoa-code · 2026-07-10",
+      "duration": 2.6,
+      "reflectFlag": true
+    },
+    {
+      "type": "browser",
+      "id": "login",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/login",
+      "beats": [
+        {
+          "id": "login-page",
+          "caption": "The Ekoa dashboard login",
+          "expectedScreen": "the Portuguese login page with username and password fields and an Entrar button",
+          "actions": [
+            { "type": "waitFor", "selector": "button:Entrar", "timeout": 90000 }
+          ],
+          "assert": { "selector": "button:Entrar", "highlight": true },
+          "hold": 3200
+        },
+        {
+          "id": "sign-in",
+          "caption": "Sign in and land on the chat workspace",
+          "expectedScreen": "the chat workspace after login, with the sidebar and the message composer visible",
+          "actions": [
+            { "type": "fill", "selector": "input[type=\"text\"], input:not([type])", "text": "admin" },
+            { "type": "fill", "selector": "input[type=\"password\"]", "text": "tmp12345" },
+            { "type": "click", "selector": "button:Entrar" },
+            { "type": "waitFor", "selector": "role:textbox:Descreva o que precisa", "timeout": 90000 }
+          ],
+          "assert": { "selector": "role:textbox:Descreva o que precisa", "highlight": true },
+          "hold": 3600
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "job",
+      "continue": true,
+      "beats": [
+        {
+          "id": "ask",
+          "caption": "Submit a job: compound interest on 1000 EUR at 5% over 3 years",
+          "expectedScreen": "the chat with the submitted compound-interest question visible as a user message",
+          "actions": [
+            { "type": "fill", "selector": "role:textbox:Descreva o que precisa", "text": "Explica em poucas frases o que é juro composto e calcula quanto rendem 1000 euros a 5% ao ano durante 3 anos, mostrando o cálculo." },
+            { "type": "press", "key": "Enter" }
+          ],
+          "assert": { "selector": "text:1000 euros a 5%", "highlight": true },
+          "hold": 3000
+        },
+        {
+          "id": "run",
+          "caption": "The agent runs and the answer streams in live",
+          "expectedScreen": "the chat mid-run: a thinking indicator, the answer streaming in, or the just-completed answer below the question",
+          "holdUntil": { "selector": "text:157,63", "timeout": 300000 },
+          "holdAfter": 2000
+        },
+        {
+          "id": "answer",
+          "caption": "The result: 157,63 EUR of interest on 1000 EUR over 3 years. Correct.",
+          "expectedScreen": "the full assistant answer with the compound-interest calculation, the 157,63 interest figure highlighted",
+          "assert": { "selector": "text=157,63 >> nth=-1", "highlight": true },
+          "hold": 5500
+        },
+        {
+          "id": "metered",
+          "caption": "The run is metered: live token usage in the dashboard header",
+          "expectedScreen": "the dashboard header with the Tokens usage meter highlighted, showing tokens consumed out of the quota",
+          "assert": { "selector": "text:Tokens", "highlight": true },
+          "hold": 3600
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "persisted",
+      "continue": true,
+      "baseURL": "http://localhost:3000",
+      "beats": [
+        {
+          "id": "old-session",
+          "caption": "A session from an earlier run, loaded fresh by URL: the transcript persists",
+          "expectedScreen": "a full page load of a chat session URL showing a persisted transcript with the same compound-interest answer",
+          "actions": [
+            { "type": "goto", "path": "/chat/8dc9beaf-1cea-4f7b-92b2-321b9e435477" },
+            { "type": "waitFor", "selector": "text=157,63 >> nth=-1", "timeout": 90000 }
+          ],
+          "assert": { "selector": "text=157,63 >> nth=-1", "highlight": true },
+          "hold": 4500
+        }
+      ]
+    },
+    {
+      "type": "evidence",
+      "id": "persisted-api",
+      "command": "bash .walkthrough/evidence-last-message.sh",
+      "source": "GET /api/v1/sessions/:id/messages",
+      "kind": "output",
+      "caption": "The fresh transcript as the API returns it: persisted server-side",
+      "expectedScreen": "an API response panel showing the assistant message with the 157,63 result line highlighted",
+      "highlight": { "match": "157,63", "note": "the computed result, persisted with the session" },
+      "hold": 6000
+    },
+    {
+      "type": "title",
+      "id": "outro",
+      "text": "Login, job submitted, correct result, persisted",
+      "duration": 2.2
+    }
+  ]
+}

@@ -928,12 +928,13 @@ export default function UnifiedChatPage() {
       ? pendingAttachments.map((a) => ({ displayName: a.displayName, type: a.type }))
       : undefined;
 
-    // 1. User message → orchestration store (also persists server-side).
+    // 1. User message → orchestration store, local mirror only: the run
+    // pipeline persists it server-side (ch05 §5.6.1 step 1).
     addMessage(sessionId, {
       role: "user",
       content: text,
       metadata: attachmentsForMessage ? { attachments: attachmentsForMessage } : undefined,
-    });
+    }, { persist: false });
     setChatInput("");
     setIsExecutingStore(true);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -998,11 +999,13 @@ export default function UnifiedChatPage() {
           resultText || buffered || "No response received.",
           language
         );
+        // Local mirror only: the run pipeline persists the assistant turn
+        // server-side (ch05 §5.6.1 step 7).
         addMessage(sessionId!, {
           role: "assistant",
           content: finalContent,
           metadata: { isEssential: true, type: "text" },
-        });
+        }, { persist: false });
       };
 
       const handleError = (event: { message?: string }) => {
