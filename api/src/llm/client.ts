@@ -213,6 +213,10 @@ export interface RawRestResponse {
  *  `runAgent` through the SAME vault handle before they leave `llm/` (§5.7.1). */
 export type AgentStreamMsg =
   | { kind: 'text'; text: string }
+  /** Working commentary, not answer: extended-thinking blocks plus the text of intermediate
+   *  turns (a turn that also carries tool_use is commentary — the SDK only continues past a
+   *  turn through tool use, so the answer is exactly the toolless final turn's text). */
+  | { kind: 'thinking'; text: string }
   | { kind: 'tool_use'; tool: string; toolId?: string; args?: Record<string, unknown> }
   | { kind: 'tool_result'; tool: string; toolId?: string; result?: unknown; isError?: boolean }
   | { kind: 'session'; sessionId: string }
@@ -235,16 +239,33 @@ export interface ChokepointTransport {
 
 // --- Default transport (real SDK + provider REST) ----------------------------------------
 
-function textOfSdkMessage(msg: SDKMessage): string {
-  if (msg.type !== 'assistant') return '';
+/**
+ * Split one assistant SDK message into answer text vs working commentary ("thinking"), in
+ * block order. Two commentary sources: real extended-thinking blocks, and the text of an
+ * intermediate turn — the agent loop only continues past a turn via tool_use, so text sharing
+ * a message with tool_use is the model narrating its work ("let me check…", where the engine
+ * happily self-identifies), never the answer. The answer is exactly the toolless final turn's
+ * text. `redacted_thinking` blocks are encrypted and dropped. Exported for unit tests.
+ */
+export function classifyAssistantContent(msg: SDKMessage): { answer: string; thinking: string } {
+  if (msg.type !== 'assistant') return { answer: '', thinking: '' };
   const content = (msg.message as { content?: unknown }).content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b): b is { type?: string; text?: string } => !!b && typeof b === 'object')
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('');
+  if (typeof content === 'string') return { answer: content, thinking: '' };
+  if (!Array.isArray(content)) return { answer: '', thinking: '' };
+  const blocks = content.filter(
+    (b): b is { type?: string; text?: string; thinking?: string } => !!b && typeof b === 'object',
+  );
+  const hasToolUse = blocks.some((b) => b.type === 'tool_use');
+  let answer = '';
+  let thinking = '';
+  for (const b of blocks) {
+    if (b.type === 'thinking' && typeof b.thinking === 'string') thinking += b.thinking;
+    else if (b.type === 'text' && typeof b.text === 'string') {
+      if (hasToolUse) thinking += b.text;
+      else answer += b.text;
+    }
+  }
+  return { answer, thinking };
 }
 
 function rawFromSdkUsage(u: unknown): RawUsage {
@@ -349,10 +370,12 @@ const defaultTransport: ChokepointTransport = {
           if (sid) { sessionEmitted = true; yield { kind: 'session', sessionId: sid }; }
         }
         if (msg.type === 'assistant') {
-          const t = textOfSdkMessage(msg);
-          if (t) {
-            text += t;
-            yield { kind: 'text', text: t };
+          const { answer, thinking } = classifyAssistantContent(msg);
+          // Thinking precedes the turn's answer/tool blocks in content order — emit it first.
+          if (thinking) yield { kind: 'thinking', text: thinking };
+          if (answer) {
+            text += answer;
+            yield { kind: 'text', text: answer };
           }
           for (const tu of toolUsesOf(msg)) yield { kind: 'tool_use', ...tu };
           const u = rawFromSdkUsage((msg.message as { usage?: unknown }).usage);
@@ -389,7 +412,7 @@ const defaultTransport: ChokepointTransport = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const q = query({ prompt: p.prompt, options: sdkOptions({ ...p, maxTurns: p.maxTurns ?? 1 }) as any });
       for await (const msg of q) {
-        if (msg.type === 'assistant') text += textOfSdkMessage(msg);
+        if (msg.type === 'assistant') text += classifyAssistantContent(msg).answer;
         else if (msg.type === 'result') {
           usage = rawFromSdkUsage((msg as { usage?: unknown }).usage);
           // F20 parity: prefer the accumulated assistant text; the result field only as fallback.
@@ -593,15 +616,19 @@ export interface AgentRunOptions {
 }
 
 export interface AgentRunResult {
+  /** The answer: the toolless final turn's text (working commentary lives in thinkingText). */
   text: string;
+  /** Accumulated working commentary (intermediate turns + thinking blocks), de-tokenized. */
+  thinkingText: string;
   usage: RawUsage;
   aborted: boolean;
 }
 
 export interface AgentRunHandle {
-  /** The streamed run: yields text events, then RETURNS the final result. Metering fires once
-   *  when the stream finishes (or aborts with reported usage). */
-  events: AsyncGenerator<{ type: 'text'; text: string }, AgentRunResult, void>;
+  /** The streamed run: yields answer (`text`) and working-commentary (`thinking`) events, then
+   *  RETURNS the final result. Metering fires once when the stream finishes (or aborts with
+   *  reported usage). */
+  events: AsyncGenerator<{ type: 'text' | 'thinking'; text: string }, AgentRunResult, void>;
   /** Resolves with the final result when the stream completes; rejects on a hard failure. */
   result: Promise<AgentRunResult>;
   /** Cancel the run. */
@@ -655,7 +682,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
   // a derived promise; the original is unchanged), but the process no longer reports it as unhandled.
   void result.catch(() => {});
 
-  async function* run(): AsyncGenerator<{ type: 'text'; text: string }, AgentRunResult, void> {
+  async function* run(): AsyncGenerator<{ type: 'text' | 'thinking'; text: string }, AgentRunResult, void> {
     let text = '';
     let usage: RawUsage = { ...ZERO_USAGE };
     let aborted = false;
@@ -677,7 +704,11 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     const handle: VaultHandle = promptAnon.handle;
     const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
     const detok = createDetokenizer(handle);
+    // The thinking channel gets its own straddle buffer: interleaving both channels through
+    // one detokenizer would mis-stitch a token split across a thinking/text boundary.
+    const detokThinking = createDetokenizer(handle);
     let rawText = ''; // the tokenized text as it comes off the transport
+    let rawThinking = ''; // tokenized working commentary (intermediate turns + thinking blocks)
     const cb = opts.callbacks;
     // F25: never let the subprocess inherit the host cwd/HOME. A caller that pins them (build,
     // verify) keeps its own; everyone else gets an empty per-run sandbox, removed at run end.
@@ -717,6 +748,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
             if (clear) yield { type: 'text', text: clear };
             break;
           }
+          case 'thinking': {
+            rawThinking += msg.text;
+            const clear = detokThinking.push(msg.text);
+            if (clear) yield { type: 'thinking', text: clear };
+            break;
+          }
           case 'tool_use':
             // De-tokenize tool args through the SAME vault handle before they leave llm/ (§5.7.1).
             cb?.onToolEvent?.({ phase: 'started', tool: msg.tool, toolId: msg.toolId, args: detokJson(msg.args, handle) });
@@ -743,6 +780,8 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
             break;
         }
       }
+      const thinkingTail = detokThinking.end();
+      if (thinkingTail) yield { type: 'thinking', text: thinkingTail };
       const tail = detok.end();
       if (tail) yield { type: 'text', text: tail };
     } catch (err) {
@@ -757,11 +796,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
     discardSandbox(sandbox);
     text = deanonymize(rawText, handle); // final result is cleartext (incl any tool_use values)
+    const thinkingText = deanonymize(rawThinking, handle);
     if (sk.ephemeral) endSession(handle); // a session-less run keeps no vault past the call (§17.5)
     // Single metering point: bill the reported usage even on abort (P-19); zero => nothing billed.
     const metered = await meter(attribution, decision.tier, decision.model, usage);
     recordSpend({ ...capKey, metered }); // accrue the admitted call's spend into the window (§6.6.4)
-    const r: AgentRunResult = { text, usage, aborted };
+    const r: AgentRunResult = { text, thinkingText, usage, aborted };
     resolveResult(r);
     return r;
   }

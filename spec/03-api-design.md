@@ -104,6 +104,7 @@ Union `ChatRunEvent` (from consumers in reference/frontend-cleanup-audit.md FC-0
 |---|---|---|
 | `ready` | `{ runId }` | subscribe ack |
 | `text_chunk` | `{ text }` | progressive assistant text; the three legacy chunk field names (`text`/`content`/`delta`) are normalized to one (FC-031) |
+| `thinking_chunk` | `{ text }` | the agent's working commentary (intermediate-turn text + thinking blocks), classified at the llm/ transport (5.7.1); marker-filtered AND engine-identity-redacted server-side (ch12 white-label — the persona governs answers, not thinking); rendered as the collapsible thinking section (added 2026-07-10, post-rc DECISION in RUN_LOG) |
 | `tool_event` | `{ phase: 'started'\|'finished'\|'failed', tool, args?, result?, isError?, durationMs? }` | drives live activity display |
 | `context_event` | `{ name, action: 'loaded'\|'used' }` | agent context content loaded/used (replaces the legacy event of the same purpose) |
 | `complete` | `{ result?, durationMs, delegate?: { kind: 'build'\|'integration', request } }` | terminal; `delegate` mirrors the notification-channel handoff for the originating run |

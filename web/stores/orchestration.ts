@@ -33,6 +33,10 @@ export interface ChatMessage {
     toolInput?: Record<string, unknown>;
     memoriesUsed?: number;
     attachments?: Array<{ displayName: string; type: 'file' | 'folder' | 'url' }>;
+    /** The agent's working commentary for this turn (server-redacted). Rendered as the
+     *  collapsed, re-expandable thinking section above the answer. */
+    thinking?: string;
+    thinkingDurationMs?: number;
     /** FC-402: local-file activity for this turn (daemon egress ledger + hosted
      *  anonymisation audit, joined by correlation id). Absent on turns that never
      *  touched local files; drives the per-turn trust chip when present. */
@@ -210,6 +214,11 @@ interface OrchestrationState {
   // Streaming chat buffer per session (not persisted)
   streamingChat: Record<string, string>;
 
+  // Streaming thinking buffer per session (not persisted). Fed by `thinking_chunk` events —
+  // the agent's working commentary, rendered as the collapsible thinking section while the
+  // run executes and flushed into the assistant message metadata on complete.
+  streamingThinking: Record<string, string>;
+
   // Per-session messages queued while a run is executing (not persisted).
   // Sent (FIFO) when the active run finishes, instead of being rejected.
   queuedMessages: Record<string, string[]>;
@@ -274,7 +283,12 @@ interface OrchestrationState {
   // Streaming chat buffer
   appendStreamingChat: (sessionId: string, delta: string) => void;
   flushStreamingChat: (sessionId: string) => string;
+  /** Clears BOTH live buffers (answer + thinking) — every abandon path wants both gone. */
   clearStreamingChat: (sessionId: string) => void;
+
+  // Streaming thinking buffer
+  appendStreamingThinking: (sessionId: string, delta: string) => void;
+  flushStreamingThinking: (sessionId: string) => string;
 
   // Message queue (queue-while-building instead of rejecting)
   enqueueMessage: (sessionId: string, text: string) => void;
@@ -487,6 +501,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       isExecuting: false,
       activityMessages: {},
       streamingChat: {},
+      streamingThinking: {},
       queuedMessages: {},
       composerDraft: {},
       retryContexts: {},
@@ -947,9 +962,29 @@ export const useOrchestrationStore = create<OrchestrationState>()(
 
       clearStreamingChat: (sessionId: string) => {
         set((state) => {
-          if (!state.streamingChat[sessionId]) return state;
-          return { streamingChat: { ...state.streamingChat, [sessionId]: '' } };
+          if (!state.streamingChat[sessionId] && !state.streamingThinking[sessionId]) return state;
+          return {
+            streamingChat: { ...state.streamingChat, [sessionId]: '' },
+            streamingThinking: { ...state.streamingThinking, [sessionId]: '' },
+          };
         });
+      },
+
+      appendStreamingThinking: (sessionId: string, delta: string) => {
+        set((state) => ({
+          streamingThinking: {
+            ...state.streamingThinking,
+            [sessionId]: (state.streamingThinking[sessionId] || '') + delta,
+          },
+        }));
+      },
+
+      flushStreamingThinking: (sessionId: string): string => {
+        const text = get().streamingThinking[sessionId] || '';
+        set((state) => ({
+          streamingThinking: { ...state.streamingThinking, [sessionId]: '' },
+        }));
+        return text;
       },
 
       // ========================================

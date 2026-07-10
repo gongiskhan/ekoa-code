@@ -21,6 +21,7 @@ import {
 } from './registry.js';
 import { ChatStreamSink, emitBuildIntent, emitIntegrationBuildIntent } from './streaming.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
+import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
 import { knowledgeToolSpecs } from './sdk-tools.js';
 import { assembleRunContext, renderPrompt } from './context.js';
@@ -153,13 +154,37 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       { kind: 'user_work', agentType: 'chat', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId },
     );
 
-    // Live stream: marker-filter every delta so no marker leaks on the wire (§5.7.2).
-    let streamedAny = false;
+    // Live stream: marker-filter every delta so no marker — partial or whole — leaks on the
+    // wire (§5.7.2), on EITHER channel. The thinking channel (intermediate turns + thinking
+    // blocks, classified at the llm/ transport) gets its own processor (stateful hold-back)
+    // and is engine-identity-redacted here (branding.ts): the persona governs answers, not
+    // thinking, so the model self-identifies freely in commentary. Thinking findings never
+    // trigger delegation — action markers are answer-level signals only.
+    const thinkingMarkers = new MarkerProcessor();
+    const thinkingRedactor = new StreamingIdentityRedactor(); // straddle-safe engine-identity redaction
+    let thinkingClean = ''; // marker-free, redacted commentary — persisted for reload replay
+    let thinkingStartedAt: number | undefined;
+    let thinkingEndedAt: number | undefined;
+    let streamedAny = false; // ANSWER chunks only: thinking must not mask a provider-error-as-result
+    const emitThinking = (piece: string): void => {
+      if (!piece) return;
+      thinkingClean += piece;
+      sink.thinking(piece);
+    };
     for await (const ev of handle.events) {
+      if (ev.type === 'thinking') {
+        thinkingStartedAt ??= input.deps.now();
+        emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
+        continue;
+      }
       streamedAny = true;
+      if (thinkingStartedAt !== undefined && thinkingEndedAt === undefined) thinkingEndedAt = input.deps.now();
       const clean = liveMarkers.push(ev.text);
       if (clean) sink.text(clean);
     }
+    const thinkingTail = thinkingMarkers.end();
+    emitThinking(thinkingRedactor.push(thinkingTail.text) + thinkingRedactor.end());
+    if (thinkingStartedAt !== undefined && thinkingEndedAt === undefined) thinkingEndedAt = input.deps.now();
     const tail = liveMarkers.end();
     if (tail.text) sink.text(tail.text);
     const result = await handle.result;
@@ -188,9 +213,12 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       return;
     }
 
-    // Persist the last valid context block onto the session (§5.6.1 step 6).
-    if (findings.contextBlocks.length) {
-      await persistSessionContext(input.sessionId, findings.contextBlocks[findings.contextBlocks.length - 1]!);
+    // Persist the last valid context block onto the session (§5.6.1 step 6). A context block
+    // emitted during an intermediate turn (thinking channel) still counts; an answer-channel
+    // block wins as "last" over any thinking-channel one.
+    const contextBlocks = [...thinkingTail.findings.contextBlocks, ...findings.contextBlocks];
+    if (contextBlocks.length) {
+      await persistSessionContext(input.sessionId, contextBlocks[contextBlocks.length - 1]!);
     }
 
     // Delegation as typed events (§5.7.2): build/integration handoffs.
@@ -207,7 +235,17 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     }
 
     // Normal completion: persist the assistant message (unless a provider-error, already handled).
-    if (cleanText.trim()) await persistAssistantMessage(input.sessionId, cleanText, input.deps);
+    // Thinking rides in metadata (already marker-free + redacted) so a reloaded session can still
+    // offer the collapsed thinking section the live stream showed.
+    const thinkingMeta = thinkingClean.trim()
+      ? {
+          thinking: thinkingClean,
+          ...(thinkingStartedAt !== undefined && thinkingEndedAt !== undefined
+            ? { thinkingDurationMs: thinkingEndedAt - thinkingStartedAt }
+            : {}),
+        }
+      : undefined;
+    if (cleanText.trim()) await persistAssistantMessage(input.sessionId, cleanText, input.deps, thinkingMeta);
     finishComplete(cleanText);
 
     // Post-run memory extraction scheduled OFF the terminal event (§5.8): the terminal already

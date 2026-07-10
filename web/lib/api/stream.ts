@@ -200,8 +200,15 @@ class SseStream<E extends { type: string }> implements EventStream<E> {
     }
   }
 
-  // Named SSE events (`event: <type>`): the DOM event type IS the union `type`.
+  // Named SSE events (`event: <type>`): the DOM event type IS the union `type`. One trap:
+  // EventSource ALSO fires a DOM `error` Event (no `data`) on every connection blip, and a
+  // consumer subscribed to the union's `error` member registers a DOM listener of that same
+  // name — so a transient disconnect used to dispatch a fake `{}` error event that falsely
+  // settled a mid-stream run ("Algo correu mal" over a healthy reconnecting stream). Every
+  // ch03 §3.6 named event carries a `data:` payload, so a payload-less event is the DOM
+  // artifact, never the server's — drop it here (onerror owns reconnect handling).
   private readonly namedListener = (event: MessageEvent): void => {
+    if (event.data === undefined || event.data === null) return;
     this.dispatch(event.type, event.data);
   };
 

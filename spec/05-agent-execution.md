@@ -351,6 +351,7 @@ The run pipeline exposes one internal callback interface; `events/` owns deliver
 | Internal callback | Wire event (shared/events.ts) | Notes |
 |---|---|---|
 | onText | `text_chunk { text }` | one field name; the three legacy chunk names are normalized (reference/frontend-cleanup-audit.md FC-031) |
+| onThinking | `thinking_chunk { text }` | chat stream only (2026-07-10 post-rc DECISION). Working commentary classified at the llm/ transport: extended-thinking blocks + the text of any turn that also carries tool_use (the SDK only continues past a turn through tool use, so the answer is exactly the toolless final turn's text). Marker-filtered with its own hold-back processor AND engine-identity-redacted (agents/branding.ts) before emission — the ch12 persona governs answers, not thinking. Never enters `complete.result` or the persisted answer; rides assistant-message metadata (`thinking`, `thinkingDurationMs`) for reload replay. Action markers found in commentary are stripped but never trigger delegation; a `<ekoa-context>` block in commentary still persists (answer-channel blocks win as "last"). |
 | onToolEvent | `tool_event { phase, tool, args?, result?, isError?, durationMs? }` | result text truncated to 200 chars (carried) |
 | onContextEvent | `context_event { name, action }` | agent-context content loaded/used |
 | onPlanStep | `plan_step { status, description?, detail? }` | job streams only; absorbs retired phase information (P-11) |
@@ -369,7 +370,7 @@ The model signals handoffs in-band - that necessity remains, because the signal 
 - Integration-builder handoff: `integration_build_intent { sessionId, hint? }`, same pattern.
 - Context blocks (`<ekoa-context>`) are parsed and persisted server-side, never streamed.
 
-No prose marker, partial or whole, may ever appear in a `text_chunk` payload - that is a contract-test assertion (chapter 13).
+No prose marker, partial or whole, may ever appear in a `text_chunk` OR `thinking_chunk` payload - that is a contract-test assertion (chapter 13).
 
 ### 5.7.3 RESOLVED (P-11) - drop subagent_event, fold phase events
 
@@ -431,7 +432,7 @@ Not dropped, easy to mistake for droppable: the marker machinery itself (the mod
 3. SDK environment test: the spawned subprocess env contains **exactly the configured mode's credential and never an inherited one** - in `oauth` mode it contains `CLAUDE_CODE_OAUTH_TOKEN` and not `ANTHROPIC_API_KEY`; in `api-key` mode it contains `ANTHROPIC_API_KEY` (from central custody) and not `CLAUDE_CODE_OAUTH_TOKEN`; in both modes any inherited `ANTHROPIC_API_KEY`/`ANTH_API_KEY` is scrubbed before injection, `CLAUDECODE` is absent, and `ANTHROPIC_BASE_URL` is the internal chokepoint address (FIXED-13, 5.4.1) rather than any user or provider value; `settingSources` is empty; build runs get `HOME = projectDir`.
 4. Session resume test: a follow-up build resumes with the stored `sdkSessionId` in the artifact's `projectDir`; a changed session id is persisted, an unchanged one is not rewritten.
 5. Chat-run tool surface test: a chat run's allowed tools are exactly the two knowledge tools; a build run's include the coding preset (lint/contract check against 5.4.4).
-6. Streaming contract tests: every event emitted on the four SSE endpoints validates against the `shared/events.ts` unions; no `text_chunk` payload ever contains a delegation-marker substring, including split-across-chunk cases (5.7.2); `subagent_event`, `phase_changed`, and `usage_progress` never appear on any stream.
+6. Streaming contract tests: every event emitted on the four SSE endpoints validates against the `shared/events.ts` unions; no `text_chunk` or `thinking_chunk` payload ever contains a delegation-marker substring, including split-across-chunk cases (5.7.2); `subagent_event`, `phase_changed`, and `usage_progress` never appear on any stream.
 7. Delegation test: a model output containing the build marker produces `build_intent` on the notifications channel and `complete.delegate` on the run stream, with clean text.
 8. Artifact-backend lane tests carried from 5.6.6: queued-invocation-after-delete is refused; a post-settle capability RPC is rejected; a hung backend function times out and the next invocation on the same artifact succeeds on a fresh worker; dry-run captures effects without persisting them.
 9. No model call executes in any lifecycle path of this chapter outside the `llm/` chokepoint (lint gate, FIXED-3), and no markdown is interpreted at runtime as logic (FIXED-4 - the guided-build state machine and all lifecycle decisions are TypeScript).

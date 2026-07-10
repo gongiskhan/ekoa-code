@@ -32,8 +32,8 @@ export function persistUserMessage(sessionId: string, content: string, deps: Per
   return insertMessage(sessionId, 'user', content, deps);
 }
 
-export function persistAssistantMessage(sessionId: string, content: string, deps: PersistDeps): Promise<Doc> {
-  return insertMessage(sessionId, 'assistant', content, deps);
+export function persistAssistantMessage(sessionId: string, content: string, deps: PersistDeps, metadata?: Record<string, unknown>): Promise<Doc> {
+  return insertMessage(sessionId, 'assistant', content, deps, metadata);
 }
 
 /** Persist the last valid `<ekoa-context>` block onto the session record (§5.6.1 step 6). */

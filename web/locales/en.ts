@@ -574,6 +574,11 @@ export const en: Translations = {
     placeholderBuild: 'Describe what you need...',
     shiftEnterHint: 'Shift+Enter for new line',
     stop: 'Stop',
+    thinking: 'Reasoning',
+    thinkingLive: 'Thinking...',
+    thoughtForSeconds: (n: number) => `Thought for ${n}s`,
+    showThinking: 'Show reasoning',
+    hideThinking: 'Hide reasoning',
   },
 
   attachments: {

@@ -145,6 +145,21 @@ input, textarea, select, button {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
+/* Gradient sweep across the live "Thinking..." label (background-clip: text) */
+@keyframes thinking-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(90deg, #a3a3a3 30%, #0d9488 50%, #a3a3a3 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2.2s linear infinite;
+}
+
 /* Subtle pulse animation for active status messages */
 @keyframes pulse-subtle {
   0%, 100% {

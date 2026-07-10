@@ -11,6 +11,12 @@ import { z } from 'zod';
 export const ChatRunEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), runId: z.string() }),
   z.object({ type: z.literal('text_chunk'), text: z.string() }),
+  // The agent's working commentary (intermediate turns + thinking blocks), classified at the
+  // llm/ transport and streamed on its own channel so the web can render it as a collapsible
+  // "thinking" section distinct from the answer. The text is engine-identity-redacted
+  // server-side (ch12 white-label): the persona governs answers, not thinking, so the run
+  // pipeline redacts this channel before it reaches the wire. Chat stream only.
+  z.object({ type: z.literal('thinking_chunk'), text: z.string() }),
   z.object({
     type: z.literal('tool_event'),
     phase: z.enum(['started', 'finished', 'failed']),

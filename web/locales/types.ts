@@ -617,6 +617,11 @@ export interface Translations {
     placeholderBuild: string;
     shiftEnterHint: string;
     stop: string;
+    thinking: string;
+    thinkingLive: string;
+    thoughtForSeconds: (n: number) => string;
+    showThinking: string;
+    hideThinking: string;
   };
 
   // ============================================

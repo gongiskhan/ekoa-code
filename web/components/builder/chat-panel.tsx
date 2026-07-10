@@ -32,6 +32,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { ComposerAttachMenu } from "@/components/privacy/composer-attach-menu";
 import { TrustChip } from "@/components/privacy/trust-chip";
+import { ThinkingBlock } from "@/components/chat/thinking-block";
+import { redactProviderIdentity } from "@/lib/sanitize-error";
 import { useOrchestrationStore, type ChatMessage, type OutputEntry } from "@/stores/orchestration";
 import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
@@ -723,6 +725,14 @@ function MessageBubble({
           </div>
         </div>
 
+        {/* Collapsed (re-expandable) thinking section for this turn */}
+        {message.role === "assistant" && message.metadata?.thinking && (
+          <ThinkingBlock
+            text={message.metadata.thinking}
+            durationMs={message.metadata.thinkingDurationMs}
+          />
+        )}
+
         {/* Message content */}
         {isError || isSubtle ? (
           <div
@@ -761,7 +771,11 @@ function MessageBubble({
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
             >
-              {stripCodeBlocks(message.content)}
+              {stripCodeBlocks(
+                message.role === "assistant"
+                  ? redactProviderIdentity(message.content)
+                  : message.content
+              )}
             </ReactMarkdown>
           </div>
         )}
@@ -1011,11 +1025,16 @@ function DetailLine({ entry }: { entry: OutputEntry }) {
 // STREAMING CHAT BUBBLE (live agent text)
 // ============================================
 
-/** Isolated component to avoid re-rendering the entire message list on every rAF tick */
+/** Isolated component to avoid re-rendering the entire message list on every rAF tick.
+ *  Renders the live thinking section (auto-expanded until the answer starts, then it
+ *  collapses) above the streamed answer. Both surfaces render through the provider-identity
+ *  redactor — applied to the ACCUMULATED buffer, so a name split across chunks can never
+ *  flash on screen (the historical "sonnet" leak). */
 function StreamingChatSection({ sessionId }: { sessionId: string }) {
   const text = useOrchestrationStore((s) => s.streamingChat[sessionId] || '');
-  const stripped = stripCodeBlocks(text).trim();
-  if (!stripped) return null;
+  const thinking = useOrchestrationStore((s) => s.streamingThinking[sessionId] || '');
+  const stripped = stripCodeBlocks(redactProviderIdentity(text)).trim();
+  if (!stripped && !thinking.trim()) return null;
   return (
     <div className="flex justify-start items-start space-x-2">
       <img
@@ -1024,15 +1043,18 @@ function StreamingChatSection({ sessionId }: { sessionId: string }) {
         className="w-7 h-7 object-contain flex-shrink-0 mt-0.5"
       />
       <div className="flex-1 min-w-0">
-        <div className="text-xs leading-relaxed break-words text-neutral-700 chat-markdown">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-          >
-            {stripped}
-          </ReactMarkdown>
-          <span className="inline-block w-0.5 h-3.5 bg-teal-600 ml-0.5 -mb-0.5 animate-pulse" />
-        </div>
+        {thinking.trim() && <ThinkingBlock text={thinking} live={!stripped} />}
+        {stripped && (
+          <div className="text-xs leading-relaxed break-words text-neutral-700 chat-markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+            >
+              {stripped}
+            </ReactMarkdown>
+            <span className="inline-block w-0.5 h-3.5 bg-teal-600 ml-0.5 -mb-0.5 animate-pulse" />
+          </div>
+        )}
       </div>
     </div>
   );

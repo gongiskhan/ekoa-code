@@ -218,6 +218,8 @@ export default function UnifiedChatPage() {
   const appendStreamingChat = useOrchestrationStore((s) => s.appendStreamingChat);
   const flushStreamingChat = useOrchestrationStore((s) => s.flushStreamingChat);
   const clearStreamingChat = useOrchestrationStore((s) => s.clearStreamingChat);
+  const appendStreamingThinking = useOrchestrationStore((s) => s.appendStreamingThinking);
+  const flushStreamingThinking = useOrchestrationStore((s) => s.flushStreamingThinking);
   const setActivityMessage = useOrchestrationStore((s) => s.setActivityMessage);
   const enqueueMessage = useOrchestrationStore((s) => s.enqueueMessage);
   const drainQueue = useOrchestrationStore((s) => s.drainQueue);
@@ -963,6 +965,10 @@ export default function UnifiedChatPage() {
       // A terminal state must settle the UI exactly once, whether it arrives as a
       // live SSE event or via the `ready` re-sync below.
       let settled = false;
+      // Thinking window (per run): first thinking_chunk opens it, first answer chunk closes
+      // it — the duration rides the local mirror's metadata (the server persists its own).
+      let thinkingStartedAt: number | null = null;
+      let thinkingEndedAt: number | null = null;
 
       const finishStream = () => {
         stream.close();
@@ -990,7 +996,10 @@ export default function UnifiedChatPage() {
           return;
         }
 
-        // Flush streaming buffer + persist the final assistant turn.
+        // Flush streaming buffers + persist the final assistant turn. The thinking buffer
+        // becomes message metadata so the collapsed thinking section survives the live bubble.
+        const thinkingText = flushStreamingThinking(sessionId!);
+        if (thinkingStartedAt !== null && thinkingEndedAt === null) thinkingEndedAt = Date.now();
         const buffered = flushStreamingChat(sessionId!);
         const resultText = typeof event.result === "string" ? event.result : "";
         // A SUCCESSFUL reply is content, never an error — render it. Do NOT run it through the
@@ -1007,7 +1016,18 @@ export default function UnifiedChatPage() {
         addMessage(sessionId!, {
           role: "assistant",
           content: finalContent,
-          metadata: { isEssential: true, type: "text" },
+          metadata: {
+            isEssential: true,
+            type: "text",
+            ...(thinkingText
+              ? {
+                  thinking: thinkingText,
+                  ...(thinkingStartedAt !== null && thinkingEndedAt !== null
+                    ? { thinkingDurationMs: thinkingEndedAt - thinkingStartedAt }
+                    : {}),
+                }
+              : {}),
+          },
         }, { persist: false });
       };
 
@@ -1030,7 +1050,17 @@ export default function UnifiedChatPage() {
       };
 
       stream.on("text_chunk", (event) => {
-        if (event.text) appendStreamingChat(sessionId!, event.text);
+        if (event.text) {
+          if (thinkingStartedAt !== null && thinkingEndedAt === null) thinkingEndedAt = Date.now();
+          appendStreamingChat(sessionId!, event.text);
+        }
+      });
+
+      stream.on("thinking_chunk", (event) => {
+        if (event.text) {
+          thinkingStartedAt ??= Date.now();
+          appendStreamingThinking(sessionId!, event.text);
+        }
       });
 
       stream.on("tool_event", (event) => {
@@ -1106,6 +1136,8 @@ export default function UnifiedChatPage() {
     appendStreamingChat,
     flushStreamingChat,
     clearStreamingChat,
+    appendStreamingThinking,
+    flushStreamingThinking,
     setActivityMessage,
     setIsExecutingStore,
     language,

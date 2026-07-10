@@ -88,7 +88,8 @@
       "targetGate": "G9",
       "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",
       "specs": [
-        "automation-deterministic"
+        "automation-deterministic",
+        "chat-thinking"
       ]
     }
   },
@@ -99,10 +100,17 @@
       "execute-skip-user-message",
       "navigation",
       "orchestration-hydrate-reconcile",
+      "orchestration-persist-optout",
       "orchestration-queue-stop",
+      "orchestration-thinking",
+      "sanitize-error",
       "verticals",
       "components/data-backups-panel",
+      "components/memory-page",
       "components/no-mode-picker",
+      "components/thinking-block",
+      "components/usage-page",
+      "components/users-page",
       "ui/badge",
       "ui/button",
       "ui/confirm-dialog",
@@ -111,8 +119,10 @@
       "ui/tabs",
       "ui/textarea",
       "ui/toast",
-      "lib/artifact-bundle"
+      "lib/artifact-bundle",
+      "lib/stream-error-collision"
     ],
+    "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page — added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation.",
     "mock_update_needed": [
       "orchestration-hydrate-reconcile",
       "components/data-backups-panel",

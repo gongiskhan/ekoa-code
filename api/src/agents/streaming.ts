@@ -53,6 +53,11 @@ export class ChatStreamSink {
   text(text: string): void {
     if (text) this.emit({ type: 'text_chunk', text });
   }
+  /** Working-commentary channel (§3.6.1 `thinking_chunk`). Callers pass text already
+   *  marker-filtered AND engine-identity-redacted (branding.ts) — never raw model output. */
+  thinking(text: string): void {
+    if (text) this.emit({ type: 'thinking_chunk', text });
+  }
   toolEvent(e: ToolEventInput): void {
     this.emit(toolEventPayload(e) as ChatRunEvent);
   }
