@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { dirname } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
@@ -249,26 +251,30 @@ describe('F25: the subprocess env carries no operator Claude-Code session or XDG
     }
   });
 
-  it('drops the operator HOME path from PATH + other vars, and the operator username (S7 finding 1)', async () => {
+  it('drops the operator identity from NON-PATH vars + username, but KEEPS the toolchain on PATH (S7 finding 1, corrected)', async () => {
     const saved = { ...process.env };
     try {
       process.env.HOME = '/home/operator';
       process.env.USER = 'operator'; process.env.LOGNAME = 'operator'; process.env.USERNAME = 'operator';
-      process.env.NVM_DIR = '/home/operator/.nvm';
-      process.env.PATH = '/home/operator/.claude/skills/watch/bin:/home/operator/.nvm/v/bin:/usr/bin:/bin';
+      process.env.NVM_DIR = '/home/operator/.nvm';                 // a NON-PATH var carrying the operator home
+      process.env.INIT_CWD = '/srv/checkout';
+      process.env.PATH = '/home/operator/.nvm/v/bin:/srv/checkout/node_modules/.bin:/usr/bin:/bin';
       const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-z' });
 
-      // no operator home path survives anywhere (PATH segments, NVM_DIR, ...)
-      const serialized = JSON.stringify(env);
-      expect(serialized).not.toContain('/home/operator');
-      // the operator username identity is gone
+      // NON-PATH vars whose value carries the operator home are dropped (identity scrub, spawn-safe).
+      expect(env.NVM_DIR).toBeUndefined();
+      // the operator username identity is gone.
       expect(env.USER).toBeUndefined();
       expect(env.LOGNAME).toBeUndefined();
       expect(env.USERNAME).toBeUndefined();
-      // PATH is filtered, not emptied — the system dirs remain so the spawn can still find node
-      expect(env.PATH!.split(':')).toContain('/usr/bin');
+      // the repo-checkout bin dir is filtered from PATH (it embeds the server path)...
+      expect(env.PATH!.split(':')).not.toContain('/srv/checkout/node_modules/.bin');
+      // ...but the HOME-rooted toolchain dir is KEPT: evicting it ENOENTs the SDK spawn on
+      // user-managed-node hosts (the finding-1 regression). The home path being visible in PATH is
+      // only reachable by a Bash-enabled build run, and HOME itself is sandboxed — spawnability wins.
+      expect(env.PATH!.split(':')).toContain('/home/operator/.nvm/v/bin');
     } finally {
-      for (const k of ['HOME', 'USER', 'LOGNAME', 'USERNAME', 'NVM_DIR', 'PATH']) {
+      for (const k of ['HOME', 'USER', 'LOGNAME', 'USERNAME', 'NVM_DIR', 'INIT_CWD', 'PATH']) {
         if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
       }
     }
@@ -288,5 +294,57 @@ describe('F25: the subprocess env carries no operator Claude-Code session or XDG
     } finally {
       for (const k of ['INIT_CWD', 'PATH']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     }
+  });
+});
+
+/**
+ * F25 finding-1 REGRESSION — surfaced by the s7-adv-review + batch-security-review re-confirm at
+ * 8a2a67b (both HIGH, same root cause). The first finding-1 fix added the operator $HOME to the
+ * PATH-filter roots; that evicts the Node/tool bin dir from PATH on every USER-MANAGED-NODE host
+ * (nvm / fnm / volta / asdf / ~/.local), where node lives UNDER $HOME. The Agent SDK spawns the
+ * CLI as the BARE command "node" (it pins no `executable`), resolved against THIS env.PATH — so the
+ * eviction makes every model subprocess (chat / build / brand-research / one-shot / gateway
+ * classifier) fail ENOENT. The committed suite missed it because it uses an INJECTED transport and
+ * never spawns a real subprocess; the earlier PATH test even ASSUMED node lives in /usr/bin.
+ *
+ * Corrected contract, pinned here: PATH is filtered against the SERVER CHECKOUT only (cwd/npm-root),
+ * NEVER $HOME; the operator-home scrub stays aggressive on the NON-PATH channels; and the parent's
+ * own Node bin dir is always resolvable on the built PATH. The real-spawn test closes the
+ * injected-transport blind spot that let the regression ship green.
+ */
+describe('F25 finding-1 regression: the PATH scrub never evicts the Node toolchain', () => {
+  it('a HOME-rooted node/tool bin dir SURVIVES the scrub — only the repo checkout is filtered', async () => {
+    const saved = { ...process.env };
+    try {
+      process.env.HOME = '/home/fixture';
+      process.env.INIT_CWD = '/srv/app';
+      process.env.PATH = ['/home/fixture/.nvm/versions/node/v20/bin', '/srv/app/node_modules/.bin', '/usr/bin', '/bin'].join(':');
+      const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-nvm' });
+      const segs = env.PATH!.split(':');
+      // the home-rooted node dir must remain — this is exactly what the first finding-1 fix evicted.
+      expect(segs).toContain('/home/fixture/.nvm/versions/node/v20/bin');
+      // the repo-checkout bin dir is still filtered (it embeds the server's path).
+      expect(segs).not.toContain('/srv/app/node_modules/.bin');
+      expect(segs).toContain('/usr/bin');
+    } finally {
+      for (const k of ['HOME', 'INIT_CWD', 'PATH']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    }
+  });
+
+  it('the parent Node bin dir (dirname(process.execPath)) is always resolvable on the built PATH', async () => {
+    const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-exe' });
+    expect(env.PATH!.split(':')).toContain(dirname(process.execPath));
+  });
+
+  it('REAL SPAWN: bare "node" resolves against the built env.PATH (closes the injected-transport blind spot)', () => {
+    // Every other test in this file uses a fake transport and never spawns; this one does. A PATH
+    // that cannot resolve bare "node" fails HERE with ENOENT (status null) — the exact runtime
+    // failure the green suite hid at 8a2a67b. The SDK spawns "node" the same way.
+    return (async () => {
+      const env = await buildSubprocessEnv({ homeDir: '/tmp/ekoa-run-spawn' });
+      const r = spawnSync('node', ['-e', 'process.exit(7)'], { env, timeout: 20_000 });
+      expect(r.error ? String(r.error) : 'no-error').toBe('no-error'); // not ENOENT
+      expect(r.status).toBe(7);
+    })();
   });
 });

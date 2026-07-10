@@ -14,6 +14,7 @@
  * rollover, rotation mutex / persist-first / peer-adoption, health scoring, selection logic,
  * per-installation rows, and the 20-minute watchdog (reduced to this one latched alert).
  */
+import { dirname } from 'node:path';
 import { loadConfig } from '../config.js';
 import { credentials as credentialsStore } from '../data/stores.js';
 import { encrypt, decrypt } from '../data/crypto.js';
@@ -335,20 +336,30 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
     //                               cwd-substring check misses it), npm_package_json, and even
     //                               npm_package_name (the checkout's directory name)
     //   PATH                      — npm prepends `<repo>/node_modules/.bin`
-    // So the scrub is value-based against the server cwd, its npm-declared root, AND the operator's
-    // HOME (the operator ~/.claude path rides PATH, and NVM_*/BUN_* carry the operator home) — plus
-    // a wholesale drop of npm_* (the server's package metadata is never a tenant's business) and the
-    // operator username identity (USER/LOGNAME/USERNAME). PATH is FILTERED not dropped: removing it
-    // would break the spawn, so only segments UNDER a root are removed.
+    //
+    // TWO DISTINCT root sets — the split is load-bearing (finding-1 regression fix):
+    //   pathRoots  = the SERVER CHECKOUT only (cwd + npm-declared root). PATH segments UNDER these
+    //     embed the repo path, so they are filtered out. The operator HOME is DELIBERATELY NOT a
+    //     PATH root: on user-managed-node hosts (nvm/fnm/volta/asdf/~/.local) node AND the toolchain
+    //     live under $HOME, and the Agent SDK spawns the CLI as the BARE command "node" (it pins no
+    //     `executable`), resolved against THIS env.PATH — so filtering $HOME out of PATH ENOENTs
+    //     every model subprocess. (The first finding-1 fix added $HOME here and broke exactly that;
+    //     caught by the s7/security re-confirm. The comment below already warned a too-broad root
+    //     "leaves the subprocess unable to find node" — $HOME is that root for the common case.)
+    //   valueRoots = pathRoots + the operator HOME. Used to DROP whole NON-PATH vars whose VALUE
+    //     carries the operator home/checkout (NVM_DIR, BUN_INSTALL, `_`, ...). Deleting these
+    //     removes the operator-home identity vector and does NOT affect spawnability (not PATH).
+    // Plus a wholesale drop of npm_* (the server's package metadata is never a tenant's business)
+    // and the operator username identity (USER/LOGNAME/USERNAME).
     //
     // Roots are used with a PATH-BOUNDARY (a segment matches a root only at a `/` boundary, so a
     // sibling `/repo/ekoa-2` is not over-matched by root `/repo/ekoa`), and a root of '' or '/' is
-    // discarded — otherwise a server started from '/' would filter EVERY absolute PATH segment and
-    // leave the subprocess unable to find node.
-    const rawRoots = [process.cwd(), env.npm_config_local_prefix, env.INIT_CWD, process.env.HOME];
-    const roots = rawRoots.filter((r): r is string => !!r && r !== '/' && r.length > 1);
-    const underRoot = (value: string) => roots.some((r) => value === r || value.startsWith(r.endsWith('/') ? r : `${r}/`));
-    const carriesRoot = (value: string) => roots.some((r) => value.includes(r));
+    // discarded — otherwise a server started from '/' would filter EVERY absolute PATH segment.
+    const guardRoot = (r: string | undefined): r is string => !!r && r !== '/' && r.length > 1;
+    const pathRoots = [process.cwd(), env.npm_config_local_prefix, env.INIT_CWD].filter(guardRoot);
+    const valueRoots = [...pathRoots, process.env.HOME].filter(guardRoot);
+    const underPathRoot = (seg: string) => pathRoots.some((r) => seg === r || seg.startsWith(r.endsWith('/') ? r : `${r}/`));
+    const carriesRoot = (value: string) => valueRoots.some((r) => value.includes(r));
     const USERNAME_KEYS = new Set(['USER', 'LOGNAME', 'USERNAME']);
 
     for (const k of Object.keys(env)) {
@@ -356,8 +367,18 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
       if (k === 'PWD' || k === 'OLDPWD' || k === 'INIT_CWD') { delete env[k]; continue; }
       if (USERNAME_KEYS.has(k)) { delete env[k]; continue; }
       const v = env[k] as string;
-      if (k === 'PATH') { env.PATH = v.split(':').filter((seg) => seg && !underRoot(seg)).join(':'); continue; }
+      if (k === 'PATH') { env.PATH = v.split(':').filter((seg) => seg && !underPathRoot(seg)).join(':'); continue; }
       if (carriesRoot(v)) delete env[k];
+    }
+    // Guarantee bare-"node" resolvability: the SDK spawns the CLI as "node" against THIS env.PATH
+    // (it pins no `executable`), and build/verify tool calls shell out to node/npm. Re-add the
+    // parent's own node bin dir if the PATH filtering (or a repo-local node install, or an absent
+    // PATH) left it out — this is the invariant the finding-1 regression tests pin.
+    const nodeDir = dirname(process.execPath);
+    if (guardRoot(nodeDir)) {
+      const segs = env.PATH ? env.PATH.split(':').filter(Boolean) : [];
+      if (!segs.includes(nodeDir)) segs.unshift(nodeDir);
+      env.PATH = segs.join(':');
     }
     env.HOME = opts.homeDir;
     env.PWD = opts.homeDir;
