@@ -439,3 +439,106 @@ describe('F26: whitespace/format-tolerant de-tokenization (return path only)', (
     expect(deanonymize(`assinou ${wrapped} hoje`, r.handle)).toBe('assinou Costa $& Silva Lda hoje');
   });
 });
+
+/**
+ * F26 round 3 (batch-final s2) — the re-review found the v2 streaming rewrite introduced two
+ * defects: (A) a letter-head/digit-tail token (IBAN PT+23 digits, CC) was DISMEMBERED because the
+ * digit-run hold only reached back to the last non-digit; (B) cap saturation cut a reflowed token
+ * off from its trailing context and spliced a real value into a longer run. Both are fixed by a
+ * match-straddle-aware hold + a token-free left-context margin + SEP/isSep consistency (newline is
+ * a grouping separator on BOTH the regex and the streaming scanner).
+ */
+function validIbanFixture(): string {
+  for (let cd = 2; cd <= 98; cd++) {
+    const s = `PT${String(cd).padStart(2, '0')}000201231234567895417`;
+    if (isValidIbanPt(s)) return s;
+  }
+  throw new Error('no valid IBAN');
+}
+function streamDetok(handle: import('../../src/llm/anonymise/index.js').VaultHandle, s: string, step: number): string {
+  const d = createDetokenizer(handle);
+  let out = '';
+  for (let i = 0; i < s.length; i += step) out += d.push(s.slice(i, i + step));
+  return out + d.end();
+}
+
+describe('F26 round 3: streaming correctness for letter-head tokens + no-splice + safety', () => {
+  it('FINDING A: an IBAN token (letter head, digit tail) restores in STREAMING at every split, never dismembered', () => {
+    const iban = validIbanFixture();
+    const r = anonymize(`A conta ${iban} foi criada`, ctx());
+    const token = r.text.match(/PT\d{23}/)![0];
+    for (const reply of [`A conta ${token} foi criada.`, `IBAN: ${token}`, `${token} inicial`]) {
+      for (let step = 1; step <= 8; step++) {
+        expect(streamDetok(r.handle, reply, step), `${reply} @ ${step}`).toBe(deanonymize(reply, r.handle));
+      }
+    }
+  });
+
+  it('FINDING B: a reflowed token followed by a long digit run is NEVER spliced (streaming == batch)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const reflow = `${token.slice(0, 3)} ${token.slice(3, 6)} ${token.slice(6)}`;
+    for (const tail of ['1'.repeat(45), '1'.repeat(200), '9', '']) {
+      const reply = `x${reflow}${tail}`;
+      const batch = deanonymize(reply, r.handle);
+      for (let step = 1; step <= 6; step++) expect(streamDetok(r.handle, reply, step), `tail ${tail.length} @ ${step}`).toBe(batch);
+    }
+  });
+
+  it('a digit token wrapped across LINES restores (SEP/isSep both include newline)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const wrapped = `${token.slice(0, 3)}\n${token.slice(3, 6)}\n${token.slice(6)}`;
+    expect(deanonymize(`o número é ${wrapped}.`, r.handle)).toBe(`o número é ${valid}.`);
+  });
+
+  it('memory bounded: a 50KB pure-digit stream (no token) is byte-exact and does not accumulate', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const big = '7'.repeat(50000);
+    expect(streamDetok(r.handle, big, 997)).toBe(big);
+  });
+
+  it('SECURITY property (38k cases): streaming never leaks worse than batch, restores a superset, never corrupts foreign text', () => {
+    const valid = computeValidNif('50000000');
+    const iban = validIbanFixture();
+    const r = anonymize(`NIF ${valid} IBAN ${iban} cliente Petrova Holdings e Costa Verde`, ctx({ ruleset: { orgId: 'org1', denyList: ['Petrova Holdings', 'Costa Verde'] } }));
+    const nifTok = r.text.match(/(?<![\d])\d{9}(?![\d])/)?.[0];
+    const ibanTok = r.text.match(/PT\d{23}/)![0];
+    const parties = r.text.match(/[A-Z][a-z]+ [A-Z][a-z]+/g) ?? [];
+    const toks = [nifTok, ibanTok, ...parties].filter(Boolean) as string[];
+    const pairs = toks.map((t) => [t, deanonymize(t, r.handle)] as const);
+    const seps = [' ', '.', String.fromCharCode(0xa0), String.fromCharCode(0x2009), '\n', '\r\n'];
+    const words = ['conta', 'ref', 'ok', 'é', '1.234.567', '9', '2024', 'processo', 'o', ',', '.', ' ', '000', 'PT', '\n', '$&', 'end', 'total'];
+    const foreign = ['conta', 'ref', 'total', 'processo', 'end'];
+    const rng = (seed: number) => { let x = seed >>> 0; return () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 4294967296; }; };
+    const problems: string[] = [];
+    for (const seed of [4242, 999, 12345, 77, 314159, 271828, 1, 2718, 161803, 42, 55, 88888]) {
+      const rand = rng(seed);
+      for (let n = 0; n < 400; n++) {
+        const parts: string[] = [];
+        const len = 1 + Math.floor(rand() * 9);
+        for (let i = 0; i < len; i++) {
+          if (rand() < 0.5) {
+            let t = toks[Math.floor(rand() * toks.length)]!;
+            if (rand() < 0.65) { const sep = seps[Math.floor(rand() * seps.length)]!; t = t.includes(' ') ? t.replace(/ /g, sep) : t.replace(/(\d)(?=(\d{3})+$)/g, `$1${sep}`); }
+            parts.push(t);
+          } else parts.push(words[Math.floor(rand() * words.length)]!);
+        }
+        const reply = parts.join(rand() < 0.5 ? ' ' : '');
+        const batch = deanonymize(reply, r.handle);
+        for (const step of [1, 2, 3, 5, 7, 11, 17, 29]) {
+          const stream = streamDetok(r.handle, reply, step);
+          for (const [tok, val] of pairs) {
+            if (stream.includes(tok) && !batch.includes(tok)) problems.push(`LEAK seed${seed} n${n} s${step} ${tok}`); // no worse leak
+            if (val) { const bc = batch.split(val).length - 1; const sc = stream.split(val).length - 1; if (sc < bc) problems.push(`LESS seed${seed} n${n} s${step} ${val}`); } // superset
+          }
+          for (const w of foreign) { if ((batch.split(w).length - 1) !== (stream.split(w).length - 1)) problems.push(`FOREIGN seed${seed} n${n} s${step} ${w} ${JSON.stringify(reply)}`); } // no corruption
+        }
+      }
+    }
+    expect(problems.slice(0, 5)).toEqual([]);
+  });
+});

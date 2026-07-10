@@ -250,16 +250,19 @@ function mapStringLeaves(value: unknown, fn: (s: string) => string): unknown {
  *    false-positive fence. The separator budget in the guard (0-3) covers the gap budget (0-2)
  *    plus slack, so a digit reachable through the grouping separators always rejects the match.
  */
-const SEP = " \\t\\u00A0\\u2009.'\\u2019"; // the grouping-separator class contents (regex-source)
+// The grouping-separator class (regex-source). MUST stay in sync with the streaming `isSep`
+// predicate below — a mismatch makes streaming hold a run the regex cannot match. Includes
+// newlines so a digit token wrapped across lines (200\n000\n005) restores like any other reflow.
+const SEP = " \\t\\n\\r\\u00A0\\u2009.'\\u2019";
 const DIGIT_GAP = `[${SEP}]{0,2}`; // between two digits
 const WORD_GAP = '[\\s\\u00A0]{1,4}'; // where the token has a literal space (name wrap)
 const PLAIN_GAP = '[ \\u00A0]{0,2}'; // between other adjacent chars
 const isDigit = (c: string): boolean => c >= '0' && c <= '9';
 const reEsc = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Build the tolerant matcher for one token, or null if the token is a single char (nothing to
- *  reflow between). The regex captures the token's chars in order with bounded separator gaps. */
-function tolerantTokenRe(token: string): RegExp | null {
+/** The tolerant match BODY (no edge guards) for one token, or null for a single-char token. The
+ *  body matches the token's chars in order with bounded separator gaps. */
+function tolerantBody(token: string): string | null {
   if (token.length < 2) return null;
   const chars = [...token];
   let body = reEsc(chars[0]!);
@@ -274,18 +277,37 @@ function tolerantTokenRe(token: string): RegExp | null {
     // a literal space in the token is consumed by the gap itself, so don't also emit it
     body += (cur === ' ' ? '' : gap + reEsc(cur));
   }
-  // Digit-edge guards (variable-length lookaround, V8): reject a match whose flank reaches a
-  // digit through 0-3 separators, so the token digits inside a LONGER grouped number
-  // (1.234.567 / 9.200.000.005 / 9..200.000.005) are left byte-exact. The 0-3 budget covers the
-  // guard-blind case where the model doubled a separator, which a fixed 1-separator guard missed.
-  const startDigit = isDigit(chars[0]!);
-  const endDigit = isDigit(chars[chars.length - 1]!);
-  const lead = startDigit ? `(?<![0-9][${SEP}]{0,3})` : '';
-  const trail = endDigit ? `(?![${SEP}]{0,3}[0-9])` : '';
+  return body;
+}
+
+/** Build the GUARDED tolerant matcher (the one that actually replaces), or null. Digit-edge guards
+ *  (variable-length lookaround, V8) reject a match whose flank reaches a digit through 0-3
+ *  separators, so the token digits inside a LONGER grouped number (1.234.567 / 9.200.000.005 /
+ *  9..200.000.005) are left byte-exact. The 0-3 budget covers the guard-blind case where the model
+ *  doubled a separator, which a fixed 1-separator guard missed. */
+function tolerantTokenRe(token: string): RegExp | null {
+  const body = tolerantBody(token);
+  if (body === null) return null;
+  const chars = [...token];
+  const lead = isDigit(chars[0]!) ? `(?<![0-9][${SEP}]{0,3})` : '';
+  const trail = isDigit(chars[chars.length - 1]!) ? `(?![${SEP}]{0,3}[0-9])` : '';
   try {
     return new RegExp(lead + body + trail, 'g');
   } catch {
     return null; // a token that cannot form a valid pattern falls back to exact-only
+  }
+}
+
+/** The BARE (guard-less) tolerant matcher — where a token's body sits regardless of the edge
+ *  guards. Streaming uses it to decide the hold: a cut must never land inside/abutting a token's
+ *  body, because whether the guard accepts the match depends on chars that may still be arriving. */
+function bareTokenRe(token: string): RegExp | null {
+  const body = tolerantBody(token);
+  if (body === null) return null;
+  try {
+    return new RegExp(body, 'g');
+  } catch {
+    return null;
   }
 }
 
@@ -343,10 +365,13 @@ export function createDetokenizer(handle: VaultHandle): { push(chunk: string): s
       || c === '.' || c === "'" || code === 0x2019;
   };
 
-  /** Could `suffix` be an in-progress REFLOWED token (hold it for the next chunk)? Walk the suffix
-   *  consuming each token's chars in order; a token space matches a RUN of >=1 separators and then
-   *  advances past the space. A hold is warranted if the whole suffix is consumed with token chars
-   *  remaining. (No compact-length early-out: a reflowed suffix is longer than the compact token.) */
+  /** Could `suffix` be an in-progress OR just-completed REFLOWED token that future input could
+   *  still change (extend or disambiguate)? Walk the suffix consuming each token's chars in order;
+   *  a token space matches a RUN of >=1 separators then advances past the space. Held when the whole
+   *  suffix is consumed with token chars still remaining (partial) OR the token was fully consumed
+   *  exactly at the suffix end (complete-at-edge — a following digit could reject it, or a cut here
+   *  would dismember a letter-head token like an IBAN). No compact-length early-out: a reflowed
+   *  suffix is longer than the compact token. */
   const couldBeTolerantPrefix = (suffix: string): boolean => {
     for (const [token] of tokens) {
       let ti = 0;
@@ -361,40 +386,97 @@ export function createDetokenizer(handle: VaultHandle): { push(chunk: string): s
         if (isSep(suffix[si]!)) { si++; continue; } // an inserted grouping separator between non-space chars
         ok = false; break;
       }
-      if (ok && si === suffix.length && ti < token.length) return true; // consumed all, token remains
+      // partial (ti < len) OR complete-exactly-at-edge (ti === len, si === len): both must be held.
+      if (ok && si === suffix.length && ti > 0) return true;
     }
     return false;
   };
 
-  /** A trailing digit-run (starts at a digit, all digits/separators) — the edge-guard left-context
-   *  for a following token, or a completed token a following digit could extend. */
-  const isDigitRun = (suffix: string): boolean => {
-    if (!isDigit(suffix[0]!)) return false;
-    for (const c of suffix) if (!isDigit(c) && !isSep(c)) return false;
-    return true;
+  const digitRelevant = (c: string | undefined): boolean => c !== undefined && (isDigit(c) || isSep(c));
+  const GUARD_MARGIN = 4; // the edge-guard lookaround width: a digit reachable through <=3 separators
+
+  /** The start offset of a token BODY (guard-less) that either STRADDLES `cut` (start < cut < end)
+   *  or ENDS exactly at `cut` with a digit-relevant char immediately after — in both cases the cut
+   *  would expose a match whose guard verdict depends on chars that may still be arriving, so it
+   *  must be pulled back before the body. Uses the BARE matcher precisely because the guarded one
+   *  would hide the body when a following digit rejects it. -1 if none. */
+  const matchAcross = (buf: string, cut: number): number => {
+    let best = -1;
+    for (const [token] of tokens) {
+      const re = bareTokenRe(token);
+      if (!re) continue;
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(buf)) !== null) {
+        const s = m.index;
+        const e = s + m[0].length;
+        const straddles = s < cut && cut < e;
+        const endsAtWithDigitTail = e === cut && digitRelevant(buf[cut]);
+        if ((straddles || endsAtWithDigitTail) && (best < 0 || s < best)) best = s;
+        if (m.index === re.lastIndex) re.lastIndex++; // zero-width guard
+      }
+    }
+    return best;
   };
 
-  /** Length of the longest UNSAFE trailing suffix of `buf` (held for the next chunk). */
+  /** Length of the longest UNSAFE trailing suffix of `buf` (held for the next chunk). Two layers:
+   *  (1) a partial/complete-at-edge reflowed token, plus a short trailing digit-relevant run for
+   *  the NEXT token's edge-guard left-context; then (2) pull the cut back before ANY complete
+   *  tolerant match it would land inside or abut with a digit tail — so a token is never
+   *  dismembered (IBAN/CC letter-head tokens) and a real value is never spliced into a longer run. */
   const unsafeSuffixLen = (buf: string): number => {
-    const maxHold = Math.min(widenedMax, buf.length);
-    for (let k = maxHold; k >= 1; k--) {
-      const suf = buf.slice(buf.length - k);
-      if (couldBeTolerantPrefix(suf) || isDigitRun(suf)) return k;
+    const cap = Math.min(widenedMax, buf.length);
+    let hold = 0;
+    for (let k = cap; k >= 1; k--) {
+      if (couldBeTolerantPrefix(buf.slice(buf.length - k))) { hold = k; break; }
     }
-    return 0;
+    // The maximal trailing digit-relevant run (capped at widenedMax for the no-token / pure-digit
+    // case, so memory stays bounded): a digit token echoed at the tail must stay whole and see the
+    // following digits that decide its guard, rather than being emitted before they arrive.
+    let dr = 0;
+    for (let k = 1; k <= cap; k++) {
+      if (digitRelevant(buf[buf.length - k])) dr = k; else break;
+    }
+    hold = Math.max(hold, dr);
+    void GUARD_MARGIN;
+    // (2) never cut inside/abutting a bare token body — bounded iteration; a straddled/abutted
+    // match extends the hold to its start, so a reflowed digit token is never emitted before the
+    // char that decides its guard, and a letter-head token (IBAN/CC) is never dismembered.
+    let cut = buf.length - hold;
+    for (let guard = 0; guard <= tokens.length + 4; guard++) {
+      const start = matchAcross(buf, cut);
+      if (start < 0 || start >= cut) break;
+      cut = start;
+    }
+    return buf.length - cut;
+  };
+
+  // Last few chars of already-EMITTED (restored) output, prepended as edge-guard LEFT context when
+  // replacing the next stable region. Already-emitted output is restored VALUES, so it is
+  // token-free — its replaced form equals itself and it strips back off cleanly. Without it, a
+  // token adjacent to a just-emitted value would not see that value's trailing digit and its lead
+  // guard would wrongly accept, diverging from batch. MARGIN covers the guard lookbehind width.
+  const CTX_MARGIN = 8;
+  let leftCtx = '';
+  const emitStable = (stable: string): string => {
+    const replaced = replaceTokens(leftCtx + stable, tokens);
+    const out = replaced.slice(leftCtx.length); // leftCtx is token-free -> unchanged by replaceTokens
+    leftCtx = (leftCtx + out).slice(-CTX_MARGIN);
+    return out;
   };
 
   return {
     push(chunk: string): string {
       const buf = carry + chunk;
       const hold = unsafeSuffixLen(buf);
-      const stable = buf.slice(0, buf.length - hold); // full left context; no match straddles the cut
+      const stable = buf.slice(0, buf.length - hold); // no match straddles the cut
       carry = buf.slice(buf.length - hold); // kept RAW for the next chunk's guards
-      return replaceTokens(stable, tokens);
+      return emitStable(stable);
     },
     end(): string {
-      const out = replaceTokens(carry, tokens);
+      const out = emitStable(carry);
       carry = '';
+      leftCtx = '';
       return out;
     },
   };
