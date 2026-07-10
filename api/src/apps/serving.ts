@@ -35,7 +35,8 @@ import { lookupShareable } from './share-lookup.js';
 import { injectAppContext } from './injected-context.js';
 import { listDemoCards, getDemoSpec, demoAssetsDir } from '../services/demo-registry.js';
 import { resolveWithinJail } from '../services/safe-path.js';
-import { artifacts } from '../data/stores.js';
+import { artifacts, jobs } from '../data/stores.js';
+import type { Doc } from '../data/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +64,53 @@ function resolveAppDistDir(appId: string): string | null {
   if (!app) return null;
   if (!existsSync(app.distDir)) return null;
   return app.distDir;
+}
+
+interface ServedJobRow extends Doc { status?: string; artifactId?: string; createdAt?: string; error?: { code: string; message: string } }
+
+/**
+ * The served-app build disposition for an artifact (F7). Distinguishes a genuinely FAILED build
+ * with nothing good to serve from a mid-build window and from a failed REBUILD over a previously
+ * good app. Returns `failed` ONLY when no build ever completed AND the most recent build failed —
+ * then serving shows an honest failed-state page instead of a scaffold shell or a "Building…"
+ * spinner forever. A prior completed build (stale-good) always wins: its dist keeps serving.
+ */
+async function servedBuildDisposition(artifactId: string): Promise<'failed' | 'ok' | 'building'> {
+  const rows = (await jobs.find({ artifactId })) as ServedJobRow[];
+  if (rows.length === 0) return 'building'; // no build history -> not our failed state
+  if (rows.some((j) => j.status === 'completed')) return 'ok'; // a prior good build exists (stale-good wins)
+  const latest = rows.reduce((a, b) => ((a.createdAt ?? '') >= (b.createdAt ?? '') ? a : b));
+  return latest.status === 'failed' ? 'failed' : 'building';
+}
+
+/**
+ * The honest "build failed" state (F7): a failed build must NOT serve a scaffold shell or spin on
+ * "Building…" forever. Never cacheable. Assets get a 503 plain-text; navigations get a 200 HTML
+ * page stating the build failed — no auto-refresh loop, no bundle references (the error DETAIL is
+ * F8's user-grade-error concern; this page just stops the lie).
+ */
+function sendAppBuildFailedResponse(req: Request, res: Response): void {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  if (ASSET_EXT_RE.test(req.path)) {
+    res.status(503).type('text/plain').send('/* app build failed */');
+    return;
+  }
+  res.status(200).setHeader('Content-Type', 'text/html').send(`<!DOCTYPE html>
+<html lang="pt"><head><meta charset="utf-8"><title>A construção falhou</title>
+<style>
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; font-family:system-ui,sans-serif; background:#fafafa; color:#525252; }
+  .container { text-align:center; max-width:28rem; padding:1.5rem; }
+  h1 { font-size:1.25rem; color:#b91c1c; margin:0 0 0.5rem; }
+  p { font-size:0.875rem; margin:0.25rem 0; }
+</style>
+</head><body>
+<div class="container">
+  <h1>A construção falhou</h1>
+  <p>Não foi possível construir esta aplicação.</p>
+  <p>Reveja o pedido e tente construir novamente.</p>
+</div>
+</body></html>`);
 }
 
 /**
@@ -280,6 +328,16 @@ export function servingRouter(deps: ServingDeps): Router {
         }
         // Owner: fall through to static serving below.
       }
+    }
+
+    // Honest failed-build state (F7): before serving anything, if this artifact's build genuinely
+    // FAILED (never activated, no build ever completed, latest build failed) show a failed-state
+    // page rather than a scaffold shell (a registered failed dist) or a "Building…" spinner
+    // forever. A prior completed build (stale-good) or an in-flight build is NOT gated here.
+    const failArtifact = (await artifacts.get(canonicalAppId)) as (Doc & { status?: string }) | null;
+    if (failArtifact && failArtifact.status !== 'active' && (await servedBuildDisposition(canonicalAppId)) === 'failed') {
+      sendAppBuildFailedResponse(req, res);
+      return;
     }
 
     let distDir = resolveAppDistDir(appId);

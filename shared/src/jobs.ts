@@ -11,6 +11,9 @@ export const Job = z
     artifactId: z.string().optional(),
     slug: z.string().optional(),
     createdAt: z.string(),
+    /** The terminal failure cause (F7): the record has always persisted it, but jobView omitted
+     *  it, so a failed job looked cause-less to clients. Present only on a failed job. */
+    error: z.object({ code: z.string(), message: z.string() }).optional(),
   })
   .passthrough();
 export type Job = z.infer<typeof Job>;

@@ -61,6 +61,7 @@ export function jobView(j: JobRecord): {
   artifactId?: string;
   slug?: string;
   createdAt: string;
+  error?: { code: string; message: string };
 } {
   return {
     id: j._id,
@@ -68,6 +69,8 @@ export function jobView(j: JobRecord): {
     ...(j.artifactId ? { artifactId: j.artifactId } : {}),
     ...(j.result?.slug ? { slug: j.result.slug } : {}),
     createdAt: j.createdAt,
+    // F7: surface the persisted terminal error so a failed job is not cause-less to clients.
+    ...(j.error ? { error: j.error } : {}),
   };
 }
 
