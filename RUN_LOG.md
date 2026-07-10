@@ -892,3 +892,27 @@ verdict transfers cleanly because no S5 source file changed.
 
 - **/usage crashes.** The route renders the error boundary ("Ocorreu um erro inesperado"); console: `pageerror: Cannot read properties of undefined (reading 'toLocaleString')`, while `GET /billing/usage` and `GET /billing/breakdown` both return 200 with real data (tokensUsed 3734 observed live). Web-side null-safety in the usage page / billing store view. Needs its own regression-test-first slice (unit test the formatter against the real 200 body).
 - **The login landing double-creates sessions.** Two server sessions created 2ms apart on one landing (observed b3ac825a @.167 / 7edccd36 @.169). Suspect: a client double-fire (React StrictMode dev double-mount) of the eager empty-session create. Empty sessions are later reused by activateOrCreateEmptySession, so the impact is dev-DB noise/orphan rows - but the write should be idempotent or effect-guarded. Same discovery class as the message double-write above.
+
+---
+
+## RUN-START — 2026-07-10T10:09:24Z
+- runId: 20260710-100824-ee82acc1 ("batch-final consolidation")
+- brief: Batch Final — Phase 0 reconcile (rc-1 + batch1-* + operator manual fixes + stash@{0} F11) onto batch-final branch; Phase 1 finish batch-1 remainder; Phase 2 F10/F21/F3/F29/F26/F11/F7; Phase 3 J3 build-journey proof x2, stack left running.
+- session: claude-fable-5, effort ultracode, auto mode; host Goncalos-MacBook-Pro.local
+- profile: feature (operator-forced)
+- gatesConfig: test:on adversarialReview:on adversarialTest:on codexSliceReview:conditional(security-boundary) design:on walkthrough:on deliberateRed:off(profile) mutation:off(profile) report:on foundation:on codexCheckpoint:on(degrade-if-no-credits)
+- preflight: asciinema 3.2.0, agg 1.9.0, codex-cli 0.142.5, gitleaks 8.30.1, semgrep 1.168.0, ffmpeg 8.1.1, playwright-cli 0.1.6, node v20.19.4 — all present
+- ground state: main clean @ ef786f8; tags batch1-{f1,f2,f16-f28,f20,f22,f25,routes} all present; stash@{0} = F11 sessions fix; rc-1 tag frozen
+- known-flakes read: e2e legal tail flakes under load; no ci:lane concurrent with colima; boot-b uses dedicated Cortex credential (EKOA_CLAUDE_CREDENTIALS)
+
+## DECISION — 2026-07-10T10:38:58Z (run 20260710-100824-ee82acc1, planning)
+Planning complete. Ground truth: ALL 7 batch-1 slices verified landed+tested on main@ef786f8 (linear, tags ancestors); F11 superseded-fixed by da0d0fa (stash@{0} redundant); F21 verified FIXED at HEAD (resolver wired context.ts:73 <- chat.ts:119). Verified OPEN: F10, F26, F3, F29, F7. Plan: 7 slices (s0-reconcile, s1-f10, s2-f26, s3-f3, s4-f29, s5-f7, s6-proof) on branch batch-final; RUN_SPEC.md with 10-entry assumptions ledger at docs/autothing/runs/20260710-100824-ee82acc1/. Turn cap 250 -> 560 (80x7). Codex NOW AUTHENTICATED (API key) — codexSliceReview runs on S1+S2, run-level checkpoint in final phase (batch-1's degraded cross-model duty carried here). RISK: model credential for Phase-3 live journeys absent on host (no env, no ~/.config/ekoa/claude-credentials.json; keychain exploration classifier-denied by design) — operator to be notified early; S0-S5 unaffected.
+
+## DECISION — 2026-07-10T10:40:54Z (s0-reconcile)
+Stash@{0} (F11 pre-hardening fix) verified SUPERSEDED by da0d0fa (stronger fix + committed 11-case contract test): archived as tag archive/stash-f11-pre-hardening (4d3dca5), stash dropped. LOCAL batch1-f25 tag re-pointed 8a2a67b -> af8b556 (this host had never received the GCP-side re-point). REMOTE tag update remains OPERATOR ACTION (auto-mode classifier denies remote tag rewrites, twice now): run `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` to move the remote tag off the broken 8a2a67b.
+
+## DECISION — 2026-07-10T10:50:15Z (s0-reconcile, wall definition)
+gate:ledger EXCLUDED from this run's deterministic wall: the bare census lane fails on "due (unrun)" for the ported Playwright specs + node e2e drivers, whose execution (--run) IS the committed e2e:server baseline — the batch-2 e2e-harness debt the operator brief explicitly excludes from batch-final ("the full-stack e2e harness ... later"). ci:lane's npm-run-test already executes the shared/api/web vitest suites (including the ledger's frontend_unit rows); the Playwright/driver estate stays owned by docs/release/e2e-harness-remediation-brief.md. Matches batch-1 precedent (its walls were ci:lane + sast + secrets + audit). FLOW_PLAN wall line amended accordingly.
+
+## GATE — s0-reconcile PASSED — 2026-07-10T11:02:16Z (run 20260710-100824-ee82acc1, tag bf-reconciled @ 5cff007)
+Green: FINDINGS.md status column complete (27 rows + 9 post-batch-1 items); F21 wiring test backfilled (4/4, reviewer mutation-verified: wiring deleted -> 2/4 red); stash archived+dropped; local batch1-f25 -> af8b556 (remote = operator action); ci:lane EXIT 0; sast/secrets/audit 0. Fresh-context adversarial review: APPROVE, zero material findings (model claude-fable-5, ~9 min; ran its own clean-worktree typecheck + 58 targeted tests). codexSliceReview skipped (not security-boundary); adversarialTest batched to s6; design kind-skipped. Evidence: slices/s0-reconcile/s0-evidence.cast (sha256 c63c65a1dfa5d9ab2abcb2252d754783d7493e377b49fe95e5540cc265b4af3b).
