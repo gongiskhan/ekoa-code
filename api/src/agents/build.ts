@@ -450,11 +450,18 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     removeRun(jobId);
     // Registo (F3): ONE terminal row per build, from the record's final status (guaranteed-once
     // here — every terminal transition has already patched the store). Metadata is ids/codes only.
-    const finalJob = await getJob(jobId);
-    const st = finalJob?.status;
-    if (st === 'completed') auditBuild(input, 'completed', { jobId, ...(artifactId ? { artifactId } : {}) });
-    else if (st === 'failed') auditBuild(input, 'failed', { jobId, code: finalJob?.error?.code ?? 'UNKNOWN' });
-    else if (st === 'cancelled') auditBuild(input, 'cancelled', { jobId });
+    // Best-effort: a store read that fails (e.g. the DB went away as the process exits) must NOT
+    // become an unhandled rejection on this fire-and-forget pipeline — swallow it like the audit
+    // write itself (a missed bookkeeping row never fails a build).
+    try {
+      const finalJob = await getJob(jobId);
+      const st = finalJob?.status;
+      if (st === 'completed') auditBuild(input, 'completed', { jobId, ...(artifactId ? { artifactId } : {}) });
+      else if (st === 'failed') auditBuild(input, 'failed', { jobId, code: finalJob?.error?.code ?? 'UNKNOWN' });
+      else if (st === 'cancelled') auditBuild(input, 'cancelled', { jobId });
+    } catch {
+      /* terminal-audit read failed (shutdown/db hiccup) — best-effort, never fails the build */
+    }
   }
 
   function clearTimers(): void {

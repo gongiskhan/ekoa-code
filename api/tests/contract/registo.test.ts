@@ -39,7 +39,9 @@ beforeAll(async () => {
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
   port = (server.address() as { port: number }).port;
 }, 60_000);
-afterAll(async () => { __resetTransportForTests(); server.close(); await closeMongo(); await mem.stop(); });
+// Builds fire async (POST /jobs returns 202 while executeBuildJob runs on the fake transport).
+// Drain them before closing mongo so an in-flight build's terminal store reads settle first.
+afterAll(async () => { await new Promise((r) => setTimeout(r, 400)); __resetTransportForTests(); server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   await users.deleteMany({}); await activityLogs.deleteMany({}); await userSettings.deleteMany({});

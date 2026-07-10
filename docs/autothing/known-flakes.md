@@ -18,3 +18,10 @@ from `$EKOA_CLAUDE_CREDENTIALS` or `~/.config/ekoa/claude-credentials.json` (a d
 `claude setup-token` output or an API key) and REFUSES to boot without it; the legacy local-token
 path is behind an explicit `EKOA_USE_LOCAL_CLAUDE_CREDS=1` with loud warnings. Provisioning notes
 live at the top of docs/release/probes/boot-b.mjs.
+
+## CORRECTED (2026-07-10, batch-final): the "ci:lane exit 1 with all tests passing" was NOT a mongo flake
+The repeated 'api vitest exits 1 though every test passed' during batch-final was the F3 terminal-build
+audit: an unguarded getJob() in build.ts's finally, on the fire-and-forget executeBuildJob, threw an
+unhandled rejection when an in-flight job completed after a contract test closed mongo. Fixed (try/catch
++ test-teardown drain) in the s3 review-round. If ci:lane exits 1 with all-green again, first check for
+NEW unguarded async in a fire-and-forget pipeline before assuming mongo-memory-server teardown.

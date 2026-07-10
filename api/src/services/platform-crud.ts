@@ -149,7 +149,12 @@ export async function addMessage(session: SessionDoc, body: { role: unknown; con
  *  detail under the passthrough `metadata` key. */
 export function registoEntry(a: ActivityLogDoc) {
   const meta = (a.metadata ?? {}) as Record<string, unknown>;
-  const targetIds = Object.values(meta).filter((v): v is string => typeof v === 'string');
+  // `targetIds` is the shared contract's `z.array(Id)` — derive it from the ID-keyed metadata
+  // values only (`*Id`/`*id`), so a mode/timestamp/email string is not misrepresented as a target
+  // id (A10). The full detail still rides the passthrough `metadata` key below.
+  const targetIds = Object.entries(meta)
+    .filter(([k, v]) => typeof v === 'string' && /id$/i.test(k))
+    .map(([, v]) => v as string);
   return {
     id: a._id,
     actor: a.userId,
