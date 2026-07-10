@@ -451,32 +451,23 @@ export function createDetokenizer(handle: VaultHandle): { push(chunk: string): s
     return buf.length - cut;
   };
 
-  // Last few chars of already-EMITTED (restored) output, prepended as edge-guard LEFT context when
-  // replacing the next stable region. Already-emitted output is restored VALUES, so it is
-  // token-free — its replaced form equals itself and it strips back off cleanly. Without it, a
-  // token adjacent to a just-emitted value would not see that value's trailing digit and its lead
-  // guard would wrongly accept, diverging from batch. MARGIN covers the guard lookbehind width.
-  const CTX_MARGIN = 8;
-  let leftCtx = '';
-  const emitStable = (stable: string): string => {
-    const replaced = replaceTokens(leftCtx + stable, tokens);
-    const out = replaced.slice(leftCtx.length); // leftCtx is token-free -> unchanged by replaceTokens
-    leftCtx = (leftCtx + out).slice(-CTX_MARGIN);
-    return out;
-  };
-
+  // NB: the stable prefix is replaced on its own — no already-emitted "left context" is prepended.
+  // A prepended-context scheme is UNSOUND (a token could form across the context/stable boundary
+  // and a length-based strip would then cut the shifted replacement). The cost is only that a
+  // reflowed token immediately adjacent to a just-emitted value may be restored where batch left
+  // it tokenized — proven benign by the SECURITY property test (streaming never leaks worse than
+  // batch, always restores a SUPERSET of the user's own values, never corrupts foreign text).
   return {
     push(chunk: string): string {
       const buf = carry + chunk;
       const hold = unsafeSuffixLen(buf);
       const stable = buf.slice(0, buf.length - hold); // no match straddles the cut
       carry = buf.slice(buf.length - hold); // kept RAW for the next chunk's guards
-      return emitStable(stable);
+      return replaceTokens(stable, tokens);
     },
     end(): string {
-      const out = emitStable(carry);
+      const out = replaceTokens(carry, tokens);
       carry = '';
-      leftCtx = '';
       return out;
     },
   };
