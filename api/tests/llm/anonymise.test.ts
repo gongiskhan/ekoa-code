@@ -292,3 +292,101 @@ describe('dual-review hardening: no boundary/format/overlap leak', () => {
     expect(r.text).not.toContain('Petrova');
   });
 });
+
+/**
+ * F26 (batch-final s2) — de-anonymisation is whitespace/format-tolerant on the RETURN path.
+ * A model routinely reformats a token it echoes: a 9-digit NIF token `200000005` comes back
+ * `200 000 005` (thousands spaces) or `200.000.005` (dot grouping); a two-word PARTY/PERSON
+ * token gets its internal space turned into a newline on wrap. The exact-substring detok then
+ * misses it and the user sees the synthetic TOKEN, not their real value. Privacy is unaffected
+ * (egress is tokens-only); this is a RETURN-path correctness fix. Detection/tokenisation are
+ * unchanged — only deanonymize/createDetokenizer gain format tolerance, bounded so unrelated
+ * grouped numbers are never touched.
+ *
+ * All fixtures are SYNTHETIC. The NIF token is minted by the vault (checksum-INVALID by design).
+ */
+describe('F26: whitespace/format-tolerant de-tokenization (return path only)', () => {
+  // Mint a real vault token for a value, then reformat the TOKEN as a model would.
+  const tokenizeAndGrab = (value: string, cls: { deny?: string } = {}) => {
+    const r = anonymize(value, ctx(cls.deny ? { ruleset: { orgId: 'org1', denyList: [cls.deny] } } : {}));
+    // the token is the whole tokenized text minus the surrounding scaffold — anonymize replaces
+    // just the entity, so recover it from the token map
+    return r;
+  };
+
+  it('a NIF token reformatted with THOUSANDS SPACES restores the original', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`O NIF é ${valid}.`, ctx());
+    const token = r.text.match(/\d{9}/)![0]; // the 9-digit NIF token the model would echo
+    const spaced = `${token.slice(0, 3)} ${token.slice(3, 6)} ${token.slice(6)}`; // 200 000 005
+    const reply = `O número de contribuinte é ${spaced}, confirmado.`;
+    expect(deanonymize(reply, r.handle)).toBe(`O número de contribuinte é ${valid}, confirmado.`);
+  });
+
+  it('a NIF token reformatted with DOT GROUPING restores the original', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const dotted = `${token.slice(0, 3)}.${token.slice(3, 6)}.${token.slice(6)}`; // 200.000.005
+    expect(deanonymize(`Consta o ${dotted} no registo.`, r.handle)).toBe(`Consta o ${valid} no registo.`);
+  });
+
+  it('a NIF token reformatted with a NON-BREAKING/THIN space restores the original', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const NBSP = String.fromCharCode(0xa0); const THIN = String.fromCharCode(0x2009);
+    const nbsp = `${token.slice(0, 3)}${NBSP}${token.slice(3, 6)}${THIN}${token.slice(6)}`;
+    expect(deanonymize(`É o ${nbsp}.`, r.handle)).toBe(`É o ${valid}.`);
+  });
+
+  it('a two-word PARTY token wrapped with a NEWLINE restores the original', () => {
+    const r = anonymize('Contrato com a Petrova Holdings hoje', ctx({ ruleset: { orgId: 'org1', denyList: ['Petrova Holdings'] } }));
+    const token = r.text.match(/[A-Z][a-z]+ [A-Z][a-z]+/)![0]; // the "Word Word" party token
+    const wrapped = token.replace(' ', '\n'); // the model wrapped the name at the space
+    expect(deanonymize(`Assinou a ${wrapped} ontem.`, r.handle)).toContain('Petrova Holdings');
+  });
+
+  it('an unrelated grouped number is NEVER touched (no false positive)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    // 1.234.567 is a plain grouped number, not the token — it must survive verbatim
+    const reply = 'O total foi 1.234.567 euros.';
+    expect(deanonymize(reply, r.handle)).toBe(reply);
+  });
+
+  it('a longer digit run EMBEDDING the token digits with separators is NOT partially rewritten (guard)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    // Prepend a digit+separator so the token digits appear inside a LONGER grouped run.
+    const embedded = `9.${token.slice(0, 3)}.${token.slice(3, 6)}.${token.slice(6)}`; // 9.200.000.005
+    const reply = `Ref ${embedded} no processo.`;
+    expect(deanonymize(reply, r.handle)).toBe(reply); // untouched: not our token
+  });
+
+  it('streaming: a SPACE-reformatted token split across chunk boundaries de-tokenizes correctly', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid}`, ctx());
+    const token = r.text.match(/\d{9}/)![0];
+    const spaced = `${token.slice(0, 3)} ${token.slice(3, 6)} ${token.slice(6)}`; // 200 000 005
+    const stream = `Contribuinte ${spaced}, ok.`;
+    // Split at EVERY granularity 1..6: a reflowed token is LONGER than the compact token, so a
+    // long in-progress suffix ("200 000 00") must still be HELD for the next chunk. Finer splits
+    // (esp. 1-2) regress if the straddle-hold prefix check keeps a stale compact-length guard
+    // (batch-final s2 self-caught bug).
+    for (let step = 1; step <= 6; step++) {
+      const detok = createDetokenizer(r.handle);
+      let out = '';
+      for (let i = 0; i < stream.length; i += step) out += detok.push(stream.slice(i, i + step));
+      out += detok.end();
+      expect(out, `split step ${step}`).toBe(`Contribuinte ${valid}, ok.`);
+    }
+  });
+
+  it('the exact-match path still works byte-for-byte (no regression)', () => {
+    const valid = computeValidNif('50000000');
+    const r = anonymize(`NIF ${valid} e outro`, ctx());
+    expect(deanonymize(r.text, r.handle)).toBe(`NIF ${valid} e outro`);
+  });
+});
