@@ -46,7 +46,7 @@ import { api, tryCall, openChatRunStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
 import { copyToClipboard } from "@/lib/clipboard";
-import { sanitizeUserFacingError } from "@/lib/sanitize-error";
+import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
 
 // ============================================
@@ -993,11 +993,14 @@ export default function UnifiedChatPage() {
         // Flush streaming buffer + persist the final assistant turn.
         const buffered = flushStreamingChat(sessionId!);
         const resultText = typeof event.result === "string" ? event.result : "";
-        // Defence-in-depth: never render raw provider/engine error text as the
-        // assistant message (backend already strips this; this catches replays).
-        const finalContent = sanitizeUserFacingError(
-          resultText || buffered || "No response received.",
-          language
+        // A SUCCESSFUL reply is content, never an error — render it. Do NOT run it through the
+        // provider-leak guard (which would replace the whole answer with "temporarily unavailable"
+        // just because it mentions the engine); instead REDACT any engine-identifying terms to the
+        // EKOA brand, so the user keeps their answer and the white-label holds. The persona in
+        // api/src/agents/context.ts is the primary enforcement; this is the client safety net. The
+        // leak guard (whole-message replace) stays on the ERROR path below, where it belongs.
+        const finalContent = redactProviderIdentity(
+          resultText || buffered || "No response received."
         );
         // Local mirror only: the run pipeline persists the assistant turn
         // server-side (ch05 §5.6.1 step 7).

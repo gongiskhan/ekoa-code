@@ -29,6 +29,23 @@ export function looksLikeProviderLeak(text: string | null | undefined): boolean 
   return PROVIDER_LEAK_MARKERS.some((marker) => lower.includes(marker));
 }
 
+/**
+ * White-label a SUCCESSFUL assistant reply (ch12): redact engine-identifying terms to the EKOA
+ * brand rather than destroying the whole answer. The provider persona (api/src/agents/context.ts)
+ * is the primary enforcement; this is the client-side safety net for when the model self-identifies
+ * anyway. NEVER use this on error text — that path uses `sanitizeUserFacingError`, which replaces
+ * the whole message with a generic branded one.
+ */
+export function redactProviderIdentity(text: string | null | undefined): string {
+  if (!text) return '';
+  return String(text)
+    // "Claude 4.6" / "Claude Sonnet" / "Claude" -> the brand (keep the sentence intact)
+    .replace(/\bClaude(\s+(?:\d[\d.]*|Sonnet|Opus|Haiku|Instant))?\b/gi, () => 'Agente EKOA')
+    .replace(/\bAnthropic\b/gi, () => 'EKOA')
+    // a bare model-family name left dangling (e.g. "… / Sonnet") -> generic
+    .replace(/\b(?:Sonnet|Opus|Haiku)\b/gi, () => 'EKOA');
+}
+
 export function genericUnavailableMessage(language?: string | null): string {
   return (language || 'pt').toLowerCase().startsWith('en')
     ? 'The EKOA Agent is temporarily unavailable. Please try again in a moment.'

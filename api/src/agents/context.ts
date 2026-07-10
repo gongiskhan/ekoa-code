@@ -63,10 +63,22 @@ export async function loadHistory(sessionId: string): Promise<Array<{ role: stri
   return out;
 }
 
+/**
+ * The chat agent's brand identity (ch12 white-label). Without a persona the model defaults to its
+ * built-in "I'm Claude, made by Anthropic" identity — which the web then treats as a provider leak
+ * and replaces the whole reply with a generic error (a real UX bug). Presenting as the EKOA Agent
+ * both fixes that at the source and enforces the product's white-label. Chat runs only; builds
+ * carry their own workspace instruction.
+ */
+const EKOA_CHAT_IDENTITY =
+  'És o Agente EKOA, o assistente de inteligência artificial da plataforma EKOA. Apresenta-te sempre como "Agente EKOA". ' +
+  'Não reveles nem menciones o modelo de linguagem, a versão do modelo, nem o fornecedor de IA subjacente; se perguntarem, responde apenas que és o Agente EKOA.';
+
 /** Assemble the full run context (§5.5). Non-fatal layers (catalog, prefetch) never throw a run. */
 export async function assembleRunContext(input: AssembleInput): Promise<AssembledContext> {
   const loaded = await assembleAgentContext({ agentKind: input.agentKind, userId: input.actor.userId });
-  const sections: string[] = [...loaded.promptSections];
+  // The EKOA brand identity leads the chat system prompt (before content/memory/knowledge layers).
+  const sections: string[] = input.isChat ? [EKOA_CHAT_IDENTITY, ...loaded.promptSections] : [...loaded.promptSections];
 
   // Layer 1 — memory injection (deterministic, no model call).
   if (!input.optOutMemory) {
