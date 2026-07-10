@@ -256,9 +256,15 @@ export async function planFromGoal(
 
   if (result.status === 'failed') {
     // F29: the model could not produce a usable plan. A STRUCTURED outcome (mirrors the
-    // awaiting_integration branch): nothing persisted, no run started, an honest reason surfaced —
-    // NOT a thrown Error the route would mask as an opaque 500.
-    return { plan: { status: 'plan_failed', steps: [], reason: result.violations.join('; ') }, rehearsing: false };
+    // awaiting_integration branch): nothing persisted, no run started — NOT a thrown Error the
+    // route would mask as an opaque 500. The wire `reason` is a fixed GENERIC message: the detailed
+    // violations can quote raw model output (a hallucinated auth header / api-key), so they stay
+    // server-side only (Codex checkpoint finding), never returned to the client.
+    console.warn(`[automation] plan-from-goal failed:\n${result.violations.map((v) => `- ${v}`).join('\n')}`);
+    return {
+      plan: { status: 'plan_failed', steps: [], reason: 'O modelo não conseguiu criar um plano válido. Reformule o objetivo e tente novamente.' },
+      rehearsing: false,
+    };
   }
   if (result.status !== 'ok') {
     // Needs an integration: no automation persisted, no run started.

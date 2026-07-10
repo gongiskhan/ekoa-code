@@ -54,6 +54,21 @@ export async function getJob(id: string): Promise<JobRecord | null> {
   return (await jobs.get(id)) as JobRecord | null;
 }
 
+/**
+ * Safe, fixed user-facing message per terminal error CODE. jobView NEVER returns the persisted
+ * `error.message` on the wire: a VERIFY_FAILED message embeds the verifier's model-derived note,
+ * which can contain app-data PII (a NIF/IBAN the verifier quoted). The client gets the honest
+ * cause via the structured `code` + a generic PT message; the raw note stays server-side.
+ */
+const SAFE_ERROR_MESSAGE: Record<string, string> = {
+  BUILD_UNFULFILLED: 'A construção não produziu a aplicação pedida.',
+  VERIFY_FAILED: 'A verificação da aplicação falhou.',
+  BILLING_BLOCKED: 'A faturação está bloqueada.',
+  ADAPTER_ERROR: 'Ocorreu um erro ao contactar o modelo.',
+  PIPELINE_STUCK: 'A construção terminou num estado inconsistente.',
+  ORPHANED: 'A construção foi interrompida por um reinício do processo.',
+};
+
 /** Wire-facing projection (`shared/jobs.ts` Job) of a persisted record. */
 export function jobView(j: JobRecord): {
   id: string;
@@ -69,8 +84,10 @@ export function jobView(j: JobRecord): {
     ...(j.artifactId ? { artifactId: j.artifactId } : {}),
     ...(j.result?.slug ? { slug: j.result.slug } : {}),
     createdAt: j.createdAt,
-    // F7: surface the persisted terminal error so a failed job is not cause-less to clients.
-    ...(j.error ? { error: j.error } : {}),
+    // F7: surface the CAUSE (structured code + a safe generic message) so a failed job is not
+    // cause-less — NEVER the raw persisted message, which can carry model-derived PII (Codex
+    // checkpoint finding). The detailed message stays server-side on the JobRecord.
+    ...(j.error ? { error: { code: j.error.code, message: SAFE_ERROR_MESSAGE[j.error.code] ?? 'A construção falhou.' } } : {}),
   };
 }
 

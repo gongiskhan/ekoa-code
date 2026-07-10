@@ -67,8 +67,20 @@ describe('F7: failed build serves an honest failed-state page + jobView.error on
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(Job.safeParse(body).success, JSON.stringify(body)).toBe(true);
-    expect((body.error as { code?: string })?.code).toBe('BUILD_UNFULFILLED');
-    expect((body.error as { message?: string })?.message).toBe('A construção falhou.');
+    expect((body.error as { code?: string })?.code).toBe('BUILD_UNFULFILLED'); // honest cause via the code
+    // the wire message is a SAFE generic (never the raw persisted message, which can carry a
+    // model-derived note with PII — Codex checkpoint finding)
+    expect((body.error as { message?: string })?.message).toBe('A construção não produziu a aplicação pedida.');
+  });
+
+  it('a VERIFY_FAILED job never leaks the verifier note (which can carry PII) on the wire', async () => {
+    // the persisted message embeds a model-derived note; jobView must return only a safe generic.
+    await jobs.put({ _id: 'jobV', kind: 'build', status: 'failed', userId: 'owner1', artifactId: 'artV', request: { description: 'x', language: 'pt' }, error: { code: 'VERIFY_FAILED', message: 'A verificação falhou. Campo para PT50000201231234567895417 em falta.' }, createdAt: 'x' } as never);
+    const t = await tokenFor('owner1');
+    const body = (await (await api('/api/v1/jobs/jobV', { headers: { authorization: `Bearer ${t}` } })).json()) as Record<string, unknown>;
+    expect((body.error as { code?: string })?.code).toBe('VERIFY_FAILED');
+    expect((body.error as { message?: string })?.message).toBe('A verificação da aplicação falhou.');
+    expect(JSON.stringify(body)).not.toContain('PT50000201231234567895417'); // the IBAN never reaches the wire
   });
 
   it('a failed build with a registered SCAFFOLD dist serves the honest failed page, NOT the scaffold shell', async () => {
