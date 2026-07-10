@@ -3,11 +3,22 @@ import { ALL_ENDPOINTS, allEndpointsFlat } from '@ekoa/shared';
 
 /**
  * Schema-coverage gate (ch13 §13.5 item 3, §14.2.5). Every endpoint descriptor in `shared/`
- * is accounted for exactly once: either COVERED (a contract test exercises it now) or PENDING
- * (a committed allowlist of not-yet-landed endpoints). The gate fails if any descriptor is in
- * NEITHER list — so adding an endpoint/schema to `shared/` without a contract test AND without
- * allowlisting it is an automatic build failure (this is the ch13 §13.11 item-5 deliberate-red
- * mechanism). PENDING must SHRINK at every domain gate and be EMPTY at G9.
+ * is accounted for exactly once: either COVERED or PENDING (a committed allowlist of
+ * not-yet-landed endpoints). The gate fails if any descriptor is in NEITHER list — so adding
+ * an endpoint/schema to `shared/` without accounting for it is an automatic build failure
+ * (the ch13 §13.11 item-5 deliberate-red mechanism). PENDING must SHRINK at every domain gate
+ * and be EMPTY at G9.
+ *
+ * KNOWN LIMIT — this gate does NOT verify that a test exercises a COVERED endpoint. It asserts
+ * only (a) every COVERED string names a real descriptor and (b) the PENDING count is the pinned
+ * constant. COVERED is a hand-maintained CLAIM: adding a key with zero tests passes. ch13 §13.5
+ * specifies a run-wide registry of actually-exercised schemas; that mechanism is not implemented.
+ * This has already shipped real bugs twice — F22 (`memoryView` omitted required fields, /memory
+ * rendered zero cards) and the sessions family (`sessionView` omitted createdAt/updatedAt and
+ * emitted `title` for `name`; message bodies emitted `_id`/`timestamp` for `id`/`createdAt`) —
+ * both while their keys sat in COVERED and no test ever requested the path. An audit on
+ * 2026-07-10 found 27 of 154 COVERED keys unexercised (RUN_LOG). Do not read a green gate here
+ * as evidence that an endpoint's body matches its schema.
  */
 
 // Endpoints with a committed contract/e2e test now (G2 auth + G3 CRUD domains).

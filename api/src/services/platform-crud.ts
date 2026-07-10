@@ -49,26 +49,77 @@ export async function patchUserSettings(userId: string, patch: Record<string, un
 }
 
 // ---- Sessions (user-scoped; ownership miss → null → uniform 404) ----
-export const sessionView = (s: SessionDoc) => ({ id: s._id, userId: s.userId, title: s.title, status: s.status, messageCount: s.messageCount ?? 0 });
+// The store keeps the carried shapes (`title`, message `timestamp`, `_id`); ch03 owns the
+// API-visible reshaping (ch04 §4.3.1 preamble), so the views below are the ONLY place the
+// wire names (`name`, `createdAt`, `id`) are produced. They must satisfy the shared
+// Session / SessionSummary / SessionMessage schemas exactly — the web validates every
+// response against them and treats a mismatch as a failed call.
+export const sessionView = (s: SessionDoc) => ({
+  id: s._id,
+  userId: s.userId,
+  ...(s.title != null ? { name: s.title } : {}),
+  ...(s.type != null ? { type: s.type } : {}),
+  ...(s.artifactId != null ? { artifactId: s.artifactId } : {}),
+  status: s.status,
+  messageCount: s.messageCount ?? 0,
+  createdAt: s.createdAt,
+  updatedAt: s.updatedAt,
+});
+/** Wire view of a message doc: `_id`→`id`, `timestamp`→`createdAt`. Built field-by-field so no
+ *  store internal (`_rev`, and anything added later) can leak onto the wire. */
+export const messageView = (m: Doc) => {
+  const d = m as Doc & { sessionId?: string; role?: unknown; content?: unknown; metadata?: Record<string, unknown>; timestamp?: string };
+  return {
+    id: d._id,
+    sessionId: d.sessionId,
+    role: d.role,
+    content: d.content,
+    ...(d.metadata ? { metadata: d.metadata } : {}),
+    createdAt: d.timestamp,
+  };
+};
 export const listSessions = (userId: string) => sessions.find({ userId });
 export async function ownedSession(userId: string, id: string): Promise<SessionDoc | null> {
   const s = await sessions.get(id);
   return s && s.userId === userId ? s : null;
 }
-export async function createSession(userId: string, name: string | undefined, deps: Deps): Promise<SessionDoc> {
+export async function createSession(
+  userId: string,
+  input: { name?: string; type?: string; artifactId?: string },
+  deps: Deps,
+): Promise<SessionDoc> {
   const id = deps.genId();
-  const doc: SessionDoc = { _id: id, userId, title: name, status: 'active', messageCount: 0 };
+  const ts = new Date(deps.now()).toISOString();
+  const doc: SessionDoc = {
+    _id: id,
+    userId,
+    ...(input.name !== undefined ? { title: input.name } : {}),
+    ...(input.type !== undefined ? { type: input.type } : {}),
+    ...(input.artifactId !== undefined ? { artifactId: input.artifactId } : {}),
+    status: 'active',
+    messageCount: 0,
+    createdAt: ts,
+    updatedAt: ts,
+  };
   await sessions.insert(doc);
   return doc;
 }
-export const updateSession = (id: string, patch: Partial<SessionDoc>) => sessions.update(id, (x) => ({ ...x, ...patch }));
+/** Rename and/or touch. An empty patch stamps `updatedAt` only (ch03 §3.8.6, carried). */
+export const updateSession = (id: string, patch: { name?: string }, deps: Deps) =>
+  sessions.update(id, (x) => ({
+    ...x,
+    ...(patch.name !== undefined ? { title: patch.name } : {}),
+    updatedAt: new Date(deps.now()).toISOString(),
+  }));
 export const deleteSession = (id: string) => sessions.delete(id);
 export const listMessages = (sessionId: string) => messages.find({ sessionId }, { timestamp: 1 });
 export async function addMessage(session: SessionDoc, body: { role: unknown; content: unknown; metadata?: unknown }, deps: Deps): Promise<Doc> {
   const id = deps.genId();
-  const doc: Doc = { _id: id, sessionId: session._id, role: body.role, content: body.content, timestamp: new Date(deps.now()).toISOString(), ...(body.metadata ? { metadata: body.metadata } : {}) };
+  const now = new Date(deps.now()).toISOString();
+  const doc: Doc = { _id: id, sessionId: session._id, role: body.role, content: body.content, timestamp: now, ...(body.metadata ? { metadata: body.metadata } : {}) };
   await messages.insert(doc);
-  await sessions.update(session._id, (x) => ({ ...x, messageCount: (x.messageCount ?? 0) + 1 }));
+  // A new turn touches the session: the web sorts the session list by `updatedAt`.
+  await sessions.update(session._id, (x) => ({ ...x, messageCount: (x.messageCount ?? 0) + 1, updatedAt: now }));
   return doc;
 }
 

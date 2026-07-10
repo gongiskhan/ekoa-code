@@ -40,7 +40,7 @@ const chatEventsFor = (runId: string) => events.filter((e) => e.stream === 'chat
 describe('chat run pipeline + streaming contract', () => {
   beforeAll(() => bootAgentTestDb('ekoa_chat_lifecycle'));
   afterAll(shutdownAgentTestDb);
-  beforeEach(async () => { await seedUser('u1', 'o1'); await sessions.insert({ _id: 's1', userId: 'u1', title: 't', status: 'active', messageCount: 0 }); });
+  beforeEach(async () => { await seedUser('u1', 'o1'); await sessions.insert({ _id: 's1', userId: 'u1', title: 't', status: 'active', messageCount: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }); });
   afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await messages.deleteMany({}); await sessions.deleteMany({}); });
 
   it('completes with the FULL concatenated stream: complete.result + the persisted assistant message equal the joined deltas, never the final-frame tail (F20)', async () => {

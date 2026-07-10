@@ -36,9 +36,14 @@ export interface RevokedTokenDoc extends Doc {
 }
 export interface SessionDoc extends Doc {
   userId: string;
+  /** Store-side name (ch04 §4.3.1 carries `title`); the wire field is `name` (ch03 §3.8.6). */
   title?: string;
+  type?: string;
+  artifactId?: string;
   status?: string;
   messageCount?: number;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface ActivityLogDoc extends Doc {
   userId: string;

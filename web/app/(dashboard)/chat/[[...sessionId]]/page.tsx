@@ -959,6 +959,9 @@ export default function UnifiedChatPage() {
       chatTraceIdRef.current = runId;
 
       const stream = openChatRunStream(runId);
+      // A terminal state must settle the UI exactly once, whether it arrives as a
+      // live SSE event or via the `ready` re-sync below.
+      let settled = false;
 
       const finishStream = () => {
         stream.close();
@@ -968,21 +971,9 @@ export default function UnifiedChatPage() {
         chatTraceIdRef.current = null;
       };
 
-      stream.on("text_chunk", (event) => {
-        if (event.text) appendStreamingChat(sessionId!, event.text);
-      });
-
-      stream.on("tool_event", (event) => {
-        if (event.phase === "started") {
-          const now = Date.now();
-          if (now - chatActivityThrottleRef.current >= 2000) {
-            chatActivityThrottleRef.current = now;
-            setActivityMessage(sessionId!, getFriendlyToolActivityBrief(event.tool, event.args ?? {}));
-          }
-        }
-      });
-
-      stream.on("complete", (event) => {
+      const handleComplete = (event: { result?: unknown; delegate?: { request: Record<string, unknown> } }) => {
+        if (settled) return;
+        settled = true;
         finishStream();
 
         // Handle delegation BEFORE flushing — if the chat-agent delegated to a
@@ -1012,9 +1003,11 @@ export default function UnifiedChatPage() {
           content: finalContent,
           metadata: { isEssential: true, type: "text" },
         });
-      });
+      };
 
-      stream.on("error", (event) => {
+      const handleError = (event: { message?: string }) => {
+        if (settled) return;
+        settled = true;
         finishStream();
         clearStreamingChat(sessionId!);
         // Strip any provider/engine leak; fall back to a generic branded message.
@@ -1028,6 +1021,50 @@ export default function UnifiedChatPage() {
           content: errorText,
           metadata: { isEssential: true, type: "status" },
         });
+      };
+
+      stream.on("text_chunk", (event) => {
+        if (event.text) appendStreamingChat(sessionId!, event.text);
+      });
+
+      stream.on("tool_event", (event) => {
+        if (event.phase === "started") {
+          const now = Date.now();
+          if (now - chatActivityThrottleRef.current >= 2000) {
+            chatActivityThrottleRef.current = now;
+            setActivityMessage(sessionId!, getFriendlyToolActivityBrief(event.tool, event.args ?? {}));
+          }
+        }
+      });
+
+      stream.on("complete", handleComplete);
+
+      stream.on("error", handleError);
+
+      // A run that settles BEFORE the EventSource attaches never reaches this
+      // client as a live event, and the ring replays only on Last-Event-ID
+      // resume (ch03 §3.6) — a fast-failing run left the spinner up forever.
+      // On every `ready` (first attach and reconnects, which lose the ring
+      // position), re-sync the terminal state via GET /chat/runs/:id
+      // (mirrors the FC-026 re-sync in useAutomationRun).
+      stream.on("ready", () => {
+        void api.chat
+          .getRun({ id: runId })
+          .then((run) => {
+            if (settled) return;
+            if (run.status === "error") {
+              handleError({ message: run.error?.message });
+            } else if (run.status === "complete") {
+              handleComplete({ result: run.result });
+            } else if (run.status === "cancelled") {
+              settled = true;
+              finishStream();
+              clearStreamingChat(sessionId!);
+            }
+          })
+          .catch(() => {
+            /* transient — live events remain the primary path */
+          });
       });
 
       // Register the stop handle immediately so the Stop button works even before

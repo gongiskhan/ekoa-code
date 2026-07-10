@@ -13,16 +13,18 @@ export interface PersistDeps {
 }
 
 async function insertMessage(sessionId: string, role: string, content: unknown, deps: PersistDeps, metadata?: Record<string, unknown>): Promise<Doc> {
+  const now = new Date(deps.now()).toISOString();
   const doc: Doc = {
     _id: deps.genId(),
     sessionId,
     role,
     content,
-    timestamp: new Date(deps.now()).toISOString(),
+    timestamp: now,
     ...(metadata ? { metadata } : {}),
   };
   await messagesStore.insert(doc);
-  await sessionsStore.update(sessionId, (s) => ({ ...s, messageCount: (((s as { messageCount?: number }).messageCount ?? 0) + 1) }));
+  // A persisted turn touches the session: the web sorts the session list by `updatedAt`.
+  await sessionsStore.update(sessionId, (s) => ({ ...s, messageCount: (((s as { messageCount?: number }).messageCount ?? 0) + 1), updatedAt: now }));
   return doc;
 }
 
