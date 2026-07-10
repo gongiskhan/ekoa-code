@@ -333,11 +333,16 @@ export function servingRouter(deps: ServingDeps): Router {
     // Honest failed-build state (F7): before serving anything, if this artifact's build genuinely
     // FAILED (never activated, no build ever completed, latest build failed) show a failed-state
     // page rather than a scaffold shell (a registered failed dist) or a "Building…" spinner
-    // forever. A prior completed build (stale-good) or an in-flight build is NOT gated here.
-    const failArtifact = (await artifacts.get(canonicalAppId)) as (Doc & { status?: string }) | null;
-    if (failArtifact && failArtifact.status !== 'active' && (await servedBuildDisposition(canonicalAppId)) === 'failed') {
-      sendAppBuildFailedResponse(req, res);
-      return;
+    // forever. A prior completed build (stale-good) or an in-flight build is NOT gated here. A
+    // store error must NEVER break serving — fall through to the normal path on any failure.
+    try {
+      const failArtifact = (await artifacts.get(canonicalAppId)) as (Doc & { status?: string }) | null;
+      if (failArtifact && failArtifact.status !== 'active' && (await servedBuildDisposition(canonicalAppId)) === 'failed') {
+        sendAppBuildFailedResponse(req, res);
+        return;
+      }
+    } catch {
+      /* disposition check unavailable (store hiccup) — never block serving; fall through */
     }
 
     let distDir = resolveAppDistDir(appId);
