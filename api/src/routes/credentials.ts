@@ -8,7 +8,7 @@ import { Router, type Response } from 'express';
 import { CredentialSetRequest } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { provisionCredential, claudeAuthStatus } from '../llm/index.js';
-import { actorOf, parseBody } from './helpers.js';
+import { actorOf, parseBody, sendError } from './helpers.js';
 
 export function credentialsRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
@@ -18,11 +18,19 @@ export function credentialsRouter(deps: { now: () => number; genId: () => string
     const body = parseBody(res, CredentialSetRequest, req.body);
     if (!body) return;
     const actor = actorOf(req);
-    await provisionCredential(
-      { mode: body.mode, secret: body.secret, refreshToken: body.refreshToken, expiresAt: body.expiresAt },
-      { userId: actor.userId, username: req.user!.username, orgId: actor.orgId },
-      deps,
-    );
+    try {
+      await provisionCredential(
+        { mode: body.mode, secret: body.secret, refreshToken: body.refreshToken, expiresAt: body.expiresAt },
+        { userId: actor.userId, username: req.user!.username, orgId: actor.orgId },
+        deps,
+      );
+    } catch (err) {
+      // A malformed secret (truncated copy with a "…", stray control char) is a CLIENT error
+      // and must say so — silently storing it yields opaque 502s on every model call while
+      // /health still reports configured (live-observed 2026-07-10).
+      sendError(res, 'VALIDATION_FAILED', err instanceof Error ? err.message : 'Credencial inválida.');
+      return;
+    }
     res.json({ ok: true, claudeAuth: claudeAuthStatus() });
   });
 

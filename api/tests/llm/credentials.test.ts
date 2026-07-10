@@ -148,3 +148,21 @@ describe('buildSubprocessEnv scrubs inherited provider env and injects per mode'
     }
   });
 });
+
+describe('provision-time secret validation (header-safety)', () => {
+  it('rejects a secret carrying a truncated-copy ellipsis with a message that says so', async () => {
+    // A secret rides `authorization`/`x-api-key` (ByteString headers): one non-ASCII char and
+    // EVERY model call throws at fetch time as an opaque 502 while /health says configured
+    // (live-observed 2026-07-10: a token pasted from a UI that rendered `sk-ant-oat…`).
+    await expect(setCredential({ mode: 'oauth', secret: 'sk-ant-oat01-abc…xyz' })).rejects.toThrow(/truncated/);
+    expect(claudeAuthStatus().configured).toBe(false); // nothing was stored
+  });
+
+  it('rejects control characters and empty secrets; trims copy-paste whitespace', async () => {
+    await expect(setCredential({ mode: 'api-key', secret: 'sk-ant\u0000key' })).rejects.toThrow(/U\+0000/);
+    await expect(setCredential({ mode: 'api-key', secret: '   ' })).rejects.toThrow(/empty/);
+    // A trailing newline from a shell substitution is the benign classic: trimmed, not rejected.
+    await setCredential({ mode: 'api-key', secret: 'sk-ant-good-key\n' });
+    await expect(getSecret()).resolves.toBe('sk-ant-good-key');
+  });
+});

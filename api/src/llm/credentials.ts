@@ -138,8 +138,28 @@ export async function loadCredential(): Promise<void> {
   }
 }
 
+/**
+ * A provider secret rides HTTP headers (`authorization` / `x-api-key`), which are ByteStrings:
+ * any char outside printable ASCII makes EVERY model call throw at fetch time — surfaced as an
+ * opaque 502 while /health still says configured (live-observed 2026-07-10: a token carrying a
+ * literal U+2026 "…" from a truncated copy). The other classic is a trailing newline from a
+ * shell substitution. Reject at PROVISION TIME with a message that says what happened.
+ */
+function assertHeaderSafeSecret(secret: string): void {
+  if (!secret) throw new Error('credential secret is empty');
+  const bad = [...secret].find((c) => c.charCodeAt(0) < 0x21 || c.charCodeAt(0) > 0x7e);
+  if (bad !== undefined) {
+    const label = bad === '…'
+      ? 'a "…" ellipsis - the token was truncated when copied; re-copy the FULL raw value'
+      : `an invalid character (U+${bad.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')})`;
+    throw new Error(`credential secret contains ${label}`);
+  }
+}
+
 /** Persist a credential (test/admin seam): encrypts the blob into the singleton. */
 export async function setCredential(cred: DecryptedCredential): Promise<void> {
+  cred = { ...cred, secret: (cred.secret ?? '').trim() };
+  assertHeaderSafeSecret(cred.secret);
   const row = (await credentialsStore.get(SINGLETON_ID)) ?? { _id: SINGLETON_ID, mode: cred.mode };
   await credentialsStore.put({
     ...row,
