@@ -1,0 +1,22 @@
+{
+  "slice": "s2",
+  "title": "Presence wiring: use-bridge-presence polls GET /api/v1/bridge/status",
+  "updatedAt": "2026-07-11T06:35:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "ui",
+  "retries": { "limit": 5, "used": 1 },
+  "gates": {
+    "tests": { "cmd": "vitest run web/__tests__/use-bridge-presence.test.ts", "exit": 0, "at": "2026-07-11T06:16:00Z", "summary": "4 passed (state mapping, failure keeps last known, shared poller, honest default)" },
+    "e2e": { "cmd": "playwright test web/e2e/bridge-presence.spec.ts", "exit": 0, "at": "2026-07-11T06:33:00Z", "summary": "3 consecutive green after widening state-flip budget to >2 poll cycles (1 flake found+fixed); zero console errors" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T06:40:00Z", "summary": "full lane green" },
+    "review": { "verdict": "clean", "by": "claude-inline", "at": "2026-07-11T06:34:00Z", "notes": "generation-guarded shared poller verified; SEAM promise held (zero consumer diffs); FIXED-2 respected" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "401 invalid_api_key; queued" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex" },
+    "designAudit": { "verdict": "n/a", "by": [], "notes": "no visual change - existing drafted states now driven by real data" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T06:35:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s2/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "401 invalid_api_key", "remediation": "codex login", "impact": "adversarial gates queued" }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T06:12:00Z",
+  "updatedAt": "2026-07-11T06:35:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -21,6 +21,17 @@
       "flagged": false,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s1/gate-status.json",
       "blockerSummary": "codex adversarial gates pending credential restore"
+    },
+    {
+      "slice": "s2",
+      "title": "Presence wiring (FC-401/FC-405)",
+      "kind": "ui",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s2/evidence.cast",
+      "verifiedAt": "2026-07-11T06:35:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s2/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
     }
   ],
   "globalGate": {
