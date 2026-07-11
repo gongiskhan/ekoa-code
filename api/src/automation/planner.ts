@@ -280,7 +280,13 @@ async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Prom
   if (!parsed) {
     return { status: 'failed', violations: [`o modelo não devolveu um plano em JSON válido: ${res.text.slice(0, 120)}`] };
   }
-  return validatePlanOutput(parsed);
+  const validated = validatePlanOutput(parsed);
+  if (validated.status === 'failed') {
+    // Server-side only (violations can quote raw model output — never sent to the client):
+    // the raw text is the ONLY way to diagnose a live shape mismatch.
+    console.warn(`[planner] model text on validation failure (server-side diagnostic):\n${res.text.slice(0, 800)}`);
+  }
+  return validated;
 }
 
 // ============================================================================

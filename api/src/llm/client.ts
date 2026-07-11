@@ -349,7 +349,12 @@ function sdkOptions(p: SdkCallParams): Record<string, unknown> {
     ...(p.disallowedTools ? { disallowedTools: p.disallowedTools } : {}),
     ...(p.cwd ? { cwd: p.cwd } : {}),
     ...(p.maxTurns !== undefined ? { maxTurns: p.maxTurns } : {}),
-    ...(p.systemPrompt ? { customSystemPrompt: p.systemPrompt } : {}),
+    // SDK ≥0.2 option name is `systemPrompt` (a plain string = full custom prompt). The old
+    // `customSystemPrompt` name was silently IGNORED by the installed SDK, so every system
+    // prompt (planner shape contract, brand research, chat context) vanished on the live path
+    // while fake-transport tests kept passing — found live 2026-07-11 (planner emitted an
+    // invented JSON shape because it never saw the required one).
+    ...(p.systemPrompt ? { systemPrompt: p.systemPrompt } : {}),
     // In-process MCP tools (§5.4.4) — instantiated at spawn time, in-process only (no egress).
     ...(p.sdkTools?.length ? { mcpServers: buildMcpServers(p.sdkTools) } : {}),
   };
@@ -853,7 +858,11 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
       images: opts.images,
       cwd: sandbox,
       disallowedTools: ['*'], // no tools on a one-shot
-      maxTurns: 1,
+      // Tool-less, so >1 turn is only a model continuation (observed live 2026-07-11: an
+      // EXPERT thinking run needs a second turn to emit the text after a thinking-heavy
+      // first turn — maxTurns:1 made the SDK error with "Reached maximum number of turns").
+      // A small ceiling keeps the runaway-loop guarantee.
+      maxTurns: 3,
       signal: opts.signal,
     });
     // Bill the reported usage even on abort (P-19), THEN reject abort as abort.
