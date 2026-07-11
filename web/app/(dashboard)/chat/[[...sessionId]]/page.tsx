@@ -45,6 +45,7 @@ import { useAgentExecution } from "@/hooks/useAgentExecution";
 import { api, tryCall, openChatRunStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
+import type { LocalFileActivity } from "@/lib/privacy-claims";
 import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
@@ -969,6 +970,10 @@ export default function UnifiedChatPage() {
       // it — the duration rides the local mirror's metadata (the server persists its own).
       let thinkingStartedAt: number | null = null;
       let thinkingEndedAt: number | null = null;
+      // FC-402 (run s5): the turn's local-file activity, streamed as `local_activity` when a
+      // delegation read local excerpts. Transient display metadata — it rides the in-memory
+      // message mirror only (persist:false below); the server never persists it (§18.2).
+      let localActivity: LocalFileActivity | null = null;
 
       const finishStream = () => {
         stream.close();
@@ -1027,6 +1032,8 @@ export default function UnifiedChatPage() {
                     : {}),
                 }
               : {}),
+            // FC-402: the trust chip's per-turn data (transient; never server-persisted).
+            ...(localActivity ? { localFileActivity: localActivity } : {}),
           },
         }, { persist: false });
       };
@@ -1061,6 +1068,15 @@ export default function UnifiedChatPage() {
           thinkingStartedAt ??= Date.now();
           appendStreamingThinking(sessionId!, event.text);
         }
+      });
+
+      stream.on("local_activity", (event) => {
+        localActivity = {
+          files: event.files,
+          ...(event.bytesOut !== undefined ? { bytesOut: event.bytesOut } : {}),
+          ...(event.maskedCounts !== undefined ? { maskedCounts: event.maskedCounts } : {}),
+          ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
+        };
       });
 
       stream.on("tool_event", (event) => {

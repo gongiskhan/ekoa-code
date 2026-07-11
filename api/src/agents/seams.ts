@@ -181,6 +181,31 @@ export function delegateToLocalTool(actor: DelegationToolActor, req: DelegationT
   return delegateToLocalFn(actor, req);
 }
 
+// --- Local-activity sources (run s5, FC-402; ch18 §18.2/§18.6) -----------------------------
+
+/** The two joins behind the per-turn trust chip: the bounded in-memory ledger-row buffer
+ *  (bridge/activity-buffer, wired at the root) and the anon-audit mask counts by correlation
+ *  id (§17.6, via the services read). Defaults are honest empties: no buffer wired means the
+ *  chip simply does not render — never invented numbers. */
+export interface LocalActivitySources {
+  /** Buffered daemon ledger rows for a session, narrowed to the turn's correlation ids. */
+  ledgerRows(session: string, correlationIds?: string[]): Array<{ path: string; byteRange: string; bytesOut: number; correlationId: string }>;
+  /** Mask counts by entity class for the turn's correlation ids (audit-join). */
+  maskedCounts(orgId: string, correlationIds: string[]): Promise<Record<string, number>>;
+}
+
+const defaultLocalActivitySources: LocalActivitySources = {
+  ledgerRows: () => [],
+  maskedCounts: async () => ({}),
+};
+let localActivitySources: LocalActivitySources = defaultLocalActivitySources;
+export function setLocalActivitySources(s: LocalActivitySources): void {
+  localActivitySources = s;
+}
+export function getLocalActivitySources(): LocalActivitySources {
+  return localActivitySources;
+}
+
 // --- Per-build verification runner (ch05 §5.6.2 step 5, ch07 §7.2.6) ----------------------
 
 export interface VerifyRunInput {
@@ -298,6 +323,7 @@ export function __resetAgentSeamsForTests(): void {
   integrationPrefetchFn = defaultIntegrationPrefetch;
   catalogFn = defaultCatalog;
   delegateToLocalFn = defaultDelegateToLocal;
+  localActivitySources = defaultLocalActivitySources;
   verifyRunnerFn = defaultVerifyRunner;
   buildMechanics = noopBuildMechanics;
 }

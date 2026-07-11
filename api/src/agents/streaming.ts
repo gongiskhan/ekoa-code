@@ -64,6 +64,17 @@ export class ChatStreamSink {
   contextEvent(name: string, action: 'loaded' | 'used'): void {
     this.emit({ type: 'context_event', name, action });
   }
+  /** FC-402 per-turn local-file activity (run s5): transient display metadata for the trust
+   *  chip — files+bytes from the daemon ledger buffer, mask counts from the anon-audit join. */
+  localActivity(a: {
+    files: Array<{ path: string; range?: string }>;
+    bytesOut?: number;
+    maskedCounts?: Record<string, number>;
+    correlationId?: string;
+  }): void {
+    if (a.files.length === 0) return;
+    this.emit({ type: 'local_activity', ...a });
+  }
   complete(result: unknown, durationMs: number, delegate?: { kind: 'build' | 'integration'; request: Record<string, unknown> }): void {
     this.emit({ type: 'complete', result, durationMs, ...(delegate ? { delegate } : {}) });
   }

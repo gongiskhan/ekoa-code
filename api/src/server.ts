@@ -41,7 +41,8 @@ import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
-import { attachBridgeServer, delegateToLocal } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession } from './bridge/index.js';
+import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
 import { devServeRouter } from './apps/dev-serve.js';
@@ -75,6 +76,7 @@ import {
   setKnowledgeToolRead,
   setLoadContextContent,
   setDelegateToLocal,
+  setLocalActivitySources,
   setVerifyRunner,
   setBuildMechanics,
   setIntegrationPrefetch,
@@ -242,6 +244,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // registry inside the bridge tool (never from tool arguments); the result is derived output
   // only, and offline is an honest `unreachable` (never an upload).
   setDelegateToLocal((actor, req) => delegateToLocal(actor, req));
+  // FC-402 (run s5, D3) — the trust chip's two joins: buffered daemon ledger rows (bytes/files)
+  // and the anon-audit mask counts by correlation id (§17.6). Both reads, no persistence.
+  setLocalActivitySources({
+    ledgerRows: (session, correlationIds) => rowsForSession(session, correlationIds),
+    maskedCounts: (orgId, correlationIds) => maskedCountsForCorrelations(orgId, correlationIds),
+  });
   // G8 — the §5.5.2 chat grounding seams land: live integration pre-fetch (layer 3) and the
   // cross-agent automation/integration catalog (layer 4).
   setIntegrationPrefetch(integrationPrefetch);
@@ -645,6 +653,9 @@ export function boot(): void {
       // display metadata only (§18.6, never persisted hosted by default).
       attachBridgeServer(httpServer, {
         resolveUserOrg: async (userId) => ((await users.get(userId)) as { orgId?: string } | null)?.orgId,
+        // FC-402 (run s5, D3): ledger rows land in the bounded in-memory per-session buffer
+        // the chat pipeline joins per turn — transient display metadata, never persisted.
+        onLedgerRow: bufferLedgerRow,
       });
     })
     .catch((err) => {

@@ -1,0 +1,22 @@
+{
+  "slice": "s5",
+  "title": "Trust chip data path + masking summary (FC-402/403/408; D3)",
+  "updatedAt": "2026-07-11T07:15:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "mixed",
+  "retries": { "limit": 5, "used": 0 },
+  "gates": {
+    "tests": { "cmd": "vitest run tests/bridge/activity-buffer.test.ts tests/agents/local-activity.test.ts tests/contract/masking-summary.test.ts", "exit": 0, "at": "2026-07-11T07:09:00Z", "summary": "14 passed (buffer bounds/TTL, join semantics incl. bytes-only degrade, endpoint contract + $in join on real mongo)" },
+    "e2e": { "cmd": "playwright test web/e2e/trust-chip.spec.ts", "exit": 0, "at": "2026-07-11T07:07:00Z", "summary": "chip renders read summary + bytes from schema-validated local_activity stub; mask clause + custody panel stay GatedClaim placeholders; zero console errors" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T07:12:00Z", "summary": "full lane green (incl. protocol checks with the new event)" },
+    "review": { "verdict": "clean", "by": "claude-inline", "notes": "seam-injected joins (tier rules held); buffer never touches a store; audit join narrowed to a $in query during review; never-persisted invariant held on both sides" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "401 invalid_api_key; queued (shared/-touching - review OWED)" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex" },
+    "designAudit": { "verdict": "clean", "by": ["inline"], "notes": "chip/panel visuals pre-existed (drafted); this slice only wires data" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T07:11:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "401 invalid_api_key", "remediation": "codex login", "impact": "adversarial gates queued" }
+  ]
+}

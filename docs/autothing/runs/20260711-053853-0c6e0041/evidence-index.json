@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T07:00:00Z",
+  "updatedAt": "2026-07-11T07:15:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -53,6 +53,17 @@
       "verifiedAt": "2026-07-11T07:00:00Z",
       "flagged": false,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s4/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s5",
+      "title": "Trust chip + masking summary (FC-402/403/408)",
+      "kind": "mixed",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/evidence.cast",
+      "verifiedAt": "2026-07-11T07:11:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/gate-status.json",
       "blockerSummary": "codex adversarial gates queued on credential"
     }
   ],

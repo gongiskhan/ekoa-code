@@ -24,6 +24,7 @@ import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
 import { knowledgeToolSpecs, delegateToolSpec } from './sdk-tools.js';
+import { getLocalActivitySources, type DelegationToolResult } from './seams.js';
 import { assembleRunContext, renderPrompt } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 
@@ -134,10 +135,15 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const policy = hasAttachments ? toolPolicyFor('text-attachments') : toolPolicyFor('chat');
     // Chat runs mount the two knowledge tools + the §5.4.8 local-bridge delegation tool as
     // in-process MCP (§5.4.4; ch18 §18.2); the attachments variant is Read/Glob/Grep only and
-    // mounts nothing.
+    // mounts nothing. The delegation collector feeds the FC-402 trust chip: results carry the
+    // citations + ledgerRefs the per-turn `local_activity` join reads (run s5, D3).
+    const delegations: DelegationToolResult[] = [];
     const sdkTools = hasAttachments
       ? undefined
-      : [...knowledgeToolSpecs(input.actor), delegateToolSpec(input.actor, input.sessionId)];
+      : [
+          ...knowledgeToolSpecs(input.actor),
+          delegateToolSpec(input.actor, input.sessionId, (r) => delegations.push(r)),
+        ];
 
     const liveMarkers = new MarkerProcessor();
     const handle = runAgent(
@@ -216,6 +222,13 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       return;
     }
 
+    // FC-402 (run s5, D3): a turn whose delegation read local excerpts emits ONE
+    // `local_activity` event — files+ranges from the results' citations, bytes-out from the
+    // buffered daemon ledger rows (falling back to result telemetry), mask counts from the
+    // anon-audit join on the correlation ids. Transient: streamed, never persisted (§18.2).
+    const activity = await joinLocalActivity(input.sessionId, input.actor.orgId, delegations);
+    if (activity) sink.localActivity(activity);
+
     // Persist the last valid context block onto the session (§5.6.1 step 6). A context block
     // emitted during an intermediate turn (thinking channel) still counts; an answer-channel
     // block wins as "last" over any thinking-channel one.
@@ -257,6 +270,66 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
   } catch (err) {
     finishError('ADAPTER_ERROR', err instanceof Error ? err.message : 'Erro na execução.');
   }
+}
+
+/**
+ * Join one turn's delegation results into the FC-402 `local_activity` payload (run s5, D3).
+ * Returns undefined when the turn touched no local files. Files come from the derived-only
+ * citations; bytes-out prefers the daemon ledger rows the buffer holds for the results'
+ * ledgerRefs (the egress ledger is the bytes authority), falling back to result telemetry;
+ * mask counts come from the hosted anon-audit joined on the same correlation ids (§17.6;
+ * §18.6 S6). Join failures degrade to bytes-only — never a fabricated count (§12.6.2).
+ */
+export async function joinLocalActivity(
+  sessionId: string,
+  orgId: string,
+  delegations: DelegationToolResult[],
+): Promise<{ files: Array<{ path: string; range?: string }>; bytesOut?: number; maskedCounts?: Record<string, number>; correlationId?: string } | undefined> {
+  const ok = delegations.filter((d) => d.status === 'ok');
+  if (ok.length === 0) return undefined;
+
+  const seen = new Set<string>();
+  const files: Array<{ path: string; range?: string }> = [];
+  for (const d of ok) {
+    for (const c of d.citations) {
+      const key = `${c.path}|${c.range}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      files.push({ path: c.path, ...(c.range ? { range: c.range } : {}) });
+    }
+  }
+
+  const refs = [...new Set(ok.flatMap((d) => d.ledgerRefs))];
+  const sources = getLocalActivitySources();
+  const rows = sources.ledgerRows(sessionId, refs.length > 0 ? refs : undefined);
+  const bytesFromLedger = rows.reduce((sum, r) => sum + r.bytesOut, 0);
+  const bytesOut = bytesFromLedger > 0 ? bytesFromLedger : ok.reduce((s, d) => s + d.telemetry.egressBytes, 0);
+
+  // Rows without citations still name files (a compose-only read cites nothing).
+  if (files.length === 0) {
+    for (const r of rows) {
+      if (seen.has(`${r.path}|${r.byteRange}`)) continue;
+      seen.add(`${r.path}|${r.byteRange}`);
+      files.push({ path: r.path, range: r.byteRange });
+    }
+  }
+  if (files.length === 0) return undefined;
+
+  const joinIds = [...new Set([...refs, ...rows.map((r) => r.correlationId)])];
+  let maskedCounts: Record<string, number> | undefined;
+  try {
+    const counts = await sources.maskedCounts(orgId, joinIds);
+    if (Object.keys(counts).length > 0) maskedCounts = counts;
+  } catch {
+    // Bytes-only chip (§12.6.2 cut-line): a failed join never invents counts.
+  }
+
+  return {
+    files,
+    ...(bytesOut > 0 ? { bytesOut } : {}),
+    ...(maskedCounts ? { maskedCounts } : {}),
+    ...(joinIds.length > 0 ? { correlationId: joinIds[0] } : {}),
+  };
 }
 
 /** Fire the post-run extraction; awaited only in tests via the returned promise. */

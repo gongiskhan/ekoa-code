@@ -26,6 +26,7 @@ export {
   setIntegrationPrefetch,
   setCatalog,
   setDelegateToLocal,
+  setLocalActivitySources,
   setVerifyRunner,
   setBuildMechanics,
   type AssembleAgentContext,
@@ -38,6 +39,7 @@ export {
   type DelegationToolActor,
   type DelegationToolRequest,
   type DelegationToolResult,
+  type LocalActivitySources,
   type VerifyRunnerFn,
   type BuildMechanics,
 } from './seams.js';

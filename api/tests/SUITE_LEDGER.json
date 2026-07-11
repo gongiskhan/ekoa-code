@@ -92,7 +92,8 @@
         "chat-thinking",
         "bridge-presence",
         "device-approval",
-        "privacy-grants-ledger"
+        "privacy-grants-ledger",
+        "trust-chip"
       ]
     }
   },

@@ -80,7 +80,13 @@ const DELEGATION_MAX_EGRESS_BYTES = 10_000_000;
  * same rule the knowledge tools apply to orgId). Cortex passes `task` and `grantRefs` through
  * opaquely (§18.2.1, S1); org + pairing resolve from the live registry inside the bridge.
  */
-export function delegateToolSpec(actor: ToolActor, sessionId: string): SdkToolSpec {
+export function delegateToolSpec(
+  actor: ToolActor,
+  sessionId: string,
+  /** Run-scoped collector (FC-402, run s5): the chat pipeline joins the turn's delegation
+   *  results (citations + ledgerRefs) with the buffered ledger rows into `local_activity`. */
+  onResult?: (result: DelegationToolResult) => void,
+): SdkToolSpec {
   return {
     name: DELEGATION_TOOL,
     description:
@@ -119,6 +125,7 @@ export function delegateToolSpec(actor: ToolActor, sessionId: string): SdkToolSp
         { userId: actor.userId, sessionId },
         { task, grantRefs, budget: { egressBytes, modelSpend: { userId: actor.userId } } },
       );
+      onResult?.(result);
       return formatDelegationResult(result);
     },
   };
