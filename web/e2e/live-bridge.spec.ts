@@ -69,6 +69,10 @@ test.describe('live bridge journey (s8 evidence lane)', () => {
 
     // 1. Real device flow: `pair` prints the userCode, then polls.
     const pairProc = spawn('node', [CLI, 'pair', '--url', API], { env: { ...process.env, EKOA_BRIDGE_HOME: home } });
+    // Capture the exit promise AT SPAWN: the pair CLI can exit before a later `.on('exit')`
+    // listener attaches (a real race — the previous run's recorder hit it), so a listener added
+    // after the UI steps would wait forever. Attach it now and await it later.
+    const pairExitP = new Promise<number>((r) => pairProc.on('exit', (code) => r(code ?? 1)));
     let pairOut = '';
     pairProc.stdout.on('data', (c) => (pairOut += String(c)));
     pairProc.stderr.on('data', (c) => (pairOut += String(c)));
@@ -83,19 +87,26 @@ test.describe('live bridge journey (s8 evidence lane)', () => {
     await page.getByTestId('device-approve').click();
     await expect(page.getByTestId('device-outcome-approved')).toBeVisible({ timeout: 15_000 });
 
-    const pairExit: number = await new Promise((r) => pairProc.on('exit', (code) => r(code ?? 1)));
+    const pairExit = await pairExitP;
     expect(pairExit, `pair exited cleanly. output:\n${pairOut}`).toBe(0);
 
-    // 3. Serve: the daemon dials the bridge WS; presence flips through registry -> status -> poll.
+    // 3. Serve on the STABLE surface port (C1): the daemon dials the bridge WS AND binds the
+    //    loopback browser surface; presence flips through registry -> status -> poll.
     serveProc = spawn('node', [CLI, 'serve'], { env: { ...process.env, EKOA_BRIDGE_HOME: home } });
     await page.goto('/settings/privacy');
     const bridgeSection = page.getByTestId('privacy-bridge-status');
     await expect(bridgeSection.getByText('Ponte ligada', { exact: true })).toBeVisible({ timeout: 45_000 });
 
-    // 4. Honest degrade: connected, but the pre-C1/C2/C3 daemon serves no browser surface.
-    await expect(page.getByTestId('privacy-grants').getByTestId('grants-unavailable')).toBeVisible({ timeout: 20_000 });
+    // 4. The C1-C3 surface is now REAL: the grants section renders the live (empty) list, not the
+    //    honest-unavailable state. Poll: the surface binds a moment after the WS connects.
+    await expect(async () => {
+      const grants = page.getByTestId('privacy-grants');
+      const listVisible = await grants.getByTestId('grants-list').isVisible().catch(() => false);
+      const emptyVisible = await grants.getByText('Não há autorizações ativas nesta sessão.').isVisible().catch(() => false);
+      expect(listVisible || emptyVisible, 'grants section reachable over the loopback surface').toBe(true);
+    }).toPass({ timeout: 20_000 });
 
-    // 5. A real grant mints and prints its ref.
+    // 5. A real grant mints (CLI) and prints its ref; then the LIVE surface lists it in the browser.
     const grantRes = spawnSync('node', [CLI, 'grant', 'add', '--path', grantDir], {
       env: { ...process.env, EKOA_BRIDGE_HOME: home },
       encoding: 'utf8',
@@ -103,6 +114,10 @@ test.describe('live bridge journey (s8 evidence lane)', () => {
     expect(grantRes.status, grantRes.stderr).toBe(0);
     const grantRef = grantRes.stdout.match(/\((g-[^)]+)\)/)?.[1];
     expect(grantRef, `grant output: ${grantRes.stdout}`).toBeTruthy();
+
+    // The daemon serves /browse: assert the grant dir is reachable through the real surface.
+    const browseRes = await page.request.get(`http://127.0.0.1:8791/browse`, { failOnStatusCode: false });
+    expect([200, 403].includes(browseRes.status()), `browse surface answered (${browseRes.status()})`).toBe(true);
 
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
 
