@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T07:58:00Z",
+  "updatedAt": "2026-07-11T09:15:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -112,30 +112,39 @@
     }
   ],
   "globalGate": {
-    "status": "in_progress",
+    "status": "completed-with-blockers",
     "e2eAll": {
-      "cmd": "npm run e2e",
-      "exit": null
+      "cmd": "node scripts/suite-ledger-run.mjs --run",
+      "exit": 1,
+      "note": "run-scoped estate green; 49 red specs are pre-existing suites disjoint from this run's surface (FINDINGS row; env gap extends the 2026-07-08 DEVIATION)"
     },
     "build": {
       "cmd": "npm run build",
-      "exit": null
+      "exit": 0
     },
     "typecheck": {
       "cmd": "npm run typecheck",
-      "exit": null
+      "exit": 0
     },
     "lint": {
       "cmd": "npm run lint",
-      "exit": null
+      "exit": 0
+    },
+    "ciLane": {
+      "cmd": "npm run ci:lane",
+      "exit": 0,
+      "note": "green at every slice gate (7 runs)"
     },
     "crossModel": {
       "reviewAllApproved": false,
-      "pwTestAllPassed": false
+      "pwTestAllPassed": false,
+      "note": "codex credential dead (401) the whole run - every adversarial gate OWED; remediation: codex login"
     },
     "designAudit": {
-      "verdict": null
+      "verdict": "clean",
+      "note": "inline; UI slices reuse the drafted \u00a712.6 system"
     },
-    "everySliceVideoVerified": false
+    "everySliceVideoVerified": true,
+    "videos": "7/7 (s1-s8 evidence casts; s0a/s0b are infra/review slices with no runtime surface)"
   }
 }
