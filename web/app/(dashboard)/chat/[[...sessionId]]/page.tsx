@@ -46,6 +46,8 @@ import { api, tryCall, openChatRunStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
 import type { LocalFileActivity } from "@/lib/privacy-claims";
+import type { ReferencePick } from "@/lib/bridge-local";
+import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips";
 import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
@@ -235,6 +237,8 @@ export default function UnifiedChatPage() {
   const [chatInput, setChatInput] = useState("");
   const [promptStripCollapsed, setPromptStripCollapsed] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  // FC-400 (run s6): reference tokens attached to the NEXT outgoing message (D4).
+  const [referenceTokens, setReferenceTokens] = useState<ReferencePick[]>([]);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlInputValue, setUrlInputValue] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -953,12 +957,18 @@ export default function UnifiedChatPage() {
         .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
       if (pendingAttachments.length > 0) clearAttachments();
 
+      // FC-400/D4 (run s6): reference tokens ride the run request; the server injects
+      // them as run context so the model delegates with real grantRefs.
+      const references = referenceTokens;
+      if (references.length > 0) setReferenceTokens([]);
+
       // FC-013: create the run, await the server-minted runId, THEN subscribe to
       // its scoped event stream. `language` is injected by the transport (§12.2.3).
       const { runId } = await api.chat.createRun({
         sessionId,
         message: text,
         ...(uploadRefs.length > 0 ? { attachments: uploadRefs } : {}),
+        ...(references.length > 0 ? { references } : {}),
       });
       chatTraceIdRef.current = runId;
 
@@ -1147,6 +1157,7 @@ export default function UnifiedChatPage() {
     createSession,
     setPendingDelegation,
     pendingAttachments,
+    referenceTokens,
     clearAttachments,
     addMessage,
     appendStreamingChat,
@@ -1535,6 +1546,10 @@ export default function UnifiedChatPage() {
             <div className="p-3 md:p-4 border-t border-neutral-100 bg-white">
               <div className="max-w-3xl mx-auto space-y-3">
                 <AttachmentChips attachments={pendingAttachments} onRemove={removeAttachment} />
+                <ReferenceTokenChips
+                  tokens={referenceTokens}
+                  onRemove={(grantRef) => setReferenceTokens((prev) => prev.filter((t) => t.grantRef !== grantRef))}
+                />
 
                 <div className="relative flex flex-col bg-white border border-neutral-300 rounded-2xl focus-within:border-teal-600 focus-within:ring-1 focus-within:ring-teal-600/20 transition-shadow shadow-sm">
                   <textarea
@@ -1563,6 +1578,11 @@ export default function UnifiedChatPage() {
                           onClose={() => setShowAttachMenu(false)}
                           onUploadFile={handleAttachFile}
                           onUploadFolder={handleAttachFolder}
+                          onReferenceCreated={(pick) =>
+                            setReferenceTokens((prev) =>
+                              prev.some((t) => t.grantRef === pick.grantRef) ? prev : [...prev, pick],
+                            )
+                          }
                         />
                       </div>
 

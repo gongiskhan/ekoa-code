@@ -88,6 +88,18 @@ export const PRIVACY_COPY = {
   firstGrantConfirm: 'Autorizar',
   firstGrantCancel: 'Cancelar',
 
+  // -- FC-400 typed-reference fallback (run s6; counterpart C4 pending) --
+  referenceTypedTitle: 'Referenciar por identificador',
+  referenceTypedIntro:
+    'Esta versão da ponte local ainda não abre o seletor de ficheiros a partir do navegador. Crie a autorização na aplicação da ponte (ekoa-bridge grant) e introduza aqui o identificador.',
+  referenceTypedRefLabel: 'Identificador da autorização',
+  referenceTypedRefHint: 'Tem o formato g-... e é mostrado pela aplicação da ponte ao criar a autorização.',
+  referenceTypedNameLabel: 'Nome a mostrar',
+  referenceTypedNameHint: 'O nome do ficheiro ou da pasta, apenas para identificação nesta conversa.',
+  referenceTypedConfirm: 'Adicionar referência',
+  referenceTokenRemove: 'Remover referência',
+  referenceTokensLabel: 'Referências locais desta mensagem',
+
   // -- FC-402 trust chip (mechanism labels; the masked-count CLAIM is gated) --
   chipReadPrefix: 'Leu',
   chipBytesSuffix: 'saíram desta máquina de forma transitória',

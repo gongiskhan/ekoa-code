@@ -25,7 +25,7 @@ import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
 import { knowledgeToolSpecs, delegateToolSpec } from './sdk-tools.js';
 import { getLocalActivitySources, type DelegationToolResult } from './seams.js';
-import { assembleRunContext, renderPrompt } from './context.js';
+import { assembleRunContext, renderPrompt, referencesContextLine } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 
 export interface StartChatRunInput {
@@ -35,6 +35,9 @@ export interface StartChatRunInput {
   message: string;
   language: string;
   attachments?: unknown[];
+  /** FC-400/D4 (run s6): composer reference tokens — injected as ONE context line so the
+   *  model calls delegate_to_local with real grantRefs (never hand-typed chat text). */
+  references?: Array<{ grantRef: string; label: string }>;
   deps: { now: () => number; genId: () => string };
 }
 
@@ -145,11 +148,17 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
           delegateToolSpec(input.actor, input.sessionId, (r) => delegations.push(r)),
         ];
 
+    // FC-400/D4 (run s6): reference tokens become ONE system-prompt line with real grantRefs.
+    // Only when the delegation tool is actually mounted (the attachments variant mounts no
+    // tools — a line instructing an absent tool would be a lie to the model).
+    const refLine = hasAttachments ? '' : referencesContextLine(input.references);
+    const systemPrompt = [assembled.systemPrompt, refLine].filter(Boolean).join('\n\n');
+
     const liveMarkers = new MarkerProcessor();
     const handle = runAgent(
       {
         prompt: renderPrompt(assembled.history, input.message),
-        systemPrompt: assembled.systemPrompt || undefined,
+        systemPrompt: systemPrompt || undefined,
         decision,
         allowedTools: policy.allowedTools,
         disallowedTools: policy.disallowedTools,

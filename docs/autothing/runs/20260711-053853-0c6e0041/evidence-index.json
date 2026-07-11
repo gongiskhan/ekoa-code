@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T07:15:00Z",
+  "updatedAt": "2026-07-11T07:30:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -64,6 +64,17 @@
       "verifiedAt": "2026-07-11T07:11:00Z",
       "flagged": false,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s6",
+      "title": "Reference attach (FC-400/401/411/412)",
+      "kind": "mixed",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/evidence.cast",
+      "verifiedAt": "2026-07-11T07:28:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/gate-status.json",
       "blockerSummary": "codex adversarial gates queued on credential"
     }
   ],

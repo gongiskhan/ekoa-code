@@ -5,42 +5,37 @@ import Link from 'next/link';
 import { FolderSearch, Download, WifiOff, RotateCw } from 'lucide-react';
 import { PRIVACY_COPY, PRIVACY_SETTINGS_HREF } from '@/lib/privacy-claims';
 import { useBridgePresence } from '@/hooks/use-bridge-presence';
-
-/**
- * SEAM: the daemon's native OS picker (real filesystem paths; ch18 §18.2). The
- * ekoa-local daemon is out of scope for this hosted build, so there is no picker to
- * invoke and the 'connected' branch is never reached. When the daemon lands, this
- * returns the chosen absolute path, which becomes a session grant + composer
- * reference token. Returning null here (never invent an endpoint) keeps the hosted
- * build honest: with no bridge, nothing is picked and nothing is uploaded instead.
- */
-async function pickLocalReference(): Promise<string | null> {
-  return null;
-}
+import { openDaemonPicker, type ReferencePick } from '@/lib/bridge-local';
 
 /**
  * FC-401 Reference action - three states driven by the bridge presence heartbeat
  * (§12.6.1). Reference NEVER uploads or copies; when the bridge is absent or
  * offline the action stays disabled and offers install / retry, never a silent
- * degrade to upload. In the hosted build the presence is always not-installed, so
- * this renders the install state (below); the offline and connected branches are
- * built for when the daemon lands.
+ * degrade to upload. Connected (run s6): the daemon's native OS picker (C4) mints a
+ * session grant and returns {grantRef, label}; against a daemon that predates C4
+ * the menu falls back to the typed-reference input (the brief's pre-authorized
+ * fallback, docs/bridge-counterpart-changes.md) — flagged, never silent.
  */
 export function ReferenceAttachAction({
   onPicked,
+  onPickerUnavailable,
   onClose,
 }: {
-  /** Reports a chosen target up to the menu, which drives the first-grant dialog. */
-  onPicked: (target: string) => void;
+  /** Reports the minted grant up to the menu, which drives the first-grant dialog. */
+  onPicked: (pick: ReferencePick) => void;
+  /** The daemon predates the C4 picker: the menu opens the typed-reference fallback. */
+  onPickerUnavailable: () => void;
   onClose: () => void;
 }) {
   const { status } = useBridgePresence();
 
   const handlePick = useCallback(async () => {
     onClose();
-    const target = await pickLocalReference();
-    if (target) onPicked(target);
-  }, [onClose, onPicked]);
+    const pick = await openDaemonPicker();
+    if (pick === 'cancelled') return;
+    if (pick === 'unavailable') onPickerUnavailable();
+    else onPicked(pick);
+  }, [onClose, onPicked, onPickerUnavailable]);
 
   // State 1 - no bridge installed: disabled action, short explanation, install CTA.
   if (status === 'not-installed') {

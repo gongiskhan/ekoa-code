@@ -99,9 +99,9 @@ export class BridgeLocalUnavailable extends Error {
   }
 }
 
-async function daemonFetch(path: string, init?: RequestInit): Promise<unknown> {
+async function daemonFetch(path: string, init?: RequestInit, timeoutMs = TIMEOUT_MS): Promise<unknown> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`${BRIDGE_LOCAL_ORIGIN}${path}`, { ...init, signal: ctrl.signal });
     if (!res.ok) throw new BridgeLocalUnavailable(`status ${res.status}`);
@@ -131,6 +131,30 @@ export async function revokeDaemonGrant(grantRef: string): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ grantRef }),
   });
+}
+
+/** A picker/typed-input result: the daemon-minted session grant + its display label. */
+export const ReferencePick = z.object({ grantRef: z.string().min(1), label: z.string().min(1) }).passthrough();
+export type ReferencePick = z.infer<typeof ReferencePick>;
+
+/**
+ * POST /picker (C4, the largest counterpart item): the daemon opens its native OS dialog,
+ * mints a session grant for the chosen path and returns `{grantRef, label}`. Returns
+ * 'unavailable' when the daemon predates C4 (or the user is offline) — the composer then
+ * falls back to the typed-reference input (the brief's pre-authorized fallback), and
+ * 'cancelled' when the daemon reports the user dismissed the dialog.
+ */
+export async function openDaemonPicker(): Promise<ReferencePick | 'unavailable' | 'cancelled'> {
+  try {
+    // A native OS dialog stays open until the user decides — give it minutes, not the
+    // read timeout.
+    const body = await daemonFetch('/picker', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }, 5 * 60_000);
+    if (typeof body === 'object' && body !== null && (body as { cancelled?: unknown }).cancelled === true) return 'cancelled';
+    const parsed = ReferencePick.safeParse(body);
+    return parsed.success ? parsed.data : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
 }
 
 export interface DaemonLedger {

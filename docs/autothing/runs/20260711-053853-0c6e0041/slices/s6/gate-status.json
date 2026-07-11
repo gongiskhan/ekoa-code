@@ -1,0 +1,22 @@
+{
+  "slice": "s6",
+  "title": "Reference attach: tokens -> chat metadata -> run context (FC-400/401/411/412; D4)",
+  "updatedAt": "2026-07-11T07:30:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "mixed",
+  "retries": { "limit": 5, "used": 1 },
+  "gates": {
+    "tests": { "cmd": "vitest run tests/agents/references-context.test.ts", "exit": 0, "at": "2026-07-11T07:25:00Z", "summary": "3 passed (empty renders nothing, one PT line with tool+refs+labels, quote escaping)" },
+    "e2e": { "cmd": "playwright test web/e2e/reference-attach.spec.ts", "exit": 0, "at": "2026-07-11T07:26:00Z", "summary": "full flow: connected state -> picker unavailable -> typed fallback -> FC-411 verbatim consent -> token chip -> request carries references (validated against shared schema) -> chip clears; zero console errors (scoped ERR_CONNECTION_REFUSED allowance = the test stimulus)" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T07:33:00Z", "summary": "full lane green" },
+    "review": { "verdict": "clean", "by": "claude-inline", "notes": "refs opaque (S1), labels quote-escaped into ONE context line, line suppressed when tool unmounted (attachments variant); FC-412 card pre-existing, acceptance-verified; builder-panel reference stays dormant (no onReferenceCreated) - noted" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "401 invalid_api_key; queued (shared/-touching - review OWED)" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex" },
+    "designAudit": { "verdict": "clean", "by": ["inline"], "notes": "token chips mirror AttachmentChips pattern in teal accent; dialogs reuse the ui system" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T07:28:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "401 invalid_api_key", "remediation": "codex login", "impact": "adversarial gates queued" }
+  ]
+}

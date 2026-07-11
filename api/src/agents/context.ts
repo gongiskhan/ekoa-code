@@ -124,3 +124,14 @@ export function renderPrompt(history: Array<{ role: string; content: string }>, 
   const transcript = history.map((t) => `<turn role="${t.role}">\n${t.content}\n</turn>`).join('\n');
   return `<conversation>\n${transcript}\n</conversation>\n\n${message}`;
 }
+
+/**
+ * FC-400/D4 (run s6): the ONE context line carrying the composer's reference tokens, so the
+ * model calls `delegate_to_local` with real grantRefs instead of the user hand-typing them.
+ * The refs are opaque (§18.2.1 S1) and the labels display-only; an empty list renders nothing.
+ */
+export function referencesContextLine(references: Array<{ grantRef: string; label: string }> | undefined): string {
+  if (!references || references.length === 0) return '';
+  const items = references.map((r) => `${r.grantRef} ("${r.label.replace(/"/g, "'")}")`).join(', ');
+  return `Autorizações locais ativas nesta sessão (utilize a ferramenta delegate_to_local com estes grantRefs para ler os ficheiros referenciados): ${items}`;
+}

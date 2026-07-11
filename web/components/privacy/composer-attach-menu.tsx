@@ -3,14 +3,17 @@
 import { useState } from 'react';
 import { File, FolderOpen } from 'lucide-react';
 import { PRIVACY_COPY } from '@/lib/privacy-claims';
+import type { ReferencePick } from '@/lib/bridge-local';
 import { ReferenceAttachAction } from './reference-attach-action';
 import { FirstGrantDialog } from './first-grant-dialog';
+import { TypedReferenceDialog } from './typed-reference-dialog';
 
 /**
  * FC-400 attach affordance - two actions where the composer offered one:
  *  - Enviar (Upload): the existing upload pipeline (FC-060). Stored at rest, hosted.
- *  - Referenciar ficheiro/pasta local (Reference): opens the daemon picker; the path
- *    becomes a session grant, never an upload/copy (FC-401 states below).
+ *  - Referenciar ficheiro/pasta local (Reference): the daemon picker (or, against a
+ *    pre-C4 daemon, the typed-reference fallback) mints a session grant; the grant
+ *    becomes a composer reference token, never an upload/copy (FC-401 states).
  *
  * The Upload-vs-Reference micro-copy is a UX distinction, not a legal claim, so it
  * ships enabled and needs no citation (§12.6.1).
@@ -32,28 +35,29 @@ export function ComposerAttachMenu({
   onClose: () => void;
   onUploadFile: () => void;
   onUploadFolder: () => void;
-  /** Fired once a Reference grant is confirmed (dormant in the hosted build). */
-  onReferenceCreated?: (target: string) => void;
+  /** Fired once a Reference grant is confirmed: the token joins the outgoing message. */
+  onReferenceCreated?: (pick: ReferencePick) => void;
   /** Popover positioning for the panel. Defaults to bottom-left of the trigger. */
   panelClassName?: string;
 }) {
-  const [pendingTarget, setPendingTarget] = useState<string | null>(null);
+  const [pendingPick, setPendingPick] = useState<ReferencePick | null>(null);
+  const [typedOpen, setTypedOpen] = useState(false);
   const [firstGrantSeen, setFirstGrantSeen] = useState(false);
 
-  function handlePicked(target: string) {
+  function handlePicked(pick: ReferencePick) {
     // First Reference grant shows the consent dialog (FC-411); later grants are
     // created directly (they were consented to once for the session).
     if (!firstGrantSeen) {
-      setPendingTarget(target);
+      setPendingPick(pick);
     } else {
-      onReferenceCreated?.(target);
+      onReferenceCreated?.(pick);
     }
   }
 
   function confirmFirstGrant() {
-    if (pendingTarget) onReferenceCreated?.(pendingTarget);
+    if (pendingPick) onReferenceCreated?.(pendingPick);
     setFirstGrantSeen(true);
-    setPendingTarget(null);
+    setPendingPick(null);
   }
 
   return (
@@ -105,16 +109,29 @@ export function ComposerAttachMenu({
             <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
               {PRIVACY_COPY.referenceGroupLabel}
             </p>
-            <ReferenceAttachAction onPicked={handlePicked} onClose={onClose} />
+            <ReferenceAttachAction
+              onPicked={handlePicked}
+              onPickerUnavailable={() => setTypedOpen(true)}
+              onClose={onClose}
+            />
           </div>
         </div>
       )}
 
       <FirstGrantDialog
-        open={pendingTarget !== null}
-        target={pendingTarget ?? ''}
+        open={pendingPick !== null}
+        target={pendingPick?.label ?? ''}
         onConfirm={confirmFirstGrant}
-        onCancel={() => setPendingTarget(null)}
+        onCancel={() => setPendingPick(null)}
+      />
+
+      <TypedReferenceDialog
+        open={typedOpen}
+        onConfirm={(pick) => {
+          setTypedOpen(false);
+          handlePicked(pick);
+        }}
+        onCancel={() => setTypedOpen(false)}
       />
     </>
   );

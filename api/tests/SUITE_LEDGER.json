@@ -93,7 +93,8 @@
         "bridge-presence",
         "device-approval",
         "privacy-grants-ledger",
-        "trust-chip"
+        "trust-chip",
+        "reference-attach"
       ]
     }
   },
