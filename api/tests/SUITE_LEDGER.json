@@ -94,7 +94,8 @@
         "device-approval",
         "privacy-grants-ledger",
         "trust-chip",
-        "reference-attach"
+        "reference-attach",
+        "live-bridge"
       ]
     }
   },
