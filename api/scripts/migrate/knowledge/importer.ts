@@ -157,7 +157,9 @@ function collectEntries(sourceDir: string, collections: string[]): SourceEntry[]
       continue;
     }
     for (const file of files) {
-      if (!file.endsWith('.md')) continue;
+      // Skip dotfiles: macOS tar extraction materializes xattrs as AppleDouble `._<name>.md`
+      // companions (binary metadata, not documents) — 30k+ of them on a real prod pull.
+      if (!file.endsWith('.md') || file.startsWith('.')) continue;
       out.push({ collection, docId: file.slice(0, -3), path: join(sourceDir, collection, file) });
     }
   }
@@ -237,7 +239,10 @@ export async function runKnowledgeImport(opts: ImportOptions): Promise<ImportRes
       bulkIndexDocs(rows);
     }
     for (const p of pending) {
-      nextState[stateKey(p.collection, p.docId)] = p.hash;
+      // Force a FRESH string for the retained hash: a frontmatter hash is a V8 SLICE of the
+      // whole raw file string, and keeping 262k slices in the state map pins ~6 GB of parent
+      // strings (the OOM observed on the real corpus). Buffer round-trip materializes a copy.
+      nextState[stateKey(p.collection, p.docId)] = Buffer.from(p.hash, 'utf8').toString('utf8');
       col(p.collection).imported++;
       imported++;
     }

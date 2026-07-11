@@ -8,9 +8,25 @@
 import { Router, type Response } from 'express';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
-import { listDefinitions, activeCatalog, refreshDefinitions } from '../integrations/definitions.js';
+import { listDefinitions, activeCatalog, refreshDefinitions, getDefinition, integrationAutomationTemplate } from '../integrations/definitions.js';
+import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import { z } from 'zod';
+
+/** Join a definition's automation-bound actions with their template payloads (the provisioner
+ *  and the session rows both consume this; automation/ never imports integrations/). */
+function automationBindings(key: string): ProvisionBinding[] {
+  const def = getDefinition(key);
+  return (def?.actions ?? [])
+    .filter((a) => a.automationBinding?.automationTemplate)
+    .map((a) => ({
+      actionName: a.actionName,
+      description: a.description,
+      mutates: a.mutates,
+      templateKey: a.automationBinding!.automationTemplate!,
+      template: integrationAutomationTemplate(key, a.automationBinding!.automationTemplate!),
+    }));
+}
 
 const CreateConfig = z.object({ integrationKey: z.string(), configValues: z.record(z.unknown()), name: z.string().optional() });
 const UpdateConfig = z.object({ enabled: z.boolean().optional(), configValues: z.record(z.unknown()).optional() });
@@ -81,18 +97,20 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
    * serialized to a client — these responses carry STATUS METADATA ONLY.
    */
   r.get('/:key/session', async (req: AuthedRequest, res: Response) => {
+    const key = req.params.key as string;
     res.json({
-      integrationKey: req.params.key as string,
+      integrationKey: key,
       status: 'none',
-      // Truthful rc-1 values: capture is a supported product surface but unavailable in
-      // this environment (no capture orchestration), and no automation-binding rows exist.
+      // Truthful values: capture is a supported product surface but unavailable in this
+      // environment (no capture orchestration). The ACTIONS rows are real: the definition's
+      // automation bindings joined with the org's materialized managed automations.
       sessionConnect: {
         supported: true,
         available: false,
         message: 'Captura de sessão não disponível nesta versão.',
       },
       session: { status: 'none', capturedAt: null },
-      actions: [],
+      actions: await sessionActionRows(actorOf(req), key, automationBindings(key)),
     });
   });
 
@@ -105,9 +123,12 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
   });
 
   r.post('/:key/provision-automations', async (req: AuthedRequest, res: Response) => {
-    // No automation-provisioning infrastructure: real zeros, never a fabricated created/updated count.
-    res.json({ provisioned: false, created: 0, updated: 0, actions: [] });
-    void req;
+    const key = req.params.key as string;
+    if (!getDefinition(key)) return notFound(res);
+    // Materialize the definition's bound automation templates as org automations (idempotent:
+    // deterministic ids; re-provision refreshes from the template).
+    const { created, updated, rows } = await provisionIntegrationAutomations(actorOf(req), key, automationBindings(key));
+    res.json({ provisioned: rows.some((row) => row.provisioned), created, updated, actions: rows });
   });
 
   return r;

@@ -23,6 +23,7 @@ export {
   listDefinitions,
   getDefinition,
   integrationSkillMd,
+  integrationAutomationTemplate,
   reservedIntegrationKeys,
   writeRuntimePackage,
   type IntegrationDefinition,

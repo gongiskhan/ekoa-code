@@ -154,16 +154,36 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     }
   });
 
-  it('POST /:key/provision-automations answers ProvisionAutomationsResponse with real zeros', async () => {
+  it('POST /:key/provision-automations: unknown key → 404 envelope; a bound key MATERIALIZES managed automations idempotently', async () => {
     const t = await tokenFor();
-    const res = await authed('/api/v1/integrations/gmail/provision-automations', t, { method: 'POST' });
+    // Unknown definition → uniform 404 (the pre-provisioner stub answered fake zeros here).
+    const missing = await authed('/api/v1/integrations/gmail/provision-automations', t, { method: 'POST' });
+    expect(missing.status).toBe(404);
+
+    // citius ships 4 automation-bound actions with repo-authored templates: provisioning
+    // materializes them as org automations with deterministic `citius-<template>` ids.
+    const res = await authed('/api/v1/integrations/citius/provision-automations', t, { method: 'POST' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ProvisionAutomationsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
-    expect(body.provisioned).toBe(false);
-    expect(body.created).toBe(0);
-    expect(body.updated).toBe(0);
-    expect(body.actions).toEqual([]);
+    expect(body.provisioned).toBe(true);
+    expect(body.created).toBe(4);
+    const rows = body.actions as Array<{ provisioned: boolean; automationId: string | null; automationName: string | null }>;
+    expect(rows.filter((row) => row.provisioned)).toHaveLength(4);
+    for (const row of rows.filter((r) => r.provisioned)) {
+      expect(String(row.automationId)).toMatch(/^citius-/);
+      expect(row.automationName).toBeTruthy();
+    }
+
+    // Idempotent: a re-provision refreshes in place, never duplicates.
+    const again = await readJson(await authed('/api/v1/integrations/citius/provision-automations', t, { method: 'POST' }));
+    expect(again.created).toBe(0);
+    expect(again.updated).toBe(4);
+
+    // The session view reflects the materialized rows (the dashboard's card state).
+    const session = await readJson(await authed('/api/v1/integrations/citius/session', t));
+    const sRows = (session.actions ?? []) as Array<{ provisioned: boolean }>;
+    expect(sRows.filter((row) => row.provisioned)).toHaveLength(4);
   });
 
   it('all three require auth (401 envelope)', async () => {

@@ -38,6 +38,14 @@ export { REHEARSAL_BUDGET, detectHumanActionable } from './rehearsal.js';
 // --- Actor-scoped REST service surface (ch03 §3.8.18) — routes/ call these; the router never
 //     imports data/ directly. Every response is shape-compatible with shared/automations.ts. ------
 export {
+  provisionIntegrationAutomations,
+  sessionActionRows,
+  managedAutomationId,
+  type ProvisionBinding,
+  type IntegrationAutomationTemplate,
+  type SessionActionRow,
+} from './integration-automations.js';
+export {
   AutomationServiceError,
   type AutomationErrorCode,
   listAutomations,

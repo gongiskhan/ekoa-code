@@ -72,6 +72,10 @@ function toWireAutomation(doc: StoredAutomation): WireAutomation {
     ownerId: doc.ownerUserId,
     orgId: doc.orgId,
     ...(doc.visibility ? { visibility: doc.visibility } : {}),
+    // Integration-managed automations: the UI's "Gerida pela integração" chip + editor
+    // banner/backlink key off `source` (wire Automation is passthrough).
+    ...(doc.source ? { source: doc.source } : {}),
+    ...(doc.inputSchema ? { inputSchema: doc.inputSchema } : {}),
     ...(doc.createdAt ? { createdAt: doc.createdAt } : {}),
     ...(doc.updatedAt ? { updatedAt: doc.updatedAt } : {}),
   };

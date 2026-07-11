@@ -302,6 +302,38 @@ export function getDefinition(key: string): IntegrationDefinition | null {
  * as `integration-<key>`. Only a KNOWN definition key resolves — the key never touches the
  * filesystem unvalidated.
  */
+/**
+ * An integration package's automation TEMPLATE (`<package>/automations/<templateKey>.json`):
+ * the repo-authored blueprint the provisioner materializes as a managed automation. Runtime
+ * tier wins over baseline (same shadowing rule as the definitions). Both path segments are
+ * validated (the templateKey never touches the filesystem unvalidated); a malformed file
+ * returns null (counted by the caller, never fatal).
+ */
+export function integrationAutomationTemplate(
+  key: string,
+  templateKey: string,
+): { templateKey: string; name: string; description?: string; inputSchema?: { fields: Array<{ name: string; description: string; required: boolean; defaultValue?: string }> }; steps: Array<Record<string, unknown>> } | null {
+  if (!ensure().has(key) || !/^[a-z0-9][a-z0-9-]{0,48}$/.test(templateKey)) return null;
+  for (const root of [runtimeDir(), integrationsDir()]) {
+    const p = join(root, key, 'automations', `${templateKey}.json`);
+    if (!existsSync(p)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+      if (typeof raw.name !== 'string' || !Array.isArray(raw.steps)) return null;
+      return {
+        templateKey,
+        name: raw.name,
+        ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
+        ...(raw.inputSchema && typeof raw.inputSchema === 'object' ? { inputSchema: raw.inputSchema as never } : {}),
+        steps: raw.steps as Array<Record<string, unknown>>,
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function integrationSkillMd(key: string): string | null {
   if (!ensure().has(key)) return null;
   // Runtime wins over baseline (a user-created package shadows a shipped one of the same key).
