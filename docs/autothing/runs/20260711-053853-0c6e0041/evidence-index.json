@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T09:15:00Z",
+  "updatedAt": "2026-07-11T10:05:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -146,5 +146,12 @@
     },
     "everySliceVideoVerified": true,
     "videos": "7/7 (s1-s8 evidence casts; s0a/s0b are infra/review slices with no runtime surface)"
+  },
+  "runWalkthrough": {
+    "video": "docs/autothing/runs/20260711-053853-0c6e0041/walkthrough.mp4",
+    "durationSec": 49.5,
+    "status": "verified",
+    "verifiedAt": "2026-07-11T10:05:00Z",
+    "note": "run-level browser walkthrough, REAL stack + REAL sibling daemon, no stubs/no model: unpaired privacy surface -> real pair code approved on /settings/devices -> serve -> 'Ponte ligada' live -> honest grants/ledger states -> attach menu -> typed reference -> FC-411 verbatim consent -> token chip. Self-verified frame-by-frame (login/devices/privacy-live/typed-dialog/consent/token). Recorded via playwright-core video (the walkthrough skill itself is a broken symlink on this machine -> ~/dev/walkthrough missing; equivalent discipline applied)."
   }
 }
