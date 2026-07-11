@@ -52,6 +52,17 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   subscriber gap, run hangs on upstream auth failure, temp-session 404 persist.
 - **`web-tests-untypechecked`** (low, batch-2). Web `__tests__` are excluded from tsc, so web test
   files are never typechecked.
+- **`e2e-estate-baseline-13`** (medium, per-spec debt). The first honest full-stack estate run
+  (2026-07-11, 187/200 green after this run's fixes) leaves 13 red ported specs, ALL pre-existing
+  product/UI gaps (none touch this run's diffs): (a) the documented band2 legacy group still built
+  around the retired `/api/v1/action` + old stubs - artifact-backend-panel, artifacts-apps-section,
+  update-from-bundle, vertical-profile, onboarding x3 (REST migration owed; see
+  docs/e2e-harness-remediation-brief.md); (b) integrations UI gaps - pages-manage expects a search
+  input the migrated page lost, integrations-sections' Webhooks tab renders no webhook rows,
+  integrations-pipedream master-toggle default/persistence semantics differ; (c) legal-content
+  gaps - legal-rcbe journey, legal-shared-drift (six scaffolds vs canonical layer), simuladores-
+  trabalho exact CT figures. Each is closed by building the missing surface or by an explicit
+  retire decision - never by editing the ported spec.
 
 ### Operator-blocked / external
 
