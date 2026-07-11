@@ -1,0 +1,1 @@
+{ "slice": "s5", "repo": "ekoa-code", "status": "passed", "commit": "d947b82", "gates": { "e2e": "reference-attach.spec pass (in-app browser -> consent -> send-time mint)", "typecheck": 0, "lint": 0, "adversarial": "owed (codex 401)" } }
