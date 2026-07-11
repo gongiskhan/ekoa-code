@@ -88,6 +88,7 @@ reconciles to the token with no orphan rows (J9); the webhook admission plane is
 | web/shared `SourceInput` divergence (seed-template source 400s from UI) | **open (deferred)** | |
 | web `__tests__` excluded from tsc (web test files never typechecked) | **open (deferred, batch-2)** | |
 | Full e2e ledger estate has NO committed one-shot environment: 49 of 213 due specs red when the whole estate runs against the run-driver stack (served-app compat `/api/v1/action` suites 404 — route absent from api/src at every commit; demo tours exceed the 30s default timeout on dev-next latency). Surfaced by the 2026-07-11 consumer run's full-lane attempt; failing suites are DISJOINT from that run's touched files (its per-slice specs + ci:lane green). Extends the RUN_LOG 2026-07-08 DEVIATION (dashboard specs relied on an uncommitted operator env). | **open (structural)** | needs: a committed full-stack e2e harness + triage of the compat-suite expectations |
+| /health `bridgeConnections` reports sseManager.connectionCount (SSE clients), not bridge/registry `bridgeConnectionCount()` (daemon sockets) — the field name promises the daemon count (registry comment says so) | **open (small)** | surfaced by recon during the 2026-07-11 consumer run; one-line fix in server.ts /health + a health contract assertion |
 | Remote tag `batch1-f25` still points at broken 8a2a67b | **operator action** | `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local re-pointed to af8b556, batch-final s0) |
 
 ## Journey verdicts
