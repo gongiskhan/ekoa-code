@@ -1,0 +1,18 @@
+{
+  "slice": "s0a",
+  "title": "Preconditions: brief committed, codex credential, baseline green",
+  "updatedAt": "2026-07-11T06:01:30Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "infra",
+  "retries": { "limit": 5, "used": 0 },
+  "gates": {
+    "briefCommitted": { "cmd": "git commit 571ccaa", "exit": 0, "at": "2026-07-11T05:57:00Z", "summary": "brief + FLOW_PLAN committed" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T06:00:00Z", "summary": "lint+chokepoint+encryption-key+garrison+typecheck+tests+builds all green" },
+    "gateSecrets": { "cmd": "npm run gate:secrets", "exit": 0, "at": "2026-07-11T06:01:00Z", "summary": "gitleaks (brew-installed this run): 232 commits, no leaks" },
+    "bridgeCanary": { "cmd": "npm run build (../ekoa-bridge)", "exit": 0, "at": "2026-07-11T05:59:00Z", "summary": "sibling repo tsc -b clean" }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "codex exec -> 401 invalid_api_key (api.openai.com); codex login is interactive (operator-only)", "remediation": "codex login  # or codex login --api-key <valid key>", "impact": "adversarial-review gates (s1/s5/s6/s7 + owed s0b reviews) blocked until restored; build slices proceed", "at": "2026-07-11T05:58:30Z" }
+  ]
+}

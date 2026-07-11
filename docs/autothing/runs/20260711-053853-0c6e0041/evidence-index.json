@@ -1,0 +1,18 @@
+{
+  "project": "ekoa-code",
+  "runId": "20260711-053853-0c6e0041",
+  "updatedAt": "2026-07-11T06:01:30Z",
+  "slices": [
+    { "slice": "s0a", "title": "Preconditions", "kind": "infra", "status": "passed", "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s0a/gate-status.json", "blockerSummary": "codex credential dead (401) - external; adversarial gates deferred until operator restores" }
+  ],
+  "globalGate": {
+    "status": "in_progress",
+    "e2eAll": { "cmd": "npm run e2e", "exit": null },
+    "build": { "cmd": "npm run build", "exit": null },
+    "typecheck": { "cmd": "npm run typecheck", "exit": null },
+    "lint": { "cmd": "npm run lint", "exit": null },
+    "crossModel": { "reviewAllApproved": false, "pwTestAllPassed": false },
+    "designAudit": { "verdict": null },
+    "everySliceVideoVerified": false
+  }
+}
