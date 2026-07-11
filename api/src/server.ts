@@ -10,6 +10,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
@@ -61,6 +62,7 @@ import { adobeSignRouter } from './integrations/adobe-sign.js';
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
 import { designTokensHandler } from './services/design-tokens.js';
+import { getArtifactScreenshotDir } from './services/artifact-screenshot.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
 import { artifactsRouter } from './routes/artifacts.js';
@@ -564,6 +566,10 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
   app.get('/api/design-tokens.css', designTokensHandler());
+  // Artifact thumbnails (ch07 §7.11): PNGs captured post-build, served publicly. The dir is
+  // pre-created so a fresh data dir serves clean 404s instead of an ENOENT from static().
+  mkdirSync(getArtifactScreenshotDir(), { recursive: true });
+  app.use('/artifact-screenshots', express.static(getArtifactScreenshotDir(), { fallthrough: false }));
   // Build-share links (ch07 §7.7): fork-per-click.
   app.use('/build', buildLinkRouter({ ...deps, verifyToken }));
   // Serving pipeline (ch07 §7.5-7.7): /apps/:idOrSlug/* + demo-bridge + demos + app-health.

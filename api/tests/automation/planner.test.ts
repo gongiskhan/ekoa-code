@@ -8,13 +8,17 @@ const hoisted = vi.hoisted(() => ({
   responses: [] as string[],
 }));
 
-vi.mock('../../src/llm/index.js', () => ({
-  runOneShot: vi.fn(async (_opts: unknown, _attr: unknown) => {
-    const text = hoisted.responses.shift() ?? '';
-    return { text, usage: {} };
-  }),
-  decideForTier: vi.fn((tier: string) => ({ tier, model: 'm', effort: 'high', weight: 1 })),
-}));
+vi.mock('../../src/llm/index.js', () => {
+  class LlmAbortedError extends Error {}
+  return {
+    LlmAbortedError,
+    runOneShot: vi.fn(async (_opts: unknown, _attr: unknown) => {
+      const text = hoisted.responses.shift() ?? '';
+      return { text, usage: {} };
+    }),
+    decideForTier: vi.fn((tier: string) => ({ tier, model: 'm', effort: 'high', weight: 1 })),
+  };
+});
 
 import { runOneShot, decideForTier } from '../../src/llm/index.js';
 import { planFromGoal } from '../../src/automation/planner.js';
@@ -160,6 +164,39 @@ describe('planFromGoal', () => {
     const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
     expect(result.status).toBe('failed');
     expect(result.status === 'failed' && result.violations.join(' ')).toMatch(/JSON/);
+    expect(runOneShot).toHaveBeenCalledTimes(2);
+  });
+
+  it('egress outage: EMPTY model text → unavailable after exactly one plain retry, never plan_failed', async () => {
+    hoisted.responses.push('', '');
+    const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('unavailable');
+    // One plain retry, and the violations-feedback pass-2 is NEVER entered for an outage.
+    expect(runOneShot).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(runOneShot).mock.calls[1]![0] as { prompt: string };
+    expect(secondCall.prompt).not.toMatch(/Plan rejected/);
+  });
+
+  it('egress outage: transport throw → unavailable (one plain retry), never a thrown 500', async () => {
+    vi.mocked(runOneShot)
+      .mockRejectedValueOnce(new Error('ECONNREFUSED 127.0.0.1:443'))
+      .mockRejectedValueOnce(new Error('ECONNREFUSED 127.0.0.1:443'));
+    const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('unavailable');
+    expect(result.status === 'unavailable' && result.detail).toMatch(/ECONNREFUSED/);
+    expect(runOneShot).toHaveBeenCalledTimes(2);
+  });
+
+  it('egress recovers on the plain retry: pass-1 empty, retry emits a valid plan → ok', async () => {
+    hoisted.responses.push(
+      '',
+      JSON.stringify({
+        status: 'ok', name: 'x', description: '', inputs: [],
+        steps: [{ id: 's', description: 'go', type: 'navigate', url: 'https://x.com' }], reasoning: '',
+      }),
+    );
+    const result = await planFromGoal({ goal: 'g', userId: 'u1', catalog: emptyCatalog });
+    expect(result.status).toBe('ok');
     expect(runOneShot).toHaveBeenCalledTimes(2);
   });
 

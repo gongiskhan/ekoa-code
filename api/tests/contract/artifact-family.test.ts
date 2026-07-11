@@ -26,6 +26,7 @@ import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { artifactsRouter } from '../../src/routes/artifacts.js';
+import { getArtifactScreenshotDir } from '../../src/services/artifact-screenshot.js';
 import { companySpaceRouter } from '../../src/routes/company-space.js';
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { appBuilder } from '../../src/apps/builder.js';
@@ -235,6 +236,22 @@ describe('files: commit-on-save + versions round-trip (ch07 §7.9)', () => {
 
     const files = await jwtApi('/api/v1/artifacts/files1/files', t);
     expectValid(ArtifactFilesResponse, await files.json());
+  });
+
+  it('list emits screenshotUrl only for artifacts with a captured PNG (ch07 §7.11)', async () => {
+    await mkApp('shot1', { userId: 'owner1', orgId: 'orgA' });
+    await mkApp('noshot1', { userId: 'owner1', orgId: 'orgA' });
+    const shotDir = getArtifactScreenshotDir();
+    await mkdir(shotDir, { recursive: true });
+    await writeFile(join(shotDir, 'shot1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    const t = await tokenFor('owner1');
+    const res = await jwtApi('/api/v1/artifacts', t);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: Array<{ id: string; screenshotUrl?: string }> };
+    for (const item of body.items) expectValid(Artifact, item);
+    expect(body.items.find((i) => i.id === 'shot1')?.screenshotUrl).toBe('/artifact-screenshots/shot1.png');
+    expect(body.items.find((i) => i.id === 'noshot1')?.screenshotUrl).toBeUndefined();
   });
 
   it('versions on a never-built artifact (projectDir missing on disk) → 200 empty list, never a 500', async () => {

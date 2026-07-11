@@ -35,8 +35,9 @@ export function brandingRouter(deps: { now: () => number; genId: () => string })
       throw e;
     }
     const actor = actorOf(req);
-    // Map the contract's `websiteUrl` onto the agent's prompt — the agent takes free text.
-    const prompt = `Investiga a identidade de marca do sítio web ${body.websiteUrl} e propõe uma paleta, tipografia e tom de voz.`;
+    // The structured instructions live in the agent's system prompt (agents/brand-research.ts);
+    // the user turn carries only the research target.
+    const prompt = `URL do sítio web a investigar: ${body.websiteUrl}`;
     const { jobId, fire } = runBrandResearch({ actor, prompt, language: 'pt', deps });
     fire(); // fire-and-forget: the job streams its progress on the jobs channel
     res.status(202).json({ jobId }); // BrandingResearchResponse — not a job envelope

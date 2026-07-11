@@ -254,6 +254,16 @@ export async function planFromGoal(
   const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
   const result = await plannerPlanFromGoal({ goal: input.goal, userId: actor.userId, catalog, ...(input.name ? { automationName: input.name } : {}) });
 
+  if (result.status === 'unavailable') {
+    // Egress outage (dead credential, provider down, empty transport): the honest wire status is
+    // "service unavailable, retry soon" — NEVER plan_failed's "rephrase your goal", which blames
+    // the user for an infrastructure failure. Nothing persisted, no run started.
+    console.warn(`[automation] plan-from-goal unavailable (egress outage): ${result.detail}`);
+    return {
+      plan: { status: 'plan_unavailable', steps: [], reason: 'O serviço de IA está indisponível de momento. Tente novamente dentro de instantes.' },
+      rehearsing: false,
+    };
+  }
   if (result.status === 'failed') {
     // F29: the model could not produce a usable plan. A STRUCTURED outcome (mirrors the
     // awaiting_integration branch): nothing persisted, no run started — NOT a thrown Error the

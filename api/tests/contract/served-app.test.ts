@@ -16,6 +16,7 @@ import { appRegistry } from '../../src/apps/app-registry.js';
 import { indexSlug, __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
 import { __resetAppHealthDedupeForTests } from '../../src/apps/serving.js';
 import { AppDataListEnvelope } from '@ekoa/shared';
+import { getArtifactScreenshotDir } from '../../src/services/artifact-screenshot.js';
 
 /**
  * G6: the byte-compatible served-app plane (ch03 §3.9) - data plane wire shapes
@@ -55,7 +56,10 @@ async function mkServedApp(id: string, opts: { html?: string; extraDist?: Record
 }
 
 beforeAll(async () => {
-  process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();
+  process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's';
+  // buildApp pre-creates + mounts the artifact-screenshot dir — keep it off the real home dir.
+  process.env.EKOA_DATA_DIR = await mkdtemp(join(tmpdir(), 'ekoa-served-data-'));
+  __resetConfigForTests(); loadConfig();
   mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_g6');
   tmpRoot = await mkdtemp(join(tmpdir(), 'ekoa-served-'));
   const app = buildApp(cfg, deps);
@@ -68,12 +72,29 @@ afterAll(async () => {
   await closeMongo();
   await mem.stop();
   await rm(tmpRoot, { recursive: true, force: true });
+  if (process.env.EKOA_DATA_DIR) await rm(process.env.EKOA_DATA_DIR, { recursive: true, force: true });
+  delete process.env.EKOA_DATA_DIR;
 });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests(); __resetSlugIndexForTests(); __resetAppHealthDedupeForTests();
   await appRegistry.stop();
   for (const s of [users, artifacts, slugs]) await s.deleteMany({});
   await getDb().collection('app_data').deleteMany({});
+});
+
+describe('artifact thumbnails static plane (ch07 §7.11)', () => {
+  it('serves captured PNGs at /artifact-screenshots/<id>.png and 404s missing ones', async () => {
+    const dir = getArtifactScreenshotDir();
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'shot-a.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    const ok = await api('/artifact-screenshots/shot-a.png');
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('content-type') ?? '').toContain('image/png');
+
+    const missing = await api('/artifact-screenshots/nope.png');
+    expect(missing.status).toBe(404);
+  });
 });
 
 describe('served-app data plane (ch03 §3.9) - the old wire envelope, byte-compatible', () => {

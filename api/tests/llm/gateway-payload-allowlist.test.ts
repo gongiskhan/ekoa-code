@@ -180,6 +180,97 @@ describe('proxyGatewayMessages forwards ONLY the documented Messages API top-lev
     expect(c.max_tokens).toBe(1024);
   });
 
+  it('a configured EXPERT model runs at EXPERT: model honored ([1m] stripped on the wire), reasoning params preserved, metered at EXPERT (rc-1 amendment to §6.5.4)', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) {
+        captured = p.payload as Record<string, unknown>;
+        return { status: 200, headers: {}, body: okBody };
+      },
+    }));
+    const tiers = loadConfig().llm.tiers;
+
+    await proxyGatewayMessages(
+      {
+        model: tiers.EXPERT.model, // 'claude-opus-4-8[1m]' by default
+        messages: [{ role: 'user', content: 'plan this' }],
+        max_tokens: 2048,
+        metadata: { session_id: 'conv-expert' },
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'high' },
+      },
+      'u1',
+    );
+
+    expect(captured).not.toBeNull();
+    // The wire model is the CONFIGURED tier model with the client-side '[1m]' alias stripped.
+    expect(captured!.model).toBe(tiers.EXPERT.model.replace(/\[1m\]$/, ''));
+    // Reasoning params target the model the client asked for — they survive.
+    expect(Object.keys(captured!)).toContain('thinking');
+    expect(Object.keys(captured!)).toContain('output_config');
+    // Metered at the tier that ran, not FAST.
+    const events = await getDb().collection('token_events').find({}).toArray();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.tier).toBe('EXPERT');
+  });
+
+  it('a configured WORKHORSE model runs at WORKHORSE with reasoning params preserved', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) {
+        captured = p.payload as Record<string, unknown>;
+        return { status: 200, headers: {}, body: okBody };
+      },
+    }));
+    const tiers = loadConfig().llm.tiers;
+
+    await proxyGatewayMessages(
+      {
+        model: tiers.WORKHORSE.model,
+        messages: [{ role: 'user', content: 'hi' }],
+        metadata: { session_id: 'conv-wh' },
+        thinking: { type: 'adaptive' },
+      },
+      'u1',
+    );
+
+    expect(captured!.model).toBe(tiers.WORKHORSE.model.replace(/\[1m\]$/, ''));
+    expect(Object.keys(captured!)).toContain('thinking');
+    const events = await getDb().collection('token_events').find({}).toArray();
+    expect(events[0]!.tier).toBe('WORKHORSE');
+  });
+
+  it('an UNKNOWN model keeps the legacy behavior: FAST clamp + reasoning params stripped', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) {
+        captured = p.payload as Record<string, unknown>;
+        return { status: 200, headers: {}, body: okBody };
+      },
+    }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tiers = loadConfig().llm.tiers;
+
+    await proxyGatewayMessages(
+      {
+        model: 'some-alien-model-id',
+        messages: [{ role: 'user', content: 'hi' }],
+        metadata: { session_id: 'conv-alien' },
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'high' },
+      },
+      'u1',
+    );
+
+    expect(captured!.model).toBe(tiers.FAST.model.replace(/\[1m\]$/, ''));
+    expect(Object.keys(captured!)).not.toContain('thinking');
+    expect(Object.keys(captured!)).not.toContain('output_config');
+    const logged = warn.mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+    expect(logged).toContain('fast-clamp');
+    const events = await getDb().collection('token_events').find({}).toArray();
+    expect(events[0]!.tier).toBe('FAST');
+  });
+
   it('does not warn when the body carries only documented fields', async () => {
     __setTransportForTests(fakeTransport({
       async messages() { return { status: 200, headers: {}, body: okBody }; },

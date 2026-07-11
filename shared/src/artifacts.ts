@@ -22,6 +22,8 @@ export const Artifact = z
     featuredRank: z.number().int().optional(),
     shareable: z.boolean().optional(),
     data: z.record(z.unknown()).optional(),
+    /** Thumbnail URL (`/artifact-screenshots/<id>.png`), present once a capture exists (§7.11). */
+    screenshotUrl: z.string().optional(),
     createdAt: IsoTimestamp.optional(),
     updatedAt: IsoTimestamp.optional(),
   })

@@ -23,6 +23,7 @@ import { appBuilder, validateBundle } from './builder.js';
 import { appRegistry } from './app-registry.js';
 import { readManifest } from './manifest.js';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
+import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 
 export interface BuildMechanicsDeps {
   now: () => number;
@@ -192,10 +193,17 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       }
     },
 
-    /** Fire-and-forget screenshot (ch05 §5.6.2 step 8). Honest no-op: the screenshot machinery is
-     *  not built in G7B — no fake PNG is produced. */
-    screenshot(_artifactId: string): void {
-      /* not built in G7B — see RUN_LOG */
+    /** Fire-and-forget screenshot (ch05 §5.6.2 step 8; ch07 §7.11). Same discipline as the
+     *  featured-builder capture: never fails the run, EKOA_SCREENSHOTS_DISABLED=1 skips
+     *  entirely (headless CI / tests). */
+    screenshot(artifactId: string): void {
+      if (process.env.EKOA_SCREENSHOTS_DISABLED === '1') return;
+      void captureArtifactScreenshot(artifactId).catch((err) => {
+        console.warn(
+          `[build-mechanics] ${artifactId}: screenshot capture failed (non-fatal):`,
+          err instanceof Error ? err.message : err,
+        );
+      });
     },
 
     /** Persist the SDK session id onto the artifact data bag ONLY when it changed (ch05 §5.4.5). */

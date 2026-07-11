@@ -14,6 +14,25 @@ export const OrgBranding = z
   .passthrough();
 export type OrgBranding = z.infer<typeof OrgBranding>;
 
+/** Structured output of the TOOL-LESS brand-research agent (ch05 §5.6.4). Keys align with
+ *  OrgBranding so a valid result merge-writes onto the org's branding; `summary`/`confidence`
+ *  are research metadata (kept on the job record, never written to branding). Colors and fonts
+ *  are PROPOSALS from brand knowledge — the agent cannot browse — flagged by `confidence`. */
+export const BrandResearchResult = z
+  .object({
+    logo: z.string().optional(),
+    primaryColor: z.string().optional(),
+    accentColor: z.string().optional(),
+    secondaryColor: z.string().optional(),
+    websiteUrl: z.string().optional(),
+    fonts: z.array(z.string()).optional(),
+    toneOfVoice: z.string().optional(),
+    summary: z.string().optional(),
+    confidence: z.enum(['low', 'medium', 'high']).optional(),
+  })
+  .passthrough();
+export type BrandResearchResult = z.infer<typeof BrandResearchResult>;
+
 export const OrgConfig = z
   .object({
     id: Id,

@@ -17,6 +17,7 @@
  */
 
 import { runOneShot, decideForTier } from '../llm/index.js';
+import { parseFirstJsonObject } from '../services/json-extract.js';
 import type {
   Locator,
   PlaywrightAction,
@@ -418,43 +419,9 @@ export async function verifyOutcome(input: VerifyOutcomeInput): Promise<VerifyOu
 // JSON parsing & validation (ported verbatim)
 // ============================================================================
 
-/**
- * Find and parse the first balanced JSON object in the model's output.
- * The system prompt asks for JSON-only, but real-world responses may
- * include a leading explanation, a trailing comment, or markdown fences.
- * Be lenient: strip fences, find the first `{`, scan to the matching
- * `}` by brace counting, parse.
- */
-export function parseFirstJsonObject(text: string): unknown {
-  if (!text) return null;
-  const fenceless = text.replace(/```(?:json|JSON)?\s*/g, '').replace(/```\s*$/g, '');
-  const start = fenceless.indexOf('{');
-  if (start < 0) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let end = -1;
-  for (let i = start; i < fenceless.length; i++) {
-    const ch = fenceless[i];
-    if (escaped) { escaped = false; continue; }
-    if (ch === '\\') { escaped = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) { end = i; break; }
-    }
-  }
-  if (end < 0) return null;
-
-  try {
-    return JSON.parse(fenceless.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-}
+// Lenient first-JSON-object extraction — hoisted to services/json-extract.ts (brand research
+// parses model JSON the same way). Re-exported so automation callers keep their import path.
+export { parseFirstJsonObject };
 
 const VALID_ACTION_KINDS: ReadonlySet<string> = new Set([
   'navigate', 'click', 'dblclick', 'fill', 'press', 'select',

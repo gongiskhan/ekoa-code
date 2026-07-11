@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { runOneShot, decideForTier } from '../llm/index.js';
+import { runOneShot, decideForTier, LlmAbortedError } from '../llm/index.js';
 import { parseFirstJsonObject } from './vision.js';
 import { formatCatalogForPrompt, type Catalog } from './catalog.js';
 import { loadAutomationConfig } from './config.js';
@@ -61,7 +61,20 @@ export interface PlanFromGoalFailed {
   violations: string[];
 }
 
-export type PlanFromGoalResult = PlanFromGoalSuccess | PlanFromGoalNeedsIntegration | PlanFromGoalFailed;
+/** The model transport failed or answered EMPTY — an egress outage, not a validation failure.
+ *  Kept distinct from `failed` so the wire never blames the user's goal for a broken credential
+ *  or provider outage (the old collapse produced "reformule o objetivo" for a dead transport). */
+export interface PlanFromGoalUnavailable {
+  status: 'unavailable';
+  /** Server-side diagnostic only — may quote transport errors; never sent to the client. */
+  detail: string;
+}
+
+export type PlanFromGoalResult =
+  | PlanFromGoalSuccess
+  | PlanFromGoalNeedsIntegration
+  | PlanFromGoalFailed
+  | PlanFromGoalUnavailable;
 
 // ============================================================================
 // System prompt
@@ -197,7 +210,14 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
     (input.automationName ? `## Working title\n${input.automationName}\n\n` : '');
 
   // Pass 1
-  const firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
+  let firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
+  if (firstResult.status === 'unavailable') {
+    // An outage is not a validation failure — violation feedback cannot fix it. One plain
+    // immediate retry, then surface the outage as-is.
+    console.warn(`[planner] model unavailable (pass 1): ${firstResult.detail} — one plain retry`);
+    firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
+    if (firstResult.status === 'unavailable') return firstResult;
+  }
   if (firstResult.status === 'awaiting_integration') return firstResult;
   // A pass-1 FAILURE (unparseable / invalid model output) feeds the corrective retry the same way a
   // cross-validation violation does — the feedback is what makes the retry actually fix it (F29).
@@ -222,6 +242,7 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
     input,
     baseUserText + feedbackSection + `\n\nReturn the corrected JSON plan now.`,
   );
+  if (secondResult.status === 'unavailable') return secondResult; // outage mid-flow — never a plan_failed
   if (secondResult.status === 'awaiting_integration') return secondResult;
   if (secondResult.status === 'failed') return secondResult;
   const secondViolations = crossValidatePlan(secondResult, input.goal, input.catalog);
@@ -235,10 +256,25 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
 }
 
 async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Promise<PlanFromGoalResult> {
-  const res = await runOneShot(
-    { prompt: userText, systemPrompt: PLANNER_SYSTEM, decision: decideForTier('EXPERT') },
-    { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },
-  );
+  let res: { text: string };
+  try {
+    res = await runOneShot(
+      { prompt: userText, systemPrompt: PLANNER_SYSTEM, decision: decideForTier('EXPERT') },
+      { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },
+    );
+  } catch (err) {
+    // A deliberate abort (budget/cancel) keeps its typed error — the route owns that mapping.
+    if (err instanceof LlmAbortedError) throw err;
+    // Transport/credential failure: an OUTAGE (see PlanFromGoalUnavailable) — never mapped to
+    // the "invalid plan" family that tells the user to rephrase the goal.
+    return { status: 'unavailable', detail: err instanceof Error ? err.message : String(err) };
+  }
+
+  if (res.text.trim() === '') {
+    // Empty text is the transport failing quietly (dead credential, clamped model refusing),
+    // not the model emitting a bad plan.
+    return { status: 'unavailable', detail: 'empty model response' };
+  }
 
   const parsed = parseFirstJsonObject(res.text);
   if (!parsed) {

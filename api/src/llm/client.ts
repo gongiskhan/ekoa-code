@@ -968,6 +968,19 @@ const GATEWAY_FORWARD_FIELDS: ReadonlySet<string> = new Set([
   'service_tier', 'betas', 'mcp_servers', 'container', 'cache_control',
 ]);
 
+/** The tier whose CONFIGURED model matches the requested wire model, or null for any other
+ *  string (which keeps the historical always-FAST clamp). Matching tolerates the client
+ *  omitting a configured trailing '[1m]' long-context marker (and vice versa). */
+function matchConfiguredTier(requestedModel: string): Tier | null {
+  if (!requestedModel) return null;
+  const strip = (m: string): string => m.replace(/\[1m\]$/, '');
+  const tiers = loadConfig().llm.tiers;
+  for (const t of ['FAST', 'WORKHORSE', 'EXPERT'] as const) {
+    if (strip(tiers[t].model) === strip(requestedModel)) return t;
+  }
+  return null;
+}
+
 export interface GatewayForwardResult {
   status: number;
   headers: Record<string, string | string[]>;
@@ -989,10 +1002,19 @@ export async function proxyGatewayMessages(
   correlationIdIn?: string,
 ): Promise<GatewayForwardResult> {
   const capKey = await admitOrThrow(billeeUserId); // §6.6.4 pre-admission cap (empty => platform admin)
-  const decision = decideForTier('FAST'); // wire tier is FAST (§6.5.4)
+  // Tier resolution (rc-1 amendment to §6.5.4, decision logged 2026-07-11): a requested model
+  // that IS one of the three configured tier models runs at THAT tier — the chokepoint no longer
+  // silently degrades its own subprocess traffic (the Agent-SDK spawns ride this gateway via
+  // ANTHROPIC_BASE_URL, so the old always-FAST clamp ran chat/build/planner on the FAST model
+  // regardless of the configured tier, and the strict-JSON planner starved). Any OTHER model
+  // string keeps the historical behavior: clamp to FAST and strip model-tuned reasoning params.
+  const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
+  const matchedTier = matchConfiguredTier(requestedModel);
+  const wireTier: Tier = matchedTier ?? 'FAST';
+  const decision = decideForTier(wireTier);
   const mode = (await currentMode()) ?? 'oauth';
   const isStream = reqBody.stream === true;
-  // Clamp the wire model to FAST; keep the client's other fields. Ensure OAuth metadata.
+  // Keep the client's other fields; ensure OAuth metadata.
   const meta = (reqBody.metadata as Record<string, unknown> | undefined) ?? {};
 
   // Anonymise the bridge/subprocess request BEFORE the transport (§17.3, §17.2: subprocess
@@ -1018,14 +1040,16 @@ export async function proxyGatewayMessages(
     if (GATEWAY_FORWARD_FIELDS.has(key)) forwarded[key] = value;
     else droppedFields.push(key);
   }
-  // The gateway clamps `model` to the FAST wire tier (§6.5.4), so the client's model-tuned
-  // reasoning params target THEIR model, not the wire model - the FAST model can reject them
-  // outright (observed live: 400 "adaptive thinking is not supported on <model>"). Clamp them
-  // with the model; the wire call runs the tier's defaults.
-  for (const key of ['thinking', 'output_config']) {
-    if (key in forwarded) {
-      delete forwarded[key];
-      droppedFields.push(`${key} (fast-clamp)`);
+  // Reasoning params travel ONLY with a matched tier model: when the wire model is the one the
+  // client targeted, its thinking/output_config are valid for it. On a clamp the client's
+  // model-tuned params target THEIR model, not the FAST wire model - which can reject them
+  // outright (observed live: 400 "adaptive thinking is not supported on <model>").
+  if (matchedTier === null) {
+    for (const key of ['thinking', 'output_config']) {
+      if (key in forwarded) {
+        delete forwarded[key];
+        droppedFields.push(`${key} (fast-clamp)`);
+      }
     }
   }
   if (droppedFields.length > 0) {
@@ -1033,7 +1057,9 @@ export async function proxyGatewayMessages(
   }
   const payload: Record<string, unknown> = {
     ...forwarded,
-    model: decision.model,
+    // A trailing '[1m]' long-context marker is a CLIENT-side alias, not a wire-legal model id -
+    // strip it before the provider call (the configured EXPERT model may carry it).
+    model: decision.model.replace(/\[1m\]$/, ''),
     metadata: { ...meta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
   };
 
@@ -1064,7 +1090,8 @@ export async function proxyGatewayMessages(
       const attribution: LlmAttribution = billeeUserId
         ? { kind: 'user_work', agentType: 'pi-fast-loop', billeeUserId }
         : { kind: 'platform', agentType: 'pi-fast-loop', justification: 'ekoa-local gateway API-key principal — platform overhead billed to the platform admin (§6.5.4)' };
-      metered = await meter(attribution, 'FAST', decision.model, usage);
+      // Metered at the tier that actually ran (§6.3): a matched EXPERT call bills EXPERT weight.
+      metered = await meter(attribution, wireTier, decision.model, usage);
       recordSpend({ ...capKey, metered }); // accrue the admitted call's spend (§6.6.4)
     } else {
       unmetered = true; // parse-or-skip (§6.5.4); the caller bumps gateway_unmetered_call

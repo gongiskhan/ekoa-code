@@ -32,7 +32,8 @@ export type PlanStep = z.infer<typeof PlanStep>;
 
 /** The planned step sequence for an automation. `status` carries the outcome: `ok` |
  *  `awaiting_integration` | `plan_failed` (F29 — the model could not produce a usable plan; the
- *  human-readable cause is on `reason`). */
+ *  human-readable cause is on `reason`) | `plan_unavailable` (the model egress itself failed —
+ *  outage/credential, not the user's goal; `reason` carries the retry-soon message). */
 export const Plan = z
   .object({
     steps: z.array(PlanStep).optional(),

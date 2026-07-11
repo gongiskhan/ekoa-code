@@ -2,14 +2,17 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, orgs, jobs } from '../../src/data/stores.js';
+import { users, orgs, jobs, credentials, billingAccounts, tokenEvents } from '../../src/data/stores.js';
+import { setCredential, __resetCredentialsForTests } from '../../src/llm/credentials.js';
+import { __setTransportForTests, __resetTransportForTests } from '../../src/llm/client.js';
+import { makeFakeTransport } from '../agents/_fake-transport.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
-import { BrandingResearchResponse, OrgConfig, ErrorEnvelope } from '@ekoa/shared';
+import { BrandingResearchResponse, BrandResearchResult, OrgConfig, ErrorEnvelope } from '@ekoa/shared';
 
 /**
  * F4 (batch-1 S6): the branding surface must live at its CONTRACT paths.
@@ -40,6 +43,16 @@ async function awaitJob(jobId: string): Promise<Record<string, unknown> | null> 
   return null;
 }
 
+/** Poll until the job reaches a terminal state (the research runs async after the 202). */
+async function awaitJobDone(jobId: string): Promise<Record<string, unknown> | null> {
+  for (let i = 0; i < 200; i++) {
+    const job = (await jobs.get(jobId)) as unknown as Record<string, unknown> | null;
+    if (job && (job.status === 'completed' || job.status === 'failed')) return job;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return null;
+}
+
 async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
@@ -56,7 +69,8 @@ beforeAll(async () => {
 afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
-  await users.deleteMany({}); await orgs.deleteMany({}); await jobs.deleteMany({});
+  __resetTransportForTests(); __resetCredentialsForTests();
+  for (const s of [users, orgs, jobs, credentials, billingAccounts, tokenEvents]) await s.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'Org A', displayName: 'Org A', createdAt: 'x' } as never);
 });
 
@@ -123,6 +137,65 @@ describe('POST /api/v1/branding/research', () => {
     const body = await readJson(res);
     const job = (await awaitJob(body.jobId as string)) as unknown as { request?: Record<string, unknown> } | null;
     expect(JSON.stringify(job?.request ?? {})).toContain('marca-unica.example');
+  });
+
+  it('a structured research result is MERGE-written onto org branding (pre-fix: success stored nothing)', async () => {
+    await mkUser('admin', 'org-admin');
+    // Pre-existing branding: the logo must SURVIVE the merge; primaryColor gets updated.
+    await orgs.update('orgA', (o) => ({ ...o, branding: { logo: 'https://old.example/logo.png', primaryColor: '#000000' } }));
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    __setTransportForTests(makeFakeTransport({
+      finalText: JSON.stringify({
+        websiteUrl: 'https://exemplo.pt',
+        primaryColor: '#123ABC',
+        accentColor: '#FF8800',
+        toneOfVoice: 'próximo e profissional',
+        summary: 'Empresa exemplo com identidade sóbria.',
+        confidence: 'medium',
+      }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://exemplo.pt' }) });
+    expect(res.status).toBe(202);
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+    const jobResult = job?.result as { branding?: unknown; brandingApplied?: boolean };
+    expect(jobResult.brandingApplied).toBe(true);
+    expect(BrandResearchResult.safeParse(jobResult.branding).success).toBe(true);
+
+    // The org read (what the branding page renders after refetch) shows the MERGED branding.
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    const branding = orgBody.branding as Record<string, unknown>;
+    expect(branding.primaryColor).toBe('#123ABC');
+    expect(branding.accentColor).toBe('#FF8800');
+    expect(branding.toneOfVoice).toBe('próximo e profissional');
+    expect(branding.logo).toBe('https://old.example/logo.png'); // merge, never a wipe
+    // Research metadata stays on the job, never on branding.
+    expect(branding.summary).toBeUndefined();
+    expect(branding.confidence).toBeUndefined();
+  });
+
+  it('prose-only research output completes WITHOUT touching org branding (brandingApplied false)', async () => {
+    await mkUser('admin', 'org-admin');
+    await orgs.update('orgA', (o) => ({ ...o, branding: { primaryColor: '#000000' } }));
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    __setTransportForTests(makeFakeTransport({
+      finalText: 'A marca parece moderna e usa tons azuis, mas não consigo estruturar mais do que isto.',
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://exemplo.pt' }) });
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed'); // prose is not an error
+    expect((job?.result as { brandingApplied?: boolean }).brandingApplied).toBe(false);
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    expect((orgBody.branding as Record<string, unknown>).primaryColor).toBe('#000000'); // untouched
   });
 
   it('an SSRF websiteUrl (link-local metadata) is rejected with a 400 envelope, no job created (url-safety.ts names brand-research a guarded target)', async () => {

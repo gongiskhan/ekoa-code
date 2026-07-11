@@ -77,8 +77,8 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe('POST /messages — forward + wire-tier FAST metering (§6.5.4)', () => {
-  it('api-key principal: forwards, bills the platform admin at FAST', async () => {
+describe('POST /messages — forward + tier-matched metering (§6.5.4, rc-1 amendment 2026-07-11)', () => {
+  it('api-key principal asking for the CONFIGURED EXPERT model: runs + bills at EXPERT against the platform admin', async () => {
     __setTransportForTests(stubTransport({ async messages() { return { status: 200, headers: { 'content-type': 'application/json' }, body: providerBody(200, 40) }; } }));
     const res = await api('/api/v1/llm/messages', { method: 'POST', headers: { 'x-api-key': GATEWAY_KEY }, body: JSON.stringify({ model: 'claude-opus-4-8[1m]', messages: [{ role: 'user', content: 'hi' }] }) });
     expect(res.status).toBe(200);
@@ -86,7 +86,18 @@ describe('POST /messages — forward + wire-tier FAST metering (§6.5.4)', () =>
 
     const rows = await tokenEvents.find({ agentType: 'pi-fast-loop' });
     expect(rows).toHaveLength(1);
-    // Wire tier is FAST even though the client asked for Opus; billee '' = platform admin.
+    // The requested model IS the configured EXPERT tier model → honored + metered at EXPERT
+    // (the pre-amendment gateway clamped this to FAST, silently degrading subprocess traffic).
+    expect(rows[0]).toMatchObject({ tier: 'EXPERT', model: 'claude-opus-4-8[1m]', billeeUserId: '', metered: 96 }); // round(0.4*240)
+  });
+
+  it('api-key principal with an UNKNOWN model: clamped + billed at FAST (legacy behavior pinned)', async () => {
+    __setTransportForTests(stubTransport({ async messages() { return { status: 200, headers: { 'content-type': 'application/json' }, body: providerBody(200, 40) }; } }));
+    const res = await api('/api/v1/llm/messages', { method: 'POST', headers: { 'x-api-key': GATEWAY_KEY }, body: JSON.stringify({ model: 'some-alien-model', messages: [{ role: 'user', content: 'hi' }] }) });
+    expect(res.status).toBe(200);
+
+    const rows = await tokenEvents.find({ agentType: 'pi-fast-loop' });
+    expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ tier: 'FAST', model: 'claude-haiku-4-5-20251001', billeeUserId: '', metered: 5 }); // round(0.02*240)
   });
 

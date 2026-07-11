@@ -1,4 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+// Partial mock: the seam test needs a spyable capture, but artifacts-service imports
+// getArtifactScreenshotUrl from the same module — keep the original for everything else.
+vi.mock('../../src/services/artifact-screenshot.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/services/artifact-screenshot.js')>();
+  return {
+    ...orig,
+    captureArtifactScreenshot: vi.fn(async () => ({ path: '', url: '', width: 1280, height: 800 })),
+  };
+});
 import { mkdtemp, rm, access, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -108,6 +118,30 @@ describe('createBuildMechanics — first build (ch05 §5.6.2, ch07 §7.3/§7.4)'
 
   it('resolveFollowUp returns null for an unknown artifact', async () => {
     expect(await mech.resolveFollowUp('nope')).toBeNull();
+  });
+
+  it('screenshot seam fire-and-forgets a capture, honoring EKOA_SCREENSHOTS_DISABLED (ch07 §7.11)', async () => {
+    const { captureArtifactScreenshot } = await import('../../src/services/artifact-screenshot.js');
+    const mocked = vi.mocked(captureArtifactScreenshot);
+    mocked.mockClear();
+
+    process.env.EKOA_SCREENSHOTS_DISABLED = '1';
+    try {
+      mech.screenshot('art-shot-1');
+      await new Promise((r) => setTimeout(r, 10));
+      expect(mocked).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.EKOA_SCREENSHOTS_DISABLED;
+    }
+
+    mech.screenshot('art-shot-1');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocked).toHaveBeenCalledWith('art-shot-1');
+
+    // A rejected capture never propagates (fire-and-forget).
+    mocked.mockRejectedValueOnce(new Error('browser pool down'));
+    expect(() => mech.screenshot('art-shot-2')).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
   });
 });
 

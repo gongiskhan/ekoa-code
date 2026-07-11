@@ -33,7 +33,14 @@ export interface JobRecord extends Doc {
     configValues?: Record<string, unknown>;
   };
   routing?: { tier: string; reason: string };
-  result?: { text?: string; slug?: string; appUrl?: string };
+  result?: {
+    text?: string;
+    slug?: string;
+    appUrl?: string;
+    /** brand-research: the parsed structured result + whether it was merged onto org branding. */
+    branding?: Record<string, unknown>;
+    brandingApplied?: boolean;
+  };
   error?: { code: string; message: string };
   createdAt: string;
   startedAt?: string;

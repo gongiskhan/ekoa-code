@@ -184,6 +184,21 @@ describe('automations contract (§3.8.18)', () => {
     }
   });
 
+  it('an egress outage returns 200 plan_unavailable with a retry-soon reason (never plan_failed)', async () => {
+    const t = await adminToken();
+    // Empty transport text = the model service failing quietly (dead credential / provider
+    // outage). The wire must say "service unavailable, retry soon" — not blame the goal.
+    hoisted.planText = '';
+    const res = await api('/api/v1/automations/plan', t, { method: 'POST', body: JSON.stringify({ goal: 'faz algo', language: 'pt' }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(PlanResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    expect((body.plan as { status?: string }).status).toBe('plan_unavailable');
+    expect((body.plan as { reason?: string }).reason).toMatch(/indisponível/i);
+    expect(body.automation).toBeUndefined(); // nothing persisted
+    expect(body.runId).toBeUndefined(); // no rehearsal run started
+  });
+
   it('plan-from-goal honours the creation-authority gate: a builder is 403 by default (Codex G8)', async () => {
     hoisted.planText = JSON.stringify({ status: 'ok', name: 'X', description: '', inputs: [], steps: [{ type: 'wait', durationMs: 1 }], reasoning: '' });
     const t = await builderToken();

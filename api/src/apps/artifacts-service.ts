@@ -7,6 +7,7 @@ import { artifacts, slugs } from '../data/stores.js';
 import { OwnerVisibilityScoped, type Actor } from '../data/scoped.js';
 import type { Doc } from '../data/store.js';
 import { indexSlug } from './slug-index.js';
+import { getArtifactScreenshotUrl } from '../services/artifact-screenshot.js';
 
 export interface ArtifactDoc extends Doc {
   name: string;
@@ -49,7 +50,7 @@ export function stripReservedDataKeys(data: Record<string, unknown>): Record<str
 const scoped = new OwnerVisibilityScoped<ArtifactDoc>(artifacts as never);
 
 export function artifactView(a: ArtifactDoc) {
-  return { id: a._id, name: a.name, slug: a.slug, userId: a.userId, orgId: a.orgId, visibility: a.visibility, featured: !!a.featured, shareable: !!a.shareable, status: a.status };
+  return { id: a._id, name: a.name, slug: a.slug, userId: a.userId, orgId: a.orgId, visibility: a.visibility, featured: !!a.featured, shareable: !!a.shareable, status: a.status, screenshotUrl: getArtifactScreenshotUrl(a._id) };
 }
 
 const STOPWORDS = new Set(['a', 'o', 'de', 'da', 'do', 'the', 'and', 'e']);

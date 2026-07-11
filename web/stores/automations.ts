@@ -237,6 +237,10 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     if (plan.status === 'plan_failed') {
       return { ok: false, error: plan.reason || 'O modelo não conseguiu criar um plano utilizável. Tente reformular o objetivo.' };
     }
+    // Egress outage: the model service itself failed — retry-soon, never "rephrase the goal".
+    if (plan.status === 'plan_unavailable') {
+      return { ok: false, error: plan.reason || 'O serviço de IA está indisponível de momento. Tente novamente dentro de instantes.' };
+    }
     // The backend persisted the automation and kicked off the rehearsal
     // run. Surface both so the caller can navigate to the editor and
     // subscribe to the live rehearsal events.
