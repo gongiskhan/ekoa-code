@@ -81,6 +81,19 @@ describe('parseIntegrationOutput', () => {
     expect(r.errors.some((e) => /configSchema is empty/.test(e))).toBe(true);
   });
 
+  it('accepts an empty configSchema for a no-auth integration (a public API has no credentials)', () => {
+    // Live 2026-07-11: the REST Countries public API (authType 'none') was rejected because an
+    // empty configSchema was flagged unconditionally, blocking Save. A no-auth integration has no
+    // credential fields, so an empty configSchema is valid (parallels the credentialGuide exemption).
+    const cfg = validConfig({ authType: 'none', configSchema: [] });
+    delete (cfg as Record<string, unknown>).credentialGuide; // no-auth needs no guide either
+    // drop the credential header the api_key action carried — a no-auth action authenticates nothing
+    (cfg.actions as Array<{ httpConfig: { headers?: unknown } }>)[0].httpConfig.headers = {};
+    const r = parseIntegrationOutput(withBlocks(JSON.stringify(cfg)));
+    expect(r.errors, JSON.stringify(r.errors)).toEqual([]);
+    expect(r.pkg?.authType).toBe('none');
+  });
+
   it('flags a missing credentialGuide (unless authType none)', () => {
     const cfg = validConfig();
     delete (cfg as Record<string, unknown>).credentialGuide;

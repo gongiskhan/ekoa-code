@@ -140,9 +140,12 @@ export function validateConfig(config: IntegrationPackageConfig, opts: ParseOpti
   if (!config.provider) errors.push('Missing provider');
   if (!config.category) errors.push('Missing category');
 
-  if (!config.configSchema || config.configSchema.length === 0) {
+  // A no-auth integration (public API) legitimately has NO credential fields, so an empty
+  // configSchema is only an error when the integration actually authenticates (mirrors the
+  // credentialGuide exemption below). When fields ARE present, validate them regardless of authType.
+  if ((!config.configSchema || config.configSchema.length === 0) && config.authType !== 'none') {
     errors.push('configSchema is empty — must have at least one field for credentials');
-  } else {
+  } else if (config.configSchema) {
     for (const field of config.configSchema) {
       if (!field.key) errors.push('Config field missing key');
       if (!field.label) errors.push(`Config field "${field.key ?? '?'}" missing label`);
