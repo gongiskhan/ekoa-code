@@ -1538,6 +1538,9 @@ export interface Translations {
       empty: string;
       stepCount: (n: number) => string;
       failedCount: (n: number) => string;
+      stepLabel: (n: number) => string;
+      screenshotAlt: (n: number) => string;
+      noSteps: string;
       status: {
         completed: string;
         failed: string;

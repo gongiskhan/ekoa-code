@@ -171,15 +171,17 @@ function ActivityBarShell({
     return (
       <BarWrapper containerClass="border-violet-300 bg-violet-50 text-violet-900">
         <Wand2 size={16} className="shrink-0 text-violet-700 animate-pulse" />
-        <Headline>
-          {t.fixingStepLabel(state.stepIndex + 1)}
-          {state.attemptNumber ? t.attemptSuffix(state.attemptNumber) : ''}…
-          <span className="font-normal text-violet-800/85">
-            {t.fixingAsking}
-          </span>
-        </Headline>
-        {state.failureMessage && <Subline tone="violet">{t.whatFailed(state.failureMessage)}</Subline>}
-        <ResolutionLine resolution={resolution} />
+        <div className="min-w-0 flex-1">
+          <Headline>
+            {t.fixingStepLabel(state.stepIndex + 1)}
+            {state.attemptNumber ? t.attemptSuffix(state.attemptNumber) : ''}…
+            <span className="font-normal text-violet-800/85">
+              {t.fixingAsking}
+            </span>
+          </Headline>
+          {state.failureMessage && <Subline tone="violet">{t.whatFailed(state.failureMessage)}</Subline>}
+          <ResolutionLine resolution={resolution} />
+        </div>
         <button
           type="button"
           onClick={cancel}
@@ -196,14 +198,16 @@ function ActivityBarShell({
     return (
       <BarWrapper containerClass="border-amber-200 bg-amber-50 text-amber-900">
         <Spinner size="sm" className="shrink-0 text-amber-700" />
-        <Headline>
-          {t.stepLabel(state.stepIndex + 1)}
-          {step?.description ? `: ` : ''}
-          <span className="font-normal text-amber-800/90 line-clamp-1">
-            {step?.description ?? ''}
-          </span>
-        </Headline>
-        <ResolutionLine resolution={resolution} />
+        <div className="min-w-0 flex-1">
+          <Headline>
+            {t.stepLabel(state.stepIndex + 1)}
+            {step?.description ? `: ` : ''}
+            <span className="font-normal text-amber-800/90 line-clamp-1">
+              {step?.description ?? ''}
+            </span>
+          </Headline>
+          <ResolutionLine resolution={resolution} />
+        </div>
         <button
           type="button"
           onClick={cancel}
@@ -231,7 +235,12 @@ function ActivityBarShell({
       <BarWrapper containerClass="border-emerald-200 bg-emerald-50 text-emerald-900">
         <CheckCircle2 size={16} className="shrink-0 text-emerald-700" />
         <Headline>
-          {t.runComplete}{state.summary ? ` - ${state.summary}` : ''}
+          {t.runComplete}
+          {state.summary && (
+            <span className="mt-0.5 block font-normal text-emerald-800/90 line-clamp-2 min-w-0" title={state.summary}>
+              {state.summary}
+            </span>
+          )}
         </Headline>
       </BarWrapper>
     );
@@ -242,7 +251,12 @@ function ActivityBarShell({
       <BarWrapper containerClass="border-red-300 bg-red-50 text-red-900">
         <AlertTriangle size={16} className="shrink-0 text-red-700" />
         <Headline>
-          {t.runFailed}{state.error ? ` - ${state.error}` : ''}
+          {t.runFailed}
+          {state.error && (
+            <span className="mt-0.5 block font-normal text-red-800/90 line-clamp-2 min-w-0" title={state.error}>
+              {state.error}
+            </span>
+          )}
         </Headline>
       </BarWrapper>
     );

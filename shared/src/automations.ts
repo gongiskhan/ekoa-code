@@ -101,6 +101,29 @@ export const PlanResponse = z.object({
 });
 export type PlanResponse = z.infer<typeof PlanResponse>;
 
+/**
+ * A run's per-step record as serialized for the Histórico detail (ch03 §3.6.3). Lean by design:
+ * carries the outcome fields the UI renders (status, tier, duration, a one-line error) plus the
+ * served screenshot URL (`/automation-screenshots/...`, a capability path) — never the disk
+ * `screenshotPath` (the client must not know the storage layout) and never the heavy per-step
+ * output payload. All fields optional + passthrough so the serializer can stay tolerant.
+ */
+export const RunStepRecord = z
+  .object({
+    stepId: z.string().optional(),
+    index: z.number().int().optional(),
+    status: z.string().optional(),
+    tier: z.string().optional(),
+    durationMs: z.number().optional(),
+    error: z
+      .object({ message: z.string(), recoverable: z.boolean().optional() })
+      .passthrough()
+      .optional(),
+    screenshotUrl: z.string().optional(),
+  })
+  .passthrough();
+export type RunStepRecord = z.infer<typeof RunStepRecord>;
+
 export const RunRecord = z
   .object({
     id: Id,
@@ -112,6 +135,9 @@ export const RunRecord = z
     finishedAt: IsoTimestamp.optional(),
     ownerId: Id.optional(),
     orgId: Id.optional(),
+    /** Per-step outcomes for the run detail view (screenshots, status, timing). Optional so a lean
+     *  list response may omit them; present on GET /runs/:id and the list serialization. */
+    steps: z.array(RunStepRecord).optional(),
   })
   .passthrough();
 export type RunRecord = z.infer<typeof RunRecord>;

@@ -76,3 +76,26 @@ export function writeStepScreenshot(
     return undefined;
   }
 }
+
+/**
+ * Absolute root the `/automation-screenshots` static plane serves from — `<dataDir>/automation-runs`.
+ * `writeStepScreenshot` returns paths RELATIVE to `dataDir` prefixed with `automation-runs/`, so the
+ * static mount roots at this directory and the URL drops the prefix (see `screenshotUrlFromPath`).
+ * The single source of truth for the serving layout, so the composition root's mount and the URL
+ * builder never drift.
+ */
+export function automationRunsRoot(): string {
+  return join(loadAutomationConfig().dataDir, 'automation-runs');
+}
+
+/**
+ * Map a stored step screenshot path (relative to the data dir, e.g.
+ * `automation-runs/<automationId>/<runId>/step-3.png`) to the public capability URL the UI renders
+ * (`/automation-screenshots/<automationId>/<runId>/step-3.png`). The unguessable automationId/runId
+ * path IS the capability (ch12) — mirrors the old cortex mapping. Returns undefined for a missing
+ * path so callers can spread it conditionally.
+ */
+export function screenshotUrlFromPath(relPath: string | undefined): string | undefined {
+  if (!relPath) return undefined;
+  return `/automation-screenshots/${relPath.replace(/^automation-runs\//, '')}`;
+}

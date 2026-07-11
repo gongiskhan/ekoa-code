@@ -190,8 +190,25 @@ export class LocalBrowserSession implements BrowserSession {
 
   private async capture(page: Page): Promise<void> {
     try {
-      const shot = await page.screenshot({ type: 'png' }).catch(() => null);
-      if (shot) this.lastScreenshotB64 = shot.toString('base64');
+      let failure: unknown;
+      let shot = await page.screenshot({ type: 'png' }).catch((err) => { failure = err; return null; });
+      if (!shot) {
+        // A screenshot can fail transiently mid-navigation ("page is navigating and
+        // changing content"). Settle briefly and retry ONCE before giving up — an empty
+        // capture would otherwise hand the vision tier a blank image.
+        await page.waitForLoadState('domcontentloaded').catch(() => { /* best-effort */ });
+        await page.waitForTimeout(250).catch(() => { /* best-effort */ });
+        shot = await page.screenshot({ type: 'png' }).catch((err) => { failure = err; return null; });
+      }
+      if (shot) {
+        // Only overwrite the held screenshot with a NON-EMPTY capture, so a failed retry
+        // never leaves the observation claiming a screenshot it does not have.
+        this.lastScreenshotB64 = shot.toString('base64');
+      } else {
+        console.warn(
+          `[automation] page screenshot failed twice — continuing without a fresh screenshot: ${failure instanceof Error ? failure.message : String(failure)}`,
+        );
+      }
       this.lastFingerprint = await computePageFingerprint(page).catch(() => this.lastFingerprint);
       this.lastUrl = page.url();
       // a11y outline is left undefined in-process (the rehearsal fixer degrades

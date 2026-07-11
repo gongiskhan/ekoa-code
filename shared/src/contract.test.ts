@@ -105,6 +105,45 @@ describe('shared contract', () => {
     expect(NotificationEvent.safeParse({ type: 'usage_updated' }).success).toBe(true);
   });
 
+  it('AutomationRunEvent step: parses both a thin legacy event and an enriched one (§3.6.3)', async () => {
+    const { AutomationRunEvent } = await import('./events.js');
+    // A pre-enrichment client emitted only the thin core — it must still validate (old clients stay valid).
+    expect(
+      AutomationRunEvent.safeParse({ type: 'step', runId: 'r', stepIndex: 0, status: 'running' }).success,
+    ).toBe(true);
+    // The enriched event carries every OPTIONAL field the run UI reads.
+    expect(
+      AutomationRunEvent.safeParse({
+        type: 'step',
+        runId: 'r',
+        stepIndex: 2,
+        status: 'failed',
+        stepId: 's2',
+        tier: 'vision',
+        error: 'a página não corresponde ao resultado esperado',
+        screenshotUrl: '/automation-screenshots/auto/run/step-2.png',
+        output: { kind: 'local_command', stdout: '', stderr: '', exitCode: 1 },
+        durationMs: 900,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('RunRecord carries optional per-step outcomes with a served screenshotUrl (§3.6.3)', async () => {
+    const { RunRecord } = await import('./automations.js');
+    const parsed = RunRecord.safeParse({
+      id: 'run-1',
+      automationId: 'auto-1',
+      status: 'completed',
+      steps: [
+        { stepId: 's1', index: 0, status: 'completed', tier: 'cache', durationMs: 12, screenshotUrl: '/automation-screenshots/auto-1/run-1/step-0.png' },
+        { stepId: 's2', index: 1, status: 'failed', tier: 'vision', durationMs: 30, error: { message: 'falhou', recoverable: true } },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    // A legacy stepless record still validates (steps optional).
+    expect(RunRecord.safeParse({ id: 'r', automationId: 'a', status: 'running' }).success).toBe(true);
+  });
+
   it('no auth cell carries a bare "admin" class (ch03 acceptance 11)', () => {
     for (const e of allEndpointsFlat()) {
       expect(['public', 'user', 'org-admin', 'super-admin', 'token-query', 'hmac', 'header-scoped', 'optional-jwt', 'app-id-gated', 'bridge']).toContain(e.auth);

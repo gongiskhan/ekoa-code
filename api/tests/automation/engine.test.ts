@@ -80,6 +80,10 @@ const hoisted = vi.hoisted(() => {
     localSessionOpts: [] as any[],
 
     proposePatch: vi.fn(),
+
+    // The bytes the fake BrowserSessions return from screenshotPng(). Default non-empty; a test
+    // sets it to an empty Buffer to exercise the engine's empty-screenshot guard.
+    screenshotBytes: Buffer.from('png') as Buffer,
   };
 });
 
@@ -100,6 +104,10 @@ vi.mock('../../src/automation/persistence.js', () => ({
     listForAutomation: vi.fn(async () => []),
   },
   writeStepScreenshot: hoisted.writeStepScreenshot,
+  // The engine imports these from persistence.js; the mock must export them or the calls (in
+  // pauseRunForUser and the SSE mapper) resolve to `undefined` and throw at runtime.
+  screenshotUrlFromPath: (rel?: string) => (rel ? `/automation-screenshots/${rel.replace(/^automation-runs\//, '')}` : undefined),
+  automationRunsRoot: () => '/tmp/ekoa-test/automation-runs',
 }));
 
 // Fake daemon-backed BrowserSession. act/assert are hoisted mocks the
@@ -114,7 +122,7 @@ vi.mock('../../src/automation/browser-session.js', () => ({
     async observe() { this.observed = true; }
     async ensureObserved() { this.observed = true; }
     hasObservation() { return this.observed; }
-    screenshotPng() { return Buffer.from('png'); }
+    screenshotPng() { return hoisted.screenshotBytes; }
     screenshotB64() { return Buffer.from('png').toString('base64'); }
     url() { return 'https://x.com/'; }
     fingerprint() { return hoisted.computePageFingerprint(); }
@@ -134,7 +142,7 @@ vi.mock('../../src/automation/local-browser-session.js', () => ({
     async observe() { this.observed = true; }
     async ensureObserved() { this.observed = true; }
     hasObservation() { return this.observed; }
-    screenshotPng() { return Buffer.from('png'); }
+    screenshotPng() { return hoisted.screenshotBytes; }
     screenshotB64() { return Buffer.from('png').toString('base64'); }
     url() { return 'https://x.com/'; }
     fingerprint() { return hoisted.computePageFingerprint(); }
@@ -247,6 +255,7 @@ beforeEach(() => {
   hoisted.assert.mockResolvedValue(true);
   hoisted.accessibilitySnapshot.mockReturnValue(undefined);
   hoisted.classifyHumanAction.mockResolvedValue(null);
+  hoisted.screenshotBytes = Buffer.from('png');
 });
 
 // ---------------------------------------------------------------------------
@@ -385,6 +394,42 @@ describe('runAutomation', () => {
     expect(run.steps[0].error.recoverable).toBe(true);
   });
 
+  it('empty-screenshot guard: a browser step never calls vision with a blank image; fails recoverable in PT', async () => {
+    // Both the initial read and the forced re-observe come back empty (the capture failed) — the
+    // engine must refuse to resolve blind rather than hand the model a blank screenshot.
+    hoisted.screenshotBytes = Buffer.alloc(0);
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'click save', type: 'browser',
+    }]));
+
+    const result = await runAutomation('auto-1', ctx());
+
+    expect(result.status).toBe('failed');
+    // The whole point: vision is NEVER asked to work off an empty screenshot.
+    expect(hoisted.resolvePlaywrightAction).not.toHaveBeenCalled();
+    expect(hoisted.act).not.toHaveBeenCalled();
+    const run = hoisted.runs.get('auto-1:' + result.runId);
+    expect(run.steps[0].status).toBe('failed');
+    expect(run.steps[0].error.recoverable).toBe(true);
+    expect(run.steps[0].error.message).toMatch(/captura de ecrã indisponível/);
+  });
+
+  it('empty-screenshot guard: a verify step never calls the verifier with a blank image', async () => {
+    hoisted.screenshotBytes = Buffer.alloc(0);
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'confirm result', type: 'verify', expectedOutcome: 'the page shows a success banner',
+    }]));
+
+    const result = await runAutomation('auto-1', ctx());
+
+    expect(result.status).toBe('failed');
+    expect(hoisted.verifyOutcome).not.toHaveBeenCalled();
+    const run = hoisted.runs.get('auto-1:' + result.runId);
+    expect(run.steps[0].status).toBe('failed');
+    expect(run.steps[0].error.recoverable).toBe(true);
+    expect(run.steps[0].error.message).toMatch(/captura de ecrã indisponível/);
+  });
+
   it('planner-authored cachedAssertion: verify step runs assertion deterministically without calling vision', async () => {
     hoisted.automations.set('auto-1', automation([{
       id: 's1',
@@ -459,7 +504,7 @@ describe('runAutomation', () => {
 
     expect(result.status).toBe('failed');
     const run = hoisted.runs.get('auto-1:' + result.runId);
-    expect(run.steps[0].error.message).toMatch(/outcome not met/);
+    expect(run.steps[0].error.message).toMatch(/resultado não atingido/);
   });
 
   it('runs a navigate step without calling vision', async () => {

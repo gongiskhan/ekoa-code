@@ -44,6 +44,10 @@ export const JobEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), jobId: z.string() }),
   z.object({ type: z.literal('routing'), tier: z.string(), reason: z.string() }),
   z.object({ type: z.literal('text_chunk'), text: z.string() }),
+  // Working-commentary channel (mirrors ChatRunEvent.thinking_chunk): the agent's intermediate
+  // narration, marker-filtered and engine-identity-redacted server-side. Renders in the
+  // collapsible thinking UI, never as regular transcript messages.
+  z.object({ type: z.literal('thinking_chunk'), text: z.string() }),
   z.object({
     type: z.literal('tool_event'),
     phase: z.enum(['started', 'finished', 'failed']),
@@ -61,6 +65,16 @@ export const JobEvent = z.discriminatedUnion('type', [
     detail: z.string().optional(),
   }),
   z.object({ type: z.literal('preview_reload') }),
+  // Emitted as soon as the build's artifact is scaffolded + registered (before the agent runs):
+  // the client can show the LIVE preview and the real file tree from second zero instead of
+  // waiting for `complete` (the scaffold is served immediately; watcher rebuilds then stream
+  // `preview_reload` as the agent writes).
+  z.object({
+    type: z.literal('artifact'),
+    artifactId: z.string(),
+    appUrl: z.string(),
+    slug: z.string().optional(),
+  }),
   z.object({
     type: z.literal('complete'),
     durationMs: z.number(),
@@ -76,7 +90,30 @@ export type JobEvent = z.infer<typeof JobEvent>;
 /** 3. GET /api/v1/automations/runs/:id/events (ch03 §3.6.3). */
 export const AutomationRunEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), runId: z.string() }),
-  z.object({ type: z.literal('step'), runId: z.string(), stepIndex: z.number(), status: z.string() }),
+  // The per-step update. `runId/stepIndex/status` are the thin core an old client relied on; the
+  // enrichment fields (all OPTIONAL, so pre-enrichment clients stay valid) carry what the run UI
+  // needs to show a step's outcome without a follow-up fetch: the resolved step id, the resolution
+  // tier, a one-line failure message, the served screenshot URL (`/automation-screenshots/...`),
+  // the non-browser step output panel payload, and the wall-clock. Kept lean on purpose — no a11y
+  // snapshots, no raw screenshot bytes (the URL is a capability path served by the static plane).
+  z.object({
+    type: z.literal('step'),
+    runId: z.string(),
+    stepIndex: z.number(),
+    status: z.string(),
+    stepId: z.string().optional(),
+    tier: z.string().optional(),
+    error: z.string().optional(),
+    // Structured failure context for the step (integration request/redacted-response, api_call
+    // request/response). Already redacted + length-bounded at the executor before it reaches the
+    // record, so it is safe to forward verbatim — the web renders it in the expandable
+    // IntegrationErrorPanel. Kept off the persisted RunStepRecord (the Histórico detail shows the
+    // one-line message, not this panel).
+    errorDetails: z.unknown().optional(),
+    screenshotUrl: z.string().optional(),
+    output: z.unknown().optional(),
+    durationMs: z.number().optional(),
+  }),
   z.object({
     type: z.literal('step_output_chunk'),
     stepIndex: z.number(),
@@ -137,6 +174,9 @@ export const NotificationEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('integration_build_intent'), sessionId: z.string(), hint: z.string().optional() }),
   z.object({ type: z.literal('integration_ready'), integrationKey: z.string() }),
   z.object({ type: z.literal('usage_updated') }),
+  // Org branding changed (brand research applied) - clients refetch the company/branding
+  // config so the header logo + theme update live instead of waiting for a page reload.
+  z.object({ type: z.literal('branding_updated') }),
 ]);
 export type NotificationEvent = z.infer<typeof NotificationEvent>;
 

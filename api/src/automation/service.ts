@@ -33,7 +33,8 @@ import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
 import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprovedCommandRecords } from './consent.js';
 import { runEventEmitterFactory } from './seams.js';
-import type { Automation, Step, StepType, RunRecord } from './types.js';
+import { screenshotUrlFromPath } from './persistence.js';
+import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
 
 // ============================================================================
 // Errors (the router maps `.code` onto the ch03 error envelope, CONV-2)
@@ -97,6 +98,25 @@ function toWireRun(doc: StoredRun): WireRunRecord {
     ...(doc.endedAt ? { finishedAt: doc.endedAt } : {}),
     ...(doc.ownerUserId ? { ownerId: doc.ownerUserId } : {}),
     ...(doc.orgId ? { orgId: doc.orgId } : {}),
+    ...(Array.isArray(doc.steps) ? { steps: doc.steps.map(toWireStep) } : {}),
+  };
+}
+
+/**
+ * A stored StepRecord → the lean wire step (shared RunStepRecord). Maps the disk `screenshotPath`
+ * to the served `screenshotUrl` capability path so the Histórico detail renders thumbnails without
+ * knowing the storage layout; drops the heavy `output`, `resolvedAction`, `fingerprint`, and the
+ * structured error `details` to keep the run list/detail response bounded.
+ */
+function toWireStep(s: StepRecord): Record<string, unknown> {
+  return {
+    stepId: s.stepId,
+    index: s.index,
+    status: s.status,
+    tier: s.tier,
+    durationMs: s.durationMs,
+    ...(s.error ? { error: { message: s.error.message, recoverable: s.error.recoverable } } : {}),
+    ...(screenshotUrlFromPath(s.screenshotPath) ? { screenshotUrl: screenshotUrlFromPath(s.screenshotPath) } : {}),
   };
 }
 

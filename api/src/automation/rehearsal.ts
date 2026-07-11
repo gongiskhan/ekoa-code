@@ -120,7 +120,8 @@ Rules:
 - Step descriptions are PLAIN ENGLISH. Never write code, selectors, or DOM structure.
 - New step ids must be short lowercase-hyphenated slugs ("dismiss-cookies", "wait-for-redirect").
 - Do not invent UI elements that aren't visible in the screenshot.
-- If the same patch index has already been retried 3+ times, prefer skip_current, pause_for_user, or abort over another insert/replace — the loop is stuck.`;
+- If the same patch index has already been retried 3+ times, prefer skip_current, pause_for_user, or abort over another insert/replace — the loop is stuck.
+- LANGUAGE: the end user reads European Portuguese. Write the human-facing free-text fields ("reasoning" and, for pause_for_user, "userInstructions") in português de Portugal (pt-PT), regardless of the page's own language. Keep every JSON key and enum value ("patch", step "type", "url", "durationMs") in English, and keep step "description" fields in plain ENGLISH (the resolver that consumes them next expects English) — translate only "reasoning" and "userInstructions".`;
 
 export async function proposePatch(input: ProposePatchInput): Promise<RehearsalPatch> {
   const currentStep = input.steps[input.currentIndex];

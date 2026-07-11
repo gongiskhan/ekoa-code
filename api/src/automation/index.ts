@@ -87,7 +87,10 @@ export {
 } from './catalog.js';
 
 // --- Persistence (routes read runs; the plan endpoint saves automations) ----
-export { automationStore, automationRunStore } from './persistence.js';
+export { automationStore, automationRunStore, automationRunsRoot, screenshotUrlFromPath } from './persistence.js';
+
+// --- Run SSE step mapping (composition root's emitter adapts this onto sseManager) -------------
+export { automationStepEventPayload, type AutomationStepEventPayload } from './run-events.js';
 
 // --- Memory-backed cache eviction (step-feedback route; §11.6) --------------
 export { evictCacheForFingerprint } from './cache.js';

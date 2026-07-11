@@ -176,7 +176,9 @@ Rules:
 - For LOGIN / SIGN-UP form submission, the same applies — press Enter on the password / last-required field rather than clicking the submit button when the page has any kind of suggestion or validation overlay visible.
 - If the page has an obvious DISMISSIBLE OVERLAY (autocomplete suggestions, pop-up dialog, "what's new" tooltip, cookie banner) covering the element you'd click, return {"kind":"press","key":"Escape"} (no locator) so the overlay closes; the engine will run the click on the next attempt.
 - NEVER return a click whose target is a FILE UPLOAD INPUT or an icon that opens one (camera/lens icons on Google Images for "search by image", Drive's "Upload file" button, "Choose file" / "Procurar" / "Anexar" buttons next to a file input). The OS file picker that opens cannot be interacted with from JavaScript and will jam the run. If the step plainly requires uploading a file you have no way to source, return {"kind":"screenshot"} with confidence "low" and a reasoning that explains the upload is the blocker — the rehearsal fixer can then re-route.
-- If you find yourself on GOOGLE IMAGES (images.google.com, google.com/imghp) when the step description was about plain Google Search, the safer action is {"kind":"navigate","url":"https://www.google.com/search?q=<query>"} directly — clicking buttons on Images often opens the reverse-image-search uploader.`;
+- If you find yourself on GOOGLE IMAGES (images.google.com, google.com/imghp) when the step description was about plain Google Search, the safer action is {"kind":"navigate","url":"https://www.google.com/search?q=<query>"} directly — clicking buttons on Images often opens the reverse-image-search uploader.
+
+LANGUAGE: the end user reads European Portuguese. Write the free-text "reasoning" field in português de Portugal (pt-PT), regardless of the page's own language. Keep EVERY JSON key and EVERY enum/identifier value (kind, strategy, role, key, state, direction, confidence, and any locator name/value copied from the page) in English exactly as specified — translate only the human-facing prose.`;
 
 const VERIFY_OUTCOME_SYSTEM = `You are the verifier layer of an automation engine. Given a screenshot of a web page and a natural-language expected outcome, decide whether the outcome holds and (if it does) propose a deterministic Playwright assertion that future runs can check without re-asking the model.
 
@@ -238,11 +240,20 @@ userInstructions is shown VERBATIM in the UI as a Post-it to the user. Write it 
 - "Open your authenticator app, type the 6-digit code in the open browser, then click Continue."
 - "Approve the payment on the 3-D Secure screen, then click Continue."
 
-If the screenshot does NOT show a human-action page, set humanAction to null. But if you see ANY of: a CAPTCHA widget, a "verify you are human" prompt, an "unusual traffic" / "/sorry/" page, an MFA / OTP entry, a 3-D Secure screen, an "is this you?" identity check, or a sign-in form — set humanAction. Don't second-guess this — the engine knows what to do with the signal.`;
+If the screenshot does NOT show a human-action page, set humanAction to null. But if you see ANY of: a CAPTCHA widget, a "verify you are human" prompt, an "unusual traffic" / "/sorry/" page, an MFA / OTP entry, a 3-D Secure screen, an "is this you?" identity check, or a sign-in form — set humanAction. Don't second-guess this — the engine knows what to do with the signal.
+
+LANGUAGE: the end user reads European Portuguese. Write the human-facing free-text fields ("reasoning" and, when set, "userInstructions") in português de Portugal (pt-PT), regardless of the page's own language. Keep EVERY JSON key and EVERY enum/identifier value (passed, the humanAction "kind", assertion "kind", locator "strategy", pattern/contains values copied from the page) in English exactly as specified — translate only the human-facing prose.`;
 
 export async function resolvePlaywrightAction(input: ResolveActionInput): Promise<ResolveActionOutput> {
   void input.tier; // legacy field; resolver always runs on EXPERT at max effort
   void input.timeoutMs; // the chokepoint manages its own timeout
+
+  // Invariant: never resolve against a blank image. The engine's empty-screenshot guard
+  // (screenshotForVision) should make this unreachable; this documents + enforces it so a future
+  // caller can't quietly send the model an empty screenshot and get a confident-looking guess.
+  if (input.screenshotPng.length === 0) {
+    throw new Error('resolvePlaywrightAction called with an empty screenshot — refusing to resolve blind');
+  }
 
   const memorySection = input.scopedMemories.length > 0
     ? `## Relevant memory for this automation\n${input.scopedMemories.map(m => `- ${m}`).join('\n')}\n\n`
@@ -315,7 +326,8 @@ userInstructions is shown VERBATIM in the UI as a Post-it to the user. Write it 
 
 Rules:
 - Output exactly one JSON object. No prose before or after. No markdown fences.
-- Bias toward populating humanAction when in doubt — a false positive merely asks the user to take a quick look; a false negative leaves them stuck.`;
+- Bias toward populating humanAction when in doubt — a false positive merely asks the user to take a quick look; a false negative leaves them stuck.
+- LANGUAGE: the end user reads European Portuguese. Write the "userInstructions" free-text in português de Portugal (pt-PT), regardless of the page's own language. Keep the JSON key names and the "kind" enum value in English exactly as specified.`;
 
 export interface ClassifyHumanActionInput {
   screenshotPng: Buffer;
@@ -378,6 +390,12 @@ export async function classifyHumanAction(
 export async function verifyOutcome(input: VerifyOutcomeInput): Promise<VerifyOutcomeOutput> {
   void input.tier;
   void input.timeoutMs;
+
+  // Same invariant as resolvePlaywrightAction: never verify against a blank image (the engine
+  // guard makes this unreachable; enforced here to document the contract).
+  if (input.screenshotPng.length === 0) {
+    throw new Error('verifyOutcome called with an empty screenshot — refusing to verify blind');
+  }
 
   const memorySection = input.scopedMemories.length > 0
     ? `## Relevant memory for this automation\n${input.scopedMemories.map(m => `- ${m}`).join('\n')}\n\n`

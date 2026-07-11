@@ -146,6 +146,9 @@ export interface StepRecord {
   visionReasoning?: string;
   error?: { message: string; recoverable: boolean; details?: IntegrationErrorDetails | unknown };
   screenshotPath?: string;
+  /** Served capability URL for the step screenshot (`/automation-screenshots/...`), set by the
+   *  backend so the run-history detail renders thumbnails without knowing the storage layout. */
+  screenshotUrl?: string;
   durationMs: number;
   feedback?: StepFeedback;
   output?: StepOutput;
@@ -196,10 +199,13 @@ export interface RunRecord {
   automationId: string;
   startedAt: string;
   endedAt?: string;
+  /** The wire serialization names the end timestamp `finishedAt` (shared RunRecord); kept alongside
+   *  the legacy `endedAt` so the history row's duration reads whichever the response carries. */
+  finishedAt?: string;
   status: RunStatus;
   inputs: Record<string, unknown>;
-  steps: StepRecord[];
-  triggeredBy: 'user' | 'agent' | 'webhook' | 'listener';
+  steps?: StepRecord[];
+  triggeredBy?: 'user' | 'agent' | 'webhook' | 'listener';
   parentRunId?: string;
   awaitingIntegration?: { service: string; reason: string };
   consentRequest?: ConsentRequest;

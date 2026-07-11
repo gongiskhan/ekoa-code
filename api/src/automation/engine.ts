@@ -46,7 +46,7 @@ import {
   type ResolveActionOutput,
 } from './vision.js';
 import { applyArgsTemplate } from './template-vars.js';
-import { automationStore, automationRunStore, writeStepScreenshot } from './persistence.js';
+import { automationStore, automationRunStore, writeStepScreenshot, screenshotUrlFromPath } from './persistence.js';
 import {
   lookupActionCache,
   writeActionCache,
@@ -1306,6 +1306,29 @@ interface BrowserVerifyContext extends Omit<ExecuteStepArgs, 'browser'> {
   stepStart: number;
 }
 
+/** European-Portuguese failure surfaced when a browser/verify step cannot obtain a screenshot to
+ *  resolve against. The vision tier is NEVER called with a blank image (it would only ever return a
+ *  low-confidence guess, which then burns the fixer budget blind). Recoverable so the fixer / pause
+ *  machinery still handles the step. */
+const SCREENSHOT_UNAVAILABLE_MESSAGE =
+  'captura de ecrã indisponível — o passo não pode ser resolvido visualmente';
+
+/**
+ * Guarantee a non-empty screenshot before a vision call. A capture can come back empty — a
+ * page.screenshot() that failed on both of the local session's attempts, or a daemon observation
+ * envelope missing `screenshotB64`. Force ONE fresh observation and re-read; return null when it is
+ * STILL empty so the caller fails the step recoverably instead of resolving against a blank image.
+ */
+async function screenshotForVision(browser: BrowserSession, stepId: string): Promise<Buffer | null> {
+  let png = browser.screenshotPng();
+  if (png.length > 0) return png;
+  await browser.observe({ stepId }).catch((err) => {
+    console.warn(`[automation] re-observe for empty screenshot failed: ${errMsg(err)}`);
+  });
+  png = browser.screenshotPng();
+  return png.length > 0 ? png : null;
+}
+
 async function executeBrowserStep(args: BrowserVerifyContext): Promise<StepRecord> {
   const { browser, automation, step, index, runId, ctx, baseRecord, stepStart } = args;
   const actor = actorFromCtx(ctx);
@@ -1346,8 +1369,18 @@ async function executeBrowserStep(args: BrowserVerifyContext): Promise<StepRecor
   }
 
   // 3. Tier 2: vision (EXPERT on max effort). The screenshot fed to vision
-  // is the daemon's observation of the page going into the step.
-  const screenshotPng = browser.screenshotPng();
+  // is the daemon's observation of the page going into the step. Guard the
+  // empty-screenshot hole: never resolve against a blank image (§13.2).
+  const screenshotPng = await screenshotForVision(browser, step.id);
+  if (!screenshotPng) {
+    const screenshotPath = await snap(browser, automation.id, runId, index);
+    return finishRecord(baseRecord, 'failed', stepStart, {
+      tier: cached ? 'cache-then-vision' : 'vision',
+      fingerprint,
+      screenshotPath,
+      error: { message: SCREENSHOT_UNAVAILABLE_MESSAGE, recoverable: true },
+    });
+  }
   let vision: ResolveActionOutput;
   try {
     vision = await resolvePlaywrightAction({
@@ -1520,8 +1553,18 @@ async function executeVerifyStep(args: BrowserVerifyContext): Promise<StepRecord
   }
 
   // Tier 2: vision verifier (EXPERT on max effort). Screenshot + URL come
-  // from the daemon's held observation of the page.
-  const screenshotPng = browser.screenshotPng();
+  // from the daemon's held observation of the page. Same empty-screenshot
+  // guard as executeBrowserStep — never verify against a blank image.
+  const screenshotPng = await screenshotForVision(browser, step.id);
+  if (!screenshotPng) {
+    const emptyPath = await snap(browser, automation.id, runId, index);
+    return finishRecord(baseRecord, 'failed', stepStart, {
+      tier: cached ? 'cache-then-vision' : 'vision',
+      fingerprint,
+      screenshotPath: emptyPath,
+      error: { message: SCREENSHOT_UNAVAILABLE_MESSAGE, recoverable: true },
+    });
+  }
   let result;
   try {
     result = await verifyOutcome({
@@ -1550,7 +1593,7 @@ async function executeVerifyStep(args: BrowserVerifyContext): Promise<StepRecord
       fingerprint,
       screenshotPath,
       visionReasoning: result.reasoning,
-      error: { message: `outcome not met: ${result.reasoning}`, recoverable: true },
+      error: { message: `resultado não atingido: ${result.reasoning}`, recoverable: true },
       humanAction: result.humanAction,
     });
   }
@@ -1762,9 +1805,7 @@ async function pauseRunForUser(args: {
   } = args;
 
   const screenshotPath = await snap(browser, automation.id, runId, i);
-  const screenshotUrl = screenshotPath
-    ? `/automation-screenshots/${screenshotPath.replace(/^automation-runs\//, '')}`
-    : undefined;
+  const screenshotUrl = screenshotUrlFromPath(screenshotPath);
   const annotated = annotateRecordWithPatch(record, patch, failureKind, record.error?.message ?? '');
   const idx = stepRecords.findIndex((r) => r.index === i);
   if (idx >= 0) stepRecords[idx] = annotated;

@@ -285,7 +285,7 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
       )}
 
       {activeRun.error && (
-        <div className="p-3 border-b border-red-100 bg-red-50 text-sm text-red-900">
+        <div className="p-3 border-b border-red-100 bg-red-50 text-sm text-red-900 min-w-0 break-words">
           {t.errorPrefix}{activeRun.error}
         </div>
       )}
@@ -324,8 +324,8 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
               </div>
 
               {live && live.type === 'automation_run_step' && live.error && (
-                <div className="text-xs text-red-700 bg-red-50 rounded px-2 py-1.5 space-y-1.5">
-                  <div className="font-medium">{live.error}</div>
+                <div className="text-xs text-red-700 bg-red-50 rounded px-2 py-1.5 space-y-1.5 min-w-0 break-words">
+                  <div className="font-medium line-clamp-3" title={live.error}>{live.error}</div>
                   {isIntegrationErrorDetails(live.errorDetails) && (
                     <IntegrationErrorPanel details={live.errorDetails} />
                   )}
