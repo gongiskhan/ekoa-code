@@ -50,6 +50,30 @@ export interface LocalFileActivity {
 /** Route of the settings privacy surface (FC-404); linked from every "saiba mais". */
 export const PRIVACY_SETTINGS_HREF = '/settings/privacy';
 
+/**
+ * Local-bridge distribution (FC-405 install section). The bridge is published to a public GCS
+ * bucket (`ekoa-bridge-downloads`, project spatial-tempo-488909-s5, 2026-07-11): a source
+ * tarball plus a `curl | bash` installer that verifies Node 20+, installs the CLI globally, and
+ * prints the pair/serve steps. Both default to the hosted URLs so the Download button and the
+ * install command work in every environment; override with `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` /
+ * `NEXT_PUBLIC_BRIDGE_INSTALL_URL` to point at a different host (or set download to '' to fall
+ * back to the honest "not yet published" state — we never point a Download button at a dead link).
+ */
+const HOSTED_BRIDGE_BASE = 'https://storage.googleapis.com/ekoa-bridge-downloads';
+/** Double-click installers (owner directive 2026-07-11: non-technical users must not touch a
+ *  terminal). Mac = a zipped `.command` (double-click installs + pairs + serves via native
+ *  dialogs); Windows = a `.bat` that runs the hosted install.ps1 with the same flow. */
+export const BRIDGE_MAC_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_MAC_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Mac.zip`;
+export const BRIDGE_WIN_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_WIN_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Windows.bat`;
+/** Advanced/manual path (Node.js + terminal), kept for technical users. */
+export const BRIDGE_DOWNLOAD_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL ?? `${HOSTED_BRIDGE_BASE}/ekoa-bridge-latest.tgz`;
+export const BRIDGE_INSTALL_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_INSTALL_URL ?? `${HOSTED_BRIDGE_BASE}/install.sh`;
+export const BRIDGE_INSTALL_CMD = `curl -fsSL ${BRIDGE_INSTALL_URL} | bash`;
+
 /* ==========================================================================
    OPERATIONAL copy - ships enabled (no legal claim).
    ========================================================================== */
@@ -63,8 +87,14 @@ export const PRIVACY_COPY = {
   uploadGroupLabel: 'Enviar',
   uploadFile: 'Carregar ficheiro',
   uploadFolder: 'Carregar pasta',
+  /** Short caption reinforcing the Upload trade-off (substring of the verbatim attachMicroCopy,
+   *  so no new claim): the hosted-copy half of the distinction, coloured as a caution. */
+  uploadHostedNote: 'Guarda uma cópia nos nossos servidores.',
   referenceGroupLabel: 'Referenciar (local)',
   referenceAction: 'Referenciar ficheiro/pasta local',
+  /** Teal "recommended" badge on the Reference block (verbatim substring of attachMicroCopy):
+   *  the visual cue that sensitive documents belong on the bridge, not the upload path. */
+  referenceRecommendedBadge: 'Recomendado para documentos sensíveis',
 
   // -- FC-401 Reference states --
   /** Install-CTA primary copy (v2 A7.2, verbatim). Operational: it describes what
@@ -81,6 +111,9 @@ export const PRIVACY_COPY = {
   bridgeOfflineHint:
     'A ponte local está instalada mas não responde. Verifique se está a correr e tente novamente - o ficheiro nunca é carregado em alternativa.',
   bridgeOfflineRetry: 'Tentar novamente',
+  /** Offline/not-installed states route to the connect+download area (FC-405 install section)
+   *  so a not-connected user always has a one-tap way to the bridge page. */
+  bridgeOpenSettings: 'Abrir definições da ponte',
   referenceChoose: 'Escolher ficheiro ou pasta local',
 
   // -- FC-411 first-time grant dialog --
@@ -143,6 +176,50 @@ export const PRIVACY_COPY = {
   bridgeRevokePairingConfirmDesc:
     'A ponte deixa de poder ligar-se a esta conta até voltar a emparelhar. As leituras em curso são interrompidas.',
   bridgePairError: 'Não foi possível gerar o código. Tente novamente.',
+
+  // FC-405 install / download (owner directive 2026-07-11: the bridge page must offer a way to
+  // download the bridge and clear instructions to install it). Operational onboarding copy — no
+  // legal claim. The install is a hosted `curl | bash` + a downloadable tarball; steps are real
+  // and runnable, never a command that fails.
+  installSectionTitle: 'Descarregar e instalar a ponte local',
+  installSectionDesc:
+    'A ponte local é uma pequena aplicação que corre no seu computador. Instale-a uma vez para o agente poder ler ficheiros no próprio local, sem os carregar.',
+  // -- Simple double-click install (primary) --
+  installSimpleTitle: 'Instalação simples',
+  installOsSelectLabel: 'Escolha o seu sistema',
+  installOsMac: 'Mac',
+  installOsWindows: 'Windows',
+  installDownloadForMac: 'Descarregar para Mac',
+  installDownloadForWindows: 'Descarregar para Windows',
+  installMacSecurityNote:
+    'Descompacte o ficheiro e faça duplo-clique. Na primeira vez, o Mac pode pedir confirmação: clique com o botão direito no ficheiro e escolha “Abrir”.',
+  installWinSecurityNote:
+    'Faça duplo-clique no ficheiro. Na primeira vez, o Windows pode mostrar um aviso: clique em “Mais informações” e depois “Executar mesmo assim”.',
+  installSimpleStep1: 'Descarregue o instalador para o seu sistema.',
+  installSimpleStep2: 'Faça duplo-clique no ficheiro descarregado — não precisa de escrever nada.',
+  installSimpleStep3: 'Quando aparecer, confirme o código no navegador para ligar à sua conta.',
+  installSimpleStep4: 'Pronto: a ponte fica ligada e já pode referenciar ficheiros.',
+  installNodeNote:
+    'O instalador precisa do Node.js (gratuito). Se não o tiver, abre a página de instalação e explica o que fazer.',
+  // -- Advanced / manual install (technical users) --
+  installAdvancedTitle: 'Instalação avançada (com Node.js e Terminal)',
+  installCommandLabel: 'Instalar (requer o Node.js 20 ou superior)',
+  installCommandHint:
+    'Cole este comando no Terminal (macOS/Linux) ou no PowerShell/WSL (Windows). Verifica o Node.js, instala a ponte e mostra os próximos passos.',
+  installCopyLabel: 'Copiar comando',
+  installCopiedLabel: 'Copiado',
+  installDownloadButton: 'Descarregar o pacote (.tgz)',
+  installDownloadManualHint: 'Prefere instalar à mão? Descarregue o pacote e corra: npm install -g <ficheiro>.',
+  /** Muted state when the download URL is overridden to '' — honest, never a dead link. */
+  installDownloadUnavailable: 'Descarregar (brevemente)',
+  installDownloadNote:
+    'O instalador para o seu sistema fica disponível aqui em breve. Entretanto, siga os passos abaixo para ligar a ponte.',
+  installRequirements: 'Compatível com Windows, macOS e Linux.',
+  installStepsTitle: 'Como ligar a ponte, passo a passo',
+  installStep1: 'Instale o Node.js 20+ (nodejs.org) e cole o comando acima no Terminal.',
+  installStep2: 'Corra "ekoa-bridge pair" e introduza o código de emparelhamento (secção seguinte).',
+  installStep3: 'Corra "ekoa-bridge serve" e deixe essa janela a correr.',
+  installStep4: 'A ponte liga-se e o estado passa a «Ponte ligada». Já pode referenciar ficheiros.',
 
   // FC-406 active grants
   grantsSectionTitle: 'Autorizações de leitura ativas',

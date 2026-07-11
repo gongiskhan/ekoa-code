@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { File, FolderOpen } from 'lucide-react';
+import { File, FolderOpen, ShieldCheck, Server } from 'lucide-react';
 import { PRIVACY_COPY } from '@/lib/privacy-claims';
 import type { PendingReference } from '@/lib/bridge-local';
 import { ReferenceAttachAction } from './reference-attach-action';
@@ -74,11 +74,15 @@ export function ComposerAttachMenu({
             {PRIVACY_COPY.attachMicroCopy}
           </p>
 
-          {/* Enviar (Upload) - existing pipeline */}
+          {/* Enviar (Upload) - existing pipeline. Kept deliberately neutral so the teal
+              Reference block below reads as the recommended path for sensitive documents. */}
           <div className="py-1">
-            <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-              {PRIVACY_COPY.uploadGroupLabel}
-            </p>
+            <div className="flex items-center gap-1.5 px-3 pb-0.5 pt-1">
+              <Server size={11} className="text-neutral-400" aria-hidden />
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+                {PRIVACY_COPY.uploadGroupLabel}
+              </p>
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -103,13 +107,27 @@ export function ComposerAttachMenu({
               <FolderOpen size={14} className="mr-2 text-neutral-400" aria-hidden />
               {PRIVACY_COPY.uploadFolder}
             </button>
+            <p className="px-3 pb-1 pt-0.5 text-[10px] leading-snug text-amber-700">
+              {PRIVACY_COPY.uploadHostedNote}
+            </p>
           </div>
 
-          {/* Referenciar (local) - never uploads */}
-          <div className="border-t border-neutral-100 py-1">
-            <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-              {PRIVACY_COPY.referenceGroupLabel}
-            </p>
+          {/* Referenciar (local) - never uploads. Teal "safe zone": the colour + shield +
+              "recommended for sensitive documents" badge make the bridge path the obvious
+              choice for confidential files (owner directive 2026-07-11). */}
+          <div
+            className="m-1.5 rounded-lg border border-teal-200 bg-teal-50/60 py-1"
+            data-testid="attach-reference-block"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-1.5 px-2.5 pb-1 pt-1.5">
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
+                <ShieldCheck size={12} aria-hidden />
+                {PRIVACY_COPY.referenceGroupLabel}
+              </span>
+              <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-teal-700">
+                {PRIVACY_COPY.referenceRecommendedBadge}
+              </span>
+            </div>
             <ReferenceAttachAction onOpenBrowser={() => setBrowserOpen(true)} onClose={onClose} />
           </div>
         </div>

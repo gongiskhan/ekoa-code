@@ -60,6 +60,28 @@ test.describe('bridge presence (FC-401/FC-405)', () => {
     await expect(section).toBeVisible();
     await expect(section.getByText('Ponte não emparelhada')).toBeVisible();
 
+    // FC-405 install/download section (owner directive 2026-07-11): non-technical double-click
+    // installers per OS, plus a collapsible advanced terminal fallback. Renders regardless of
+    // bridge state.
+    const install = page.getByTestId('privacy-bridge-install');
+    await expect(install).toBeVisible();
+    await expect(install.getByTestId('bridge-os-toggle')).toBeVisible();
+    // Mac installer (select explicitly so the assertion is UA-independent).
+    await install.getByTestId('bridge-os-mac').click();
+    const macDl = install.getByTestId('bridge-download-mac');
+    await expect(macDl).toBeVisible();
+    await expect(macDl).toHaveAttribute('href', /Instalar-Ponte-Ekoa-Mac\.zip$/);
+    // Windows installer.
+    await install.getByTestId('bridge-os-windows').click();
+    const winDl = install.getByTestId('bridge-download-win');
+    await expect(winDl).toBeVisible();
+    await expect(winDl).toHaveAttribute('href', /Windows\.bat$/);
+    await expect(install.getByTestId('bridge-install-steps').locator('li')).toHaveCount(4);
+    // Advanced (terminal) fallback still offered, inside a collapsed <details>.
+    await install.getByTestId('bridge-advanced').locator('summary').click();
+    await expect(install.getByTestId('bridge-install-command')).toContainText('curl -fsSL');
+    await expect(install.getByTestId('bridge-download')).toHaveAttribute('href', /ekoa-bridge.*\.tgz$/);
+
     // Paired but offline — the poll picks the change up without a reload. The budget is
     // deliberately > 2 poll cycles (12 s each): the flip can land just after a poll fired.
     state = 'offline';

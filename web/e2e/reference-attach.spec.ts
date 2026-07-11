@@ -116,6 +116,12 @@ test.describe('reference attach (FC-400/FC-401/FC-411; D1/D2/D3)', () => {
     await expect(menu).toBeVisible();
     await expect(menu).toContainText('Enviar guarda uma cópia nos nossos servidores.');
 
+    // The Reference path is the teal "recommended for sensitive documents" block — the colour
+    // cue that confidential files belong on the bridge, not the hosted upload path.
+    const refBlock = menu.getByTestId('attach-reference-block');
+    await expect(refBlock).toBeVisible();
+    await expect(refBlock).toContainText('Recomendado para documentos sensíveis');
+
     // Connected state opens the in-app file browser (no typed input anywhere).
     await page.getByTestId('reference-state-connected').click();
     const browser = page.getByTestId('file-browser');
@@ -160,5 +166,26 @@ test.describe('reference attach (FC-400/FC-401/FC-411; D1/D2/D3)', () => {
 
     const meaningful = meaningfulErrors();
     expect(meaningful, `console errors: ${meaningful.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('offline reference state routes the user to the bridge page (download + connect)', async ({ page }) => {
+    // Bridge installed but not running: the Reference action must never degrade to upload, and
+    // must give the not-connected user a one-tap way to the bridge page (owner directive
+    // 2026-07-11). Schema-validated offline stub of the status endpoint.
+    const OFFLINE = { paired: true, live: false, pairingId: 'pair-e2e' };
+    expect(BridgeStatusResponse.safeParse(OFFLINE).success).toBe(true);
+    await page.route('**/api/v1/bridge/status', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(OFFLINE) }),
+    );
+
+    await login(page);
+
+    await page.getByRole('button', { name: /anexar/i }).first().click();
+    await expect(page.getByTestId('composer-attach-menu')).toBeVisible();
+
+    // The offline reference state renders (never an upload fallback) and exposes the settings CTA.
+    const settingsCta = page.getByTestId('reference-offline-settings');
+    await expect(settingsCta).toBeVisible({ timeout: 20_000 });
+    await expect(settingsCta).toHaveAttribute('href', '/settings/privacy');
   });
 });

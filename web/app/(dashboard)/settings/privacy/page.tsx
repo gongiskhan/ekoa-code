@@ -6,6 +6,7 @@ import { PageShell } from '@/components/ui/page-shell';
 import { PageHeader } from '@/components/ui/page-header';
 import { useSettingsStore } from '@/stores/settings';
 import { PRIVACY_COPY } from '@/lib/privacy-claims';
+import { BridgeInstallSection } from '@/components/privacy/settings/bridge-install-section';
 import { BridgeStatusSection } from '@/components/privacy/settings/bridge-status-section';
 import { GrantsSection } from '@/components/privacy/settings/grants-section';
 import { LedgerSection } from '@/components/privacy/settings/ledger-section';
@@ -43,6 +44,7 @@ export default function PrivacySettingsPage() {
       {isLegal && <LegalOnboardingCard variant="reference" />}
 
       <div className="space-y-8">
+        <BridgeInstallSection />
         <BridgeStatusSection />
         <GrantsSection />
         <LedgerSection />

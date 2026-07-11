@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FolderSearch, Download, WifiOff, RotateCw } from 'lucide-react';
+import { FolderSearch, Download, WifiOff, RotateCw, Settings } from 'lucide-react';
 import { PRIVACY_COPY, PRIVACY_SETTINGS_HREF } from '@/lib/privacy-claims';
 import { useBridgePresence } from '@/hooks/use-bridge-presence';
 
@@ -76,15 +76,27 @@ export function ReferenceAttachAction({
         <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500">
           {PRIVACY_COPY.bridgeOfflineHint}
         </p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50"
-          data-testid="reference-retry"
-        >
-          <RotateCw size={12} aria-hidden />
-          {PRIVACY_COPY.bridgeOfflineRetry}
-        </button>
+        <div className="mt-2 flex items-center gap-3">
+          {/* Primary: route the not-connected user to the bridge page (download + connect). */}
+          <Link
+            href={PRIVACY_SETTINGS_HREF}
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-md bg-teal-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-teal-700"
+            data-testid="reference-offline-settings"
+          >
+            <Settings size={12} aria-hidden />
+            {PRIVACY_COPY.bridgeOpenSettings}
+          </Link>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50"
+            data-testid="reference-retry"
+          >
+            <RotateCw size={12} aria-hidden />
+            {PRIVACY_COPY.bridgeOfflineRetry}
+          </button>
+        </div>
       </div>
     );
   }
@@ -97,7 +109,7 @@ export function ReferenceAttachAction({
         onClose();
         onOpenBrowser();
       }}
-      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-neutral-700 transition-colors hover:bg-neutral-50"
+      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium text-teal-900 transition-colors hover:bg-teal-100/60"
       data-testid="reference-state-connected"
     >
       <FolderSearch size={14} className="text-teal-600" aria-hidden />
