@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T06:45:00Z",
+  "updatedAt": "2026-07-11T07:00:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -42,6 +42,17 @@
       "verifiedAt": "2026-07-11T06:45:00Z",
       "flagged": false,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s3/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s4",
+      "title": "Daemon-served grants + ledger (FC-406/FC-407)",
+      "kind": "ui",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s4/evidence.cast",
+      "verifiedAt": "2026-07-11T07:00:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s4/gate-status.json",
       "blockerSummary": "codex adversarial gates queued on credential"
     }
   ],

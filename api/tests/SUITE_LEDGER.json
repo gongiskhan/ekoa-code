@@ -91,7 +91,8 @@
         "automation-deterministic",
         "chat-thinking",
         "bridge-presence",
-        "device-approval"
+        "device-approval",
+        "privacy-grants-ledger"
       ]
     }
   },
@@ -124,7 +125,8 @@
       "lib/artifact-bundle",
       "lib/stream-error-collision",
       "use-bridge-presence",
-      "device-code"
+      "device-code",
+      "bridge-local"
     ],
     "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation.",
     "mock_update_needed": [

@@ -129,8 +129,11 @@ export const PRIVACY_COPY = {
   grantsEmptyConnected: 'Não há autorizações ativas nesta sessão.',
   grantsOffline:
     'A lista de autorizações é servida pela ponte local. Ligue a ponte para a ver.',
+  grantsUnavailable:
+    'A ponte está ligada mas a lista de autorizações não está acessível a partir do navegador. Atualize a aplicação da ponte local.',
   grantRevoke: 'Revogar',
   grantRevoking: 'A revogar...',
+  grantRevokeError: 'Não foi possível revogar. Tente novamente.',
 
   // FC-407 ledger viewer
   ledgerSectionTitle: 'Registo de leituras locais',
@@ -138,11 +141,24 @@ export const PRIVACY_COPY = {
     'O que saiu deste computador: ficheiro, intervalo lido, dimensão e momento. Servido pela ponte local; não guardamos este registo nos nossos servidores.',
   ledgerOffline:
     'O registo é mantido e servido pela ponte local. Ligue a ponte para o consultar.',
+  ledgerUnavailable:
+    'A ponte está ligada mas o registo não está acessível a partir do navegador. Atualize a aplicação da ponte local.',
   ledgerEmpty: 'Ainda não há leituras registadas nesta sessão.',
   ledgerColTime: 'Momento',
+  ledgerColKind: 'Tipo',
   ledgerColPath: 'Ficheiro',
   ledgerColRange: 'Intervalo',
   ledgerColBytes: 'Dimensão',
+  ledgerSessionLabel: 'Sessão',
+  ledgerUnparseable: (n: number) =>
+    n === 1 ? '1 registo não pôde ser lido.' : `${n} registos não puderam ser lidos.`,
+  ledgerKindLabels: {
+    read: 'Leitura',
+    write: 'Escrita',
+    denial: 'Recusa',
+    cap_consent: 'Limite',
+    automation: 'Automação',
+  } as Record<string, string>,
 
   // FC-408 masking summary
   maskingSectionTitle: 'Atividade de mascaramento',
