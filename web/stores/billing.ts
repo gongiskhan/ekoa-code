@@ -47,7 +47,7 @@ export interface HistoryPage {
 export interface AdminUsageRow {
   userId: string;
   username: string;
-  role: 'super-admin' | 'admin' | 'builder';
+  role: 'super-admin' | 'org-admin' | 'builder';
   isActive: boolean;
   tokensUsed: number;
   tokensBase: number;

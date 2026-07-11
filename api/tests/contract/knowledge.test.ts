@@ -15,7 +15,7 @@ import { closeIndex } from '../../src/knowledge/index-store.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import {
   CollectionsResponse, DocumentsResponse, CreateDocumentResponse, OkResponse,
-  CreateUploadResponse, DeleteUploadResponse, ReindexResponse, IndexStatus, ErrorEnvelope,
+  CreateUploadResponse, DeleteUploadResponse, UploadsResponse, ReindexResponse, IndexStatus, ErrorEnvelope,
 } from '@ekoa/shared';
 
 /**
@@ -119,6 +119,24 @@ describe('uploads (raw body + X-Filename/X-Collection)', () => {
     const dbody = await del.json();
     expect(DeleteUploadResponse.safeParse(dbody).success).toBe(true);
     expect(dbody).toEqual({ removed: true, docsRemoved: 1 });
+  });
+
+  it('GET /uploads validates UploadsResponse (rows carry `id`, not the store `_id`)', async () => {
+    await mkUser('u1', 'orgA', 'builder');
+    const t = await tokenFor('u1');
+    const created = await upload(t, 'nota.md', 'uploads', 'texto sobre penhora de bens', 'text/markdown');
+    expect(created.status).toBe(201);
+    const uploadId = ((await created.json()) as { uploadId: string }).uploadId;
+
+    const res = await api('/api/v1/knowledge/uploads', t);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const parsed = UploadsResponse.safeParse(body);
+    expect(parsed.success, JSON.stringify(parsed.success ? '' : parsed.error)).toBe(true);
+    const items = (body as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.id).toBe(uploadId);
+    expect(items[0]!.filename).toBe('nota.md');
   });
 
   it('rejects an upload with no X-Filename (400 envelope)', async () => {

@@ -53,11 +53,37 @@ export const SessionSnapshot = z.object({
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshot>;
 
+/** One per-action row of a session status: automation-binding STATUS metadata only (never
+ *  session secrets — same bound as SessionSnapshot above). Not exported: exercised through
+ *  SessionCaptureStatus by the contract suite. */
+const SessionActionRow = z
+  .object({
+    actionName: z.string(),
+    description: z.string().optional(),
+    mutates: z.boolean().optional(),
+    automationTemplate: z.string().nullable().optional(),
+    automationId: z.string().nullable().optional(),
+    automationName: z.string().nullable().optional(),
+    provisioned: z.boolean().optional(),
+  })
+  .passthrough();
+
+/** Capture-capability metadata for the dashboard's session-connect panel: whether this
+ *  environment can run a capture at all, and the operator-facing message when it cannot. */
+const SessionConnectInfo = z.object({
+  supported: z.boolean(),
+  available: z.boolean(),
+  loginUrl: z.string().optional(),
+  message: z.string().optional(),
+});
+
 export const SessionCaptureStatus = z
   .object({
     integrationKey: z.string().optional(),
     status: z.string(),
+    sessionConnect: SessionConnectInfo.optional(),
     session: SessionSnapshot.optional(),
+    actions: z.array(SessionActionRow).optional(),
     updatedAt: IsoTimestamp.optional(),
   })
   .passthrough();

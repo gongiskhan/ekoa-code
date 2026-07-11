@@ -118,7 +118,8 @@ export interface IntegrationSessionStatus {
     capturedAt: string | null;
     message?: string;
   };
-  actions: IntegrationSessionActionRow[];
+  /** Optional on the wire (SessionCaptureStatus); the store normalizes to []. */
+  actions?: IntegrationSessionActionRow[];
 }
 
 export interface IntegrationConnectSessionResult {

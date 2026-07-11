@@ -33,7 +33,7 @@ import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 import { withRepoLock } from './repo-lock.js';
-import { resolveWithinJail, sandboxRoot } from './safe-path.js';
+import { resolveProjectDirInAnyJail, resolveWithinJail, sandboxRoot } from './safe-path.js';
 
 const execFileP = promisify(execFile);
 
@@ -398,9 +398,13 @@ export interface VersionEntry {
 const LOG_UNIT = '\x1f'; // between fields
 const LOG_REC = '\x1e'; // between records
 
-/** List commits (newest first) with `[build-failed]` / `[restored]` flags stripped. */
+/** List commits (newest first) with `[build-failed]` / `[restored]` flags stripped.
+ *  Graceful over the two prod-reachable non-repo cases (never-built artifact: dir does
+ *  not exist; featured artifact: dir under the featured root, not the sandbox) — an
+ *  unresolvable, missing, or repo-less dir is an empty history, never a 500. */
 export async function readVersions(projectDir: string, limit = 100): Promise<VersionEntry[]> {
-  const resolved = validateProjectDir(projectDir);
+  const resolved = resolveProjectDirInAnyJail(projectDir);
+  if (!resolved || !existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return [];
   if (!isRepo(resolved)) return [];
   let out: string;
   try {

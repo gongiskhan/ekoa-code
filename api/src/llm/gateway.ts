@@ -131,8 +131,9 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       return;
     }
     const tiers = loadConfig().llm.tiers;
+    // Anthropic-style envelope per the shared LlmModelsResponse contract: { data: [...] }.
     res.json({
-      models: [
+      data: [
         { id: tiers.FAST.model, route: 'gateway', note: 'wire tier (OAuth-compatible)' },
         { id: tiers.EXPERT.model, route: 'sdk', note: 'SDK-only strong tier' },
       ],

@@ -268,7 +268,9 @@ export async function createUpload(
 }
 
 export async function listUploads(actor: Actor) {
-  return knowledgeUploads.find({ orgId: actor.orgId });
+  const rows = (await knowledgeUploads.find({ orgId: actor.orgId })) as KnowledgeUploadDoc[];
+  // Wire shape is UploadDoc (shared/src/knowledge.ts): `id`, not the store's `_id`.
+  return rows.map(({ _id, ...rest }) => ({ id: _id, uploadId: _id, ...rest }));
 }
 
 /** Delete an upload: unindex its ingested docs, remove the blob, drop the registry row. */

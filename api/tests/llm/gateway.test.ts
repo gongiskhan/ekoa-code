@@ -8,6 +8,7 @@ import { tokenEvents, billingAccounts } from '../../src/data/stores.js';
 import { gatewayRouter, gatewayUnmeteredCount, __resetGatewayCountersForTests } from '../../src/llm/gateway.js';
 import { __setTransportForTests, __resetTransportForTests, type ChokepointTransport } from '../../src/llm/client.js';
 import { setCredential, __resetCredentialsForTests, __setNowForTests } from '../../src/llm/credentials.js';
+import { LlmModelsResponse } from '@ekoa/shared';
 
 /**
  * The ekoa-local gateway sub-app (ch03 §3.10; §6.5.4). Wire-tier FAST billing regardless of
@@ -143,10 +144,12 @@ describe('POST /classify — deterministic keyword mode, never 500s', () => {
     }
   });
 
-  it('GET /models lists the wire + strong models', async () => {
+  it('GET /models answers the Anthropic-style LlmModelsResponse envelope ({ data })', async () => {
     const res = await api('/api/v1/llm/models', { headers: { 'x-api-key': GATEWAY_KEY } });
     expect(res.status).toBe(200);
-    const ids = (await json(res)).models.map((m: { id: string }) => m.id);
+    const body = await json(res);
+    expect(LlmModelsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    const ids = body.data.map((m: { id: string }) => m.id);
     expect(ids).toContain('claude-haiku-4-5-20251001');
   });
 });

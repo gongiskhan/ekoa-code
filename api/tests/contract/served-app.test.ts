@@ -15,6 +15,7 @@ import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { indexSlug, __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
 import { __resetAppHealthDedupeForTests } from '../../src/apps/serving.js';
+import { AppDataListEnvelope } from '@ekoa/shared';
 
 /**
  * G6: the byte-compatible served-app plane (ch03 §3.9) - data plane wire shapes
@@ -94,6 +95,7 @@ describe('served-app data plane (ch03 §3.9) - the old wire envelope, byte-compa
     expect('_rev' in cBody.data).toBe(false);
 
     const list = (await (await appApi('/api/app-data/clientes', 'gestor')).json()) as { success: boolean; data: unknown[] };
+    expect(AppDataListEnvelope.safeParse(list).success, JSON.stringify(list)).toBe(true);
     expect(list.success).toBe(true);
     expect(list.data).toHaveLength(1);
 
@@ -170,6 +172,7 @@ describe('served-app data plane (ch03 §3.9) - the old wire envelope, byte-compa
     const created = await appApi('/api/app-shared/spine', 'gestor', { method: 'POST', body: JSON.stringify({ k: 'v' }) });
     expect(created.status).toBe(201);
     const viaOtherApp = (await (await appApi('/api/app-shared/spine', 'appc')).json()) as { data: unknown[] };
+    expect(AppDataListEnvelope.safeParse(viaOtherApp).success, JSON.stringify(viaOtherApp)).toBe(true);
     expect(viaOtherApp.data).toHaveLength(1);
 
     // non-opted-in app → 403 with the carried string

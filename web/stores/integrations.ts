@@ -324,7 +324,18 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
       const res = await tryCall(() => api.integrations.sessionStatus({ key: integrationKey }));
       if (res.ok) {
         // The passthrough SessionCaptureStatus carries the full rich status snapshot.
-        const status = res.data as unknown as IntegrationSessionStatus;
+        const raw = res.data as unknown as IntegrationSessionStatus;
+        // Normalize the wire's optional fields: consumers deref sessionConnect/session/actions.
+        const status: IntegrationSessionStatus = {
+          ...raw,
+          sessionConnect: raw.sessionConnect ?? {
+            supported: false,
+            available: false,
+            message: 'Captura de sessão não disponível.',
+          },
+          session: raw.session ?? { status: 'none', capturedAt: null },
+          actions: raw.actions ?? [],
+        };
         set((state) => ({
           sessionStatuses: { ...state.sessionStatuses, [integrationKey]: status },
         }));

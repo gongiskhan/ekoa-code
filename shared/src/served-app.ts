@@ -11,16 +11,23 @@ export type AppDataDocument = z.infer<typeof AppDataDocument>;
 export const GenericQuery = z.record(z.string());
 export type GenericQuery = z.infer<typeof GenericQuery>;
 
+/** The byte-compat list envelope the served-data plane actually emits:
+ *  `{ success: true, data: [...] }` (apps/served-data.ts header contract). */
+export const AppDataListEnvelope = z
+  .object({ success: z.literal(true), data: z.array(AppDataDocument) })
+  .passthrough();
+export type AppDataListEnvelope = z.infer<typeof AppDataListEnvelope>;
+
 export const servedAppEndpoints = {
   // Per-app data CRUD (/api/app-data/:collection[/:id]), header-scoped, no JWT.
-  appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: z.array(AppDataDocument) },
+  appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: AppDataListEnvelope },
   appDataGet: { method: 'GET', path: '/api/app-data/:collection/:id', auth: 'header-scoped', response: AppDataDocument },
   appDataCreate: { method: 'POST', path: '/api/app-data/:collection', auth: 'header-scoped', request: AppDataDocument, response: AppDataDocument },
   appDataUpsert: { method: 'PUT', path: '/api/app-data/:collection/:id', auth: 'header-scoped', request: AppDataDocument, response: AppDataDocument },
   appDataDelete: { method: 'DELETE', path: '/api/app-data/:collection/:id', auth: 'header-scoped', response: OkResponse },
 
   // Owner-shared data (/api/app-shared/:collection[/:id]), header + server-side owner-scope resolution.
-  appSharedList: { method: 'GET', path: '/api/app-shared/:collection', auth: 'header-scoped', response: z.array(AppDataDocument) },
+  appSharedList: { method: 'GET', path: '/api/app-shared/:collection', auth: 'header-scoped', response: AppDataListEnvelope },
   appSharedGet: { method: 'GET', path: '/api/app-shared/:collection/:id', auth: 'header-scoped', response: AppDataDocument },
   appSharedCreate: { method: 'POST', path: '/api/app-shared/:collection', auth: 'header-scoped', request: AppDataDocument, response: AppDataDocument },
   appSharedUpsert: { method: 'PUT', path: '/api/app-shared/:collection/:id', auth: 'header-scoped', request: AppDataDocument, response: AppDataDocument },

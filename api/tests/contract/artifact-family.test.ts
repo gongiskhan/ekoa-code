@@ -236,6 +236,38 @@ describe('files: commit-on-save + versions round-trip (ch07 §7.9)', () => {
     const files = await jwtApi('/api/v1/artifacts/files1/files', t);
     expectValid(ArtifactFilesResponse, await files.json());
   });
+
+  it('versions on a never-built artifact (projectDir missing on disk) → 200 empty list, never a 500', async () => {
+    const t = await tokenFor('owner1');
+    // Artifact row only — no on-disk working copy (the pre-first-build state).
+    await artifacts.insert({
+      _id: 'ghost1', name: 'ghost1', slug: 'ghost1', userId: 'owner1', orgId: 'orgA',
+      visibility: 'private', status: 'active', shareable: true, data: {},
+    } as never);
+    await slugs.put({ _id: 'ghost1', artifactId: 'ghost1' });
+    const res = await jwtApi('/api/v1/artifacts/ghost1/versions', t);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expectValid(ArtifactVersionListResponse, body);
+    expect((body as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it('versions on a seeded featured artifact (projectDir outside the sandbox jail) → 200, never a 500', async () => {
+    const t = await tokenFor('owner1');
+    // Seeded featured artifacts resolve projectDirFor to the assets scaffold dir,
+    // outside the owner sandbox — the pre-fix path threw UnsafePathError → 500.
+    await artifacts.insert({
+      _id: 'feat1', name: 'feat1', slug: 'feat1', userId: 'owner1', orgId: 'orgA',
+      visibility: 'org', status: 'active', shareable: true, featured: true,
+      data: { seededFrom: 'assets/featured-artifacts' },
+    } as never);
+    await slugs.put({ _id: 'feat1', artifactId: 'feat1' });
+    const res = await jwtApi('/api/v1/artifacts/feat1/versions', t);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expectValid(ArtifactVersionListResponse, body);
+    expect(Array.isArray((body as { items: unknown[] }).items)).toBe(true);
+  });
 });
 
 describe('download: 422 on a planted credential (C09-07 half)', () => {

@@ -130,6 +130,9 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     expect(SessionCaptureStatus.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect(body.status).toBe('none');
     expect((body.session as { status: string }).status).toBe('none');
+    // The dashboard derefs `.actions` on this body (integrations page automation rows):
+    // the contract carries an explicit (possibly empty) array, never undefined.
+    expect(Array.isArray(body.actions), JSON.stringify(body)).toBe(true);
   });
 
   it('POST /:key/session answers ConnectSessionResponse WITHOUT claiming a session was started', async () => {

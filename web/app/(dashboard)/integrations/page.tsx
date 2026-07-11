@@ -157,7 +157,7 @@ function IntegrationCard({
   }, [expanded, hasAutomationBoundActions, sessionEntry, refreshSessionStatus, skill.integrationKey]);
 
   const hasUnprovisionedAutomations =
-    sessionEntry?.actions.some((row) => row.automationTemplate && !row.provisioned) ?? false;
+    sessionEntry?.actions?.some((row) => row.automationTemplate && !row.provisioned) ?? false;
 
   async function handleProvisionAutomations(e: React.MouseEvent) {
     e.stopPropagation();
@@ -288,7 +288,7 @@ function IntegrationCard({
                       </p>
                       <div className="space-y-1">
                         {skill.actions.map((action) => {
-                          const row = sessionEntry?.actions.find(
+                          const row = sessionEntry?.actions?.find(
                             (r) => r.actionName === action.actionName
                           );
                           const hasAutomation = Boolean(

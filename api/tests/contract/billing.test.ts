@@ -180,6 +180,39 @@ describe('super-admin surfaces (§6.6.2)', () => {
     expect(relisted.items.find((r: { userId: string }) => r.userId === 'u1').tokensUsed).toBe(0);
   });
 
+  it('admin usage rows carry identity + gauge fields; account-less users appear zeroed', async () => {
+    await mkUser('admin', 'super-admin');
+    await mkUser('u1', 'builder');
+    await mkUser('fresh', 'builder'); // never made a metered call → no billing account row
+    const t = await tokenFor('admin');
+    await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: 'chat', model: 'm', tier: 'FAST', raw: { input: 5000, output: 0, cacheCreate: 0, cacheRead: 0 }, now: deps.now() });
+
+    const list = await readJson(await jwtApi('/api/v1/billing/admin/usage', t));
+    expect(AdminUsageResponse.safeParse(list).success).toBe(true);
+
+    const u1 = list.items.find((r: { userId: string }) => r.userId === 'u1');
+    expect(u1).toMatchObject({
+      username: 'u1', role: 'builder', isActive: true,
+      tokensUsed: 100, tokensBase: 10_000_000, tokensRemaining: 10_000_000 - 100,
+      tokenLimit: null, isCustomLimit: false, percentage: 0, lastLoginAt: null,
+    });
+    expect(typeof u1.currentPeriodStart).toBe('string');
+
+    // The account-less user still appears, zeroed against the platform default base.
+    const fresh = list.items.find((r: { userId: string }) => r.userId === 'fresh');
+    expect(fresh).toMatchObject({
+      username: 'fresh', role: 'builder', isActive: true,
+      tokensUsed: 0, tokensBase: 10_000_000, tokensRemaining: 10_000_000,
+      tokenLimit: null, isCustomLimit: false, percentage: 0,
+    });
+
+    // A custom limit flips isCustomLimit and rebases the gauge.
+    await jwtApi('/api/v1/billing/admin/limits/u1', t, { method: 'PUT', body: JSON.stringify({ tokenLimit: 1000 }) });
+    const relisted = await readJson(await jwtApi('/api/v1/billing/admin/usage', t));
+    const u1Limited = relisted.items.find((r: { userId: string }) => r.userId === 'u1');
+    expect(u1Limited).toMatchObject({ tokensBase: 1000, isCustomLimit: true, tokenLimit: 1000, percentage: 10 });
+  });
+
   it('a builder is refused every admin route with 403 FORBIDDEN (envelope)', async () => {
     await mkUser('u1', 'builder');
     const t = await tokenFor('u1');

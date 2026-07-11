@@ -84,7 +84,15 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
     res.json({
       integrationKey: req.params.key as string,
       status: 'none',
+      // Truthful rc-1 values: capture is a supported product surface but unavailable in
+      // this environment (no capture orchestration), and no automation-binding rows exist.
+      sessionConnect: {
+        supported: true,
+        available: false,
+        message: 'Captura de sessão não disponível nesta versão.',
+      },
       session: { status: 'none', capturedAt: null },
+      actions: [],
     });
   });
 

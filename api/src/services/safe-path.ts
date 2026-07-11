@@ -82,3 +82,26 @@ export function resolveWithinJail(jailRoot: string, candidate: string): string {
 export function resolveSafePath(candidate: string): string {
   return resolveWithinJail(sandboxRoot(), candidate);
 }
+
+/** The featured-builds root: `EKOA_FEATURED_BUILDS_DIR` or `~/.ekoa/data/featured-builds`.
+ *  Featured artifacts store a projectDir under this root, outside the owner sandboxes. */
+export function featuredBuildsRoot(): string {
+  return process.env.EKOA_FEATURED_BUILDS_DIR || resolve(homedir(), '.ekoa', 'data', 'featured-builds');
+}
+
+/**
+ * Resolve a stored artifact projectDir against BOTH legitimate roots (owner sandboxes,
+ * then featured builds — same dual-jail rule as apps/serving). Returns the confined
+ * absolute path, or null when the path escapes both jails, so read-only consumers can
+ * treat an alien path as "no repo" instead of a thrown 500.
+ */
+export function resolveProjectDirInAnyJail(candidate: string): string | null {
+  for (const root of [sandboxRoot(), featuredBuildsRoot()]) {
+    try {
+      return resolveWithinJail(root, candidate);
+    } catch {
+      /* not under this root — try the next jail */
+    }
+  }
+  return null;
+}

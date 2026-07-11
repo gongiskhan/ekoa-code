@@ -31,6 +31,17 @@ export const AdminUsageRow = z
     tokenLimit: z.number().nullable(),
     balanceUsd: z.number().optional(),
     overageEnabled: z.boolean().optional(),
+    // Identity + gauge surface the admin usage pages render (left-joined from the
+    // users store; lastLoginAt is null until login tracking exists).
+    username: z.string().optional(),
+    role: z.string().optional(),
+    isActive: z.boolean().optional(),
+    tokensBase: z.number().optional(),
+    tokensRemaining: z.number().optional(),
+    percentage: z.number().optional(),
+    isCustomLimit: z.boolean().optional(),
+    currentPeriodStart: z.string().nullable().optional(),
+    lastLoginAt: z.string().nullable().optional(),
   })
   .passthrough();
 export type AdminUsageRow = z.infer<typeof AdminUsageRow>;

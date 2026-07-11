@@ -4,12 +4,13 @@
  * WRITE path is the tracker (§6.5); this service holds the derived views (usage, breakdown,
  * history) and the account/admin mutations (credits, overage, per-user limits + reset).
  */
-import { billingAccounts, tokenEvents } from '../data/stores.js';
+import { billingAccounts, tokenEvents, users, type UserDoc } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 import {
   applyLazyReset,
   baseFor,
   creditTokensOf,
+  defaultAccount,
   ensureAccount,
   overagePermitted,
   readGlobalOverageEnabled,
@@ -134,15 +135,31 @@ export async function setGlobalOverage(enabled: boolean) {
   return { globalOverageEnabled };
 }
 
-/** GET /billing/admin/usage: per-user rows (§6.6.2). Reset-aware display (does not persist). */
+/**
+ * GET /billing/admin/usage: per-user rows (§6.6.2). Reset-aware display (does not persist).
+ * One row per USER (left-joined to billing accounts) so users who never made a metered call
+ * still appear zeroed; carries the identity + gauge fields the admin pages render.
+ */
 export async function adminListUsage(now: number = Date.now()) {
-  const rows = (await billingAccounts.find({})) as BillingAccountDoc[];
-  const items = rows.map((acct) => {
-    const { used } = applyLazyReset(acct, now);
+  const [allUsers, accts] = await Promise.all([users.find({}), billingAccounts.find({})]);
+  const acctById = new Map((accts as BillingAccountDoc[]).map((a) => [a._id, a]));
+  const items = (allUsers as UserDoc[]).map((user) => {
+    const acct = acctById.get(user._id) ?? defaultAccount(user._id, now);
+    const { used, periodStart } = applyLazyReset(acct, now);
+    const base = baseFor(acct);
     return {
-      userId: acct._id,
+      userId: user._id,
+      username: user.username,
+      role: user.role,
+      isActive: user.active,
       tokensUsed: used,
+      tokensBase: base,
+      tokensRemaining: Math.max(0, base - used),
       tokenLimit: acct.tokenLimit ?? null,
+      isCustomLimit: acct.tokenLimit != null,
+      percentage: base > 0 ? Math.round((used / base) * 100) : 100,
+      currentPeriodStart: new Date(periodStart).toISOString(),
+      lastLoginAt: null,
       balanceUsd: acct.creditBalanceUsd,
       overageEnabled: acct.overageEnabled,
     };

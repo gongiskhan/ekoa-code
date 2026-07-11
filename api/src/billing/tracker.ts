@@ -86,7 +86,9 @@ export function computeMetered(tier: Tier, raw: TokenEventInput['raw']): number 
   );
 }
 
-const DEFAULT_ACCOUNT = (userId: string, now: number): BillingAccountDoc => ({
+/** The zeroed account shape a user has before any metered call (also used by read-only
+ *  views for users with no account row yet — no write side effect). */
+export const defaultAccount = (userId: string, now: number): BillingAccountDoc => ({
   _id: userId,
   monthlyBaseTokensUsed: 0,
   creditBalanceUsd: 0,
@@ -99,8 +101,8 @@ const DEFAULT_ACCOUNT = (userId: string, now: number): BillingAccountDoc => ({
 export async function ensureAccount(userId: string, now: number): Promise<BillingAccountDoc> {
   const existing = (await billingAccounts.get(userId)) as BillingAccountDoc | null;
   if (existing) return existing;
-  await billingAccounts.insert(DEFAULT_ACCOUNT(userId, now) as unknown as Doc);
-  return ((await billingAccounts.get(userId)) as BillingAccountDoc | null) ?? DEFAULT_ACCOUNT(userId, now);
+  await billingAccounts.insert(defaultAccount(userId, now) as unknown as Doc);
+  return ((await billingAccounts.get(userId)) as BillingAccountDoc | null) ?? defaultAccount(userId, now);
 }
 
 /**
