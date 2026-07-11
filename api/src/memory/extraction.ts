@@ -65,10 +65,18 @@ function parseFacts(text: string): Array<{ title: string; content: string }> {
   return out;
 }
 
+// Distilled from the old-cortex memory-extraction instruction: the extract / don't-extract
+// lists are what separate a useful organizational memory from noise. Output shape unchanged
+// ({"title","content"} array — parseFacts depends on it).
 const EXTRACTION_SYSTEM =
   'Extract durable, user-specific facts worth remembering from this conversation. ' +
-  'Return a JSON array of {"title","content"} objects. Only lasting preferences, identities, or ' +
-  'constraints — never transient details. Return [] when nothing is worth keeping.';
+  'Return a JSON array of {"title","content"} objects. Return [] when nothing is worth keeping.\n' +
+  'EXTRACT: lasting preferences and conventions (naming, formats, language, tone), how the user ' +
+  'works (recurring workflows, integration usage patterns), stable identities and constraints ' +
+  '(role, team, business rules), and recurring problems WITH their accepted solutions.\n' +
+  'DO NOT EXTRACT: code or implementation details, transient task state ("is building X now"), ' +
+  'secrets/credentials/PII (emails, phone numbers, document numbers), generic world knowledge, ' +
+  'or trivia mentioned once with no reuse value.';
 
 /**
  * Run the post-run extraction. Returns a summary for tests; production callers `void` it AFTER

@@ -80,6 +80,8 @@ const COVERED = new Set<string>([
   'memories.bulkDelete', 'memories.submitSignal', 'memories.listTags', 'memories.stats',
   'knowledge.updateSource', 'knowledge.crawlSource', 'knowledge.crawlStatus', 'knowledge.refreshSchedule',
   'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
+  // PR4 — the AI integration builder (integration-builder.test.ts): chat/load/save/test.
+  'integrationBuilder.chat', 'integrationBuilder.load', 'integrationBuilder.save', 'integrationBuilder.test',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
@@ -91,7 +93,7 @@ const COVERED = new Set<string>([
 // documents list/ingest/delete, uploads create/delete, reindex, index-status). Knowledge crawl
 // endpoints (updateSource, crawlSource, crawlStatus, refreshSchedule) remain PENDING for the crawl gate.
 // G7B agent-execution: 80->72 as chat runs (4) + build jobs (4) landed with their contract tests.
-const EXPECTED_PENDING_COUNT = 53; // F1 -7 (72->65); F4 -1 (->64); F5 subset -11 (->53)
+const EXPECTED_PENDING_COUNT = 49; // F1 -7 (72->65); F4 -1 (->64); F5 subset -11 (->53); PR4 integration-builder -4 (->49)
 
 describe('schema-coverage gate (ch13 §13.5 item 3)', () => {
   it('every descriptor endpoint is COVERED or PENDING (no unaccounted schema)', () => {

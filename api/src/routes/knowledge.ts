@@ -52,9 +52,14 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
   });
 
   r.delete('/collections/:collection/documents/:id', async (req: AuthedRequest, res: Response) => {
-    const ok = await deleteDocument(actorOf(req), req.params.collection as string, req.params.id as string);
-    if (!ok) return notFound(res);
-    res.json({ ok: true });
+    try {
+      const ok = await deleteDocument(actorOf(req), req.params.collection as string, req.params.id as string);
+      if (!ok) return notFound(res);
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
   });
 
   // --- Sources (G4) ---
@@ -152,8 +157,13 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
 
   // --- Org-admin heal operations (backend-only, kept for ops — ch03 §3.8.20 C3) ---
   r.post('/reindex', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
-    const out = await reindexOrg(actorOf(req));
-    res.status(202).json(out);
+    try {
+      const out = await reindexOrg(actorOf(req));
+      res.status(202).json(out);
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
   });
 
   r.get('/index-status', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {

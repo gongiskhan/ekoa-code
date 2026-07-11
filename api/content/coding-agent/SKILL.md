@@ -157,6 +157,9 @@ A app nunca chama APIs externas diretamente. Os caminhos suportados:
 - Microsoft 365 do visitante autenticado: `window.__ekoa.graphFetch(path, options)`
   (proxy Graph com a sessão SSO do visitante).
 Declara as integrações usadas em `external_dependencies.integrations`.
+Antes de usares uma integração configurada, carrega o conhecimento dela com a
+ferramenta `load_context` (nome `integration-<chave>`, ex.: `integration-slack`):
+descreve as ações, os argumentos e os erros comuns dessa integração.
 
 ## Documentos descarregáveis (Word / PDF)
 Quando o pedido é um DOCUMENTO (contrato, parecer, relatório, proposta, carta), o

@@ -22,7 +22,7 @@ export interface AgentContext {
 }
 
 export type AssembleAgentContext = (input: {
-  agentKind: 'coding' | 'chat' | 'automation';
+  agentKind: 'coding' | 'chat' | 'automation' | 'integration-builder';
   userId: string;
 }) => Promise<AgentContext>;
 
@@ -35,7 +35,7 @@ let assembleAgentContextFn: AssembleAgentContext = defaultAssembleAgentContext;
 export function setAssembleAgentContext(fn: AssembleAgentContext): void {
   assembleAgentContextFn = fn;
 }
-export function assembleAgentContext(input: { agentKind: 'coding' | 'chat' | 'automation'; userId: string }): Promise<AgentContext> {
+export function assembleAgentContext(input: { agentKind: 'coding' | 'chat' | 'automation' | 'integration-builder'; userId: string }): Promise<AgentContext> {
   return assembleAgentContextFn(input);
 }
 
@@ -99,13 +99,13 @@ export function knowledgeToolRead(input: { orgId: string; collection: string; do
 
 /** The `load_context` tool: fetch a named on-demand content file from the user's composed
  *  agent context. Returns null when no such package/file exists (an honest not-found). */
-export type LoadContextContentFn = (input: { userId: string; agentKind: 'coding' | 'chat' | 'automation'; name: string }) => Promise<string | null>;
+export type LoadContextContentFn = (input: { userId: string; agentKind: 'coding' | 'chat' | 'automation' | 'integration-builder'; name: string }) => Promise<string | null>;
 const defaultLoadContextContent: LoadContextContentFn = async () => null;
 let loadContextContentFn: LoadContextContentFn = defaultLoadContextContent;
 export function setLoadContextContent(fn: LoadContextContentFn): void {
   loadContextContentFn = fn;
 }
-export function loadContextContent(input: { userId: string; agentKind: 'coding' | 'chat' | 'automation'; name: string }): Promise<string | null> {
+export function loadContextContent(input: { userId: string; agentKind: 'coding' | 'chat' | 'automation' | 'integration-builder'; name: string }): Promise<string | null> {
   return loadContextContentFn(input);
 }
 

@@ -2,10 +2,23 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import {
   indexDoc, removeDoc, clearOrg, search, orgStatus, totalRows, closeIndex,
-  collectionAuthority, toMatchQuery,
+  collectionAuthority, toMatchQuery, bulkIndexDocs, optimizeIndex, type IndexRow,
 } from '../../src/knowledge/index-store.js';
+import { SHARED_ORG_ID, indexDbPath } from '../../src/knowledge/paths.js';
+
+/** White-box read of the derived doc-map row count (a second short-lived connection), used only to
+ *  assert the map ↔ fts invariant the fast-delete path depends on. */
+function mapCount(): number {
+  const d = new Database(indexDbPath());
+  try {
+    return (d.prepare('SELECT COUNT(*) AS n FROM knowledge_doc_map').get() as { n: number }).n;
+  } finally {
+    d.close();
+  }
+}
 
 /**
  * Lexical index tests (ch04 §4.4.1): SQLite FTS5. Accent-folded BM25 + collection-authority
@@ -84,6 +97,83 @@ describe('write/delete hooks', () => {
     clearOrg('orgA');
     expect(orgStatus('orgA').documentCount).toBe(0);
     expect(orgStatus('orgB').documentCount).toBe(1);
+  });
+});
+
+describe('shared partition (dual-scope search)', () => {
+  it('a normal org search sees its own docs + the shared corpus, never another org', () => {
+    doc('orgA', 'notas', 'a1', 'Contrato orgA', 'cláusula sobre arrendamento urbano');
+    doc('orgB', 'notas', 'b1', 'Contrato orgB', 'cláusula sobre arrendamento urbano');
+    doc(SHARED_ORG_ID, 'legislacao', 's1', 'Lei do arrendamento', 'regime jurídico do arrendamento urbano');
+    const ids = search('orgA', 'arrendamento clausula', 10).map((h) => h.docId);
+    expect(ids).toContain('a1'); // own
+    expect(ids).toContain('s1'); // shared surfaced
+    expect(ids).not.toContain('b1'); // never another org
+  });
+
+  it('hits carry scope org|shared and never surface the row orgId', () => {
+    doc('orgA', 'notas', 'a1', 'Prazo orgA', 'prazo de recurso');
+    doc(SHARED_ORG_ID, 'legal-spine', 's1', 'Prazo partilhado', 'prazo de recurso');
+    const hits = search('orgA', 'prazo recurso', 10);
+    expect(hits.find((h) => h.docId === 'a1')!.scope).toBe('org');
+    expect(hits.find((h) => h.docId === 's1')!.scope).toBe('shared');
+    expect(hits.every((h) => !Object.prototype.hasOwnProperty.call(h, 'orgId'))).toBe(true);
+  });
+
+  it('a shared-scope caller reads only the shared corpus (ids collapse, no duplicate hits)', () => {
+    doc(SHARED_ORG_ID, 'legal-spine', 's1', 'Prazo partilhado', 'prazo de recurso');
+    const hits = search(SHARED_ORG_ID, 'prazo recurso', 10);
+    expect(hits.map((h) => h.docId)).toEqual(['s1']); // exactly once
+    expect(hits[0]!.scope).toBe('shared');
+  });
+
+  it('clearOrg(_shared) drops only the shared partition, leaving org rows intact', () => {
+    doc('orgA', 'notas', 'a1', 'T', 'prazo de recurso');
+    doc(SHARED_ORG_ID, 'legal-spine', 's1', 'T', 'prazo de recurso');
+    clearOrg(SHARED_ORG_ID);
+    expect(search('orgA', 'prazo', 10).map((h) => h.docId)).toEqual(['a1']);
+    expect(orgStatus(SHARED_ORG_ID).documentCount).toBe(0);
+    expect(orgStatus('orgA').documentCount).toBe(1);
+  });
+});
+
+describe('doc-map (fast delete) + bulk index', () => {
+  const rows: IndexRow[] = [
+    { orgId: 'orgA', collection: 'c', docId: 'd1', title: 'Prazos', body: 'prazo de recurso', createdAt: '2026-01-01T00:00:00.000Z' },
+    { orgId: 'orgA', collection: 'c', docId: 'd2', title: 'Penhora', body: 'penhora de bens', createdAt: '2026-01-01T00:00:00.000Z' },
+  ];
+
+  it('bulkIndexDocs equals an indexDoc loop and re-bulk replaces without duplicates', () => {
+    for (const r of rows) indexDoc(r);
+    const loop = search('orgA', 'prazo penhora', 10).map((h) => h.docId).sort();
+    clearOrg('orgA');
+    bulkIndexDocs(rows);
+    expect(search('orgA', 'prazo penhora', 10).map((h) => h.docId).sort()).toEqual(loop);
+    bulkIndexDocs(rows); // re-bulk the same docIds → replace, not duplicate
+    expect(orgStatus('orgA').documentCount).toBe(2);
+    expect(totalRows()).toBe(2);
+    expect(mapCount()).toBe(2);
+  });
+
+  it('the map/fts row-count invariant holds across index, remove and clearOrg', () => {
+    doc('orgA', 'c', 'a1', 'A', 'prazo');
+    doc('orgB', 'c', 'b1', 'B', 'prazo');
+    doc(SHARED_ORG_ID, 'c', 's1', 'S', 'prazo');
+    expect(mapCount()).toBe(totalRows());
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'a1', title: 'A2', body: 'prazo novo', createdAt: '2026-01-01T00:00:00.000Z' }); // replace
+    expect(mapCount()).toBe(totalRows());
+    removeDoc('orgB', 'c', 'b1');
+    expect(mapCount()).toBe(totalRows());
+    clearOrg('orgA');
+    expect(mapCount()).toBe(totalRows());
+    expect(totalRows()).toBe(1); // only shared s1 remains
+  });
+
+  it('optimizeIndex compacts without disturbing results or the invariant', () => {
+    doc('orgA', 'c', 'd1', 'Prazos', 'prazo de recurso');
+    optimizeIndex();
+    expect(search('orgA', 'prazo', 5).map((h) => h.docId)).toEqual(['d1']);
+    expect(mapCount()).toBe(totalRows());
   });
 });
 

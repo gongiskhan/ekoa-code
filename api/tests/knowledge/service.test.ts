@@ -8,9 +8,11 @@ import { knowledgeUploads } from '../../src/data/stores.js';
 import type { Actor } from '@ekoa/shared';
 import {
   ingestDocument, deleteDocument, listDocuments, createUpload, deleteUpload, listUploads,
-  reindexOrg, indexStatus, backfillKnowledgeIndex,
+  reindexOrg, indexStatus, backfillKnowledgeIndex, readDocWithShared, KnowledgeError,
 } from '../../src/knowledge/service.js';
 import { search, closeIndex } from '../../src/knowledge/index-store.js';
+import { writeDoc } from '../../src/knowledge/vault.js';
+import { SHARED_ORG_ID } from '../../src/knowledge/paths.js';
 
 /**
  * Service tests (ch03 §3.8.20, ch04 §4.4.1): the vault+index orchestration — ingest write hook,
@@ -76,6 +78,54 @@ describe('uploads', () => {
     const out = await createUpload(actor('orgA'), { filename: 'x.md', collection: 'uploads', contentType: 'text/markdown', bytes: Buffer.from('prazo') }, deps);
     expect(await deleteUpload(actor('orgB'), out.uploadId)).toEqual({ removed: false, docsRemoved: 0 });
     expect(await listUploads(actor('orgA'))).toHaveLength(1); // untouched
+  });
+});
+
+describe('shared partition read fallback (readDocWithShared)', () => {
+  it('an org doc shadows a shared doc on the same (collection, docId)', async () => {
+    await writeDoc('orgA', 'legislacao', 'lei-1', { title: 'Org override', createdAt: '2026-01-01T00:00:00.000Z' }, 'texto do org');
+    await writeDoc(SHARED_ORG_ID, 'legislacao', 'lei-1', { title: 'Shared base', createdAt: '2026-01-01T00:00:00.000Z' }, 'texto partilhado');
+    const doc = await readDocWithShared('orgA', 'legislacao', 'lei-1');
+    expect(doc?.body).toBe('texto do org');
+    expect(doc?.fm.title).toBe('Org override');
+  });
+
+  it('falls back to the shared corpus when the org has no such doc', async () => {
+    await writeDoc(SHARED_ORG_ID, 'legislacao', 'lei-2', { title: 'Shared only', createdAt: '2026-01-01T00:00:00.000Z' }, 'só partilhado');
+    const doc = await readDocWithShared('orgA', 'legislacao', 'lei-2');
+    expect(doc?.body).toBe('só partilhado');
+    expect(doc?.fm.title).toBe('Shared only');
+  });
+
+  it('returns null when neither the org nor the shared corpus has the doc', async () => {
+    expect(await readDocWithShared('orgA', 'legislacao', 'inexistente')).toBeNull();
+  });
+
+  it('a shared-scope caller reads the shared corpus directly', async () => {
+    await writeDoc(SHARED_ORG_ID, 'legislacao', 'lei-3', { title: 'Shared', createdAt: '2026-01-01T00:00:00.000Z' }, 'partilhado');
+    expect((await readDocWithShared(SHARED_ORG_ID, 'legislacao', 'lei-3'))?.body).toBe('partilhado');
+    expect(await readDocWithShared(SHARED_ORG_ID, 'legislacao', 'inexistente')).toBeNull();
+  });
+});
+
+describe('shared partition is write-protected online (FORBIDDEN 403)', () => {
+  const shared = actor(SHARED_ORG_ID);
+  const forbidden = async (fn: () => Promise<unknown>) => {
+    await expect(fn()).rejects.toBeInstanceOf(KnowledgeError);
+    await expect(fn()).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+  };
+
+  it('refuses ingest, upload, delete-doc, delete-upload and reindex for the shared actor', async () => {
+    await forbidden(() => ingestDocument(shared, { collection: 'c', title: 'T', text: 'x' }, deps));
+    await forbidden(() => createUpload(shared, { filename: 'n.md', contentType: 'text/markdown', bytes: Buffer.from('x') }, deps));
+    await forbidden(() => deleteDocument(shared, 'c', 'd1'));
+    await forbidden(() => deleteUpload(shared, 'u1'));
+    await forbidden(() => reindexOrg(shared));
+  });
+
+  it('a normal org is unaffected by the guard (ingest still works)', async () => {
+    const { id } = await ingestDocument(actor('orgA'), { collection: 'c', title: 'T', text: 'prazo' }, deps);
+    expect(search('orgA', 'prazo', 5).map((h) => h.docId)).toContain(id);
   });
 });
 

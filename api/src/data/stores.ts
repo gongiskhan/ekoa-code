@@ -74,6 +74,10 @@ export const memories = new Store<Doc>('memories');
 export const artifacts = new Store<Doc>('artifacts');
 export const slugs = new Store<Doc>('slugs');
 export const integrationConfigs = new Store<Doc>('integration_configs');
+/** Integration-builder chat sessions (ch03 §3.8.14). PERSISTED — the old cortex builder kept an
+ *  in-memory Map that died on restart; load-by-key durability requires a store. Holds the running
+ *  transcript + the last generated package/skill so a session can be reloaded and edited. */
+export const integrationBuilderSessions = new Store<Doc>('integration_builder_sessions');
 export const activityLogs = new Store<ActivityLogDoc>('activity_logs');
 export const jobs = new Store<Doc>('jobs');
 export const settings = new Store<SettingsDoc>('settings');

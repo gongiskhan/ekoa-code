@@ -1,0 +1,8 @@
+{
+  "name": "integration-builder-agent",
+  "version": "1.0.0",
+  "description": "Base behavior for the integration builder agent: single-company posture, completeness checklist, and the two fenced output blocks",
+  "agents": ["integration-builder"],
+  "mode": "eager",
+  "files": ["SKILL.md"]
+}

@@ -18,5 +18,16 @@ export * from './pipedream.js';
 export { integrationPrefetch, __resetPrefetchCacheForTests, type PrefetchDeps } from './prefetch.js';
 // Config custody + the definitions registry (the composition root binds these to the
 // automation credential-loader and catalog seams).
-export { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
-export { listDefinitions, getDefinition, type IntegrationDefinition } from './definitions.js';
+export { findConfigForOwner, createConfig, updateConfig, type IntegrationConfigDoc } from './service.js';
+export {
+  listDefinitions,
+  getDefinition,
+  integrationSkillMd,
+  reservedIntegrationKeys,
+  writeRuntimePackage,
+  type IntegrationDefinition,
+  type IntegrationPackageConfig,
+  type IntegrationAction,
+  type IntegrationActionHttpConfig,
+  type IntegrationConfigField,
+} from './definitions.js';

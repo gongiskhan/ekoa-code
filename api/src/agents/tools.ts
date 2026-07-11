@@ -18,7 +18,7 @@ export const CONTEXT_LOADING_TOOL = 'load_context';
 /** Read-only file tools for a text run that carries attachments (§5.4.4). */
 export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 
-export type RunToolClass = 'chat' | 'build' | 'text-attachments' | 'pure-text' | 'brand-research';
+export type RunToolClass = 'chat' | 'build' | 'text-attachments' | 'pure-text' | 'brand-research' | 'integration-builder';
 
 export interface ToolPolicy {
   allowedTools?: string[];
@@ -45,6 +45,11 @@ export function toolPolicyFor(runClass: RunToolClass): ToolPolicy {
       return { disallowedTools: ['*'], maxTurns: cfg.maxTurnsText };
     case 'brand-research':
       // Tool-less: no Bash/Read (§5.6.4).
+      return { disallowedTools: ['*'], maxTurns: cfg.maxTurnsText };
+    case 'integration-builder':
+      // Tool-less one-shot: the builder emits its two fenced blocks from a single WORKHORSE turn
+      // with no filesystem/network reach (§3.8.14) — a prompt-injected service page cannot make it
+      // read the server or call out. Same posture as brand-research.
       return { disallowedTools: ['*'], maxTurns: cfg.maxTurnsText };
   }
 }

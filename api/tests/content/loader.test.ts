@@ -341,6 +341,18 @@ describe('content loader', () => {
       expect(names(automation.eagerFiles)).toEqual(['automation-agent']);
     });
 
+    it('the integration-builder kind composes ONLY its own package (not chat/coding/automation)', async () => {
+      const l = loader();
+      const builder = await l.composeContext('u1', 'integration-builder');
+      const names = (files: string[]) => files.map((f) => f.split('/').slice(-2, -1)[0]);
+      expect(names(builder.eagerFiles)).toEqual(['integration-builder-agent']);
+      // The builder package is scoped to its own kind — the three baseline agents never pick it up.
+      for (const kind of ['chat', 'coding', 'automation'] as const) {
+        const other = await l.composeContext('u1', kind);
+        expect(names(other.eagerFiles)).not.toContain('integration-builder-agent');
+      }
+    });
+
     it('assembleAgentContext returns eager bodies as promptSections with a content version', async () => {
       const l = loader();
       const ctx = await l.assembleAgentContext({ agentKind: 'chat', userId: 'u1' });

@@ -11,6 +11,7 @@
     "dev": "node --watch --loader ts-node/esm src/server.ts",
     "start": "node dist/server.js",
     "tool:migrate": "node --loader ts-node/esm scripts/migrate/cli.ts",
+    "tool:knowledge-import": "node --loader ts-node/esm scripts/migrate/knowledge/cli.ts",
     "tool:billing-replay": "node --loader ts-node/esm scripts/billing-replay/cli.ts",
     "tool:parity-workload": "node --loader ts-node/esm scripts/parity-workload/cli.ts"
   },

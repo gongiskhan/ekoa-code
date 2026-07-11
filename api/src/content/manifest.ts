@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 
-export const AGENT_KINDS = ['coding', 'chat', 'automation'] as const;
+export const AGENT_KINDS = ['coding', 'chat', 'automation', 'integration-builder'] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
 /** The `content.json` manifest schema (ch08 §8.1). `.strict()` rejects unknown keys so a

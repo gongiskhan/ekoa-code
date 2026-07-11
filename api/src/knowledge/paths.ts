@@ -29,6 +29,16 @@ export function isSafeSegment(seg: string): boolean {
   return seg !== '.' && seg !== '..' && SEGMENT_RE.test(seg);
 }
 
+/**
+ * The single reserved shared partition (ch04 §4.4.1): a public legal corpus consulted by every
+ * org's searches. It is a normal vault partition on disk (`vault/_shared/<collection>/...`), so it
+ * rides the same path-safety and index code as any org. The `_` prefix passes SEGMENT_RE yet is
+ * collision-proof against real org ids (UUIDs from randomUUID are hex + dashes, never `_`-prefixed),
+ * so no firm can ever be routed to `_shared`. Written ONLY by the offline importer CLI; a request
+ * actor whose org is this id is refused at the service (the shared corpus is read-only online).
+ */
+export const SHARED_ORG_ID = '_shared';
+
 /** The operational data root (carried convention, identical to apps/app-files.ts): ~/.ekoa/data,
  *  NEVER a path inside the repo. Read live (not memoized) so tests can point EKOA_DATA_DIR at a
  *  temp dir per suite. */

@@ -35,6 +35,7 @@ import { credentialsRouter } from './routes/credentials.js';
 import { llmHealth, registerGateway, loadCredential, setRulesetResolver } from './llm/index.js';
 import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
+import { integrationBuilderRouter } from './routes/integration-builder.js';
 import { knowledgeRouter } from './routes/knowledge.js';
 import { triggersRouter } from './routes/triggers.js';
 import { hooksRouter } from './routes/hooks.js';
@@ -83,7 +84,7 @@ import {
   sweepOrphans,
 } from './agents/index.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
-import { backfillKnowledgeIndex, buildGroundingBlock, searchKnowledgeIndex, readKnowledgeDoc } from './knowledge/index.js';
+import { backfillKnowledgeIndex, buildGroundingBlock, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
 // G8 — automation engine + integrations execution layer + delivery targets + canvas.
 import { automationsRouter } from './routes/automations.js';
 import { platformIntegrationsRouter, oauthCallbackRouter } from './routes/platform-integrations.js';
@@ -98,6 +99,7 @@ import {
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  setAutomationContentSections,
   startRunForTrigger,
   runAutomationForAction,
   buildAutomationCatalog,
@@ -109,6 +111,7 @@ import {
   callPlatformIntegration,
   findConfigForOwner,
   integrationPrefetch,
+  integrationSkillMd,
   listDefinitions,
   getDefinition,
 } from './integrations/index.js';
@@ -194,6 +197,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // the composition root binds the real collaborators (structural binding is where the shapes are
   // checked). server.ts is the only file that may reach across these seams.
   setAssembleAgentContext(assembleAgentContext); // content loader (ch08 §8.3.2, ch05 §5.5.1)
+  // The automation planner's eager content sections ride the same loader (automation/ may not
+  // import content/ — this seam is its one route to the composed package).
+  setAutomationContentSections(async (userId) => (await assembleAgentContext({ agentKind: 'automation', userId })).promptSections);
   // Knowledge grounding (ch08 §8.4 slot 5): buildGroundingBlock already applies the chat-always /
   // build-only-legal rule internally, so the adapter only maps agentKind → its chat|build kind.
   setKnowledgeGrounding(async ({ orgId, query, agentKind }) =>
@@ -218,25 +224,40 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     })),
   );
   setKnowledgeToolRead(async ({ orgId, collection, docId }) => {
-    const doc = await readKnowledgeDoc(orgId, collection, docId);
+    const doc = await readDocWithShared(orgId, collection, docId);
     return doc ? { title: doc.fm.title, sourceUrl: doc.fm.sourceUrl ?? '', body: doc.body } : null;
   });
   // The build-run `load_context` tool (§5.4.4): a named on-demand file from the user's composed
   // context. The name matches against the loader's OWN returned file list (never a joined path),
   // so the tool argument cannot traverse; frontmatter strips like the eager prompt sections.
   setLoadContextContent(async ({ userId, agentKind, name }) => {
+    const stripFrontmatter = (raw: string): string => {
+      if (!raw.startsWith('---')) return raw;
+      const end = raw.indexOf('\n---', 3);
+      if (end === -1) return raw;
+      const after = raw.indexOf('\n', end + 1);
+      return after === -1 ? '' : raw.slice(after + 1).replace(/^\n+/, '');
+    };
     const composed = await composeContext(userId, agentKind);
     const file = composed.onDemandFiles.find((f) => {
       const base = f.replace(/\\/g, '/').split('/').pop() ?? '';
       return base === name || base.replace(/\.[^.]+$/, '') === name;
     });
-    if (!file) return null;
-    const raw = await readFile(file, 'utf8');
-    if (!raw.startsWith('---')) return raw;
-    const end = raw.indexOf('\n---', 3);
-    if (end === -1) return raw;
-    const after = raw.indexOf('\n', end + 1);
-    return after === -1 ? '' : raw.slice(after + 1).replace(/^\n+/, '');
+    if (file) return stripFrontmatter(await readFile(file, 'utf8'));
+    // Fallback: `integration-<key>` resolves to the integration package's knowledge SKILL.md
+    // when the caller's org has that integration configured (on-demand — zero eager tokens).
+    // The key is validated against the definitions registry before any filesystem read.
+    const m = /^integration-([a-z0-9][a-z0-9-]*)$/.exec(name);
+    if (m) {
+      const key = m[1]!;
+      const user = (await users.get(userId)) as { orgId?: string } | null;
+      const cfg = user?.orgId ? await findConfigForOwner(user.orgId, userId, key) : null;
+      if (cfg && (cfg as { enabled?: boolean }).enabled !== false) {
+        const raw = integrationSkillMd(key);
+        if (raw) return stripFrontmatter(raw);
+      }
+    }
+    return null;
   });
   // G8 — the §5.5.2 chat grounding seams land: live integration pre-fetch (layer 3) and the
   // cross-agent automation/integration catalog (layer 4).
@@ -515,6 +536,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   registerGateway(app, { verifyToken });
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
+  // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
+  app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));
   // G5 — push infrastructure + triggers.
   app.use('/api/v1/triggers', triggersRouter(deps));

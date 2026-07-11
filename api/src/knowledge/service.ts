@@ -16,7 +16,7 @@ import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 import * as vault from './vault.js';
 import * as index from './index-store.js';
-import { PathSafetyError, uploadBlobPath, uploadsDir, knowledgeRoot } from './paths.js';
+import { PathSafetyError, uploadBlobPath, uploadsDir, knowledgeRoot, SHARED_ORG_ID } from './paths.js';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { relative } from 'node:path';
 
@@ -48,6 +48,19 @@ export interface Deps { now: () => number; genId: () => string }
 export class KnowledgeError extends Error {
   constructor(public code: string, public status: number, message: string) {
     super(message);
+  }
+}
+
+/**
+ * Tenancy guard for the reserved shared partition (ch04 §4.4.1). The `_shared` corpus is a
+ * read-only public legal spine, written ONLY by the offline importer CLI. No real actor is ever
+ * assigned this org id (UUIDs never collide with it), so this is a structural invariant, not a
+ * user-facing permission: any request actor presenting the shared org id is refused before it can
+ * mutate the corpus through the service.
+ */
+function assertNotSharedActor(actor: Actor): void {
+  if (actor.orgId === SHARED_ORG_ID) {
+    throw new KnowledgeError('FORBIDDEN', 403, 'A coleção partilhada é só de leitura.');
   }
 }
 
@@ -157,6 +170,7 @@ function toSummary(d: vault.VaultDoc, now?: string) {
 
 /** Ingest a document: write the vault file, then run the index write hook. Returns the id. */
 export async function ingestDocument(actor: Actor, input: CreateDocumentInput, deps: Deps): Promise<{ id: string }> {
+  assertNotSharedActor(actor);
   const docId = deps.genId();
   const createdAt = new Date(deps.now()).toISOString();
   const fm: vault.DocFrontmatter = {
@@ -198,8 +212,26 @@ export async function listCollections(actor: Actor): Promise<string[]> {
   return vault.listCollections(actor.orgId);
 }
 
+/**
+ * Read a document, consulting the caller's own vault first and the shared corpus as a fallback: an
+ * org doc SHADOWS a shared doc on the same (collection, docId). A shared-scope caller reads the
+ * shared partition once (no double read). This backs the in-process knowledge read tool so an agent
+ * can open a shared-corpus citation it surfaced via {@link searchKnowledgeIndex}.
+ */
+export async function readDocWithShared(
+  orgId: string,
+  collection: string,
+  docId: string,
+): Promise<{ fm: vault.DocFrontmatter; body: string } | null> {
+  const own = await vault.readDoc(orgId, collection, docId);
+  if (own) return own;
+  if (orgId === SHARED_ORG_ID) return null;
+  return vault.readDoc(SHARED_ORG_ID, collection, docId);
+}
+
 /** Delete a document: remove the vault file + the index row. */
 export async function deleteDocument(actor: Actor, collection: string, docId: string): Promise<boolean> {
+  assertNotSharedActor(actor);
   let removed = false;
   try {
     removed = await vault.deleteDoc(actor.orgId, collection, docId);
@@ -229,6 +261,7 @@ export async function createUpload(
   input: { filename: string; collection?: string; contentType: string; bytes: Buffer },
   deps: Deps,
 ): Promise<{ uploadId: string; filename: string; collection?: string; status: string; docsIndexed: number }> {
+  assertNotSharedActor(actor);
   const uploadId = deps.genId();
   const createdAt = new Date(deps.now()).toISOString();
   await mkdir(uploadsDir(actor.orgId), { recursive: true });
@@ -275,6 +308,7 @@ export async function listUploads(actor: Actor) {
 
 /** Delete an upload: unindex its ingested docs, remove the blob, drop the registry row. */
 export async function deleteUpload(actor: Actor, id: string): Promise<{ removed: boolean; docsRemoved: number }> {
+  assertNotSharedActor(actor);
   const row = (await knowledgeUploads.get(id)) as KnowledgeUploadDoc | null;
   if (!row || row.orgId !== actor.orgId) return { removed: false, docsRemoved: 0 }; // cross-org → uniform not-found
   let docsRemoved = 0;
@@ -292,6 +326,7 @@ export async function deleteUpload(actor: Actor, id: string): Promise<{ removed:
 /** Rebuild one org's index from its vault (admin heal). Synchronous + deterministic in v1;
  *  clears the org partition then re-indexes every vault file. */
 export async function reindexOrg(actor: Actor): Promise<{ started: boolean }> {
+  assertNotSharedActor(actor);
   await index.ensureIndexDir();
   index.clearOrg(actor.orgId);
   await indexOrgFromVault(actor.orgId);
@@ -303,14 +338,23 @@ export function indexStatus(actor: Actor): { status: string; documentCount: numb
   return { status: 'ready', documentCount: s.documentCount, collectionCount: s.collectionCount };
 }
 
-/** Read every vault file for an org and (re)index it. */
+/** Read every vault file for an org and (re)index it. Batched through {@link index.bulkIndexDocs}
+ *  (one transaction per 1000 docs) so a large org rebuild is not thousands of separate commits. */
 async function indexOrgFromVault(orgId: string): Promise<number> {
+  const BATCH = 1000;
   const docs = await vault.listAllDocs(orgId);
   let n = 0;
+  let batch: index.IndexRow[] = [];
+  const flush = () => {
+    if (batch.length === 0) return;
+    index.bulkIndexDocs(batch);
+    n += batch.length;
+    batch = [];
+  };
   for (const d of docs) {
     const parsed = await vault.readDoc(orgId, d.collection, d.docId);
     if (!parsed) continue;
-    index.indexDoc({
+    batch.push({
       orgId,
       collection: d.collection,
       docId: d.docId,
@@ -321,8 +365,9 @@ async function indexOrgFromVault(orgId: string): Promise<number> {
       sourceType: parsed.fm.sourceType,
       language: parsed.fm.language,
     });
-    n++;
+    if (batch.length >= BATCH) flush();
   }
+  flush();
   return n;
 }
 

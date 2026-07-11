@@ -30,7 +30,8 @@ export function knowledgeToolSpecs(actor: ToolActor): SdkToolSpec[] {
     {
       name: searchName,
       description:
-        'Pesquisa a base de conhecimento da organização. Devolve resultados citados ' +
+        'Pesquisa a base de conhecimento da organização E o acervo jurídico partilhado ' +
+        '(legislação e jurisprudência portuguesas). Devolve resultados citados ' +
         '(coleção/documento + excerto); usa knowledge_read para ler um documento completo.',
       inputSchema: {
         query: z.string().min(1).describe('Termos de pesquisa'),
@@ -49,8 +50,8 @@ export function knowledgeToolSpecs(actor: ToolActor): SdkToolSpec[] {
     {
       name: readName,
       description:
-        'Lê um documento completo da base de conhecimento da organização, identificado por ' +
-        'coleção + id (tal como citado por knowledge_search).',
+        'Lê um documento completo da base de conhecimento (da organização ou do acervo ' +
+        'jurídico partilhado), identificado por coleção + id (tal como citado por knowledge_search).',
       inputSchema: {
         collection: z.string().min(1).describe('Coleção do documento'),
         docId: z.string().min(1).describe('Id do documento'),
@@ -71,12 +72,13 @@ export function knowledgeToolSpecs(actor: ToolActor): SdkToolSpec[] {
 
 /** The build-run `load_context` tool (§5.4.4 build row): pull a named on-demand content
  *  package from the user's composed agent context at runtime (ch08 on-demand files). */
-export function loadContextToolSpec(actor: ToolActor, agentKind: 'coding' | 'chat' | 'automation' = 'coding'): SdkToolSpec {
+export function loadContextToolSpec(actor: ToolActor, agentKind: 'coding' | 'chat' | 'automation' | 'integration-builder' = 'coding'): SdkToolSpec {
   return {
     name: CONTEXT_LOADING_TOOL,
     description:
       'Carrega um conteúdo de contexto on-demand pelo nome (listado nas secções de contexto ' +
-      'do agente). Devolve o conteúdo completo desse pacote.',
+      'do agente). Devolve o conteúdo completo desse pacote. Também carrega o conhecimento de ' +
+      'uma integração configurada com o nome `integration-<chave>` (ex.: `integration-slack`).',
     inputSchema: {
       name: z.string().min(1).describe('Nome do conteúdo on-demand'),
     },

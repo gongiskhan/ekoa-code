@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { indexDoc, closeIndex } from '../../src/knowledge/index-store.js';
 import { buildGroundingBlock, isLegalContext } from '../../src/knowledge/grounding.js';
+import { SHARED_ORG_ID } from '../../src/knowledge/paths.js';
 
 /**
  * Grounding block tests (ch08 §8.4 slot 5, ch05 §5.5.2): cited-or-silent, the deterministic
@@ -76,5 +77,15 @@ describe('org partition', () => {
     seed('orgA');
     const { block } = buildGroundingBlock({ orgId: 'orgB', query: 'prazo de recurso', kind: 'chat' });
     expect(block).toBe('');
+  });
+});
+
+describe('shared corpus grounding', () => {
+  it('a normal org chat surfaces shared-corpus hits it does not own', () => {
+    indexDoc({ orgId: SHARED_ORG_ID, collection: 'legal-spine', docId: 'shared-1', title: 'Prazo comum de recurso', body: 'o prazo comum de recurso é de 30 dias', createdAt: '2026-01-01T00:00:00.000Z' });
+    const { block, hits } = buildGroundingBlock({ orgId: 'orgSemNada', query: 'qual o prazo de recurso', kind: 'chat' });
+    expect(hits.map((h) => h.docId)).toContain('shared-1');
+    expect(hits.find((h) => h.docId === 'shared-1')!.scope).toBe('shared');
+    expect(block).toContain('legal-spine / Prazo comum de recurso (doc shared-1)');
   });
 });

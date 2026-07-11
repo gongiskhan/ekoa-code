@@ -19,9 +19,11 @@
  * credential-named field can never leave the registry, belt-and-braces.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PIPEDREAM_INTEGRATION_KEY } from './service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -98,8 +100,9 @@ export interface IntegrationSessionConnectConfig {
   guidePt?: string;
 }
 
-/** The parsed `config.json` of a versioned integration package. */
-interface IntegrationPackageConfig {
+/** The parsed `config.json` of a versioned integration package. Exported so the integration
+ *  builder (agents/) types + validates its generated package against the ONE canonical shape. */
+export interface IntegrationPackageConfig {
   version?: string;
   skillType?: string;
   integrationKey: string;
@@ -183,16 +186,34 @@ function redactSecrets<T>(value: T): T {
 // ============================================
 
 let cache: Map<string, IntegrationDefinition> | null = null;
+/** Keys that come from the read-only BASELINE tier (api/assets/integrations). Rebuilt by load().
+ *  The reserved-key set the builder guards against (a user integration may not shadow a shipped
+ *  one) is derived from this + the pipedream row — not from the whole cache, which now also holds
+ *  runtime (user-created) packages. */
+let baselineKeys = new Set<string>();
 
-/** Root of the versioned packages. Resolved at call time so tests can point EKOA_INTEGRATIONS_DIR
- *  at a fixture and refresh() picks it up. `__dirname/../../assets/integrations` holds from both
- *  api/src/integrations and api/dist/integrations (assets/ sits at the api package root). */
+/** Root of the versioned BASELINE packages. Resolved at call time so tests can point
+ *  EKOA_INTEGRATIONS_DIR at a fixture and refresh() picks it up. `__dirname/../../assets/integrations`
+ *  holds from both api/src/integrations and api/dist/integrations (assets/ sits at the api root). */
 function integrationsDir(): string {
   return process.env.EKOA_INTEGRATIONS_DIR || join(__dirname, '..', '..', 'assets', 'integrations');
 }
 
+/** Operational data directory (EKOA_DATA_DIR || ~/.ekoa/data), resolved per call so tests can
+ *  override it — same derivation as services/artifact-screenshot.ts dataDir(). */
+function dataDir(): string {
+  const raw = process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data');
+  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+}
+
+/** Root of the RUNTIME tier: user-created integration packages the builder saves
+ *  (`<dataDir>/integrations/runtime/<key>/`). Shadows baseline on key collision. */
+function runtimeDir(): string {
+  return join(dataDir(), 'integrations', 'runtime');
+}
+
 /** Load and project one package directory, or null if it has no readable config.json. */
-function loadOne(dir: string): IntegrationDefinition | null {
+function loadOne(dir: string, userCreated: boolean): IntegrationDefinition | null {
   const configPath = join(dir, 'config.json');
   if (!existsSync(configPath)) return null;
 
@@ -217,7 +238,7 @@ function loadOne(dir: string): IntegrationDefinition | null {
     authType: config.authType,
     provider: config.provider,
     category: config.category,
-    userCreated: false,
+    userCreated,
     configSchema: config.configSchema ?? [],
     actions: config.actions ?? [],
     credentialGuide: config.credentialGuide,
@@ -229,23 +250,34 @@ function loadOne(dir: string): IntegrationDefinition | null {
   });
 }
 
-/** (Re)load every package directory from disk into a fresh cache. */
-function load(): Map<string, IntegrationDefinition> {
-  const dir = integrationsDir();
-  const next = new Map<string, IntegrationDefinition>();
-  if (existsSync(dir)) {
-    for (const d of readdirSync(dir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const def = loadOne(join(dir, d.name));
-      if (def) next.set(def.key, def);
+/** Scan one tier's package directories into `next`, marking userCreated + recording keys. */
+function loadTier(root: string, userCreated: boolean, next: Map<string, IntegrationDefinition>, keys: Set<string>): void {
+  if (!existsSync(root)) return;
+  for (const d of readdirSync(root, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const def = loadOne(join(root, d.name), userCreated);
+    if (def) {
+      next.set(def.key, def); // later tiers overwrite earlier ones (runtime shadows baseline)
+      keys.add(def.key);
     }
   }
+}
+
+/** (Re)load every package directory from disk into a fresh cache: baseline first, then runtime
+ *  (which shadows baseline on key collision, §8.3.2 rule 2). */
+function load(): Map<string, IntegrationDefinition> {
+  const next = new Map<string, IntegrationDefinition>();
+  const baseKeys = new Set<string>();
+  loadTier(integrationsDir(), false, next, baseKeys);
+  loadTier(runtimeDir(), true, next, new Set<string>());
   cache = next;
+  baselineKeys = baseKeys;
   return next;
 }
 
 function ensure(): Map<string, IntegrationDefinition> {
-  return cache ?? load();
+  if (!cache) load();
+  return cache!;
 }
 
 // ============================================
@@ -261,6 +293,57 @@ export function listDefinitions(): IntegrationDefinition[] {
  *  to resolve an action's httpConfig without re-reading config.json off disk. */
 export function getDefinition(key: string): IntegrationDefinition | null {
   return ensure().get(key) ?? null;
+}
+
+/**
+ * The integration package's knowledge SKILL.md (raw markdown), or null when the package has
+ * none. The definitions registry deliberately ignores SKILL.md (config.json is the runtime
+ * contract); this is the ON-DEMAND knowledge surface the agents pull through `load_context`
+ * as `integration-<key>`. Only a KNOWN definition key resolves — the key never touches the
+ * filesystem unvalidated.
+ */
+export function integrationSkillMd(key: string): string | null {
+  if (!ensure().has(key)) return null;
+  // Runtime wins over baseline (a user-created package shadows a shipped one of the same key).
+  for (const p of [join(runtimeDir(), key, 'SKILL.md'), join(integrationsDir(), key, 'SKILL.md')]) {
+    if (!existsSync(p)) continue;
+    try {
+      return readFileSync(p, 'utf8');
+    } catch {
+      /* try the next tier */
+    }
+  }
+  return null;
+}
+
+/** Regex for a well-formed integration key, enforced at write time (mirrors the builder parser). */
+const RUNTIME_KEY_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
+
+/**
+ * The keys a user-created integration may NOT claim: every BASELINE definition key plus the
+ * reserved `pipedream` connect row. The integration builder rejects a generated/edited package
+ * whose key collides with this set (unless the session is editing that very key), so a user
+ * integration can never shadow a shipped one or the platform Pipedream row (§3.8.14/§3.8.16).
+ */
+export function reservedIntegrationKeys(): Set<string> {
+  ensure(); // populates baselineKeys
+  return new Set<string>([...baselineKeys, PIPEDREAM_INTEGRATION_KEY]);
+}
+
+/**
+ * Persist a user-created integration package into the RUNTIME tier
+ * (`<dataDir>/integrations/runtime/<key>/{config.json,SKILL.md}`) and refresh the registry so the
+ * new definition is immediately resolvable (list/getDefinition/integrationSkillMd). `integrations/`
+ * owns this filesystem write (the builder route calls it). The key shape is re-validated here as a
+ * belt-and-braces guard even though the builder already checked it. Returns the reload summary.
+ */
+export function writeRuntimePackage(key: string, config: Record<string, unknown>, skillMd: string): { count: number; keys: string[] } {
+  if (!RUNTIME_KEY_RE.test(key)) throw new Error(`invalid integration key: ${JSON.stringify(key)}`);
+  const dir = join(runtimeDir(), key);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  writeFileSync(join(dir, 'SKILL.md'), skillMd, 'utf8');
+  return refreshDefinitions();
 }
 
 /** The action + event catalog for every loaded definition (unfiltered; the route joins
