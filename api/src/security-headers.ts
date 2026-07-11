@@ -32,6 +32,43 @@ function isApiSurface(path: string): boolean {
   return path === '/health' || path.startsWith('/api') || path.startsWith('/hooks');
 }
 
+/** True for the EMBEDDABLE app documents (/apps/*): the dashboard's preview overlay frames
+ *  these cross-origin (app.<domain> → api.<domain>; :3000 → :4111 in dev), so this surface —
+ *  and ONLY this surface — allowlists the dashboard origins as frame ancestors. */
+function isEmbeddableAppsSurface(path: string): boolean {
+  return path === '/apps' || path.startsWith('/apps/');
+}
+
+/**
+ * Dashboard origins allowed to embed /apps/*: `EKOA_DASHBOARD_ORIGINS` (comma-separated
+ * absolute origins) → `EKOA_APP_ORIGIN` (the canonical running-frontend origin) → the dev
+ * dashboard. Entries must parse as http(s) URLs; invalid ones are dropped with a warning
+ * (never silently widened). Memoized — env is process-stable; tests reset.
+ */
+let cachedDashboardOrigins: string[] | null = null;
+export function dashboardOrigins(): string[] {
+  if (cachedDashboardOrigins) return cachedDashboardOrigins;
+  const raw = process.env.EKOA_DASHBOARD_ORIGINS || process.env.EKOA_APP_ORIGIN || 'http://localhost:3000';
+  const out: string[] = [];
+  for (const entry of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    try {
+      const u = new URL(entry);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        out.push(u.origin);
+        continue;
+      }
+    } catch {
+      /* fall through to the warning */
+    }
+    console.warn(`[security-headers] dropped invalid dashboard-origin entry: ${entry}`);
+  }
+  cachedDashboardOrigins = out;
+  return out;
+}
+export function __resetDashboardOriginsForTests(): void {
+  cachedDashboardOrigins = null;
+}
+
 export function securityHeaders(req: Request, res: Response, next: NextFunction): void {
   // Universal — safe on every response, no rendering impact.
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -41,6 +78,16 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   if (isApiSurface(req.path)) {
     res.setHeader('Content-Security-Policy', API_CSP);
     res.setHeader('X-Frame-Options', 'DENY');
+  } else if (isEmbeddableAppsSurface(req.path)) {
+    // /apps embed surface: 'self' + the configured dashboard origins. Deliberately NO
+    // X-Frame-Options here — XFO cannot express an allowlist and a SAMEORIGIN value would
+    // keep blocking the cross-origin dashboard in some engines; every modern browser gives
+    // frame-ancestors precedence, and legacy XFO-only browsers fail CLOSED (no framing).
+    const origins = dashboardOrigins();
+    res.setHeader(
+      'Content-Security-Policy',
+      `frame-ancestors 'self'${origins.length > 0 ? ` ${origins.join(' ')}` : ''}`,
+    );
   } else {
     // Served-app plane: framing-scoped containment, resource loading left to byte-compat.
     res.setHeader('Content-Security-Policy', SERVED_APP_CSP);

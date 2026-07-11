@@ -77,6 +77,10 @@ const nextConfig: NextConfig = {
     // Artifact thumbnails are served by the API (/artifact-screenshots, ch07 §7.11); in dev
     // that origin is http so the blanket `https:` does not cover it — allow it explicitly.
     const imgSrc = ["'self'", "data:", "blob:", "https:", apiOrigin].filter(Boolean).join(" ");
+    // The artifact preview overlay frames the API's /apps/* plane (cross-origin). Framing is
+    // two-sided: the api allowlists the dashboard via frame-ancestors, and the dashboard must
+    // allow the api as a frame SOURCE here (no frame-src = default-src 'self' = blocked).
+    const frameSrc = ["'self'", apiOrigin].filter(Boolean).join(" ");
     // Next's dev server (fast-refresh/HMR) and the webpack runtime evaluate code via eval, so
     // 'unsafe-eval' is required for the app to run; 'unsafe-inline' covers Next's inline
     // bootstrap. Websocket dev-HMR needs ws: in connect-src. The security-load-bearing directives
@@ -90,6 +94,7 @@ const nextConfig: NextConfig = {
       scriptSrc,
       "style-src 'self' 'unsafe-inline'",
       `img-src ${imgSrc}`,
+      `frame-src ${frameSrc}`,
       "font-src 'self' data:",
       connect,
       "frame-ancestors 'none'",

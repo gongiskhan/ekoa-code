@@ -41,15 +41,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 - **`restoreVersion-featured-500`** (medium). `restoreVersion` on a *featured* artifact still 500s.
   (The broader versions-500 - never-built artifacts and the featured list - was fixed 2026-07-11; this
   case remains.)
-- **`apps-embed-frame-headers`** (medium, security). The dashboard cannot iframe a served artifact
-  because the served-app plane sets `frame-ancestors 'self'`/`SAMEORIGIN` and the dashboard is a
-  different origin; the `/apps` embed allowlist is not built. Scheduled as the deferred security task
-  of this run. Tracked: `docs/security.md`.
 - **`web-sourceinput-divergence`** (medium). A web/`shared` `SourceInput` divergence makes a seed-
   template knowledge source 400 from the UI.
 - **`login-double-session`** (minor, dev-only). The login landing double-creates sessions (React
-  StrictMode double-mount of the eager empty-session create); dev-DB orphan-row noise. The write should
-  be idempotent/effect-guarded.
+  StrictMode double-mount of the eager empty-session create); dev-DB orphan-row noise, and the /chat
+  landing intermittently GETs a just-created session id that 404s (the e2e trackers carry a scoped
+  exclusion for exactly that 404 pattern - remove it when this closes). The write should be
+  idempotent/effect-guarded.
 - **`chat-sse-discovery`** (deferred, batch-2). S1 adversarial-tester discovery set: chat-SSE late-
   subscriber gap, run hangs on upstream auth failure, temp-session 404 persist.
 - **`web-tests-untypechecked`** (low, batch-2). Web `__tests__` are excluded from tsc, so web test
@@ -66,6 +64,11 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## Recently fixed - 2026-07-11 stabilization run
 
+- **`apps-embed-frame-headers`** - the `/apps/*` embed surface now answers CSP
+  `frame-ancestors 'self'` + the configured dashboard origins (`EKOA_DASHBOARD_ORIGINS` csv ->
+  `EKOA_APP_ORIGIN` -> dev localhost:3000; invalid entries dropped) with NO `X-Frame-Options`;
+  the dashboard CSP gained `frame-src`/`img-src` for the api origin. The preview iframe renders
+  live and is pinned by e2e. Other planes unchanged (API `'none'`+DENY, served `'self'`+SAMEORIGIN).
 - **`registo-targetIds`** - `registoEntry.targetIds` emitted the metadata object where the schema
   wants `array(Id)`, failing `RegistoListResponse` validation; now derives ids from id-keyed metadata.
   Verified live.

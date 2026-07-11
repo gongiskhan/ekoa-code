@@ -45,7 +45,12 @@ function trackConsoleErrors(page: Page): string[] {
     errors.push(`pageerror: ${err.message}`);
   });
   page.on('response', (r) => {
-    if (r.status() >= 400 && !devAssetNoise.test(r.url())) errors.push(`${r.status()} ${r.url()}`);
+    if (r.status() < 400 || devAssetNoise.test(r.url())) return;
+    // Known OPEN finding (docs/findings.md: login session double-create race): the /chat
+    // landing intermittently GETs a just-created session id that 404s. Scoped exclusion —
+    // remove when the finding closes.
+    if (r.status() === 404 && /\/api\/v1\/sessions\/[0-9a-f-]{36}$/.test(r.url())) return;
+    errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;
 }
@@ -88,6 +93,28 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
     await page.waitForTimeout(2_000); // let the uploads/collections fetches settle
 
     expect(errors, `console errors on /knowledge:\n${errors.join('\n')}`).toEqual([]);
+  });
+
+  test('/artifacts preview overlay: the cross-origin app iframe actually renders (embed allowlist)', async ({ page }) => {
+    await login(page);
+
+    const errors = trackConsoleErrors(page);
+    await page.goto('/artifacts');
+    // Open a running (featured) artifact's detail — the preview affordance lives there.
+    const card = page.getByRole('heading', { name: /Portfólio Agência/i }).first();
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await card.click();
+    const previewButton = page.getByRole('button', { name: /pré-visualiza/i }).last();
+    await expect(previewButton).toBeVisible({ timeout: 30_000 });
+    await previewButton.click();
+
+    // The overlay's iframe points at the api's /apps/* plane — cross-origin from the
+    // dashboard. Pre-fix the api answered frame-ancestors 'self' + XFO SAMEORIGIN and the
+    // browser refused the frame; now /apps/* allowlists the dashboard origin.
+    const frame = page.frameLocator('iframe[title*="Preview"]');
+    await expect(frame.locator('body')).not.toBeEmpty({ timeout: 30_000 });
+
+    expect(errors, `console errors on /artifacts preview:\n${errors.join('\n')}`).toEqual([]);
   });
 
   test('/integrations: session-status cards survive the status poll and expanding renders action rows', async ({ page }) => {
