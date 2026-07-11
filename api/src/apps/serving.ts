@@ -35,6 +35,7 @@ import { lookupShareable } from './share-lookup.js';
 import { injectAppContext } from './injected-context.js';
 import { listDemoCards, getDemoSpec, demoAssetsDir } from '../services/demo-registry.js';
 import { resolveWithinJail } from '../services/safe-path.js';
+import { verifyPreviewToken } from '../services/preview-token.js';
 import { artifacts, jobs } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 
@@ -304,13 +305,20 @@ export function servingRouter(deps: ServingDeps): Router {
 
         let isOwner = false;
         if (token) {
-          try {
-            const claims = deps.verifyToken(token);
-            const resolvedAppId = getAppIdBySlug(appId) || appId;
-            const artifact = await artifacts.get(resolvedAppId);
-            if (artifact && artifact.userId === claims.sub) isOwner = true;
-          } catch {
-            /* invalid token -> not the owner */
+          // Purpose-scoped preview token first (the per-build verifier's capability: view THIS
+          // artifact only, short TTL - never a user JWT in an agent transcript).
+          const previewArtifactId = verifyPreviewToken(token);
+          if (previewArtifactId && previewArtifactId === canonicalAppId) {
+            isOwner = true;
+          } else {
+            try {
+              const claims = deps.verifyToken(token);
+              const resolvedAppId = getAppIdBySlug(appId) || appId;
+              const artifact = await artifacts.get(resolvedAppId);
+              if (artifact && artifact.userId === claims.sub) isOwner = true;
+            } catch {
+              /* invalid token -> not the owner */
+            }
           }
         }
 

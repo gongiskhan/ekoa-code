@@ -73,6 +73,32 @@ export type UseJobStreamReturn = [UseJobStreamState, UseJobStreamActions];
 /** Minimum interval (ms) between activity message updates to avoid flickering */
 const ACTIVITY_THROTTLE_MS = 2000;
 
+/** Strip the server-side sandbox root (…/sandboxes/<user>/<artifact>/) — or any absolute home
+ *  prefix — so the user only ever sees project-relative paths (white-label, ch12). */
+function relativizeSandboxPath(p: string): string {
+  const m = p.match(/\/sandboxes\/[^/]+\/[^/]+\/(.+)$/);
+  if (m) return m[1] as string;
+  return p.replace(/^\/(?:Users|home)\/[^/]+\//, '');
+}
+
+/** Friendly, white-labelled activity line for a tool start: the localized tool label plus the
+ *  touched file relativized to the project. Never raw commands, never absolute paths. */
+function describeToolForUser(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  locale: string,
+): string | null {
+  const label = getFriendlyToolActivity(toolName, args ?? {}, locale);
+  if (!label) return null;
+  const rawPath =
+    args && typeof args.file_path === 'string'
+      ? args.file_path
+      : args && typeof args.path === 'string'
+        ? args.path
+        : null;
+  return rawPath ? `${label}: ${relativizeSandboxPath(rawPath)}` : label;
+}
+
 // ============================================
 // HOOK
 // ============================================
@@ -108,12 +134,14 @@ export function useJobStream(
   const fillerIndexRef = useRef(0);
   const lastPhaseRef = useRef<string | null>(null);
 
-  // Tool duration tracking
-  const toolStartTimesRef = useRef<Map<string, number>>(new Map());
-
   // Streaming chat buffer (rAF-batched)
   const chatStreamBufferRef = useRef('');
   const chatStreamRafRef = useRef<number | null>(null);
+
+  // Thinking window (per run): first thinking_chunk opens it, first answer chunk closes it —
+  // the duration rides the final message's metadata (mirrors the chat page's handling).
+  const thinkingStartedAtRef = useRef<number | null>(null);
+  const thinkingEndedAtRef = useRef<number | null>(null);
 
   // -- Helpers --
 
@@ -170,7 +198,9 @@ export function useJobStream(
       }
 
       if (filePath) {
-        useOrchestrationStore.getState().addFileOperation(sessionId, filePath, action);
+        // Project-relative: the file endpoints are path-confined server-side (P-15), and the
+        // user must never see the host's absolute sandbox root (white-label, ch12).
+        useOrchestrationStore.getState().addFileOperation(sessionId, relativizeSandboxPath(filePath), action);
       }
     },
     [sessionId]
@@ -209,29 +239,6 @@ export function useJobStream(
     chatStreamRafRef.current = null;
   }, [sessionId]);
 
-  /** Flush streaming chat buffer → permanent chat message (if substantive) */
-  const flushStreamingChatToMessage = useCallback(() => {
-    if (!sessionId) return;
-    // Cancel pending rAF and flush buffer synchronously
-    if (chatStreamRafRef.current) {
-      cancelAnimationFrame(chatStreamRafRef.current);
-      chatStreamRafRef.current = null;
-    }
-    const buffered = chatStreamBufferRef.current;
-    chatStreamBufferRef.current = '';
-    // Flush any text already in the store + the local buffer
-    const store = useOrchestrationStore.getState();
-    const storeText = store.flushStreamingChat(sessionId);
-    const fullText = (storeText + buffered).trim();
-    if (fullText.length >= 20) {
-      store.addMessage(sessionId, {
-        role: 'assistant',
-        content: fullText,
-        metadata: { isEssential: true, type: 'agent_text' },
-      });
-    }
-  }, [sessionId]);
-
   // -- SSE Event Handler --
 
   const handleJobEvent = useCallback(
@@ -262,23 +269,18 @@ export function useJobStream(
         }
 
         case 'routing': {
+          // Internal routing decision: drives hook state only. It is NEVER surfaced to the end
+          // user — "Routing: EXPERT - first build" in the activity feed was a white-label leak
+          // (operator report 2026-07-11).
           setState(prev => ({ ...prev, status: 'routing', phase: event.tier || prev.phase }));
-
-          // Add routing decision as a system output entry (FC-203).
-          if (sessionId) {
-            const outputId = `${sessionId}-routing-${outputIdRef.current++}`;
-            addOutputToStore({
-              id: outputId,
-              timestamp: new Date().toISOString(),
-              type: 'system',
-              content: `Routing: ${event.tier}${event.reason ? ' - ' + event.reason : ''}`,
-            });
-          }
           break;
         }
 
         case 'text_chunk': {
           const content = event.text;
+          if (thinkingStartedAtRef.current !== null && thinkingEndedAtRef.current === null) {
+            thinkingEndedAtRef.current = Date.now();
+          }
           // Accumulate text into the last output entry instead of creating one per token
           setState(prev => {
             const outputs = [...prev.outputs];
@@ -302,47 +304,46 @@ export function useJobStream(
           break;
         }
 
+        case 'thinking_chunk': {
+          // Working commentary (server-side marker-filtered + identity-redacted). Renders in the
+          // live collapsible thinking UI — NEVER as transcript messages (the old behavior flushed
+          // commentary fragments into "Agente EKOA" bubbles split mid-word; operator report
+          // 2026-07-11). Flushed into the final message's metadata on complete.
+          if (sessionId && event.text) {
+            thinkingStartedAtRef.current ??= Date.now();
+            useOrchestrationStore.getState().appendStreamingThinking(sessionId, event.text);
+          }
+          break;
+        }
+
         case 'tool_event': {
+          // WHITE-LABEL (ch12, operator report 2026-07-11): the end user NEVER sees raw tool
+          // traffic — no tool names as-is, no commands, no absolute sandbox paths, no raw
+          // results/errors (the agent self-corrects; its internal misses are not user news).
+          // The activity feed gets a friendly one-liner per tool start (with the touched file
+          // relativized to the project); results are dropped entirely.
           const toolName = event.tool;
           const args = event.args;
 
-          // Flush streaming chat text as a permanent message before tool activity
           if (event.phase === 'started') {
-            flushStreamingChatToMessage();
-          }
-          const outputId = sessionId ? `${sessionId}-tool-${outputIdRef.current++}` : `tool-${outputIdRef.current++}`;
-
-          if (event.phase === 'started') {
-            // Track tool start time for duration calculation
-            if (toolName) {
-              toolStartTimesRef.current.set(toolName + '-' + outputIdRef.current, Date.now());
+            const locale = getLocale();
+            const friendly = describeToolForUser(toolName, args, locale);
+            if (friendly) {
+              const outputId = sessionId ? `${sessionId}-tool-${outputIdRef.current++}` : `tool-${outputIdRef.current++}`;
+              addOutputToStore({
+                id: outputId,
+                timestamp: new Date().toISOString(),
+                type: 'status',
+                content: friendly,
+                phase: lastPhaseRef.current || undefined,
+              });
             }
-
-            const output: StreamedOutput = {
-              id: outputId,
-              type: 'tool_use',
-              content: `Tool: ${toolName}`,
-              toolName,
-              toolInput: args,
-              timestamp: new Date(),
-            };
-            setState(prev => ({ ...prev, outputs: [...prev.outputs, output] }));
-            addOutputToStore({
-              id: outputId,
-              timestamp: new Date().toISOString(),
-              type: 'tool_use',
-              content: `Tool: ${toolName}`,
-              toolName,
-              toolInput: args,
-              phase: lastPhaseRef.current || undefined,
-            });
             extractFileOps({ type: 'tool_use', toolName, toolInput: args });
 
             // Activity message
             if (sessionId) {
               const now = Date.now();
               if (now - lastActivityUpdateRef.current >= ACTIVITY_THROTTLE_MS) {
-                const locale = getLocale();
                 const activity = getFriendlyToolActivity(toolName, args || {}, locale);
                 if (activity) {
                   lastActivityUpdateRef.current = now;
@@ -351,37 +352,6 @@ export function useJobStream(
                 }
               }
             }
-          } else if (event.phase === 'finished') {
-            const result = event.result;
-            const isError = event.isError === true;
-            const resultContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-
-            addOutputToStore({
-              id: outputId,
-              timestamp: new Date().toISOString(),
-              type: 'tool_result',
-              content: resultContent,
-              toolName,
-              phase: lastPhaseRef.current || undefined,
-              toolDuration: event.durationMs,
-              isSuccess: !isError,
-            });
-          } else if (event.phase === 'failed') {
-            const result = event.result;
-            const errorContent = typeof result === 'string'
-              ? result
-              : result
-                ? JSON.stringify(result)
-                : 'Tool execution failed';
-            addOutputToStore({
-              id: outputId,
-              timestamp: new Date().toISOString(),
-              type: 'tool_result',
-              content: errorContent,
-              toolName,
-              phase: lastPhaseRef.current || undefined,
-              isSuccess: false,
-            });
           }
           break;
         }
@@ -402,7 +372,6 @@ export function useJobStream(
         }
 
         case 'plan_step': {
-          flushStreamingChatToMessage();
           const phase = event.status as string;
           const detail = event.detail as string | undefined;
           const stepDescription = event.description as string | undefined;
@@ -436,6 +405,28 @@ export function useJobStream(
           break;
         }
 
+        case 'artifact': {
+          // The build's artifact is scaffolded + served BEFORE the agent runs: show the live
+          // preview and fetch the real file tree from second zero (the scaffold/template files),
+          // instead of waiting minutes for `complete`. Watcher rebuilds then stream
+          // `preview_reload` so the iframe follows the agent's writes.
+          if (sessionId) {
+            const store = useOrchestrationStore.getState();
+            store.setSessionJob(sessionId, {
+              artifactInstanceId: event.artifactId,
+              ...(event.slug ? { slug: event.slug } : {}),
+            });
+            store.setSessionPreview(sessionId, {
+              previewId: event.artifactId,
+              appUrl: event.appUrl,
+              status: 'running',
+              reloadCount: 0,
+            });
+            void store.loadSessionFiles(sessionId, event.artifactId);
+          }
+          break;
+        }
+
         case 'preview_reload': {
           // Hot-reload: esbuild watcher rebuilt the app — refresh the preview. The
           // event is payload-free (§3.6.2); reuse the session's known artifact.
@@ -458,14 +449,21 @@ export function useJobStream(
         case 'complete': {
           // Clear the pending stream buffer without persisting it as a separate message.
           // The full agent response is captured in event.result and added below as the
-          // result message — flushing would add the same text twice.
+          // result message — flushing would add the same text twice. The thinking buffer is
+          // flushed FIRST so the collapsed commentary survives on the final message metadata.
           if (chatStreamRafRef.current) {
             cancelAnimationFrame(chatStreamRafRef.current);
             chatStreamRafRef.current = null;
           }
           chatStreamBufferRef.current = '';
+          let completedThinking = '';
           if (sessionId) {
-            useOrchestrationStore.getState().clearStreamingChat(sessionId);
+            const store = useOrchestrationStore.getState();
+            completedThinking = store.flushStreamingThinking(sessionId);
+            store.clearStreamingChat(sessionId);
+          }
+          if (thinkingStartedAtRef.current !== null && thinkingEndedAtRef.current === null) {
+            thinkingEndedAtRef.current = Date.now();
           }
           isCompleteRef.current = true;
           const duration = event.durationMs;
@@ -500,13 +498,26 @@ export function useJobStream(
                 status: 'running',
                 reloadCount: (current?.reloadCount || 0) + 1,
               });
+              // Final truth for the Files tab: the completed project tree.
+              void store.loadSessionFiles(sessionId, artifactInstanceId);
             }
 
             const locale = getLocale();
             store.addMessage(sessionId, {
               role: 'assistant',
               content: getFriendlySummary({ success: true, summary: result }, locale),
-              metadata: { isEssential: true, type: 'result' },
+              metadata: {
+                isEssential: true,
+                type: 'result',
+                ...(completedThinking
+                  ? {
+                      thinking: completedThinking,
+                      ...(thinkingStartedAtRef.current !== null && thinkingEndedAtRef.current !== null
+                        ? { thinkingDurationMs: thinkingEndedAtRef.current - thinkingStartedAtRef.current }
+                        : {}),
+                    }
+                  : {}),
+              },
             });
             store.setActivityMessage(sessionId, null);
             stopFillerTimer();
@@ -515,7 +526,15 @@ export function useJobStream(
         }
 
         case 'error': {
-          flushStreamingChatToMessage();
+          // Clear the live buffers — the sanitized error message below is what the user sees.
+          if (chatStreamRafRef.current) {
+            cancelAnimationFrame(chatStreamRafRef.current);
+            chatStreamRafRef.current = null;
+          }
+          chatStreamBufferRef.current = '';
+          if (sessionId) {
+            useOrchestrationStore.getState().clearStreamingChat(sessionId);
+          }
           isCompleteRef.current = true;
           // Strip any provider/engine leak before it reaches the user (backend
           // already sanitizes the wire; this guards replays / any bypass).
@@ -542,7 +561,7 @@ export function useJobStream(
         }
       }
     },
-    [sessionId, addOutputToStore, extractFileOps, startFillerTimer, stopFillerTimer, flushChatStreamBuffer, flushStreamingChatToMessage]
+    [sessionId, addOutputToStore, extractFileOps, startFillerTimer, stopFillerTimer, flushChatStreamBuffer]
   );
 
   // -- Connection Management --
@@ -589,9 +608,11 @@ export function useJobStream(
         'ready',
         'routing',
         'text_chunk',
+        'thinking_chunk',
         'tool_event',
         'context_event',
         'plan_step',
+        'artifact',
         'preview_reload',
         'complete',
         'error',

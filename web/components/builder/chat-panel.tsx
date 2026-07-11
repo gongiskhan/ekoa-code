@@ -413,8 +413,11 @@ export default function ChatPanel({
               <StreamingChatSection sessionId={sessionId} />
             )}
 
-            {/* Progress indicator during execution */}
-            {isExecuting && sessionJob && (
+            {/* Progress indicator during execution. Build sessions gate on the
+                job (its phase drives the message); plain chat turns have no job,
+                so they must not be left indicator-less during the silent
+                tool-use phase before the first streamed chunk. */}
+            {isExecuting && (sessionJob || !isBuildSession) && (
               <div className="flex items-start space-x-2">
                 <img
                   src="/ekoa_logo.png"

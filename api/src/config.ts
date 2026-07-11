@@ -49,6 +49,11 @@ export interface AgentsConfig {
   maxTurnsBuild: number;
   /** 5.4.4 text/chat/one-shot maxTurns. */
   maxTurnsText: number;
+  /** ch07 §7.2.6 per-build verification wall-clock deadline — the REAL bound on the verify
+   *  stage (turn ceilings are runaway backstops only; they must never cut a task short). */
+  verifyWallClockMs: number;
+  /** ch07 §7.2.6 verify-agent turn ceiling (generous backstop, not the operative bound). */
+  maxTurnsVerify: number;
   /** 5.4.2 transient-provider retry backoff. */
   transientRetryBackoffMs: number[];
   /** 5.4.1 agent-face stream-close timeout. */
@@ -124,8 +129,13 @@ export function defaultAgentsConfig(): AgentsConfig {
     buildInactivityTimeoutMs: envInt('BUILD_INACTIVITY_TIMEOUT_MS', 300_000),
     buildWallClockMs: envInt('BUILD_WALL_CLOCK_MS', 2_400_000),
     firstBuildReservationTtlMs: envInt('FIRST_BUILD_RESERVATION_TTL_MS', 2_700_000),
-    maxTurnsBuild: envInt('MAX_TURNS_BUILD', 100),
-    maxTurnsText: envInt('MAX_TURNS_TEXT', 30),
+    // Turn ceilings are runaway backstops well above real use — the inactivity + wall-clock
+    // timers are the operative bounds. A turn ceiling must never stop a user's task mid-way
+    // (operator directive 2026-07-11: the verify agent died at 15 turns mid-verification).
+    maxTurnsBuild: envInt('MAX_TURNS_BUILD', 500),
+    maxTurnsText: envInt('MAX_TURNS_TEXT', 60),
+    verifyWallClockMs: envInt('VERIFY_WALL_CLOCK_MS', 300_000),
+    maxTurnsVerify: envInt('MAX_TURNS_VERIFY', 60),
     transientRetryBackoffMs: [envInt('TRANSIENT_RETRY_BACKOFF_MS_1', 5_000), envInt('TRANSIENT_RETRY_BACKOFF_MS_2', 15_000)],
     agentFaceStreamCloseTimeoutMs: envInt('AGENT_FACE_STREAM_CLOSE_TIMEOUT_MS', 180_000),
     memoryAutoExtractEnabled: process.env.MEMORY_AUTO_EXTRACT_ENABLED !== 'false',

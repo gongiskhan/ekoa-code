@@ -262,6 +262,9 @@ interface OrchestrationState {
 
   // File tree
   addFileOperation: (sessionId: string, path: string, action: 'created' | 'modified' | 'deleted') => void;
+  /** Fetch the artifact's REAL file tree (GET /artifacts/:id/files) into the Files tab —
+   *  the server list is the source of truth; live tool-event badges are preserved. */
+  loadSessionFiles: (sessionId: string, artifactId: string) => Promise<void>;
 
   // UI state
   /** Set the canonical side-panel state. Persists per active session. */
@@ -430,6 +433,52 @@ function addFileToTree(
   }
 
   return newTree;
+}
+
+/**
+ * Build a FileNode tree from the server's project-relative file list (GET /artifacts/:id/files),
+ * folding in any action badges (+/M/D) the live stream already recorded. Folders first, then
+ * files, both alphabetical. The server list is the SOURCE OF TRUTH for the Files tab — the
+ * per-tool-event additions only decorate it between fetches.
+ */
+function buildFileTree(
+  paths: string[],
+  actions: Map<string, 'created' | 'modified' | 'deleted'>,
+): FileNode[] {
+  const root: FileNode[] = [];
+  for (const filePath of paths) {
+    const parts = filePath.split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+    let level = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const folderName = parts[i] as string;
+      let folder = level.find((n) => n.name === folderName && n.type === 'folder');
+      if (!folder) {
+        folder = { name: folderName, path: parts.slice(0, i + 1).join('/'), type: 'folder', children: [] };
+        level.push(folder);
+      }
+      if (!folder.children) folder.children = [];
+      level = folder.children;
+    }
+    const name = parts[parts.length - 1] as string;
+    const action = actions.get(filePath);
+    level.push({ name, path: filePath, fullPath: filePath, type: 'file', ...(action ? { action } : {}) });
+  }
+  const sortLevel = (nodes: FileNode[]): FileNode[] => {
+    nodes.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'folder' ? -1 : 1));
+    for (const n of nodes) if (n.children) sortLevel(n.children);
+    return nodes;
+  };
+  return sortLevel(root);
+}
+
+/** Collect path→action from an existing tree (so a server refresh keeps the +/M/D badges). */
+function collectFileActions(nodes: FileNode[], into = new Map<string, 'created' | 'modified' | 'deleted'>()): Map<string, 'created' | 'modified' | 'deleted'> {
+  for (const n of nodes) {
+    if (n.type === 'file' && n.action) into.set(n.path, n.action);
+    if (n.children) collectFileActions(n.children, into);
+  }
+  return into;
 }
 
 /**
@@ -886,6 +935,23 @@ export const useOrchestrationStore = create<OrchestrationState>()(
             ),
           },
         }));
+      },
+
+      loadSessionFiles: async (sessionId: string, artifactId: string) => {
+        const result = await tryCall(() => api.artifacts.filesList({ id: artifactId }));
+        if (!result.ok) return; // non-fatal: the live tool-event tree keeps working
+        const paths = (result.data.files ?? [])
+          .map((f) => f.path)
+          .filter((p): p is string => typeof p === 'string' && p.length > 0);
+        set((state) => {
+          const actions = collectFileActions(state.sessionFiles[sessionId] || []);
+          return {
+            sessionFiles: {
+              ...state.sessionFiles,
+              [sessionId]: buildFileTree(paths, actions),
+            },
+          };
+        });
       },
 
       // ========================================

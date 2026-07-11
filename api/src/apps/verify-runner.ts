@@ -8,6 +8,16 @@
  * attributed `user_work` / `build-verify`, billed to the build's user (ch06 §6.4.1 row A2), so the
  * zero-platform-calls posture is untouched.
  *
+ * Operative bounds (operator incident 2026-07-11): the artifact-relative `appUrl` used to be
+ * pasted into the prompt verbatim (`/apps/<id>/` — no origin), so the agent spent 13+ minutes
+ * port-scanning the host for the app and died at the turn ceiling, mid-task, silently. Three
+ * fixes live here:
+ *  - the prompt receives an ABSOLUTE loopback URL (the API serves /apps/* itself);
+ *  - the WALL-CLOCK deadline (`verifyWallClockMs`) is the real bound — the turn ceiling
+ *    (`maxTurnsVerify`) is a generous runaway backstop that must never cut a verification short;
+ *  - the agent is forbidden from searching the host when the URL does not answer (that is an
+ *    immediate FAIL, not a scavenger hunt).
+ *
  * Two honesty invariants:
  *  - Credential-skip: when no usable model credential is configured (`claudeAuthStatus().ok`
  *    false) the runner reports `{ ran: false, passed: false, note }` — an honest not-run is a
@@ -15,12 +25,15 @@
  *    fake claim of having verified. A not-run does not FAIL the build (build.ts completes with the
  *    note); it just refuses to report a pass it did not earn.
  *  - Never throw into the build pipeline (§5.6.2 step 5): every failure is wrapped into a
- *    VerifyRunResult with an honest `ran` flag.
+ *    VerifyRunResult with an honest `ran` flag. User-facing notes are PT and generic — raw
+ *    SDK/provider error strings go to the server log, never the chat (white-label, ch12).
  */
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgent, decideForTask, claudeAuthStatus } from '../llm/index.js';
+import { loadConfig, loadAgentsConfig } from '../config.js';
+import { mintPreviewToken } from '../services/preview-token.js';
 
 /** first build → full acceptance pass; follow-up → scoped tests + smoke pass. */
 export interface VerifyRunInput {
@@ -31,6 +44,8 @@ export interface VerifyRunInput {
   depth: 'full' | 'scoped';
   /** The user's build request (F28): the verifier asserts request-FULFILMENT, not mere rendering. */
   request: string;
+  /** Live narration hook — raw model text; the caller owns marker/identity scrubbing. */
+  onProgress?: (text: string) => void;
 }
 
 export interface VerifyRunResult {
@@ -39,44 +54,71 @@ export interface VerifyRunResult {
   note?: string;
 }
 
-/** Modest turn ceiling — medium-depth exercise, not an open-ended session (ch07 §7.2.6). */
-const MAX_TURNS = 15;
+/** The API serves /apps/* itself, so the verify agent (same host) reaches the app on loopback.
+ *  Artifact records store the browser-relative path (`/apps/<id>/`); an absolute URL passes
+ *  through untouched. A draft, non-shareable artifact's DOCUMENT is owner-gated (§7.7), so the
+ *  URL carries a purpose-scoped preview token - the capability to view THIS artifact for the
+ *  verify window, never a user JWT (which would authenticate on every API route from inside an
+ *  agent transcript). Exported for the unit test. */
+export function resolveVerifyUrl(appUrl: string, artifactId?: string, ttlMs?: number): string {
+  const base = /^https?:\/\//i.test(appUrl)
+    ? appUrl
+    : `http://127.0.0.1:${loadConfig().port}${appUrl.startsWith('/') ? appUrl : `/${appUrl}`}`;
+  if (!artifactId) return base;
+  const token = mintPreviewToken(artifactId, ttlMs ?? 600_000);
+  return `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+}
 
 export async function verifyRunner(input: VerifyRunInput): Promise<VerifyRunResult> {
   // Credential-skip (ch05 §5.6.2 step 5): `ok` is false when unconfigured OR a refresh alert is
   // latched — either way a real verification run cannot proceed, so report an honest not-run.
   if (!claudeAuthStatus().ok) {
-    return { ran: false, passed: false, note: 'verification skipped: model credential unavailable' };
+    return { ran: false, passed: false, note: 'verificação não executada: credencial de modelo indisponível' };
   }
 
+  const cfg = loadAgentsConfig();
   try {
     // A throwaway working dir for the verifier's own scratch (screenshots, temp scripts). The
-    // app under test is driven over HTTP at appUrl — this cwd is not the app's project tree.
+    // app under test is driven over HTTP at the resolved URL — this cwd is not the app's tree.
     const scratch = await mkdtemp(join(tmpdir(), 'ekoa-verify-'));
     const decision = decideForTask('test the built application end to end', undefined, 'WORKHORSE');
 
     const handle = runAgent(
       {
-        prompt: buildPrompt(input),
+        prompt: buildPrompt({ ...input, appUrl: resolveVerifyUrl(input.appUrl, input.artifactId, cfg.verifyWallClockMs + 120_000) }),
         decision,
         allowedTools: ['Bash'],
-        maxTurns: MAX_TURNS,
+        maxTurns: cfg.maxTurnsVerify,
         cwd: scratch,
         homeDir: scratch, // pin HOME too so the chokepoint does not allocate a second, unused sandbox (F25 finding 4)
+        // The REAL bound: a verification that outlives the deadline is cut off and reported as
+        // an honest not-run — never a silent multi-minute void, never a fake verdict.
+        signal: AbortSignal.timeout(cfg.verifyWallClockMs),
       },
       { kind: 'user_work', agentType: 'build-verify', billeeUserId: input.userId, artifactId: input.artifactId },
     );
 
-    // Drain the stream so the chokepoint's single metering point fires, then read the final text.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    for await (const _ev of handle.events) {
-      /* text is read from the resolved result below; draining is what lets metering complete */
+    // Stream the run: narration chunks feed the live progress hook (the verify stage used to be
+    // a silent void); draining is also what lets the chokepoint's single metering point fire.
+    for await (const ev of handle.events) {
+      if (ev.text) input.onProgress?.(ev.text);
     }
     const result = await handle.result;
+    if (result.aborted) {
+      return { ran: false, passed: false, note: 'a verificação excedeu o tempo limite e não foi concluída' };
+    }
     return parseVerdict(result.text);
   } catch (err) {
-    // Never propagate into the build pipeline: a runner failure is an honest not-run.
-    return { ran: false, passed: false, note: `verification did not run: ${err instanceof Error ? err.message : String(err)}` };
+    // Never propagate into the build pipeline: a runner failure is an honest not-run. The raw
+    // error (SDK/provider strings, English, engine names) belongs in the server log — the
+    // user-facing note stays generic PT (white-label; the operator saw "Agente EKOA Code
+    // returned an error result: Reached maximum number of turns (15)" in the chat, 2026-07-11).
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/timeout|abort/i.test(raw)) {
+      return { ran: false, passed: false, note: 'a verificação excedeu o tempo limite e não foi concluída' };
+    }
+    console.warn(`[verify] ${input.artifactId}: runner failed:`, raw);
+    return { ran: false, passed: false, note: 'a verificação não pôde ser concluída' };
   }
 }
 
@@ -91,12 +133,19 @@ export function buildPrompt(input: VerifyRunInput): string {
       ? 'Run a FULL acceptance pass: exercise the primary user flows end to end.'
       : 'Run a SCOPED pass: exercise the recently changed area, plus a short smoke test of the core flow.';
   return [
-    `Exercise the web application served at ${input.appUrl} using playwright-cli at medium depth.`,
+    `Exercise the web application served at EXACTLY this URL using playwright-cli: ${input.appUrl}`,
+    '',
+    'That URL is a local server on this machine and is the ONLY place the app lives.',
+    'If it does not respond or returns an error, output FAIL immediately with the reason —',
+    'do NOT search for the app elsewhere, do NOT scan ports, do NOT inspect the host system.',
     '',
     'The application was built from this user request:',
     `<request>${input.request}</request>`,
     '',
     scope,
+    'Scale effort to the app: a simple static page (a flyer, a landing page) needs only a quick',
+    'pass — load it, check the console, confirm the requested content and any buttons work.',
+    'Reserve deep multi-flow exercising for apps whose request implies real interaction.',
     'Drive the real UI: navigate, click, fill forms, and assert the app renders and responds without console errors or crashes.',
     '',
     'You must verify REQUEST-FULFILMENT, not merely that a page renders:',
@@ -111,6 +160,7 @@ export function buildPrompt(input: VerifyRunInput): string {
     'When you are done, output your verdict as the FINAL line, in exactly this form:',
     '  PASS - <short note>   (the app fulfils the request and all checks passed)',
     '  FAIL - <short note>   (scaffold placeholder, missing requested functionality, or a failed check)',
+    'Write the <short note> in European Portuguese - it is shown to a non-technical end user.',
   ].join('\n');
 }
 

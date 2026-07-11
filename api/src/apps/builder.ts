@@ -14,6 +14,7 @@
  */
 
 import * as esbuild from 'esbuild';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile, access, readdir, readFile, copyFile, stat, open } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, dirname, extname } from 'node:path';
@@ -163,6 +164,29 @@ function cdnResolverPlugin(): esbuild.Plugin {
   return {
     name: 'cdn-resolver',
     setup(build) {
+      // Step 0: SERVER-ABSOLUTE paths (`/api/design-tokens.css`, `/apps/...`) are RUNTIME URLs
+      // the serving plane answers - they can never be bundle-resolved, and the coding agent is
+      // explicitly taught to use them (content/coding-agent). Pre-fix, one `@import
+      // '/api/design-tokens.css'` failed the whole build ("could not resolve", live 2026-07-11).
+      //  - CSS @import / url(): keep as external (the browser resolves it at runtime).
+      //  - JS import of an absolute path: swap in an empty stub - external would emit a
+      //    browser-breaking require() under IIFE, and the generated index.html already links
+      //    the design tokens, so the import is redundant.
+      build.onResolve({ filter: /^\// }, (args) => {
+        if (args.namespace === 'cdn-fetch') return null; // esm.sh internals keep their handler
+        // Real filesystem paths (the entry point itself, tool-resolved absolute imports) are
+        // NOT server routes - let esbuild handle them.
+        if (args.kind === 'entry-point' || existsSync(args.path)) return null;
+        if (args.kind === 'import-rule' || args.kind === 'url-token') {
+          return { path: args.path, external: true };
+        }
+        return { path: args.path, namespace: 'server-absolute' };
+      });
+      build.onLoad({ filter: /.*/, namespace: 'server-absolute' }, (args) => ({
+        contents: `/* runtime-served path, loaded by the browser (see index.html): ${args.path} */`,
+        loader: args.path.endsWith('.css') ? 'css' : 'js',
+      }));
+
       // Step 1: Resolve CDN URLs - try local, else mark for fetch.
       // Skip CSS @import url() - those are handled by esbuild's native CSS
       // loader. Only intercept JS/module imports from CDN URLs.

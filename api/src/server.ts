@@ -64,6 +64,8 @@ import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
 import { designTokensHandler } from './services/design-tokens.js';
 import { getArtifactScreenshotDir } from './services/artifact-screenshot.js';
+import { appPdfRouter, getArtifactPdfDir } from './apps/pdf.js';
+import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
 import { artifactsRouter } from './routes/artifacts.js';
@@ -104,6 +106,8 @@ import {
   runAutomationForAction,
   buildAutomationCatalog,
   formatCatalogForPrompt,
+  automationStepEventPayload,
+  automationRunsRoot,
   type RunEventEmitter,
 } from './automation/index.js';
 import {
@@ -137,7 +141,7 @@ export interface RuntimeDeps {
  * engine itself never imports events/ (ch02 §2.8 — the seam the old engine already had, B7).
  */
 function makeRunSseEmitter(runId: string): RunEventEmitter {
-  const emit = (type: string, data: Record<string, unknown>): void => {
+  const emit = (type: string, data: object): void => {
     try {
       sseManager.emit('automation', runId, type, data);
     } catch (err) {
@@ -145,7 +149,10 @@ function makeRunSseEmitter(runId: string): RunEventEmitter {
     }
   };
   return {
-    stepUpdate: (record, id) => emit('step', { runId: id, stepIndex: record.index, status: record.status }),
+    // Forward the StepRecord enrichment (screenshot URL, tier, one-line error, output, duration) so
+    // the run UI renders a step's outcome without a follow-up fetch. Mapping lives in automation/
+    // (unit-tested) — this stays a thin emit.
+    stepUpdate: (record, id) => emit('step', automationStepEventPayload(record, id)),
     runComplete: (_id, _durationMs, summary) => emit('complete', { summary }),
     runError: (_id, error) => emit('error', { code: 'AUTOMATION_FAILED', message: error }),
     runPaused: (_id, _reason, service) => emit('paused', { service }),
@@ -589,10 +596,31 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
   app.get('/api/design-tokens.css', designTokensHandler());
+  // Served-app document export (ch07 §7.12): window.__ekoa.exportPdf POSTs the serialized DOM
+  // here; the rendered PDF is served from /artifact-pdfs below. Was never mounted in the port -
+  // every in-app "Descarregar PDF" 404'd (caught live by the per-build verifier, 2026-07-11).
+  app.use('/', appPdfRouter());
+  mkdirSync(getArtifactPdfDir(), { recursive: true });
+  app.use('/artifact-pdfs', express.static(getArtifactPdfDir(), { fallthrough: false }));
   // Artifact thumbnails (ch07 §7.11): PNGs captured post-build, served publicly. The dir is
   // pre-created so a fresh data dir serves clean 404s instead of an ENOENT from static().
   mkdirSync(getArtifactScreenshotDir(), { recursive: true });
   app.use('/artifact-screenshots', express.static(getArtifactScreenshotDir(), { fallthrough: false }));
+  // Per-step automation screenshots (ch12): PNGs written per run at <dataDir>/automation-runs/
+  // <automationId>/<runId>/step-N.png, served publicly as capability URLs (the unguessable
+  // automationId/runId path IS the capability — the run UI renders them via <img>, which cannot
+  // carry an Authorization header; decisions.md). Same fallthrough/caching posture as the
+  // artifact-thumbnail mount above (express.static's ETag + Last-Modified revalidation keeps a
+  // step whose screenshot was overwritten by a same-index retry fresh). Dir pre-created so a fresh
+  // data dir serves clean 404s instead of an ENOENT from static().
+  mkdirSync(automationRunsRoot(), { recursive: true });
+  app.use('/automation-screenshots', express.static(automationRunsRoot(), { fallthrough: false }));
+  // Brand-research logos (ch05 §5.6.4): the pipeline downloads + validates the owner's logo and
+  // stores it under <dataDir>/brand-assets; served publicly read-only like the artifact
+  // thumbnails above (the dashboard renders `/brand-assets/<file>` via <img>). Dir pre-created so
+  // a fresh data dir serves clean 404s instead of an ENOENT from static().
+  mkdirSync(getBrandAssetsDir(), { recursive: true });
+  app.use('/brand-assets', express.static(getBrandAssetsDir(), { fallthrough: false }));
   // Build-share links (ch07 §7.7): fork-per-click.
   app.use('/build', buildLinkRouter({ ...deps, verifyToken }));
   // Serving pipeline (ch07 §7.5-7.7): /apps/:idOrSlug/* + demo-bridge + demos + app-health.

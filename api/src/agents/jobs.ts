@@ -40,6 +40,8 @@ export interface JobRecord extends Doc {
     /** brand-research: the parsed structured result + whether it was merged onto org branding. */
     branding?: Record<string, unknown>;
     brandingApplied?: boolean;
+    /** brand-research: whether the target site was reachable (false = honest knowledge fallback). */
+    siteReachable?: boolean;
   };
   error?: { code: string; message: string };
   createdAt: string;

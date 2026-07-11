@@ -26,6 +26,7 @@ import {
 } from './registry.js';
 import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './streaming.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
+import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
 import { knowledgeToolSpecs, loadContextToolSpec } from './sdk-tools.js';
 import { classifyInBuildIntent } from './guided-build.js';
@@ -231,6 +232,10 @@ const BUILD_SYSTEM_PROMPT = [
   'Make ALL user-visible changes by editing frontend/src/App.jsx (and files it imports under frontend/src/).',
   'NEVER write a standalone top-level *.html file as the deliverable - top-level HTML files are not served; only the compiled entrypoint bundle is.',
   'Do not edit dist/ by hand - it is build output, regenerated from frontend/src/.',
+  // White-label (ch12; operator report 2026-07-11: the final summary named `window.__ekoa.exportPdf`).
+  'Your FINAL message is read by a non-technical end user. Write it in the language of their request.',
+  'In that final message NEVER mention internal platform APIs (window.__ekoa or any of its members), file paths, bundlers, manifests, libraries, or any implementation machinery.',
+  'Describe what the app DOES in product terms ("um botão que descarrega o documento em PDF"), never HOW it is wired.',
 ].join('\n');
 
 /**
@@ -309,8 +314,18 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (!resolved) { clearTimers(); await finishError('ADAPTER_ERROR'); return; }
       projectDir = resolved.projectDir;
       resumeSessionId = resolved.resumeSessionId;
+      slug = resolved.slug;
+      appUrl = resolved.appUrl;
     }
     if (abort.signal.aborted) { await settleAborted(); return; }
+
+    // Live build surface: the scaffold (or the existing app, on a follow-up) is served ALREADY —
+    // tell the client where, so the preview iframe + real file tree show from second zero, and
+    // wire the watcher so every incremental rebuild reloads the preview as the agent writes.
+    if (artifactId && appUrl) {
+      sink.artifact({ artifactId, appUrl, ...(slug ? { slug } : {}) });
+      if (projectDir) await mech.watchRebuilds({ artifactId, projectDir, onRebuild: () => sink.previewReload() });
+    }
 
     // Routing floored at the expert tier (§5.2 step 5); emit the routing event.
     const decision = decideForTask(input.description, undefined, 'EXPERT');
@@ -360,13 +375,30 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       { kind: 'user_work', agentType: 'build', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId: jobId, artifactId },
     );
 
-    let streamedAny = false;
+    // Two channels, mirroring chat.ts (§5.6.1): the ANSWER stream (`text`) and the working
+    // commentary (`thinking` — intermediate-turn narration + thinking blocks, where the engine
+    // happily self-identifies). Pre-fix, build funneled BOTH into text_chunk, so the user's
+    // transcript filled with mid-word fragments of internal narration rendered as regular
+    // messages (operator report 2026-07-11). Each channel gets its own marker filter; the
+    // thinking channel is additionally engine-identity-redacted (branding.ts).
+    const thinkingMarkers = new MarkerProcessor();
+    const thinkingRedactor = new StreamingIdentityRedactor();
+    const emitThinking = (piece: string): void => {
+      if (piece) sink.thinking(piece);
+    };
+    let streamedAny = false; // ANSWER chunks only: thinking must not mask a provider-error-as-result
     for await (const ev of handle.events) {
-      streamedAny = true;
       resetInactivity();
+      if (ev.type === 'thinking') {
+        emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
+        continue;
+      }
+      streamedAny = true;
       const clean = liveMarkers.push(ev.text);
       if (clean) sink.text(clean);
     }
+    const thinkingTail = thinkingMarkers.end();
+    emitThinking(thinkingRedactor.push(thinkingTail.text) + thinkingRedactor.end());
     const tail = liveMarkers.end();
     if (tail.text) sink.text(tail.text);
     const result = await handle.result;
@@ -420,7 +452,24 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const verifyEnabled = (await userSettings.get(input.actor.userId))?.build?.verifyBuilds ?? true;
     if (verifyEnabled) {
       sink.planStep('verifying', 'A testar a aplicação...');
-      const verdict = await verifyRunner({ artifactId, projectDir, appUrl, userId: input.actor.userId, depth: opts.firstBuild ? 'full' : 'scoped', request: input.description });
+      // The verify stage streams its narration through the thinking channel — it used to be a
+      // silent multi-minute void (operator report 2026-07-11). Its own filter chain: raw runner
+      // text → marker filter → engine-identity redaction. Verify is bounded by its own wall
+      // clock inside the runner (verifyWallClockMs), not the build timers (cleared above).
+      const verifyMarkers = new MarkerProcessor();
+      const verifyRedactor = new StreamingIdentityRedactor();
+      const verdict = await verifyRunner({
+        artifactId,
+        projectDir,
+        appUrl,
+        userId: input.actor.userId,
+        depth: opts.firstBuild ? 'full' : 'scoped',
+        request: input.description,
+        onProgress: (text) => {
+          const clean = verifyRedactor.push(verifyMarkers.push(text));
+          if (clean) sink.thinking(clean);
+        },
+      });
       if (verdict.ran && !verdict.passed) {
         if (finalizeOnce(jobId)) {
           const message = `A verificação da aplicação falhou. ${verdict.note ?? ''}`.trim();
@@ -433,11 +482,15 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (!verdict.ran && verdict.note) verifyNote = verdict.note;
     }
 
-    // Step 6: complete event (bundle error + any unresolved verification failure appended).
+    // Step 6: complete event. Notes (bundle error / honest verify not-run) are APPENDED to the
+    // agent's user-facing summary, never a replacement for it — pre-fix, any note clobbered the
+    // whole summary, so the user's "done" message was just "verification did not run: ..."
+    // (operator report 2026-07-11).
     const notes = [bundle.ok ? '' : (bundle.error ?? 'A compilação final falhou.'), verifyNote ?? ''].filter(Boolean).join(' ');
+    const completionText = [result.text, notes].filter(Boolean).join('\n\n') || notes;
     if (finalizeOnce(jobId)) {
-      sink.complete({ result: notes || result.text, artifactId, slug, appUrl }, input.deps.now() - start);
-      await patchJob(jobId, { status: 'completed', result: { text: notes || result.text, slug, appUrl }, endedAt: new Date(input.deps.now()).toISOString() });
+      sink.complete({ result: completionText, artifactId, slug, appUrl }, input.deps.now() - start);
+      await patchJob(jobId, { status: 'completed', result: { text: completionText, slug, appUrl }, endedAt: new Date(input.deps.now()).toISOString() });
     }
     terminalReached = true;
 

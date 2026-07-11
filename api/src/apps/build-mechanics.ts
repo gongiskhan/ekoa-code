@@ -132,15 +132,18 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       return { artifactId, projectDir, slug, appUrl };
     },
 
-    /** Follow-up resolution (ch05 §5.3.5, §5.4.5): the artifact record → its project dir and the
-     *  SDK session id to resume with. Null when the artifact is gone. */
-    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; resumeSessionId?: string } | null> {
+    /** Follow-up resolution (ch05 §5.3.5, §5.4.5): the artifact record → its project dir, the
+     *  SDK session id to resume with, and its existing slug + served URL (follow-up completion
+     *  re-activates with these — carrying '' through blanked the slug on every follow-up).
+     *  Null when the artifact is gone. */
+    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; resumeSessionId?: string; slug: string; appUrl: string } | null> {
       const art = (await artifacts.get(artifactId)) as ArtifactDoc | null;
       if (!art) return null;
       const projectDir = projectDirFor(art);
       const data = (art.data as Record<string, unknown> | undefined) ?? {};
       const resumeSessionId = typeof data.sdkSessionId === 'string' ? data.sdkSessionId : undefined;
-      return { projectDir, ...(resumeSessionId ? { resumeSessionId } : {}) };
+      const appUrl = typeof data.appUrl === 'string' && data.appUrl ? data.appUrl : `/apps/${artifactId}/`;
+      return { projectDir, ...(resumeSessionId ? { resumeSessionId } : {}), slug: art.slug ?? '', appUrl };
     },
 
     /**
@@ -212,6 +215,19 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       const current = (art?.data as Record<string, unknown> | undefined)?.sdkSessionId;
       if (current === sdkSessionId) return;
       await patchArtifactData(artifactId, { sdkSessionId });
+    },
+
+    /** (Re)start the incremental watcher with a rebuild callback (ch07 §7.4 trigger 2) — the
+     *  live-preview heartbeat: appBuilder.watch is idempotent (disposes any prior context), so
+     *  this cleanly replaces the callback-less watcher prepareFirstBuild started, and gives
+     *  FOLLOW-UP builds (which historically ran with no watcher at all) a live preview too.
+     *  Non-fatal like the initial watch — the final bundle still happens at completion. */
+    async watchRebuilds(input: { artifactId: string; projectDir: string; onRebuild: () => void }): Promise<void> {
+      try {
+        await appBuilder.watch(input.artifactId, input.projectDir, input.onRebuild);
+      } catch (err) {
+        console.warn(`[build-mechanics] ${input.artifactId}: watch-for-preview failed (non-fatal):`, err instanceof Error ? err.message : err);
+      }
     },
 
     /** Activate the artifact with a MERGE onto its existing data bag (ch05 §5.6.2 step 7): a

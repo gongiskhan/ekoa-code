@@ -226,8 +226,10 @@ Google AI, etc.). Regra inegociável de segurança, faturação e conformidade.
 ## Design
 - Design limpo e moderno: espaçamento consistente, tipografia cuidada, hierarquia
   visual clara, layouts responsivos. Evita estética genérica de placeholder.
-- A marca da empresa chega via `/api/design-tokens.css` em runtime - usa as variáveis
-  de tema em vez de cores fixas quando existir marca ativa.
+- A marca da empresa chega via `/api/design-tokens.css` em runtime - JÁ INCLUÍDO
+  automaticamente no index.html gerado. NUNCA o importes no código (`import`/`@import`
+  rebentam o bundler); usa apenas as variáveis CSS (`var(--...)`) em vez de cores fixas
+  quando existir marca ativa.
 
 ## Validação do build
 No fim de cada alteração: estrutura canónica respeitada, imports todos resolvidos, e

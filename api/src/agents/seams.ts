@@ -148,6 +148,10 @@ export interface VerifyRunInput {
    *  not the Ekoa scaffold placeholder and the requested interactive elements exist — not merely
    *  that "something renders". */
   request: string;
+  /** Live working-commentary hook: the runner forwards the verify agent's narration chunks so
+   *  the build pipeline can stream them to the user (the verify stage used to be a silent
+   *  multi-minute void). Raw model text — the CALLER owns marker-filtering + identity redaction. */
+  onProgress?: (text: string) => void;
 }
 
 export interface VerifyRunResult {
@@ -185,6 +189,10 @@ export interface FollowUpResolution {
   projectDir: string;
   /** The SDK session id to resume with (§5.4.5). */
   resumeSessionId?: string;
+  /** The artifact's existing slug + served URL. Follow-up completion re-activates the artifact
+   *  with these — pre-fix, build.ts carried '' through and blanked the slug on every follow-up. */
+  slug: string;
+  appUrl: string;
 }
 
 /**
@@ -206,6 +214,10 @@ export interface BuildMechanics {
   persistSdkSessionId(artifactId: string, sdkSessionId: string): Promise<void>;
   /** Activate the artifact with a MERGE onto its existing data bag (§5.6.2 step 7). */
   activateArtifact(input: { artifactId: string; slug: string; appUrl: string }): Promise<void>;
+  /** (Re)start the incremental watcher with a rebuild callback — the live-preview heartbeat:
+   *  every successful watcher rebuild fires `onRebuild`, which build.ts maps to a
+   *  `preview_reload` job event so the client's iframe follows the agent's writes. */
+  watchRebuilds(input: { artifactId: string; projectDir: string; onRebuild: () => void }): Promise<void>;
   /**
    * Honest-completion gate (F16, ch05 §5.6.2 step 5a): deterministic evidence the agent's work
    * reached the SERVED surface. NOT clean when the manifest-entrypoint subtree (`frontend/src/`)
@@ -230,6 +242,7 @@ const noopBuildMechanics: BuildMechanics = {
   screenshot() {},
   async persistSdkSessionId() {},
   async activateArtifact() {},
+  async watchRebuilds() {},
   async assertProgress() {
     return { clean: true, reasons: [] };
   },
