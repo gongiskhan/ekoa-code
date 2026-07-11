@@ -32,7 +32,7 @@ function watchConsole(page: Page): string[] {
 }
 
 async function apiJson(page: Page, method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
-  const token = await page.evaluate(() => localStorage.getItem('token') ?? sessionStorage.getItem('token'));
+  const token = await page.evaluate(() => localStorage.getItem('ekoa_token') ?? localStorage.getItem('token') ?? sessionStorage.getItem('token'));
   const res = await page.request.fetch(`${API}${path}`, {
     method,
     headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },

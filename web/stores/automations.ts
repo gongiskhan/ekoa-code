@@ -145,6 +145,38 @@ const NON_TERMINAL_RUN_STATUSES = new Set<string>([
 ]);
 
 // ============================================================================
+// Wire → view normalization
+// ============================================================================
+
+/**
+ * The wire Automation carries `plan.steps` rows of `{ stepId, description, tool }`; the view
+ * type reads a top-level `steps: Step[]`. Casting without mapping left `steps` undefined and
+ * `a.steps.length` crashed the /automations page on ANY non-empty list (latent until
+ * integration-managed automations started materializing rows).
+ */
+function normalizeWireAutomation(raw: unknown): Automation {
+  const w = raw as Automation & {
+    plan?: { steps?: Array<{ stepId?: string; description?: string; tool?: string }> };
+    ownerId?: string;
+  };
+  const steps = Array.isArray(w.steps)
+    ? w.steps
+    : (w.plan?.steps ?? []).map((s, i) => ({
+        id: s.stepId ?? `step-${i + 1}`,
+        description: s.description ?? '',
+        type: (s.tool ?? 'browser') as Automation['steps'][number]['type'],
+      }));
+  return {
+    ...w,
+    steps,
+    // The wire omits an empty description (the editor's goal field trims it — a required
+    // string here) and names the owner `ownerId`.
+    description: w.description ?? '',
+    ownerUserId: w.ownerUserId ?? w.ownerId ?? '',
+  };
+}
+
+// ============================================================================
 // Store
 // ============================================================================
 
@@ -165,7 +197,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     set({ loading: true, error: undefined });
     const res = await tryCall(() => api.automations.list());
     if (res.ok) {
-      set({ automations: res.data.items as unknown as Automation[], loading: false });
+      set({ automations: (res.data.items as unknown[]).map(normalizeWireAutomation), loading: false });
     } else {
       set({ loading: false, error: res.error.message || 'failed to load automations' });
     }
@@ -175,7 +207,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     set({ currentLoading: true, error: undefined });
     const res = await tryCall(() => api.automations.get({ id }));
     if (res.ok) {
-      const automation = res.data as unknown as Automation;
+      const automation = normalizeWireAutomation(res.data as unknown);
       set({ current: automation, currentLoading: false });
       return automation;
     }
@@ -188,7 +220,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
       api.automations.create({ name: data.name, description: data.description, steps: data.steps }),
     );
     if (res.ok) {
-      const a = res.data as unknown as Automation;
+      const a = normalizeWireAutomation(res.data as unknown);
       set((s) => ({ automations: [a, ...s.automations], current: a }));
       return a;
     }
@@ -199,7 +231,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
   async update(id, patch) {
     const res = await tryCall(() => api.automations.patch({ id, ...patch }));
     if (res.ok) {
-      const updated = res.data as unknown as Automation;
+      const updated = normalizeWireAutomation(res.data as unknown);
       set((s) => ({
         automations: s.automations.map((a) => (a.id === id ? updated : a)),
         current: s.current?.id === id ? updated : s.current,
@@ -244,7 +276,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     // The backend persisted the automation and kicked off the rehearsal
     // run. Surface both so the caller can navigate to the editor and
     // subscribe to the live rehearsal events.
-    const automation = res.data.automation as unknown as Automation | undefined;
+    const automation = res.data.automation ? normalizeWireAutomation(res.data.automation as unknown) : undefined;
     const runId = res.data.runId;
     if (!automation) {
       return { ok: false, error: 'planner returned no automation' };
