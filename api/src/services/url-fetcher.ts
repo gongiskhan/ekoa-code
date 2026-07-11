@@ -85,3 +85,44 @@ export async function guardedFetch(url: string, opts: GuardedFetchOptions = {}):
     clearTimeout(timer);
   }
 }
+
+/**
+ * Guarded fetch that FOLLOWS redirects, re-validating every hop through the SSRF guard (ch09
+ * invariant 8; the brief's "redirects re-validated"). `guardedFetch` uses `redirect: 'error'`,
+ * which is correct when a redirect would be an SSRF vector but wrong for legitimate public
+ * fetches that hop apex->www or http->https (brand-research targets, logo CDNs). This variant
+ * fetches with `redirect: 'manual'` and re-runs `assertSafeUrl` + the resolved-IP re-check on the
+ * `Location` of every 3xx before following it, so a redirect to a private/loopback address is
+ * rejected the same way a direct one is. Bounded by `maxRedirects` (a redirect loop throws).
+ * The returned Response's `url` is the final hop (manual mode does not rewrite it).
+ */
+export async function guardedFetchFollow(
+  url: string,
+  opts: GuardedFetchOptions = {},
+  maxRedirects = 5,
+): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const parsed = assertSafeUrl(current); // per-hop literal guard (scheme + private-IP encodings)
+    await assertResolvedIpsSafe(parsed.hostname); // per-hop resolved-IP guard (DNS rebinding)
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10_000);
+    let res: Response;
+    try {
+      res = await fetch(current, {
+        method: opts.method ?? 'GET',
+        headers: opts.headers,
+        body: opts.body,
+        redirect: 'manual', // we follow by hand so each hop is re-validated above
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!location) return res; // a non-redirect response (or a 3xx without Location) is the answer
+    // Resolve the next hop against the current URL and loop — the top of the loop re-guards it.
+    current = new URL(location, current).toString();
+  }
+  throw new SsrfError('Too many redirects');
+}

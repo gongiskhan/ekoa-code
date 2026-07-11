@@ -16,7 +16,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { loadConfig } from '../config.js';
 import { recordTokenEvent, resolvePlatformBillee, type TokenEventInput } from '../billing/tracker.js';
 import { checkRateCaps, recordSpend, type RateCapKey, type RateCapVerdict } from '../billing/rate-caps.js';
@@ -360,6 +360,28 @@ function sdkOptions(p: SdkCallParams): Record<string, unknown> {
   };
 }
 
+/**
+ * Build a one-message streaming-input prompt for a vision one-shot: a single user message whose
+ * content is the text followed by the base64 image blocks. The SDK accepts `prompt` as
+ * `string | AsyncIterable<SDKUserMessage>`; a finite generator that yields once and completes is
+ * processed as a single turn (bounded by `maxTurns`). Used ONLY when `p.images` is non-empty.
+ */
+async function* imagePromptInput(
+  text: string,
+  images: Array<{ mediaType: string; data: string }>,
+): AsyncGenerator<SDKUserMessage> {
+  const content = [
+    { type: 'text', text },
+    ...images.map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } })),
+  ];
+  yield {
+    type: 'user',
+    parent_tool_use_id: null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    message: { role: 'user', content: content as any },
+  } as SDKUserMessage;
+}
+
 const defaultTransport: ChokepointTransport = {
   async *streamAgent(p) {
     let text = '';
@@ -414,8 +436,13 @@ const defaultTransport: ChokepointTransport = {
     let usage: RawUsage = { ...ZERO_USAGE };
     let aborted = false;
     try {
+      // Vision one-shots (§6.2.1 runOneShot images): a plain string prompt cannot carry image
+      // blocks, so when images are present the prompt becomes a one-message streaming input whose
+      // content is [text, ...image blocks]. Text-only one-shots keep the plain string prompt
+      // (byte-identical to before), so this change cannot affect any non-image caller.
+      const promptInput = p.images && p.images.length > 0 ? imagePromptInput(p.prompt, p.images) : p.prompt;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const q = query({ prompt: p.prompt, options: sdkOptions({ ...p, maxTurns: p.maxTurns ?? 1 }) as any });
+      const q = query({ prompt: promptInput, options: sdkOptions({ ...p, maxTurns: p.maxTurns ?? 1 }) as any });
       for await (const msg of q) {
         if (msg.type === 'assistant') text += classifyAssistantContent(msg).answer;
         else if (msg.type === 'result') {
@@ -1001,6 +1028,41 @@ export interface GatewayForwardResult {
   correlationId: string;
 }
 
+/** A content block is an empty text block when it is `{type:'text', text: ''|whitespace}`. The
+ *  Anthropic API rejects `cache_control` on such a block, so it must never reach the provider. */
+function isEmptyTextBlock(block: unknown): boolean {
+  if (!block || typeof block !== 'object') return false;
+  const b = block as { type?: unknown; text?: unknown };
+  return b.type === 'text' && (typeof b.text !== 'string' || b.text.trim() === '');
+}
+
+/** Remove empty text blocks from ONE message's `content` (only when it is a block array). Guarded:
+ *  if scrubbing would empty the array, the content is left untouched (an empty `content: []` is
+ *  itself invalid — better to forward the original and let a real error surface than fabricate one). */
+function stripEmptyTextBlocksFromContent(content: unknown): { value: unknown; removed: number } {
+  if (!Array.isArray(content)) return { value: content, removed: 0 };
+  const kept = content.filter((block) => !isEmptyTextBlock(block));
+  const removed = content.length - kept.length;
+  if (removed === 0 || kept.length === 0) return { value: content, removed: 0 };
+  return { value: kept, removed };
+}
+
+/** Scrub empty text blocks from every message's content array. Returns the (possibly new) messages
+ *  array and the total number of blocks removed. Non-array input passes through untouched. */
+function stripEmptyTextBlocks(messages: unknown): { value: unknown; removed: number } {
+  if (!Array.isArray(messages)) return { value: messages, removed: 0 };
+  let removed = 0;
+  const value = messages.map((msg) => {
+    if (!msg || typeof msg !== 'object') return msg;
+    const m = msg as { content?: unknown };
+    const scrubbed = stripEmptyTextBlocksFromContent(m.content);
+    if (scrubbed.removed === 0) return msg;
+    removed += scrubbed.removed;
+    return { ...m, content: scrubbed.value };
+  });
+  return removed > 0 ? { value, removed } : { value: messages, removed: 0 };
+}
+
 export async function proxyGatewayMessages(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
@@ -1061,6 +1123,19 @@ export async function proxyGatewayMessages(
       }
     }
   }
+  // Belt-and-braces: the Agent SDK occasionally appends an empty text block that still carries a
+  // `cache_control` breakpoint (observed live 2026-07-11 on multi-turn chat runs incl. the
+  // integration-build handoff: the OAuth endpoint 400s "messages.N.content.M.text: cache_control
+  // cannot be set for empty text blocks", killing the whole turn). The chokepoint is the last
+  // place we control before the provider, so scrub empty text blocks out of the forwarded
+  // messages/system here. Guarded so a message never ends up with an empty content array.
+  const scrubbed = stripEmptyTextBlocks(forwarded.messages);
+  if (scrubbed.removed > 0) {
+    forwarded.messages = scrubbed.value;
+    console.warn(`[llm] gateway forward: scrubbed ${scrubbed.removed} empty text block(s) from messages`);
+  }
+  const scrubbedSystem = stripEmptyTextBlocksFromContent(forwarded.system);
+  if (scrubbedSystem.removed > 0) forwarded.system = scrubbedSystem.value;
   if (droppedFields.length > 0) {
     console.warn(`[llm] gateway forward: dropped unknown top-level fields: ${droppedFields.join(', ')}`);
   }

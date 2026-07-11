@@ -82,6 +82,15 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     });
   }, [notifications, fetchUsage]);
 
+  // Live brand refresh: when brand research applies new branding, refetch the company
+  // config so the header logo + theme update without a page reload.
+  useEffect(() => {
+    if (!notifications) return;
+    return notifications.on('branding_updated', () => {
+      fetchCompany();
+    });
+  }, [notifications, fetchCompany]);
+
   // Close user menu on click outside
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

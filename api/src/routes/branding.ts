@@ -25,11 +25,13 @@ export function brandingRouter(deps: { now: () => number; genId: () => string })
   r.post('/research', requireRole('org-admin', 'super-admin'), async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, BrandingResearchRequest, req.body);
     if (body === undefined) return;
-    // SSRF guard (ch09 invariant 8): url-safety.ts names the brand-research target as a URL the
-    // platform must guard. Even though the agent is tool-less today, validate at the boundary so
-    // this does not become a live SSRF the moment a fetch/web tool is added to the run class.
+    // Normalise a scheme-less host to https:// so the guard (and the pipeline's fetch) get a full
+    // URL. SSRF guard (ch09 invariant 8): url-safety.ts names the brand-research target as a URL
+    // the platform must guard - the pipeline's deterministic server-side fetches all re-guard, but
+    // reject an unsafe target at the boundary too so no job is even created for one.
+    const websiteUrl = /^https?:\/\//i.test(body.websiteUrl) ? body.websiteUrl : `https://${body.websiteUrl}`;
     try {
-      assertSafeUrl(body.websiteUrl);
+      assertSafeUrl(websiteUrl);
     } catch (e) {
       if (e instanceof SsrfError) return sendError(res, 'VALIDATION_FAILED', 'URL não permitido.');
       throw e;
@@ -37,8 +39,8 @@ export function brandingRouter(deps: { now: () => number; genId: () => string })
     const actor = actorOf(req);
     // The structured instructions live in the agent's system prompt (agents/brand-research.ts);
     // the user turn carries only the research target.
-    const prompt = `URL do sítio web a investigar: ${body.websiteUrl}`;
-    const { jobId, fire } = runBrandResearch({ actor, prompt, language: 'pt', deps });
+    const prompt = `URL do sítio web a investigar: ${websiteUrl}`;
+    const { jobId, fire } = runBrandResearch({ actor, prompt, websiteUrl, language: 'pt', deps });
     fire(); // fire-and-forget: the job streams its progress on the jobs channel
     res.status(202).json({ jobId }); // BrandingResearchResponse — not a job envelope
   });

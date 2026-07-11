@@ -284,3 +284,81 @@ describe('proxyGatewayMessages forwards ONLY the documented Messages API top-lev
     expect(logged).not.toContain('dropped');
   });
 });
+
+/**
+ * Empty-text-block scrub (live 2026-07-11): on multi-turn chat runs (incl. the integration-build
+ * handoff) the Agent SDK appends an empty text block that still carries a `cache_control`
+ * breakpoint. The OAuth beta endpoint 400s "messages.N.content.M.text: cache_control cannot be set
+ * for empty text blocks", killing the whole turn. The chokepoint scrubs empty text blocks out of the
+ * forwarded messages/system before the provider call - guarded so no message is left content-empty.
+ */
+describe('proxyGatewayMessages scrubs empty text blocks (cache_control 400 on empty text)', () => {
+  it('removes an empty text block sitting alongside real content, keeping the rest intact', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { captured = p.payload as Record<string, unknown>; return { status: 200, headers: {}, body: okBody }; },
+    }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await proxyGatewayMessages(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'real question' },
+              { type: 'text', text: 'grounding' },
+              // the offending block: empty text + a cache breakpoint (the shape the SDK emits)
+              { type: 'text', text: '', cache_control: { type: 'ephemeral' } },
+            ],
+          },
+        ],
+        metadata: { session_id: 'conv-empty-block' },
+      },
+      'u1',
+    );
+
+    expect(captured).not.toBeNull();
+    const msgs = captured!.messages as Array<{ content: Array<{ type: string; text: string }> }>;
+    expect(msgs[0]!.content).toHaveLength(2);
+    expect(msgs[0]!.content.every((b) => b.text.trim() !== '')).toBe(true);
+    const logged = warn.mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+    expect(logged).toContain('scrubbed 1 empty text block');
+  });
+
+  it('leaves a message untouched when scrubbing would empty its content array (never sends content: [])', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { captured = p.payload as Record<string, unknown>; return { status: 200, headers: {}, body: okBody }; },
+    }));
+
+    await proxyGatewayMessages(
+      {
+        messages: [{ role: 'user', content: [{ type: 'text', text: '   ', cache_control: { type: 'ephemeral' } }] }],
+        metadata: { session_id: 'conv-all-empty' },
+      },
+      'u1',
+    );
+
+    const msgs = captured!.messages as Array<{ content: unknown[] }>;
+    expect(msgs[0]!.content).toHaveLength(1); // untouched — better a real error than a fabricated empty array
+  });
+
+  it('passes a plain string-content message through unchanged (no block array to scrub)', async () => {
+    let captured: Record<string, unknown> | null = null;
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { captured = p.payload as Record<string, unknown>; return { status: 200, headers: {}, body: okBody }; },
+    }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await proxyGatewayMessages(
+      { messages: [{ role: 'user', content: 'plain string' }], metadata: { session_id: 'conv-plain' } },
+      'u1',
+    );
+
+    const msgs = captured!.messages as Array<{ content: unknown }>;
+    expect(msgs[0]!.content).toBe('plain string');
+    const logged = warn.mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+    expect(logged).not.toContain('scrubbed');
+  });
+});

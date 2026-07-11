@@ -231,3 +231,40 @@ describe('refresh-and-retry-once on 401 (§6.2.1 completeFast)', () => {
     expect(await tokenEvents.find({ billeeUserId: 'u5' })).toHaveLength(1);
   });
 });
+
+describe('runOneShot forwards vision images to the transport (§6.2.1 images plumbing)', () => {
+  it('a one-shot with images passes them through to transport.oneShot verbatim', async () => {
+    // The brand-research visual-vibe pass (and automation vision) hand base64 PNGs to runOneShot.
+    // This pins the OneShotOptions.images -> SdkCallParams.images plumbing at the chokepoint (the
+    // default transport then turns them into a one-message streaming prompt for the SDK).
+    let seenImages: Array<{ mediaType: string; data: string }> | undefined;
+    __setTransportForTests(fakeTransport({
+      async oneShot(p) {
+        seenImages = p.images;
+        return { text: '{"mood":"x"}', usage: { input: 5, output: 2, cacheCreate: 0, cacheRead: 0 } };
+      },
+    }));
+    const images = [
+      { mediaType: 'image/png', data: 'AAAA' },
+      { mediaType: 'image/png', data: 'BBBB' },
+    ];
+    await runOneShot(
+      { prompt: 'descreve', systemPrompt: 'sys', images, decision: decideForTier('FAST') },
+      { kind: 'user_work', agentType: 'brand-research', billeeUserId: 'u-vib' },
+    );
+    expect(seenImages).toEqual(images);
+    expect(await tokenEvents.find({ billeeUserId: 'u-vib' })).toHaveLength(1);
+  });
+
+  it('a text-only one-shot forwards no images (undefined), unchanged from before', async () => {
+    let seenImages: Array<{ mediaType: string; data: string }> | undefined = [];
+    __setTransportForTests(fakeTransport({
+      async oneShot(p) {
+        seenImages = p.images;
+        return { text: 'ok', usage: { input: 1, output: 1, cacheCreate: 0, cacheRead: 0 } };
+      },
+    }));
+    await runOneShot({ prompt: 'p', decision: decideForTier('FAST') }, { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId: 'u-txt' });
+    expect(seenImages).toBeUndefined();
+  });
+});

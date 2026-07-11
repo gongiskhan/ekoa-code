@@ -84,6 +84,11 @@ export class JobStreamSink {
   text(text: string): void {
     if (text) this.emit({ type: 'text_chunk', text });
   }
+  /** Working-commentary channel (mirrors ChatStreamSink.thinking). Callers pass text already
+   *  marker-filtered AND engine-identity-redacted (branding.ts) — never raw model output. */
+  thinking(text: string): void {
+    if (text) this.emit({ type: 'thinking_chunk', text });
+  }
   toolEvent(e: ToolEventInput): void {
     this.emit(toolEventPayload(e) as JobEvent);
   }
@@ -95,6 +100,11 @@ export class JobStreamSink {
   }
   previewReload(): void {
     this.emit({ type: 'preview_reload' });
+  }
+  /** The build's artifact is scaffolded + served — fired BEFORE the agent runs so the client
+   *  shows the live preview and the real file tree from second zero. */
+  artifact(payload: { artifactId: string; appUrl: string; slug?: string }): void {
+    this.emit({ type: 'artifact', ...payload });
   }
   complete(payload: { result?: unknown; artifactId?: string; slug?: string; appUrl?: string }, durationMs: number): void {
     this.emit({ type: 'complete', durationMs, ...payload });
@@ -122,4 +132,12 @@ export function emitIntegrationBuildIntent(userId: string, ev: { sessionId: stri
 export function emitChatAnswer(userId: string, ev: { sessionId: string; sourceRunId: string; text: string }): void {
   const payload: NotificationEvent = { type: 'chat_answer', ...ev };
   sseManager.emit('notifications', userId, 'chat_answer', payload);
+}
+
+/** Org branding changed (brand research applied): tell the user's clients to refetch the
+ *  company config so the header logo + theme update live (no page reload). Per-user channel -
+ *  other org members pick the change up on their next company fetch. */
+export function emitBrandingUpdated(userId: string): void {
+  const payload: NotificationEvent = { type: 'branding_updated' };
+  sseManager.emit('notifications', userId, 'branding_updated', payload);
 }

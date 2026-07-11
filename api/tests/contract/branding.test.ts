@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -6,6 +6,14 @@ import { users, orgs, jobs, credentials, billingAccounts, tokenEvents } from '..
 import { setCredential, __resetCredentialsForTests } from '../../src/llm/credentials.js';
 import { __setTransportForTests, __resetTransportForTests } from '../../src/llm/client.js';
 import { makeFakeTransport } from '../agents/_fake-transport.js';
+import {
+  __setBrandingPipelineForTests,
+  __resetBrandingPipelineForTests,
+  type SiteContext,
+  type DesignSystem,
+  type VisualVibe,
+  type RenderedCandidates,
+} from '../../src/services/branding/index.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
@@ -27,6 +35,16 @@ import { BrandingResearchResponse, BrandResearchResult, OrgConfig, ErrorEnvelope
 let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
+
+/** An unreachable-site fixture: the pipeline degrades honestly to knowledge-only research. */
+function unreachableSite(url: string): SiteContext {
+  return {
+    url, finalUrl: url, status: 0, ok: false, title: null, description: null, ogSiteName: null,
+    ogImage: null, themeColor: null, favicon: null, generator: null, colorCandidates: [], fontCandidates: [], textSample: '',
+    error: 'blocked (test)',
+  };
+}
+const okRendered: RenderedCandidates = { ok: true, candidates: [], paintedHexes: [], topFonts: [], chromeColors: [], chromeFonts: [] };
 
 const authed = (p: string, t: string, init: RequestInit = {}) =>
   fetch(`http://127.0.0.1:${port}${p}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${t}`, ...(init.headers ?? {}) } });
@@ -70,9 +88,15 @@ afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   __resetTransportForTests(); __resetCredentialsForTests();
+  // Default: the brand-research pipeline reports the site UNREACHABLE, so tests exercise the
+  // knowledge fallback deterministically (no network, browser, dembrandt, or vibe model call).
+  // The grounded test overrides this with a full reachable pipeline + fixture data.
+  __resetBrandingPipelineForTests();
+  __setBrandingPipelineForTests({ fetchSiteContext: async (url) => unreachableSite(url) });
   for (const s of [users, orgs, jobs, credentials, billingAccounts, tokenEvents]) await s.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'Org A', displayName: 'Org A', createdAt: 'x' } as never);
 });
+afterEach(() => { __resetBrandingPipelineForTests(); });
 
 describe('PUT /api/v1/branding (the contract path)', () => {
   it('org-admin saves branding at the contract path and gets an OrgConfig back', async () => {
@@ -128,6 +152,10 @@ describe('POST /api/v1/branding/research', () => {
     const job = (await awaitJob(body.jobId as string)) as unknown as { kind: string; userId: string } | null;
     expect(job?.kind).toBe('brand-research');
     expect(job?.userId).toBe('admin');
+    // Drain the fire-and-forget job so it settles inside THIS test (no credential set -> it fails
+    // at synthesis) rather than running on into the next test and mutating the shared transport/
+    // pipeline singletons mid-run.
+    await awaitJobDone(body.jobId as string);
   });
 
   it('the requested websiteUrl reaches the agent prompt (contract field -> prompt mapping)', async () => {
@@ -137,6 +165,7 @@ describe('POST /api/v1/branding/research', () => {
     const body = await readJson(res);
     const job = (await awaitJob(body.jobId as string)) as unknown as { request?: Record<string, unknown> } | null;
     expect(JSON.stringify(job?.request ?? {})).toContain('marca-unica.example');
+    await awaitJobDone(body.jobId as string); // drain the fire-and-forget job (see note above)
   });
 
   it('a structured research result is MERGE-written onto org branding (pre-fix: success stored nothing)', async () => {
@@ -144,8 +173,9 @@ describe('POST /api/v1/branding/research', () => {
     // Pre-existing branding: the logo must SURVIVE the merge; primaryColor gets updated.
     await orgs.update('orgA', (o) => ({ ...o, branding: { logo: 'https://old.example/logo.png', primaryColor: '#000000' } }));
     await setCredential({ mode: 'oauth', secret: 'tok' });
+    // The synthesis is a tool-less runOneShot, so the fake transport answers via `oneShotText`.
     __setTransportForTests(makeFakeTransport({
-      finalText: JSON.stringify({
+      oneShotText: JSON.stringify({
         websiteUrl: 'https://exemplo.pt',
         primaryColor: '#123ABC',
         accentColor: '#FF8800',
@@ -178,12 +208,84 @@ describe('POST /api/v1/branding/research', () => {
     expect(branding.confidence).toBeUndefined();
   });
 
+  it('a REACHABLE site: merges colours + fonts + tone + designSystem + visualVibe + a stored logo onto org branding', async () => {
+    await mkUser('admin', 'org-admin');
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+
+    // The deterministic pipeline seams are injected with fixture data - no network, browser,
+    // dembrandt, or vibe model call. Only the tool-less synthesis rides the fake transport.
+    const designSystem: DesignSystem = {
+      url: 'https://marca.pt/',
+      extractedAt: 'x',
+      colors: {
+        palette: [{ color: '#0d9488', normalized: '#0d9488', count: 200, confidence: 'high', sources: ['button'] }],
+        cssVariables: { '--primary': { value: '#0d9488' } },
+      },
+      // dembrandt 0.23 typography spellings, to prove the normalization survives persistence.
+      typography: { styles: [{ context: 'body', family: 'Inter', size: '16px', weight: 400 } as never] },
+      frameworks: [{ name: 'Next.js', confidence: 'high' }],
+    };
+    const visualVibe: VisualVibe = { mood: 'moderno minimalista', bullets: ['tipografia grande'], shape: 'rounded', density: 'minimal', texture: 'flat', hero: 'bloco sólido' };
+
+    __setBrandingPipelineForTests({
+      fetchSiteContext: async (url) => ({ ...unreachableSite(url), ok: true, status: 200, finalUrl: url, fontCandidates: ['Inter'], textSample: 'Somos a Marca.', ogImage: 'https://marca.pt/og.png' }),
+      fetchRenderedCandidates: async () => okRendered,
+      fetchDesignSystem: async () => designSystem,
+      fetchVisualVibe: async () => visualVibe,
+      resolveBrandLogo: async () => '/brand-assets/deadbeef.png',
+    });
+    __setTransportForTests(makeFakeTransport({
+      oneShotText: JSON.stringify({
+        websiteUrl: 'https://marca.pt/',
+        primaryColor: '#0d9488',
+        secondaryColor: '#1032cf',
+        accentColor: '#f0b11a',
+        fonts: ['Inter'],
+        toneOfVoice: 'claro e direto',
+        instructions: 'Formas arredondadas, tipografia grande, botão sólido.',
+        summary: 'Marca de exemplo.',
+        confidence: 'high',
+      }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://marca.pt' }) });
+    expect(res.status).toBe(202);
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+    const jr = job?.result as { brandingApplied?: boolean; siteReachable?: boolean };
+    expect(jr.brandingApplied).toBe(true);
+    expect(jr.siteReachable).toBe(true);
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    expect(OrgConfig.safeParse(orgBody).success).toBe(true); // designSystem + visualVibe still validate
+    const b = orgBody.branding as Record<string, unknown>;
+    expect(b.primaryColor).toBe('#0d9488');
+    expect(b.secondaryColor).toBe('#1032cf');
+    expect(b.accentColor).toBe('#f0b11a');
+    expect(b.fonts).toEqual(['Inter']);
+    expect(b.toneOfVoice).toBe('claro e direto');
+    expect(b.instructions).toContain('arredondadas');
+    expect(b.logo).toBe('/brand-assets/deadbeef.png'); // a stored file, never a raw external URL
+
+    const ds = b.designSystem as { palette?: Array<{ hex: string }>; typography?: { families?: string[] } };
+    expect(ds.palette?.[0]?.hex).toBe('#0d9488');
+    expect(ds.typography?.families).toContain('Inter');
+    const vv = b.visualVibe as { mood?: string };
+    expect(vv.mood).toBe('moderno minimalista');
+    // Research metadata never rides branding.
+    expect(b.summary).toBeUndefined();
+    expect(b.confidence).toBeUndefined();
+  });
+
   it('prose-only research output completes WITHOUT touching org branding (brandingApplied false)', async () => {
     await mkUser('admin', 'org-admin');
     await orgs.update('orgA', (o) => ({ ...o, branding: { primaryColor: '#000000' } }));
     await setCredential({ mode: 'oauth', secret: 'tok' });
     __setTransportForTests(makeFakeTransport({
-      finalText: 'A marca parece moderna e usa tons azuis, mas não consigo estruturar mais do que isto.',
+      oneShotText: 'A marca parece moderna e usa tons azuis, mas não consigo estruturar mais do que isto.',
     }));
 
     const t = await tokenFor('admin');
