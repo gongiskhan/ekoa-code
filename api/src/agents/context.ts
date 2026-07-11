@@ -7,7 +7,7 @@
  * inlined-and-clipped: full history, no truncation of pasted material — §5.5.2 item 5).
  */
 import type { Actor } from '@ekoa/shared';
-import { messages as messagesStore } from '../data/stores.js';
+import { messages as messagesStore, sessions as sessionsStore } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 import { resolveMemoryInjection } from '../memory/resolver.js';
 import { assembleAgentContext, knowledgeGrounding, integrationPrefetch, catalog } from './seams.js';
@@ -104,6 +104,14 @@ export async function assembleRunContext(input: AssembleInput): Promise<Assemble
     if (cat) sections.push(cat);
   } catch {
     /* catalog build failures are non-fatal (§5.5.2 layer 4) */
+  }
+
+  // Session continuity — the last persisted `<ekoa-context>` block (§5.6.1 step 6). The marker
+  // pipeline persists it onto the session; re-inject it here so the agent keeps its own working
+  // notes across turns (pre-fix it was persisted but never read back — a dead letter).
+  if (input.sessionId) {
+    const sess = (await sessionsStore.get(input.sessionId)) as (Doc & { lastContext?: string }) | null;
+    if (sess?.lastContext) sections.push(`# Contexto da sessão (as tuas notas do turno anterior)\n${sess.lastContext}`);
   }
 
   // Layer 5 — conversation history (structured; loaded separately, conveyed as its own block).

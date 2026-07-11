@@ -38,7 +38,7 @@ import {
   resetArtifactToDraft,
   type JobRecord,
 } from './jobs.js';
-import { getBuildMechanics, verifyRunner } from './seams.js';
+import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, verifyRunner } from './seams.js';
 import { logActivity } from '../data/activity.js';
 
 /** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
@@ -321,6 +321,19 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const liveMarkers = new MarkerProcessor();
     let capturedSessionId: string | undefined;
 
+    // The coding kind's content sections lead the build system prompt (before this run's F16
+    // entrypoint steering) — pre-fix, builds sent ONLY the 6-line inline prompt and the whole
+    // coding-agent content package was dead weight. The grounding block self-gates (legal-context
+    // builds only, §5.5.2 layer 2); both layers are non-fatal.
+    let contentSections: string[] = [];
+    let groundingBlock = '';
+    try {
+      contentSections = (await assembleAgentContext({ agentKind: 'coding', userId: input.actor.userId })).promptSections;
+      groundingBlock = await knowledgeGrounding({ userId: input.actor.userId, orgId: input.actor.orgId, query: input.description, agentKind: 'coding' });
+    } catch (err) {
+      console.warn('[build] content/grounding assembly failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+
     const handle = runAgent(
       {
         prompt: input.description,
@@ -328,7 +341,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
         // never served while the scaffold keeps being compiled. Flows through runAgent's
         // anonymise path like every prompt (client.ts systemPrompt handling).
-        systemPrompt: BUILD_SYSTEM_PROMPT,
+        systemPrompt: [...contentSections, groundingBlock, BUILD_SYSTEM_PROMPT].filter(Boolean).join('\n\n'),
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,

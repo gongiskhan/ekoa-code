@@ -350,5 +350,30 @@ describe('content loader', () => {
       // Frontmatter is stripped from the prose handed to the prompt.
       expect(ctx.promptSections[0]).not.toContain('description:');
     });
+
+    it('eager content stays inside the per-kind budget (felt-speed gate)', async () => {
+      // Chars, not tokens (CI-stable): ~4 chars/token. Chat is the TTFT-relevant kind — its
+      // eager budget guards the "agent feels quick" trait; the others guard drift. Raising a
+      // budget is a deliberate decision, not a side effect of a content edit.
+      const BUDGET_CHARS = { chat: 8_000, coding: 14_000, automation: 3_500 } as const;
+      const l = loader();
+      for (const kind of ['chat', 'coding', 'automation'] as const) {
+        const ctx = await l.assembleAgentContext({ agentKind: kind, userId: 'u1' });
+        const total = ctx.promptSections.reduce((n, s) => n + s.length, 0);
+        expect(total, `${kind} eager content ${total} chars > budget ${BUDGET_CHARS[kind]}`).toBeLessThanOrEqual(BUDGET_CHARS[kind]);
+      }
+    });
+
+    it('the composed chat content carries the marker vocabulary the pipeline strips (drift guard)', async () => {
+      // The chat content teaches the EXACT markers agents/markers.ts matches; if the content
+      // drifts to another spelling the delegation silently dies.
+      const l = loader();
+      const ctx = await l.assembleAgentContext({ agentKind: 'chat', userId: 'u1' });
+      const body = ctx.promptSections.join('\n');
+      expect(body).toContain('[[EKOA_BUILD]]');
+      expect(body).toContain('[[EKOA_INTEGRATION_BUILD]]');
+      expect(body).toContain('<ekoa-context>');
+      expect(body).toContain('knowledge_search');
+    });
   });
 });

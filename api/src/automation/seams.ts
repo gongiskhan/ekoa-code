@@ -334,6 +334,28 @@ export function runEventEmitterFactory(runId: string): RunEventEmitter | undefin
 }
 
 // ============================================================================
+// Agent-content sections (ch08) — the automation kind's eager content package.
+// automation/ must not import content/ or agents/; the composition root wires
+// the content loader here. Honest default: no sections (the planner runs on its
+// inline shape-contract prompt alone).
+// ============================================================================
+
+export type AutomationContentResolver = (userId: string) => Promise<string[]>;
+const defaultAutomationContent: AutomationContentResolver = async () => [];
+let automationContentFn: AutomationContentResolver = defaultAutomationContent;
+export function setAutomationContentSections(fn: AutomationContentResolver): void {
+  automationContentFn = fn;
+}
+/** The automation agent kind's composed eager content sections (never throws a run). */
+export async function automationContentSections(userId: string): Promise<string[]> {
+  try {
+    return await automationContentFn(userId);
+  } catch {
+    return []; // content assembly is never fatal to a plan
+  }
+}
+
+// ============================================================================
 // Reset (tests)
 // ============================================================================
 
@@ -349,4 +371,5 @@ export function __resetAutomationSeamsForTests(): void {
   artifactResolver = defaultArtifactResolver;
   catalogSources = defaultCatalogSources;
   localBrowserContextProvider = defaultLocalBrowserContextProvider;
+  automationContentFn = defaultAutomationContent;
 }

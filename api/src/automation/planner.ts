@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { runOneShot, decideForTier, LlmAbortedError } from '../llm/index.js';
+import { automationContentSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
 import { formatCatalogForPrompt, type Catalog } from './catalog.js';
 import { loadAutomationConfig } from './config.js';
@@ -256,10 +257,15 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
 }
 
 async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Promise<PlanFromGoalResult> {
+  // The automation kind's content sections lead; the inline PLANNER_SYSTEM (the JSON shape
+  // contract) stays LAST so the output contract is the final word. Content is never fatal.
+  const sections = await automationContentSections(input.userId);
+  const systemPrompt = [...sections, PLANNER_SYSTEM].filter(Boolean).join('\n\n');
+
   let res: { text: string };
   try {
     res = await runOneShot(
-      { prompt: userText, systemPrompt: PLANNER_SYSTEM, decision: decideForTier('EXPERT') },
+      { prompt: userText, systemPrompt, decision: decideForTier('EXPERT') },
       { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },
     );
   } catch (err) {

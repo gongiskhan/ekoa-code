@@ -107,6 +107,7 @@ export type {
 // --- Injected seams (wired at the composition root; ch02 §2.8) --------------
 export {
   setDaemonConnectionResolver,
+  setAutomationContentSections,
   setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
