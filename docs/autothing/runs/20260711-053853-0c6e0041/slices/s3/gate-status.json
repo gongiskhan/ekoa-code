@@ -1,0 +1,22 @@
+{
+  "slice": "s3",
+  "title": "/settings/devices device-approval page (D5)",
+  "updatedAt": "2026-07-11T06:45:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "ui",
+  "retries": { "limit": 5, "used": 1 },
+  "gates": {
+    "tests": { "cmd": "vitest run web/__tests__/device-code.test.ts", "exit": 0, "at": "2026-07-11T06:33:00Z", "summary": "4 passed (normalizer)" },
+    "e2e": { "cmd": "playwright test web/e2e/device-approval.spec.ts", "exit": 0, "at": "2026-07-11T06:40:00Z", "summary": "3 passed REAL flow (approve mints token via poll, deny, invalid-code honest error); 1 fix: expected-404 console allowance" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T06:52:00Z", "summary": "full lane green" },
+    "review": { "verdict": "clean", "by": "claude-inline", "notes": "normalizer in lib (page keeps default-only exports); PT-PT operational copy, no claims" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "401 invalid_api_key; queued" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex" },
+    "designAudit": { "verdict": "clean", "by": ["inline"], "notes": "follows PageShell/PageHeader/Card/Input system exactly; no new visual language" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T06:45:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s3/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "401 invalid_api_key", "remediation": "codex login", "impact": "adversarial gates queued" }
+  ]
+}
