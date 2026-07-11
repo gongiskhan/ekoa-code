@@ -26,13 +26,26 @@ async function login(page: Page) {
   await page.waitForURL(/\/chat/, { timeout: 60_000 });
 }
 
+/**
+ * Error tracking with a precise 404 net: the bare "Failed to load resource" console line
+ * carries no URL, and next-dev intermittently 404s its own _next assets on first compile —
+ * so 4xx/5xx are tracked from `response` events BY URL (dev-server asset noise excluded,
+ * every API/page 404 still fails), while all OTHER console errors (TypeErrors, React
+ * crashes) keep the strict zero bar.
+ */
 function trackConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
+  const devAssetNoise = /\/_next\/|hot-update|favicon/;
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text());
+    if (msg.type() !== 'error') return;
+    if (/^Failed to load resource/.test(msg.text())) return; // pinned precisely below
+    errors.push(msg.text());
   });
   page.on('pageerror', (err) => {
     errors.push(`pageerror: ${err.message}`);
+  });
+  page.on('response', (r) => {
+    if (r.status() >= 400 && !devAssetNoise.test(r.url())) errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;
 }
@@ -63,6 +76,18 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
     await expect(rows.first().getByText(/\/.*\(\d+%\)/).first()).toBeVisible({ timeout: 15_000 });
 
     expect(errors, `console errors on /users:\n${errors.join('\n')}`).toEqual([]);
+  });
+
+  test('/knowledge renders collections and uploads without crashing (UploadDoc id mapping)', async ({ page }) => {
+    await login(page);
+
+    const errors = trackConsoleErrors(page);
+    await page.goto('/knowledge');
+    // The page's data loads (collections/uploads lists answer 200 and render).
+    await expect(page.getByRole('heading').first()).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(2_000); // let the uploads/collections fetches settle
+
+    expect(errors, `console errors on /knowledge:\n${errors.join('\n')}`).toEqual([]);
   });
 
   test('/integrations: session-status cards survive the status poll and expanding renders action rows', async ({ page }) => {

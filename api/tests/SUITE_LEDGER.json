@@ -90,7 +90,8 @@
       "specs": [
         "automation-deterministic",
         "chat-thinking",
-        "regressions-dashboard"
+        "regressions-dashboard",
+        "integration-builder"
       ]
     }
   },
