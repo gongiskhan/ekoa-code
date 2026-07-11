@@ -51,15 +51,17 @@ export interface LocalFileActivity {
 export const PRIVACY_SETTINGS_HREF = '/settings/privacy';
 
 /**
- * Local-bridge distribution (FC-405 install section). The bridge is published to a public GCS
- * bucket (`ekoa-bridge-downloads`, project spatial-tempo-488909-s5, 2026-07-11): a source
- * tarball plus a `curl | bash` installer that verifies Node 20+, installs the CLI globally, and
- * prints the pair/serve steps. Both default to the hosted URLs so the Download button and the
- * install command work in every environment; override with `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` /
- * `NEXT_PUBLIC_BRIDGE_INSTALL_URL` to point at a different host (or set download to '' to fall
- * back to the honest "not yet published" state — we never point a Download button at a dead link).
+ * Local-bridge distribution (FC-405 install section). The bridge is published as GitHub Release
+ * assets on `github.com/gongiskhan/ekoa-bridge` (canonical since 2026-07-11; the `latest/download`
+ * URLs always resolve to the newest release): the double-click installers, a source tarball, and
+ * the `curl | bash` / `install.ps1` scripts. All default to the release URLs so the download
+ * buttons and install command work in every environment; override with `NEXT_PUBLIC_BRIDGE_MAC_URL`
+ * / `NEXT_PUBLIC_BRIDGE_WIN_URL` / `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` / `NEXT_PUBLIC_BRIDGE_INSTALL_URL`
+ * to point elsewhere (or set download to '' for the honest "not yet published" state — we never
+ * point a Download button at a dead link). (The GCS bucket `ekoa-bridge-downloads` remains as a
+ * secondary mirror.)
  */
-const HOSTED_BRIDGE_BASE = 'https://storage.googleapis.com/ekoa-bridge-downloads';
+const HOSTED_BRIDGE_BASE = 'https://github.com/gongiskhan/ekoa-bridge/releases/latest/download';
 /** Double-click installers (owner directive 2026-07-11: non-technical users must not touch a
  *  terminal). Mac = a zipped `.command` (double-click installs + pairs + serves via native
  *  dialogs); Windows = a `.bat` that runs the hosted install.ps1 with the same flow. */
