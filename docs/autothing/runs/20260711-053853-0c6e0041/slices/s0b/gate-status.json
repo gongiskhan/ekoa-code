@@ -1,0 +1,16 @@
+{
+  "slice": "s0b",
+  "title": "Owed retroactive adversarial reviews (2e3e199, d2c8463)",
+  "updatedAt": "2026-07-11T07:45:00Z",
+  "phase": "blocked",
+  "status": "blocked",
+  "kind": "review",
+  "retries": { "limit": 5, "used": 4 },
+  "gates": {
+    "claudeRetroReview": { "verdict": "clean-with-findings", "by": "claude-inline", "at": "2026-07-11T07:42:00Z", "summary": "2e3e199: actor-bound spec, opaque refs, daemon-side egress cap - clean (1 observation: model-raisable budget to 10MB relies on the daemon session cap, per spec). d2c8463: fix correct+tested; FINDING - wire accepts ONLY metadata.user_id, other client metadata keys would still 400-and-mask -> metadata allowlist folded into s7." },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "codex exec -> 401 invalid_api_key (probed 4x across the run: S0a, s1, s0b x2)" }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "codex exec --skip-git-repo-check '...' -> ERROR: unexpected status 401 Unauthorized ... auth error code: invalid_api_key (api.openai.com/v1/responses)", "remediation": "codex login  # interactive, operator-only; or codex login --api-key <valid key>", "impact": "the two owed cross-model reviews and every per-slice adversarial gate of this run remain OWED; same-model retro reviews done as best-effort (NOT a substitute)", "at": "2026-07-11T07:40:00Z" }
+  ]
+}

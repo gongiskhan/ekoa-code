@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T07:30:00Z",
+  "updatedAt": "2026-07-11T07:45:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -76,6 +76,17 @@
       "flagged": false,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/gate-status.json",
       "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s0b",
+      "title": "Owed retroactive adversarial reviews",
+      "kind": "review",
+      "status": "blocked",
+      "video": null,
+      "verifiedAt": null,
+      "flagged": true,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s0b/gate-status.json",
+      "blockerSummary": "codex 401 invalid_api_key (external); same-model retro reviews done as best-effort; cross-model reviews remain OWED"
     }
   ],
   "globalGate": {
