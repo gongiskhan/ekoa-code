@@ -1,0 +1,54 @@
+{
+  "title": "Ekoa: uma integração construída por IA a partir do chat",
+  "project": "ekoa",
+  "folder": "stabilization-verification",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "Integrações construídas por IA",
+      "subtitle": "ekoa · 2026-07-11", "duration": 2.8, "reflectFlag": true },
+    { "type": "browser", "id": "pedido",
+      "baseURL": "http://localhost:3000", "startPath": "/chat",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "composer", "caption": "A app precisa de falar com um serviço externo",
+          "expectedScreen": "the chat landing with the empty composer",
+          "actions": [ { "type": "waitFor", "selector": "placeholder:Descreva o que precisa...", "timeout": 60000 } ],
+          "assert": { "selector": "placeholder:Descreva o que precisa...", "highlight": true }, "hold": 2800 },
+        { "id": "peco", "caption": "Pedir os dados da API pública Open Library",
+          "expectedScreen": "the sent request bubble mentioning Open Library and a thinking indicator",
+          "actions": [
+            { "type": "fill", "selector": "textarea", "text": "A minha app precisa de consultar a API pública Open Library (openlibrary.org), sem autenticação, para procurar livros pelo título. Chama-lhe Open Library." },
+            { "type": "press", "key": "Enter" },
+            { "type": "waitFor", "selector": "text:openlibrary.org", "timeout": 60000 }
+          ],
+          "assert": { "selector": "text:openlibrary.org", "highlight": true }, "hold": 3000 }
+      ] },
+    { "type": "browser", "id": "oferta", "continue": true, "runTimeoutMs": 300000,
+      "waitBefore": { "selector": "text:Queres que comece", "timeout": 240000 },
+      "beats": [
+        { "id": "propoe", "caption": "O agente propõe construir a integração",
+          "expectedScreen": "the assistant offering to build an Open Library integration and asking to proceed",
+          "assert": { "selector": "text:Queres que comece", "highlight": true }, "hold": 4500 }
+      ] },
+    { "type": "title", "id": "cut", "text": "≈ a IA gera e guarda o pacote da integração", "duration": 2.2 },
+    { "type": "browser", "id": "resultado",
+      "baseURL": "http://localhost:3000", "startPath": "/integrations?tab=plataforma",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "carta", "caption": "A integração criada pela IA, disponível na organização",
+          "expectedScreen": "the integrations page showing an Open Library integration card among the available integrations",
+          "actions": [ { "type": "waitFor", "selector": "testid:platform-integrations-section", "timeout": 60000 },
+                       { "type": "waitFor", "selector": "role:heading:Open Library", "timeout": 30000 } ],
+          "assert": { "selector": "role:heading:Open Library", "highlight": true }, "hold": 4500 }
+      ] },
+    { "type": "evidence", "id": "definicao",
+      "command": "TOKEN=$(curl -s -X POST http://localhost:4111/api/v1/auth/login -H 'content-type: application/json' -d '{\"username\":\"admin\",\"password\":\"tmp12345\"}' | python3 -c \"import sys,json;print(json.load(sys.stdin)['token'])\"); curl -s -H \"authorization: Bearer $TOKEN\" http://localhost:4111/api/v1/integrations | python3 -c \"import sys,json; d=[i for i in json.load(sys.stdin)['items'] if i.get('key')=='open-library'][0]; print(json.dumps({'key':d['key'],'displayName':d['displayName'],'authType':d['authType'],'provider':d.get('provider'),'actions':[a['actionName'] for a in d['actions']]}, indent=2, ensure_ascii=False))\"",
+      "source": "GET /api/v1/integrations — open-library",
+      "kind": "json",
+      "caption": "A integração ficou persistida, com quatro ações e sem autenticação",
+      "expectedScreen": "a JSON panel of the open-library definition with the actions array highlighted",
+      "highlight": { "match": "search_books", "note": "uma das quatro ações geradas pela IA, prontas a usar" },
+      "hold": 5500 },
+    { "type": "title", "id": "outro", "text": "Pedido no chat → pacote gerado → integração guardada", "duration": 2.4 }
+  ]
+}

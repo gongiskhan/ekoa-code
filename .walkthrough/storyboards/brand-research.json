@@ -1,0 +1,64 @@
+{
+  "title": "Ekoa: pesquisa de marca com persistência",
+  "project": "ekoa",
+  "folder": "stabilization-verification",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "Pesquisa de marca",
+      "subtitle": "ekoa · 2026-07-11", "duration": 2.6, "reflectFlag": true },
+    { "type": "browser", "id": "pesquisa",
+      "baseURL": "http://localhost:3000", "startPath": "/settings/branding",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "pagina", "caption": "A identidade da organização começa aqui",
+          "expectedScreen": "the branding settings page on the 'Pesquisa' tab with a website URL input",
+          "actions": [ { "type": "waitFor", "selector": "testid:settings-branding-page", "timeout": 60000 },
+                       { "type": "waitFor", "selector": "placeholder:https://exemplo.com", "timeout": 30000 } ],
+          "assert": { "selector": "placeholder:https://exemplo.com", "highlight": true }, "hold": 3000 },
+        { "id": "lancar", "caption": "Indicar o site — a IA pesquisa a marca",
+          "expectedScreen": "the research running state (progress card / 'Pesquisando...' button) for www.plmj.com",
+          "actions": [
+            { "type": "fill", "selector": "placeholder:https://exemplo.com", "text": "https://www.plmj.com" },
+            { "type": "click", "selector": "button:Pesquisar Marca" }
+          ],
+          "assert": { "selector": "button:Pesquisando...", "timeout": 30000 }, "hold": 3000 }
+      ] },
+    { "type": "browser", "id": "espera", "continue": true, "speed": 8, "runTimeoutMs": 420000,
+      "beats": [
+        { "id": "aguarda", "caption": "A identificar cores, logotipo e tipografia (acelerado)",
+          "expectedScreen": "the research progress card with rotating phase text, or the completion banner appearing",
+          "holdUntil": { "selector": "text:Pesquisa concluida", "timeout": 360000 }, "holdAfter": 1500 }
+      ] },
+    { "type": "browser", "id": "resultado", "continue": true,
+      "beats": [
+        { "id": "sucesso", "caption": "Pesquisa concluída — os dados da marca foram guardados",
+          "expectedScreen": "a green success banner saying 'Pesquisa concluida! Os dados da marca foram guardados.'",
+          "assert": { "selector": "text:Pesquisa concluida", "highlight": true }, "hold": 4000 },
+        { "id": "marca", "caption": "Cores, nome e tipografia preenchidos automaticamente",
+          "expectedScreen": "the 'Marca' tab with company name, logo area, color scheme pickers and typography",
+          "actions": [ { "type": "click", "selector": "role:tab:Marca" },
+                       { "type": "waitFor", "selector": "text:Esquema de Cores", "timeout": 30000 } ],
+          "assert": { "selector": "text:Esquema de Cores", "highlight": true }, "hold": 5000 }
+      ] },
+    { "type": "browser", "id": "reload",
+      "baseURL": "http://localhost:3000", "startPath": "/settings/branding",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "persiste", "caption": "Sessão nova, página recarregada: a marca persiste",
+          "expectedScreen": "the 'Marca' tab after a fresh page load still showing the researched branding fields",
+          "actions": [ { "type": "waitFor", "selector": "testid:settings-branding-page", "timeout": 60000 },
+                       { "type": "click", "selector": "role:tab:Marca" },
+                       { "type": "waitFor", "selector": "text:Esquema de Cores", "timeout": 30000 } ],
+          "assert": { "selector": "text:Nome da Empresa", "highlight": true }, "hold": 4500 }
+      ] },
+    { "type": "evidence", "id": "org",
+      "command": "TOKEN=$(curl -s -X POST http://localhost:4111/api/v1/auth/login -H 'content-type: application/json' -d '{\"username\":\"admin\",\"password\":\"tmp12345\"}' | python3 -c \"import sys,json;print(json.load(sys.stdin)['token'])\"); curl -s -H \"authorization: Bearer $TOKEN\" http://localhost:4111/api/v1/org | python3 -c \"import sys,json;print(json.dumps(json.load(sys.stdin).get('branding',{}),indent=2,ensure_ascii=False))\"",
+      "source": "GET /api/v1/org — branding",
+      "kind": "json",
+      "caption": "A marca pesquisada ficou gravada na organização",
+      "expectedScreen": "a JSON panel of the org branding with the primaryColor line highlighted",
+      "highlight": { "match": "primaryColor", "note": "a cor primária pesquisada, persistida no registo da organização" },
+      "hold": 5500 },
+    { "type": "title", "id": "outro", "text": "Site → pesquisa → marca guardada", "duration": 2.2 }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "project": "ekoa",
+  "baseURL": "http://localhost:3000",
+  "startCommand": "node .claude/skills/run-ekoa-code/driver.mjs up",
+  "ports": { "app": 3000, "api": 4111 },
+  "authStatePath": ".walkthrough/auth.json",
+  "logFile": ".walkthrough/server.log"
+}

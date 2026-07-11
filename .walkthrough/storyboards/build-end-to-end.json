@@ -1,0 +1,61 @@
+{
+  "title": "Ekoa: construir uma app a partir de um pedido",
+  "project": "ekoa",
+  "folder": "stabilization-verification",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "Do pedido à app construída",
+      "subtitle": "ekoa · 2026-07-11", "duration": 2.8, "reflectFlag": true },
+    { "type": "browser", "id": "pedido",
+      "baseURL": "http://localhost:3000", "startPath": "/chat",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "composer", "caption": "Descrever a app pretendida",
+          "expectedScreen": "the chat landing with the empty composer",
+          "actions": [ { "type": "waitFor", "selector": "placeholder:Descreva o que precisa...", "timeout": 60000 } ],
+          "assert": { "selector": "placeholder:Descreva o que precisa...", "highlight": true }, "hold": 2800 },
+        { "id": "enviar", "caption": "O pedido segue — o agente analisa e começa a trabalhar",
+          "expectedScreen": "the sent build request bubble with the agent working (a running/building indicator)",
+          "actions": [
+            { "type": "fill", "selector": "textarea", "text": "Constrói um Simulador de Honorários: horas x tarifa, com total e IVA a 23%." },
+            { "type": "press", "key": "Enter" },
+            { "type": "waitFor", "selector": "[title=\"Cancelar build\"]", "timeout": 120000 }
+          ],
+          "assert": { "selector": "[title=\"Cancelar build\"]", "highlight": false }, "hold": 6500 }
+      ] },
+    { "type": "title", "id": "espera", "text": "≈ alguns minutos depois — construída e verificada", "duration": 2.2 },
+    { "type": "browser", "id": "app",
+      "baseURL": "http://localhost:4111", "startPath": "/apps/00645cd8-a9b0-4e7c-98af-aacfb9419eb4/",
+      "beats": [
+        { "id": "renderiza", "caption": "A app construída, servida ao vivo pela plataforma",
+          "expectedScreen": "the built 'Simulador de Honorários' app rendered, with two input fields and a total",
+          "actions": [ { "type": "waitFor", "selector": "text:Simulador de Honorários", "timeout": 60000 } ],
+          "assert": { "selector": "text:Simulador de Honorários", "highlight": true }, "hold": 4000 },
+        { "id": "calcula", "caption": "E funciona: calcula o total com IVA a 23%",
+          "expectedScreen": "the app with values entered and a computed total including 23% VAT",
+          "actions": [
+            { "type": "fill", "selector": "input >> nth=0", "text": "10" },
+            { "type": "fill", "selector": "input >> nth=1", "text": "150" }
+          ],
+          "assert": { "selector": "text:IVA (23%)", "highlight": true }, "hold": 5000 }
+      ] },
+    { "type": "browser", "id": "galeria",
+      "baseURL": "http://localhost:3000", "startPath": "/artifacts",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "screenshot", "caption": "Guardada na galeria, com miniatura gerada automaticamente",
+          "expectedScreen": "the artifacts page showing artifact cards with generated screenshot thumbnails",
+          "actions": [ { "type": "waitFor", "selector": "testid:artifacts-page", "timeout": 60000 } ],
+          "assert": { "selector": "testid:artifacts-page", "highlight": false }, "hold": 4000 }
+      ] },
+    { "type": "evidence", "id": "servido",
+      "command": "curl -s http://localhost:4111/apps/00645cd8-a9b0-4e7c-98af-aacfb9419eb4/ | python3 -c \"import sys,re; h=sys.stdin.read(); m=re.search(r'<title>(.*?)</title>', h, re.S); print('served bytes:', len(h)); print('title:', (m.group(1).strip() if m else '(none)')); print('has app root:', ('root' in h or 'app' in h.lower()))\"",
+      "source": "GET /apps/00645cd8.../ (served app)",
+      "kind": "output",
+      "caption": "A app construída é servida pela plataforma como HTML real",
+      "expectedScreen": "an output panel confirming the served app returns real HTML with an app root",
+      "highlight": { "match": "served bytes", "note": "a app gerada é servida ao vivo, não um placeholder" },
+      "hold": 4500 },
+    { "type": "title", "id": "outro", "text": "Pedido → construção → app real e servida", "duration": 2.4 }
+  ]
+}

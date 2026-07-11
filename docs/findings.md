@@ -22,6 +22,28 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   (optional-drop).
 - **F14** (harness-gap, minor). The served-app owner bypass accepts both `Authorization: Bearer` and
   `?token=`; the committed suite asserts only `?token=`. Untested accepted-auth surface.
+- **`ai-integration-lands-under-platform-tab`** (minor, UX). An AI-built integration saved via the
+  chat builder (e.g. open-library, e2e-proof-weather, openweathermap) renders under
+  `/integrations?tab=plataforma` ("Integrações da Plataforma"), while "Minhas Integrações"
+  (`?tab=minhas`) shows the empty state - so a user who just built an integration and looks under
+  "Minhas Integrações" does not find it (confusing). It is available to the org (works), just filed
+  under the wrong tab for its provenance. Observed live 2026-07-11. Likely the "mine" filter keys on
+  a config/credential-instance concept rather than `userCreated` runtime definitions. Decide the
+  intended split and route userCreated runtime defs to the "mine" tab (or relabel the tabs).
+- **`integration-handoff-spurious-build`** (medium, UX). Confirming a chat integration offer (the
+  two-turn `[[EKOA_INTEGRATION_BUILD]]` handshake) reliably ALSO spawns a real app-build job that
+  runs the coding agent with an effectively-empty task and terminates `BUILD_UNFULFILLED` ("A
+  construção não chegou à aplicação servida"). Observed live 2026-07-11 for both rest-countries and
+  open-library: the integration panel opens and generates+saves correctly (proven — the integration
+  lands on `/integrations` with its actions), but the chat column shows a spurious failed build
+  alongside it. The build job carries a jobId (server-created) yet no `Vou ligar essa integração
+  primeiro.` message precedes it, so it is NOT the build-path in-build classifier; and the client
+  `isBuildSession` gate is false on a fresh chat session, so the client message router did not kick
+  it — the spurious `build_intent` originates in the server marker orchestration when the
+  confirmation turn is classified. Not blocking (the integration still saves) but pollutes the
+  handoff. Close by tracing the turn-2 emission: the chat run must emit ONLY the integration signal
+  (or, if it emits both, integration must win over build in `agents/chat.ts` — currently build is
+  checked first). Add a deterministic test asserting one signal per confirmation turn.
 
 ### Gateway / egress
 
@@ -64,6 +86,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   trabalho exact CT figures. Each is closed by building the missing surface or by an explicit
   retire decision - never by editing the ported spec.
 
+- **`branding-tab-stale-after-research`** (minor, UI freshness). Right after a brand research
+  completes, the Marca tab can render the PREVIOUS palette (local component state seeded at page
+  load) while `org.branding` already holds the new one - a fresh reload shows the correct values.
+  Observed live 2026-07-11 during the walkthrough recording (post-research tab showed `#1A2D5A`,
+  persisted+reload truth was `#1C2B4A`). Likely the local-state sync effect on
+  `settings/branding/page.tsx` not re-seeding after `fetchCompany()`. Close with a deterministic
+  test that researches (fake transport), switches to the Marca tab and asserts the fresh hex.
+
 ### Operator-blocked / external
 
 - **`prod-corpus-import`** (external). The real production knowledge corpus import is pending, blocked
@@ -73,7 +103,210 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-11 operator round 2 (build surface + verify + logo)
+
+- **`verify-runner-portscan-hang`** (operator-reported, 2026-07-11) - a simple flyer build sat in
+  `verifying` with NO output for 13+ minutes, then surfaced a half-redacted raw SDK error ("Agente
+  EKOA Code returned an error result: Reached maximum number of turns (15)"). Root causes, from the
+  verifier's own transcript: (1) `build.ts` passed the artifact-relative `appUrl` (`/apps/<id>/`,
+  no origin) verbatim into the verify prompt, so the agent PORT-SCANNED the host (`:80 :3000 :8080
+  :5173 :7080-7090`, `find /`, old-ekoa nginx configs) hunting for the app it could never find;
+  (2) the build wall-clock/inactivity timers are cleared BEFORE verify, so nothing bounded it;
+  (3) the raw error string reached the user chat. Fixed in `apps/verify-runner.ts`: the prompt gets
+  an ABSOLUTE loopback URL (`resolveVerifyUrl` - the API serves `/apps/*` itself), a hard
+  `AbortSignal.timeout(verifyWallClockMs)` (5 min default, env-tunable) as the REAL bound, an
+  explicit no-scavenger-hunt rule (URL dead → FAIL immediately, never search the host), a
+  proportionate-effort rule (static flyer → quick pass), live narration forwarded through the new
+  job thinking channel (`onProgress` seam), and PT-generic user-facing notes (raw errors go to the
+  server log only). Turn ceilings raised per operator directive ("must never stop users mid-task"):
+  verify 15→60, build 100→500, chat 30→60 - backstops, not bounds. A verify note no longer REPLACES
+  the agent's completion summary (it's appended). Tests: `api/tests/apps/verify-runner.test.ts`.
+- **`build-chat-raw-internals`** (operator-reported, 2026-07-11) - the build transcript showed raw
+  tool calls (Bash command lines, Read/Write with absolute sandbox paths, tool results incl. "File
+  does not exist... your current working directory is /Users/..."), "Routing: EXPERT - first build",
+  commentary bubbles split MID-WORD ("...construir s" / "obre a estrutura..."), and the final
+  summary named `window.__ekoa.exportPdf`. Root causes: `build.ts` flattened the chokepoint's
+  thinking/text channels into `text_chunk` (chat.ts had the thinking channel; build never did);
+  `useJobStream` flushed the live buffer into a permanent message on EVERY tool_event (the mid-word
+  chops) and rendered raw tool traffic + the routing decision into the user-visible feed. Fixed:
+  `JobEvent` gained `thinking_chunk`; build routes commentary through MarkerProcessor +
+  StreamingIdentityRedactor into the collapsible thinking UI (same as chat); the activity feed shows
+  friendly white-labelled one-liners with project-relative paths (never commands/results/routing);
+  `BUILD_SYSTEM_PROMPT` forbids internal API/machinery names in the final user-facing message.
+- **`build-no-live-preview-no-files`** (operator-reported, 2026-07-11) - preview stayed empty during
+  (and after) the build and the files area showed nothing, even though `prepareFirstBuild` had
+  ALREADY built + registered + served the scaffold ("register it so the preview is live before the
+  agent runs" - the last mile was never wired: nothing emitted `preview_reload`, and the client
+  learned the artifactId only at `complete`). Fixed: new `JobEvent` `artifact`
+  `{artifactId, appUrl, slug}` emitted right after prep/resolve → the preview iframe + REAL file
+  tree (GET `/artifacts/:id/files`, the scaffold/template files) show from second zero; the esbuild
+  watcher's `onRebuild` now fires `sink.previewReload()` so the iframe follows the agent's writes
+  live (follow-up builds get a watcher too - they previously ran without one); the Files tab is fed
+  from the server list (source of truth) with live +/M/D badges, and file paths are project-relative
+  - which also fixes the Monaco editor dialog (it exists and works; it was sending
+  `sandboxes/...`-prefixed paths that the path-confined API rejected). Latent bug fixed on the way:
+  follow-up completion blanked the artifact's slug/appUrl (`resolveFollowUp` now returns them).
+- **`brand-logo-wrong-image`** (operator-reported, 2026-07-11) - "not the logo at all": the logo
+  picker chose a 380KB touch-icon (`/brand-assets/01d6df7c73d6.png`) because selection was
+  source-name heuristics only (favicons/og-image) with no eyes on the rendered page - the OLD ekoa
+  worked better because its research agent DROVE A BROWSER and picked the header logo by sight.
+  Restored that ability tool-lessly (§5.6.4 intact): (1) `rendered-candidates.ts` now harvests logo
+  candidates from the RENDERED DOM (header/nav imgs, inline `<svg>` logos - stored as sanitized
+  local svg assets - and logo-classed background images), scored by placement (header, top-left,
+  home-link, logo attrs, aspect ratio); (2) new top trust tier `rendered-header` beats
+  design-system/favicon sources, JPEG photos demoted within tiers; (3) ONE FAST vision one-shot
+  (`logo-vision.ts`) compares the downloaded candidates against the header-strip screenshot and can
+  override the heuristic pick ("qual é o logótipo visível no cabeçalho?"). Tests extended in
+  `api/tests/services/branding/brand-assets.test.ts`.
+- **`brand-stale-until-refresh`** (operator-reported, 2026-07-11) - the dashboard kept the old
+  brand until a manual page reload. The Marca page refetches on its own job stream, but the header
+  logo/theme only read the company store on first load. Fixed with a `branding_updated`
+  notification (NotificationEvent) emitted when research applies branding; the header listens on
+  the global notifications stream (same pattern as `usage_updated`) and refetches the company
+  config - live brand refresh, no reload.
+- **`verify-blocked-by-shareability-gate`** (found during the live re-verify of the fix above) -
+  with the URL fixed, the verifier reached the app in 17 SECONDS but got the §7.7 "Link já não
+  disponível" page: a draft, non-shareable artifact's document is owner-gated, and the verify
+  agent carries no auth (and must NEVER carry a user JWT in an agent transcript - it would
+  authenticate on every API route). Fixed with a PURPOSE-SCOPED preview token
+  (`services/preview-token.ts`: HMAC capability `pv1.<artifactId>.<exp>.<mac>`, not a JWT,
+  grants viewing ONE artifact's served document for the verify window): verify-runner appends it
+  to the URL; serving.ts accepts it in the owner-bypass ahead of the user-JWT path. Verdict notes
+  are now requested in PT (they surface to the end user). Tests: preview-token expiry/tamper +
+  resolveVerifyUrl token cases in `api/tests/apps/verify-runner.test.ts`.
+- **`app-pdf-endpoint-never-mounted`** (CAUGHT BY THE NOW-WORKING VERIFIER, live 2026-07-11:
+  "o botão 'Descarregar PDF' não funciona — o servidor retorna um erro 404") - the injected
+  `window.__ekoa.exportPdf` client was carried in the port but its endpoint `POST /api/app-pdf`
+  (and the `/artifact-pdfs` static mount) never were: EVERY in-app document export 404'd since
+  rc-1. Ported from old cortex into `apps/pdf.ts`: `renderAppDocumentPdf` (page JS disabled,
+  subresource allowlist blocking private ranges/metadata, injected `<base>`, embedded print
+  reset, @page-aware margins) + `appPdfRouter` (X-Ekoa-App-Id scoping, html required, 4MB cap)
+  + both mounts in server.ts. Contract test: `api/tests/contract/app-pdf.test.ts`. Second-order
+  fix in the same class: agent-written `@import '/api/design-tokens.css'` failed the whole
+  esbuild bundle ("could not resolve") - server-absolute paths are now treated as runtime URLs
+  (CSS externals / JS stubs) in builder.ts's resolver, and the coding-agent content now says the
+  tokens are auto-linked in index.html and must never be imported.
+- **`brand-consent-overlay-polluted-vision`** (found during the live re-verify) - plmj.com's
+  Cookiebot overlay covered the header strip, so the logo-vision ground truth showed a cookie
+  banner and the rendered harvest scored a team-PORTRAIT carousel into the top tier (position +
+  aspect alone). Fixed: `consent-chrome.ts` (shared vendor-token list + in-page removal) runs
+  before EVERY rendered pass (colours, logo harvest, header shot, visual-vibe screenshots);
+  harvest candidates now require a STRUCTURAL logo signal (logo attrs / header-nav / home-link)
+  to qualify, and photo JPEGs are score-penalized. Re-verified live: the vision gate then
+  correctly overrode dembrandt's white-on-white candidate to the REAL PLMJ wordmark, and the
+  header logo swapped in live (`navigations: 1`, no reload).
+- **`brand-assets-url-keyed-cache-staleness`** - stored assets were keyed by md5(source URL), so
+  a re-research whose logo changed at the same URL kept the same `/brand-assets/<hash>` path and
+  every browser served its stale cached copy. Now keyed by md5(CONTENT).
+- **`dev-harness-30s-health-window`** - `scripts/dev-api.mjs` killed healthy API boots at 30s while
+  a cold boot registering ~200 featured apps takes ~90s. Now 120s default (`DEV_API_HEALTH_TIMEOUT_MS`
+  override); the run-skill driver's API window raised to 180s.
+
 ## Recently fixed - 2026-07-11 stabilization run
+
+- **`brand-research-site-blind`** (operator-reported, 2026-07-11) - brand research "saved nothing
+  from the site": the agent was TOOL-LESS *and* model-knowledge-only, so it never touched the
+  target website, never saved a logo, and never produced a design system - it emitted a plausible
+  palette from memory and the job's `summary`/`confidence` were the only real output. Fixed by
+  porting the REAL cortex pipeline as deterministic SERVER-SIDE services (`api/src/services/branding/`):
+  `fetchSiteContext` (HTML + linked-CSS scrape: title/meta/generator, CSS colour + font candidates),
+  `fetchRenderedCandidates` (headless-Chromium area-weighted painted colours + fonts),
+  `fetchDesignSystem` (the `dembrandt` 0.23 CLI: confidence-scored palette, CSS variables, typography,
+  spacing, radii, shadows, button styles, frameworks), `fetchVisualVibe` (hero/mid/footer screenshots
+  → vision one-shot → mood/shape/density/texture/hero), plus website-builder chrome detection/scrub so
+  a Webnode/Wix promo stripe never masquerades as the brand. The agent STAYS tool-less (§5.6.4
+  anti-injection): all site access is server code, the model receives a server-built snapshot and
+  returns constrained JSON grounded "usa APENAS a informação do snapshot". The orchestrator
+  (`agents/brand-research.ts`) now: fetch site-context → (parallel) rendered + dembrandt + vibe →
+  grounded `runOneShot` → resolve + STORE a real logo file under `/brand-assets/<file>` (SSRF-guarded
+  download, content-type + size cap) → merge colours/fonts/tone/instructions + `designSystem` +
+  `visualVibe` + `logo` onto `org.branding`. Site unreachable → honest degradation to the
+  knowledge-only prompt, noted on the job (`siteReachable: false`). All server fetches of the
+  user-supplied URL go through the SSRF guard (new `guardedFetchFollow` re-validates each redirect
+  hop); the dembrandt URL is guard-validated BEFORE the subprocess spawns. `shared/OrgBranding`
+  gained optional typed `designSystem` (StoredDesignSystem) + `visualVibe` fields (the dashboard
+  Design System tab already reads them). Covered by 6 unit suites under
+  `api/tests/services/branding/` + the extended `api/tests/contract/branding.test.ts` (reachable-site
+  run merges colours + designSystem + visualVibe + a stored logo; unreachable degrades to knowledge).
+  Decision logged in `docs/decisions.md`. LIVE-VERIFIED 2026-07-11 against plmj.com: real logo stored
+  and served at `/brand-assets/...`, real brand colours (`#110088` navy + `#a90707` red), real fonts
+  (Domaine Display + GT America), a populated Design System tab (palette + typography + visual vibe),
+  visible in the Marca preview. Three follow-up fixes made during that live verification:
+  (a) **vibe screenshots exceeded the 32MB provider request cap** ("Request too large") - three
+  viewport PNGs of a photo-heavy site are multi-MB base64; switched the vibe captures to JPEG q60
+  (`api/src/services/branding/visual-vibe.ts`), which keeps each shot in the low-hundreds-of-KB.
+  (b) **cookie-consent vendor chrome leaked into the palette** - dembrandt colours whose sources were
+  all `cybotcookiebotdialog...`/OneTrust/etc. were surviving; added a builder-independent
+  consent-chrome source filter in `filterDesignSystemChrome`, AND made `scrubBuilderChrome` always run
+  the design-system filter (it previously early-returned when NO site-builder was detected, so custom
+  sites like plmj.com were never scrubbed). (c) A `manifest:theme_color` white legitimately survives
+  (mixed owner source) - by design. Covered by new cases in the design-system + snapshot suites.
+- **`gateway-empty-text-block-cache-control`** (vision-discovered, walkthrough 2026-07-11) - the
+  Agent SDK intermittently appends an EMPTY text block that still carries a `cache_control`
+  breakpoint on multi-turn chat runs (reproduced deterministically on the integration-build
+  handoff two-turn handshake). The OAuth beta endpoint 400s
+  `messages.N.content.M.text: cache_control cannot be set for empty text blocks`, killing the whole
+  turn - so the integration-builder generation failed every time while plain builds and single-turn
+  chat were unaffected. Fixed at the egress chokepoint (`proxyGatewayMessages`, the last place we
+  control before the provider): `stripEmptyTextBlocks` scrubs empty text blocks out of the
+  forwarded `messages`/`system`, guarded so a message is never left with an empty `content: []`.
+  Covered by `api/tests/llm/gateway-payload-allowlist.test.ts` (3 cases: scrub-alongside-real,
+  never-empty-the-array, plain-string-passthrough). Live-verified: the same handoff that 400'd now
+  reaches `package-ready` with a Save button. Decision logged in `docs/decisions.md`.
+- **`run-activity-bar-word-wrap`** (vision-discovered, walkthrough 2026-07-11) - the automation
+  rehearsal activity bar rendered the fixer commentary one-word-per-line: `Headline`/`Subline`/
+  `ResolutionLine` sat as siblings in the flex-row `BarWrapper`, so a long failure message squeezed
+  the headline to content-width. Fixed by wrapping the text block in a `min-w-0 flex-1` column in
+  the `fixing-step` and `running-step` branches (`web/components/automations/run-activity-bar.tsx`).
+  Evidence: walkthrough `stabilization-verification/2026-07-11_11-26-17` (pre-fix state on camera).
+- **`chat-turn-no-progress-indicator`** (vision-discovered, walkthrough 2026-07-11) - plain chat
+  turns showed NO indicator between send and the first streamed chunk (the whole knowledge-search
+  phase was a blank screen): the progress indicator required `sessionJob`, which only build
+  sessions have. Fixed: `isExecuting && (sessionJob || !isBuildSession)`
+  (`web/components/builder/chat-panel.tsx`), so chat turns show "A pensar..." + elapsed time
+  immediately. Evidence: walkthrough `2026-07-11_11-44-28` (blank) vs `2026-07-11_11-49-20` (fixed).
+- **`automation-step-events-thin`** (operator-reported, 2026-07-11) - a regression vs old cortex: the
+  automation run's `step` SSE event dropped everything but `{runId, stepIndex, status}`, so per-step
+  screenshots captured + persisted server-side (`writeStepScreenshot`) never reached the run viewer,
+  and there was NO `express.static('/automation-screenshots', ...)` mount - even the already-emitted
+  `pause_for_user` screenshot URL 404'd. Fixed by (a) extending the shared `AutomationRunEvent.step`
+  member + `RunRecord` with the optional enrichment (`stepId/tier/error/errorDetails/screenshotUrl/
+  output/durationMs`; `errorDetails` is the executor's already-redacted+bounded integration/api
+  request-response that lights up the live IntegrationErrorPanel; per-step `RunStepRecord` with a
+  served `screenshotUrl`), (b) a pure, unit-tested
+  mapper `automationStepEventPayload` (api/src/automation/run-events.ts) the composition-root emitter
+  now forwards, (c) mounting `/automation-screenshots` on `automationRunsRoot()` mirroring the
+  `/artifact-screenshots` precedent, and (d) serializing steps (with `screenshotUrl`) in `toWireRun`
+  so `GET /runs/:id` + the Histórico drill-in render thumbnails without knowing the disk layout. The
+  disk-path -> served-URL map lives in ONE helper (`screenshotUrlFromPath`). Covered by
+  `api/tests/automation/run-events.test.ts`, `api/tests/contract/automation-screenshots.test.ts`, and
+  shared `contract.test.ts` (thin+enriched parse). Decision logged in `docs/decisions.md`. Remaining
+  for live verification: a real automation run driven end-to-end (operator session).
+- **`automation-vision-empty-screenshot`** (operator-reported, 2026-07-11) - a browser/verify step
+  could hand the vision tier an EMPTY screenshot (a `page.screenshot()` that failed on the local
+  session, or a daemon observation envelope missing `screenshotB64`); the model then answered
+  `confidence:'low'` and the engine refused ("No screenshot was provided"), burning the fixer budget
+  blind and crippling self-recovery. Fixed with a guard (`screenshotForVision` in engine.ts): on an
+  empty capture, force ONE fresh `observe()` and re-read; if still empty, fail the step RECOVERABLE
+  with a user-grade PT message ("captura de ecrã indisponível - o passo não pode ser resolvido
+  visualmente") so the fixer/pause machinery handles it - the model is never asked to work blind.
+  Belt-and-braces: `LocalBrowserSession.capture()` now retries the screenshot once after a settle and
+  only keeps a NON-EMPTY capture; `resolvePlaywrightAction`/`verifyOutcome` throw on an empty image
+  (documents the invariant). Covered by two `api/tests/automation/engine.test.ts` cases (browser +
+  verify: no blind vision call, recoverable PT failure). LIVE-VERIFIED 2026-07-11 (DRE-search
+  automation): per-step screenshots stream into the run viewer AND the Histórico drill-in; step
+  screenshots serve 200 at `/automation-screenshots/<automationId>/<runId>/step-N.png`; the run
+  completed with no blind-refusal. One more display fix made during that run: the verify-failure
+  prefix was still English (`outcome not met:`) - now PT (`resultado não atingido:`) in
+  `engine.ts` (the one test asserting the prefix updated).
+- **`automation-run-surfaces-word-wrap`** (operator-reported, 2026-07-11) - extends
+  `run-activity-bar-word-wrap` to the terminal states + the run viewer: the completed/failed activity
+  bar and the run-viewer run-level + per-step error surfaces rendered long unformatted text that
+  ballooned the layout. Fixed with `min-w-0 break-words` + `line-clamp` (2-3 lines, full text on
+  `title`) on the completed/failed `Headline` detail (`run-activity-bar.tsx`) and the error blocks
+  (`run-viewer.tsx`). Also: the vision resolver/verifier/fixer/classifier prompts now instruct the
+  model to write human-facing free-text (reasoning, userInstructions) in pt-PT while keeping all JSON
+  keys/enums in English.
 
 - **`apps-embed-frame-headers`** - the `/apps/*` embed surface now answers CSP
   `frame-ancestors 'self'` + the configured dashboard origins (`EKOA_DASHBOARD_ORIGINS` csv ->

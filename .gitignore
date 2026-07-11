@@ -29,3 +29,4 @@ docs/autothing/runs/**/owner.lock.json
 # <<< autothing <<<
 RUN_LOG.knowledge-import.txt
 api/tests/evidence/
+.walkthrough/auth.json

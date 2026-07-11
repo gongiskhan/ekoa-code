@@ -1,0 +1,59 @@
+{
+  "title": "Ekoa: automatização a partir de um objetivo",
+  "project": "ekoa",
+  "folder": "stabilization-verification",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "Automatizações: de objetivo a plano",
+      "subtitle": "ekoa · 2026-07-11", "duration": 2.6, "reflectFlag": true },
+    { "type": "browser", "id": "kickoff",
+      "baseURL": "http://localhost:3000", "startPath": "/automations",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "list", "caption": "As automatizações da organização",
+          "expectedScreen": "the automations list page with a 'Nova automatização' button in the header",
+          "actions": [ { "type": "waitFor", "selector": "testid:automations-page", "timeout": 60000 } ],
+          "assert": { "selector": "button:Nova automatização", "highlight": true }, "hold": 3200 },
+        { "id": "goal", "caption": "Descrever o objetivo em linguagem natural",
+          "expectedScreen": "the new-automation form with the goal textarea filled and a name typed",
+          "actions": [
+            { "type": "click", "selector": "button:Nova automatização" },
+            { "type": "waitFor", "selector": "testid:automations-new-page", "timeout": 60000 },
+            { "type": "fill", "selector": "textarea", "text": "Todas as manhãs, abrir o site do Diário da República, procurar novos diplomas sobre arrendamento urbano e guardar um resumo das novidades." },
+            { "type": "fill", "selector": "placeholder:Deixe em branco para o planeador escolher um", "text": "Vigilância Diário da República" }
+          ],
+          "assert": { "selector": "textarea", "highlight": true }, "hold": 3600 },
+        { "id": "draft", "caption": "O planeador começa a esboçar os passos",
+          "expectedScreen": "the drafting progress card saying 'A esboçar a sua automatização...'",
+          "actions": [ { "type": "click", "selector": "button:Esboçar passos" } ],
+          "assert": { "selector": "text:A esboçar a sua automatização", "timeout": 30000 }, "hold": 2600 }
+      ] },
+    { "type": "browser", "id": "planning", "continue": true, "speed": 8, "runTimeoutMs": 420000,
+      "beats": [
+        { "id": "wait", "caption": "O modelo a planear (acelerado)",
+          "expectedScreen": "the drafting progress card with rotating hints, or the editor already appearing",
+          "holdUntil": { "selector": "testid:automation-editor-page", "timeout": 360000 }, "holdAfter": 1500 }
+      ] },
+    { "type": "browser", "id": "editor", "continue": true,
+      "beats": [
+        { "id": "plano", "caption": "Plano criado e guardado: passos editáveis",
+          "expectedScreen": "the automation editor titled 'Vigilância Diário da República' with numbered step cards",
+          "actions": [ { "type": "waitFor", "selector": "input[aria-label=\"Nome da automatização\"]", "timeout": 60000 } ],
+          "assert": { "selector": "input[aria-label=\"Nome da automatização\"]", "highlight": true }, "hold": 4200 },
+        { "id": "ensaio", "caption": "Ensaio automático: o plano corrige-se num navegador real",
+          "expectedScreen": "the editor with a live rehearsal activity bar (run in progress, Cancelar button visible)",
+          "actions": [ { "type": "waitFor", "selector": "button.ml-auto.border-red-300", "timeout": 180000 } ],
+          "assert": { "selector": "button.ml-auto.border-red-300", "highlight": true }, "hold": 8000 }
+      ] },
+    { "type": "browser", "id": "lista",
+      "baseURL": "http://localhost:3000", "startPath": "/automations",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "persisted", "caption": "A automatização fica guardada na lista",
+          "expectedScreen": "the automations list showing the new 'Vigilância Diário da República' row",
+          "actions": [ { "type": "waitFor", "selector": "testid:automations-page", "timeout": 60000 } ],
+          "assert": { "selector": "text:Vigilância Diário da República", "timeout": 30000, "highlight": true }, "hold": 4000 }
+      ] },
+    { "type": "title", "id": "outro", "text": "Objetivo → plano → ensaio → guardado", "duration": 2 }
+  ]
+}

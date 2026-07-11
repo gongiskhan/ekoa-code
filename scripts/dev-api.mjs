@@ -28,7 +28,11 @@ const PORT = process.env.PORT ?? '4111';
 const BASE = `http://127.0.0.1:${PORT}`;
 const useBuilt = process.argv.includes('--built');
 
-async function waitForHealth(base, timeoutMs = 30_000) {
+// A cold boot registers every featured app (~200) before /health answers - observed ~90s on a
+// laptop (2026-07-11). 30s killed healthy boots; default generously and allow an env override.
+const HEALTH_TIMEOUT_MS = Number(process.env.DEV_API_HEALTH_TIMEOUT_MS) || 120_000;
+
+async function waitForHealth(base, timeoutMs = HEALTH_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -79,6 +83,6 @@ child.on('exit', (code) => void shutdown(code ?? 1));
 if (await waitForHealth(BASE)) {
   process.stdout.write(`DEV-API READY ${BASE}\n`);
 } else {
-  process.stderr.write(`[dev-api] server did not answer /health at ${BASE} within 30s\n`);
+  process.stderr.write(`[dev-api] server did not answer /health at ${BASE} within ${Math.round(HEALTH_TIMEOUT_MS / 1000)}s\n`);
   await shutdown(1);
 }

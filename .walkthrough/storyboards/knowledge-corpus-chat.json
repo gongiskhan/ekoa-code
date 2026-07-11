@@ -1,0 +1,48 @@
+{
+  "title": "Ekoa: pergunta jurídica respondida com o corpus de 262 mil documentos",
+  "project": "ekoa",
+  "folder": "stabilization-verification",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "Conhecimento jurídico no chat",
+      "subtitle": "ekoa · corpus de 262 672 documentos · 2026-07-11", "duration": 2.8, "reflectFlag": true },
+    { "type": "browser", "id": "pergunta",
+      "baseURL": "http://localhost:3000", "startPath": "/chat",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        { "id": "composer", "caption": "Uma pergunta jurídica real, em linguagem natural",
+          "expectedScreen": "the chat landing page with an empty large composer ('Descreva o que precisa...')",
+          "actions": [ { "type": "waitFor", "selector": "placeholder:Descreva o que precisa...", "timeout": 60000 } ],
+          "assert": { "selector": "placeholder:Descreva o que precisa...", "highlight": true }, "hold": 3000 },
+        { "id": "enviar", "caption": "A pergunta parte — o agente pesquisa o corpus jurídico",
+          "expectedScreen": "the conversation view with the sent question bubble and a thinking/answering indicator",
+          "actions": [
+            { "type": "fill", "selector": "textarea", "text": "Qual o entendimento dos tribunais superiores sobre a resolução do contrato de arrendamento por falta de pagamento de rendas? Cita jurisprudência concreta." },
+            { "type": "press", "key": "Enter" },
+            { "type": "waitFor", "selector": "[title=\"Cancelar build\"]", "timeout": 60000 }
+          ],
+          "assert": { "selector": "text:falta de pagamento de rendas", "highlight": true }, "hold": 3200 }
+      ] },
+    { "type": "browser", "id": "resposta", "continue": true, "speed": 8, "runTimeoutMs": 420000,
+      "beats": [
+        { "id": "espera", "caption": "A pesquisar jurisprudência e a redigir (acelerado)",
+          "expectedScreen": "the chat streaming an answer (thinking indicator or growing markdown answer)",
+          "holdUntil": { "selector": "[title=\"Enviar mensagem\"]", "timeout": 360000 }, "holdAfter": 1500 }
+      ] },
+    { "type": "browser", "id": "leitura", "continue": true,
+      "beats": [
+        { "id": "citacoes", "caption": "Resposta fundamentada, com jurisprudência citada do corpus",
+          "expectedScreen": "a finished assistant answer in Portuguese citing concrete case law (acórdãos, process numbers or court references)",
+          "assert": { "selector": ".chat-markdown", "highlight": true }, "hold": 7000 }
+      ] },
+    { "type": "evidence", "id": "corpus",
+      "command": "sqlite3 /Users/ggomes/.ekoa/data/knowledge/index/fts.db \"SELECT orgId, COUNT(*) AS docs FROM knowledge_doc_map GROUP BY orgId ORDER BY docs DESC LIMIT 3;\"",
+      "source": "índice de conhecimento — fts.db",
+      "kind": "output",
+      "caption": "O corpus partilhado por trás da resposta: 262 672 documentos indexados",
+      "expectedScreen": "an output panel listing orgId doc counts with the _shared row highlighted",
+      "highlight": { "match": "_shared", "note": "o corpus jurídico partilhado (jurisprudência, legislação, direito laboral)" },
+      "hold": 5000 },
+    { "type": "title", "id": "outro", "text": "Pergunta → pesquisa no corpus → resposta citada", "duration": 2.2 }
+  ]
+}

@@ -180,7 +180,8 @@ function bootWeb() {
 // ---- Bring the whole stack up ---------------------------------------------
 async function bootStack() {
   bootApi();
-  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 60_000 }))) {
+  // Cold boots register ~200 featured apps before /health answers (~90s observed 2026-07-11).
+  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 180_000 }))) {
     throw new Error(`API did not answer /health on :${API_PORT}`);
   }
   log('API healthy');
