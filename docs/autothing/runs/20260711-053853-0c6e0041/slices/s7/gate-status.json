@@ -1,0 +1,21 @@
+{
+  "slice": "s7",
+  "title": "Diagnostics honesty (D6, closes 502-masks-401) + D7 defaults + s0b metadata-allowlist fix-forward",
+  "updatedAt": "2026-07-11T07:45:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "retries": { "limit": 5, "used": 1 },
+  "gates": {
+    "tests": { "cmd": "vitest run tests/llm/ (139 tests) + full api suite via ci:lane", "exit": 0, "at": "2026-07-11T07:40:00Z", "summary": "8 new (terminal-vs-transient classing 503/429/502, lastProviderError surface+reset, status-class mapping) + allowlist strengthened (metadata = user_id ONLY) + router test refreshed to D7 default; fake-daemon suites untouched green" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T07:44:00Z", "summary": "full lane green" },
+    "review": { "verdict": "clean", "by": "claude-inline", "notes": "CredentialError extends Error (no consumer ripple; no message-matching callers); session_id excluded from drop-warning (chokepoint-own channel, log-spam honest); white-label held (generic wire messages, truth on /health + logs)" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "blocker": "401 invalid_api_key (probed again this slice) - llm/-touching review MANDATORY and OWED" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex" },
+    "designAudit": { "verdict": "n/a", "by": [], "notes": "API-only slice" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T07:45:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s7/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "codex exec -> 401 invalid_api_key", "remediation": "codex login", "impact": "the MANDATORY llm/-touching adversarial review is OWED; slice otherwise green" }
+  ]
+}

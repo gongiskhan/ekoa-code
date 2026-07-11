@@ -79,7 +79,7 @@ reconciles to the token with no orphan rows (J9); the webhook admission plane is
 
 | Item | Status | Notes |
 |------|--------|-------|
-| 502-masks-401: terminal credential rejection reported as retryable 502 (gateway.ts catch-all) | **open (deferred, batch-2)** | llm/ chokepoint slice; /health reports truth; RUN_LOG 2026-07-10 08:40 |
+| 502-masks-401: terminal credential rejection reported as retryable 502 (gateway.ts catch-all) | **CLOSED (consumer-run s7, 2026-07-11)** | typed CredentialError -> 503 credential_error (non-retryable), rate-cap -> 429, transient stays 502; /health claudeAuth.lastProviderError carries class+timestamp (no bodies/secrets); provider rejection reasons logged (bridge/server.ts); metadata allowlist (user_id only) kills the sibling mask |
 | F2 gateway `apikey` principal skips checkAllowance, bills platform admin (exfil surface from build subprocess) | **open (deferred, batch-2)** | RUN_LOG batch-1 final-phase security observation |
 | `/usage` dashboard crash (undefined `.toLocaleString()`; billing endpoints 200) | **open (deferred)** | known bug the operator will hit; fix owed post-batch |
 | Login landing double-creates sessions (React StrictMode dev double-mount) | **open (deferred, dev-only)** | |

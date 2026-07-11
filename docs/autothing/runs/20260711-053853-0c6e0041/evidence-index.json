@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code",
   "runId": "20260711-053853-0c6e0041",
-  "updatedAt": "2026-07-11T07:45:00Z",
+  "updatedAt": "2026-07-11T07:46:00Z",
   "slices": [
     {
       "slice": "s0a",
@@ -87,6 +87,17 @@
       "flagged": true,
       "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s0b/gate-status.json",
       "blockerSummary": "codex 401 invalid_api_key (external); same-model retro reviews done as best-effort; cross-model reviews remain OWED"
+    },
+    {
+      "slice": "s7",
+      "title": "Diagnostics honesty + D7 (closes 502-masks-401)",
+      "kind": "api",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s7/evidence.cast",
+      "verifiedAt": "2026-07-11T07:45:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s7/gate-status.json",
+      "blockerSummary": "mandatory llm/ adversarial review owed (codex 401)"
     }
   ],
   "globalGate": {

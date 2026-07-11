@@ -228,6 +228,13 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // Bind the credential to THIS socket's pairing (§18.4.4): the frame's credential must
         // resolve to the pairing whose live socket it arrived on.
         const outcome = await provider.handle(frame, pairingId);
+        // Diagnostics honesty (run s7, D6): the rejection reason existed on ProviderOutcome
+        // but was DROPPED — a rejected compose looked identical to a healthy one in the logs
+        // (the 502-masks-401 family). Operators get the reason server-side; the daemon still
+        // receives only the typed error frame (no new wire surface).
+        if (!outcome.ok) {
+          console.warn(`[bridge][provider] request rejected: reason=${outcome.reason ?? 'unknown'} pairing=${pairingId}`);
+        }
         sendToPairing(pairingId, outcome.frame);
         break;
       }

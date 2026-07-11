@@ -54,12 +54,51 @@ export interface DecryptedCredential {
   expiresAt?: number;
 }
 
+/** Terminal provider-error classes surfaced on /health (run s7, D6; FINDINGS 502-masks-401).
+ *  A CLASS + timestamp only — never bodies, never secrets (ch09 invariant 2). */
+export type ProviderErrorClass = 'auth' | 'billing' | 'invalid_request' | 'rate_limit' | 'transient';
+
+export interface LastProviderError {
+  class: ProviderErrorClass;
+  at: string;
+}
+
 /** The `claudeAuth` health field shape (ch03 §3.8.23; the external-watchdog contract). */
 export interface ClaudeAuthStatus {
   ok: boolean;
   configured: boolean;
   mode?: CredentialMode;
   lastRefreshError?: string;
+  /** The most recent classed provider error (run s7, D6): operators get truth on /health
+   *  while user-facing text stays white-labelled. Class + timestamp only. */
+  lastProviderError?: LastProviderError;
+}
+
+/** Typed credential failure (run s7): getSecret/forceRefresh throw THIS so the gateway can
+ *  class a terminal credential problem distinctly from a transient transport failure —
+ *  the 502-masks-401 fix. The message never carries secret material. */
+export class CredentialError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CredentialError';
+  }
+}
+
+let lastProviderError: LastProviderError | null = null;
+
+/** Record the CLASS of a provider/credential failure for /health (no bodies, no secrets). */
+export function noteProviderError(cls: ProviderErrorClass, deps?: { now?: () => number }): void {
+  lastProviderError = { class: cls, at: new Date(deps?.now?.() ?? Date.now()).toISOString() };
+}
+
+/** Map a provider HTTP status to its class; undefined for non-terminal statuses. */
+export function providerErrorClassOf(status: number): ProviderErrorClass | undefined {
+  if (status === 401 || status === 403) return 'auth';
+  if (status === 402) return 'billing';
+  if (status === 400 || status === 404 || status === 413 || status === 422) return 'invalid_request';
+  if (status === 429) return 'rate_limit';
+  if (status >= 500) return 'transient';
+  return undefined;
 }
 
 /**
@@ -116,6 +155,7 @@ export function __resetCredentialsForTests(): void {
   cached = null;
   loaded = false;
   lastRefreshError = null;
+  lastProviderError = null;
   alertLatched = false;
   refreshFn = defaultRefresh;
   nowFn = () => Date.now();
@@ -238,14 +278,18 @@ async function doRefresh(cred: DecryptedCredential): Promise<string> {
  */
 export async function getSecret(): Promise<string> {
   await ensureLoaded();
-  if (!cached) throw new Error('No model credential configured for this environment (ch06 §6.2).');
+  if (!cached) throw new CredentialError('No model credential configured for this environment (ch06 §6.2).');
 
   if (cached.mode === 'oauth' && cached.expiresAt !== undefined && now() >= cached.expiresAt - REFRESH_MARGIN_MS) {
     try {
       return await doRefresh(cached);
     } catch (err) {
       latchAlert(`proactive refresh failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (cached.expiresAt !== undefined && now() >= cached.expiresAt) throw err; // hard-expired, no valid token
+      if (cached.expiresAt !== undefined && now() >= cached.expiresAt) {
+        // Hard-expired with no refresh path: a TERMINAL credential failure, typed so the
+        // gateway can class it honestly (run s7 — never again a generic 502).
+        throw new CredentialError(`credential expired and refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       return cached.secret; // still-valid window remains
     }
   }
@@ -258,17 +302,19 @@ export async function getSecret(): Promise<string> {
  */
 export async function forceRefresh(): Promise<string> {
   await ensureLoaded();
-  if (!cached) throw new Error('No model credential configured for this environment (ch06 §6.2).');
+  if (!cached) throw new CredentialError('No model credential configured for this environment (ch06 §6.2).');
   if (cached.mode !== 'oauth') {
     // api-key mode cannot refresh; a 401 is terminal.
     latchAlert('api-key rejected (401) — no refresh possible in api-key mode');
-    throw new Error('api-key credential rejected (401)');
+    noteProviderError('auth', { now });
+    throw new CredentialError('api-key credential rejected (401)');
   }
   try {
     return await doRefresh(cached);
   } catch (err) {
     latchAlert(`forced refresh failed: ${err instanceof Error ? err.message : String(err)}`);
-    throw err;
+    noteProviderError('auth', { now });
+    throw new CredentialError(`forced refresh failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -282,6 +328,7 @@ export function claudeAuthStatus(): ClaudeAuthStatus {
   };
   if (cached) status.mode = cached.mode;
   if (lastRefreshError) status.lastRefreshError = lastRefreshError;
+  if (lastProviderError) status.lastProviderError = lastProviderError;
   return status;
 }
 
