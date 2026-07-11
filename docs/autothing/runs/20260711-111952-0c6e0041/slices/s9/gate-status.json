@@ -1,0 +1,1 @@
+{ "slice": "s9", "repo": "ekoa-code", "status": "passed", "gates": { "video": "verified", "artifact": "docs/autothing/runs/20260711-111952-0c6e0041/walkthrough.mp4 (51.5s)", "selfVerify": "6 frames viewed: file-browser (home nav), FC-411 consent (contrato.txt), token chip, live presence + grants-empty + registo all-sessions + session column + gated masking" } }
