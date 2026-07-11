@@ -21,6 +21,15 @@ export const ChatRun = z
   .passthrough();
 export type ChatRun = z.infer<typeof ChatRun>;
 
+/** FC-400/FC-411 composer reference token (run s6; D4): a session grant the user attached.
+ *  The grantRef is daemon-minted and OPAQUE to the hosted side (§18.2.1 S1 — Cortex never
+ *  resolves or widens it); the label is display-only (a file/folder name, never a full path). */
+export const ReferenceToken = z.object({
+  grantRef: z.string().min(1),
+  label: z.string().min(1).max(200),
+});
+export type ReferenceToken = z.infer<typeof ReferenceToken>;
+
 export const ChatRunCreateRequest = z.object({
   sessionId: z.string(),
   message: z.string(),
@@ -30,6 +39,10 @@ export const ChatRunCreateRequest = z.object({
   // silently defeating the default. Use the bare default schema.
   language: Language,
   attachments: z.array(UploadRef).optional(),
+  // Reference tokens ride run context, not hand-typed chat text (D4): the run pipeline
+  // injects one "autorizações locais ativas nesta sessão" line so the model calls
+  // delegate_to_local with real refs.
+  references: z.array(ReferenceToken).max(20).optional(),
 });
 export type ChatRunCreateRequest = z.infer<typeof ChatRunCreateRequest>;
 

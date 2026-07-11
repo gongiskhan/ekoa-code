@@ -50,6 +50,32 @@ export interface LocalFileActivity {
 /** Route of the settings privacy surface (FC-404); linked from every "saiba mais". */
 export const PRIVACY_SETTINGS_HREF = '/settings/privacy';
 
+/**
+ * Local-bridge distribution (FC-405 install section). The bridge is published as GitHub Release
+ * assets on `github.com/gongiskhan/ekoa-bridge` (canonical since 2026-07-11; the `latest/download`
+ * URLs always resolve to the newest release): the double-click installers, a source tarball, and
+ * the `curl | bash` / `install.ps1` scripts. All default to the release URLs so the download
+ * buttons and install command work in every environment; override with `NEXT_PUBLIC_BRIDGE_MAC_URL`
+ * / `NEXT_PUBLIC_BRIDGE_WIN_URL` / `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` / `NEXT_PUBLIC_BRIDGE_INSTALL_URL`
+ * to point elsewhere (or set download to '' for the honest "not yet published" state — we never
+ * point a Download button at a dead link). (The GCS bucket `ekoa-bridge-downloads` remains as a
+ * secondary mirror.)
+ */
+const HOSTED_BRIDGE_BASE = 'https://github.com/gongiskhan/ekoa-bridge/releases/latest/download';
+/** Double-click installers (owner directive 2026-07-11: non-technical users must not touch a
+ *  terminal). Mac = a zipped `.command` (double-click installs + pairs + serves via native
+ *  dialogs); Windows = a `.bat` that runs the hosted install.ps1 with the same flow. */
+export const BRIDGE_MAC_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_MAC_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Mac.zip`;
+export const BRIDGE_WIN_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_WIN_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Windows.bat`;
+/** Advanced/manual path (Node.js + terminal), kept for technical users. */
+export const BRIDGE_DOWNLOAD_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL ?? `${HOSTED_BRIDGE_BASE}/ekoa-bridge-latest.tgz`;
+export const BRIDGE_INSTALL_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_INSTALL_URL ?? `${HOSTED_BRIDGE_BASE}/install.sh`;
+export const BRIDGE_INSTALL_CMD = `curl -fsSL ${BRIDGE_INSTALL_URL} | bash`;
+
 /* ==========================================================================
    OPERATIONAL copy - ships enabled (no legal claim).
    ========================================================================== */
@@ -63,8 +89,14 @@ export const PRIVACY_COPY = {
   uploadGroupLabel: 'Enviar',
   uploadFile: 'Carregar ficheiro',
   uploadFolder: 'Carregar pasta',
+  /** Short caption reinforcing the Upload trade-off (substring of the verbatim attachMicroCopy,
+   *  so no new claim): the hosted-copy half of the distinction, coloured as a caution. */
+  uploadHostedNote: 'Guarda uma cópia nos nossos servidores.',
   referenceGroupLabel: 'Referenciar (local)',
   referenceAction: 'Referenciar ficheiro/pasta local',
+  /** Teal "recommended" badge on the Reference block (verbatim substring of attachMicroCopy):
+   *  the visual cue that sensitive documents belong on the bridge, not the upload path. */
+  referenceRecommendedBadge: 'Recomendado para documentos sensíveis',
 
   // -- FC-401 Reference states --
   /** Install-CTA primary copy (v2 A7.2, verbatim). Operational: it describes what
@@ -81,12 +113,37 @@ export const PRIVACY_COPY = {
   bridgeOfflineHint:
     'A ponte local está instalada mas não responde. Verifique se está a correr e tente novamente - o ficheiro nunca é carregado em alternativa.',
   bridgeOfflineRetry: 'Tentar novamente',
+  /** Offline/not-installed states route to the connect+download area (FC-405 install section)
+   *  so a not-connected user always has a one-tap way to the bridge page. */
+  bridgeOpenSettings: 'Abrir definições da ponte',
   referenceChoose: 'Escolher ficheiro ou pasta local',
 
   // -- FC-411 first-time grant dialog --
   firstGrantTitle: 'Autorizar leitura local',
   firstGrantConfirm: 'Autorizar',
   firstGrantCancel: 'Cancelar',
+
+  // -- FC-401 in-app file browser (run 20260711-111952 s5; D1/D2 — replaces the native picker
+  //    and the typed-identifier fallback: the user navigates and picks, never types a path or code) --
+  browserTitle: 'Escolher ficheiro ou pasta',
+  browserIntro:
+    'Navegue no seu computador e escolha o ficheiro ou a pasta que o agente pode ler. Nada é carregado: fica autorizada apenas a leitura, e cada leitura fica registada.',
+  browserParent: 'Subir um nível',
+  browserChooseFolder: 'Autorizar esta pasta',
+  browserChooseHint: 'Escolher uma pasta autoriza todos os ficheiros nela.',
+  browserPickFile: 'Autorizar',
+  browserFilePickNote: 'Autorizar um ficheiro autoriza a pasta que o contém.',
+  browserEmpty: 'Esta pasta está vazia.',
+  browserTruncated: 'A mostrar os primeiros itens desta pasta.',
+  browserLoading: 'A carregar...',
+  browserUnavailable:
+    'Não foi possível abrir o explorador de ficheiros. Verifique se a ponte local está a correr e atualizada.',
+  browserCancel: 'Cancelar',
+  referenceTokenRemove: 'Remover referência',
+  referenceTokensLabel: 'Referências locais desta mensagem',
+  /** Shown when a pending reference could not be turned into a grant at send time (D3). */
+  referenceMintError:
+    'Não foi possível autorizar a referência local. A mensagem foi enviada sem ela; verifique a ponte local e tente de novo.',
 
   // -- FC-402 trust chip (mechanism labels; the masked-count CLAIM is gated) --
   chipReadPrefix: 'Leu',
@@ -122,6 +179,50 @@ export const PRIVACY_COPY = {
     'A ponte deixa de poder ligar-se a esta conta até voltar a emparelhar. As leituras em curso são interrompidas.',
   bridgePairError: 'Não foi possível gerar o código. Tente novamente.',
 
+  // FC-405 install / download (owner directive 2026-07-11: the bridge page must offer a way to
+  // download the bridge and clear instructions to install it). Operational onboarding copy — no
+  // legal claim. The install is a hosted `curl | bash` + a downloadable tarball; steps are real
+  // and runnable, never a command that fails.
+  installSectionTitle: 'Descarregar e instalar a ponte local',
+  installSectionDesc:
+    'A ponte local é uma pequena aplicação que corre no seu computador. Instale-a uma vez para o agente poder ler ficheiros no próprio local, sem os carregar.',
+  // -- Simple double-click install (primary) --
+  installSimpleTitle: 'Instalação simples',
+  installOsSelectLabel: 'Escolha o seu sistema',
+  installOsMac: 'Mac',
+  installOsWindows: 'Windows',
+  installDownloadForMac: 'Descarregar para Mac',
+  installDownloadForWindows: 'Descarregar para Windows',
+  installMacSecurityNote:
+    'Descompacte o ficheiro e faça duplo-clique. Na primeira vez, o Mac pode pedir confirmação: clique com o botão direito no ficheiro e escolha “Abrir”.',
+  installWinSecurityNote:
+    'Faça duplo-clique no ficheiro. Na primeira vez, o Windows pode mostrar um aviso: clique em “Mais informações” e depois “Executar mesmo assim”.',
+  installSimpleStep1: 'Descarregue o instalador para o seu sistema.',
+  installSimpleStep2: 'Faça duplo-clique no ficheiro descarregado — não precisa de escrever nada.',
+  installSimpleStep3: 'Quando aparecer, confirme o código no navegador para ligar à sua conta.',
+  installSimpleStep4: 'Pronto: a ponte fica ligada e já pode referenciar ficheiros.',
+  installNodeNote:
+    'O instalador precisa do Node.js (gratuito). Se não o tiver, abre a página de instalação e explica o que fazer.',
+  // -- Advanced / manual install (technical users) --
+  installAdvancedTitle: 'Instalação avançada (com Node.js e Terminal)',
+  installCommandLabel: 'Instalar (requer o Node.js 20 ou superior)',
+  installCommandHint:
+    'Cole este comando no Terminal (macOS/Linux) ou no PowerShell/WSL (Windows). Verifica o Node.js, instala a ponte e mostra os próximos passos.',
+  installCopyLabel: 'Copiar comando',
+  installCopiedLabel: 'Copiado',
+  installDownloadButton: 'Descarregar o pacote (.tgz)',
+  installDownloadManualHint: 'Prefere instalar à mão? Descarregue o pacote e corra: npm install -g <ficheiro>.',
+  /** Muted state when the download URL is overridden to '' — honest, never a dead link. */
+  installDownloadUnavailable: 'Descarregar (brevemente)',
+  installDownloadNote:
+    'O instalador para o seu sistema fica disponível aqui em breve. Entretanto, siga os passos abaixo para ligar a ponte.',
+  installRequirements: 'Compatível com Windows, macOS e Linux.',
+  installStepsTitle: 'Como ligar a ponte, passo a passo',
+  installStep1: 'Instale o Node.js 20+ (nodejs.org) e cole o comando acima no Terminal.',
+  installStep2: 'Corra "ekoa-bridge pair" e introduza o código de emparelhamento (secção seguinte).',
+  installStep3: 'Corra "ekoa-bridge serve" e deixe essa janela a correr.',
+  installStep4: 'A ponte liga-se e o estado passa a «Ponte ligada». Já pode referenciar ficheiros.',
+
   // FC-406 active grants
   grantsSectionTitle: 'Autorizações de leitura ativas',
   grantsSectionDesc:
@@ -129,8 +230,11 @@ export const PRIVACY_COPY = {
   grantsEmptyConnected: 'Não há autorizações ativas nesta sessão.',
   grantsOffline:
     'A lista de autorizações é servida pela ponte local. Ligue a ponte para a ver.',
+  grantsUnavailable:
+    'A ponte está ligada mas a lista de autorizações não está acessível a partir do navegador. Atualize a aplicação da ponte local.',
   grantRevoke: 'Revogar',
   grantRevoking: 'A revogar...',
+  grantRevokeError: 'Não foi possível revogar. Tente novamente.',
 
   // FC-407 ledger viewer
   ledgerSectionTitle: 'Registo de leituras locais',
@@ -138,11 +242,26 @@ export const PRIVACY_COPY = {
     'O que saiu deste computador: ficheiro, intervalo lido, dimensão e momento. Servido pela ponte local; não guardamos este registo nos nossos servidores.',
   ledgerOffline:
     'O registo é mantido e servido pela ponte local. Ligue a ponte para o consultar.',
-  ledgerEmpty: 'Ainda não há leituras registadas nesta sessão.',
+  ledgerUnavailable:
+    'A ponte está ligada mas o registo não está acessível a partir do navegador. Atualize a aplicação da ponte local.',
+  ledgerEmpty: 'Ainda não há leituras registadas.',
   ledgerColTime: 'Momento',
+  ledgerColKind: 'Tipo',
   ledgerColPath: 'Ficheiro',
   ledgerColRange: 'Intervalo',
   ledgerColBytes: 'Dimensão',
+  ledgerColSession: 'Sessão',
+  ledgerSessionLabel: 'Sessão',
+  ledgerSessionAll: 'Todas as sessões',
+  ledgerUnparseable: (n: number) =>
+    n === 1 ? '1 registo não pôde ser lido.' : `${n} registos não puderam ser lidos.`,
+  ledgerKindLabels: {
+    read: 'Leitura',
+    write: 'Escrita',
+    denial: 'Recusa',
+    cap_consent: 'Limite',
+    automation: 'Automação',
+  } as Record<string, string>,
 
   // FC-408 masking summary
   maskingSectionTitle: 'Atividade de mascaramento',

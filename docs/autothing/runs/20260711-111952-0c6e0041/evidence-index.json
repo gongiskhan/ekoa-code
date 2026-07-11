@@ -1,0 +1,19 @@
+{
+  "runId": "20260711-111952-0c6e0041",
+  "project": "ekoa-code + ekoa-bridge (local-bridge UX completion)",
+  "globalGate": { "status": "completed-with-blockers", "buildableRemaining": 0 },
+  "slices": {
+    "s0": "passed", "s1": "passed", "s2": "passed", "s3": "passed", "s4": "passed",
+    "s5": "passed", "s6": "passed", "s7": "passed", "s8": "passed", "s9": "passed"
+  },
+  "runWalkthrough": {
+    "artifact": "docs/autothing/runs/20260711-111952-0c6e0041/walkthrough.mp4",
+    "durationSec": 51.5,
+    "status": "verified",
+    "journey": "unpaired privacy surface -> real ekoa-bridge pair code approved on /settings/devices -> serve -> Ponte ligada live -> grants+registo served LIVE by the real C1-C3 daemon (registo defaults to all-sessions) -> attach -> IN-APP FILE BROWSER (home nav, visual pick, no typed path/code) -> FC-411 consent (contrato.txt) -> teal token chip"
+  },
+  "blockers": [
+    { "cause": "codex credential 401 invalid_api_key (external)", "remediation": "codex login", "impact": "all adversarial cross-model gates owed" },
+    { "cause": "no model credential (external)", "remediation": "claude setup-token + provision-credential.mjs then LIVE_MODEL=1", "impact": "live chat-file-read leg annotation-gated" }
+  ]
+}

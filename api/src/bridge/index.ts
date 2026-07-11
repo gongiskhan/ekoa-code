@@ -27,6 +27,7 @@ export { signDelegatedTask, verifyDelegatedTaskSig, canonicalTaskBinding } from 
 export {
   registerPairing,
   getPairingById,
+  getPairingsByOwner,
   getConnectionByOwner,
   getLiveConnection,
   isLive,
@@ -39,6 +40,9 @@ export {
 
 // The daemon-facing WS server (ch18 §18.3).
 export { attachBridgeServer, type BridgeServerHandle, type BridgeServerDeps } from './server.js';
+
+// The bounded in-memory ledger-row buffer feeding the FC-402 trust chip (§18.2; run s5).
+export { bufferLedgerRow, rowsForSession, __resetActivityBufferForTests } from './activity-buffer.js';
 
 // The provider endpoint (ch18 §18.4).
 export { createProviderHandler, type ProviderHandler, type ProviderDeps, type ProviderOutcome, type ResolvedPairing } from './provider.js';

@@ -135,6 +135,77 @@ export function catalog(input: { userId: string; orgId: string }): Promise<strin
   return catalogFn(input);
 }
 
+// --- Local-bridge delegation tool (ch05 §5.4.8; ch18 §18.2) --------------------------------
+
+/** The delegating principal: the run's owner + the hosted conversation id (ch18 §18.4.3 vault
+ *  key). Both bind from the run's actor at spec-build time — NEVER from tool arguments. */
+export interface DelegationToolActor {
+  userId: string;
+  sessionId: string;
+}
+
+/** The §18.2.1 tool arguments: an opaque task program, pass-through grant refs (Cortex never
+ *  resolves or widens them — S1), and the egress/model budget. */
+export interface DelegationToolRequest {
+  task: string;
+  grantRefs: string[];
+  budget: { egressBytes: number; modelSpend: { userId: string } };
+}
+
+/** Derived output only (§18.2.2): summary, citations, patch proposals, ledger refs — raw local
+ *  file content never crosses this seam. Structurally matches shared/'s DelegationResult. */
+export interface DelegationToolResult {
+  status: 'ok' | 'unreachable' | 'cap_reached' | 'denied';
+  answer?: string;
+  citations: { path: string; range: string }[];
+  patches?: { path: string; diff: string }[];
+  ledgerRefs: string[];
+  telemetry: { egressBytes: number; maskedCounts: Record<string, number> };
+}
+
+export type DelegateToLocalFn = (actor: DelegationToolActor, req: DelegationToolRequest) => Promise<DelegationToolResult>;
+
+/** Honest default: an unwired root means no bridge — offline is `unreachable`, and there is no
+ *  degrade-to-upload anywhere (§18.2.3, invariant I1). */
+const defaultDelegateToLocal: DelegateToLocalFn = async () => ({
+  status: 'unreachable',
+  citations: [],
+  ledgerRefs: [],
+  telemetry: { egressBytes: 0, maskedCounts: {} },
+});
+let delegateToLocalFn: DelegateToLocalFn = defaultDelegateToLocal;
+export function setDelegateToLocal(fn: DelegateToLocalFn): void {
+  delegateToLocalFn = fn;
+}
+export function delegateToLocalTool(actor: DelegationToolActor, req: DelegationToolRequest): Promise<DelegationToolResult> {
+  return delegateToLocalFn(actor, req);
+}
+
+// --- Local-activity sources (run s5, FC-402; ch18 §18.2/§18.6) -----------------------------
+
+/** The two joins behind the per-turn trust chip: the bounded in-memory ledger-row buffer
+ *  (bridge/activity-buffer, wired at the root) and the anon-audit mask counts by correlation
+ *  id (§17.6, via the services read). Defaults are honest empties: no buffer wired means the
+ *  chip simply does not render — never invented numbers. */
+export interface LocalActivitySources {
+  /** Buffered daemon ledger rows for a session, narrowed to the turn's correlation ids. */
+  ledgerRows(session: string, correlationIds?: string[]): Array<{ path: string; byteRange: string; bytesOut: number; correlationId: string }>;
+  /** Mask counts by entity class for the turn's correlation ids (audit-join). */
+  maskedCounts(orgId: string, correlationIds: string[]): Promise<Record<string, number>>;
+}
+
+const defaultLocalActivitySources: LocalActivitySources = {
+  ledgerRows: () => [],
+  maskedCounts: async () => ({}),
+};
+let localActivitySources: LocalActivitySources = defaultLocalActivitySources;
+export function setLocalActivitySources(s: LocalActivitySources): void {
+  localActivitySources = s;
+}
+export function getLocalActivitySources(): LocalActivitySources {
+  return localActivitySources;
+}
+
 // --- Per-build verification runner (ch05 §5.6.2 step 5, ch07 §7.2.6) ----------------------
 
 export interface VerifyRunInput {
@@ -264,6 +335,8 @@ export function __resetAgentSeamsForTests(): void {
   loadContextContentFn = defaultLoadContextContent;
   integrationPrefetchFn = defaultIntegrationPrefetch;
   catalogFn = defaultCatalog;
+  delegateToLocalFn = defaultDelegateToLocal;
+  localActivitySources = defaultLocalActivitySources;
   verifyRunnerFn = defaultVerifyRunner;
   buildMechanics = noopBuildMechanics;
 }

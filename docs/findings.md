@@ -47,9 +47,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Gateway / egress
 
-- **`gateway-502-masks-401`** (medium). A terminal credential rejection is reported to the client as a
-  retryable `502` by the `gateway.ts` catch-all, producing a retry storm; `/health` reports the truth.
-  Deferred to a `llm/` chokepoint slice.
+- **`gateway-502-masks-401`** - CLOSED (local-bridge consumer run s7, 2026-07-11, merged from the
+  parallel session): typed `CredentialError` -> 503 `credential_error` (non-retryable), rate-cap ->
+  429, transient stays 502; `/health claudeAuth.lastProviderError` carries class+timestamp only;
+  gateway metadata is an allowlist (`user_id` only), killing the sibling mask.
+- **`health-bridgeConnections-mismatch`** (small, merged from the parallel session's recon). `/health
+  bridgeConnections` reports `sseManager.connectionCount` (SSE clients), not the bridge registry's
+  daemon-socket count the field name promises. One-line fix in server.ts /health + a health contract
+  assertion.
+- **`e2e-estate-no-committed-env`** (open, structural; merged - extends `e2e-estate-baseline-13`
+  below). 49 of 213 due specs red when the WHOLE ledger estate runs against the run-driver stack
+  (the served-app compat `/api/v1/action` suites 404 at every commit; demo tours exceed the 30s
+  timeout on dev-next latency). Needs a committed full-stack e2e harness + a compat-suite triage.
 - **`gateway-apikey-checkAllowance`** (medium, security). The gateway `apikey` principal skips
   `checkAllowance` and bills the platform admin account - an exfil surface reachable from a build
   subprocess. Operator decision owed on the sanctioned posture.

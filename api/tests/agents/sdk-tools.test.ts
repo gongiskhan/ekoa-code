@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { knowledgeToolSpecs, loadContextToolSpec } from '../../src/agents/sdk-tools.js';
-import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL } from '../../src/agents/tools.js';
+import { knowledgeToolSpecs, loadContextToolSpec, delegateToolSpec } from '../../src/agents/sdk-tools.js';
+import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL } from '../../src/agents/tools.js';
 import {
   setKnowledgeToolSearch,
   setKnowledgeToolRead,
   setLoadContextContent,
+  setDelegateToLocal,
   __resetAgentSeamsForTests,
+  type DelegationToolActor,
+  type DelegationToolRequest,
 } from '../../src/agents/seams.js';
 
 /**
@@ -56,6 +59,56 @@ describe('knowledgeToolSpecs (§5.4.4 chat tools)', () => {
     expect(await read.handler({ collection: 'contratos', docId: 'd1' })).toContain('corpo');
     expect(await read.handler({ collection: 'contratos', docId: 'ghost' })).toBe('Documento não encontrado.');
     expect(seen.every((s) => s.orgId === 'org-A')).toBe(true);
+  });
+});
+
+describe('delegateToolSpec (§5.4.8 local-bridge delegation tool)', () => {
+  const okResult = {
+    status: 'ok' as const,
+    answer: 'resumo derivado',
+    citations: [{ path: 'contrato.txt', range: '0-209' }],
+    ledgerRefs: ['default:0'],
+    telemetry: { egressBytes: 209, maskedCounts: {} },
+  };
+
+  it('binds userId + sessionId from the run actor — injected identity arguments never win', async () => {
+    const seen: Array<{ actor: DelegationToolActor; req: DelegationToolRequest }> = [];
+    setDelegateToLocal(async (actor, req) => {
+      seen.push({ actor, req });
+      return okResult;
+    });
+    const spec = delegateToolSpec(actor, 'sess-1');
+    expect(spec.name).toBe(DELEGATION_TOOL);
+    const text = await spec.handler({
+      task: '{"v":1,"steps":[]}',
+      grantRefs: ['g-1'],
+      userId: 'attacker', // injected args must not re-address the delegation
+      sessionId: 'other-session',
+    });
+    expect(seen[0]!.actor).toEqual({ userId: 'u1', sessionId: 'sess-1' });
+    expect(seen[0]!.req.grantRefs).toEqual(['g-1']);
+    expect(seen[0]!.req.budget).toEqual({ egressBytes: 262_144, modelSpend: { userId: 'u1' } });
+    expect(text).toContain('resumo derivado');
+    expect(text).toContain('contrato.txt (0-209)');
+  });
+
+  it('honest offline default: with no root wiring the result is unreachable — never an upload', async () => {
+    const spec = delegateToolSpec(actor, 'sess-1');
+    const text = await spec.handler({ task: '{"v":1,"steps":[]}', grantRefs: ['g-1'] });
+    expect(text).toContain('unreachable');
+  });
+
+  it('denied and cap_reached surface as honest statuses, and an explicit egressBytes rides the budget', async () => {
+    const budgets: number[] = [];
+    setDelegateToLocal(async (_actor, req) => {
+      budgets.push(req.budget.egressBytes);
+      return { status: 'cap_reached' as const, citations: [], ledgerRefs: [], telemetry: { egressBytes: 10, maskedCounts: {} } };
+    });
+    const spec = delegateToolSpec(actor, 'sess-1');
+    expect(await spec.handler({ task: '{"v":1}', grantRefs: ['g-1'], egressBytes: 1024 })).toContain('cap_reached');
+    expect(budgets).toEqual([1024]);
+    setDelegateToLocal(async () => ({ status: 'denied' as const, citations: [], ledgerRefs: [], telemetry: { egressBytes: 0, maskedCounts: {} } }));
+    expect(await spec.handler({ task: '{"v":1}', grantRefs: ['g-1'] })).toContain('denied');
   });
 });
 

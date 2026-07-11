@@ -72,7 +72,7 @@ describe('complexity hints + file-count heuristics', () => {
 describe('RouterDecision resolution (config-driven models + weights)', () => {
   it('decisionForTier reads model/effort/weight from config', () => {
     expect(decideForTier('FAST')).toEqual({ tier: 'FAST', model: 'claude-haiku-4-5-20251001', effort: 'low', weight: 0.02 });
-    expect(decideForTier('WORKHORSE')).toEqual({ tier: 'WORKHORSE', model: 'claude-sonnet-4-6', effort: 'medium', weight: 0.1 });
+    expect(decideForTier('WORKHORSE')).toEqual({ tier: 'WORKHORSE', model: 'claude-sonnet-5', effort: 'medium', weight: 0.1 });
     expect(decideForTier('EXPERT')).toEqual({ tier: 'EXPERT', model: 'claude-opus-4-8[1m]', effort: 'high', weight: 0.4 });
   });
 

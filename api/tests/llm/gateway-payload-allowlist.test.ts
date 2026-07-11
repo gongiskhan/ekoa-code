@@ -125,6 +125,9 @@ describe('proxyGatewayMessages forwards ONLY the documented Messages API top-lev
     expect(keys).toContain('max_tokens');
     expect(keys).toContain('model');
     expect(keys).toContain('metadata');
+    // metadata.session_id is the chokepoint's own vault-key channel — consumed, never wired
+    // (observed live: 400 "metadata.session_id: Extra inputs are not permitted").
+    expect((captured!.metadata as Record<string, unknown>).session_id).toBeUndefined();
 
     // dropped KEY NAMES are logged for observability; VALUES never are
     const logged = warn.mock.calls.map((args) => args.map(String).join(' ')).join('\n');
@@ -161,7 +164,7 @@ describe('proxyGatewayMessages forwards ONLY the documented Messages API top-lev
         mcp_servers: [],
         container: 'cont_1',
         cache_control: { type: 'ephemeral' },
-        metadata: { session_id: 'conv-keep', user_id: 'client-user' },
+        metadata: { session_id: 'conv-keep', user_id: 'client-user', trace_id: 'client-trace' },
       },
       'u1',
     );
@@ -175,8 +178,13 @@ describe('proxyGatewayMessages forwards ONLY the documented Messages API top-lev
     ]) {
       expect(Object.keys(c), `field ${k} must be forwarded`).toContain(k);
     }
-    // gateway semantics preserved: wire model clamped, client metadata kept
+    // gateway semantics preserved: wire model clamped. metadata is an ALLOWLIST (run s7,
+    // s0b retro-review finding): the wire accepts ONLY user_id and 400s on any extra key
+    // (observed live with session_id) — every other key is dropped, not just session_id.
     expect((c.metadata as Record<string, unknown>).user_id).toBe('client-user');
+    expect((c.metadata as Record<string, unknown>).session_id).toBeUndefined();
+    expect((c.metadata as Record<string, unknown>).trace_id).toBeUndefined();
+    expect(Object.keys(c.metadata as Record<string, unknown>)).toEqual(['user_id']);
     expect(c.max_tokens).toBe(1024);
   });
 

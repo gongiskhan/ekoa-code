@@ -14,8 +14,8 @@
  */
 import { z } from 'zod/v4';
 import type { SdkToolSpec } from '../llm/index.js';
-import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL } from './tools.js';
-import { knowledgeToolSearch, knowledgeToolRead, loadContextContent } from './seams.js';
+import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL } from './tools.js';
+import { knowledgeToolSearch, knowledgeToolRead, loadContextContent, delegateToLocalTool, type DelegationToolResult } from './seams.js';
 
 /** The actor identity a tool run is bound to (a subset of the route Actor). */
 export interface ToolActor {
@@ -68,6 +68,88 @@ export function knowledgeToolSpecs(actor: ToolActor): SdkToolSpec[] {
       },
     },
   ];
+}
+
+/** Egress budget when the model omits one; the daemon still caps per session (§18.2.1, S3). */
+const DELEGATION_DEFAULT_EGRESS_BYTES = 262_144;
+const DELEGATION_MAX_EGRESS_BYTES = 10_000_000;
+
+/**
+ * The §5.4.8 `delegate_to_local` tool (ch18 §18.2), chat + build classes. The delegating
+ * identity (userId + hosted sessionId) binds from the run's actor at spec-build time — a
+ * prompt-injected argument can never delegate as another user or into another session (the
+ * same rule the knowledge tools apply to orgId). Cortex passes `task` and `grantRefs` through
+ * opaquely (§18.2.1, S1); org + pairing resolve from the live registry inside the bridge.
+ */
+export function delegateToolSpec(
+  actor: ToolActor,
+  sessionId: string,
+  /** Run-scoped collector (FC-402, run s5): the chat pipeline joins the turn's delegation
+   *  results (citations + ledgerRefs) with the buffered ledger rows into `local_activity`. */
+  onResult?: (result: DelegationToolResult) => void,
+): SdkToolSpec {
+  return {
+    name: DELEGATION_TOOL,
+    description:
+      'Delega uma tarefa de ficheiros locais na ponte emparelhada do utilizador (ekoa-bridge). ' +
+      'A ponte executa a tarefa dentro das pastas autorizadas e devolve apenas resultado derivado ' +
+      '(resposta, citações, propostas de alteração); o conteúdo bruto dos ficheiros nunca entra ' +
+      'nesta conversa. Use quando o utilizador pedir para ler, procurar ou alterar ficheiros no ' +
+      'computador dele, com um grantRef que ele tenha fornecido na conversa. O campo task é um ' +
+      'TaskProgram em JSON (contrato da ponte, ch18): {"v":1,"steps":[...],"answer"?:"texto final",' +
+      '"compose"?:{"provider":true,"instructions":"..."}}. Passos: {"tool":"read"|"list"|"glob"|' +
+      '"grep"|"stat"|"extract_text"|"write","grantRef":"g-...","relPath":"caminho/relativo",...}; ' +
+      'read/extract_text aceitam "as":"nome" e "cite":true para citar; grep usa "pattern"; write ' +
+      'exige "confirmed":true e "expectedSha256":null para criar um ficheiro novo (reescrever um ' +
+      'existente exige o sha256 atual dos bytes). Com compose.provider:true a ponte compõe a ' +
+      'resposta a partir do conteúdo lido segundo as instruções; sem compose, defina answer. Se a ' +
+      'ponte estiver offline o resultado é unreachable; nunca há upload de ficheiros.',
+    inputSchema: {
+      task: z.string().min(2).describe('O TaskProgram em JSON (ver o formato na descrição da ferramenta)'),
+      grantRefs: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe('Referências de autorização (grantRef) que o utilizador forneceu na conversa'),
+      egressBytes: z
+        .number()
+        .int()
+        .positive()
+        .max(DELEGATION_MAX_EGRESS_BYTES)
+        .optional()
+        .describe('Orçamento de bytes de saída (por omissão 262144)'),
+    },
+    handler: async (args) => {
+      const task = String(args.task ?? '');
+      const grantRefs = Array.isArray(args.grantRefs) ? args.grantRefs.map((g) => String(g)) : [];
+      const egressBytes = typeof args.egressBytes === 'number' ? args.egressBytes : DELEGATION_DEFAULT_EGRESS_BYTES;
+      const result = await delegateToLocalTool(
+        { userId: actor.userId, sessionId },
+        { task, grantRefs, budget: { egressBytes, modelSpend: { userId: actor.userId } } },
+      );
+      onResult?.(result);
+      return formatDelegationResult(result);
+    },
+  };
+}
+
+/** Render the derived-only result for the model: honest terminal states, then answer +
+ *  citations + patch proposals + ledger refs (§18.2.2). */
+function formatDelegationResult(r: DelegationToolResult): string {
+  if (r.status === 'unreachable') {
+    return 'A ponte local não está ligada (status: unreachable). Nada foi carregado; peça ao utilizador para iniciar a ponte (ekoa-bridge serve) e tentar de novo.';
+  }
+  if (r.status === 'denied') {
+    return 'A ponte local recusou a tarefa (status: denied). Verifique o grantRef e se os caminhos pedidos estão dentro da pasta autorizada.';
+  }
+  if (r.status === 'cap_reached') {
+    return `O orçamento de bytes de saída esgotou (status: cap_reached, egressBytes: ${r.telemetry.egressBytes}). Pode repetir com um orçamento maior se o utilizador consentir.`;
+  }
+  const lines = [`Resultado da ponte local (status: ok, bytes de saída: ${r.telemetry.egressBytes}).`];
+  if (r.answer) lines.push(`Resposta derivada:\n${r.answer}`);
+  if (r.citations.length) lines.push(`Citações:\n${r.citations.map((c) => `- ${c.path} (${c.range})`).join('\n')}`);
+  if (r.patches?.length) lines.push(`Alterações:\n${r.patches.map((p) => `- ${p.path}: ${p.diff}`).join('\n')}`);
+  if (r.ledgerRefs.length) lines.push(`Registos no ledger local: ${r.ledgerRefs.join(', ')}`);
+  return lines.join('\n\n');
 }
 
 /** The build-run `load_context` tool (§5.4.4 build row): pull a named on-demand content

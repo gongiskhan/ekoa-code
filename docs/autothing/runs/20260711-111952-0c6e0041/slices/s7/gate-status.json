@@ -1,0 +1,1 @@
+{ "slice": "s7", "repo": "both", "status": "passed", "commits": ["dd2617c", "c611489"], "gates": { "spec": "12.6.1/FC-401 amended (in-app browser)", "counterpart": "C1-C5 marked implemented/retired", "diagram": "10-privacy-boundaries.excalidraw updated; PNG re-export owed (no tooling)", "adversarial": "owed (codex 401)" } }

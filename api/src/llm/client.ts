@@ -29,7 +29,7 @@ import {
 } from './attribution.js';
 import { decideForTier, type RouterDecision, type Tier } from './router.js';
 import { buildMcpServers, translateAllowedTools, type SdkToolSpec } from './sdk-tools.js';
-import { buildSubprocessEnv, getSecret, forceRefresh, currentMode, type CredentialMode } from './credentials.js';
+import { buildSubprocessEnv, getSecret, forceRefresh, currentMode, noteProviderError, providerErrorClassOf, type CredentialMode } from './credentials.js';
 import {
   anonymize,
   deanonymize,
@@ -1139,12 +1139,26 @@ export async function proxyGatewayMessages(
   if (droppedFields.length > 0) {
     console.warn(`[llm] gateway forward: dropped unknown top-level fields: ${droppedFields.join(', ')}`);
   }
+  // The wire Messages API accepts ONLY metadata.user_id and 400s on ANY extra key (observed
+  // live: "metadata.session_id: Extra inputs are not permitted", which silently emptied every
+  // bridge compose answer). The first fix stripped just the chokepoint's own session_id vault
+  // key (§18.4.3); the s0b retro review found the sibling — any OTHER client metadata key
+  // masks the same way — so the forward is now an ALLOWLIST: user_id only, dropped key NAMES
+  // logged for observability (values never are).
+  // session_id is the chokepoint's OWN expected channel (consumed above on every bridge
+  // call) — stripping it is routine, so it is excluded from the warning to keep logs honest
+  // about the unexpected keys only.
+  const droppedMetaKeys = Object.keys(meta).filter((k) => k !== 'user_id' && k !== 'session_id');
+  if (droppedMetaKeys.length > 0) {
+    console.warn(`[llm] gateway forward: dropped metadata keys (wire accepts user_id only): ${droppedMetaKeys.join(', ')}`);
+  }
   const payload: Record<string, unknown> = {
     ...forwarded,
     // A trailing '[1m]' long-context marker is a CLIENT-side alias, not a wire-legal model id -
-    // strip it before the provider call (the configured EXPERT model may carry it).
+    // strip it before the provider call (the configured EXPERT model may carry it). Metadata is
+    // the ALLOWLIST established above: user_id only (any other key 400s on the wire).
     model: decision.model.replace(/\[1m\]$/, ''),
-    metadata: { ...meta, user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
+    metadata: { user_id: (meta.user_id as string) ?? 'ekoa-llm-gateway' },
   };
 
   let resp: RawRestResponse;
@@ -1161,6 +1175,13 @@ export async function proxyGatewayMessages(
     // the re-identification key must not linger to TTL after a failed gateway call.
     if (!hasSession) endSession(anon.handle);
   }
+
+  // Diagnostics honesty (run s7, D6): a terminal provider status is CLASSED onto /health's
+  // claudeAuth.lastProviderError — class + timestamp only, never the body. The response still
+  // passes through untouched (the caller decides what to surface); this ends the
+  // invisible-failure family (400-emptied compose answers, 502-masks-401).
+  const errClass = providerErrorClassOf(resp.status);
+  if (errClass && errClass !== 'transient' && errClass !== 'rate_limit') noteProviderError(errClass);
 
   // Meter only successful responses; a 4xx/5xx carries no billable usage (carried).
   let unmetered = false;

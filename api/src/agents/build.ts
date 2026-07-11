@@ -28,7 +28,7 @@ import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './str
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
-import { knowledgeToolSpecs, loadContextToolSpec } from './sdk-tools.js';
+import { knowledgeToolSpecs, loadContextToolSpec, delegateToolSpec } from './sdk-tools.js';
 import { classifyInBuildIntent } from './guided-build.js';
 import {
   persistJob,
@@ -360,8 +360,9 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,
-        // Builds mount the knowledge tools + the context-loading tool as in-process MCP (§5.4.4).
-        sdkTools: [...knowledgeToolSpecs(input.actor), loadContextToolSpec(input.actor, 'coding')],
+        // Builds mount the knowledge tools + the context-loading tool + the §5.4.8 local-bridge
+        // delegation tool as in-process MCP (§5.4.4; ch18 §18.2).
+        sdkTools: [...knowledgeToolSpecs(input.actor), loadContextToolSpec(input.actor, 'coding'), delegateToolSpec(input.actor, input.sessionId)],
         cwd: projectDir || undefined,
         homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),

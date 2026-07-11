@@ -18,7 +18,8 @@ import { loadConfig } from '../config.js';
 import { checkAllowance } from '../billing/allowance.js';
 import { classify, type Tier } from './router.js';
 import { completeFast, proxyGatewayMessages } from './client.js';
-import { LlmAbortedError } from './client.js';
+import { LlmAbortedError, LlmRateCapError } from './client.js';
+import { CredentialError } from './credentials.js';
 
 /** The injected JWT verifier (returns at least the subject + org). */
 export type VerifyToken = (token: string) => { sub: string; orgId?: string };
@@ -68,9 +69,9 @@ function billeeOf(principal: NonNullable<GatewayPrincipal>): string {
   return principal.kind === 'jwt' ? principal.userId : '';
 }
 
-function gatewayError(res: Response, status: number, message: string): void {
+function gatewayError(res: Response, status: number, message: string, type = 'authentication_error'): void {
   if (!res.headersSent) {
-    res.status(status).json({ type: 'error', error: { type: 'authentication_error', message } });
+    res.status(status).json({ type: 'error', error: { type, message } });
   }
 }
 
@@ -117,8 +118,22 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       }
       res.status(result.status).send(result.body);
     } catch (err) {
+      // Diagnostics honesty (run s7, D6 — closes FINDINGS 502-masks-401): a TERMINAL failure
+      // is classed distinctly from a transient one instead of the old catch-all "retryable"
+      // 502. Callers (the daemon's C5 surfacing, the TUI) can now tell "fix the credential"
+      // from "try again". Messages stay generic — no bodies, no secrets on the wire.
       console.error('[llm-gateway] forward failed:', err instanceof Error ? err.message : err);
-      gatewayError(res, 502, 'Provider request failed');
+      if (err instanceof CredentialError) {
+        // Terminal: the central credential is missing/rejected/unrefreshable. Non-retryable
+        // until an operator acts; /health.claudeAuth carries the class + latched alert.
+        gatewayError(res, 503, 'Provider credential unavailable (terminal). See /health claudeAuth.', 'credential_error');
+        return;
+      }
+      if (err instanceof LlmRateCapError) {
+        gatewayError(res, 429, 'Rate cap exceeded. Retry later.', 'rate_limit_error');
+        return;
+      }
+      gatewayError(res, 502, 'Provider request failed', 'api_error');
     }
   };
 

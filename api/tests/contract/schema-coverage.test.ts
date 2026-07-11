@@ -82,6 +82,10 @@ const COVERED = new Set<string>([
   'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
   // PR4 — the AI integration builder (integration-builder.test.ts): chat/load/save/test.
   'integrationBuilder.chat', 'integrationBuilder.load', 'integrationBuilder.save', 'integrationBuilder.test',
+  // Local-bridge consumer run s1 — hosted presence (bridge-status.test.ts)
+  'ekoaLocal.bridgeStatus',
+  // Local-bridge consumer run s5 — FC-408 masking summary (masking-summary.test.ts)
+  'registo.maskingSummary',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

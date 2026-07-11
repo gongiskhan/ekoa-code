@@ -45,6 +45,9 @@ import { useAgentExecution } from "@/hooks/useAgentExecution";
 import { api, tryCall, openChatRunStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
+import { PRIVACY_COPY, type LocalFileActivity } from "@/lib/privacy-claims";
+import { createDaemonGrant, type PendingReference } from "@/lib/bridge-local";
+import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips";
 import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
@@ -234,6 +237,9 @@ export default function UnifiedChatPage() {
   const [chatInput, setChatInput] = useState("");
   const [promptStripCollapsed, setPromptStripCollapsed] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  // FC-400 (run s6): reference tokens attached to the NEXT outgoing message (D4).
+  const [referenceTokens, setReferenceTokens] = useState<PendingReference[]>([]);
+  const [referenceMintError, setReferenceMintError] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlInputValue, setUrlInputValue] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -952,12 +958,31 @@ export default function UnifiedChatPage() {
         .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
       if (pendingAttachments.length > 0) clearAttachments();
 
+      // FC-400/D3 (run 20260711-111952 s5): pending references are minted into session
+      // grants HERE, bound to the real chat session id (which a brand-new chat only has
+      // now). Selection was the authorization (D2); the daemon grants a file pick's parent
+      // folder. A mint failure is honest — the message still sends, without that reference,
+      // and the composer surfaces the error — never a silent upload or a fabricated grant.
+      const pendingRefs = referenceTokens;
+      if (pendingRefs.length > 0) setReferenceTokens([]);
+      setReferenceMintError(false);
+      const references: Array<{ grantRef: string; label: string }> = [];
+      for (const ref of pendingRefs) {
+        try {
+          const grant = await createDaemonGrant({ path: ref.path, session: sessionId, label: ref.label });
+          references.push({ grantRef: grant.grantRef, label: grant.label ?? ref.label });
+        } catch {
+          setReferenceMintError(true);
+        }
+      }
+
       // FC-013: create the run, await the server-minted runId, THEN subscribe to
       // its scoped event stream. `language` is injected by the transport (§12.2.3).
       const { runId } = await api.chat.createRun({
         sessionId,
         message: text,
         ...(uploadRefs.length > 0 ? { attachments: uploadRefs } : {}),
+        ...(references.length > 0 ? { references } : {}),
       });
       chatTraceIdRef.current = runId;
 
@@ -969,6 +994,10 @@ export default function UnifiedChatPage() {
       // it — the duration rides the local mirror's metadata (the server persists its own).
       let thinkingStartedAt: number | null = null;
       let thinkingEndedAt: number | null = null;
+      // FC-402 (run s5): the turn's local-file activity, streamed as `local_activity` when a
+      // delegation read local excerpts. Transient display metadata — it rides the in-memory
+      // message mirror only (persist:false below); the server never persists it (§18.2).
+      let localActivity: LocalFileActivity | null = null;
 
       const finishStream = () => {
         stream.close();
@@ -1027,6 +1056,8 @@ export default function UnifiedChatPage() {
                     : {}),
                 }
               : {}),
+            // FC-402: the trust chip's per-turn data (transient; never server-persisted).
+            ...(localActivity ? { localFileActivity: localActivity } : {}),
           },
         }, { persist: false });
       };
@@ -1061,6 +1092,15 @@ export default function UnifiedChatPage() {
           thinkingStartedAt ??= Date.now();
           appendStreamingThinking(sessionId!, event.text);
         }
+      });
+
+      stream.on("local_activity", (event) => {
+        localActivity = {
+          files: event.files,
+          ...(event.bytesOut !== undefined ? { bytesOut: event.bytesOut } : {}),
+          ...(event.maskedCounts !== undefined ? { maskedCounts: event.maskedCounts } : {}),
+          ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
+        };
       });
 
       stream.on("tool_event", (event) => {
@@ -1131,6 +1171,7 @@ export default function UnifiedChatPage() {
     createSession,
     setPendingDelegation,
     pendingAttachments,
+    referenceTokens,
     clearAttachments,
     addMessage,
     appendStreamingChat,
@@ -1519,6 +1560,15 @@ export default function UnifiedChatPage() {
             <div className="p-3 md:p-4 border-t border-neutral-100 bg-white">
               <div className="max-w-3xl mx-auto space-y-3">
                 <AttachmentChips attachments={pendingAttachments} onRemove={removeAttachment} />
+                <ReferenceTokenChips
+                  tokens={referenceTokens}
+                  onRemove={(path) => setReferenceTokens((prev) => prev.filter((t) => t.path !== path))}
+                />
+                {referenceMintError && (
+                  <p className="mb-2 text-[11px] leading-relaxed text-amber-700" data-testid="reference-mint-error">
+                    {PRIVACY_COPY.referenceMintError}
+                  </p>
+                )}
 
                 <div className="relative flex flex-col bg-white border border-neutral-300 rounded-2xl focus-within:border-teal-600 focus-within:ring-1 focus-within:ring-teal-600/20 transition-shadow shadow-sm">
                   <textarea
@@ -1547,6 +1597,11 @@ export default function UnifiedChatPage() {
                           onClose={() => setShowAttachMenu(false)}
                           onUploadFile={handleAttachFile}
                           onUploadFolder={handleAttachFolder}
+                          onReferencePicked={(ref) =>
+                            setReferenceTokens((prev) =>
+                              prev.some((t) => t.path === ref.path) ? prev : [...prev, ref],
+                            )
+                          }
                         />
                       </div>
 

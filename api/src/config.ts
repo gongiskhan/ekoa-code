@@ -102,7 +102,9 @@ export function defaultLlmConfig(): LlmConfig {
   return {
     tiers: {
       FAST: { model: process.env.LLM_MODEL_FAST ?? 'claude-haiku-4-5-20251001', effort: 'low', weight: envFloat('LLM_WEIGHT_FAST', 0.02) },
-      WORKHORSE: { model: process.env.LLM_MODEL_WORKHORSE ?? 'claude-sonnet-4-6', effort: 'medium', weight: envFloat('LLM_WEIGHT_WORKHORSE', 0.1) },
+      // D7 (consumer run): refreshed to the current Sonnet id. Same $3/$15 sticker price as
+      // sonnet-4-6, so the tier weight stands (billing re-check 2026-07-11); env overrides win.
+      WORKHORSE: { model: process.env.LLM_MODEL_WORKHORSE ?? 'claude-sonnet-5', effort: 'medium', weight: envFloat('LLM_WEIGHT_WORKHORSE', 0.1) },
       EXPERT: { model: process.env.LLM_MODEL_EXPERT ?? 'claude-opus-4-8[1m]', effort: 'high', weight: envFloat('LLM_WEIGHT_EXPERT', 0.4) },
     },
     cacheReadFactor: envFloat('LLM_CACHE_READ_FACTOR', 0.25),

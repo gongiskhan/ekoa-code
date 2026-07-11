@@ -26,6 +26,15 @@ export const ClaudeAuthHealth = z.object({
   configured: z.boolean(),
   mode: CredentialMode.optional(),
   lastRefreshError: z.string().optional(),
+  // Diagnostics honesty (run s7, D6; FINDINGS 502-masks-401): the most recent CLASSED
+  // provider error — a class + timestamp, never bodies, never secrets. Operators get
+  // truth here while user-facing text stays white-labelled.
+  lastProviderError: z
+    .object({
+      class: z.enum(['auth', 'billing', 'invalid_request', 'rate_limit', 'transient']),
+      at: z.string(),
+    })
+    .optional(),
 });
 export type ClaudeAuthHealth = z.infer<typeof ClaudeAuthHealth>;
 

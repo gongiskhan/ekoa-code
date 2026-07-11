@@ -73,7 +73,13 @@ const nextConfig: NextConfig = {
   // HSTS / nosniff / referrer / X-Frame-Options.
   async headers() {
     const apiOrigin = process.env.NEXT_PUBLIC_API_URL || "";
-    const connectSrc = ["'self'", apiOrigin].filter(Boolean).join(" ");
+    // The ekoa-bridge daemon's loopback surface (FC-406/FC-407, run D2): grants + the
+    // egress ledger are fetched by the BROWSER straight from 127.0.0.1 — never proxied or
+    // persisted hosted-side. Default port is the proposed C1 stable port; keep the literal
+    // in sync with web/lib/bridge-local.ts (this config cannot import app code here).
+    const bridgeLocalOrigin =
+      process.env.NEXT_PUBLIC_BRIDGE_LOCAL_ORIGIN || "http://127.0.0.1:8791";
+    const connectSrc = ["'self'", apiOrigin, bridgeLocalOrigin].filter(Boolean).join(" ");
     // Artifact thumbnails are served by the API (/artifact-screenshots, ch07 §7.11); in dev
     // that origin is http so the blanket `https:` does not cover it — allow it explicitly.
     const imgSrc = ["'self'", "data:", "blob:", "https:", apiOrigin].filter(Boolean).join(" ");

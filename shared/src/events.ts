@@ -27,6 +27,20 @@ export const ChatRunEvent = z.discriminatedUnion('type', [
     durationMs: z.number().optional(),
   }),
   z.object({ type: z.literal('context_event'), name: z.string(), action: z.enum(['loaded', 'used']) }),
+  // FC-402 per-turn local-file activity (the trust chip's data): joined hosted-side from the
+  // daemon egress ledger (files + bytes-out) and the anonymisation audit's mask counts on the
+  // per-request correlation id (§12.6.2; ch17 §17.6; ch18 §18.2/§18.6). Emitted only on turns
+  // whose delegate_to_local call read local excerpts. TRANSIENT display metadata: it rides the
+  // stream and the client's in-memory mirror, never hosted conversation records (§18.2 —
+  // paths can themselves be sensitive). May arrive bytes-only before the audit-join lands
+  // (§12.6.2 cut-line). Chat stream only.
+  z.object({
+    type: z.literal('local_activity'),
+    files: z.array(z.object({ path: z.string(), range: z.string().optional() })),
+    bytesOut: z.number().optional(),
+    maskedCounts: z.record(z.number()).optional(),
+    correlationId: z.string().optional(),
+  }),
   z.object({
     type: z.literal('complete'),
     result: z.unknown().optional(),

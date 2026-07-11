@@ -91,7 +91,13 @@
         "automation-deterministic",
         "chat-thinking",
         "regressions-dashboard",
-        "integration-builder"
+        "integration-builder",
+        "bridge-presence",
+        "device-approval",
+        "privacy-grants-ledger",
+        "trust-chip",
+        "reference-attach",
+        "live-bridge"
       ]
     }
   },
@@ -123,9 +129,12 @@
       "ui/toast",
       "lib/artifact-bundle",
       "lib/stream-error-collision",
-      "lib/format-tokens"
+      "lib/format-tokens",
+      "use-bridge-presence",
+      "device-code",
+      "bridge-local"
     ],
-    "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page — added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation.",
+    "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation.",
     "mock_update_needed": [
       "orchestration-hydrate-reconcile",
       "components/data-backups-panel",

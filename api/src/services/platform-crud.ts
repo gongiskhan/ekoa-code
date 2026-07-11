@@ -175,3 +175,39 @@ export async function readRegisto(actor: Actor, username: string, q: { userId?: 
   await logActivity({ userId: actor.userId, username, orgId: actor.orgId }, 'registo', 'read', deps);
   return { items: page.map(registoEntry), total };
 }
+
+// ---- Anonymisation-audit reads (run s5; §17.6 metadata-only) ----------------------------
+
+/** Sum `classes` maps from anonymisation-audit rows. Metadata only — never bodies. */
+function sumClasses(rows: ActivityLogDoc[]): { classes: Record<string, number>; entityCount: number } {
+  const classes: Record<string, number> = {};
+  let entityCount = 0;
+  for (const r of rows) {
+    const md = (r.metadata ?? {}) as { classes?: Record<string, unknown>; entityCount?: unknown };
+    for (const [cls, n] of Object.entries(md.classes ?? {})) {
+      if (typeof n === 'number') classes[cls] = (classes[cls] ?? 0) + n;
+    }
+    if (typeof md.entityCount === 'number') entityCount += md.entityCount;
+  }
+  return { classes, entityCount };
+}
+
+/** FC-408: the caller's OWN masking-activity aggregate (per-user surface — least privilege;
+ *  org-wide views stay on the admin Registo). Counts by entity class, never values. */
+export async function maskingSummary(actor: Actor): Promise<{ classes: Record<string, number>; entityCount: number; events: number }> {
+  const rows = (await activityLogs.find({ orgId: actor.orgId, category: 'anonymisation', userId: actor.userId })) as ActivityLogDoc[];
+  const { classes, entityCount } = sumClasses(rows);
+  return { classes, entityCount, events: rows.length };
+}
+
+/** FC-402 audit-join (D3; §18.6 S6): mask counts for the correlation ids a turn's delegation
+ *  touched. Joined on the daemon-minted correlationId recorded by the anon-audit. */
+export async function maskedCountsForCorrelations(orgId: string, correlationIds: string[]): Promise<Record<string, number>> {
+  if (correlationIds.length === 0) return {};
+  const rows = (await activityLogs.find({
+    orgId,
+    category: 'anonymisation',
+    'metadata.correlationId': { $in: correlationIds },
+  })) as ActivityLogDoc[];
+  return sumClasses(rows).classes;
+}

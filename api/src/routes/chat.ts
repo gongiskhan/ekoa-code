@@ -41,6 +41,7 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
       message: body.message,
       language: body.language,
       ...(body.attachments ? { attachments: body.attachments } : {}),
+      ...(body.references ? { references: body.references } : {}),
       deps,
     };
     const { runId } = createChatRun(input);

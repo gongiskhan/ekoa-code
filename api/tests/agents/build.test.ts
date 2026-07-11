@@ -115,11 +115,12 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const call = t.streamCalls[0]!;
     expect(call.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']));
     expect(call.env.HOME).toBe('/pd');
-    // §5.4.4 build row: the knowledge tools + the context-loading tool mount as in-process MCP,
-    // and the allowlist carries their translated wire names alongside the untouched built-ins.
-    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'load_context']);
+    // §5.4.4 build row: the knowledge tools + the context-loading tool + the §5.4.8 delegation
+    // tool mount as in-process MCP, and the allowlist carries their translated wire names
+    // alongside the untouched built-ins.
+    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'load_context', 'delegate_to_local']);
     expect(call.allowedTools).toEqual(
-      expect.arrayContaining(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__load_context']),
+      expect.arrayContaining(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__load_context', 'mcp__ekoa__delegate_to_local']),
     );
     expect(call.allowedTools).not.toContain('knowledge_search'); // the plain name is translated, not duplicated
   });

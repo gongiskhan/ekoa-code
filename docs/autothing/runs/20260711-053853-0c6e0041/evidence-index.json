@@ -1,0 +1,157 @@
+{
+  "project": "ekoa-code",
+  "runId": "20260711-053853-0c6e0041",
+  "updatedAt": "2026-07-11T10:05:00Z",
+  "slices": [
+    {
+      "slice": "s0a",
+      "title": "Preconditions",
+      "kind": "infra",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s0a/gate-status.json",
+      "blockerSummary": "codex credential dead (401) - external; adversarial gates deferred until operator restores"
+    },
+    {
+      "slice": "s1",
+      "title": "GET /api/v1/bridge/status (hosted presence)",
+      "kind": "api",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s1/evidence.cast",
+      "verifiedAt": "2026-07-11T06:09:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s1/gate-status.json",
+      "blockerSummary": "codex adversarial gates pending credential restore"
+    },
+    {
+      "slice": "s2",
+      "title": "Presence wiring (FC-401/FC-405)",
+      "kind": "ui",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s2/evidence.cast",
+      "verifiedAt": "2026-07-11T06:35:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s2/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s3",
+      "title": "/settings/devices approval page",
+      "kind": "ui",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s3/evidence.cast",
+      "verifiedAt": "2026-07-11T06:45:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s3/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s4",
+      "title": "Daemon-served grants + ledger (FC-406/FC-407)",
+      "kind": "ui",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s4/evidence.cast",
+      "verifiedAt": "2026-07-11T07:00:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s4/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s5",
+      "title": "Trust chip + masking summary (FC-402/403/408)",
+      "kind": "mixed",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/evidence.cast",
+      "verifiedAt": "2026-07-11T07:11:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s5/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s6",
+      "title": "Reference attach (FC-400/401/411/412)",
+      "kind": "mixed",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/evidence.cast",
+      "verifiedAt": "2026-07-11T07:28:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s6/gate-status.json",
+      "blockerSummary": "codex adversarial gates queued on credential"
+    },
+    {
+      "slice": "s0b",
+      "title": "Owed retroactive adversarial reviews",
+      "kind": "review",
+      "status": "blocked",
+      "video": null,
+      "verifiedAt": null,
+      "flagged": true,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s0b/gate-status.json",
+      "blockerSummary": "codex 401 invalid_api_key (external); same-model retro reviews done as best-effort; cross-model reviews remain OWED"
+    },
+    {
+      "slice": "s7",
+      "title": "Diagnostics honesty + D7 (closes 502-masks-401)",
+      "kind": "api",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s7/evidence.cast",
+      "verifiedAt": "2026-07-11T07:45:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s7/gate-status.json",
+      "blockerSummary": "mandatory llm/ adversarial review owed (codex 401)"
+    },
+    {
+      "slice": "s8",
+      "title": "Cross-repo live evidence lane",
+      "kind": "evidence",
+      "status": "passed",
+      "video": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s8/evidence.cast",
+      "verifiedAt": "2026-07-11T07:58:00Z",
+      "flagged": false,
+      "gateStatus": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s8/gate-status.json",
+      "blockerSummary": "chat leg gated on the absent model credential (LIVE_MODEL)"
+    }
+  ],
+  "globalGate": {
+    "status": "completed-with-blockers",
+    "e2eAll": {
+      "cmd": "node scripts/suite-ledger-run.mjs --run",
+      "exit": 1,
+      "note": "run-scoped estate green; 49 red specs are pre-existing suites disjoint from this run's surface (FINDINGS row; env gap extends the 2026-07-08 DEVIATION)"
+    },
+    "build": {
+      "cmd": "npm run build",
+      "exit": 0
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": 0
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": 0
+    },
+    "ciLane": {
+      "cmd": "npm run ci:lane",
+      "exit": 0,
+      "note": "green at every slice gate (7 runs)"
+    },
+    "crossModel": {
+      "reviewAllApproved": false,
+      "pwTestAllPassed": false,
+      "note": "codex credential dead (401) the whole run - every adversarial gate OWED; remediation: codex login"
+    },
+    "designAudit": {
+      "verdict": "clean",
+      "note": "inline; UI slices reuse the drafted \u00a712.6 system"
+    },
+    "everySliceVideoVerified": true,
+    "videos": "7/7 (s1-s8 evidence casts; s0a/s0b are infra/review slices with no runtime surface)"
+  },
+  "runWalkthrough": {
+    "video": "docs/autothing/runs/20260711-053853-0c6e0041/walkthrough.mp4",
+    "durationSec": 49.5,
+    "status": "verified",
+    "verifiedAt": "2026-07-11T10:05:00Z",
+    "note": "run-level browser walkthrough, REAL stack + REAL sibling daemon, no stubs/no model: unpaired privacy surface -> real pair code approved on /settings/devices -> serve -> 'Ponte ligada' live -> honest grants/ledger states -> attach menu -> typed reference -> FC-411 verbatim consent -> token chip. Self-verified frame-by-frame (login/devices/privacy-live/typed-dialog/consent/token). Recorded via playwright-core video (the walkthrough skill itself is a broken symlink on this machine -> ~/dev/walkthrough missing; equivalent discipline applied)."
+  }
+}

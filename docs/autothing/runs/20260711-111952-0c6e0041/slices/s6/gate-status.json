@@ -1,0 +1,1 @@
+{ "slice": "s6", "repo": "ekoa-code", "status": "passed", "commit": "d947b82", "gates": { "e2e": "privacy-grants-ledger.spec 2/2 (grants live+revoke, all-sessions registo, honest unavailable)", "typecheck": 0, "lint": 0, "adversarial": "owed (codex 401)" } }

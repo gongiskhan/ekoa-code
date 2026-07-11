@@ -36,6 +36,8 @@ export interface LiveConnection {
   ws: WebSocket;
   registeredAt: number;
   alive: boolean;
+  /** ISO stamp of the last heartbeat proof (attach or pong) — the FC-405 "last seen". */
+  lastSeenAt: string;
 }
 
 /** Monotonic sequence so redials register strictly after their predecessor even within one ms. */
@@ -83,6 +85,16 @@ export async function isRevoked(pairingId: string): Promise<boolean> {
   return !row || row.revokedAt !== null;
 }
 
+/**
+ * All non-revoked pairing rows an owner holds, newest first (§18.3.4; FC-405). Owner-scoped by
+ * construction: the filter is the requester's own user id, so no cross-user (a fortiori no
+ * cross-org) row can be returned. Registry-only — presence reads never round-trip to a daemon.
+ */
+export async function getPairingsByOwner(ownerUserId: string): Promise<PairingRow[]> {
+  const rows = (await bridgePairings.find({ ownerUserId, revokedAt: null })) as PairingRow[];
+  return rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
 // --- Live-socket map ---------------------------------------------------------------------
 
 /**
@@ -106,6 +118,7 @@ export function attachLiveConnection(input: { pairingId: string; org: string; ow
     ws: input.ws,
     registeredAt: ++registrationSeq,
     alive: true,
+    lastSeenAt: new Date().toISOString(),
   };
   live.set(input.pairingId, conn);
   return conn;
@@ -167,7 +180,10 @@ export function bridgeConnectionCount(): number {
 /** Heartbeat state accessors (§18.3.3): a pairing's live/offline state IS its heartbeat state. */
 export function markAlive(pairingId: string): void {
   const conn = live.get(pairingId);
-  if (conn) conn.alive = true;
+  if (conn) {
+    conn.alive = true;
+    conn.lastSeenAt = new Date().toISOString();
+  }
 }
 export function markStale(pairingId: string): void {
   const conn = live.get(pairingId);
