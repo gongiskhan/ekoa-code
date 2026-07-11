@@ -1,9 +1,0 @@
-{
-  "slice": "s3-f3-registo", "runId": "20260710-100824-ee82acc1", "commit": "5937858", "tag": "bf-f3",
-  "test": { "status": "passed", "detail": "F3 Registo regression tests green; api suite green", "at": "2026-07-10T13:51:50Z" },
-  "securityWall": { "status": "passed", "detail": "typecheck/lint/chokepoint/sast/secrets 0", "at": "2026-07-10T13:51:50Z" },
-  "adversarialReview": { "verdict": "approve-after-fix", "by": "claude-fable-5", "detail": "F-1 unhandled-rejection FIXED (was ci:lane exit-1 cause), F-2 targetIds id-keyed FIXED, F-3 orphan-audit noted", "at": "2026-07-10T13:51:50Z" },
-  "codexSliceReview": { "status": "skipped", "reason": "profile-conditional (feature; F3/F29/F7 covered by fresh-context review; run-level codex checkpoint in phase 5)" },
-  "adversarialTest": { "status": "skipped", "reason": "kind-conditional (api; batched run-level pass in s6)" },
-  "video": { "mode": "asciinema", "status": "recorded", "file": "evidence.cast", "videoSha256": "573bf9b4bc0eeb26e6e220095aa6c407d50b9253c321ba0bc5c91a8abe44d9b8", "videoBytes": 778 }
-}

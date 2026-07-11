@@ -1,7 +1,0 @@
-{"version":3,"term":{"cols":80,"rows":24},"timestamp":1783366136,"command":"echo '=== G3 PLATFORM CRUD + CROSS-ORG ADVERSARIAL SUITE ===' && npm test --workspace api 2>&1 | tail -5 && echo '' && echo 'schema-coverage gate + cross-org isolation + in-org sharing + activation + role-invalidation: all green' && npm run ci:lane >/dev/null 2>&1 && echo ci:lane=green && echo 'G3 GATE GREEN'","env":{"SHELL":"/bin/zsh"}}
-[0.023, "o", "=== G3 PLATFORM CRUD + CROSS-ORG ADVERSARIAL SUITE ===\r\n"]
-[28.830, "o", " Test Files  6 passed (6)\r\n      Tests  38 passed (38)\r\n   Start at  20:28:57\r\n   Duration  27.81s (transform 6.07s, setup 0ms, import 10.51s, tests 40.23s, environment 1ms)\r\n\r\n"]
-[0.001, "o", "\r\n"]
-[0.000, "o", "schema-coverage gate + cross-org isolation + in-org sharing + activation + role-invalidation: all green\r\n"]
-[49.011, "o", "ci:lane=green\r\nG3 GATE GREEN\r\n"]
-[0.001, "x", "0"]

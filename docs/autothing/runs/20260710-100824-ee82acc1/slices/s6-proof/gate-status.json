@@ -1,9 +1,0 @@
-{
-  "slice": "s6-proof", "runId": "20260710-100824-ee82acc1", "commit": "f7fbfd1", "tag": "bf-proof",
-  "status": "blocked",
-  "test": { "status": "passed", "detail": "LIVE deterministic proof 15/15 against the real running stack (auth, F10 deny-list masking, F3 Registo rows, served-app plane, health honesty); full ci:lane EXIT 0 (1102 api + 32 shared + 119 web + web build)", "at": "2026-07-10T14:23:29Z" },
-  "builtinSecurityReview": { "status": "clean", "detail": "structural greps + sast/secrets/audit clean; per-slice fresh-context reviews on all 6 slices", "at": "2026-07-10T14:23:29Z" },
-  "codexCheckpoint": { "verdict": "clean", "by": "gpt-5.5", "effort": "high", "detail": "5 invariants; #1 found 2 data-exposures (F29 plan_failed.reason raw model output, F7 jobView verify-note PII) both FIXED + re-verified clean; #2 anonymisation-bypass, #3 authz/tenant-scoping, #4 FIXED-13, #5 injection/ReDoS all clean", "at": "2026-07-10T14:23:29Z" },
-  "blocker": { "cause": "external: no model credential in this environment (no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY, no ~/.config/ekoa/claude-credentials.json)", "affects": "the live-model J3 build journey + live-turn probes j2/j4/j6/j8b", "remediation": "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) && node .claude/skills/run-ekoa-code/provision-credential.mjs", "note": "keychain scan classifier-denied; local-token path invalidates the operator session" },
-  "video": { "mode": "asciinema", "status": "recorded", "file": "s6-live-proof.cast", "videoSha256": "c3a22a99a7691b28ab07f458883f368402a079c3ebda52c12c388f37bb6be753", "videoBytes": 1625 }
-}

@@ -1,5 +1,0 @@
-{ "slice":"phase-10","gate":"G10","status":"passed",
-  "greenCondition":"ci:lane exit 0 (shared 24 + api 915/1-skip incl. 27 migration-tool tests + web 103; lint 0-err; typecheck+build); the 3 tools re-runnable + dry-run/structural-green vs committed synthetic fixtures (import dry-run+execute round-trip, replay exact-match+corrupt-bite, workload structural+bad-platform-bite), verified standalone via the CLIs",
-  "tools":["scripts/migrate (import, §10.2/§10.3)","scripts/billing-replay (Part A, tolerance zero)","scripts/parity-workload (Part B, structural mode)"],
-  "reviews":{"claudeFreshContext":"done - 1 HIGH (journal wrote into source = read-only-on-source violation) + minor, ALL fixed+re-verified; the 3 critical invariants (honest checksum/decrypt-sample, real-formula zero-tolerance replay, zero-platform workload bite) confirmed hold","codexCrossModel":"deferred to the run final security phase (G12), with G8A/G9"},
-  "checkpoint":"tag gate-10" }

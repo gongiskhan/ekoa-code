@@ -1,1 +1,0 @@
-{"verdict":"clean","summary":"No material mapped-IPv4 decode bypass survives in the reviewed url-fetcher scope; dotted, full hex, and shortened hex ::ffff forms decode to blocked IPv4 octets before fetch proceeds.","findings":[]}

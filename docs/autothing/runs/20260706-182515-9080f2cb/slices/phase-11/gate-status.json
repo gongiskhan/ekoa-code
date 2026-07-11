@@ -1,6 +1,0 @@
-{ "slice":"phase-11","gate":"G11","status":"passed",
-  "greenCondition":"findings log 100% triage closure (G9 6 + G10 1-HIGH review findings fixed+re-verified + the discovery-then-regression gaps -> new specs); ci:lane exit 0 incl. new tests (web 113 = 103+10); §13.6 gap-table census complete (every gap: artifact / moot / reasoned deferral)",
-  "artifacts":["slices/phase-11/findings.md (§13.6 census + findings log)","web/__tests__/components/{usage,users,memory}-page.test.tsx (10 tests, page->store->typed-client)"],
-  "deferrals":["real-LLM chat/build = nightly/periodic managed-credential (§13.8)","platform-page e2e = needs a web-boot lane (pinned at unit level meanwhile)","live-daemon driver = no daemon in CI, SKIP-gated + manual pre-cutover","vision-based UI discovery = §13.8 periodic-audit cadence, post-cutover by design"],
-  "reviews":{"note":"G11 adds test specs + a census doc (no product-source change); no ch13 §13.7 adversarial trigger fires (no shared/auth/billing/llm/collections touch). Specs spot-checked honest (real testids + api-op args, page->store->client e2e). Codex cross-model for G8A/G9/G10 rides G12."},
-  "checkpoint":"tag gate-11" }

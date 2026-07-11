@@ -1,65 +1,31 @@
 # ekoa-code docs
 
-The map of what is documented and which layer is authoritative. Two layers:
+The map of the docs set. These docs are the authoritative as-built record for agents and humans; the
+build-run spec and gate journal are retired (archive note below). Start with `architecture.md`.
 
-- **Normative design record** - `spec/` (19 chapters + `SPEC.md`) and `spec/diagrams/`. The spec
-  wins by rule during the build; it is marked, never deleted. Chapter-by-chapter build status is in
-  the as-built annex below.
-- **As-built layer** - what the rc-1 code actually does, where it diverges from the spec, and how to
-  run/operate/repair it. Everything under `docs/`.
+## The docs
 
-## Start here
-
-| If you want to... | Read |
+| Doc | What it is |
 |---|---|
-| Orient in 5 minutes (topology, module map, chokepoint) | `as-built-architecture.md` |
-| Run, test, deploy-dry-run, or operate the stack | `operations-runbook.md` |
-| Know what is built vs partial vs deferred, per spec chapter | `spec-status-annex.md` |
-| See the open as-built defects and their fixes | `release/FINDINGS.md` |
-| Understand a past decision | `decisions.md`, then `../RUN_LOG.md` (append-only gate journal) |
+| `architecture.md` | THE architecture doc: product, repo layout, module map + tier/direction rules, import boundaries (FIXED-1), the LLM egress chokepoint (FIXED-3/8/13), injected seams, and the agent/knowledge/apps/automations/integrations/billing subsystems. |
+| `api-contract.md` | The `shared/` contract conventions: error envelope, auth tiers, the four SSE streams, the served-app byte-compat plane, and the schema-coverage / mount-coverage / protocol-parity gates (with the honor-system caveat). |
+| `security.md` | The numbered security invariants + enforcement homes, the anonymisation pipeline, access-control model, served-app admission planes, frame-header state, and incident-response + secure-development posture. |
+| `testing.md` | The five-layer QA process, the test estate map, the suite-ledger and contract gates, how to run everything (`ci:lane`, `e2e`, `e2e:server`, `gate:*`), e2e discipline, and the live-verification playbook. |
+| `operations-runbook.md` | Run (the run driver), test lanes, deploy dry-run, secrets/env, model-credential re-provisioning, the knowledge importer, backup, and known-flake pointers. |
+| `governance.md` | Where decisions and findings live, the standing invariants, review policy, reference-access rule, and the spec/RUN_LOG archive note. |
+| `findings.md` | THE live findings ledger: open, recently fixed, accepted/by-design. |
+| `decisions.md` | The append-only decision journal (dated entries not derivable from code or git). |
+| `known-flakes.md` | Observed test flakes and their environmental causes; linked from the runbook. |
+| `diagrams/` | The 12 Excalidraw sources (`01`..`12`). First-class (FIXED-12): a structural change without its diagram update is incomplete, and review must reject it. |
 
-## As-built layer (this directory)
+## Security policy skeleton
 
-- `as-built-architecture.md` - one-page architecture overview with pointers into the still-normative
-  spec chapters.
-- `operations-runbook.md` - run (the run-ekoa-code driver), test lanes (ci:lane, e2e:server + its
-  documented baseline debt), deploy dry-run, secrets/env posture, backup, known flakes.
-- `spec-status-annex.md` - every spec chapter marked as-built-verified / with-findings /
-  partially-built / historical / deferred. The live delta list is `release/FINDINGS.md`.
-- `diagram-census-and-deviation-annex.md` - G13 diagram/FIXED-12 reconciliation + the RUN_LOG
-  deviation count check.
-- `security/` - policy skeleton: `access-control.md`, `incident-response.md`,
-  `secure-development.md`.
+`security/` holds the ISMS-seed policy pages (`access-control.md`, `incident-response.md`,
+`secure-development.md`), distilled into `security.md`; they grow into the ISMS at certification phase.
 
-## Release hardening (`release/`)
+## Archive
 
-The 2026-07-08 rc-1 verification run (this layer fixes nothing; it verifies and curates):
-
-- `release/FINDINGS.md` - one row per finding across the 9 product journeys, classified
-  bug/harness-gap/judgment/docs-gap with severity + evidence pointer. **The authoritative delta
-  between spec/code and reality.**
-- `release/patch-briefs/` - one ready-to-run patch-profile brief per `bug` finding.
-- `release/e2e-harness-remediation-brief.md` - spec for the later run that closes the e2e baseline
-  debt (full-stack boot, REST-migrate the retired-protocol specs, fold in the journey suite).
-- `release/probes/` - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) + the
-  credentialed `boot-b.mjs` harness. Re-runnable; destined to become the permanent journey suite.
-- `release/evidence/` - captured probe output per journey (the compliance trail; keep).
-
-## Historical (marked, not deleted - the amendment audit trail)
-
-- `AMENDMENT-2-DIFF-SUMMARY.md`, `ekoa-code-spec-amendment-2-consolidated-ledger.md` - the Amendment
-  2 record that reshaped the spec (Mongo not Supabase, no license gate, etc.).
-- `autothing/` - build-run scaffolding (`friction-log.md`, `known-flakes.md`, `runs/`). Historical
-  process record; the colima/mongo flake note in `known-flakes.md` is still operationally useful
-  (linked from the runbook).
-
-## Elsewhere in the repo
-
-- `../spec/` - normative design (chapters 01-18 + SPEC.md); `../spec/diagrams/` first-class
-  (FIXED-12: a structural change without its diagram update is incomplete).
-- `../RUN_LOG.md` - append-only build journal: every gate G-P..G13, every DEVIATION, the terminal
-  completed-with-blockers verdict. Compliance material; never edited retroactively.
-- `../CLAUDE.md` - agent guidance + the verbatim ch02 §2.9 (lint/CI enforcement) and ch13 §13.10 (QA
-  process + diagram invariant) blocks.
-- `../.claude/skills/` - area skills: ekoa-architecture, ekoa-testing, ekoa-governance,
-  run-ekoa-code.
+The build-run design record - `spec/` (19 chapters + `SPEC.md`) and `RUN_LOG.md` (the append-only
+gate journal) - was **retired 2026-07 by operator decision** in favour of this docs set. History is
+preserved in git and under the tag `archive/pre-docs-cleanup-2026-07`. It is no longer normative;
+consult it only for build-run provenance these docs do not carry (see `governance.md`).

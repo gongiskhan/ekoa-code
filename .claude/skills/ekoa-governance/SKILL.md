@@ -1,32 +1,34 @@
 ---
 name: ekoa-governance
-description: Run mechanics for the ekoa-code build — gate template, checkpoint commits, RUN_LOG.md discipline, abort semantics, reference-access rules, decision precedence. Load BEFORE passing any gate, logging any decision, or touching ../ekoa-dev / ../ekoa-deploy. Do NOT use for code structure (ekoa-architecture) or test mechanics (ekoa-testing).
+description: Governance for ekoa-code — decision journal, findings ledger, review policy, reference-access rules for ../ekoa-dev and ../ekoa-deploy, archive pointers. Load BEFORE logging a decision, changing standing rules, or touching ../ekoa-dev / ../ekoa-deploy. Do NOT use for code structure (ekoa-architecture) or test mechanics (ekoa-testing).
 ---
 
 # ekoa-governance
 
-Normative source: `spec/14-build-sequence.md` §14.1-14.3.
+Normative source: `docs/governance.md`. The rc-1 build-run machinery (gate template, RUN_LOG,
+abort semantics) is RETIRED — history is preserved at git tag `archive/pre-docs-cleanup-2026-07`.
 
-## Decision precedence (14.1)
-1. FIXED decisions — never negotiable; impossible-as-specified → ABORT procedure (14.2.4), never improvise.
-2. Chapter text — deviations only where reality contradicts the spec, ALWAYS logged as DEVIATION.
-3. `spec/reference/` docs — ground truth for carried behavior.
-4. Conventional practice — fills unspecified detail; log DECISION only when a future reader would be surprised.
-Material ambiguities: resolve via precedence, log AMBIGUITY. Never silent.
+## Journals (both append-only, dated entries)
+- **Decisions** → `docs/decisions.md`: any choice a future reader would be surprised by —
+  standing-rule changes, spec-of-record amendments, accepted risks, deferred work with reasons.
+- **Findings** → `docs/findings.md`: the LIVE defect/risk ledger (OPEN / RECENTLY FIXED /
+  ACCEPTED). A discovery run or review finding is closed by a deterministic test or a written
+  dismissal here — never silently.
 
-## The gate template (14.2.1 — ALL six, in order)
-1. Phase green condition met (command exit 0 / artifact check).
-2. Full per-PR CI lane exit 0.
-3. BOTH reviews on the cumulative phase diff — Claude review then adversarial Codex review — verdicts in RUN_LOG; red adversarial verdict blocks.
-4. Suite ledger updated; ratchet holds.
-5. Affected diagrams updated in-phase (FIXED-12) or "no structural change" noted in the GATE entry.
-6. Checkpoint commit `checkpoint: G<N> <phase-name>` + git tag `gate-<N>` — itself green under item 2.
+## Standing invariants (survive any cleanup; enforced by lint/CI/tests)
+1. Import boundaries + egress chokepoint + module tiers (see ekoa-architecture).
+2. Diagram invariant (FIXED-12): structural change ⇒ `docs/diagrams/*.excalidraw` updated in the same unit of work.
+3. The five-layer QA process is binding (see ekoa-testing); suite-ledger census is strict.
+4. Review policy: every PR gets a model code review. PRs touching `shared/`, auth, billing, `llm/`, the collections engine — or exceeding 300 changed non-test lines — additionally get an adversarial cross-model review and merge only on its approval.
 
-## RUN_LOG.md (append-only, repo root)
-Entries timestamped ISO-8601 UTC + current phase: GATE (evidence, review verdicts, ledger delta, diagram note, tag) · DECISION (options, choice, reason) · AMBIGUITY (passages, reading, precedence rule) · DEVIATION (spec section, why, what instead) · ABORT (14.2.4). An undocumented deviation found later is a spec violation of the run.
+## Reference access
+`../ekoa-dev` (old Cortex) and `../ekoa-deploy` are READ-ONLY references. Deploy-config SHAPE
+only — NEVER copy secret values. Old-cortex content (prompts, skills, tests) may be ported only
+with runtime-truth validation against THIS repo's code (old claims about APIs/tools must be
+verified before they ship in content).
 
-## Reference access (14.1 — exhaustive; everything else is answered from spec/)
-`../ekoa-dev` and `../ekoa-deploy` are READ-ONLY. Sanctioned: (a) `ekoa-dev/ekoa/` wholesale for the ch12 web migration; (b) old Cortex only through files named port-as-is/adapt by `spec/reference/carryover-audit.md`; (c) the test estate per `spec/reference/test-audit.md`; (d) `ekoa-deploy` deploy-config SHAPE only — NEVER copy secret values; (e) design docs cited by ch17/18. Carryover verdicts are normative; disagreement on contact with reality = logged DEVIATION.
-
-## Abort (14.2.4)
-FIXED impossible as specified → halt, branch `abort/G<N>`, ABORT entry (FIXED-n, evidence, attempts, ≥2 candidate resolutions), final report. No gate after it is attempted.
+## Archive
+`spec/` (19 chapters + reference audits), `RUN_LOG.md`, `PLAN.md`, and the run evidence were
+retired 2026-07 by operator decision. Everything is recoverable from git history at tag
+`archive/pre-docs-cleanup-2026-07`. Do not resurrect them as living docs; distill anything
+still needed into `docs/`.

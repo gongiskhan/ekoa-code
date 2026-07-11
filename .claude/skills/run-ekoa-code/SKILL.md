@@ -21,7 +21,7 @@ root.
    `Access-Control-Allow-Origin`, so login fails preflight.
 
 The committed e2e harness only ever boots the API; the dashboard specs
-historically relied on an uncommitted "operator full-stack env" (RUN_LOG
+historically relied on an uncommitted "operator full-stack env" (build-run note,
 DEVIATION, 2026-07-08). This driver **is** that missing bring-up: it runs the
 real API on an internal port (`4211`), puts a tiny zero-dependency CORS reverse
 proxy on `4111` (the port `backend.port` names, so the web bundle resolves to

@@ -50,8 +50,8 @@ unit + contract suites under vitest); and finally `build` (shared, api, web) wit
 
 `npm run e2e:server` (`scripts/e2e-with-server.mjs`) boots `dev-api.mjs --built` (so run
 `npm run build` first), waits for the featured-app prebuild, then runs the suite-ledger e2e. It
-carries **known, documented committed-baseline debt** (RUN_LOG.md DEVIATIONs, 2026-07-08) - this is
-not a regression and not a flake:
+carries **known, documented committed-baseline debt** (see `docs/testing.md` and
+`docs/known-flakes.md`) - this is not a regression and not a flake:
 - The **band1** dashboard specs (13) drive the Next dashboard on `:3000`, which this api-only
   harness never starts, so each `page.goto('/login')` gets `ERR_CONNECTION_REFUSED`. The old
   "127/127" runs relied on the operator's separately-running dev web.
@@ -61,7 +61,7 @@ not a regression and not a flake:
 - The **4 `erp-*` drivers** target an out-of-catalog `@brasilsalomao.pt` tenant fork; they are
   deferred to the post-run CUTOVER milestone and report `skipped (awaiting CUTOVER)` - censused,
   never a silent pass.
-The repair plan is `docs/release/e2e-harness-remediation-brief.md` (a full-stack self-contained
+The repair plan is `docs/e2e-harness-remediation-brief.md` (a full-stack self-contained
 harness, migration of the retired-protocol specs, and ERP-fork reconstitution).
 
 Security gates, run out of the lane: `gate:sast` (semgrep over `api/src` + `shared/src`),
@@ -70,7 +70,8 @@ Security gates, run out of the lane: `gate:sast` (semgrep over `api/src` + `shar
 ## Deploy (dry-run only)
 
 This repo builds and validates the deploy shape; it never performs a real deploy or cutover. A real
-cutover is the founder-gated chapter-10 procedure, outside this run - see `spec/10-*.md`.
+cutover is the founder-gated cutover procedure, outside this run - archived with the build-run spec
+(see the archive note in `docs/governance.md`).
 
 - `Dockerfile.api` - multi-stage `node:20-bookworm-slim`, builds shared+api, ships `api/dist` +
   `api/assets` + production deps only, runs as non-root `node` on `:4111`. Secrets are never baked
@@ -98,11 +99,10 @@ provider credential is a single AES-encrypted document in the `credentials` Mong
 `api/src/llm/credentials.ts`. There is no env var, no HTTP route, and no migration that seeds it. A
 fresh boot is therefore honestly un-credentialed: `GET /health` reports `claudeAuth.configured=false`
 and `claudeAuth.ok=false`, and every chat/build call errors with "No model credential configured"
-until the credential is seeded out-of-band. Remediation brief: `docs/release/FINDINGS.md` (F2). To run
-real chat/build in dev today, `docs/release/probes/boot-b.mjs` seeds the credential from the operator's
-Keychain into an ephemeral mongo before boot; note the DEFAULT chokepoint topology still 401s even
-credentialed (the gateway key is never provisioned - F2), so that harness sets
-`LLM_CHOKEPOINT_BASE_URL=https://api.anthropic.com` via `EKOA_LLM_DIRECT=1`.
+until the credential is provisioned. Because dev Mongo is in-memory and ephemeral (below), the
+credential is wiped on every restart and must be re-provisioned each boot - see "Model credential
+re-provisioning" below. The original provisioning gap (`docs/findings.md`, F2) is fixed-verified; the
+sanctioned dev path is `provision-credential.mjs`.
 
 Env names the API reads, with dev defaults:
 
@@ -134,6 +134,43 @@ Env names the API reads, with dev defaults:
 - OAuth provider creds for integrations: `MICROSOFT_*`, `MICROSOFT_SSO_*`, `GOOGLE_CLIENT_*`,
   `ADOBE_*` (see `deploy/api.service.json` `env_passthrough` for the deploy-time list).
 
+## Model credential re-provisioning
+
+The provider credential is the AES-encrypted `credentials/default` document in Mongo. Dev Mongo is
+`mongodb-memory-server`, created fresh and discarded on every boot, so the credential does not survive
+a restart - re-provision it after every `driver.mjs up` (and after any `api/` rebuild + restart):
+
+```
+export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or an ANTHROPIC_API_KEY for api-key mode
+node .claude/skills/run-ekoa-code/provision-credential.mjs
+```
+
+This writes the credential through the in-process `setCredential` seam - there is no HTTP route or env
+var that seeds it (invariant 4). Confirm with `GET /health`: `claudeAuth.ok=true`,
+`claudeAuth.configured=true`, `meteringAnomalies=0`, `gatewayUnmeteredCalls=0`. Only then is a live
+model turn trustworthy. Do not use the operator's live Claude Code login token for long-lived stacks -
+it rotates on `/login` and invalidates the seeded snapshot (`docs/known-flakes.md`); provision a
+dedicated account token.
+
+## Knowledge importer
+
+The `_shared` legal corpus (the public partition every org's searches also consult) is written ONLY by
+the offline importer CLI - the online service refuses a shared-org actor. Import a staged corpus:
+
+```
+npm run tool:knowledge-import -- --source <staged-corpus-dir>              # dry-run (default)
+npm run tool:knowledge-import -- --source <staged-corpus-dir> --execute    # write
+npm run tool:knowledge-import -- --source <dir> --collection legislacao --collection jurisprudencia
+```
+
+Dry-run is the default; `--execute` is required to write. The target vault + FTS5 index live under
+`EKOA_DATA_DIR` (or `~/.ekoa/data`); the tool REFUSES (exit 2) if `--source` resolves inside that data
+dir - the live corpus must never be its own import source. A per-run journal is written to
+`RUN_LOG.knowledge-import.txt` in the CWD (override with `--journal`); `--prune` removes vault docs
+absent from the source (re-sync pattern), `--force` re-imports unchanged docs. **Restart the api after
+an import** so the index-store picks up the new partition. The real production corpus import is
+operator-blocked on ssh/rsync of the staged corpus (`docs/findings.md`, `prod-corpus-import`).
+
 ## Backup
 
 State that matters:
@@ -152,7 +189,7 @@ backups out-of-band.
 
 ## Known flakes
 
-- **colima/mongodb-memory-server hang** (`docs/autothing/known-flakes.md`, 2026-07-08): the api
+- **colima/mongodb-memory-server hang** (`docs/known-flakes.md`, 2026-07-08): the api
   vitest suite hangs on a `mongodb-memory-server` test (worker at 0% CPU, `mongod` up but blocked)
   when `ci:lane` runs concurrently with a colima docker VM under heavy load. Not a code regression -
   the same suite passes when run alone. Workaround: do not run `ci:lane` concurrently with docker

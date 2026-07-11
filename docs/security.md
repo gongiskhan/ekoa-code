@@ -1,0 +1,143 @@
+# Security
+
+The binding security invariants, the anonymisation pipeline, the access-control model, and the
+incident-response + secure-development posture. Every invariant names its enforcement home.
+
+## The numbered invariants (ch09)
+
+Eleven carried invariants; each has a mechanical enforcement home (lint, grep gate, boot gate, or a
+named test suite).
+
+1. **No Anthropic access outside `llm/`.** Every Anthropic byte flows through `api/src/llm/`; no
+   model call exists in runtime platform paths. Enforced by ESLint `no-restricted-imports` +
+   the `api.anthropic.com`/`@anthropic-ai/` grep gate + the attribution-tag test gate.
+2. **Egress controls.** (a) Model-bound anonymisation before Anthropic (below); (b) client-bound
+   error sanitisation - `services/sanitizeOutbound` runs at exactly two egress points (the SSE event
+   serializer and the Express error middleware), replacing any provider-identifying or provider-auth
+   text wholesale. No provider identity ("Anthropic"/"Claude"/auth markers) ever reaches a user, on
+   SSE or REST. Test gate injects a provider-auth error and asserts neither leaks.
+3. **Single audit write path.** All audit logging flows through one `logActivity(user, category,
+   type, description, metadata?)` in `data/`; direct writes to the activity collection are grep-
+   banned. Writes are best-effort (a persistence failure is swallowed, never fails the domain action)
+   and carry `orgId` for the org-scoped Registo read surface.
+4. **Centrally managed model credentials.** One AES-encrypted `credentials` singleton per environment
+   (`_id: 'default'`), two auth modes as config (`oauth` / `api-key`), no per-user ad hoc keys, no
+   `~/.claude` fallback. The SDK subprocess env builder deletes any inherited provider env
+   (`SCRUBBED_PROVIDER_ENV`: `ANTHROPIC_API_KEY`/`ANTH_API_KEY`/`ANTHROPIC_BASE_URL`) and injects
+   exactly one credential + the chokepoint base URL. Grep gate: no provider-credential env name
+   appears outside the `api/src/llm/` custody code.
+5. **Org + user scoping on every data access; single multi-org process.** Scope resolution in `data/`
+   is the only query constructor and requires org + user context; an unscoped query is inexpressible
+   and routes never import `data/`. Ownership mismatch returns uniform not-found (never leaks
+   existence). Enforced by the cross-org adversarial suite and in-org sharing tests.
+6. **Credential encryption at rest; key mandatory; single crypto module.** One AES-256-GCM
+   implementation in `data/`; `ENCRYPTION_KEY` absent = refuse to boot in every environment; no
+   default key constant anywhere (grep gate).
+7. **Secret guard on code egress.** User-app code leaves through exactly three doors (version
+   snapshot commit, GitHub mirror push, download zip); each runs the secret scanner. A hit blocks:
+   `commit-blocked` audit row on snapshot, `422 SECRET_GUARD_BLOCKED` on download.
+8. **SSRF guard on platform fetches of user-supplied URLs** (brand research, knowledge crawl/seed,
+   uploaded links) via the guarded fetcher in `services/`. Scope boundary stated honestly: user-
+   defined integration actions call arbitrary user endpoints by design and are not SSRF-gated.
+9. **Webhook HMAC + dedup + audit.** Raw-body HMAC (verifier sees unmodified bytes - boot self-test),
+   disabled-check AFTER signature (410 signed / 401 unsigned), dedup on `UNIQUE(trigger_id,
+   dedup_key)` returning `{duplicate:true}`, and a `webhook_audit` row per outcome.
+10. **Sandbox path confinement.** Every user-derived filesystem path resolves through the symlink-
+    hardened `resolveWithinJail`/safe-path helper in `services/`, jailing it to the owner sandbox;
+    traversal/absolute/symlink fixtures all fail with uniform not-found. Covers artifact files AND the
+    automation `file.read`/`file.write` operations (P-15).
+11. **Production guard on default secrets.** JWT secret fails closed on default/unset in a
+    production-like environment; `ENCRYPTION_KEY` is stricter - mandatory everywhere.
+
+Fail-closed boot gates (`config.ts` boot): config secrets (fatal), App-SSO redirect URI (fatal),
+storage backend (fatal), Claude credential init (non-fatal - agent calls fail until healed), webhook
+raw-body self-test (non-fatal), port collision EADDRINUSE (fatal).
+
+## Tool-less anti-injection agents (§5.6.4)
+
+Agents whose only input is untrusted external/brand content run **tool-less** by design so a prompt-
+injection attempt has no tool to reach: `brand-research` and the served-app assistant produce
+proposals only. All model output and user content is untrusted input - nothing model-generated is
+interpolated into queries, shell commands, or privileged calls without validation; generated apps are
+static client bundles under a strict CSP with no server-side eval ever.
+
+## Anonymisation pipeline (ch17)
+
+The pipeline is a submodule of the chokepoint (`llm/anonymise/`), invoked by `llm/client.ts` after
+the payload is assembled and before any Anthropic request, and again on every response and streamed
+delta. Because the chokepoint is the only transport, a caller cannot skip it.
+
+Per request: **collect** all model-bound text; **detect** sensitive spans on the delta only (never
+the tokenized prefix - preserves prompt caching); **tokenize** each span into a deterministic,
+format-preserving fake recorded in the session vault; **forward** tagged with a per-request
+correlation id; **de-tokenize** the response, including `tool_use` argument blocks, streaming with
+straddle buffering.
+
+Detection layers, all behind one interface: (a) PT structured-ID recognizers (regex + checksum:
+NIF/NIPC/NISS/utente/CC/IBAN-PT/CITIUS) - near-certain; (b) the **per-org deny-list** (the firm's
+client/matter/party names, matched literally) - itself secret material, so it is AES-encrypted with
+an org-scoped key, access-logged, and never sent to Anthropic; (c) a recall-biased PT-PT NER head
+(in-process ONNX). Fail-closed: if (a) or (b) is unavailable the request is refused, not forwarded
+un-tokenized; (c) is best-effort and degrades without failing the request. Structured-ID fakes are
+minted with a **deliberately invalid checksum** so a fake can never collide with a real identifier.
+
+The vault (value->token map) is per-session, **in-memory, TTL, never persisted, cleared on session
+end** - a re-identification key that does not exist cannot be produced. It is keyed by the hosted
+conversation id so tokens stay consistent across delegated local turns. Audit is **metadata only**
+(entity classes, counts, correlation id, payload hash - never bodies, never the vault), async, hash-
+chained and tamper-evident, folded into the single Registo write path. The payload-capture harness
+asserts every planted synthetic value appears tokenized (never cleartext) in every captured outbound
+request while the user-visible response is cleartext. The Garrison line (FIXED-7): the mechanism is
+Ekoa core; the PT-PT ruleset and per-org deny-lists are loaded configuration, never core.
+
+## Access control model
+
+Deny by default: every `/api/v1` route passes auth middleware; pre-auth exemptions are exactly the
+`public` class, enforced by a route-census contract test. Authorization is deterministic code, never
+the model. Object-level ownership/org checks on every resource fetch, uniform 403/404. Three roles
+(`super-admin`/`org-admin`/`builder`); privileged routes re-resolve the user from the store. Private
+items (memories, artifacts) are invisible to org admins - their existence appears in Registo
+metadata, never their content; sharing is explicit via `visibility`. Credential planes are mutually
+non-interchangeable: platform session JWT (24 h / 30 d rememberMe), bridge token (600 s,
+`aud: ekoa-bridge`), app-SSO session (8 h HttpOnly cookie), gateway key (static, constant-compare).
+Deactivation is write-through (immediate) and bumps the token epoch, invalidating outstanding JWTs.
+
+**Served-app admission planes.** The per-app `/api/app-data` plane is unauthenticated app-global
+storage scoped only by `X-Ekoa-App-Id` (carried verbatim for byte-compatibility) - it must never hold
+confidential or per-user-private data. Anything private lives on a server-authenticated plane: the
+shared namespace (`/api/app-shared`, resolved owner + same-origin guard + `sharedData` opt-in) or
+behind the platform JWT / app-SSO session. This open posture is a documented decision, not an
+oversight.
+
+**Frame headers (current state).** The api plane sets `X-Frame-Options: DENY` / `frame-ancestors
+'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`. The `/apps` embed
+allowlist (so the cross-origin dashboard can iframe a served artifact) is **PENDING** - tracked as an
+open security task in `docs/findings.md`.
+
+## Incident response
+
+Solo-operator posture: the founder is incident commander. Detection sources, in order: **Registo**
+(append-only, single write path - agent actions, privileged data access, auth/admin ops), the
+anonymisation audit (hash-chained, metadata-only), the chokepoint meter (anomalous-burn / spend-cap
+trips), and boot-gate failures. Severity: S1 confirmed cross-org exposure / key compromise / PII
+egress past the anonymisation boundary; S2 single-org/user exposure or auth bypass without confirmed
+exploitation; S3 vulnerability without exposure. Containment (first hour): scope from Registo; cut
+access narrowly (deactivate account -> bump token epoch -> revoke bridge pairings -> rotate the
+secret in Secret Manager -> last resort stop the service); preserve the append-only evidence before
+any remediation. GDPR: personal-data breach to the supervisory authority within 72 h of awareness
+unless no risk; record the decision either way. Post-incident: write it up in `docs/decisions.md`,
+and every accepted root cause ships a deterministic guard in the same fix.
+
+## Secure development
+
+All change lands through the gated process (spec-first history preserved in git; see
+`docs/governance.md`). Structural enforcement is the lint + CI wall above. Input/output: boundary
+validation via the shared zod contract on every request (the contract is simultaneously input schema
+and injection defence); non-2xx bodies validate against the error envelope; no secrets/keys/org data
+in system prompts. CI security gates run on every lane: gitleaks (secrets), Semgrep (SAST),
+`npm audit` severity, the boundary/chokepoint grep gates, plus the named security suites - cross-org
+adversarial, in-org sharing, rate-limit/spend-cap, anonymisation payload-capture, and the bridge
+S1-S6 scenarios. The determinism ratchet: every accepted review or incident finding ships a
+deterministic guard (test, lint rule, Semgrep pattern, grep gate) in the same fix, so reviews trend
+toward judgment-only and regressions are machine-caught. Secrets live in a managed store only (GCP
+Secret Manager in prod; a bootstrap-generated key in dev); rotation is documented per secret.

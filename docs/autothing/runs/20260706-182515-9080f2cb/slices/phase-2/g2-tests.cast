@@ -1,6 +1,0 @@
-{"version":3,"term":{"cols":80,"rows":24},"timestamp":1783364638,"command":"echo '=== G2 DATA CORE + AUTH: engine parity (8 semantics) + crypto/jwt + activation write-through + boot fail-closed ===' && npm test --workspace api 2>&1 | tail -6 && echo '' && echo '=== ci lane + security gates ===' && npm run ci:lane > /dev/null 2>&1 && echo ci:lane=green && npm run gate:sast >/dev/null 2>&1 && echo sast=green && echo 'G2 GATE GREEN'","env":{"SHELL":"/bin/zsh"}}
-[0.007, "o", "=== G2 DATA CORE + AUTH: engine parity (8 semantics) + crypto/jwt + activation write-through + boot fail-closed ===\r\n"]
-[15.018, "o", "\r\n Test Files  4 passed (4)\r\n      Tests  25 passed (25)\r\n   Start at  20:03:59\r\n   Duration  14.03s (transform 3.10s, setup 0ms, import 5.53s, tests 14.05s, environment 1ms)\r\n\r\n\r\n=== ci lane + security gates ===\r\n"]
-[34.383, "o", "ci:lane=green\r\n"]
-[7.316, "o", "sast=green\r\nG2 GATE GREEN\r\n"]
-[0.001, "x", "0"]
