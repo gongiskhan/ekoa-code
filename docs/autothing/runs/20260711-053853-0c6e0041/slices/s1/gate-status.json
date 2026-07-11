@@ -1,0 +1,21 @@
+{
+  "slice": "s1",
+  "title": "GET /api/v1/bridge/status (hosted presence, registry-only)",
+  "updatedAt": "2026-07-11T06:09:30Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "retries": { "limit": 5, "used": 0 },
+  "gates": {
+    "tests": { "cmd": "npx vitest run tests/contract/bridge-status.test.ts (+schema/mount coverage)", "exit": 0, "at": "2026-07-11T06:06:00Z", "summary": "12 passed (7 new + coverage gates)" },
+    "ciLane": { "cmd": "npm run ci:lane", "exit": 0, "at": "2026-07-11T06:07:30Z", "summary": "full lane green" },
+    "review": { "verdict": "clean", "by": "claude-inline-8-angle", "at": "2026-07-11T06:08:00Z", "notes": "1 candidate refuted (alive-flag flapping), 1 hygiene revert (next-env.d.ts churn)" },
+    "codexReview": { "verdict": "blocked-external", "rounds": 0, "by": "codex", "at": "2026-07-11T06:08:20Z", "lastReport": null, "overrides": [], "blocker": "401 invalid_api_key; re-run queued for when the operator restores the credential" },
+    "codexPwTest": { "result": "blocked-external", "by": "codex", "at": "2026-07-11T06:08:20Z", "report": null },
+    "designAudit": { "verdict": "n/a", "by": [], "notes": "API-only slice, no UI" },
+    "video": { "status": "verified", "verifiedAt": "2026-07-11T06:09:00Z", "flagged": false, "link": "docs/autothing/runs/20260711-053853-0c6e0041/slices/s1/evidence.cast", "runDir": null }
+  },
+  "blockers": [
+    { "name": "codex-credential-dead", "external": true, "cause": "codex exec -> 401 invalid_api_key (probed again this slice)", "remediation": "codex login", "impact": "adversarial review+test pending; slice otherwise green" }
+  ]
+}

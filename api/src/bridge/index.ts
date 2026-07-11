@@ -27,6 +27,7 @@ export { signDelegatedTask, verifyDelegatedTaskSig, canonicalTaskBinding } from 
 export {
   registerPairing,
   getPairingById,
+  getPairingsByOwner,
   getConnectionByOwner,
   getLiveConnection,
   isLive,

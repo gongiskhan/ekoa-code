@@ -80,6 +80,8 @@ const COVERED = new Set<string>([
   'memories.bulkDelete', 'memories.submitSignal', 'memories.listTags', 'memories.stats',
   'knowledge.updateSource', 'knowledge.crawlSource', 'knowledge.crawlStatus', 'knowledge.refreshSchedule',
   'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
+  // Local-bridge consumer run s1 — hosted presence (bridge-status.test.ts)
+  'ekoaLocal.bridgeStatus',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

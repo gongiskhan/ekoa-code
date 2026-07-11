@@ -45,6 +45,17 @@ export const BridgeTokenResponse = z.object({
 });
 export type BridgeTokenResponse = z.infer<typeof BridgeTokenResponse>;
 
+/** Hosted bridge presence, derived from the pairing registry ONLY — no daemon round trip
+ *  (ch18 §18.3.3; §12.6 FC-401/FC-405). `pairingId` present when paired; `lastSeenAt` is the
+ *  last heartbeat stamp and only known while a live socket exists in this process. */
+export const BridgeStatusResponse = z.object({
+  paired: z.boolean(),
+  live: z.boolean(),
+  pairingId: z.string().optional(),
+  lastSeenAt: z.string().optional(),
+});
+export type BridgeStatusResponse = z.infer<typeof BridgeStatusResponse>;
+
 export const BridgeDebugInvokeRequest = z.unknown();
 export type BridgeDebugInvokeRequest = z.infer<typeof BridgeDebugInvokeRequest>;
 
@@ -98,6 +109,12 @@ export const ekoaLocalEndpoints = {
     path: '/api/v1/bridge/token',
     auth: 'user',
     response: BridgeTokenResponse,
+  },
+  bridgeStatus: {
+    method: 'GET',
+    path: '/api/v1/bridge/status',
+    auth: 'user',
+    response: BridgeStatusResponse,
   },
   bridgeConnect: {
     method: 'GET',
