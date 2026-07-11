@@ -1,20 +1,22 @@
 /**
- * Browser -> daemon loopback client (run s4; D2). FC-406/FC-407 are explicit: grants and
- * the egress ledger are served LIVE by the ekoa-bridge daemon on 127.0.0.1 and rendered
- * straight from it — they NEVER transit or persist hosted-side (paths are sensitive;
- * ch18 §18.2). The browser therefore fetches the daemon's loopback surface directly.
+ * Browser -> daemon loopback client (runs s4 + 20260711-111952 s4; D2). FC-406/FC-407 are
+ * explicit: grants and the egress ledger are served LIVE by the ekoa-bridge daemon on
+ * 127.0.0.1 and rendered straight from it — they NEVER transit or persist hosted-side
+ * (paths are sensitive; ch18 §18.2). The browser therefore fetches the daemon's loopback
+ * surface directly.
  *
- * Counterpart contract (docs/bridge-counterpart-changes.md): C1 gives the surface a stable
- * default port (proposed 8791, overridable via NEXT_PUBLIC_BRIDGE_LOCAL_ORIGIN — the same
- * origin is added to the dashboard CSP connect-src in next.config.ts); C2 adds CORS for the
- * app origins (bind stays 127.0.0.1-only); C3 adds GET /grants + POST /grants/revoke.
- * GET /status and GET /ledger?session= exist in the daemon today. Against a daemon that
- * predates C1-C3 every call here fails fast and the sections render their honest
- * unavailable states — never fabricated data (§12.6).
+ * The counterpart contract (docs/bridge-counterpart-changes.md C1–C3) is IMPLEMENTED in
+ * the daemon since its 2026-07-11 run: stable port 8791 (overridable via
+ * NEXT_PUBLIC_BRIDGE_LOCAL_ORIGIN — the same origin sits in the dashboard CSP connect-src,
+ * next.config.ts), CORS for the app origins (bind stays 127.0.0.1-only), GET /grants +
+ * POST /grants + POST /grants/revoke, GET /browse (the in-app picker read that replaced the
+ * C4 native picker), and the all-sessions GET /ledger. Against an older daemon every call
+ * here fails fast and the sections render their honest unavailable states — never
+ * fabricated data (§12.6).
  *
  * Responses are zod-parsed (tolerant: passthrough + row-level salvage) against the wire
- * shapes vendored from the daemon's ledger contract (ekoa-bridge src/ledger/ledger.ts,
- * §18.5.1). Rows this client cannot parse are dropped and counted, never invented.
+ * shapes vendored from the daemon's contract (ekoa-bridge src/surface/, src/ledger/).
+ * Rows this client cannot parse are dropped and counted, never invented.
  */
 import { z } from 'zod';
 
@@ -32,6 +34,7 @@ export const DaemonGrant = z
     grantRef: z.string(),
     label: z.string().optional(),
     path: z.string().optional(),
+    session: z.string().optional(),
     scope: z.string().optional(),
     createdAt: z.string().optional(),
   })
@@ -86,7 +89,34 @@ export const DaemonLedgerRow = z.discriminatedUnion('kind', [
 ]);
 export type DaemonLedgerRow = z.infer<typeof DaemonLedgerRow>;
 
-const LedgerResponse = z.object({ session: z.string(), rows: z.array(z.unknown()), corrupt: z.unknown().optional() }).passthrough();
+/** `session` is present on per-session reads and absent on the all-sessions merge. */
+const LedgerResponse = z.object({ session: z.string().optional(), rows: z.array(z.unknown()), corrupt: z.unknown().optional() }).passthrough();
+
+export const BrowseEntry = z
+  .object({ name: z.string(), kind: z.enum(['dir', 'file']), size: z.number().optional() })
+  .passthrough();
+export type BrowseEntry = z.infer<typeof BrowseEntry>;
+
+export const BrowseResult = z
+  .object({ path: z.string(), parent: z.string().optional(), entries: z.array(z.unknown()), truncated: z.boolean().optional() })
+  .passthrough();
+export interface DaemonBrowse {
+  path: string;
+  parent?: string;
+  entries: BrowseEntry[];
+  truncated: boolean;
+}
+
+const CreatedGrant = z
+  .object({
+    grantRef: z.string(),
+    path: z.string(),
+    session: z.string(),
+    label: z.string().optional(),
+    requested: z.enum(['dir', 'file']).optional(),
+  })
+  .passthrough();
+export type CreatedGrant = z.infer<typeof CreatedGrant>;
 
 // -- transport -----------------------------------------------------------------------------
 
@@ -133,28 +163,53 @@ export async function revokeDaemonGrant(grantRef: string): Promise<void> {
   });
 }
 
-/** A picker/typed-input result: the daemon-minted session grant + its display label. */
+/** A minted reference the outgoing message carries: the daemon grant + its display label. */
 export const ReferencePick = z.object({ grantRef: z.string().min(1), label: z.string().min(1) }).passthrough();
 export type ReferencePick = z.infer<typeof ReferencePick>;
 
 /**
- * POST /picker (C4, the largest counterpart item): the daemon opens its native OS dialog,
- * mints a session grant for the chosen path and returns `{grantRef, label}`. Returns
- * 'unavailable' when the daemon predates C4 (or the user is offline) — the composer then
- * falls back to the typed-reference input (the brief's pre-authorized fallback), and
- * 'cancelled' when the daemon reports the user dismissed the dialog.
+ * A browser-dialog selection BEFORE minting (owner decision D3, 2026-07-11): picks are held
+ * as pending tokens and minted into session grants only at SEND time, when the chat session
+ * id actually exists — a brand-new chat has none until the first message. No grantRef is
+ * typed or shown to the user at any point.
  */
-export async function openDaemonPicker(): Promise<ReferencePick | 'unavailable' | 'cancelled'> {
-  try {
-    // A native OS dialog stays open until the user decides — give it minutes, not the
-    // read timeout.
-    const body = await daemonFetch('/picker', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }, 5 * 60_000);
-    if (typeof body === 'object' && body !== null && (body as { cancelled?: unknown }).cancelled === true) return 'cancelled';
-    const parsed = ReferencePick.safeParse(body);
-    return parsed.success ? parsed.data : 'unavailable';
-  } catch {
-    return 'unavailable';
-  }
+export interface PendingReference {
+  path: string;
+  label: string;
+  kind: 'dir' | 'file';
+}
+
+/** GET /browse — the in-app picker read (supersedes the C4 native picker). */
+export async function browseDaemon(path?: string): Promise<DaemonBrowse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  const body = BrowseResult.safeParse(await daemonFetch(`/browse${query}`));
+  if (!body.success) throw new BridgeLocalUnavailable('browse shape');
+  const entries = body.data.entries
+    .map((e) => BrowseEntry.safeParse(e))
+    .filter((r): r is { success: true; data: BrowseEntry } => r.success)
+    .map((r) => r.data);
+  return {
+    path: body.data.path,
+    ...(body.data.parent !== undefined ? { parent: body.data.parent } : {}),
+    entries,
+    truncated: body.data.truncated === true,
+  };
+}
+
+/**
+ * POST /grants — mint a session grant for a picked path (selection IS authorization, D2).
+ * The daemon grants a FILE pick's parent folder and says so (`path` is the granted root).
+ */
+export async function createDaemonGrant(input: { path: string; session: string; label?: string }): Promise<CreatedGrant> {
+  const body = CreatedGrant.safeParse(
+    await daemonFetch('/grants', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  );
+  if (!body.success) throw new BridgeLocalUnavailable('grant shape');
+  return body.data;
 }
 
 export interface DaemonLedger {
@@ -163,9 +218,11 @@ export interface DaemonLedger {
   unparseable: number;
 }
 
-/** GET /ledger?session= (exists in the daemon today; needs C1+C2 to be browser-reachable). */
-export async function fetchDaemonLedger(session: string): Promise<DaemonLedger> {
-  const body = LedgerResponse.safeParse(await daemonFetch(`/ledger?session=${encodeURIComponent(session)}`));
+/** GET /ledger — all sessions merged when `session` is omitted (the registo default view),
+ *  or one session's rows with `?session=`. */
+export async function fetchDaemonLedger(session?: string): Promise<DaemonLedger> {
+  const query = session ? `?session=${encodeURIComponent(session)}` : '';
+  const body = LedgerResponse.safeParse(await daemonFetch(`/ledger${query}`));
   if (!body.success) throw new BridgeLocalUnavailable('ledger shape');
   let unparseable = 0;
   const rows: DaemonLedgerRow[] = [];

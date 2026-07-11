@@ -88,17 +88,27 @@ export const PRIVACY_COPY = {
   firstGrantConfirm: 'Autorizar',
   firstGrantCancel: 'Cancelar',
 
-  // -- FC-400 typed-reference fallback (run s6; counterpart C4 pending) --
-  referenceTypedTitle: 'Referenciar por identificador',
-  referenceTypedIntro:
-    'Esta versão da ponte local ainda não abre o seletor de ficheiros a partir do navegador. Crie a autorização na aplicação da ponte (ekoa-bridge grant) e introduza aqui o identificador.',
-  referenceTypedRefLabel: 'Identificador da autorização',
-  referenceTypedRefHint: 'Tem o formato g-... e é mostrado pela aplicação da ponte ao criar a autorização.',
-  referenceTypedNameLabel: 'Nome a mostrar',
-  referenceTypedNameHint: 'O nome do ficheiro ou da pasta, apenas para identificação nesta conversa.',
-  referenceTypedConfirm: 'Adicionar referência',
+  // -- FC-401 in-app file browser (run 20260711-111952 s5; D1/D2 — replaces the native picker
+  //    and the typed-identifier fallback: the user navigates and picks, never types a path or code) --
+  browserTitle: 'Escolher ficheiro ou pasta',
+  browserIntro:
+    'Navegue no seu computador e escolha o ficheiro ou a pasta que o agente pode ler. Nada é carregado: fica autorizada apenas a leitura, e cada leitura fica registada.',
+  browserParent: 'Subir um nível',
+  browserChooseFolder: 'Autorizar esta pasta',
+  browserChooseHint: 'Escolher uma pasta autoriza todos os ficheiros nela.',
+  browserPickFile: 'Autorizar',
+  browserFilePickNote: 'Autorizar um ficheiro autoriza a pasta que o contém.',
+  browserEmpty: 'Esta pasta está vazia.',
+  browserTruncated: 'A mostrar os primeiros itens desta pasta.',
+  browserLoading: 'A carregar...',
+  browserUnavailable:
+    'Não foi possível abrir o explorador de ficheiros. Verifique se a ponte local está a correr e atualizada.',
+  browserCancel: 'Cancelar',
   referenceTokenRemove: 'Remover referência',
   referenceTokensLabel: 'Referências locais desta mensagem',
+  /** Shown when a pending reference could not be turned into a grant at send time (D3). */
+  referenceMintError:
+    'Não foi possível autorizar a referência local. A mensagem foi enviada sem ela; verifique a ponte local e tente de novo.',
 
   // -- FC-402 trust chip (mechanism labels; the masked-count CLAIM is gated) --
   chipReadPrefix: 'Leu',
@@ -155,13 +165,15 @@ export const PRIVACY_COPY = {
     'O registo é mantido e servido pela ponte local. Ligue a ponte para o consultar.',
   ledgerUnavailable:
     'A ponte está ligada mas o registo não está acessível a partir do navegador. Atualize a aplicação da ponte local.',
-  ledgerEmpty: 'Ainda não há leituras registadas nesta sessão.',
+  ledgerEmpty: 'Ainda não há leituras registadas.',
   ledgerColTime: 'Momento',
   ledgerColKind: 'Tipo',
   ledgerColPath: 'Ficheiro',
   ledgerColRange: 'Intervalo',
   ledgerColBytes: 'Dimensão',
+  ledgerColSession: 'Sessão',
   ledgerSessionLabel: 'Sessão',
+  ledgerSessionAll: 'Todas as sessões',
   ledgerUnparseable: (n: number) =>
     n === 1 ? '1 registo não pôde ser lido.' : `${n} registos não puderam ser lidos.`,
   ledgerKindLabels: {

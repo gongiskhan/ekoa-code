@@ -3,30 +3,33 @@ import { test, expect, type Page } from '@playwright/test';
 import { BridgeStatusResponse } from '@ekoa/shared';
 
 /**
- * Daemon-served grants + ledger (run s4; FC-406/FC-407, D2) — deterministic, LLM-free.
+ * Daemon-served grants + registo (run 20260711-111952 s6; FC-406/FC-407, D2/D5) —
+ * deterministic, LLM-free.
  *
  * The browser fetches grants and the egress ledger STRAIGHT from the daemon's loopback
- * surface; nothing transits the hosted API. This spec plays the daemon: a real HTTP
- * server on 127.0.0.1:8791 (the proposed C1 port) serving the C1-C3 contract with CORS
- * (C2), while the hosted presence endpoint is stubbed 'connected' (schema-validated).
- * Asserts: the live grants list renders with revoke wired (the revoke round-trips to the
- * stub daemon and the list refreshes), the ledger renders read/write/denial row kinds for
- * the selected session, and a daemon WITHOUT the C3 endpoints yields the honest
- * unavailable state — never fabricated data. Real UI login, zero console errors.
+ * surface; nothing transits the hosted API. This spec plays the daemon: a real HTTP server
+ * on 127.0.0.1:8791 (the stable C1 port) serving the C1-C3 contract with CORS (C2), while
+ * the hosted presence endpoint is stubbed 'connected' (schema-validated). Asserts: the live
+ * grants list renders with revoke wired (round-trips to the stub daemon, the list
+ * refreshes), the registo defaults to the ALL-SESSIONS view (`GET /ledger` with no param,
+ * D5) rendering read/write/denial kinds each labelled with its session, and a daemon
+ * WITHOUT the C3 endpoints yields the honest unavailable state — never fabricated data.
+ * Real UI login, zero console errors.
  */
 
 const DAEMON_PORT = 8791;
 const CONNECTED = { paired: true, live: true, pairingId: 'pair-e2e', lastSeenAt: '2026-07-11T06:00:00.000Z' };
 
+// Two sessions, so the all-sessions merge (D5) is exercised, newest-first.
 const LEDGER_ROWS = [
-  { kind: 'read', ts: '2026-07-11T06:00:00Z', session: '', correlationId: 'c1', path: '/clientes/contrato.txt', byteRange: '0-3100', bytesOut: 3100, sha256: 'h', tool: 'read', taskId: 't1' },
-  { kind: 'write', ts: '2026-07-11T06:01:00Z', session: '', taskId: 't1', path: '/clientes/nota.txt', bytesWritten: 42, sha256Before: 'a', sha256After: 'b', tool: 'write' },
-  { kind: 'denial', ts: '2026-07-11T06:02:00Z', reason: 'caminho fora da autorização', principle: 'S2', tool: 'read' },
+  { kind: 'read', ts: '2026-07-11T06:00:00Z', session: 'sess-a', correlationId: 'c1', path: '/clientes/contrato.txt', byteRange: '0-3100', bytesOut: 3100, sha256: 'h', tool: 'read', taskId: 't1' },
+  { kind: 'write', ts: '2026-07-11T06:01:00Z', session: 'sess-a', taskId: 't1', path: '/clientes/nota.txt', bytesWritten: 42, sha256Before: 'a', sha256After: 'b', tool: 'write' },
+  { kind: 'denial', ts: '2026-07-11T06:02:00Z', session: 'sess-b', reason: 'caminho fora da autorização', principle: 'S2', tool: 'read' },
 ];
 
 interface StubDaemon {
   server: Server;
-  grants: Array<{ grantRef: string; label: string; scope: string; createdAt: string }>;
+  grants: Array<{ grantRef: string; label: string; path: string; scope: string; session: string; createdAt: string }>;
   revoked: string[];
   serveGrants: boolean;
 }
@@ -35,8 +38,8 @@ function startStubDaemon(): Promise<StubDaemon> {
   const state: StubDaemon = {
     server: null as unknown as Server,
     grants: [
-      { grantRef: 'g-contratos', label: 'Contratos 2026', scope: 'folder', createdAt: '2026-07-11T05:00:00Z' },
-      { grantRef: 'g-kyc', label: 'kyc-ficha.pdf', scope: 'file', createdAt: '2026-07-11T05:10:00Z' },
+      { grantRef: 'g-contratos', label: 'Contratos 2026', path: '/clientes/contratos', scope: 'folder', session: 'sess-a', createdAt: '2026-07-11T05:00:00Z' },
+      { grantRef: 'g-kyc', label: 'kyc-ficha.pdf', path: '/clientes/kyc', scope: 'file', session: 'sess-a', createdAt: '2026-07-11T05:10:00Z' },
     ],
     revoked: [],
     serveGrants: true,
@@ -73,8 +76,9 @@ function startStubDaemon(): Promise<StubDaemon> {
     }
     if (url.pathname === '/ledger') {
       const session = url.searchParams.get('session');
-      if (!session) return json(400, { error: 'session query parameter required' });
-      return json(200, { session, rows: LEDGER_ROWS.map((r) => ({ ...r, session })), corrupt: false });
+      // D5: no session param → the all-sessions merge; a param → that session's rows only.
+      const rows = session ? LEDGER_ROWS.filter((r) => r.session === session) : LEDGER_ROWS;
+      return json(200, session ? { session, rows, corrupt: 0 } : { rows, corrupt: 0 });
     }
     return json(404, { error: 'not found' });
   });

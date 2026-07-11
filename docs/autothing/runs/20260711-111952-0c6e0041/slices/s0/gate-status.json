@@ -1,0 +1,1 @@
+{ "slice": "s0", "status": "passed", "gates": { "codexProbe": "dead-401-owed", "baselines": "green (ekoa-code ci:lane 0; bridge build+vitest+lint 0)", "records": "RUN_LOG + bridge decisions.md appended" } }

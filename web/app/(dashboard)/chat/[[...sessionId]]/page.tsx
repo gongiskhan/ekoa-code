@@ -45,8 +45,8 @@ import { useAgentExecution } from "@/hooks/useAgentExecution";
 import { api, tryCall, openChatRunStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { getFriendlyToolActivityBrief } from "@/lib/friendly-messages";
-import type { LocalFileActivity } from "@/lib/privacy-claims";
-import type { ReferencePick } from "@/lib/bridge-local";
+import { PRIVACY_COPY, type LocalFileActivity } from "@/lib/privacy-claims";
+import { createDaemonGrant, type PendingReference } from "@/lib/bridge-local";
 import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips";
 import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
@@ -238,7 +238,8 @@ export default function UnifiedChatPage() {
   const [promptStripCollapsed, setPromptStripCollapsed] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   // FC-400 (run s6): reference tokens attached to the NEXT outgoing message (D4).
-  const [referenceTokens, setReferenceTokens] = useState<ReferencePick[]>([]);
+  const [referenceTokens, setReferenceTokens] = useState<PendingReference[]>([]);
+  const [referenceMintError, setReferenceMintError] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlInputValue, setUrlInputValue] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -957,10 +958,23 @@ export default function UnifiedChatPage() {
         .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
       if (pendingAttachments.length > 0) clearAttachments();
 
-      // FC-400/D4 (run s6): reference tokens ride the run request; the server injects
-      // them as run context so the model delegates with real grantRefs.
-      const references = referenceTokens;
-      if (references.length > 0) setReferenceTokens([]);
+      // FC-400/D3 (run 20260711-111952 s5): pending references are minted into session
+      // grants HERE, bound to the real chat session id (which a brand-new chat only has
+      // now). Selection was the authorization (D2); the daemon grants a file pick's parent
+      // folder. A mint failure is honest — the message still sends, without that reference,
+      // and the composer surfaces the error — never a silent upload or a fabricated grant.
+      const pendingRefs = referenceTokens;
+      if (pendingRefs.length > 0) setReferenceTokens([]);
+      setReferenceMintError(false);
+      const references: Array<{ grantRef: string; label: string }> = [];
+      for (const ref of pendingRefs) {
+        try {
+          const grant = await createDaemonGrant({ path: ref.path, session: sessionId, label: ref.label });
+          references.push({ grantRef: grant.grantRef, label: grant.label ?? ref.label });
+        } catch {
+          setReferenceMintError(true);
+        }
+      }
 
       // FC-013: create the run, await the server-minted runId, THEN subscribe to
       // its scoped event stream. `language` is injected by the transport (§12.2.3).
@@ -1548,8 +1562,13 @@ export default function UnifiedChatPage() {
                 <AttachmentChips attachments={pendingAttachments} onRemove={removeAttachment} />
                 <ReferenceTokenChips
                   tokens={referenceTokens}
-                  onRemove={(grantRef) => setReferenceTokens((prev) => prev.filter((t) => t.grantRef !== grantRef))}
+                  onRemove={(path) => setReferenceTokens((prev) => prev.filter((t) => t.path !== path))}
                 />
+                {referenceMintError && (
+                  <p className="mb-2 text-[11px] leading-relaxed text-amber-700" data-testid="reference-mint-error">
+                    {PRIVACY_COPY.referenceMintError}
+                  </p>
+                )}
 
                 <div className="relative flex flex-col bg-white border border-neutral-300 rounded-2xl focus-within:border-teal-600 focus-within:ring-1 focus-within:ring-teal-600/20 transition-shadow shadow-sm">
                   <textarea
@@ -1578,9 +1597,9 @@ export default function UnifiedChatPage() {
                           onClose={() => setShowAttachMenu(false)}
                           onUploadFile={handleAttachFile}
                           onUploadFolder={handleAttachFolder}
-                          onReferenceCreated={(pick) =>
+                          onReferencePicked={(ref) =>
                             setReferenceTokens((prev) =>
-                              prev.some((t) => t.grantRef === pick.grantRef) ? prev : [...prev, pick],
+                              prev.some((t) => t.path === ref.path) ? prev : [...prev, ref],
                             )
                           }
                         />

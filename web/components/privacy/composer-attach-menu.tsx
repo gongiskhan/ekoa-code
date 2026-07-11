@@ -3,59 +3,60 @@
 import { useState } from 'react';
 import { File, FolderOpen } from 'lucide-react';
 import { PRIVACY_COPY } from '@/lib/privacy-claims';
-import type { ReferencePick } from '@/lib/bridge-local';
+import type { PendingReference } from '@/lib/bridge-local';
 import { ReferenceAttachAction } from './reference-attach-action';
 import { FirstGrantDialog } from './first-grant-dialog';
-import { TypedReferenceDialog } from './typed-reference-dialog';
+import { FileBrowserDialog } from './file-browser-dialog';
 
 /**
  * FC-400 attach affordance - two actions where the composer offered one:
  *  - Enviar (Upload): the existing upload pipeline (FC-060). Stored at rest, hosted.
- *  - Referenciar ficheiro/pasta local (Reference): the daemon picker (or, against a
- *    pre-C4 daemon, the typed-reference fallback) mints a session grant; the grant
- *    becomes a composer reference token, never an upload/copy (FC-401 states).
+ *  - Referenciar ficheiro/pasta local (Reference): the in-app file browser (the daemon's
+ *    /browse surface) lets the user pick a file/folder visually; the pick becomes a pending
+ *    reference and, once consented (FC-411), a composer reference token. Never an upload/copy.
  *
- * The Upload-vs-Reference micro-copy is a UX distinction, not a legal claim, so it
- * ships enabled and needs no citation (§12.6.1).
+ * Owner directive (2026-07-11): connected = trusted; no typed grantRefs, no typed paths — the
+ * visual browser IS the picker. The grant is minted at SEND time (D3), bound to the real chat
+ * session; this menu only produces a pending {path,label,kind} reference.
  *
- * The component is mounted permanently by each composer (the panel shows only when
- * `open`); it owns the first-time grant dialog (FC-411) so the dialog survives the
- * menu closing. `firstGrantSeen` is tracked per session in memory - the dialog is
- * shown the first time a Reference grant is created.
+ * The Upload-vs-Reference micro-copy is a UX distinction, not a legal claim, so it ships
+ * enabled and needs no citation (§12.6.1). The component owns the first-time grant dialog
+ * (FC-411) so it survives the menu closing; `firstGrantSeen` is per-session, in memory.
  */
 export function ComposerAttachMenu({
   open,
   onClose,
   onUploadFile,
   onUploadFolder,
-  onReferenceCreated,
+  onReferencePicked,
   panelClassName,
 }: {
   open: boolean;
   onClose: () => void;
   onUploadFile: () => void;
   onUploadFolder: () => void;
-  /** Fired once a Reference grant is confirmed: the token joins the outgoing message. */
-  onReferenceCreated?: (pick: ReferencePick) => void;
+  /** Fired once a Reference pick is confirmed: the composer holds it until send (D3). */
+  onReferencePicked?: (ref: PendingReference) => void;
   /** Popover positioning for the panel. Defaults to bottom-left of the trigger. */
   panelClassName?: string;
 }) {
-  const [pendingPick, setPendingPick] = useState<ReferencePick | null>(null);
-  const [typedOpen, setTypedOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [pendingPick, setPendingPick] = useState<PendingReference | null>(null);
   const [firstGrantSeen, setFirstGrantSeen] = useState(false);
 
-  function handlePicked(pick: ReferencePick) {
-    // First Reference grant shows the consent dialog (FC-411); later grants are
-    // created directly (they were consented to once for the session).
+  function handlePicked(ref: PendingReference) {
+    setBrowserOpen(false);
+    // First Reference pick shows the consent dialog (FC-411); later picks are added directly
+    // (consented once for the session).
     if (!firstGrantSeen) {
-      setPendingPick(pick);
+      setPendingPick(ref);
     } else {
-      onReferenceCreated?.(pick);
+      onReferencePicked?.(ref);
     }
   }
 
   function confirmFirstGrant() {
-    if (pendingPick) onReferenceCreated?.(pendingPick);
+    if (pendingPick) onReferencePicked?.(pendingPick);
     setFirstGrantSeen(true);
     setPendingPick(null);
   }
@@ -109,29 +110,18 @@ export function ComposerAttachMenu({
             <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
               {PRIVACY_COPY.referenceGroupLabel}
             </p>
-            <ReferenceAttachAction
-              onPicked={handlePicked}
-              onPickerUnavailable={() => setTypedOpen(true)}
-              onClose={onClose}
-            />
+            <ReferenceAttachAction onOpenBrowser={() => setBrowserOpen(true)} onClose={onClose} />
           </div>
         </div>
       )}
+
+      <FileBrowserDialog open={browserOpen} onCancel={() => setBrowserOpen(false)} onPick={handlePicked} />
 
       <FirstGrantDialog
         open={pendingPick !== null}
         target={pendingPick?.label ?? ''}
         onConfirm={confirmFirstGrant}
         onCancel={() => setPendingPick(null)}
-      />
-
-      <TypedReferenceDialog
-        open={typedOpen}
-        onConfirm={(pick) => {
-          setTypedOpen(false);
-          handlePicked(pick);
-        }}
-        onCancel={() => setTypedOpen(false)}
       />
     </>
   );

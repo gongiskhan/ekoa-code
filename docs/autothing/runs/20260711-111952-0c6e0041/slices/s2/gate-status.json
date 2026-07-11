@@ -1,0 +1,1 @@
+{ "slice": "s2", "repo": "ekoa-bridge", "status": "passed", "gates": { "tests": 0, "typecheck": 0, "lint": 0, "build": 0, "fullSuite": "301 passed / 1 skipped", "adversarial": "owed (codex 401)" } }

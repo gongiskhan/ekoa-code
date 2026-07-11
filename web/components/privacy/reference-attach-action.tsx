@@ -1,41 +1,27 @@
 'use client';
 
-import { useCallback } from 'react';
 import Link from 'next/link';
 import { FolderSearch, Download, WifiOff, RotateCw } from 'lucide-react';
 import { PRIVACY_COPY, PRIVACY_SETTINGS_HREF } from '@/lib/privacy-claims';
 import { useBridgePresence } from '@/hooks/use-bridge-presence';
-import { openDaemonPicker, type ReferencePick } from '@/lib/bridge-local';
 
 /**
  * FC-401 Reference action - three states driven by the bridge presence heartbeat
- * (§12.6.1). Reference NEVER uploads or copies; when the bridge is absent or
- * offline the action stays disabled and offers install / retry, never a silent
- * degrade to upload. Connected (run s6): the daemon's native OS picker (C4) mints a
- * session grant and returns {grantRef, label}; against a daemon that predates C4
- * the menu falls back to the typed-reference input (the brief's pre-authorized
- * fallback, docs/bridge-counterpart-changes.md) — flagged, never silent.
+ * (§12.6.1). Reference NEVER uploads or copies; when the bridge is absent or offline the
+ * action stays disabled and offers install / retry, never a silent degrade to upload.
+ * Connected (owner directive 2026-07-11): "connected = trusted" — the action opens the
+ * in-app file browser (the daemon's /browse surface); the user navigates and picks
+ * visually. No native OS dialog round-trip, no typed grantRef, no typed path.
  */
 export function ReferenceAttachAction({
-  onPicked,
-  onPickerUnavailable,
+  onOpenBrowser,
   onClose,
 }: {
-  /** Reports the minted grant up to the menu, which drives the first-grant dialog. */
-  onPicked: (pick: ReferencePick) => void;
-  /** The daemon predates the C4 picker: the menu opens the typed-reference fallback. */
-  onPickerUnavailable: () => void;
+  /** Connected: open the in-app file browser dialog. */
+  onOpenBrowser: () => void;
   onClose: () => void;
 }) {
   const { status } = useBridgePresence();
-
-  const handlePick = useCallback(async () => {
-    onClose();
-    const pick = await openDaemonPicker();
-    if (pick === 'cancelled') return;
-    if (pick === 'unavailable') onPickerUnavailable();
-    else onPicked(pick);
-  }, [onClose, onPicked, onPickerUnavailable]);
 
   // State 1 - no bridge installed: disabled action, short explanation, install CTA.
   if (status === 'not-installed') {
@@ -103,11 +89,14 @@ export function ReferenceAttachAction({
     );
   }
 
-  // State 3 - connected: open the native picker; the path becomes a session grant.
+  // State 3 - connected: open the in-app file browser; the pick becomes a session grant at send.
   return (
     <button
       type="button"
-      onClick={handlePick}
+      onClick={() => {
+        onClose();
+        onOpenBrowser();
+      }}
       className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-neutral-700 transition-colors hover:bg-neutral-50"
       data-testid="reference-state-connected"
     >

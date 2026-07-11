@@ -2,18 +2,22 @@ import { test, expect, type Page } from '@playwright/test';
 import { BridgeStatusResponse, ChatRunCreateRequest, ChatRunEvent, ChatRun, ChatRunCreateResponse } from '@ekoa/shared';
 
 /**
- * Reference attach (run s6; FC-400, FC-401 connected state, FC-411; D4) — deterministic.
+ * Reference attach (run 20260711-111952 s5; FC-400, FC-401 connected state, FC-411; D1/D2/D3) —
+ * deterministic, with an in-spec stub of the daemon's loopback browser surface.
  *
- * Connected presence (schema-validated stub), a daemon that predates the C4 picker (no
- * loopback server at all): the Reference action falls back to the typed-reference input
- * (the brief's pre-authorized fallback), the FIRST grant shows the FC-411 consent dialog
- * with its verbatim body, the confirmed token renders as a composer chip, and the sent
- * run carries `references` — asserted BY VALIDATING the intercepted request against the
- * shared ChatRunCreateRequest schema. Real UI login, zero console errors.
+ * Owner directive: connected = trusted, the user PICKS a file/folder in an in-app browser — no
+ * typed path, no typed grantRef. Connected presence (schema-validated stub) + a stubbed
+ * /browse + /grants loopback surface: the Reference action opens the file browser, the user
+ * navigates and picks a file, the FIRST grant shows the FC-411 consent dialog with its verbatim
+ * body, the pending token renders as a composer chip, and on SEND the pick is minted into a
+ * session grant (POST /grants) whose {grantRef,label} rides the run request — asserted by
+ * validating the intercepted request against the shared ChatRunCreateRequest schema. Real UI
+ * login, zero console errors.
  */
 
 const RUN_ID = 'run-reference-e2e';
 const CONNECTED = { paired: true, live: true, pairingId: 'pair-e2e', lastSeenAt: '2026-07-11T06:00:00.000Z' };
+const BRIDGE_ORIGIN = 'http://127.0.0.1:8791';
 const SSE_EVENTS = [
   { type: 'ready', runId: RUN_ID },
   { type: 'text_chunk', text: 'Li o contrato referenciado.' },
@@ -40,15 +44,11 @@ function trackConsoleErrors(page: Page): string[] {
   return errors;
 }
 
-test.describe('reference attach (FC-400/FC-411; D4)', () => {
-  test('typed-fallback token flows through consent into the run request', async ({ page }) => {
+test.describe('reference attach (FC-400/FC-401/FC-411; D1/D2/D3)', () => {
+  test('pick a file in the in-app browser, consent, and the send mints a session grant', async ({ page }) => {
     const errors = trackConsoleErrors(page);
-    // The pre-C4 daemon is deliberately ABSENT: the picker fetch's connection-refused is
-    // this test's stimulus for the typed fallback, and Chrome logs it as a console error.
     const meaningfulErrors = () =>
-      errors.filter(
-        (e) => !e.includes('favicon') && !e.includes('Download the React DevTools') && !e.includes('ERR_CONNECTION_REFUSED'),
-      );
+      errors.filter((e) => !e.includes('favicon') && !e.includes('Download the React DevTools'));
 
     expect(BridgeStatusResponse.safeParse(CONNECTED).success).toBe(true);
     for (const e of SSE_EVENTS) expect(ChatRunEvent.safeParse(e).success).toBe(true);
@@ -58,6 +58,42 @@ test.describe('reference attach (FC-400/FC-411; D4)', () => {
     await page.route('**/api/v1/bridge/status', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONNECTED) }),
     );
+
+    // Stub the daemon's loopback browser surface: /browse lists a folder with one file; POST
+    // /grants mints a session grant for the picked path (its parent, honestly) bound to the
+    // session id the app passes.
+    let grantBody: { path?: string; session?: string; label?: string } | null = null;
+    await page.route(`${BRIDGE_ORIGIN}/browse**`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({
+          path: '/Users/adv/Documentos',
+          entries: [
+            { name: 'Arquivo', kind: 'dir' },
+            { name: 'contrato.pdf', kind: 'file', size: 32100 },
+          ],
+          truncated: false,
+        }),
+      }),
+    );
+    await page.route(`${BRIDGE_ORIGIN}/grants`, (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      grantBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({
+          grantRef: 'g-e2e-contratos',
+          path: '/Users/adv/Documentos',
+          session: grantBody?.session ?? '',
+          label: 'contrato.pdf',
+          requested: 'file',
+        }),
+      });
+    });
 
     let createBody: unknown = null;
     await page.route('**/api/v1/chat/runs', (route) => {
@@ -80,37 +116,43 @@ test.describe('reference attach (FC-400/FC-411; D4)', () => {
     await expect(menu).toBeVisible();
     await expect(menu).toContainText('Enviar guarda uma cópia nos nossos servidores.');
 
-    // Connected state: the picker is tried, the pre-C4 daemon is unreachable -> typed fallback.
+    // Connected state opens the in-app file browser (no typed input anywhere).
     await page.getByTestId('reference-state-connected').click();
-    const typed = page.getByTestId('typed-reference-ref');
-    await expect(typed).toBeVisible({ timeout: 15_000 });
-    await typed.fill('g-e2e-contratos');
-    await page.getByTestId('typed-reference-label').fill('Contratos 2026');
-    await page.getByTestId('typed-reference-confirm').click();
+    const browser = page.getByTestId('file-browser');
+    await expect(browser).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('file-browser-path')).toHaveText('/Users/adv/Documentos');
 
-    // FC-411 first-grant consent dialog, verbatim body with the target filled in.
+    // Pick the file: its parent is what gets granted (stated), label is the file name.
+    await page.getByTestId('file-browser-pick-file-contrato.pdf').click();
+
+    // FC-411 first-grant consent dialog, verbatim body with the picked label filled in.
     const dialogBody = page.getByTestId('first-grant-body');
     await expect(dialogBody).toBeVisible();
     await expect(dialogBody).toHaveText(
-      'Esta autorização permite ao agente ler Contratos 2026 durante esta sessão. Pode revogar a qualquer momento em Definições → Privacidade e ponte local.',
+      'Esta autorização permite ao agente ler contrato.pdf durante esta sessão. Pode revogar a qualquer momento em Definições → Privacidade e ponte local.',
     );
     await page.getByTestId('first-grant-confirm').click();
 
-    // The token renders as a composer chip.
-    await expect(page.getByTestId('reference-token-g-e2e-contratos')).toBeVisible();
-    await expect(page.getByTestId('reference-token-g-e2e-contratos')).toContainText('Contratos 2026');
+    // The pending token renders as a composer chip (labelled by the file name).
+    await expect(page.getByTestId('reference-token-chips')).toContainText('contrato.pdf');
 
-    // Send: the run request carries the references and VALIDATES against the shared schema.
+    // Send: the pick is minted into a session grant (POST /grants) bound to the chat session,
+    // and the run request carries the resulting {grantRef,label} — validated against the schema.
     const composer = page.locator('textarea').first();
     await composer.fill('resume o contrato referenciado');
     await composer.press('Enter');
     await expect(page.getByText('Li o contrato referenciado.').first()).toBeVisible({ timeout: 30_000 });
 
+    expect(grantBody, 'grant mint request captured at send').not.toBeNull();
+    expect(grantBody!.path).toBe('/Users/adv/Documentos/contrato.pdf');
+    expect(typeof grantBody!.session).toBe('string');
+    expect((grantBody!.session ?? '').length).toBeGreaterThan(0);
+
     expect(createBody, 'create-run request captured').not.toBeNull();
     const parsed = ChatRunCreateRequest.safeParse(createBody);
     expect(parsed.success, 'request validates against the shared schema').toBe(true);
     if (parsed.success) {
-      expect(parsed.data.references).toEqual([{ grantRef: 'g-e2e-contratos', label: 'Contratos 2026' }]);
+      expect(parsed.data.references).toEqual([{ grantRef: 'g-e2e-contratos', label: 'contrato.pdf' }]);
     }
 
     // Tokens attach to ONE message: the chip is gone after send.

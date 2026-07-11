@@ -10,14 +10,15 @@ import { useBridgePresence } from '@/hooks/use-bridge-presence';
 import { fetchDaemonLedger, type DaemonLedgerRow } from '@/lib/bridge-local';
 
 /**
- * FC-407 local egress-ledger viewer. The ledger is kept and served LIVE by the daemon's
- * loopback surface and rendered straight from it (run D2) — hosted persistence of ledger
- * rows is off by default (§18.2: folder paths can themselves be sensitive), so nothing
- * fetched here ever goes back to the hosted API. The daemon serves rows per hosted
- * session (`GET /ledger?session=`), so the viewer carries a session picker fed by the
- * user's own session list; an all-sessions view is a flagged counterpart follow-up
- * (docs/bridge-counterpart-changes.md). An export (print/CSV) is a named fast-follow,
- * not this run (§12.6.3).
+ * FC-407 local egress-ledger viewer (the "registo"). The ledger is kept and served LIVE by
+ * the daemon's loopback surface and rendered straight from it (run D2) — hosted persistence
+ * of ledger rows is off by default (§18.2: folder paths can themselves be sensitive), so
+ * nothing fetched here ever goes back to the hosted API.
+ *
+ * Owner directive (2026-07-11, D5): the DEFAULT view is ALL sessions (`GET /ledger` with no
+ * param, the C3 follow-up), newest-first, each row labelled with its session — so the user
+ * sees "everything that left this computer" in one place. A per-session filter narrows it,
+ * fed by the user's own session list. An export (print/CSV) is a named fast-follow (§12.6.3).
  */
 
 function fmtBytes(n: number): string {
@@ -52,15 +53,28 @@ function rowBytes(row: DaemonLedgerRow): string {
   return '';
 }
 
+/** The owning session, present on read/write rows (denials/cap_consent/automation carry none). */
+function rowSession(row: DaemonLedgerRow): string {
+  if (row.kind === 'read' || row.kind === 'write') return row.session;
+  return '';
+}
+
+/** Newest-first: the daemon serves ascending, the registo shows most-recent on top. */
+function byTsDesc(a: DaemonLedgerRow, b: DaemonLedgerRow): number {
+  return a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0;
+}
+
 export function LedgerSection() {
   const { connected } = useBridgePresence();
   const [sessions, setSessions] = useState<Array<{ id: string; name: string }>>([]);
+  // '' = all sessions (the default view, D5); a specific id narrows it.
   const [session, setSession] = useState<string>('');
   const [rows, setRows] = useState<DaemonLedgerRow[] | null>(null);
   const [unparseable, setUnparseable] = useState(0);
   const [unavailable, setUnavailable] = useState(false);
 
-  // The user's sessions feed the picker (ids only — the hosted API already owns them).
+  // The user's sessions feed the filter (ids/names only — the hosted API already owns them).
+  // We NEVER auto-select one: the default stays the all-sessions view.
   useEffect(() => {
     if (!connected) return;
     void (async () => {
@@ -68,15 +82,20 @@ export function LedgerSection() {
       if (res.ok) {
         const items = (res.data as { items?: Array<{ id: string; name?: string }> }).items ?? [];
         setSessions(items.map((s) => ({ id: s.id, name: s.name || s.id })));
-        if (items.length > 0) setSession((cur) => cur || items[0]!.id);
       }
     })();
   }, [connected]);
 
+  const sessionName = useCallback(
+    (id: string | undefined) => sessions.find((s) => s.id === id)?.name ?? (id ? id.slice(0, 8) : ''),
+    [sessions],
+  );
+
   const load = useCallback(async (sid: string) => {
     try {
-      const ledger = await fetchDaemonLedger(sid);
-      setRows(ledger.rows);
+      // Empty sid → the all-sessions merge (D5); a specific id → that session only.
+      const ledger = await fetchDaemonLedger(sid || undefined);
+      setRows([...ledger.rows].sort(byTsDesc));
       setUnparseable(ledger.unparseable);
       setUnavailable(false);
     } catch {
@@ -86,7 +105,7 @@ export function LedgerSection() {
   }, []);
 
   useEffect(() => {
-    if (!connected || !session) {
+    if (!connected) {
       setRows(null);
       setUnavailable(false);
       return;
@@ -99,7 +118,7 @@ export function LedgerSection() {
       <CardTitle icon={ScrollText}>{PRIVACY_COPY.ledgerSectionTitle}</CardTitle>
       <CardDescription>{PRIVACY_COPY.ledgerSectionDesc}</CardDescription>
 
-      {connected && sessions.length > 0 && (
+      {connected && (
         <div className="mt-3 max-w-xs">
           <Select
             label={PRIVACY_COPY.ledgerSessionLabel}
@@ -107,6 +126,7 @@ export function LedgerSection() {
             onChange={(e) => setSession(e.target.value)}
             data-testid="ledger-session-select"
           >
+            <option value="">{PRIVACY_COPY.ledgerSessionAll}</option>
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -117,12 +137,13 @@ export function LedgerSection() {
       )}
 
       <Card className="mt-3" padding="none">
-        <div className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+        <div className="grid grid-cols-[auto_auto_1fr_auto_auto_auto] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
           <span>{PRIVACY_COPY.ledgerColTime}</span>
           <span>{PRIVACY_COPY.ledgerColKind}</span>
           <span>{PRIVACY_COPY.ledgerColPath}</span>
           <span>{PRIVACY_COPY.ledgerColRange}</span>
           <span className="text-right">{PRIVACY_COPY.ledgerColBytes}</span>
+          <span>{PRIVACY_COPY.ledgerColSession}</span>
         </div>
 
         {!connected ? (
@@ -138,7 +159,7 @@ export function LedgerSection() {
             {rows.map((row, i) => (
               <div
                 key={i}
-                className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-x-4 border-b border-line px-4 py-2 text-xs text-neutral-600 last:border-b-0"
+                className="grid grid-cols-[auto_auto_1fr_auto_auto_auto] gap-x-4 border-b border-line px-4 py-2 text-xs text-neutral-600 last:border-b-0"
                 data-testid={`ledger-row-${row.kind}`}
               >
                 <span className="whitespace-nowrap text-neutral-400">{fmtTime(row.ts)}</span>
@@ -150,6 +171,9 @@ export function LedgerSection() {
                 </span>
                 <span className="whitespace-nowrap text-neutral-400">{rowRange(row)}</span>
                 <span className="whitespace-nowrap text-right">{rowBytes(row)}</span>
+                <span className="whitespace-nowrap text-neutral-400" title={rowSession(row)}>
+                  {rowSession(row) ? sessionName(rowSession(row)) : ''}
+                </span>
               </div>
             ))}
             {unparseable > 0 && (
