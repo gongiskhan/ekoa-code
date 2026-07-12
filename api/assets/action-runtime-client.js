@@ -432,6 +432,7 @@
           } else if (idx != null && sel.options && sel.options[Number(idx)]) {
             setNativeValue(sel, sel.options[Number(idx)].value);
           }
+          fireEvent(sel, 'input');
           fireEvent(sel, 'change');
           finish('done');
         });
