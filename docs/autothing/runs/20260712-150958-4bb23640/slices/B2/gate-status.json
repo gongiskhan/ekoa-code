@@ -1,0 +1,54 @@
+{
+  "slice": "B2",
+  "kind": "mixed",
+  "commit": "9e92757 (576e641+a034ca1+prose)",
+  "tag": "operator/b2",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "11 loader/real-builder tests; offline bundle+degrade proofs; LIVE gate: job 6f7d2edd completed on credentialed stack, verifier PASS (add/complete/filter/delete), mount survives served bundle, extends=app",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean all commits; semgrep green earlier in slice window",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/B2/review-verdict.md",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "round 1: 3 findings on the ORIGINAL wiring superseded by the live-gate code loop (retired /api/v1/action -> injected-runtime rewrite a034ca1); round 2: 2 prose findings ACCEPTED+FIXED (9e92757)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api/mixed shell content \u2014 batched run-level pass covers the api surface; the D-group panel slices carry the per-slice UI passes)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "deferred to D2 (the base shell's UI is exercised+judged there); recorded, not silent"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/B2/b2-evidence.cast",
+      "videoSha256": "c192833f8841513f0f656162ccce3696e9c944a6adfd3b086844c054cc5ffcb9",
+      "videoBytes": 2250,
+      "at": "2026-07-12T19:22:57Z"
+    }
+  },
+  "status": "passed"
+}

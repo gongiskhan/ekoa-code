@@ -83,3 +83,15 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - The live templateId=app build (job 3da8f930, after the required dist rebuild+reboot — first attempt 262d3a52 hit the STALE-DIST process miss and is void) completed generation but ended VERIFY_FAILED: the base wiring targets the RETIRED /api/v1/action envelope (404 on this platform; carried faithfully from the app-auth-persistent donor authored in the old-cortex era). Shell auth fails at runtime → error card → honest verifier failure. Classified CODE; slice-b2 agent re-dispatched with the current sanctioned surfaces (window.__ekoa.whoami/graphFetch/exportPdf/cloudFiles; /api/app-data; NO client action envelope).
 - NOTED for B4/operator: the donor base app-auth-persistent (and its skills) carries the same retired-endpoint rot; it is loadable via explicit templateId. Not fixed in B2 (scope); B4's migration must either fix or quarantine it.
 - Process note: the stale-dist miss is the documented live-verification trap (docs/testing.md); no ledger cost.
+
+## GATE 2026-07-12T19:22:57Z — B2 (the app base) — PASSED (attempt 3 of 5)
+- green: api/assets/bases/app authored (shell + assistant mount + wiring over the INJECTED runtime + skills/recipes/conventions); live gate: a real templateId=app build completed with the LLM verifier's PASS (narration on record in the cast dir source), mount survived into the served bundle, extends persisted.
+- loop history: attempt 1 VOID (stale dist — process miss, journaled); attempt 2 real code finding (retired /api/v1/action wiring) fixed a034ca1; attempt 3 PASSED. One VERIFY_FAILED on identical fixed code (dc19dd76) recorded as LLM-verifier nondeterminism — flagged to LANDING (verifier flakiness is a standing product observation, not this run's defect).
+- reviews: codex 2 rounds (wiring round superseded by the live loop; prose round fixed 9e92757); fresh-context approve.
+- ledger: passed 11/31 · blocked 0 · buildable-remaining 20.
+
+## GATE 2026-07-12T19:22:57Z — C1 (artifact-type classifier) — PASSED
+- green: shared/ArtifactType; deterministic-first classifier (earliest-signal-wins) with FAST chokepoint one-shot fallback (classifier/select-base-template attribution) and app default; explicit templateId path unchanged; artifactType persisted (store-level test; the artifact VIEW deliberately projects a fixed field set — noted, not a defect).
+- reviews: codex 2 findings accepted+fixed (0137e54); fresh-context approve.
+- note: live emission of ui_actions by the coding agent awaits the base instructions slice (C3 teaches the declaration); C2's capture is unit-proven.
+- ledger: passed 11/31 · blocked 0 · buildable-remaining 20.

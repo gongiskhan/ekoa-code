@@ -113,6 +113,34 @@
         "videoSha256": "a7f8218196136358e278e65533d825165a99944c3889612e670534d902332664",
         "videoBytes": 1372
       }
+    },
+    "B2": {
+      "status": "passed",
+      "kind": "mixed",
+      "commit": "9e92757 (576e641+a034ca1+prose)",
+      "tag": "operator/b2",
+      "gateStatus": "slices/B2/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/B2/b2-evidence.cast",
+        "videoSha256": "c192833f8841513f0f656162ccce3696e9c944a6adfd3b086844c054cc5ffcb9",
+        "videoBytes": 2250
+      }
+    },
+    "C1": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "0137e54 (a179a75+fix)",
+      "tag": "operator/c1",
+      "gateStatus": "slices/C1/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/C1/c1-evidence.cast",
+        "videoSha256": "d3355dd8c1833b992fa65b9d0968b94b2a943147fc64ac040d0620c712587632",
+        "videoBytes": 1580
+      }
     }
   },
   "globalGate": {

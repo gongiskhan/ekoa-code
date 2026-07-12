@@ -1,0 +1,54 @@
+{
+  "slice": "C1",
+  "kind": "api",
+  "commit": "0137e54 (a179a75+fix)",
+  "tag": "operator/c1",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "6 unit + 2 contract + integration via base-loader suite (classified default, document routing, persistence)",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean all commits; semgrep green earlier in slice window",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/C1/review-verdict.md",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "2 findings ACCEPTED+FIXED (earliest-signal-wins ordering trap; empty-description guard) 0137e54",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "at": "2026-07-12T19:22:57Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api/mixed shell content \u2014 batched run-level pass covers the api surface; the D-group panel slices carry the per-slice UI passes)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "deferred to D2 (the base shell's UI is exercised+judged there); recorded, not silent"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/C1/c1-evidence.cast",
+      "videoSha256": "d3355dd8c1833b992fa65b9d0968b94b2a943147fc64ac040d0620c712587632",
+      "videoBytes": 1580,
+      "at": "2026-07-12T19:22:57Z"
+    }
+  },
+  "status": "passed"
+}
