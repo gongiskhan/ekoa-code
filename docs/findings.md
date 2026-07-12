@@ -22,6 +22,12 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   (optional-drop).
 - **F14** (harness-gap, minor). The served-app owner bypass accepts both `Authorization: Bearer` and
   `?token=`; the committed suite asserts only `?token=`. Untested accepted-auth surface.
+- **`artifact-cards-invalid-date`** (minor, UX). The expanded "Os Meus Artefactos" cards render
+  "Invalid Date" in the date row for every featured artifact (observed live 2026-07-12 on a fresh
+  dev stack, all 41 cards). Likely the card formats a missing/differently-shaped timestamp on
+  seeded featured artifacts (`createdAt`/`updatedAt` absent or non-ISO) straight through
+  `new Date(...)`. Fix: tolerate absent timestamps (hide the row) and add a regression assertion
+  that no card ever renders the literal "Invalid Date".
 - **`ai-integration-lands-under-platform-tab`** (minor, UX). An AI-built integration saved via the
   chat builder (e.g. open-library, e2e-proof-weather, openweathermap) renders under
   `/integrations?tab=plataforma` ("Integrações da Plataforma"), while "Minhas Integrações"
@@ -111,6 +117,44 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 - **`remote-tag-f25`** (operator action). The remote tag `batch1-f25` still points at the broken
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
+
+## Recently fixed - 2026-07-12 preview "proxy error" (operator)
+
+- **`F-2026-07-12-preview-502`** (operator-reported, 2026-07-12) - during a build, the side-panel
+  preview iframe displayed a raw `proxy error` body and stayed there (screenshot: 502 on the
+  `/apps/<id>/?token=` document request while adjacent `/api/v1/billing/usage` calls returned 200).
+  Two stacked defects:
+  1. **Dev-harness proxy transient** (root cause of THIS 502): the run-ekoa-code driver's CORS
+     reverse proxy (`.claude/skills/run-ekoa-code/driver.mjs`) forwarded upstream requests over the
+     Node 20 global agent (keep-alive pooled, server closes idles at its default 5s
+     `keepAliveTimeout`) and answered ANY pre-response upstream socket error with a bare 502
+     `proxy error` - silently (no log), so the exact errno of the operator's occurrence (2 of 265
+     requests) is unrecoverable. Fixed: fresh upstream connection per request
+     (`http.Agent({ keepAlive: false })` - loopback, sub-ms), one replay for bodyless idempotent
+     methods (GET/HEAD) failing before a response, upstream errors logged with method/path/errno,
+     and a mid-stream failure destroys the response instead of appending garbage. Forensics note:
+     the classic close-vs-reuse race would NOT reproduce in 365 timed attempts against Node 20
+     (agent honors the server's Keep-Alive hint), so the residual trigger class is broader than
+     that race - the fix covers the class, and the new logging captures any recurrence.
+  2. **Preview panel could not recover** (product gap, any 5xx source incl. a prod edge blip): an
+     iframe NEVER fires its error event for an HTTP error response - it renders the error body and
+     fires `load` - so `side-panel.tsx`'s retry machinery never engaged and the raw body stuck
+     until a manual refresh. Fixed: `web/lib/preview-probe.ts` classifies the document plane via a
+     HEAD probe (`ok` 2xx / `transient` network+5xx / `hard` other); the panel now gates the first
+     iframe render on the probe (polls at the existing 500ms/30s bounds), re-probes on every iframe
+     `load`, routes `transient` into the existing bounded retry, restores the retry budget on a
+     verified-ok load, and renders `hard` pages (410 revoked) as-is. Manual refresh polling unified
+     on the same classification (and now probes the tokened URL the iframe actually loads).
+  Accepted residual: a blip that hits ONLY the iframe's GET while the adjacent HEAD probes pass is
+  undetectable cross-origin without a new parent<->iframe liveness protocol on the byte-compat
+  injection plane (the demo bridge stays dormant until `demo.init` by design) - disproportionate;
+  revisit only if it recurs behind the fixed proxy/edge. Tests:
+  `web/__tests__/lib/preview-probe.test.ts` (classification),
+  `web/__tests__/components/side-panel-preview-recovery.test.tsx` (wiring: probe-gated first
+  render, 410 renders as-is, on-load transient -> retry -> recovery); both fail against the
+  pre-fix behavior. Live-verified 2026-07-12: stack restarted on the fixed driver, real-UI login,
+  /artifacts + served `legal-nucleo` render through the proxy, 16/16 doc-plane requests across
+  5s keep-alive boundaries clean.
 
 ## Recently fixed - 2026-07-12 brand research colors (operator round 3)
 

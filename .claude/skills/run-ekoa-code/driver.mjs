@@ -112,6 +112,15 @@ function bootApi() {
 // Zero-dependency. Reflects Origin + allows the Authorization header so the
 // cross-origin dashboard fetch (token auth) is accepted. Forwards websockets
 // too (chat streaming) via the 'upgrade' event.
+//
+// Upstream connections are NOT keep-alive pooled: Node 19+ made the global
+// agent keep-alive by default, and the API server closes idle sockets after
+// its default 5s keepAliveTimeout — reusing a pooled socket the server is
+// closing at that same moment dies with ECONNRESET before any response, which
+// used to surface as a raw 502 "proxy error" document in the preview iframe
+// (findings ledger F-2026-07-12). A fresh loopback connection per request is
+// sub-millisecond and immune to that race; bodyless idempotent requests also
+// get one retry in case the upstream socket dies some other transient way.
 function corsHeaders(req) {
   const origin = req.headers.origin || '*';
   return {
@@ -124,6 +133,8 @@ function corsHeaders(req) {
   };
 }
 
+const upstreamAgent = new http.Agent({ keepAlive: false });
+
 function startProxy() {
   return new Promise((resolve, reject) => {
     proxyServer = http.createServer((req, res) => {
@@ -132,16 +143,29 @@ function startProxy() {
         res.end();
         return;
       }
-      const proxyReq = http.request(
-        { host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers: req.headers },
-        (proxyRes) => {
-          const headers = { ...proxyRes.headers, ...corsHeaders(req) };
-          res.writeHead(proxyRes.statusCode || 502, headers);
-          proxyRes.pipe(res);
-        },
-      );
-      proxyReq.on('error', () => { if (!res.headersSent) res.writeHead(502, corsHeaders(req)); res.end('proxy error'); });
-      req.pipe(proxyReq);
+      // GET/HEAD carry no body, so a failed attempt can be replayed verbatim;
+      // anything with a body has already been piped and cannot be.
+      const retryable = req.method === 'GET' || req.method === 'HEAD';
+      const forward = (attempt) => {
+        const proxyReq = http.request(
+          { host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers: req.headers, agent: upstreamAgent },
+          (proxyRes) => {
+            const headers = { ...proxyRes.headers, ...corsHeaders(req) };
+            res.writeHead(proxyRes.statusCode || 502, headers);
+            proxyRes.pipe(res);
+          },
+        );
+        proxyReq.on('error', (err) => {
+          log(`proxy upstream error (${req.method} ${req.url} attempt ${attempt}): ${err.code || err.message}`);
+          if (res.headersSent) { res.destroy(); return; } // mid-stream: never append to a partial body
+          if (retryable && attempt === 1) { forward(2); return; }
+          res.writeHead(502, { ...corsHeaders(req), 'Content-Type': 'text/plain' });
+          res.end(`proxy error: upstream API request failed (${err.code || err.message})`);
+        });
+        if (retryable) proxyReq.end();
+        else req.pipe(proxyReq);
+      };
+      forward(1);
     });
     // Forward websocket upgrades (streaming) straight through.
     proxyServer.on('upgrade', (req, socket, head) => {

@@ -25,6 +25,7 @@ import { useOrchestrationStore, type FileNode } from "@/stores/orchestration";
 import { useSettingsStore } from "@/stores/settings";
 import { useAuthStore } from "@/stores/auth";
 import { api } from "@/lib/api";
+import { probePreviewDocument } from "@/lib/preview-probe";
 import { useTranslation } from "@/stores/i18n";
 import { isTextFile } from "@/lib/file-utils";
 import OutputPanel from "./output-panel";
@@ -201,18 +202,46 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
     setSidePanelTab(tab);
   }
 
-  // Static files are available immediately after build -- no polling needed.
-  // Just load the iframe directly when the URL is known.
+  // Static files are available immediately after build, but verify the document
+  // plane answers before pointing the iframe at it: an HTTP error body rendered
+  // into an iframe never fires the error event, so a transient 5xx (proxy/edge
+  // blip) would stick until a manual refresh (F-2026-07-12-preview-502). A
+  // 'hard' answer (401/404/410) is a deliberate server page — render it as-is.
   useEffect(() => {
-    if (!previewUrl) {
+    if (!previewUrlWithToken) {
       setPreviewReady(false);
       return;
     }
+    setPreviewReady(false);
     setIframeLoading(true);
     setIframeError(false);
-    setPreviewReady(true);
     autoRetryCountRef.current = 0;
-  }, [previewUrl]);
+    pollAbortRef.current?.abort();
+    const abortController = new AbortController();
+    pollAbortRef.current = abortController;
+    const startTime = Date.now();
+    const probeLoop = async () => {
+      while (!abortController.signal.aborted) {
+        const verdict = await probePreviewDocument(previewUrlWithToken, abortController.signal);
+        if (abortController.signal.aborted) return;
+        if (verdict !== "transient") {
+          setPreviewReady(true);
+          return;
+        }
+        if (Date.now() - startTime > PREVIEW_POLL_TIMEOUT_MS) {
+          setIframeLoading(false);
+          setIframeError(true);
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, PREVIEW_POLL_INTERVAL_MS);
+          abortController.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+      }
+    };
+    probeLoop();
+    return () => abortController.abort();
+  }, [previewUrlWithToken]);
 
   // Hot-reload: when reloadCount changes, force-reload the iframe
   const reloadCount = preview?.reloadCount || 0;
@@ -230,13 +259,6 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
       }, 100);
     }
   }, [reloadCount, previewUrlWithToken]);
-
-  const handleIframeLoad = useCallback(() => {
-    // Static serving: fast loads are expected (esbuild bundles load instantly).
-    // No auto-retry on fast load needed.
-    setIframeLoading(false);
-    setIframeError(false);
-  }, []);
 
   const handleIframeError = useCallback(() => {
     // On error, auto-retry a few times (the server might still be starting)
@@ -261,6 +283,27 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
     setIframeError(true);
   }, [previewUrlWithToken]);
 
+  const handleIframeLoad = useCallback(() => {
+    // `load` fires even when the document is an HTTP error body (an iframe never
+    // fires its error event for HTTP failures), so verify the document plane
+    // out-of-band and push a transient failure through the retry machinery
+    // (F-2026-07-12-preview-502). A verified-ok load restores the retry budget.
+    if (!previewUrlWithToken) {
+      setIframeLoading(false);
+      setIframeError(false);
+      return;
+    }
+    probePreviewDocument(previewUrlWithToken).then((verdict) => {
+      if (verdict === "transient") {
+        handleIframeError();
+        return;
+      }
+      autoRetryCountRef.current = 0;
+      setIframeLoading(false);
+      setIframeError(false);
+    });
+  }, [previewUrlWithToken, handleIframeError]);
+
   function handleRefreshPreview() {
     if (previewUrl) {
       autoRetryCountRef.current = 0;
@@ -282,15 +325,12 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
 
         const poll = async () => {
           while (!abortController.signal.aborted) {
-            try {
-              const res = await fetch(previewUrl, { method: "HEAD", signal: abortController.signal });
-              if (res.ok) {
-                setPreviewReady(true);
-                iframeLoadStartRef.current = Date.now();
-                return;
-              }
-            } catch {
-              if (abortController.signal.aborted) return;
+            const verdict = await probePreviewDocument(previewUrlWithToken || previewUrl, abortController.signal);
+            if (abortController.signal.aborted) return;
+            if (verdict !== "transient") {
+              setPreviewReady(true);
+              iframeLoadStartRef.current = Date.now();
+              return;
             }
             if (Date.now() - startTime > PREVIEW_POLL_TIMEOUT_MS) {
               setIframeLoading(false);
