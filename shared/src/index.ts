@@ -57,6 +57,7 @@ export * from './uploads.js';
 export * from './registo.js';
 export * from './capabilities.js';
 export * from './action-manifest.js';
+export * from './artifact-type.js';
 export * from './app-assistant.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';

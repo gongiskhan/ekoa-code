@@ -24,6 +24,8 @@ import { appRegistry } from './app-registry.js';
 import { readManifest, writeManifest } from './manifest.js';
 import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-loader.js';
 import { readUiActions } from './action-manifest.js';
+import { classifyArtifactType, baseForType, typeForBase } from './artifact-type.js';
+import type { ArtifactType } from '@ekoa/shared';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 
@@ -61,20 +63,34 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
   }
 
   /**
-   * Resolve the internal base a first build should scaffold from (operator-run B1).
-   * `templateId` was threaded route → build → here since G6 and consumed by NOBODY
-   * (analysis/04 §1.4); it now selects a base when it names one. An unknown id is a
-   * WARN + generic-starters fallback (honest: featured-artifact ids also travel this
-   * field historically), never a hard failure. A known base that fails to LOAD is a
-   * hard failure — a selected-but-broken base must not silently degrade (F16 class).
+   * Resolve the internal base + artifact type a first build scaffolds from.
+   * B1: an EXPLICIT `templateId` naming a base wins (a known-but-broken base fails
+   * LOUD; an unknown id warns and falls through to classification — featured ids
+   * also travel this field historically). C1: with no explicit selection, the
+   * scoping classifier decides the artifact type (deterministic signals first,
+   * FAST chokepoint one-shot on ambiguity, `app` on any failure) and the type's
+   * base scaffolds the build. Only a base that fails to LOAD after classification
+   * degrades to the generic starters (warned, never silent).
    */
-  async function baseFor(templateId: string | undefined): Promise<LoadedBase | null> {
-    if (!templateId) return null;
-    if (!isBaseId(templateId)) {
-      console.warn(`[build-mechanics] templateId "${templateId}" names no internal base; using generic starters`);
-      return null;
+  async function baseFor(
+    templateId: string | undefined,
+    description: string,
+    userId: string,
+  ): Promise<{ base: LoadedBase | null; artifactType: ArtifactType }> {
+    if (templateId && isBaseId(templateId)) {
+      const base = await loadBase(templateId); // explicit selection: broken base fails loud
+      return { base, artifactType: typeForBase(base.id) };
     }
-    return loadBase(templateId);
+    if (templateId) {
+      console.warn(`[build-mechanics] templateId "${templateId}" names no internal base; classifying instead`);
+    }
+    const artifactType = await classifyArtifactType(description, userId);
+    try {
+      return { base: await loadBase(baseForType(artifactType)), artifactType };
+    } catch (err) {
+      console.warn(`[build-mechanics] base "${baseForType(artifactType)}" failed to load; generic starters:`, err instanceof Error ? err.message : err);
+      return { base: null, artifactType };
+    }
   }
 
   /** Load the base an existing artifact extends (manifest `extends`) for follow-up
@@ -127,7 +143,7 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       language: string;
       templateId?: string;
     }): Promise<{ artifactId: string; projectDir: string; slug: string; appUrl: string; basePromptSections?: string[] }> {
-      const base = await baseFor(input.templateId);
+      const { base, artifactType } = await baseFor(input.templateId, input.description, input.userId);
       const artifactId = deps.genId();
       const name = deriveAppName(input.description);
       const slug = await generateSlug(name, deps);
@@ -148,7 +164,9 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         orgId,
         visibility: 'private',
         status: 'draft',
-        data: { projectDir, appUrl, sessionId: input.sessionId },
+        // artifactType (C1): the scoping classifier's verdict — the operator surface
+        // exists only for 'app' artifacts (downstream slices read this, never re-classify).
+        data: { projectDir, appUrl, sessionId: input.sessionId, artifactType },
       };
       await artifacts.insert(doc as never);
 

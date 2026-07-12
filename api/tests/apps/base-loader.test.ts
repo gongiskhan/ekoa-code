@@ -132,18 +132,31 @@ describe('base-loader — build-flow wiring (B1 integration)', () => {
     expect(followUp?.basePromptSections?.length).toBeGreaterThan(0);
   }, 60_000);
 
-  it('no templateId keeps the generic starters and writes no extends', async () => {
+  // operator-run C1: with no explicit templateId the CLASSIFIER selects the base.
+  it('no templateId classifies the request and scaffolds the type base (app default)', async () => {
     const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b2', description: 'A colorful budget tracker', language: 'pt' });
     const appJsx = await readFile(join(prep.projectDir, 'frontend', 'src', 'App.jsx'), 'utf-8');
-    expect(appJsx).toContain("Let's build something"); // the generic starter placeholder
-    expect((await readManifest(prep.projectDir))?.extends).toBeUndefined();
-    expect(prep.basePromptSections).toBeUndefined();
+    expect(appJsx).toContain('ekoa-assistant-root'); // the app base shell, not the generic starter
+    expect((await readManifest(prep.projectDir))?.extends).toBe('app');
+    expect(prep.basePromptSections?.length).toBeGreaterThan(0);
+    const { artifacts } = await import('../../src/data/stores.js');
+    const art = (await artifacts.get(prep.artifactId)) as { data?: Record<string, unknown> } | null;
+    expect(art?.data?.artifactType).toBe('app');
   }, 60_000);
 
-  it('an unknown templateId falls back to generic starters (honest fallback, no failure)', async () => {
-    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b3', description: 'Qualquer coisa', language: 'pt', templateId: 'featured-thing-123' });
-    expect((await readManifest(prep.projectDir))?.extends).toBeUndefined();
-    expect(prep.basePromptSections).toBeUndefined();
+  it('a document-shaped request classifies to the document base without explicit selection', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-c1-doc', description: 'Um contrato de arrendamento comercial', language: 'pt' });
+    expect((await readManifest(prep.projectDir))?.extends).toBe('document');
+    expect(await fileExists(join(prep.projectDir, 'frontend', 'src', 'documentData.js'))).toBe(true);
+    const { artifacts } = await import('../../src/data/stores.js');
+    const art = (await artifacts.get(prep.artifactId)) as { data?: Record<string, unknown> } | null;
+    expect(art?.data?.artifactType).toBe('document');
+  }, 60_000);
+
+  it('an unknown templateId classifies instead of failing (honest fallback)', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b3', description: 'Um gestor de contactos', language: 'pt', templateId: 'featured-thing-123' });
+    expect((await readManifest(prep.projectDir))?.extends).toBe('app');
+    expect(prep.basePromptSections?.length).toBeGreaterThan(0);
   }, 60_000);
 
   // operator-run B2: the app base builds through the REAL pipeline (scaffold -> esbuild).
