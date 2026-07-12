@@ -1,0 +1,55 @@
+{
+  "slice": "B4",
+  "kind": "docs",
+  "commit": "280e2c7 (dcdd488+migration-fix)",
+  "tag": "operator/b4",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T20:44:26Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "measured shrink 12,331->9,984 chars (2,347 removed ~671 est tokens); LIVE: app build (extends=app) + document build (extends=document) both completed+served 200 on slimmed instructions; base-loader 12/12",
+      "at": "2026-07-12T20:44:26Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean both commits",
+      "at": "2026-07-12T20:44:26Z"
+    },
+    "adversarialReview": {
+      "status": "passed-after-fix",
+      "verdict": "needs-work -> approve: 2 blockers (password flow + load_context lossy-deleted) INDEPENDENTLY found and fixed in 280e2c7 (the fix was uncommitted at the reviewer's snapshot dcdd488); docx coverage, shrink arithmetic, fallback disclosure all passed",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/B4/review-verdict.md",
+      "at": "2026-07-12T20:44:26Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "needs-work: 3 findings ALL ACCEPTED+FIXED (passwordSignIn/setUserPassword, load_context, PDF format/landscape) restored to their bases in 280e2c7",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 107697,
+      "at": "2026-07-12T20:44:26Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs; the live app+doc builds are the functional proof)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/B4/b4-evidence.cast",
+      "videoSha256": "a270e37c8efae178200cd58a64ff7332d32e822cb6264924a1a698c11a19084b",
+      "videoBytes": 1705,
+      "at": "2026-07-12T20:44:26Z"
+    }
+  },
+  "status": "passed"
+}

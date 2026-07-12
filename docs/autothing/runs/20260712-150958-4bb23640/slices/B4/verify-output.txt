@@ -1,0 +1,5 @@
+B4 live verification on the slimmed always-on instructions (dist rebuilt+rebooted):
+- app build (job 3d4282a8): completed, extends=app, served=200
+- document build (job eaf488a3): completed, extends=document, served=200
+Both artifact types build + serve after removing SSO/integrations/docx sections from SKILL.md.
+Measured shrink: SKILL.md body 12,331 -> 9,984 chars (2,347 removed, ~671 est. tokens always-on).

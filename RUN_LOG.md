@@ -119,3 +119,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - reviews: fresh-context approve; codex 2 findings — #5 accepted+fixed (sentinel), #3 rebutted (deliberate scope).
 - SPINE COMPLETE (S0, A1-A5, B1-B4 partial [B4 pending], C1-C5): the operate foundation — bases + classifier + action registry + in-page runtime + assistant tool-defs + audit + round-trip — is on the branch. B4 (instruction migration) is the one remaining B-group slice.
 - ledger: passed 14/31 · blocked 0 · buildable-remaining 17.
+
+## GATE 2026-07-12T20:44:26Z — B4 (instruction migration + measured shrink) — PASSED
+- green: 3 type-specific sections migrated out of always-on SKILL.md into their bases; measured shrink 12,331->9,984 chars (~671 est. tokens/build); app+document builds verified live on the slimmed instructions.
+- reviews: BOTH codex AND the fresh review independently caught the same lossy-delete (password flow + load_context deleted from SKILL.md but not yet in the bases at dcdd488) — a genuine defect, FIXED in 280e2c7 (restored to app base skills; PDF format/landscape restored to document conventions). This is the run's clearest example of the double-review catching a real gap that the green live build could NOT (neither probe exercised a password-login or integration-heavy app).
+- B-GROUP COMPLETE (B1-B4): the internal-templates story is fully landed — loader, app base, per-build verification, and the measured instruction migration.
+- ledger: passed 15/31 · blocked 0 · buildable-remaining 16.

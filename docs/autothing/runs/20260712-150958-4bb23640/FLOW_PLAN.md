@@ -15,7 +15,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | B1 | base registry + loader + build-flow selection | api | 5 | B | A5 | passed |
 | B2 | the `app` base (panel mount point, protocol client, token link, error boundaries) | mixed | 5 | B | B1 | passed |
 | B3 | base-manifest per-build verification (closes F16/F28 class) | api | 3 | B | B1 | passed |
-| B4 | instruction migration: boilerplate → bases, measured shrink | docs | 3 | B | B1,B2,A4 | pending |
+| B4 | instruction migration: boilerplate → bases, measured shrink | docs | 3 | B | B1,B2,A4 | passed |
 | C1 | artifact-type classifier in scoping (apps get the operator) | api | 3 | C | A5 | passed |
 | C2 | action-registry contract: shared/ schema + build-time emission | api | 4 | C | A5 | passed |
 | C3 | in-page action runtime (state-layer dispatch, highlight, destructive confirm) | mixed | 6 | C | B2,C2 | passed |

@@ -181,6 +181,20 @@
         "status": "verified",
         "path": "slices/C5/round-trip-output.txt"
       }
+    },
+    "B4": {
+      "status": "passed",
+      "kind": "docs",
+      "commit": "280e2c7",
+      "tag": "operator/b4",
+      "gateStatus": "slices/B4/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/B4/b4-evidence.cast",
+        "videoSha256": "a270e37c8efae178200cd58a64ff7332d32e822cb6264924a1a698c11a19084b",
+        "videoBytes": 1705
+      }
     }
   },
   "globalGate": {
