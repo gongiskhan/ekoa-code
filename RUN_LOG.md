@@ -78,3 +78,8 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - evidence: commits b8ba9a9 + 72e229f (tag operator/c2); 12 tests + schema-coverage; slices/C2/{gate-status.json,review-verdict.md,c2-evidence.cast}.
 - reviews: fresh-context approve; codex gpt-5.5/high 1 finding accepted+fixed (frontmatter fence drift — regexes now identical + pinned by regression test).
 - ledger: passed 9/31 · blocked 0 · buildable-remaining 22 (B2 closing on its live gate).
+
+## DECISION 2026-07-12T18:28:48Z — B2 live gate FAILED (code finding, attempt 2/5) + donor-base rot noted
+- The live templateId=app build (job 3da8f930, after the required dist rebuild+reboot — first attempt 262d3a52 hit the STALE-DIST process miss and is void) completed generation but ended VERIFY_FAILED: the base wiring targets the RETIRED /api/v1/action envelope (404 on this platform; carried faithfully from the app-auth-persistent donor authored in the old-cortex era). Shell auth fails at runtime → error card → honest verifier failure. Classified CODE; slice-b2 agent re-dispatched with the current sanctioned surfaces (window.__ekoa.whoami/graphFetch/exportPdf/cloudFiles; /api/app-data; NO client action envelope).
+- NOTED for B4/operator: the donor base app-auth-persistent (and its skills) carries the same retired-endpoint rot; it is loadable via explicit templateId. Not fixed in B2 (scope); B4's migration must either fix or quarantine it.
+- Process note: the stale-dist miss is the documented live-verification trap (docs/testing.md); no ledger cost.
