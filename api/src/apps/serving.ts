@@ -260,6 +260,17 @@ try {
   console.error('[demo-bridge] client unavailable:', err instanceof Error ? err.message : String(err));
 }
 
+/** The in-page action runtime (executes a generated app's declared ui_actions;
+ *  operator-run C3), served at /__ekoa/action-runtime.js. Same read-once-at-boot
+ *  posture and unavailable-fallback as the demo bridge. */
+const ACTION_RUNTIME_PATH = join(__dirname, '..', '..', 'assets', 'action-runtime-client.js');
+let actionRuntimeSource = '/* ekoa action runtime unavailable */';
+try {
+  actionRuntimeSource = readFileSync(ACTION_RUNTIME_PATH, 'utf-8');
+} catch (err) {
+  console.error('[action-runtime] client unavailable:', err instanceof Error ? err.message : String(err));
+}
+
 export function servingRouter(deps: ServingDeps): Router {
   const r = Router();
 
@@ -409,6 +420,15 @@ export function servingRouter(deps: ServingDeps): Router {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.send(demoBridgeSource);
+  });
+
+  // In-page action runtime (operator-run C3) - same byte-serving posture as the
+  // demo bridge (JS content-type, CORS *, 5-min cache).
+  r.get('/__ekoa/action-runtime.js', (_req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(actionRuntimeSource);
   });
 
   // Public demo registry (ch03 §3.8.23, carried): versioned demo specs + assets.

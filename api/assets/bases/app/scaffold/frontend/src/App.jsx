@@ -62,6 +62,21 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
+  // Expose the shell's navigation to the operator assistant runtime (operator-run
+  // C3): a navigate action resolves window.__ekoaApp.navigate(routeOrId) first. A
+  // route matches a PAGES id, or "/id", or an id === label match; unknown routes
+  // are ignored (the runtime falls back to hash/history, harmless here).
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    window.__ekoaApp = window.__ekoaApp || {};
+    window.__ekoaApp.navigate = (route) => {
+      const key = String(route || '').replace(/^\//, '');
+      const page = PAGES.find((p) => p.id === key || p.label === route);
+      if (page) setActiveId(page.id);
+    };
+    return () => { if (window.__ekoaApp) delete window.__ekoaApp.navigate; };
+  }, []);
+
   const appName = (typeof document !== 'undefined' && document.title) || 'App';
   const active = PAGES.find((p) => p.id === activeId) ?? PAGES[0];
   const ActivePage = active.component;

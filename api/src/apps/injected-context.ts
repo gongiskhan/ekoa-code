@@ -257,7 +257,8 @@ window.__EKOA_APP_ID=${JSON.stringify(appId)};
   } catch (_) { /* probe must never crash the app */ }
 })();
 </script>
-<script src="/__ekoa/demo-bridge.js"></script>`;
+<script src="/__ekoa/demo-bridge.js"></script>
+<script src="/__ekoa/action-runtime.js"></script>`;
   // <base> makes relative asset URLs (./bundle.js) resolve from the app root on
   // DEEP paths too (/apps/<id>/rota/sub) - without it a hard reload of a
   // BrowserRouter sub-route 404s its own bundle. /api/... and /apps/... URLs are
