@@ -22,7 +22,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | C4 | assistant tool definitions from manifest + audit rows | api | 4 | C | C2 | passed |
 | C5 | registry test-harness dual use + round-trip gate | api | 3 | C | C3,C4 | passed |
 | D1 | assistant endpoint: /api/app-assistant through the chokepoint (grounding, citations, mode inference) | api | 6 | D | C4 | passed |
-| D2 | assistant panel UI in the app base (first-open, modes, driving indicator, pause-on-input) | ui | 6 | D | B2,C3 | pending |
+| D2 | assistant panel UI in the app base (first-open, modes, driving indicator, pause-on-input) | ui | 6 | D | B2,C3 | passed |
 | D3 | three-modes scripted gate + pause assertion + cited answer | mixed | 3 | D | D1,D2 | pending |
 | E1 | build-time tour generation (overview + per-journey, registry-ID selectors) | api | 4 | E | C2,A2 | pending |
 | E2 | tour playback via panel (zero-token) + rebuild selector-stability gate | mixed | 4 | E | E1,D2 | pending |

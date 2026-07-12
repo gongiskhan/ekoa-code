@@ -1,0 +1,17 @@
+{
+  "slice": "D2",
+  "kind": "ui",
+  "commit": "486fb1b",
+  "commits": ["4541861", "15b230e", "34e4b86", "7521951", "098f022", "486fb1b"],
+  "tag": "operator/d2",
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-12T23:25:51Z", "detail": "panel (AssistantPanel.jsx/.css + mount.js + index.jsx hook) + base skill + D1 action enrichment (server-authoritative AppAction attached per validated toolName) + D2-prep same-document window.__ekoaActions API" },
+    "test": { "status": "passed", "detail": "16 panel source-contract tests + 15 app-assistant unit (incl. undeclared-param drop) + 11 contract + runtime/base-loader suites green; tsc + eslint + chokepoint clean; offline per-app esbuild bundle 0 errors", "at": "2026-07-12T23:25:51Z" },
+    "securityWall": { "status": "passed", "detail": "gitleaks clean on all 6 commits; chokepoint grep clean; no XSS sink (fresh review grep: no dangerouslySetInnerHTML/innerHTML)", "at": "2026-07-12T23:25:51Z" },
+    "liveVerification": { "status": "passed", "detail": "assistant-panel.e2e.mjs on the credentialed stack: fresh app build -> launcher mounts in real bundle (React-18 async timing) -> first-open 3-capability PT-PT message -> real POST /api/app-assistant turn (200, 1059-char PT-PT reply, X-Ekoa-App-Id) -> zero non-benign console errors (2 documented pre-existing platform signatures allowlisted + logged to docs/findings.md). PASS at 34e4b86; codex/polish fixes after it are source+bundle verified (caps/abort/CSS-var swap do not alter the driven path)", "at": "2026-07-12T23:25:51Z" },
+    "freshReview": { "status": "passed", "detail": "VERDICT: approve - acceptance met, no XSS sink, enrichment unforgeable, contract additive, mount bounded; 6 non-blocking findings: F1 fixed (history caps), F2/F3 fixed (Mostrar unification + card order), F4 logged to findings.md (citations-vs-reply, D1-inherited), F5 deferred to D3 by plan, F6 rebutted-documented (fallbacks mirror the contract table)", "at": "2026-07-12T23:25:51Z" },
+    "codexSliceReview": { "status": "passed", "detail": "gpt-5.5/high, read-only sandbox: needs-work with 5 findings, ALL fixed in 098f022 (fenced-path param filtering vs manifest [high]; history/message caps; AbortController+120s timeout; --color-on-primary -> contract var --color-bg; stronger test pins). E2e sub-point rebutted (driver already asserted reply != calm-error at :177)", "at": "2026-07-12T23:25:51Z" },
+    "designAudit": { "status": "passed", "detail": "fresh reviewer audited the 3 live screenshots: professional/calm/restrained, token-scale spacing, correct PT-PT; nits fixed (F2/F3) + model register drift fixed via system-prompt formal-register pin; sample-app truncation noted as generated-app, not panel", "at": "2026-07-12T23:25:51Z" },
+    "walkthrough": { "status": "passed", "detail": "evidence-live.cast (asciinema, clean PASS run) + live-01..03.png (launcher / first-open / real reply)", "at": "2026-07-12T23:25:51Z" }
+  }
+}
