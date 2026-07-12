@@ -68,6 +68,23 @@ describe('base-loader — registry + loader (B1)', () => {
     expect(libPaths).toContain('frontend/src/lib/integrations.ts');
     expect(libPaths).toContain('frontend/src/lib/jsonStore.ts');
   });
+
+  // operator-run B2: the app base — the strategic default with the assistant mount.
+  it('loads the app base: shipped shell carries the assistant mount, wiring maps the protocol client', async () => {
+    expect(BASE_IDS).toContain('app');
+    expect(isBaseId('app')).toBe(true);
+
+    const base = await loadBase('app');
+    expect(base.manifest.id).toBe('app');
+
+    // The pre-built shell is scaffolded verbatim and carries the assistant mount point.
+    const appJsx = base.scaffoldFiles.find((f) => f.relPath === 'frontend/src/App.jsx');
+    expect(appJsx?.content).toContain('ekoa-assistant-root');
+
+    // The hardened protocol client is wiring, mapped into the project's lib/.
+    const projectFiles = baseProjectFiles(base);
+    expect(projectFiles.map((f) => f.path)).toContain('frontend/src/lib/protocol-client.ts');
+  });
 });
 
 describe('base-loader — build-flow wiring (B1 integration)', () => {
@@ -127,6 +144,43 @@ describe('base-loader — build-flow wiring (B1 integration)', () => {
     const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b3', description: 'Qualquer coisa', language: 'pt', templateId: 'featured-thing-123' });
     expect((await readManifest(prep.projectDir))?.extends).toBeUndefined();
     expect(prep.basePromptSections).toBeUndefined();
+  }, 60_000);
+
+  // operator-run C2: activation captures the declared ui_actions (valid, invalid, absent).
+  it('activateArtifact persists the ui_actions manifest (and clears it when absent)', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-c2', description: 'Gestor de clientes', language: 'pt' });
+    const manifestMd = `---
+name: Gestor
+purpose: gerir clientes
+ui_actions:
+  - id: ir-clientes
+    kind: navigate
+    labelPt: Ver clientes
+    description: Abre a lista de clientes
+    route: /clientes
+---
+`;
+    await writeFile(join(prep.projectDir, 'MANIFEST.md'), manifestMd, 'utf-8');
+    await mech.activateArtifact({ artifactId: prep.artifactId, slug: prep.slug, appUrl: prep.appUrl, projectDir: prep.projectDir });
+    const { artifacts } = await import('../../src/data/stores.js');
+    let art = (await artifacts.get(prep.artifactId)) as { data?: Record<string, unknown> } | null;
+    const persisted = art?.data?.actionManifest as { version: number; actions: Array<{ id: string }> };
+    expect(persisted?.version).toBe(1);
+    expect(persisted?.actions[0]?.id).toBe('ir-clientes');
+
+    // An invalid declaration persists the ERROR (visible), not a manifest.
+    await writeFile(join(prep.projectDir, 'MANIFEST.md'), manifestMd.replace('route: /clientes', ''), 'utf-8');
+    await mech.activateArtifact({ artifactId: prep.artifactId, slug: prep.slug, appUrl: prep.appUrl, projectDir: prep.projectDir });
+    art = (await artifacts.get(prep.artifactId)) as { data?: Record<string, unknown> } | null;
+    expect(art?.data?.actionManifest).toBeUndefined();
+    expect(String(art?.data?.actionManifestError)).toMatch(/requires route/);
+
+    // Removing the section clears both keys (the operator surface follows the declaration).
+    await writeFile(join(prep.projectDir, 'MANIFEST.md'), '---\nname: G\npurpose: p\n---\n', 'utf-8');
+    await mech.activateArtifact({ artifactId: prep.artifactId, slug: prep.slug, appUrl: prep.appUrl, projectDir: prep.projectDir });
+    art = (await artifacts.get(prep.artifactId)) as { data?: Record<string, unknown> } | null;
+    expect(art?.data?.actionManifest).toBeUndefined();
+    expect(art?.data?.actionManifestError).toBeUndefined();
   }, 60_000);
 
   // operator-run B3: the base-manifest mustEdit signal in the honest-completion gate.

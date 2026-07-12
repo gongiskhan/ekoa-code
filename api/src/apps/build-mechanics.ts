@@ -23,6 +23,7 @@ import { appBuilder, validateBundle } from './builder.js';
 import { appRegistry } from './app-registry.js';
 import { readManifest, writeManifest } from './manifest.js';
 import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-loader.js';
+import { readUiActions } from './action-manifest.js';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 
@@ -286,9 +287,30 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
 
     /** Activate the artifact with a MERGE onto its existing data bag (ch05 §5.6.2 step 7): a
      *  wholesale replace historically dropped customization + lineage fields. */
-    async activateArtifact(input: { artifactId: string; slug: string; appUrl: string }): Promise<void> {
+    async activateArtifact(input: { artifactId: string; slug: string; appUrl: string; projectDir?: string }): Promise<void> {
+      // operator-run C2: capture the app's declared UI action manifest (the operate
+      // contract) at activation. Valid → persisted for the assistant/tools; invalid →
+      // the ERROR is persisted so the failure is visible (fail-loud) without failing
+      // an otherwise working build; absent → both keys cleared (a re-build that
+      // removed the section removes the operator surface).
+      let uiActions: { actionManifest?: unknown; actionManifestError?: string } = {};
+      if (input.projectDir) {
+        try {
+          const res = await readUiActions(input.projectDir);
+          if (res.status === 'valid') uiActions = { actionManifest: res.manifest };
+          else if (res.status === 'invalid') {
+            console.warn(`[build-mechanics] ${input.artifactId}: ui_actions invalid — ${res.error}`);
+            uiActions = { actionManifestError: res.error };
+          }
+        } catch (err) {
+          console.warn(`[build-mechanics] ${input.artifactId}: ui_actions read failed (non-fatal):`, err instanceof Error ? err.message : err);
+        }
+      }
       await artifacts.update(input.artifactId, (a) => {
-        const data = { ...((a.data as Record<string, unknown> | undefined) ?? {}), appUrl: input.appUrl };
+        const prev = { ...((a.data as Record<string, unknown> | undefined) ?? {}) };
+        delete prev.actionManifest;
+        delete prev.actionManifestError;
+        const data = { ...prev, appUrl: input.appUrl, ...uiActions };
         return { ...a, status: 'active', slug: input.slug, data };
       });
     },

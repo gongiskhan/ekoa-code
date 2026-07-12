@@ -292,7 +292,7 @@ export interface BuildMechanics {
   /** Persist sdkSessionId onto the artifact — ONLY when it changed (§5.4.5). */
   persistSdkSessionId(artifactId: string, sdkSessionId: string): Promise<void>;
   /** Activate the artifact with a MERGE onto its existing data bag (§5.6.2 step 7). */
-  activateArtifact(input: { artifactId: string; slug: string; appUrl: string }): Promise<void>;
+  activateArtifact(input: { artifactId: string; slug: string; appUrl: string; projectDir?: string }): Promise<void>;
   /** (Re)start the incremental watcher with a rebuild callback — the live-preview heartbeat:
    *  every successful watcher rebuild fires `onRebuild`, which build.ts maps to a
    *  `preview_reload` job event so the client's iframe follows the agent's writes. */

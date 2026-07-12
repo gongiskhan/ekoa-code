@@ -502,7 +502,8 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     terminalReached = true;
 
     // Step 7: artifact → active with a MERGE onto its data bag (§5.6.2 step 7).
-    await mech.activateArtifact({ artifactId, slug, appUrl });
+    // projectDir lets activation capture the app's declared UI action manifest (C2).
+    await mech.activateArtifact({ artifactId, slug, appUrl, ...(projectDir ? { projectDir } : {}) });
     // Step 8: fire-and-forget screenshot + post-run memory extraction OFF the terminal event.
     mech.screenshot(artifactId);
     void runPostRunExtraction({ userId: input.actor.userId, username: input.username, orgId: input.actor.orgId, sessionId: input.sessionId, runId: jobId, transcript: `${input.description}\n\n${result.text}`, deps: input.deps }).catch(() => undefined);
