@@ -169,6 +169,18 @@
         "videoSha256": "67d7111bcf83bbb75720775be456ea5e59e1016b9d20d4b884780b7be83576cd",
         "videoBytes": 1256
       }
+    },
+    "C5": {
+      "status": "passed",
+      "kind": "mixed",
+      "commit": "2d9cd42",
+      "tag": "operator/c5",
+      "gateStatus": "slices/C5/gate-status.json",
+      "video": {
+        "mode": "e2e-output",
+        "status": "verified",
+        "path": "slices/C5/round-trip-output.txt"
+      }
     }
   },
   "globalGate": {

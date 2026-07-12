@@ -113,3 +113,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - GAP flagged to D2 + LANDING: the runtime is postMessage-to-parent (iframe) only; the same-document assistant panel (D2) needs a direct in-window API or an iframe. Recorded in slices/C5/impl-notes.md so D2 doesn't rediscover it.
 - ledger note: the e2e is a feature-run artifact (unmerged branch); build-run SUITE_LEDGER.json left untouched (its census is already in documented committed-baseline debt); operator registers it on merge.
 - fresh-context review + codex slice review scheduled next; ledger updates to passed on their clearance.
+
+## GATE 2026-07-12T20:27:04Z — C5 (registry round-trip + tester harness) — PASSED
+- green: live round-trip e2e (7 assertions) incl. the sentinel proof that a destructive action is withheld before confirm and never runs on cancel.
+- reviews: fresh-context approve; codex 2 findings — #5 accepted+fixed (sentinel), #3 rebutted (deliberate scope).
+- SPINE COMPLETE (S0, A1-A5, B1-B4 partial [B4 pending], C1-C5): the operate foundation — bases + classifier + action registry + in-page runtime + assistant tool-defs + audit + round-trip — is on the branch. B4 (instruction migration) is the one remaining B-group slice.
+- ledger: passed 14/31 · blocked 0 · buildable-remaining 17.

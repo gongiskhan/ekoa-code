@@ -1,7 +1,7 @@
 {
   "slice": "C5",
   "kind": "mixed",
-  "commit": "5acd1ab",
+  "commit": "2d9cd42 (5acd1ab+sentinel)",
   "tag": "operator/c5",
   "gates": {
     "implement": {
@@ -10,7 +10,7 @@
     },
     "test": {
       "status": "passed",
-      "detail": "LIVE round-trip e2e PASS (7 assertions): app-base build -> injected runtime -> highlight ring -> setField via native events -> destructive confirm -> cancel. Output captured at slices/C5/round-trip-output.txt.",
+      "detail": "LIVE round-trip e2e PASS (7 assertions incl. the sentinel non-execution proof): app-base build -> injected runtime -> highlight ring -> setField via native events -> destructive confirm (action withheld) -> cancel (action never ran).",
       "at": "2026-07-12T20:20:20Z"
     },
     "securityWall": {
@@ -19,10 +19,20 @@
       "at": "2026-07-12T20:20:20Z"
     },
     "adversarialReview": {
-      "status": "pending"
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/C5/review-verdict.md",
+      "at": "2026-07-12T20:27:04Z"
     },
     "codexSliceReview": {
-      "status": "pending"
+      "status": "passed-after-fix",
+      "verdict": "needs-work: 2 findings; #5 ACCEPTED+FIXED (sentinel proof of non-execution before confirm/on cancel, 2d9cd42); #3 REBUTTED (self-planted probe is deliberate scope \u2014 C5 gates the runtime round-trip, J3/verify gate app quality)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 80008,
+      "at": "2026-07-12T20:27:04Z"
     },
     "adversarialTest": {
       "status": "skipped",
@@ -40,5 +50,5 @@
       "at": "2026-07-12T20:20:20Z"
     }
   },
-  "status": "gates-pending"
+  "status": "passed"
 }

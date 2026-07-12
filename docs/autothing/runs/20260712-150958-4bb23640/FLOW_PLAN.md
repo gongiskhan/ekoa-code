@@ -20,7 +20,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | C2 | action-registry contract: shared/ schema + build-time emission | api | 4 | C | A5 | passed |
 | C3 | in-page action runtime (state-layer dispatch, highlight, destructive confirm) | mixed | 6 | C | B2,C2 | passed |
 | C4 | assistant tool definitions from manifest + audit rows | api | 4 | C | C2 | passed |
-| C5 | registry test-harness dual use + round-trip gate | api | 3 | C | C3,C4 | pending |
+| C5 | registry test-harness dual use + round-trip gate | api | 3 | C | C3,C4 | passed |
 | D1 | assistant endpoint: /api/app-assistant through the chokepoint (grounding, citations, mode inference) | api | 6 | D | C4 | pending |
 | D2 | assistant panel UI in the app base (first-open, modes, driving indicator, pause-on-input) | ui | 6 | D | B2,C3 | pending |
 | D3 | three-modes scripted gate + pause assertion + cited answer | mixed | 3 | D | D1,D2 | pending |
