@@ -1,0 +1,52 @@
+{
+  "kind": "docs",
+  "commit": "97f66d6",
+  "tag": "operator/a-group",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T16:58:53Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "committed deliverable; no code change; wall inherited green from S0",
+      "at": "2026-07-12T16:58:53Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean on 97f66d6",
+      "at": "2026-07-12T16:58:53Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/A-group/review-verdict.md",
+      "at": "2026-07-12T16:58:53Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-with-rebuttal",
+      "verdict": "needs-work (8 findings, all rejected)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "rebuttal": "all 8 flagged passages describe EXISTING shipped org-scoping/auth mechanisms encountered in read-only exploration; the sequencing rule bans new security design/code/discussion, not factual inventory; D1 paragraph prescribes reuse of the existing served-app admission plane only",
+      "at": "2026-07-12T16:58:53Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs)"
+    },
+    "walkthrough": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs)"
+    }
+  },
+  "status": "passed",
+  "slice": "A2",
+  "deliverable": "analysis/02-demos-tutorials.md"
+}

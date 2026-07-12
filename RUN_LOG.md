@@ -48,3 +48,10 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - kind-conditional skips recorded: adversarialTest (api → batched), design (api).
 - duration: ~35 min wall (dominated by ci:lane + the subagent-delivery DEVIATION above); models: fable-5 lead, gpt-5.5 codex.
 - ledger: passed 1/31 · blocked 0 · buildable-remaining 30.
+
+## GATE 2026-07-12T16:58:53Z — A1–A5 (exploration + decision memos) — PASSED (batched gates, per-slice records)
+- green: four verified analyses (each confirming its RUN_SPEC assumption with cited evidence) + three decision memos, committed 97f66d6, tag operator/a-group.
+- key ground truth established: ekoa_action data-plane primitive real but undiscoverable (listEkoaActions honest-empty); automations cannot drive app UI; automations bypass logActivity today; Tutorial Bridge 1:1 port, one net-new component needed (same-document player); F1 = plain ingestDocument call (+ optional mid-run upload transport); D1 = new route on the existing admission plane; measured structural token tax ~2,700 est. tokens/build (B4 bar); dropped base-loader located in ../ekoa-dev (reference implementation).
+- reviews: fresh-context approve (12+ citations spot-checked, zero wrong; A4 arithmetic re-derived); codex gpt-5.5/high 8 findings ALL REBUTTED (descriptions of existing mechanisms, not new security design). Batching note: one review + one codex call covered the five docs slices; per-slice records point at the shared evidence.
+- minor non-blocking notes carried to LANDING: A4 did not literally grep the archived spec tag (seam evidence suffices); A4 judgment-rows foot 14 chars off headline (flagged ~ estimates).
+- ledger: passed 6/31 · blocked 0 · buildable-remaining 25.
