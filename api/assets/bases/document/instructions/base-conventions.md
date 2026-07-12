@@ -17,6 +17,15 @@ The project was scaffolded from the platform's print-tested document shell:
 
 **Do NOT rebuild or restyle the shell.** Do not remove the toolbar, change the export functions, or alter the print rules — the Word/PDF quality is guaranteed by them. Touch `App.jsx`/`index.css` only for user-requested EXTRAS (e.g. fill-in fields for placeholders, an additional tab), keeping every existing export path intact.
 
+The export APIs the shell already wires (only relevant if the user asks for an EXTRA export
+control — never rebuild the shipped ones): PDF is server-rendered from the live DOM via
+`window.__ekoa.exportPdf({ filename, format: 'A4' | 'Letter' | 'Legal', landscape })`; Word builds
+the `.docx` from the SAME data with the `docx` library (`import { Document, Packer, Paragraph,
+TextRun, HeadingLevel } from 'docx'`) and downloads via the anchor pattern
+(`URL.createObjectURL` + click), no extra libraries; cloud save (when Google Workspace / Microsoft
+365 is connected) is `window.__ekoa.cloudFiles`. A document is never delivered without working
+download buttons — which is exactly why the shell ships them pre-built.
+
 ## Filling `documentData.js`
 
 Block types (rendered on screen and mirrored 1:1 into the .docx):

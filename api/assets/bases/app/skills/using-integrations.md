@@ -21,6 +21,11 @@ The frontend's job is the UI and the app-data it owns (`./lib/jsonStore`). When
 a user action needs a capability whose integration is not connected, render the
 needs-integration state (below) to route them to `/integrations`.
 
+Before you author an `integration.call` capability for a configured integration, load its
+knowledge with the `load_context` tool (name `integration-<key>`, e.g. `integration-slack`): it
+describes that integration's actions, their arguments, and its common errors. Declare the
+integrations you use in `external_dependencies.integrations` of the MANIFEST.md.
+
 ## 2. The visitor's Microsoft 365 (the only in-app integration call)
 
 The signed-in visitor's own Microsoft 365 is reachable through the Graph proxy,
