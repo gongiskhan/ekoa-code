@@ -1,0 +1,55 @@
+{
+  "slice": "C3",
+  "kind": "mixed",
+  "commit": "aec0181 (14f45e5+fix)",
+  "tag": "operator/c3",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T19:45:39Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "11 runtime source/route tests + 19 served-app byte-compat + 12 base-loader (shell nav hook); typecheck; eslint; chokepoint. Visible browser round-trip deferred to C5.",
+      "at": "2026-07-12T19:45:39Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean both commits",
+      "at": "2026-07-12T19:45:39Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/C3/review-verdict.md",
+      "at": "2026-07-12T19:45:39Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "needs-work: 1 finding ACCEPTED+FIXED (select dispatched change only, not input+change; React parity) aec0181",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 63042,
+      "at": "2026-07-12T19:45:39Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (the browser functional pass is C5's playwright round-trip gate \u2014 recorded, not silent)"
+    },
+    "design": {
+      "status": "deferred",
+      "reason": "the runtime's visible driving UI (highlight ring, confirm card, driving badge) is judged in D2's design audit with the panel; recorded"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/C3/c3-evidence.cast",
+      "videoSha256": "67d7111bcf83bbb75720775be456ea5e59e1016b9d20d4b884780b7be83576cd",
+      "videoBytes": 1256,
+      "at": "2026-07-12T19:45:39Z"
+    }
+  },
+  "status": "passed"
+}

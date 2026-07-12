@@ -100,3 +100,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - green: manifest -> namespaced tool defs (JSON-schema inputs, option enums, destructive flag carried, action forwarded verbatim); auditAssistantAction writes one row via the single logActivity path (category app-assistant, ids-only metadata) proven against real mongo-mem. No permission logic, no DOM, no llm import.
 - reviews: codex gpt-5.5/high APPROVE (0 findings); fresh-context approve.
 - ledger: passed 12/31 · blocked 0 · buildable-remaining 19.
+
+## GATE 2026-07-12T19:45:39Z — C3 (in-page action runtime + shell nav hook) — PASSED
+- green: action-runtime-client.js (demo-bridge precedent) served+injected; executes ui_actions through the app's own state events (native-setter input+change, real click); origin-pinned; destructive confirm-before-dispatch; visible driving badge + highlight ring; pause-on-isTrusted-input; startTour->tour-request (E2); custom via __ekoaApp.actions; app shell exposes __ekoaApp.navigate. Base skill teaches ui_actions declaration.
+- reviews: codex 1 finding accepted+fixed (select input+change parity, aec0181); fresh-context approve.
+- deferrals recorded: visible browser round-trip -> C5 gate; driving-UI design judgement -> D2.
+- ledger: passed 13/31 · blocked 0 · buildable-remaining 18.

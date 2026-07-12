@@ -18,7 +18,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | B4 | instruction migration: boilerplate → bases, measured shrink | docs | 3 | B | B1,B2,A4 | pending |
 | C1 | artifact-type classifier in scoping (apps get the operator) | api | 3 | C | A5 | passed |
 | C2 | action-registry contract: shared/ schema + build-time emission | api | 4 | C | A5 | passed |
-| C3 | in-page action runtime (state-layer dispatch, highlight, destructive confirm) | mixed | 6 | C | B2,C2 | pending |
+| C3 | in-page action runtime (state-layer dispatch, highlight, destructive confirm) | mixed | 6 | C | B2,C2 | passed |
 | C4 | assistant tool definitions from manifest + audit rows | api | 4 | C | C2 | passed |
 | C5 | registry test-harness dual use + round-trip gate | api | 3 | C | C3,C4 | pending |
 | D1 | assistant endpoint: /api/app-assistant through the chokepoint (grounding, citations, mode inference) | api | 6 | D | C4 | pending |
