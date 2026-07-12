@@ -307,7 +307,9 @@ async function bootStack() {
   await seedCredential(cred);
 
   bootApi();
-  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 60_000 }))) {
+  // 180s: the api boot scans the whole ~/.ekoa sandbox estate + prebuilds featured apps;
+  // on a machine with a grown estate 60s was a boot-b flake (operator-run, 2026-07-12).
+  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 180_000 }))) {
     throw new Error(`api did not answer /health on :${API_PORT}`);
   }
   log('api healthy');
