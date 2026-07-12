@@ -211,16 +211,9 @@
       }
     }
   },
-  "globalGate": {
-    "status": "aborted-operator-stop",
-    "at": "2026-07-12T21:18:31Z",
-    "landed": 16,
-    "plusEnabling": [
-      "d2-prep"
-    ],
-    "spineComplete": true,
-    "resumePoint": "D2",
-    "landing": "LANDING.md",
-    "note": "Operator-requested stop with the operate spine complete; nothing merged to main; H security block untouched by design (can() stays a permissive stub)."
+  "resume": {
+    "at": "2026-07-12T21:45:57Z",
+    "note": "operator resumed after stop; see RUN_LOG RESUME entry",
+    "resumePoint": "D2"
   }
 }
