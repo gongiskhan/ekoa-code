@@ -301,12 +301,14 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     }
 
     // First-build vs follow-up resolution.
+    let basePromptSections: string[] = [];
     if (opts.firstBuild) {
       const prep = await mech.prepareFirstBuild({ userId: input.actor.userId, sessionId: input.sessionId, description: input.description, language: input.language, ...(input.templateId ? { templateId: input.templateId } : {}) });
       artifactId = prep.artifactId;
       projectDir = prep.projectDir;
       slug = prep.slug;
       appUrl = prep.appUrl;
+      basePromptSections = prep.basePromptSections ?? [];
       if (entry) entry.artifactId = artifactId;
       await patchJob(jobId, { artifactId });
     } else {
@@ -316,6 +318,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       resumeSessionId = resolved.resumeSessionId;
       slug = resolved.slug;
       appUrl = resolved.appUrl;
+      basePromptSections = resolved.basePromptSections ?? [];
     }
     if (abort.signal.aborted) { await settleAborted(); return; }
 
@@ -356,7 +359,10 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
         // never served while the scaffold keeps being compiled. Flows through runAgent's
         // anonymise path like every prompt (client.ts systemPrompt handling).
-        systemPrompt: [...contentSections, groundingBlock, BUILD_SYSTEM_PROMPT].filter(Boolean).join('\n\n'),
+        // Base conventions (operator-run B1) sit between the universal coding sections and
+        // the grounding block: universal judgment first, then the selected base's structural
+        // invariants, then dynamic knowledge, then the F16 entrypoint steer.
+        systemPrompt: [...contentSections, ...basePromptSections, groundingBlock, BUILD_SYSTEM_PROMPT].filter(Boolean).join('\n\n'),
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,

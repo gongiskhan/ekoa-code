@@ -59,8 +59,10 @@ export interface AppManifest {
   };
 
   /**
-   * Optional base template this artifact extends. References an id under `ekoa-data/bases/`.
-   * If absent, the base loader applies the default base (`app-auth-persistent`).
+   * Optional internal base this artifact extends — an id under `api/assets/bases/`
+   * (`base-loader.ts` BASE_IDS). Written by prepareFirstBuild when a base is selected;
+   * read on follow-up builds to re-inject the base's prompt sections. Absent = the
+   * artifact was scaffolded from the generic starters (no base).
    */
   extends?: string;
 

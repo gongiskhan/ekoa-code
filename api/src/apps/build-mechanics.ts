@@ -21,7 +21,8 @@ import { indexSlug } from './slug-index.js';
 import { scaffoldApp } from './scaffold.js';
 import { appBuilder, validateBundle } from './builder.js';
 import { appRegistry } from './app-registry.js';
-import { readManifest } from './manifest.js';
+import { readManifest, writeManifest } from './manifest.js';
+import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-loader.js';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 
@@ -56,6 +57,36 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
   function deriveAppName(description: string): string {
     const firstLine = (description.split('\n')[0] ?? '').replace(/\s+/g, ' ').trim().slice(0, 60).trim();
     return firstLine || 'App';
+  }
+
+  /**
+   * Resolve the internal base a first build should scaffold from (operator-run B1).
+   * `templateId` was threaded route → build → here since G6 and consumed by NOBODY
+   * (analysis/04 §1.4); it now selects a base when it names one. An unknown id is a
+   * WARN + generic-starters fallback (honest: featured-artifact ids also travel this
+   * field historically), never a hard failure. A known base that fails to LOAD is a
+   * hard failure — a selected-but-broken base must not silently degrade (F16 class).
+   */
+  async function baseFor(templateId: string | undefined): Promise<LoadedBase | null> {
+    if (!templateId) return null;
+    if (!isBaseId(templateId)) {
+      console.warn(`[build-mechanics] templateId "${templateId}" names no internal base; using generic starters`);
+      return null;
+    }
+    return loadBase(templateId);
+  }
+
+  /** Load the base an existing artifact extends (manifest `extends`) for follow-up
+   *  prompt injection. Non-fatal: a missing/invalid manifest or base yields null. */
+  async function baseOfProject(projectDir: string): Promise<LoadedBase | null> {
+    try {
+      const m = await readManifest(projectDir);
+      if (!m?.extends || !isBaseId(m.extends)) return null;
+      return await loadBase(m.extends);
+    } catch (err) {
+      console.warn('[build-mechanics] base of project failed to load (non-fatal):', err instanceof Error ? err.message : err);
+      return null;
+    }
   }
 
   /** Resolve the artifact's build output dir (manifest.outputDir, default `dist/`). */
@@ -94,7 +125,8 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       description: string;
       language: string;
       templateId?: string;
-    }): Promise<{ artifactId: string; projectDir: string; slug: string; appUrl: string }> {
+    }): Promise<{ artifactId: string; projectDir: string; slug: string; appUrl: string; basePromptSections?: string[] }> {
+      const base = await baseFor(input.templateId);
       const artifactId = deps.genId();
       const name = deriveAppName(input.description);
       const slug = await generateSlug(name, deps);
@@ -119,7 +151,22 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       };
       await artifacts.insert(doc as never);
 
-      await scaffoldApp({ appId: artifactId, name, projectDir, description: input.description });
+      await scaffoldApp({
+        appId: artifactId,
+        name,
+        projectDir,
+        description: input.description,
+        ...(base ? { templateScaffoldFiles: baseProjectFiles(base) } : {}),
+      });
+      // Persist the base linkage (manifest `extends`) so follow-up builds and the
+      // per-build base-manifest verification know which base this artifact is on.
+      if (base) {
+        const m = await readManifest(projectDir);
+        if (m) {
+          m.extends = base.id;
+          await writeManifest(projectDir, m);
+        }
+      }
       // Trigger 1: initial build + watch, before the agent starts. A failure here is non-fatal.
       try {
         await appBuilder.build(artifactId, projectDir);
@@ -129,21 +176,28 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       }
       await appRegistry.register(artifactId, projectDir, input.userId, name);
 
-      return { artifactId, projectDir, slug, appUrl };
+      return { artifactId, projectDir, slug, appUrl, ...(base ? { basePromptSections: base.promptSections } : {}) };
     },
 
     /** Follow-up resolution (ch05 §5.3.5, §5.4.5): the artifact record → its project dir, the
      *  SDK session id to resume with, and its existing slug + served URL (follow-up completion
      *  re-activates with these — carrying '' through blanked the slug on every follow-up).
      *  Null when the artifact is gone. */
-    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; resumeSessionId?: string; slug: string; appUrl: string } | null> {
+    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; resumeSessionId?: string; slug: string; appUrl: string; basePromptSections?: string[] } | null> {
       const art = (await artifacts.get(artifactId)) as ArtifactDoc | null;
       if (!art) return null;
       const projectDir = projectDirFor(art);
       const data = (art.data as Record<string, unknown> | undefined) ?? {};
       const resumeSessionId = typeof data.sdkSessionId === 'string' ? data.sdkSessionId : undefined;
       const appUrl = typeof data.appUrl === 'string' && data.appUrl ? data.appUrl : `/apps/${artifactId}/`;
-      return { projectDir, ...(resumeSessionId ? { resumeSessionId } : {}), slug: art.slug ?? '', appUrl };
+      const base = await baseOfProject(projectDir);
+      return {
+        projectDir,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        slug: art.slug ?? '',
+        appUrl,
+        ...(base ? { basePromptSections: base.promptSections } : {}),
+      };
     },
 
     /**

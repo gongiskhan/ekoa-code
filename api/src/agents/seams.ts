@@ -254,6 +254,10 @@ export interface FirstBuildPrep {
   projectDir: string;
   slug: string;
   appUrl: string;
+  /** Prompt sections of the selected internal base (operator-run B1) — the base's
+   *  instructions/skills/layouts markdown, injected into the build system prompt.
+   *  Absent when the build scaffolds from the generic starters. */
+  basePromptSections?: string[];
 }
 
 export interface FollowUpResolution {
@@ -264,6 +268,10 @@ export interface FollowUpResolution {
    *  with these — pre-fix, build.ts carried '' through and blanked the slug on every follow-up. */
   slug: string;
   appUrl: string;
+  /** Prompt sections of the artifact's base (manifest `extends`, operator-run B1), so
+   *  follow-up builds keep the base conventions in the system prompt. Absent when the
+   *  artifact extends no base (or the base fails to load — non-fatal, logged). */
+  basePromptSections?: string[];
 }
 
 /**
