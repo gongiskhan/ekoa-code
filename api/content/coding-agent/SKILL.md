@@ -150,50 +150,13 @@ sentido uma automação invocá-la ("adicionar cliente", "listar faturas em aber
 NÃO é a forma certa quando exige UI ou computação fora dos primitivos - isso fica no
 código da app.
 
-## Integrações a partir da app
-A app nunca chama APIs externas diretamente. Os caminhos suportados:
-- Capacidades `integration.call` no MANIFEST.md (executadas pela plataforma).
-- Automações da plataforma (o utilizador liga-as às ações da app).
-- Microsoft 365 do visitante autenticado: `window.__ekoa.graphFetch(path, options)`
-  (proxy Graph com a sessão SSO do visitante).
-Declara as integrações usadas em `external_dependencies.integrations`.
-Antes de usares uma integração configurada, carrega o conhecimento dela com a
-ferramenta `load_context` (nome `integration-<chave>`, ex.: `integration-slack`):
-descreve as ações, os argumentos e os erros comuns dessa integração.
-
-## Documentos descarregáveis (Word / PDF)
-Quando o pedido é um DOCUMENTO (contrato, parecer, relatório, proposta, carta), o
-entregável é uma app-documento: página com estilo de impressão mostrando o documento
-completo + uma barra de ações que descarrega **Word (.docx)** e **PDF**. Nunca
-entregues uma página de documento sem botões de download a funcionar.
-- Texto real corrido (títulos, cláusulas numeradas), nunca formulários/textareas.
-- Botões numa toolbar `className="no-print"` (a plataforma remove `.no-print` do PDF).
-- Revisões = o documento COMPLETO com as alterações aplicadas (nunca um aditamento,
-  salvo pedido explícito); notas explicativas numa aba separada, fora dos exports.
-- PDF: `window.__ekoa.exportPdf({ filename, format: 'A4'|'Letter'|'Legal', landscape })`
-  - renderizado no servidor a partir do DOM vivo.
-- Word: `import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'`;
-  gera o .docx da MESMA estrutura de dados que renderiza a página; descarrega com o
-  padrão de âncora (`URL.createObjectURL` + click), sem bibliotecas extra.
-- Cloud: com Google Workspace / Microsoft 365 ligados, oferece "Guardar no Drive/
-  OneDrive" via `window.__ekoa.cloudFiles` (`status()` no arranque -> botão só para
-  fornecedores `connected: true`; `upload(blob, { provider, name, type })` devolve
-  `webUrl`).
-
-## Sessão de utilizador final (SSO)
-Quando a app precisa de saber QUEM a usa:
-- `window.__ekoa.signIn(returnPath?)` - início de sessão Microsoft de página inteira.
-- `window.__ekoa.whoami()` -> `{ email, name, oid, tid } | null` - chama no arranque.
-- `window.__ekoa.signOut()`.
-- `window.__ekoa.passwordSignIn(identity, password)` / `setUserPassword(...)` - o
-  fluxo alternativo por password gerido pela plataforma.
-- **Autoriza por `oid` (+`tid`), nunca por `email`** - o email é mutável e serve só
-  para display.
-- NUNCA confundas a identidade do visitante (SSO acima) com a conta do workspace
-  (integrações): o proxy de integrações age como o dono do workspace e é a ferramenta
-  errada para identificar visitantes.
-- O contexto fiável de SSO é o URL standalone `/apps/{slug}/` (o iframe do painel tem
-  limites de cookies de terceiros) - testa o login a partir do URL standalone.
+## Estrutura por tipo - vem do modelo interno (base) selecionado
+As convenções ESTRUTURAIS específicas do tipo de artefacto (identidade/SSO do
+visitante, integrações, documentos Word/PDF, wiring de dados) NÃO estão aqui: são
+injetadas pelo modelo interno que o teu build seleciona (as skills e convenções da
+base). Uma app-documento recebe o shell de impressão + toolbar já construídos; uma app
+interativa recebe o wiring de auth/persistência/integrações e o cliente de protocolo já
+prontos. Segue as convenções da base; não reconstruas o que já está feito.
 
 ## Fundamentação legal (OBRIGATÓRIA para qualquer valor legal)
 A base de conhecimento (legislação e jurisprudência portuguesas com fonte) é a
