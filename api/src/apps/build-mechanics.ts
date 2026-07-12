@@ -342,6 +342,29 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         /* unreadable output: no evidence */
       }
 
+      // Signal 1b (operator-run B3): base-built artifact whose base-manifest mustEdit files are
+      // untouched vs the scaffold baseline. The base shell is pixel-tested and looks plausible
+      // served as-is, so the generic scaffold markers (signal 2) never fire on it — this is the
+      // per-base refinement that closes the F16/F28 class for base-built apps.
+      const baseUntouched: string[] = [];
+      try {
+        const projectBase = await baseOfProject(input.projectDir);
+        const mustEdit = projectBase?.manifest.mustEdit ?? [];
+        if (mustEdit.length > 0) {
+          const { stdout: root } = await execFileAsync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: input.projectDir });
+          const baseCommit = root.trim().split('\n')[0];
+          if (baseCommit) {
+            const { stdout: diff } = await execFileAsync('git', ['diff', '--name-only', baseCommit, '--'], { cwd: input.projectDir });
+            const changed = new Set(diff.trim().split('\n').filter(Boolean));
+            for (const path of mustEdit) {
+              if (!changed.has(path)) baseUntouched.push(path);
+            }
+          }
+        }
+      } catch {
+        /* no git / unreadable manifest: no evidence either way */
+      }
+
       // Signal 3: orphan top-level HTML (the classic miss: the real app written where it is never served).
       let orphanHtml: string[] = [];
       try {
@@ -356,11 +379,14 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       const entrypointSignal = entrypointUntouched && bundleExists;
       if (entrypointSignal) reasons.push('frontend/src está inalterado desde o modelo inicial');
       if (outputIsScaffold) reasons.push('a aplicação compilada continua o modelo Ekoa');
-      if (orphanHtml.length > 0 && (entrypointSignal || outputIsScaffold)) {
+      if (baseUntouched.length > 0) {
+        reasons.push(`ficheiro(s) do modelo interno por preencher: ${baseUntouched.join(', ')}`);
+      }
+      if (orphanHtml.length > 0 && (entrypointSignal || outputIsScaffold || baseUntouched.length > 0)) {
         reasons.push(`ficheiro(s) HTML solto(s) na raiz nunca servidos: ${orphanHtml.join(', ')}`);
       }
 
-      return { clean: !entrypointSignal && !outputIsScaffold, reasons };
+      return { clean: !entrypointSignal && !outputIsScaffold && baseUntouched.length === 0, reasons };
     },
   };
 }

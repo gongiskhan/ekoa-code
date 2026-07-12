@@ -48,6 +48,14 @@ const baseManifestSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   version: z.string().min(1),
+  /**
+   * Project-relative files generation MUST modify vs the scaffold baseline
+   * (operator-run B3). The honest-completion gate fails a base-built artifact
+   * whose mustEdit files are untouched — the base shell looks plausible served
+   * as-is, which is exactly the F16/F28 failure class the generic scaffold
+   * markers cannot see. Absent/empty = the generic subtree signal suffices.
+   */
+  mustEdit: z.array(z.string().min(1)).optional(),
 });
 
 export type BaseManifest = z.infer<typeof baseManifestSchema>;

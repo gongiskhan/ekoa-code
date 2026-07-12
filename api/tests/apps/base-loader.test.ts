@@ -9,7 +9,8 @@ vi.mock('../../src/services/artifact-screenshot.js', async (importOriginal) => {
     captureArtifactScreenshot: vi.fn(async () => ({ path: '', url: '', width: 1280, height: 800 })),
   };
 });
-import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
@@ -127,4 +128,28 @@ describe('base-loader — build-flow wiring (B1 integration)', () => {
     expect((await readManifest(prep.projectDir))?.extends).toBeUndefined();
     expect(prep.basePromptSections).toBeUndefined();
   }, 60_000);
+
+  // operator-run B3: the base-manifest mustEdit signal in the honest-completion gate.
+  it('assertProgress FAILS a deliberately untouched base build and PASSES once mustEdit files are filled', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b3-gate', description: 'Contrato de arrendamento', language: 'pt', templateId: 'document' });
+
+    // Untouched base: the shell serves plausibly, but documentData.js was never filled.
+    const before = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(before.clean).toBe(false);
+    expect(before.reasons.join(' ')).toContain('frontend/src/documentData.js');
+
+    // Simulate the agent filling the document content and committing (the snapshot path commits in prod).
+    const dataPath = join(prep.projectDir, 'frontend', 'src', 'documentData.js');
+    const filled = (await readFile(dataPath, 'utf-8')) + '\n// contrato preenchido pelo agente\n';
+    await writeFile(dataPath, filled, 'utf-8');
+    const git = (args: string[]) => new Promise<void>((res, rej) => {
+      execFile('git', args, { cwd: prep.projectDir }, (err) => (err ? rej(err) : res()));
+    });
+    await git(['add', '-A']);
+    await git(['-c', 'user.name=test', '-c', 'user.email=t@t', 'commit', '--no-verify', '-m', 'fill document']);
+
+    const after = await mech.assertProgress({ artifactId: prep.artifactId, projectDir: prep.projectDir });
+    expect(after.reasons.join(' ')).not.toContain('modelo interno por preencher');
+    expect(after.clean).toBe(true);
+  }, 90_000);
 });
