@@ -226,9 +226,19 @@ export function extractActions(
         rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
           ? (rawInput as Record<string, unknown>)
           : {};
+      // The fenced path honours the SAME param contract the SDK tool schema enforces
+      // (`additionalProperties: false` in assistant-tools): keep ONLY the params the
+      // manifest declares for this action. Undeclared keys from the model are dropped,
+      // never forwarded to the runtime — for `custom` actions they would otherwise
+      // reach app code verbatim.
+      const declared = new Set(action.params.map((p) => p.name));
+      const filtered: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input)) {
+        if (declared.has(key)) filtered[key] = value;
+      }
       // Attach the server-authoritative manifest action; the client dispatches
       // `execute({ ...action, params: input })` (values override the param definitions).
-      actions.push({ toolName, input, action });
+      actions.push({ toolName, input: filtered, action });
     }
   }
   const text = reply.replace(actionsFence(), '').trim();

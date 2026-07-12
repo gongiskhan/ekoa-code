@@ -29,6 +29,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
+// Bounds (codex-d2): the transcript kept in memory, the history slice sent per turn,
+// and a hard timeout on the assistant fetch so a hung turn can never lock the composer.
+const MAX_MESSAGES = 200;
+const MAX_HISTORY_TURNS = 16;
+const FETCH_TIMEOUT_MS = 120000;
 
 /** The three modes, in toggle order, with their PT-PT labels. */
 const MODES = [
@@ -205,13 +210,16 @@ export function AssistantPanel() {
       const text = (rawText != null ? rawText : draft).trim();
       if (!text || busy) return;
 
-      // History is the conversation BEFORE this message (role/content pairs only).
+      // History is the conversation BEFORE this message (role/content pairs only),
+      // capped to the most recent turns so request size, latency and model cost stay
+      // bounded on a long-lived panel.
       const history = messagesRef.current
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error)
+        .slice(-MAX_HISTORY_TURNS)
         .map((m) => ({ role: m.role, content: m.content }));
 
       setDraft('');
-      setMessages((prev) => [...prev, { id: nextId(), role: 'user', content: text }]);
+      setMessages((prev) => [...prev, { id: nextId(), role: 'user', content: text }].slice(-MAX_MESSAGES));
       setBusy(true);
 
       const route = currentRoute();
@@ -221,9 +229,14 @@ export function AssistantPanel() {
       if (recent.length) context.actionResults = recent;
 
       const id = appId();
+      // A hung network/model turn must never lock the composer: abort after the
+      // timeout and fall through to the calm PT-PT error turn.
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
       try {
         const res = await fetch(ENDPOINT, {
           method: 'POST',
+          ...(controller ? { signal: controller.signal } : {}),
           headers: {
             'Content-Type': 'application/json',
             ...(id ? { 'X-Ekoa-App-Id': id } : {}),
@@ -238,7 +251,7 @@ export function AssistantPanel() {
           }),
         });
         if (!res.ok) {
-          setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }]);
+          setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }].slice(-MAX_MESSAGES));
           return;
         }
         const data = await res.json();
@@ -253,13 +266,14 @@ export function AssistantPanel() {
             citations: data && Array.isArray(data.citations) ? data.citations : undefined,
             runs: [],
           },
-        ]);
+        ].slice(-MAX_MESSAGES));
         if (data && Array.isArray(data.actions) && data.actions.length) {
           await runActions(data.actions, turnId);
         }
       } catch {
-        setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }]);
+        setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }].slice(-MAX_MESSAGES));
       } finally {
+        if (timer) clearTimeout(timer);
         setBusy(false);
       }
     },

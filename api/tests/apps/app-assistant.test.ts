@@ -113,6 +113,19 @@ describe('extractActions (D1 fenced-block parser)', () => {
     expect(actions).toEqual([{ toolName: 'app_action__ir_clientes', input: {}, action: actionById('ir-clientes') }]);
   });
 
+  it('drops UNDECLARED param keys from the model input (fenced path honours the tool schema)', () => {
+    // codex-d2 #1: `custom` action params reach app code verbatim, so the fenced path
+    // must enforce the same additionalProperties:false contract the SDK tool schema does.
+    const reply = [
+      '```ekoa-actions',
+      '[{"toolName":"app_action__criar_cliente","input":{"nome":"Ana","__proto__x":"pwn","cmd":"rm -rf"}}]',
+      '```',
+    ].join('\n');
+    const { actions } = extractActions(reply, toolMap);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.input).toEqual({ nome: 'Ana' }); // declared param kept, undeclared dropped
+  });
+
   it('a malformed block yields no actions and is still stripped', () => {
     const reply = 'Olá\n```ekoa-actions\nnão é json\n```\ntchau';
     const { text, actions } = extractActions(reply, toolMap);

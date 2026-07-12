@@ -60,6 +60,10 @@ describe('D2 panel source contract', () => {
     expect(PANEL).toMatch(/method:\s*'POST'/);
     // the request carries message + history + mode + context (route + recent action results)
     expect(PANEL).toContain('history');
+    // bounded turn cost + a hung turn can never lock the composer (codex-d2 #2/#3)
+    expect(PANEL).toMatch(/MAX_HISTORY_TURNS/);
+    expect(PANEL).toMatch(/AbortController/);
+    expect(PANEL).toMatch(/FETCH_TIMEOUT_MS/);
     expect(PANEL).toContain('context');
     expect(PANEL).toContain('actionResults');
   });
@@ -69,6 +73,9 @@ describe('D2 panel source contract', () => {
     expect(PANEL).toMatch(/\.execute\(/);
     expect(PANEL).toContain('data.actions'); // only ever the actions the assistant returned
     expect(PANEL).toContain('A executar...'); // the subtle in-flight state
+    // the D1 enrichment drives the SERVER-resolved manifest action with the model's
+    // input as VALUES - the exact transform, not a client-side reconstruction
+    expect(PANEL).toContain('{ ...a.action, params: values }');
   });
 
   it('renders a "Fontes" citation list from response.citations', () => {
@@ -85,7 +92,9 @@ describe('D2 panel source contract', () => {
   });
 
   it('does not autofocus on mount (never steals focus from the app)', () => {
-    // focus happens only on an explicit user open / example click, never at render.
+    // No JSX autoFocus attribute anywhere; imperative .focus() exists but only behind
+    // explicit user intent (open / example click), never at render.
+    expect(PANEL).not.toMatch(/autoFocus/);
     expect(PANEL).toContain('user intent');
   });
 
