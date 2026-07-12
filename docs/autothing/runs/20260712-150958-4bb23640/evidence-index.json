@@ -85,6 +85,20 @@
         "videoSha256": "17f9ae98f3ce1cb28177168275e07d39d51cc1c7373b6185afe5fb7f074a63a4",
         "videoBytes": 2555
       }
+    },
+    "B3": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "3f06499",
+      "tag": "operator/b3",
+      "gateStatus": "slices/B3/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/B3/b3-evidence.cast",
+        "videoSha256": "2f527b0556fa7bd546808c6d4e100280fafbde0b97417f2e085ebefc9c90a5b6",
+        "videoBytes": 1285
+      }
     }
   },
   "globalGate": {

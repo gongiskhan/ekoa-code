@@ -6,15 +6,15 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 
 | id | title | kind | size | group | deps | status |
 |---|---|---|---|---|---|---|
-| S0 | run setup: branch, can() stub seam, run dirs | api | 1 | s0 | — | pending |
-| A1 | exploration: automations layer + action primitives | docs | 2 | A | S0 | pending |
-| A2 | exploration: demos/tutorials salvage (incl. ../ekoa-dev) | docs | 2 | A | S0 | pending |
-| A3 | exploration: knowledge hooks + retrieval path | docs | 2 | A | S0 | pending |
-| A4 | exploration: internal-templates archaeology + measured token-tax baseline | docs | 2 | A | S0 | pending |
-| A5 | decision memos: registry / tour format / base set | docs | 2 | A | A1,A2,A3,A4 | pending |
-| B1 | base registry + loader + build-flow selection | api | 5 | B | A5 | pending |
+| S0 | run setup: branch, can() stub seam, run dirs | api | 1 | s0 | — | passed |
+| A1 | exploration: automations layer + action primitives | docs | 2 | A | S0 | passed |
+| A2 | exploration: demos/tutorials salvage (incl. ../ekoa-dev) | docs | 2 | A | S0 | passed |
+| A3 | exploration: knowledge hooks + retrieval path | docs | 2 | A | S0 | passed |
+| A4 | exploration: internal-templates archaeology + measured token-tax baseline | docs | 2 | A | S0 | passed |
+| A5 | decision memos: registry / tour format / base set | docs | 2 | A | A1,A2,A3,A4 | passed |
+| B1 | base registry + loader + build-flow selection | api | 5 | B | A5 | passed |
 | B2 | the `app` base (panel mount point, protocol client, token link, error boundaries) | mixed | 5 | B | B1 | pending |
-| B3 | base-manifest per-build verification (closes F16/F28 class) | api | 3 | B | B1 | pending |
+| B3 | base-manifest per-build verification (closes F16/F28 class) | api | 3 | B | B1 | passed |
 | B4 | instruction migration: boilerplate → bases, measured shrink | docs | 3 | B | B1,B2,A4 | pending |
 | C1 | artifact-type classifier in scoping (apps get the operator) | api | 3 | C | A5 | pending |
 | C2 | action-registry contract: shared/ schema + build-time emission | api | 4 | C | A5 | pending |

@@ -66,3 +66,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - reviews: fresh-context approve (independent evidence incl. imports/diagram/emoji sweeps); codex gpt-5.5/high 1 finding accepted+fixed with a determinism-ratchet regression test, 2 rebutted.
 - duration: ~50 min wall (incl. the credential-infra remediation); models: fable-5 lead + fresh reviewer, gpt-5.5 codex.
 - ledger: passed 7/31 · blocked 0 · buildable-remaining 24.
+
+## GATE 2026-07-12T17:59:59Z — B3 (base-manifest mustEdit signal in the honest-completion gate) — PASSED
+- green: mustEdit[] on base manifests; assertProgress signal 1b fails untouched-base builds (PT-PT reason names the unfilled files); non-base artifacts untouched; both directions proven by committed tests.
+- evidence: commit 3f06499 (tag operator/b3); 8/8 tests; slices/B3/{gate-status.json,review-verdict.md,b3-evidence.cast}.
+- reviews: codex gpt-5.5/high APPROVE (0 findings); fresh-context APPROVE incl. an explicit placement judgment (assertProgress, not verify-runner, is the deterministic credential-independent home — verify-runner returns ran:false without credentials and is blind to this class).
+- ledger: passed 8/31 · blocked 0 · buildable-remaining 23.

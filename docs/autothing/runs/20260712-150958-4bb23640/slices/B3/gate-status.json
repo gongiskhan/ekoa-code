@@ -1,0 +1,56 @@
+{
+  "slice": "B3",
+  "kind": "api",
+  "commit": "3f06499",
+  "tag": "operator/b3",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T17:59:59Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "8/8 committed tests (untouched-base FAILS with named file; filled+committed PASSES); typecheck x2; eslint; semgrep",
+      "at": "2026-07-12T17:59:59Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean; semgrep exit 0",
+      "at": "2026-07-12T17:59:59Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/B3/review-verdict.md",
+      "at": "2026-07-12T17:59:59Z"
+    },
+    "codexSliceReview": {
+      "status": "passed",
+      "verdict": "approve (0 findings)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 58519,
+      "at": "2026-07-12T17:59:59Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 batched run-level pass)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/B3/b3-evidence.cast",
+      "videoSha256": "2f527b0556fa7bd546808c6d4e100280fafbde0b97417f2e085ebefc9c90a5b6",
+      "videoBytes": 1285,
+      "verifyDetail": "replay shows 3f06499, mustEdit manifest, 8/8 tests",
+      "at": "2026-07-12T17:59:59Z"
+    }
+  },
+  "status": "passed"
+}
