@@ -53,9 +53,18 @@ export async function classifyArtifactType(
   billeeUserId: string,
   deps: ClassifyDeps = {},
 ): Promise<ArtifactType> {
+  if (!description.trim()) return 'app'; // nothing to classify — the platform default (codex C1)
+  // EARLIEST match wins, not table order: PT head nouns come first ("app para
+  // gerar contratos" is an app about contracts; "contrato de arrendamento" is a
+  // document). Ties (same index) fall back to table order (codex C1 finding).
+  let best: { type: ArtifactType; index: number } | null = null;
   for (const s of SIGNALS) {
-    if (s.rx.test(description)) return s.type;
+    const m = s.rx.exec(description);
+    if (m && (best === null || m.index < best.index)) {
+      best = { type: s.type, index: m.index };
+    }
   }
+  if (best) return best.type;
   try {
     const raw = (await (deps.oneShot ?? defaultOneShot)(description, billeeUserId)).trim().toLowerCase();
     const word = raw.split(/\s+/)[0]?.replace(/[^a-z]/g, '') ?? '';

@@ -22,6 +22,19 @@ describe('classifyArtifactType (C1)', () => {
     }
   });
 
+  it('the earliest signal wins: head nouns beat later co-occurring words (codex C1)', async () => {
+    const boom = async () => { throw new Error('no one-shot for signal hits'); };
+    expect(await classifyArtifactType('Uma app para gerar contratos de arrendamento', 'u1', { oneShot: boom })).toBe('app');
+    expect(await classifyArtifactType('Gestor de contratos com prazos', 'u1', { oneShot: boom })).toBe('app');
+    expect(await classifyArtifactType('Contrato de arrendamento para o gestor', 'u1', { oneShot: boom })).toBe('document');
+  });
+
+  it('an empty or blank description is the platform default app, no one-shot (codex C1)', async () => {
+    const boom = async () => { throw new Error('must not be called'); };
+    expect(await classifyArtifactType('', 'u1', { oneShot: boom })).toBe('app');
+    expect(await classifyArtifactType('   \n', 'u1', { oneShot: boom })).toBe('app');
+  });
+
   it('ambiguous requests consult the one-shot and parse a single-word verdict', async () => {
     expect(await classifyArtifactType('Algo para o escritório', 'u1', { oneShot: async () => 'presentation' })).toBe('presentation');
     expect(await classifyArtifactType('Algo para o escritório', 'u1', { oneShot: async () => '  Document.\n' })).toBe('document');
