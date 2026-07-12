@@ -173,13 +173,22 @@ async function main() {
   assert(fieldVal === 'ekoa-c5', `field value after setField: ${fieldVal}`);
   ok('setField drove the app input through user-equivalent events (value applied)');
 
-  // 2) A DESTRUCTIVE action prompts a confirmation card inside the app BEFORE anything runs.
+  // Register a SENTINEL custom action inside the app so we can prove a destructive action does NOT
+  // run before confirmation (the sentinel flips a flag ONLY if the action actually dispatches).
+  await frame.evaluate(() => {
+    window.__ekoaApp = window.__ekoaApp || {};
+    window.__ekoaApp.actions = window.__ekoaApp.actions || {};
+    window.__c5SentinelRan = false;
+    window.__ekoaApp.actions['c5-sentinel'] = () => { window.__c5SentinelRan = true; };
+  });
+
+  // 2) A DESTRUCTIVE action prompts a confirmation card AND does NOT run before confirmation.
   const confirmSeen = await page.evaluate(() => new Promise((resolve) => {
     const win = document.getElementById('ekoa-app-frame').contentWindow;
     const doc = document.getElementById('ekoa-app-frame').contentDocument;
     const origin = new URL(document.getElementById('ekoa-app-frame').src).origin;
     win.postMessage({ __ekoaActions: 1, type: 'actions.init', hostOrigin: window.location.origin }, origin);
-    win.postMessage({ __ekoaActions: 1, type: 'actions.execute', id: 'destr-1', action: { id: 'apagar-tudo', kind: 'custom', labelPt: 'Apagar tudo', description: 'x', destructive: true, params: {} } }, origin);
+    win.postMessage({ __ekoaActions: 1, type: 'actions.execute', id: 'destr-1', action: { id: 'c5-sentinel', kind: 'custom', labelPt: 'Apagar tudo', description: 'x', destructive: true, params: {} } }, origin);
     const started = Date.now();
     const t = setInterval(() => {
       if (doc.querySelector('[data-demo-target="ekoa-confirm-acao"]')) { clearInterval(t); resolve(true); }
@@ -187,6 +196,9 @@ async function main() {
     }, 100);
   }));
   assert(confirmSeen, 'destructive action did not prompt a confirmation card');
+  // Proof the action did NOT execute before the user confirmed (the sentinel is still un-run).
+  const ranBeforeConfirm = await frame.evaluate(() => window.__c5SentinelRan === true);
+  assert(ranBeforeConfirm === false, 'destructive action RAN before the user confirmed');
   ok('destructive action prompted a confirmation card before dispatch');
 
   // 3) Cancelling the confirm reports cancelled (nothing ran).
@@ -203,6 +215,9 @@ async function main() {
     setTimeout(() => resolve('timeout'), 4000);
   }));
   assert(cancelled === 'cancelled', `cancel path status ${cancelled}`);
+  // And the sentinel STILL never ran — cancel dispatched nothing.
+  const ranAfterCancel = await frame.evaluate(() => window.__c5SentinelRan === true);
+  assert(ranAfterCancel === false, 'destructive action ran despite being cancelled');
   ok('cancelling the confirmation reports cancelled (destructive action never ran)');
 
   await browser.close();
