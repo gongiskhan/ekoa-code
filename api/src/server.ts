@@ -47,6 +47,7 @@ import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession } 
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
+import { appAssistantRouter } from './apps/app-assistant-route.js';
 import { devServeRouter } from './apps/dev-serve.js';
 import { servingRouter } from './apps/serving.js';
 import { appRegistry } from './apps/app-registry.js';
@@ -587,6 +588,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   });
 
   app.use('/api', servedDataRouter(deps));
+  // Served-app assistant (operator-run D1): POST /api/app-assistant, header-scoped, runs under the
+  // resolved artifact owner's org + billing through the llm/ chokepoint.
+  app.use('/api', appAssistantRouter());
   // Legal vertical services + e-signature (full paths carried inside the routers).
   // The owner-spine seams read/write the app owner's SHARED collections (usr.<owner>)
   // through the collections engine - the same spine the app itself drives via
