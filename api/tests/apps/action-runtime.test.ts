@@ -124,4 +124,21 @@ describe('C3 runtime source contract', () => {
     const pictographic = RUNTIME_SRC.match(/\p{Extended_Pictographic}/u);
     expect(pictographic, pictographic ? `found emoji: ${JSON.stringify(pictographic[0])}` : '').toBeNull();
   });
+
+  // operator-run D2-prep: the same-document API the assistant panel uses.
+  it('exposes window.__ekoaActions.execute/cancel routing through the SAME executor', () => {
+    expect(RUNTIME_SRC).toContain('window.__ekoaActions = {');
+    expect(RUNTIME_SRC).toMatch(/execute:\s*function/);
+    expect(RUNTIME_SRC).toMatch(/cancel:\s*function/);
+    // execute enqueues + drains through the shared queue/runNext (not a separate path).
+    expect(RUNTIME_SRC).toMatch(/queue\.push\(\{ id: id, action: action, resolve: resolve, reject: reject \}\)/);
+    expect(RUNTIME_SRC).toContain('same-document drive needs no init handshake');
+  });
+
+  it('same-document items resolve their Promise on every terminal path (done/failed/cancelled)', () => {
+    // finish/fail/cancelById/cancelAllForUserInput all settle activeItem.resolve when present.
+    expect(RUNTIME_SRC).toMatch(/var settle = activeItem\.resolve/);
+    expect(RUNTIME_SRC).toMatch(/var settle = activeItem\.reject/);
+    expect(RUNTIME_SRC).toMatch(/settlers\[j\]\.resolve/); // user-input cancel settles too
+  });
 });

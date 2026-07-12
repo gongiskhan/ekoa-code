@@ -304,20 +304,26 @@
   function runNext() {
     if (activeItem || queue.length === 0) return;
     var item = queue.shift();
-    activeItem = { id: item.id, action: item.action, teardown: noop };
+    activeItem = { id: item.id, action: item.action, teardown: noop, resolve: item.resolve, reject: item.reject };
     startItem(item.id, item.action);
   }
 
   // Terminal report for the active item. Tears down its transient UI and drains.
+  // An item enqueued through the SAME-DOCUMENT API (window.__ekoaActions.execute) carries a
+  // `resolve`/`reject` pair instead of a host frame; report to it directly. Cross-frame items
+  // carry neither and report via post() (the iframe/dashboard host). post() no-ops in the
+  // same-document case (no parent), so no message leaks.
   function finish(status, detail) {
     if (!activeItem) return;
     var id = activeItem.id;
+    var settle = activeItem.resolve;
     try { activeItem.teardown(); } catch (_) { /* ignore */ }
     hideDrivingBadge();
-    activeItem = null;
     var payload = { id: id, status: status };
     if (detail) payload.detail = detail;
+    activeItem = null;
     post('actions.result', payload);
+    if (settle) { try { settle(payload); } catch (_) { /* ignore */ } }
     runNext();
   }
 
@@ -325,10 +331,12 @@
   function fail(reason) {
     if (!activeItem) return;
     var id = activeItem.id;
+    var settle = activeItem.reject;
     try { activeItem.teardown(); } catch (_) { /* ignore */ }
     hideDrivingBadge();
     activeItem = null;
     post('actions.error', { id: id, reason: reason });
+    if (settle) { try { settle({ id: id, status: 'error', reason: reason }); } catch (_) { /* ignore */ } }
     runNext();
   }
 
@@ -456,17 +464,20 @@
 
   function cancelById(id) {
     if (activeItem && activeItem.id === id) {
+      var settle = activeItem.resolve;
       try { activeItem.teardown(); } catch (_) { /* ignore */ }
       hideDrivingBadge();
       activeItem = null;
       post('actions.result', { id: id, status: 'cancelled' });
+      if (settle) { try { settle({ id: id, status: 'cancelled' }); } catch (_) { /* ignore */ } }
       runNext();
       return;
     }
     for (var i = 0; i < queue.length; i++) {
       if (queue[i].id === id) {
-        queue.splice(i, 1);
+        var qitem = queue.splice(i, 1)[0];
         post('actions.result', { id: id, status: 'cancelled' });
+        if (qitem && qitem.resolve) { try { qitem.resolve({ id: id, status: 'cancelled' }); } catch (_) { /* ignore */ } }
         return;
       }
     }
@@ -478,19 +489,21 @@
   // report cancelled for each. Events on the runtime's OWN UI (the confirm
   // buttons, overlays) are ignored - they are the assistant, not the user.
   function cancelAllForUserInput() {
-    var ids = [];
+    var settlers = [];
     if (activeItem) {
       try { activeItem.teardown(); } catch (_) { /* ignore */ }
-      ids.push(activeItem.id);
+      settlers.push({ id: activeItem.id, resolve: activeItem.resolve });
       activeItem = null;
     }
-    for (var i = 0; i < queue.length; i++) ids.push(queue[i].id);
+    for (var i = 0; i < queue.length; i++) settlers.push({ id: queue[i].id, resolve: queue[i].resolve });
     queue.length = 0;
     hideDrivingBadge();
     clearHighlight();
     clearConfirm();
-    for (var j = 0; j < ids.length; j++) {
-      post('actions.result', { id: ids[j], status: 'cancelled', detail: 'user-input' });
+    for (var j = 0; j < settlers.length; j++) {
+      var payload = { id: settlers[j].id, status: 'cancelled', detail: 'user-input' };
+      post('actions.result', payload);
+      if (settlers[j].resolve) { try { settlers[j].resolve(payload); } catch (_) { /* ignore */ } }
     }
   }
 
@@ -545,6 +558,31 @@
         break;
     }
   });
+
+  // ---- SAME-DOCUMENT public API ----------------------------------------------
+  // The operator assistant PANEL (operator-run D2) mounts INSIDE the served app (same document,
+  // at #ekoa-assistant-root), so it has no host frame to postMessage across - the cross-frame
+  // path (post() -> window.parent) refuses same-window drive by design. This direct API routes a
+  // manifest action through the SAME executor (same events, same highlight, same destructive
+  // confirmation, same pause-on-user-input) and resolves a Promise with the terminal result. The
+  // dashboard/tour iframe path is unchanged.
+  var idSeq = 0;
+  window.__ekoaActions = {
+    /** Execute one manifest action; resolves { id, status:'done'|'failed'|'cancelled', detail? }
+     *  or rejects on a structural error ({ status:'error', reason }). Never dispatches without the
+     *  app's own events + (for destructive actions) the confirmation card. */
+    execute: function (action) {
+      return new Promise(function (resolve, reject) {
+        if (!action || typeof action !== 'object') { reject({ status: 'error', reason: 'invalid-action' }); return; }
+        active = true; // same-document drive needs no init handshake
+        var id = 'panel-' + (++idSeq);
+        queue.push({ id: id, action: action, resolve: resolve, reject: reject });
+        runNext();
+      });
+    },
+    /** Cancel a pending/active same-document action by the id returned in a result. */
+    cancel: function (id) { cancelById(id); },
+  };
 
   // Keyframes for the (motion-safe) accent pulse on the driven target.
   try {
