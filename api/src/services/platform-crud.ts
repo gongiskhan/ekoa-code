@@ -19,9 +19,20 @@ function audit(actor: ActivityActor | undefined, category: string, type: string,
 }
 
 // ---- Org ----
-export const orgView = (o: OrgDoc) => ({ id: o._id, name: o.name, displayName: o.displayName, branding: o.branding, settings: o.settings });
+export const orgView = (o: OrgDoc) => ({
+  id: o._id,
+  name: o.name,
+  displayName: o.displayName,
+  branding: o.branding,
+  settings: o.settings,
+  ...(o.updatedAt ? { updatedAt: o.updatedAt } : {}),
+});
 export const getOrg = (id: string) => orgs.get(id);
-export const updateOrg = (id: string, patch: Partial<OrgDoc>) => orgs.update(id, (o) => ({ ...o, ...patch }));
+// Every org patch stamps `updatedAt`: the web's branding page re-syncs its local editor state
+// only when this fingerprint changes (an open page must reflect a research merge without a
+// reload — the field was read client-side but never written, so the sync never re-fired).
+export const updateOrg = (id: string, patch: Partial<OrgDoc>) =>
+  orgs.update(id, (o) => ({ ...o, ...patch, updatedAt: new Date().toISOString() }));
 export async function createOrg(input: { name: string; displayName?: string }, deps: Deps, actor?: ActivityActor): Promise<OrgDoc> {
   const id = deps.genId();
   await orgs.insert({ _id: id, name: input.name, displayName: input.displayName, createdAt: new Date(deps.now()).toISOString() });

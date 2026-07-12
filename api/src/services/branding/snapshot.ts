@@ -31,7 +31,7 @@ Regras absolutas:
 Responde com EXATAMENTE um objeto JSON (sem texto antes ou depois, sem cercas de código):
 {
   "websiteUrl": "<o URL final do snapshot>",
-  "companyName": "<o nome da empresa tal como o site o apresenta: título, og:site_name ou texto visível - NÃO o domínio em bruto>",
+  "companyName": "<o nome da empresa como ela se apresenta às PESSOAS, com maiúsculas e espaços próprios - prefere a forma do texto visível/logotipo; usa o título/og:site_name apenas se não houver melhor; NUNCA um domínio ou slug colado (ex.: devolve 'Silva & Costa Advogados', não 'silvacostaadvogados')>",
   "primaryColor": "#rrggbb",
   "secondaryColor": "#rrggbb",
   "accentColor": "#rrggbb",

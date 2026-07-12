@@ -22,6 +22,9 @@ export interface OrgDoc extends Doc {
   branding?: Record<string, unknown>;
   settings?: Record<string, unknown>;
   createdAt: string;
+  /** Stamped by updateOrg on every patch — the web's re-sync fingerprint (a branding page left
+   *  open must pick up a research merge without a reload; live 2026-07-12). */
+  updatedAt?: string;
 }
 export interface CredentialsDoc extends Doc {
   // singleton _id: 'default'

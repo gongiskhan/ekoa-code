@@ -127,6 +127,9 @@ export const OrgConfig = z
     displayName: z.string().optional(),
     branding: OrgBranding.optional(),
     settings: z.record(z.unknown()).optional(),
+    /** Stamped on every org patch. The web branding page re-syncs its local editor state only
+     *  when this changes (its research-refresh fingerprint), so it must be on the wire. */
+    updatedAt: z.string().optional(),
   })
   .passthrough();
 export type OrgConfig = z.infer<typeof OrgConfig>;

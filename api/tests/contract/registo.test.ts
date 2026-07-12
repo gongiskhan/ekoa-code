@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, userSettings, activityLogs } from '../../src/data/stores.js';
+import { users, userSettings, activityLogs, jobs } from '../../src/data/stores.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
@@ -40,8 +40,18 @@ beforeAll(async () => {
   port = (server.address() as { port: number }).port;
 }, 60_000);
 // Builds fire async (POST /jobs returns 202 while executeBuildJob runs on the fake transport).
-// Drain them before closing mongo so an in-flight build's terminal store reads settle first.
-afterAll(async () => { await new Promise((r) => setTimeout(r, 400)); __resetTransportForTests(); server.close(); await closeMongo(); await mem.stop(); });
+// Drain them before closing mongo so an in-flight build's terminal store reads settle first —
+// by POLLING for terminal status, not a fixed sleep (a 400ms sleep raced under machine load and
+// an in-flight patchJob then rejected on the closed Mongo; observed 2026-07-12 full-suite run).
+afterAll(async () => {
+  const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+  for (let i = 0; i < 200; i++) {
+    const rows = (await jobs.find({})) as Array<{ status?: string }>;
+    if (rows.every((j) => typeof j.status === 'string' && TERMINAL.has(j.status))) break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  __resetTransportForTests(); server.close(); await closeMongo(); await mem.stop();
+});
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   await users.deleteMany({}); await activityLogs.deleteMany({}); await userSettings.deleteMany({});

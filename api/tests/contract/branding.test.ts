@@ -136,6 +136,21 @@ describe('PUT /api/v1/branding (the contract path)', () => {
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
   });
 
+  it('every org patch stamps a fresh updatedAt on the wire - the web branding page re-syncs only when this fingerprint changes (live 2026-07-12: page stayed stale until reload because the field was read client-side but never written)', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+    const first = await readJson(await authed('/api/v1/branding', t, { method: 'PUT', body: JSON.stringify({ branding: { primaryColor: '#2a3547' } }) }));
+    expect(OrgConfig.safeParse(first).success).toBe(true);
+    expect(typeof first.updatedAt).toBe('string');
+    await new Promise((r) => setTimeout(r, 5)); // updatedAt has ms precision
+    const second = await readJson(await authed('/api/v1/branding', t, { method: 'PUT', body: JSON.stringify({ branding: { primaryColor: '#374559' } }) }));
+    expect(typeof second.updatedAt).toBe('string');
+    expect(second.updatedAt).not.toBe(first.updatedAt);
+    // GET /org (what fetchCompany renders) carries the same fingerprint.
+    const org = await readJson(await authed('/api/v1/org', t));
+    expect(org.updatedAt).toBe(second.updatedAt);
+  });
+
   it('MERGES onto existing branding - a dashboard Save never wipes research outputs (pre-fix: updateOrg replaced branding wholesale)', async () => {
     await mkUser('admin', 'org-admin');
     await orgs.update('orgA', (o) => ({

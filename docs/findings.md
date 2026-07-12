@@ -162,6 +162,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `secondaryColor`, so the persisted `accentColor` was never displayed and Save wrote the fallback
   slate into `secondaryColor` under an accent label. Fixed: the accent picker binds `accentColor`.
   Test: `web/e2e/branding-colors.spec.ts` (accent stays unset when only primary is saved).
+- **`branding-page-stale-until-reload`** (operator-reported, 2026-07-12 follow-up: "had to refresh
+  to see the changes on the brand area") - the branding page re-syncs its local editor state only
+  when the `${company.id}_${company.updatedAt}` fingerprint changes, but `orgView` never returned
+  `updatedAt` and nothing stamped it, so the fingerprint NEVER changed after mount: the
+  `branding_updated` notification correctly refetched the company (round-2 fix), the store updated,
+  and the page kept rendering stale colors/name until a reload remounted it. Fixed server-side:
+  `updateOrg` stamps `updatedAt` on every org patch, `orgView` + shared `OrgConfig` expose it.
+  Live-verified: page open on the Marca tab, research fired via API, primary + company name updated
+  in place with zero navigation. Test: `api/tests/contract/branding.test.ts` (updatedAt present +
+  changes across saves + GET /org parity).
 - **`founder-name-never-updated`** (operator-visible in the same screenshot) - "Founder" is the
   seedAdmin bootstrap displayName; `BrandResearchResult` had no `companyName` field, so research
   could never replace it (old cortex wrote displayName from the extracted companyName). Fixed:
