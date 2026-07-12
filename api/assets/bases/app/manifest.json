@@ -1,7 +1,7 @@
 {
   "id": "app",
   "name": "Ekoa App",
-  "description": "Default interactive multi-page app: pre-built left-nav shell with auth, per-app persistence, the integrations client, error boundaries, and the operator assistant mount point.",
+  "description": "Default interactive multi-page app: pre-built left-nav shell with visitor identity (anonymous by default), per-app persistence, platform-executed integration capabilities, error boundaries, and the operator assistant mount point.",
   "version": "1.0.0",
   "mustEdit": [
     "frontend/src/App.jsx"

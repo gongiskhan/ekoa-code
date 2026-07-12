@@ -5,7 +5,7 @@ description: Always-loaded conventions for builds using the app base (the defaul
 
 # Base Conventions - app
 
-This is the default base: an authenticated, interactive, multi-page app with per-app persistence, the integrations client, error boundaries, and the platform's assistant mount point. Apply these conventions on every build that uses this base.
+This is the default base: an interactive multi-page app with visitor identity (anonymous by default - whoami() may be null), per-app persistence, platform-executed integration capabilities (never a client-side integration call), error boundaries, and the platform's assistant mount point. Apply these conventions on every build that uses this base.
 
 ## THE SHELL IS ALREADY BUILT - add pages, don't rebuild it
 
