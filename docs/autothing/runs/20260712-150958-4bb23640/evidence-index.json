@@ -1,0 +1,14 @@
+{
+  "runId": "20260712-150958-4bb23640",
+  "project": "ekoa-code",
+  "branch": "operator-run",
+  "gatesConfig": {
+    "test": true, "adversarialReview": true, "adversarialTest": true,
+    "codexSliceReview": true, "design": true, "walkthrough": true,
+    "deliberateRed": true, "mutation": true, "report": true,
+    "foundation": true, "codexCheckpoint": true,
+    "askQuestions": false, "profile": "build"
+  },
+  "slices": {},
+  "globalGate": { "status": "in-progress" }
+}

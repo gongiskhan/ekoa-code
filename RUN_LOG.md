@@ -1,0 +1,39 @@
+# RUN_LOG — autothing run journal (append-only)
+
+Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae897ef). This file restarts the journal; earlier autothing runs (20260711-053853, 20260711-111952) recorded their state under `docs/autothing/runs/<runId>/`.
+
+---
+
+## RUN-START 2026-07-12T15:09:58Z
+- runId: 20260712-150958-4bb23640
+- brief: "Ekoa Apps Get an Operator" (LEDGER v0.2) — every Ekoa-built app ships a dedicated assistant (operate/teach/answer + admin-gated edit); internal template bases; action registry; assistant panel; build-time tours; knowledge-during-build; metering; security block (roles/identity/edit-mode/request-changes + assertions) batched LAST per the model-tier sequencing rule.
+- session: claude-fable-5, effort inherited from session; host Goncalos-MacBook-Pro.local (darwin 24.6.0)
+- gatesConfig: all gates enabled (no operator flags passed) — test, adversarialReview, adversarialTest, codexSliceReview (conditional), design, walkthrough, deliberateRed (pending sizing), mutation (pending sizing), report, foundation, codexCheckpoint. askQuestions=false.
+- profile: build (assigned by Phase-1 sizing at 15:37Z — see DECISION below; placeholder updated per the run-shaping contract)
+- preflight doctor: asciinema 3.2.0, agg 1.9.0, codex-cli 0.142.5, gitleaks 8.30.1, semgrep 1.168.0, ffmpeg 8.1.1, node v20.19.4, npm 10.8.2, jq 1.7.1, playwright-cli 0.1.6, playwright 1.61.1 — all present, nothing missing.
+- known-flakes: none on file.
+- coordination: coord stack CONNECTED — agent identity `MistyValley` (id 7) registered on project `users-ggomes-dev-ekoa-code`; inbox empty; no file-reservation conflicts at start.
+- resume-check: runs 20260711-053853 and 20260711-111952 both terminal (`completed-with-blockers`); no live sentinel or fresh owner lock; this is a NEW run.
+- run precondition (from brief): Cortex foolproof run DONE; permanent journey suite is the safety net; J3 build-journey probe guards anything touching the build pipeline.
+- sequencing rule (binding): Phases 1–8 touch NO security topics (no auth code, no permission logic, no session handling, no security design in planning or this log); early permission decisions call a stubbed `can(capability)` seam; ALL security work lands contiguously in Phases 9–10 at the END. Nothing merges to main before operator diff review.
+
+## DECISION 2026-07-12T15:37:54Z
+- Profile assigned: **build** (31 slices incl. S0; sizes 1–7 on the 100-point scale, none >8). deliberateRed + mutation ON. Sentinel turnCap resized 250 → **2480** (max(300, 80×31); runaway brake, not a schedule).
+
+## DECISION 2026-07-12T15:37:54Z
+- FLOW_PLAN authored in the LEAD planning context from RUN_SPEC + direct exploration (bases-unwired find, demo-bridge/tour stack, platform-primitives, app-assistant stub, knowledge/billing/build-flow traces). The 3 Explore subagents + 1 Plan subagent ran long past their useful window; their reports (when they land) reconcile at Phase-3 review BEFORE the build loop starts — any contradiction updates FLOW_PLAN and is journaled here. The run's A-group slices re-do exploration as committed deliverables regardless, so no coverage is lost.
+
+## DECISION 2026-07-12T15:37:54Z
+- Run branch: **operator-run** off main; per-slice checkpoint commit + tag operator/<sliceId>; merge to main only by the operator after diff review (brief mechanics). web/next-env.d.ts dev churn will be restored, never committed.
+
+## DECISION 2026-07-12T15:45:25Z
+- Subagent deadline (15:45Z) reached: the 3 Explore subagents (spawned 15:14Z, wrap-up-pinged 15:25Z) and the Plan subagent (spawned 15:28Z) returned nothing. Declared LOST for planning purposes; FLOW_PLAN stands as lead-authored. If reports arrive mid-run they are journaled and reconciled then. No coverage loss: A-group slices produce the committed exploration deliverables regardless.
+
+## GATE 2026-07-12T15:45:25Z — planning (Phase 1)
+- green condition: RUN_SPEC.md + FLOW_PLAN.md written under the runDir, profile assigned, turn cap resized, control-plane consistent.
+- evidence: docs/autothing/runs/20260712-150958-4bb23640/{RUN_SPEC.md,FLOW_PLAN.md,evidence-index.json}; sentinel turnCap=2480.
+- model: claude-fable-5 (lead context; no fallbacks). duration: ~35 min wall (incl. subagent wait).
+- ledger: 31 slices pending; buildable-remaining 31.
+
+## GATE 2026-07-12T15:46:03Z — foundation (Phases 2–3)
+- detect: all manifest elements PRESENT (root CLAUDE.md routing index; docs/{architecture,testing,governance,api-contract,security,operations-runbook,decisions,findings}.md; area skills ekoa-architecture/ekoa-testing/ekoa-governance/run-ekoa-code; git repo; .gitignore autothing marker block; security wall gitleaks 8.30.1 + semgrep 1.168.0 + npm audit; /run + /verify resolve; walkthrough preflight asciinema 3.2.0 + agg 1.9.0). Phase 3 scaffold: NO-OP (nothing missing; non-clobber respected).
