@@ -1,54 +1,37 @@
 /**
  * Auth wiring for the `app` base.
  *
- * The platform injects `window.__EKOA_APP_ID` and the `window.__ekoa` helper
- * into every served app. There is no inline auth token - app-data is scoped
- * per-app by the `X-Ekoa-App-Id` header alone, so apps read and write their
- * own collections without authenticating.
+ * Identity comes from the injected runtime's end-user SSO (Microsoft, per-app
+ * cookie). `getCurrentUser()` resolves the signed-in visitor or null - logged
+ * out, OR the runtime is absent (standalone preview, file://, screenshot
+ * pipeline). Everything here is best-effort and NON-THROWING: the shell must
+ * render fully for an anonymous visitor, with no error card.
+ *
+ * Authorize by `oid` (+ `tid`), NEVER by `email`: email is mutable and
+ * display-only. Do not confuse this visitor identity (SSO) with the workspace
+ * account behind integrations - they are different principals.
  */
+import { whoami, signIn, signOut, type WhoAmI } from './protocol-client';
 
-declare global {
-  interface Window {
-    __EKOA_APP_ID?: string;
-    __ekoa?: { fetch?: typeof fetch };
-  }
+export type CurrentUser = WhoAmI;
+
+/** This app's id, or null outside a served-app document. Never throws. */
+export function getAppId(): string | null {
+  return typeof window !== 'undefined' ? window.__EKOA_APP_ID ?? null : null;
 }
 
-export function getAppId(): string {
-  const id = typeof window !== 'undefined' ? window.__EKOA_APP_ID : undefined;
-  if (!id) throw new Error('No Ekoa app id in window - auth wiring not initialised');
-  return id;
-}
-
-export interface CurrentUser {
-  id: string;
-  username: string;
-  role: 'user' | 'admin' | 'super-admin';
-}
-
-let cachedMe: CurrentUser | null = null;
+let cached: CurrentUser | null | undefined;
 
 /**
- * Best-effort lookup of the dashboard user that opened this artifact, used
- * only for personalisation (avatar, greeting). The `/api/v1/action` endpoint
- * still requires the dashboard's auth cookie; in standalone runs (e.g. the
- * screenshot capture pipeline) this resolves to a synthetic anonymous user.
+ * The signed-in visitor, or null. Resolved once and cached. Never throws -
+ * a logged-out visitor or an absent runtime both resolve to null, and the
+ * caller renders the anonymous state.
  */
-export async function getCurrentUser(): Promise<CurrentUser> {
-  if (cachedMe) return cachedMe;
-  const fetchFn = window.__ekoa?.fetch ?? window.fetch.bind(window);
-  try {
-    const res = await fetchFn('/api/v1/action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app: 'ekoa.auth', intent: 'me' }),
-    });
-    if (res.ok) {
-      const body = (await res.json()) as { type: 'action_result'; data: CurrentUser };
-      cachedMe = body.data;
-      return body.data;
-    }
-  } catch { /* fall through to anon */ }
-  cachedMe = { id: 'anonymous', username: 'anonymous', role: 'user' };
-  return cachedMe;
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  if (cached !== undefined) return cached;
+  cached = await whoami();
+  return cached;
 }
+
+/** Re-export the SSO actions so the shipped shell has one identity import. */
+export { signIn, signOut };

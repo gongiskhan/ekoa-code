@@ -7,9 +7,10 @@
  * assistant mount.
  *
  * Already wired for you (see frontend/src/lib/):
- *  - Auth      -> ./lib/auth            getCurrentUser(), best-effort identity for the top bar.
+ *  - Auth      -> ./lib/auth            getCurrentUser() (null when logged out / no runtime), signIn, signOut.
  *  - Data      -> ./lib/jsonStore       per-app persistence: list/get/create/update/remove.
- *  - Protocol  -> ./lib/protocol-client action(app,intent,params) + callIntegration over it.
+ *  - Protocol  -> ./lib/protocol-client typed wrappers over the injected runtime: whoami/signIn/signOut,
+ *                 graphFetch (visitor M365), exportPdf, cloudFiles.
  *  - Errors    -> ./lib/ErrorBoundary   shipped recoverable error UI, mounted at the root and per page.
  *  - Assistant -> the empty <div id="ekoa-assistant-root"> below. The platform's
  *                 operator assistant panel runtime mounts INTO it in a later slice.
@@ -69,7 +70,7 @@ export default function App() {
     <div className="app-shell" data-demo-target="app-shell">
       <header className="app-topbar" data-demo-target="app-topbar">
         <span className="app-topbar-name">{appName}</span>
-        <span className="app-topbar-user">{user && user.id !== 'anonymous' ? user.username : ''}</span>
+        <span className="app-topbar-user">{user ? (user.name || user.email) : ''}</span>
       </header>
 
       <div className="app-body">

@@ -1,22 +1,35 @@
 ---
 name: using-auth
-description: How to use the Ekoa identity primitives shipped by the app base
+description: How to use the Ekoa end-user SSO identity primitives shipped by the app base
 ---
 
 # Using Auth
 
-This base ships auth wiring at `frontend/src/lib/auth.ts`. You do not build a login UI.
+This base ships identity wiring at `frontend/src/lib/auth.ts` (over the injected
+runtime's end-user SSO). You do not build a login form.
 
 ## What you get
 
-- The app is reached through Ekoa's authenticated routes; a session already exists by the time `App.jsx` mounts.
-- `getAppId()` - this app's id (rarely needed directly).
-- `getCurrentUser()` - best-effort identity of the dashboard user that opened the app, for personalisation only (greeting, avatar). It is cached and falls back to a synthetic anonymous user in standalone runs, so it never throws. The shell already calls it for the top bar.
-- `window.__ekoa.fetch()` - the platform fetch wrapper that attaches the `X-Ekoa-App-Id` header. Prefer it over raw `fetch`. App-data is scoped per-app by that header - there is no auth token for you to manage.
+- `getCurrentUser()` -> `{ email, name, oid, tid, canSendMail } | null`. The signed-in visitor, or `null` when logged out OR the runtime is absent (standalone preview, file://). Cached, best-effort, and NON-THROWING - the shell renders fully for an anonymous visitor. The shipped shell already calls it for the top bar.
+- `signIn(returnPath?)` - starts the full-page Microsoft sign-in. Call it from an explicit "Entrar" affordance when your app needs a known visitor.
+- `signOut()` - ends the visitor session.
+- `getAppId()` -> this app's id, or `null` outside a served-app document.
+
+## Authorize by `oid` (+ `tid`), never by `email`
+
+`email` is mutable and display-only. Any per-visitor authorization or data scoping must key on the immutable `oid` (with `tid` for the tenant). Never trust `email` as an identity key.
+
+## Anonymous by default
+
+An app is reachable without a session. Gate only what genuinely needs a known visitor, and render a clean anonymous state (or an "Entrar" button that calls `signIn()`) otherwise. Do not assume a visitor is present.
+
+## The reliable SSO context is the standalone URL
+
+Sign-in depends on the per-app cookie, which the dashboard iframe cannot always set (third-party cookie limits). The trustworthy SSO context is the standalone `/apps/{slug}/` URL - test login there, not inside the embedded preview.
 
 ## What NOT to do
 
-- Do not write a login form. The user is already logged in.
+- Do not write a login form or introduce another auth library. Use `signIn()`.
 - Do not store identity or tokens in `localStorage`/`sessionStorage`.
-- Do not introduce a different auth library. Use what is shipped.
-- Do not persist per-user identity into app-data; app-data is shared by all visitors of `/apps/{id}/`. Read identity live from `getCurrentUser()` when you need it.
+- Do not persist per-visitor identity into app-data; app-data is shared by all visitors of `/apps/{id}/`. Read identity live from `getCurrentUser()`.
+- Do not confuse the visitor identity (SSO) with the workspace account behind integrations - they are different principals.

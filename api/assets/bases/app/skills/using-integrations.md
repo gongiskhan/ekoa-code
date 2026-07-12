@@ -1,83 +1,89 @@
 ---
 name: using-integrations
-description: How to call connected integrations (email, calendar, files, etc.) and gracefully handle missing credentials
+description: How integrations work for an app build - platform-executed capabilities, the visitor M365 Graph proxy, and the needs-integration UI state
 ---
 
 # Using Integrations
 
-This base ships the integrations client as part of the protocol client at
-`frontend/src/lib/protocol-client.ts`: `callIntegration<T>()`, built over the
-generic `action(app, intent, params)` envelope. Always use it for any
-cross-service call - Gmail send, Calendar list, Drive read, Slack post, etc.
-Never call an external API directly.
+An app **never calls an external service directly** - no OAuth, no API keys, no
+generic client-side action envelope. There are exactly two sanctioned paths.
 
-## The contract
+## 1. Platform-executed capabilities (the primary path)
+
+Cross-service actions (send an email, create a calendar event, post to Slack,
+read a sheet) are declared as `integration.call` capabilities in the app's
+`MANIFEST.md` and **executed by the platform** - automations and agents invoke
+them over the data layer, not the app's frontend. Declare what you use in
+`external_dependencies.integrations`; the platform resolves credentials and the
+connected provider.
+
+The frontend's job is the UI and the app-data it owns (`./lib/jsonStore`). When
+a user action needs a capability whose integration is not connected, render the
+needs-integration state (below) to route them to `/integrations`.
+
+## 2. The visitor's Microsoft 365 (the only in-app integration call)
+
+The signed-in visitor's own Microsoft 365 is reachable through the Graph proxy,
+using their delegated SSO session:
 
 ```ts
-import { callIntegration } from './lib/protocol-client';
+import { graphFetch, RuntimeUnavailable } from './lib/protocol-client';
 
-const result = await callIntegration('email', 'send', {
-  to: 'a@b.com',
-  subject: '...',
-  body: '...',
-});
-
-if (result.ok) {
-  // result.data - the integration's typed response
-} else if (result.status === 'needs_integration') {
-  // No connected provider for this category.
-  // result.integration - category that's missing ('email', 'calendar', …)
-  // result.options     - provider keys the user can pick from
-  // result.message     - short human-readable explanation
-  // Render <IntegrationNeededBoundary /> in this branch.
+try {
+  const res = await graphFetch('me/messages?$top=10'); // path relative to the Graph root
+  if (res.status === 401 || res.status === 403) {
+    // The visitor has not granted Microsoft 365 - render the needs-integration state.
+  } else if (res.ok) {
+    const data = await res.json();
+  }
+} catch (err) {
+  if (err instanceof RuntimeUnavailable) {
+    // No served-app runtime (standalone preview) - show a neutral fallback.
+  }
 }
 ```
 
-The two outcomes are exhaustive. There is no other shape.
+`graphFetch` acts as the VISITOR (SSO identity), never as the workspace account.
+Do not use it to identify the visitor - use `whoami()` / `getCurrentUser()` for that.
 
-## Categories
+## The needs-integration UI state
 
-Closed enum - pick the closest match, never invent one:
-
-`email | calendar | files-storage | payments | external-api | spreadsheets | crm | sms | maps`
-
-## The IntegrationNeededBoundary
-
-Shipped at `frontend/src/lib/IntegrationNeededBoundary.jsx`. Render it when a call returns `needs_integration`:
+Shipped at `frontend/src/lib/IntegrationNeededBoundary.jsx`. Render it when a
+capability the UI depends on has no connected integration (e.g. a `graphFetch`
+returns 401/403, or a required provider is absent):
 
 ```jsx
-import { callIntegration } from './lib/protocol-client';
+import { graphFetch } from './lib/protocol-client';
 import { IntegrationNeededBoundary } from './lib/IntegrationNeededBoundary';
 
-function SendEmailButton({ to, body }) {
+function InboxButton() {
   const [needed, setNeeded] = useState(null);
 
-  async function send() {
-    const r = await callIntegration('email', 'send', { to, body });
-    if (!r.ok && r.status === 'needs_integration') setNeeded(r);
-    // else if (r.ok) continue
+  async function load() {
+    const r = await graphFetch('me/messages');
+    if (r.status === 401 || r.status === 403) {
+      setNeeded({ category: 'email', options: ['microsoft-365'], message: 'Ligue o Microsoft 365 para ver o email.' });
+    }
+    // else use the data
   }
 
   if (needed) {
-    return <IntegrationNeededBoundary category={needed.integration} options={needed.options} message={needed.message} />;
+    return <IntegrationNeededBoundary category={needed.category} options={needed.options} message={needed.message} />;
   }
-  return <button onClick={send}>Enviar</button>;
+  return <button onClick={load}>Carregar email</button>;
 }
 ```
 
-The boundary surfaces a "Ligar à {provider}" CTA that deep-links to `/integrations`. After the user connects, the component re-renders and the next call succeeds.
+The boundary surfaces a "Ligar à {provider}" CTA that deep-links to `/integrations`.
 
-## The generic action envelope
+## Categories
 
-For platform server-actions that are not integrations, use `action` directly:
+Use the closed enum when labelling a needed integration, never invent one:
 
-```ts
-import { action } from './lib/protocol-client';
-const data = await action('some.app', 'some.intent', { ...params }); // throws ActionFailed on error
-```
+`email | calendar | files-storage | payments | external-api | spreadsheets | crm | sms | maps`
 
 ## What NOT to do
 
-- Do not assume an integration is connected. Always handle `needs_integration`.
-- Do not hard-code provider names ("Gmail", "Outlook") into business logic. Use the category; the helper picks the connected provider.
-- Do not store integration credentials in app-data. The platform holds them; you only receive a typed response.
+- Do not call an external API directly from the app, and do not install an SDK or handle credentials. The platform holds them.
+- Do not assume an integration is connected. Handle the not-connected state.
+- Do not hard-code provider names into business logic. Declare the capability; the platform picks the connected provider.

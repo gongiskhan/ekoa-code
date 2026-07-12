@@ -1,131 +1,155 @@
 /**
  * Protocol client for the `app` base.
  *
- * One typed entry to the served-app control plane. Every server-side action the
- * platform exposes rides a single envelope: POST /api/v1/action with
- * `{ app, intent, params }`, answered by an `action_result` (success) or an
- * `action_error`. `auth.ts` and the integrations helper below all speak this
- * runtime - this module makes the envelope first-class instead of hand-rolled
- * at each call site.
+ * The typed surface over the platform's INJECTED served-app runtime
+ * (`window.__ekoa`, stamped into every served document - see the served-app
+ * byte-compat plane, api-contract 3.9). It wraps the sanctioned client calls:
+ * end-user SSO identity (whoami / signIn / signOut), the visitor's Microsoft 365
+ * Graph proxy (graphFetch), server-side PDF export (exportPdf), and workspace
+ * cloud files (cloudFiles).
+ *
+ * Persistence is NOT here - use `./jsonStore` (the /api/app-data plane).
+ *
+ * There is NO client-side generic action envelope and NO direct integration
+ * calls: an app never reaches an external API itself. Cross-service work is done
+ * by platform-executed `integration.call` capabilities declared in MANIFEST.md;
+ * the only in-app integration path is the authenticated visitor's own Microsoft
+ * 365 via `graphFetch`.
+ *
+ * Every wrapper degrades cleanly when the runtime is absent (standalone preview,
+ * file://, the screenshot pipeline): `whoami()` resolves `null`; the action
+ * wrappers throw `RuntimeUnavailable`, which callers can catch to render a
+ * fallback. The shell must render fully with no runtime present.
  */
+
+export interface WhoAmI {
+  email: string;
+  name: string | null;
+  oid: string | null;
+  tid: string | null;
+  /** Whether the visitor granted the delegated Graph scopes (Mail.Send, Calendars). */
+  canSendMail: boolean;
+}
+
+export interface PdfExportOptions {
+  filename?: string;
+  format?: 'A4' | 'Letter' | 'Legal';
+  landscape?: boolean;
+  /** Explicit HTML to render; defaults to the live document (scripts/.no-print stripped). */
+  html?: string;
+  /** Set false to receive the result without triggering a browser download. */
+  download?: boolean;
+}
+
+export interface PdfExportResult {
+  url: string;
+  [key: string]: unknown;
+}
+
+export interface CloudFileRef {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+export interface CloudFileDownload {
+  name: string;
+  type: string;
+  blob: Blob;
+}
+
+export interface CloudFilesClient {
+  status(): Promise<unknown>;
+  upload(file: Blob, opts: { provider?: string; name?: string; type?: string }): Promise<unknown>;
+  list(provider: string, query?: string): Promise<CloudFileRef[]>;
+  download(provider: string, id: string): Promise<CloudFileDownload>;
+}
+
+/** The subset of the injected `window.__ekoa` surface this client wraps. */
+export interface EkoaRuntime {
+  fetch(path: string, options?: RequestInit): Promise<Response>;
+  whoami(): Promise<WhoAmI | null>;
+  signIn(returnPath?: string): void;
+  signOut(): Promise<boolean>;
+  graphFetch(path: string, options?: RequestInit): Promise<Response>;
+  exportPdf(opts?: PdfExportOptions): Promise<PdfExportResult>;
+  cloudFiles: CloudFilesClient;
+}
 
 declare global {
   interface Window {
-    __ekoa?: { fetch?: typeof fetch };
+    __EKOA_APP_ID?: string;
+    __ekoa?: EkoaRuntime;
   }
 }
 
-type FetchLike = (input: RequestInfo, init?: RequestInit) => Promise<Response>;
-
-function ekoaFetch(): FetchLike {
-  if (typeof window !== 'undefined' && window.__ekoa?.fetch) return window.__ekoa.fetch;
-  if (typeof window !== 'undefined' && typeof window.fetch === 'function') return window.fetch.bind(window);
-  throw new Error('No fetch available - Ekoa runtime not initialised');
-}
-
-export interface ActionResult<T> {
-  type: 'action_result';
-  request_id?: string;
-  success: true;
-  data: T;
-}
-
-export interface ActionError {
-  type: 'action_error';
-  request_id?: string;
-  error: string;
-}
-
-export type ActionEnvelope<T> = ActionResult<T> | ActionError;
-
-/** Thrown when an action returns `action_error` or a non-2xx transport status. */
-export class ActionFailed extends Error {
-  readonly app: string;
-  readonly intent: string;
-  readonly status?: number;
-  constructor(message: string, app: string, intent: string, status?: number) {
-    super(message);
-    this.name = 'ActionFailed';
-    this.app = app;
-    this.intent = intent;
-    this.status = status;
+/** Thrown by the action wrappers when the served-app runtime is not present. */
+export class RuntimeUnavailable extends Error {
+  readonly feature: string;
+  constructor(feature: string) {
+    super(`Ekoa runtime unavailable - ${feature} needs the served-app context (open at /apps/<id>/).`);
+    this.name = 'RuntimeUnavailable';
+    this.feature = feature;
   }
+}
+
+/** The injected runtime, or undefined outside a served-app document. */
+export function getRuntime(): EkoaRuntime | undefined {
+  return typeof window !== 'undefined' ? window.__ekoa : undefined;
+}
+
+function requireRuntime(feature: string): EkoaRuntime {
+  const rt = getRuntime();
+  if (!rt) throw new RuntimeUnavailable(feature);
+  return rt;
 }
 
 /**
- * Post one action envelope and return its `data`, or throw `ActionFailed` on an
- * `action_error` / non-2xx response. This is the generic path every server
- * action rides; specialised helpers (callIntegration below) are built on it.
+ * The signed-in visitor, or null when logged out or the runtime is absent.
+ * NON-THROWING - safe to call unconditionally on mount.
  */
-export async function action<T = unknown>(
-  app: string,
-  intent: string,
-  params: Record<string, unknown> = {}
-): Promise<T> {
-  const res = await ekoaFetch()('/api/v1/action', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ app, intent, params }),
-  });
-
-  if (!res.ok) {
-    throw new ActionFailed(`Action ${app}/${intent} failed (${res.status}).`, app, intent, res.status);
-  }
-
-  const body = (await res.json()) as ActionEnvelope<T>;
-  if (body.type === 'action_error') {
-    throw new ActionFailed(body.error || `Action ${app}/${intent} failed.`, app, intent);
-  }
-  return body.data;
-}
-
-// ---------------------------------------------------------------------------
-// Integrations - the same contract app-auth-persistent shipped, now built over
-// `action`. The integration proxy answers INSIDE the envelope's data with
-// either { ok: true, data } or the needs_integration shape; a transport/action
-// failure is mapped to the same needs_integration shape so the UI has one
-// branch to render (IntegrationNeededBoundary).
-// ---------------------------------------------------------------------------
-
-export type IntegrationCategory =
-  | 'email'
-  | 'calendar'
-  | 'files-storage'
-  | 'payments'
-  | 'external-api'
-  | 'spreadsheets'
-  | 'crm'
-  | 'sms'
-  | 'maps';
-
-export type CallIntegrationResult<T> =
-  | { ok: true; data: T }
-  | {
-      ok: false;
-      status: 'needs_integration';
-      integration: IntegrationCategory;
-      options?: string[];
-      message: string;
-    };
-
-export async function callIntegration<T = unknown>(
-  category: IntegrationCategory,
-  actionName: string,
-  args: Record<string, unknown> = {}
-): Promise<CallIntegrationResult<T>> {
+export async function whoami(): Promise<WhoAmI | null> {
+  const rt = getRuntime();
+  if (!rt) return null;
   try {
-    // The proxy returns the CallIntegrationResult<T> shape as the envelope data.
-    return await action<CallIntegrationResult<T>>('ekoa.integrations', 'call', {
-      category,
-      action: actionName,
-      args,
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      status: 'needs_integration',
-      integration: category,
-      message: err instanceof Error && err.message ? err.message : 'Não foi possível executar a acção.',
-    };
+    return await rt.whoami();
+  } catch {
+    return null;
   }
 }
+
+/** Start the full-page Microsoft sign-in. Throws RuntimeUnavailable with no runtime. */
+export function signIn(returnPath?: string): void {
+  requireRuntime('signIn').signIn(returnPath);
+}
+
+/** End the visitor session. Throws RuntimeUnavailable with no runtime. */
+export function signOut(): Promise<boolean> {
+  return requireRuntime('signOut').signOut();
+}
+
+/**
+ * Proxy a Microsoft Graph request AS THE VISITOR (their delegated SSO session).
+ * `path` is relative to the Graph proxy root (e.g. `me`, `me/messages`).
+ * Throws RuntimeUnavailable with no runtime; the caller catches to render an
+ * IntegrationNeededBoundary when the visitor has not connected Microsoft 365.
+ */
+export function graphFetch(path: string, options?: RequestInit): Promise<Response> {
+  return requireRuntime('graphFetch').graphFetch(path, options);
+}
+
+/** Server-rendered PDF of the live document (or `opts.html`). Throws RuntimeUnavailable with no runtime. */
+export function exportPdf(opts?: PdfExportOptions): Promise<PdfExportResult> {
+  return requireRuntime('exportPdf').exportPdf(opts);
+}
+
+/**
+ * Workspace cloud files (Google Drive / OneDrive) for save-to-cloud flows.
+ * Each method throws RuntimeUnavailable with no runtime.
+ */
+export const cloudFiles: CloudFilesClient = {
+  status: () => requireRuntime('cloudFiles.status').cloudFiles.status(),
+  upload: (file, opts) => requireRuntime('cloudFiles.upload').cloudFiles.upload(file, opts),
+  list: (provider, query) => requireRuntime('cloudFiles.list').cloudFiles.list(provider, query),
+  download: (provider, id) => requireRuntime('cloudFiles.download').cloudFiles.download(provider, id),
+};

@@ -15,14 +15,14 @@
       "Border-radius var(--radius-md)",
       "Spacing var(--space-6) inside the card",
       "Headline: \"Para continuar, ligue uma integração\"",
-      "Subtext: the message field from callIntegration",
+      "Subtext: a short message explaining which integration is needed",
       "Buttons: one per option, label \"Ligar à {provider}\"",
       "Secondary link: \"Gerir integrações\" -> /integrations"
     ]
   },
   "shipped": "This base ships the component at frontend/src/lib/IntegrationNeededBoundary.jsx - import and render it, do not hand-build it.",
   "triggers": {
-    "renderWhen": "callIntegration returns { ok: false, status: 'needs_integration' }",
+    "renderWhen": "a capability the UI depends on has no connected integration - e.g. a graphFetch call returns 401/403 (visitor has not connected Microsoft 365), or a required provider is absent",
     "deepLinkTarget": "/integrations?category={category}"
   }
 }

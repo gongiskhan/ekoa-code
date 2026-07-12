@@ -19,14 +19,14 @@ The wiring libraries under `frontend/src/lib/` are shipped and ready - import th
 
 - `lib/auth.ts` - `getCurrentUser()` (best-effort identity for the top bar) and `getAppId()`.
 - `lib/jsonStore.ts` - per-app persistence: `list/get/create/update/remove`.
-- `lib/protocol-client.ts` - the generic server-action envelope `action(app, intent, params)` plus `callIntegration()` built over it.
+- `lib/protocol-client.ts` - typed wrappers over the injected runtime: `whoami/signIn/signOut`, `graphFetch` (the visitor's Microsoft 365), `exportPdf`, `cloudFiles`. Each degrades cleanly when the runtime is absent.
 - `lib/ErrorBoundary.jsx` - the shipped recoverable error UI (mounted at the shell root and around each page).
 - `lib/IntegrationNeededBoundary.jsx` - the "connect a provider" CTA for a `needs_integration` result.
 
 ## What you edit
 
 - **Pages.** Write a component under `frontend/src/pages/{PascalCase}.jsx` and register it in the `PAGES` array in `App.jsx` (`{ id, label, component }`). The first entry is the default page - replace the shipped starter with the product's real first screen.
-- **Page content and data.** Read/write through `lib/jsonStore`; call external services through `lib/protocol-client`'s `callIntegration`.
+- **Page content and data.** Read/write through `lib/jsonStore`. An app never calls an external service directly - cross-service work is declared as `integration.call` capabilities in `MANIFEST.md` and executed by the platform; the only in-app integration call is the visitor's own Microsoft 365 via `lib/protocol-client`'s `graphFetch`.
 - **Shell chrome only for user-requested extras** (a user menu, a global search box). Keep the top bar, the nav mechanism, the root error boundary, and the assistant mount intact.
 
 ## Rules
@@ -34,7 +34,7 @@ The wiring libraries under `frontend/src/lib/` are shipped and ready - import th
 1. **Start from the existing files.** Modify `App.jsx` to register pages; add page components under `frontend/src/pages/`. Do not rewrite `index.jsx`/`index.css` without a strong reason.
 2. **NEVER remove the assistant mount point.** The empty `<div id="ekoa-assistant-root">` in `App.jsx` is where the platform's operator assistant panel mounts in a later slice. Do not delete it, do not render your own children into it, do not repurpose it.
 3. **NEVER remove the `data-demo-target` attributes** on the shell landmarks (`app-shell`, `app-topbar`, `app-nav`, `app-content`, `assistant-root`). Platform tooling targets them by those stable selectors.
-4. **Always use `callIntegration`** for any external service (`lib/protocol-client`). Never write raw OAuth or API-key handling. Handle the `needs_integration` branch with `<IntegrationNeededBoundary />`.
+4. **Never call an external service directly** - no OAuth, no API keys, no SDKs. Declare cross-service actions as `integration.call` capabilities in `MANIFEST.md` (platform-executed); use `graphFetch` only for the visitor's Microsoft 365. When a needed integration is not connected, render `<IntegrationNeededBoundary />`.
 5. **Always wrap data-rendering subtrees in `<ErrorBoundary>`** (already at the page root; add more around risky subtrees). Never swallow a fetch error silently - surface it.
 6. **Always render an empty state** for a collection that can be empty (`empty-state` recipe).
 7. **Style only through the CSS-variable contract with fallbacks.** No hex literals in component code. The brand arrives at runtime via `/api/design-tokens.css`.

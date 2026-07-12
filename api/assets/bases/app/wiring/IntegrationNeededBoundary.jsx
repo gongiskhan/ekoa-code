@@ -3,8 +3,9 @@ import React from 'react';
 /**
  * IntegrationNeededBoundary
  *
- * Renders the "connect a provider" CTA when an integration is missing.
- * Consumes the props from a callIntegration { ok: false; status: 'needs_integration' } result.
+ * Renders the "connect a provider" CTA when a capability the UI depends on has
+ * no connected integration (e.g. a graphFetch to the visitor's Microsoft 365
+ * returns 401/403). Props: { category, options?, message }.
  */
 export function IntegrationNeededBoundary({ category, options = [], message }) {
   const friendlyCategory = {
