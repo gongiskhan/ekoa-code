@@ -45,9 +45,9 @@ const MODES = [
 /** The first-open capability prompts (PT-PT), one per capability. Clicking one
  *  pins its mode and drops the example into the composer. */
 const EXAMPLES = [
-  { mode: 'show', kind: 'Apresentar', prompt: 'Dê-me uma visão geral da aplicação' },
-  { mode: 'teach', kind: 'Ensinar', prompt: 'Mostre-me um tutorial' },
   { mode: 'do', kind: 'Operar', prompt: 'Adicione um novo registo' },
+  { mode: 'show', kind: 'Mostrar', prompt: 'Dê-me uma visão geral da aplicação' },
+  { mode: 'teach', kind: 'Ensinar', prompt: 'Mostre-me um tutorial' },
 ];
 
 const ERROR_REPLY = 'O assistente está indisponível de momento.';
@@ -346,7 +346,7 @@ export function AssistantPanel() {
         {messages.length === 0 ? (
           <div className="ekoa-assistant-intro">
             <p className="ekoa-assistant-intro-lead">
-              Olá. Posso ajudar de três formas: apresentar uma visão geral da aplicação, ensinar como
+              Olá. Posso ajudar de três formas: mostrar uma visão geral da aplicação, ensinar como
               a usar passo a passo, ou operá-la por si. Experimente:
             </p>
             <div className="ekoa-assistant-examples">

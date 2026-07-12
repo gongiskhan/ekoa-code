@@ -140,7 +140,8 @@ function buildSystemPrompt(
   sections.push(`Estás no modo "${mode}". ${MODE_INSTRUCTION[mode]}`);
 
   sections.push(
-    'Responde SEMPRE em português de Portugal (PT-PT), de forma clara e objetiva.',
+    'Responde SEMPRE em português de Portugal (PT-PT), de forma clara e objetiva, em registo ' +
+      'formal (trata o utilizador por você; nunca uses tuteio como "queres" ou "podes").',
   );
 
   sections.push(

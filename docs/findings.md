@@ -501,3 +501,19 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
   confusion (the qualified query returns all rows); not a missing row.
 - **F30** (won't-fix-minor). Builds do not emit a `memory-extract` billing row (build post-run
   extraction differs from the chat path).
+- **served-app assistant "Fontes" can contradict the reply** (open; found by D2 fresh review, 2026-07-13).
+  `runAppAssistant` returns ALL grounding hits as citations (`api/src/apps/app-assistant.ts`
+  `grounding.citations`), not the sources the model actually used - the live D2 evidence shows a
+  reply saying the excerpts were not used while five "Fontes" render under it. Trust-eroding for a
+  cite-your-source legal product. Candidate fix: emit only reply-referenced citations, or suppress
+  the list when the model states it grounded on nothing. Owner: D3/F-slice follow-up on the
+  operator-run branch (or platform, whichever lands first).
+- **served-app anonymous `whoami` logs a console 401** (open platform nit, surfaced by the D2 strict
+  console gate, 2026-07-13). `injected-context.ts:110` fetches `/api/app-sso/me`; for an anonymous
+  visitor it 401s and the browser logs the failed resource on EVERY served app load. Candidate fix:
+  200 `{user:null}` for anonymous (contract response is `z.unknown()`, additive). Until fixed, the
+  D2 e2e allowlists exactly this signature (documented in `api/tests/e2e/assistant-panel.e2e.mjs`).
+- **served-app health beacon 502 through the dev proxy** (open platform nit, surfaced by the D2
+  strict console gate, 2026-07-13). `injected-context.ts:244` POSTs `/api/app-health`; through the
+  dev proxy (:4111) it 502s and logs a console error on load. Likely a dev-proxy forwarding gap
+  (relates to d55bd02). Prod path unverified. Allowlisted (documented) in the D2 e2e only.
