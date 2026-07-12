@@ -141,6 +141,15 @@ export function baseProjectFiles(base: LoadedBase): Array<{ path: string; conten
   for (const s of base.scaffoldFiles) {
     byPath.set(s.relPath, s.content);
   }
+  // Fail LOUD on any path scaffoldApp's safety guard would silently drop
+  // (absolute, or containing '..' — including legal-but-cursed names like
+  // "notes..md"): a base file that would vanish from projects is a broken
+  // base, not a skippable entry (codex B1 finding, determinism-ratchet guard).
+  for (const path of byPath.keys()) {
+    if (path.startsWith('/') || path.includes('..')) {
+      throw new Error(`BaseInvalid: base "${base.id}" emits unsafe project path "${path}" (scaffold would silently drop it)`);
+    }
+  }
   return [...byPath.entries()].map(([path, content]) => ({ path, content }));
 }
 

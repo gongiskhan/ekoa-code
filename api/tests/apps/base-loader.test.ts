@@ -52,6 +52,12 @@ describe('base-loader — registry + loader (B1)', () => {
     expect(projectFiles.find((f) => f.path === 'frontend/src/App.jsx')?.content).toContain('documentData');
   });
 
+  it('throws loudly on a base file whose project path the scaffold guard would silently drop', async () => {
+    const base = await loadBase('document');
+    const cursed = { ...base, scaffoldFiles: [...base.scaffoldFiles, { relPath: 'frontend/src/notes..md', content: 'x' }] };
+    expect(() => baseProjectFiles(cursed)).toThrow(/BaseInvalid.*unsafe project path/);
+  });
+
   it('maps wiring files to frontend/src/lib/<basename> (app-auth-persistent)', async () => {
     const base = await loadBase('app-auth-persistent');
     expect(base.wiringFiles.length).toBeGreaterThan(0);
