@@ -45,6 +45,25 @@ The four code files + the evolved contract are authored and self-verified. Re-ra
   the worker did NOT touch server.ts, honoring the 6-reserved-paths constraint). The no-arg call binds
   the route's `prodDeps` default (`runOneShot` / `buildGroundingBlock` / `decideForTask` floored WORKHORSE).
 
+### Amendment — `AssistantAction` carries the resolved manifest `AppAction` (D2 gap, fixed)
+
+D2 (assistant panel) found that `{ toolName, input }` alone is **not executable** by the C3 same-
+document runtime: `api/assets/action-runtime-client.js perform()` hard-requires a full `AppAction`
+(fails `invalid-action` without `action.kind`; also reads `target`/`route`/`tourId`/`id` + param
+values), and `injected-context.ts` injects `__EKOA_APP_ID` + the `__ekoa` helper + `action-runtime.js`
+but **not** the manifest — so the panel has no way to resolve `toolName → AppAction`. Verified both
+claims directly. Fixed on the D1 side (additive, back-compat):
+- `shared/src/app-assistant.ts` — `AssistantAction` gains optional `action: AppAction` (imported from
+  `./action-manifest.js`). The client dispatches `execute({ ...action, params: input })`.
+- `api/src/apps/app-assistant.ts` — `extractActions` now takes a `ReadonlyMap<string, AppAction>`
+  (toolName → the manifest action) instead of a name Set; for each validated toolName it attaches the
+  **server-authoritative** `tool.action` (from the app's activation-time manifest). This is *more*
+  secure than client-side resolution: neither the model nor the anonymous visitor can forge a
+  kind/target — only `input` (the param VALUES) comes from the model, and it is a validated record.
+- Tests updated: `extractActions`/`runAppAssistant` assert the attached `action`; the contract test
+  validates an action carrying a full `AppAction` and rejects a malformed embedded action. **30 tests
+  green** (was 29); typecheck/eslint/chokepoint still clean.
+
 Two precise nuances the lead may want to action:
 - **schema-coverage:** `appAssistant.assistantChat` is currently in the PENDING set (count 49); the
   gate passes green as-is. Now that it has a real contract test, the honest bookkeeping move is to add
