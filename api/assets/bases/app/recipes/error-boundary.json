@@ -1,0 +1,26 @@
+{
+  "id": "error-boundary",
+  "name": "Error-boundary UX recipe",
+  "description": "Wraps any component that renders fetched data; renders a recoverable error UI if rendering throws.",
+  "shipped": "This base SHIPS the boundary at frontend/src/lib/ErrorBoundary.jsx. Import and use it - do NOT hand-build one. The shell already mounts it at the root and around each page; add more around risky subtrees.",
+  "usage": "import { ErrorBoundary } from './lib/ErrorBoundary';\n<ErrorBoundary fallback={({ error, retry }) => (...)} onError={(e) => log(e)}>\n  <DataView />\n</ErrorBoundary>",
+  "shape": {
+    "component": "ErrorBoundary",
+    "props": {
+      "fallback": "({ error, retry }) => ReactNode (optional; replaces the default card)",
+      "onError": "(error) => void (optional logger)"
+    },
+    "visualRules": [
+      "Card with border var(--color-border), radius var(--radius-md), padding var(--space-6)",
+      "Headline: \"Ocorreu um problema\" - typography.h3",
+      "Body: error.message, typography.body, color var(--color-text-muted)",
+      "Primary action: \"Tentar de novo\" - calls retry()",
+      "Secondary text link: \"Reportar\" - opens /support"
+    ]
+  },
+  "rules": [
+    "Every page-level data render must sit inside this boundary.",
+    "React boundaries only catch render errors: catch an async fetch in the component, put the error in state, and render it inside the boundary - never swallow it silently.",
+    "Never let an unhandled exception escape to React's default error UI."
+  ]
+}

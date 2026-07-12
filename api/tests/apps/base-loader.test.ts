@@ -146,6 +146,20 @@ describe('base-loader — build-flow wiring (B1 integration)', () => {
     expect(prep.basePromptSections).toBeUndefined();
   }, 60_000);
 
+  // operator-run B2: the app base builds through the REAL pipeline (scaffold -> esbuild).
+  it('templateId app scaffolds the shell, wires lib/, and the real builder bundles it', async () => {
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-b2-app', description: 'Gestor de processos', language: 'pt', templateId: 'app' });
+    const appJsx = await readFile(join(prep.projectDir, 'frontend', 'src', 'App.jsx'), 'utf-8');
+    expect(appJsx).toContain('ekoa-assistant-root');
+    expect(await fileExists(join(prep.projectDir, 'frontend', 'src', 'lib', 'protocol-client.ts'))).toBe(true);
+    expect(await fileExists(join(prep.projectDir, 'frontend', 'src', 'lib', 'ErrorBoundary.jsx'))).toBe(true);
+    expect((await readManifest(prep.projectDir))?.extends).toBe('app');
+    // The initial build (trigger 1) ran inside prepareFirstBuild; the shell must have bundled.
+    expect(await fileExists(join(prep.projectDir, 'dist', 'bundle.js'))).toBe(true);
+    const bundle = await readFile(join(prep.projectDir, 'dist', 'bundle.js'), 'utf-8');
+    expect(bundle).toContain('ekoa-assistant-root'); // the mount survived into the served bundle
+  }, 90_000);
+
   // operator-run C2: activation captures the declared ui_actions (valid, invalid, absent).
   it('activateArtifact persists the ui_actions manifest (and clears it when absent)', async () => {
     const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 's-c2', description: 'Gestor de clientes', language: 'pt' });

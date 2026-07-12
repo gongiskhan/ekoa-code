@@ -1,0 +1,28 @@
+{
+  "id": "integration-needed",
+  "name": "Integration-needed UX recipe",
+  "description": "Renders a Connect-to-X call-to-action when an integration is required but no credentials are connected for this category.",
+  "shape": {
+    "component": "IntegrationNeededBoundary",
+    "props": {
+      "category": "email | calendar | files-storage | payments | external-api | spreadsheets | crm | sms | maps",
+      "options": "string[]",
+      "message": "string"
+    },
+    "visualRules": [
+      "Center-aligned in the content area",
+      "Primary CTA button uses var(--color-primary)",
+      "Border-radius var(--radius-md)",
+      "Spacing var(--space-6) inside the card",
+      "Headline: \"Para continuar, ligue uma integração\"",
+      "Subtext: the message field from callIntegration",
+      "Buttons: one per option, label \"Ligar à {provider}\"",
+      "Secondary link: \"Gerir integrações\" -> /integrations"
+    ]
+  },
+  "shipped": "This base ships the component at frontend/src/lib/IntegrationNeededBoundary.jsx - import and render it, do not hand-build it.",
+  "triggers": {
+    "renderWhen": "callIntegration returns { ok: false, status: 'needs_integration' }",
+    "deepLinkTarget": "/integrations?category={category}"
+  }
+}

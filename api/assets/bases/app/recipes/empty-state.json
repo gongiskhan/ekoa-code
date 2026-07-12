@@ -1,0 +1,26 @@
+{
+  "id": "empty-state",
+  "name": "Empty-state UX recipe",
+  "description": "Shown when a collection has zero items. Encourages first action without scolding.",
+  "shape": {
+    "component": "EmptyState",
+    "props": {
+      "title": "string",
+      "subtitle": "string",
+      "primaryAction": { "label": "string", "onClick": "function" },
+      "icon": "lucide-react icon name"
+    },
+    "visualRules": [
+      "Vertically centered within the empty container",
+      "Icon size 48px, color var(--color-text-muted)",
+      "Title typography.h2, color var(--color-text)",
+      "Subtitle typography.body, color var(--color-text-muted)",
+      "Primary action button uses var(--color-primary)",
+      "Max-width 480px on the text block"
+    ]
+  },
+  "examples": {
+    "todos": { "title": "Nenhuma tarefa ainda", "subtitle": "Crie a sua primeira tarefa para começar.", "primaryAction": { "label": "Nova tarefa" } },
+    "contacts": { "title": "Sem contactos", "subtitle": "Adicione um contacto manualmente ou importe uma lista." }
+  }
+}
