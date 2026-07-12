@@ -42,6 +42,24 @@ describe('AssistantChatResponse contract (D1)', () => {
     expect(AssistantChatResponse.safeParse({ reply: 'x', actions: [{ toolName: 't', input: {} }] }).success).toBe(true);
     expect(AssistantChatResponse.safeParse({ reply: 'x', actions: [{ toolName: 't', input: 'oops' }] }).success).toBe(false);
   });
+
+  it('an action may carry the server-resolved manifest AppAction (D1 attaches it for C3)', () => {
+    const withAction = {
+      reply: 'Vou criar o cliente.',
+      actions: [{
+        toolName: 'app_action__criar_cliente',
+        input: { nome: 'Ana' },
+        action: { id: 'criar-cliente', kind: 'custom', labelPt: 'Criar cliente', description: 'Cria um cliente', params: [], destructive: false },
+      }],
+    };
+    expect(AssistantChatResponse.safeParse(withAction).success).toBe(true);
+    // A malformed embedded action (navigate without a route) is rejected by the AppAction contract.
+    const badAction = {
+      reply: 'x',
+      actions: [{ toolName: 't', input: {}, action: { id: 'ir', kind: 'navigate', labelPt: 'Ir', description: 'x' } }],
+    };
+    expect(AssistantChatResponse.safeParse(badAction).success).toBe(false);
+  });
 });
 
 describe('AssistantChatRequest contract (D1)', () => {

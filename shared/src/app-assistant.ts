@@ -16,6 +16,7 @@
  */
 import { z } from 'zod';
 import type { DomainDescriptorMap } from './descriptor.js';
+import { AppAction } from './action-manifest.js';
 
 export const AssistantChatMessage = z.object({
   role: z.enum(['user', 'assistant']),
@@ -54,10 +55,20 @@ export const AssistantCitation = z.object({
 export type AssistantCitation = z.infer<typeof AssistantCitation>;
 
 /** One app-action the assistant asks the in-page runtime (C3) to execute. `toolName` is a
- *  manifest tool name (`app_action__<id>`); `input` is the tool's validated arguments. */
+ *  manifest tool name (`app_action__<id>`); `input` is the tool's validated arguments (VALUES).
+ *
+ *  `action` is the SERVER-RESOLVED manifest AppAction (kind/target/route/tourId/labelPt/destructive/
+ *  params-definitions). D1 attaches it because the C3 same-document runtime's `perform()` needs a
+ *  full AppAction (it fails `invalid-action` without `action.kind`) and the served page is NOT
+ *  injected with the manifest — so the client cannot resolve `toolName → AppAction` on its own. The
+ *  client dispatches `execute({ ...action, params: input })` (input overrides the definition-shaped
+ *  params with VALUES at execute time). Keeping the executable shape server-authoritative (from the
+ *  app's own activation-time manifest) means neither the model nor the anonymous visitor can forge a
+ *  kind/target. Optional for back-compat; D1 always populates it for a validated toolName. */
 export const AssistantAction = z.object({
   toolName: z.string(),
   input: z.record(z.unknown()),
+  action: AppAction.optional(),
 });
 export type AssistantAction = z.infer<typeof AssistantAction>;
 

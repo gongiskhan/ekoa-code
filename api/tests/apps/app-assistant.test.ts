@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import type { AppActionManifest } from '@ekoa/shared';
+import type { AppAction, AppActionManifest } from '@ekoa/shared';
 import type { SearchHit } from '../../src/knowledge/index.js';
 import type { OneShotOptions, LlmAttribution, RouterDecision } from '../../src/llm/index.js';
+import { assistantToolsFromManifest } from '../../src/apps/assistant-tools.js';
 import {
   runAppAssistant,
   inferMode,
@@ -30,6 +31,11 @@ const manifest: AppActionManifest = {
 
 const DECISION: RouterDecision = { tier: 'WORKHORSE', model: 'claude-sonnet-5', effort: 'medium', weight: 0.1 };
 const OWNER = { userId: 'owner-1', orgId: 'org-owner' };
+
+/** The server-resolved manifest AppAction D1 attaches to each proposed action. */
+const actionById = (id: string): AppAction => manifest.actions.find((a) => a.id === id)!;
+/** toolName -> manifest AppAction, as runAppAssistant / extractActions consume it. */
+const toolMap = new Map(assistantToolsFromManifest(manifest).map((t) => [t.name, t.action] as const));
 
 interface Captured {
   opts?: OneShotOptions;
@@ -79,9 +85,7 @@ describe('inferMode (D1 deterministic PT-PT classifier)', () => {
 });
 
 describe('extractActions (D1 fenced-block parser)', () => {
-  const valid = new Set(['app_action__ir_clientes', 'app_action__criar_cliente']);
-
-  it('parses an actions block, validates against the manifest, and strips it from the prose', () => {
+  it('parses an actions block, attaches the resolved AppAction, and strips it from the prose', () => {
     const reply = [
       'Vou criar o cliente para si.',
       '```ekoa-actions',
@@ -89,27 +93,29 @@ describe('extractActions (D1 fenced-block parser)', () => {
       '```',
       'Feito.',
     ].join('\n');
-    const { text, actions } = extractActions(reply, valid);
-    expect(actions).toEqual([{ toolName: 'app_action__criar_cliente', input: { nome: 'Ana' } }]);
+    const { text, actions } = extractActions(reply, toolMap);
+    expect(actions).toEqual([
+      { toolName: 'app_action__criar_cliente', input: { nome: 'Ana' }, action: actionById('criar-cliente') },
+    ]);
     expect(text).toContain('Vou criar o cliente');
     expect(text).toContain('Feito.');
     expect(text).not.toContain('ekoa-actions');
     expect(text).not.toContain('app_action__');
   });
 
-  it('drops unknown tool names but keeps known ones', () => {
+  it('drops unknown tool names but keeps + resolves known ones', () => {
     const reply = [
       '```ekoa-actions',
       '[{"toolName":"app_action__inexistente","input":{}},{"toolName":"app_action__ir_clientes","input":{}}]',
       '```',
     ].join('\n');
-    const { actions } = extractActions(reply, valid);
-    expect(actions).toEqual([{ toolName: 'app_action__ir_clientes', input: {} }]);
+    const { actions } = extractActions(reply, toolMap);
+    expect(actions).toEqual([{ toolName: 'app_action__ir_clientes', input: {}, action: actionById('ir-clientes') }]);
   });
 
   it('a malformed block yields no actions and is still stripped', () => {
     const reply = 'Olá\n```ekoa-actions\nnão é json\n```\ntchau';
-    const { text, actions } = extractActions(reply, valid);
+    const { text, actions } = extractActions(reply, toolMap);
     expect(actions).toEqual([]);
     expect(text).not.toContain('ekoa-actions');
     expect(text).toContain('Olá');
@@ -118,8 +124,8 @@ describe('extractActions (D1 fenced-block parser)', () => {
 
   it('non-object input defaults to {}', () => {
     const reply = '```ekoa-actions\n[{"toolName":"app_action__ir_clientes","input":"oops"}]\n```';
-    const { actions } = extractActions(reply, valid);
-    expect(actions).toEqual([{ toolName: 'app_action__ir_clientes', input: {} }]);
+    const { actions } = extractActions(reply, toolMap);
+    expect(actions).toEqual([{ toolName: 'app_action__ir_clientes', input: {}, action: actionById('ir-clientes') }]);
   });
 });
 
@@ -167,7 +173,9 @@ describe('runAppAssistant (D1)', () => {
       { message: 'Cria a cliente Ana', owner: OWNER, artifactId: 'art-1', actionManifest: manifest },
       deps,
     );
-    expect(res.actions).toEqual([{ toolName: 'app_action__criar_cliente', input: { nome: 'Ana' } }]); // unknown dropped
+    expect(res.actions).toEqual([
+      { toolName: 'app_action__criar_cliente', input: { nome: 'Ana' }, action: actionById('criar-cliente') },
+    ]); // unknown dropped, resolved AppAction attached
     expect(res.reply).toBe('Vou tratar disso.');
     expect(res.reply).not.toContain('ekoa-actions');
   });

@@ -23,6 +23,7 @@
  *    = owner activation, enforced at the route).
  */
 import type {
+  AppAction,
   AppActionManifest,
   AssistantChatMessage,
   AssistantChatMode,
@@ -194,12 +195,14 @@ function actionsFence(): RegExp {
 /**
  * Pull every `ekoa-actions` fenced block out of the model reply: parse each as a JSON array of
  * `{ toolName, input }`, keep only actions whose toolName is a REAL manifest tool (unknown names
- * dropped — the endpoint can only ask the client to run a declared action), and strip the blocks
- * from the user-facing prose. A malformed block is skipped (still stripped) — never surfaced raw.
+ * dropped — the endpoint can only ask the client to run a declared action), attach the SERVER's
+ * copy of that action's manifest AppAction (so the C3 runtime can execute without the manifest,
+ * which is not injected into the served page), and strip the blocks from the user-facing prose. A
+ * malformed block is skipped (still stripped) — never surfaced raw.
  */
 export function extractActions(
   reply: string,
-  validToolNames: ReadonlySet<string>,
+  toolsByName: ReadonlyMap<string, AppAction>,
 ): { text: string; actions: AssistantAction[] } {
   const actions: AssistantAction[] = [];
   const scan = actionsFence();
@@ -215,13 +218,17 @@ export function extractActions(
     for (const item of parsed) {
       if (!item || typeof item !== 'object') continue;
       const toolName = (item as { toolName?: unknown }).toolName;
-      if (typeof toolName !== 'string' || !validToolNames.has(toolName)) continue; // unknown -> drop
+      if (typeof toolName !== 'string') continue;
+      const action = toolsByName.get(toolName);
+      if (!action) continue; // unknown tool -> drop (the app never declared it)
       const rawInput = (item as { input?: unknown }).input;
       const input =
         rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
           ? (rawInput as Record<string, unknown>)
           : {};
-      actions.push({ toolName, input });
+      // Attach the server-authoritative manifest action; the client dispatches
+      // `execute({ ...action, params: input })` (values override the param definitions).
+      actions.push({ toolName, input, action });
     }
   }
   const text = reply.replace(actionsFence(), '').trim();
@@ -240,7 +247,9 @@ export async function runAppAssistant(
 ): Promise<AppAssistantResult> {
   const mode: AssistantChatMode = input.mode ?? inferMode(input.message);
   const tools = assistantToolsFromManifest(input.actionManifest);
-  const validToolNames = new Set(tools.map((t) => t.name));
+  // toolName -> the manifest AppAction. The value validates + names the tool AND carries the
+  // server-authoritative executable shape that D1 attaches to each proposed action.
+  const toolsByName = new Map(tools.map((t) => [t.name, t.action] as const));
 
   // Grounding ALWAYS under the resolved owner's org (never a caller-supplied org); kind:'chat'
   // grounds unconditionally and is cited-or-silent.
@@ -265,7 +274,7 @@ export async function runAppAssistant(
   };
 
   const res = await deps.oneShot({ prompt, systemPrompt, decision }, attribution);
-  const { text, actions } = extractActions(res.text, validToolNames);
+  const { text, actions } = extractActions(res.text, toolsByName);
 
   return { reply: text, mode, citations, actions };
 }
