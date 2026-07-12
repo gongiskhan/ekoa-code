@@ -1,0 +1,58 @@
+{
+  "slice": "S0",
+  "kind": "api",
+  "commit": "f9dee3c",
+  "tag": "operator/s0",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T16:23:12Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "ci:lane exit 0 (lint, chokepoint/encryption/garrison greps, typecheck, vitest all-workspaces, build); committed capabilities-stub.test.ts 2/2",
+      "at": "2026-07-12T16:23:12Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks clean (272 commits); semgrep exit 0; npm audit --audit-level=high exit 0",
+      "at": "2026-07-12T16:23:12Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context general-purpose agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/S0/review-verdict.md",
+      "at": "2026-07-12T16:40:21Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-with-rebuttal",
+      "verdict": "needs-work (3 findings, all rejected)",
+      "by": "codex",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "rebuttal": "flagged lines are the operator's verbatim BRIEF.md prose (em-dashes + PT-PT example prompts); the emoji/PT-PT rules bind authored UI code, not the preserved brief document; no code file flagged",
+      "tokens": 62413,
+      "at": "2026-07-12T16:23:12Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 batched run-level pass)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/S0/s0-evidence.cast",
+      "videoSha256": "c43a474313953ee743c7a35bec928fd6d6834798b44ff788f43075977bc3d6cd",
+      "videoBytes": 1569,
+      "verifyDetail": "cast replayed: shows commit f9dee3c, PERMISSIVE-STUB markers, vitest 2/2 green",
+      "at": "2026-07-12T16:23:12Z"
+    }
+  },
+  "status": "passed"
+}

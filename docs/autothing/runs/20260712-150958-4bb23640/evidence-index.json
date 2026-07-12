@@ -3,12 +3,37 @@
   "project": "ekoa-code",
   "branch": "operator-run",
   "gatesConfig": {
-    "test": true, "adversarialReview": true, "adversarialTest": true,
-    "codexSliceReview": true, "design": true, "walkthrough": true,
-    "deliberateRed": true, "mutation": true, "report": true,
-    "foundation": true, "codexCheckpoint": true,
-    "askQuestions": false, "profile": "build"
+    "test": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "codexSliceReview": true,
+    "design": true,
+    "walkthrough": true,
+    "deliberateRed": true,
+    "mutation": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true,
+    "askQuestions": false,
+    "profile": "build"
   },
-  "slices": {},
-  "globalGate": { "status": "in-progress" }
+  "slices": {
+    "S0": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "f9dee3c",
+      "tag": "operator/s0",
+      "gateStatus": "slices/S0/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/S0/s0-evidence.cast",
+        "videoSha256": "c43a474313953ee743c7a35bec928fd6d6834798b44ff788f43075977bc3d6cd",
+        "videoBytes": 1569
+      }
+    }
+  },
+  "globalGate": {
+    "status": "in-progress"
+  }
 }

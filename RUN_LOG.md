@@ -37,3 +37,14 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 
 ## GATE 2026-07-12T15:46:03Z — foundation (Phases 2–3)
 - detect: all manifest elements PRESENT (root CLAUDE.md routing index; docs/{architecture,testing,governance,api-contract,security,operations-runbook,decisions,findings}.md; area skills ekoa-architecture/ekoa-testing/ekoa-governance/run-ekoa-code; git repo; .gitignore autothing marker block; security wall gitleaks 8.30.1 + semgrep 1.168.0 + npm audit; /run + /verify resolve; walkthrough preflight asciinema 3.2.0 + agg 1.9.0). Phase 3 scaffold: NO-OP (nothing missing; non-clobber respected).
+
+## DEVIATION 2026-07-12T16:39:27Z
+- Subagent message delivery is broken in this session (5 agents finished work; no final message arrived; run_in_background:false still spawns async). Workaround adopted for ALL remaining gate agents: verdicts/reports are WRITTEN TO FILES under the runDir (primary channel) and polled by the lead. Friction-logged for skill-improver.
+
+## GATE 2026-07-12T16:40:21Z — S0 (run setup: branch + can() seam + capability vocabulary) — PASSED
+- green condition: branch operator-run cut; permissive can() stub (no callers) + shared Capability enum + stub-contract test; ci:lane green.
+- evidence: commit f9dee3c, tag operator/s0; ci:lane exit 0; gitleaks/semgrep/audit clean; slices/S0/{gate-status.json,review-verdict.md,s0-evidence.cast (sha256 c43a4743…, verified)}.
+- reviews: adversarialReview approve (fresh-context, claude-fable-5, file-channel); codexSliceReview gpt-5.5/high returned needs-work with 3 findings, ALL REJECTED with rebuttal (flagged lines are the operator's verbatim BRIEF.md prose; emoji/PT-PT rules bind authored UI code) — no code findings.
+- kind-conditional skips recorded: adversarialTest (api → batched), design (api).
+- duration: ~35 min wall (dominated by ci:lane + the subagent-delivery DEVIATION above); models: fable-5 lead, gpt-5.5 codex.
+- ledger: passed 1/31 · blocked 0 · buildable-remaining 30.
