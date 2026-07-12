@@ -501,7 +501,7 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
   confusion (the qualified query returns all rows); not a missing row.
 - **F30** (won't-fix-minor). Builds do not emit a `memory-extract` billing row (build post-run
   extraction differs from the chat path).
-- **served-app assistant "Fontes" can contradict the reply** (open; found by D2 fresh review, 2026-07-13).
+- **served-app assistant "Fontes" can contradict the reply** (open; found by D2 fresh review, 2026-07-13; CONFIRMED harder by D3 live evidence: 5 authoritative-looking Acórdão citations rendered directly under an explicit "não posso responder" refusal — slices/D3 live-04-fontes.png of run 20260712-150958-4bb23640).
   `runAppAssistant` returns ALL grounding hits as citations (`api/src/apps/app-assistant.ts`
   `grounding.citations`), not the sources the model actually used - the live D2 evidence shows a
   reply saying the excerpts were not used while five "Fontes" render under it. Trust-eroding for a
