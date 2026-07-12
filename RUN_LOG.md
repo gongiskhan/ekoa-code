@@ -135,3 +135,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - green: POST /api/app-assistant through the chokepoint (assistant-chat billed to the resolved owner); owner-org grounding + citations; do/show/teach mode inference; proposes validated ui_actions; additive contract; 29 tests + mount/schema coverage.
 - reviews: fresh-context APPROVE (independently verified the owner-org isolation is correct — org/billee only from the server-resolved owner, never the visitor body); codex 2 findings dispositioned (1 rebutted false-positive, 1 pre-existing platform gap flagged to H block, D1 guarded by the live allowance check).
 - ledger: passed 16/31 · blocked 0 · buildable-remaining 15.
+
+## ABORT 2026-07-12T21:17:25Z — operator-requested stop ("stop the run")
+- Operator instruction to stop received. Clean abort: in-flight D2 panel worker halted (had written no files — working tree clean at HEAD 4541861), goal-loop sentinel deleted, coordination released, LANDING.md written.
+- Landed on the operator-run branch (NOT merged to main; awaits operator diff review): 16 fully-gated slices — S0, A1-A5, B1-B4, C1-C5, D1 — plus the D2-prep same-document runtime API. The entire operate SPINE (internal bases, artifact classifier, action registry + in-page runtime, assistant tool-defs + audit, verified round-trip) and the served-app assistant endpoint (D1).
+- NOT started/incomplete: D2 (assistant panel — worker was authoring, no output), D3, E1-E2 (tours), F1-F2 (knowledge-during-build), G1-G2 (metering), H1-H6 (security block, must land atomically — untouched, the can() seam stays a permissive stub).
+- Every slice has its gate-status.json + evidence + dual review (fresh-context + codex) recorded under docs/autothing/runs/20260712-150958-4bb23640/. Resume point: D2 (FLOW_PLAN + gate-status + evidence-index are authoritative).
