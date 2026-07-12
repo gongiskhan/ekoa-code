@@ -106,3 +106,10 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - reviews: codex 1 finding accepted+fixed (select input+change parity, aec0181); fresh-context approve.
 - deferrals recorded: visible browser round-trip -> C5 gate; driving-UI design judgement -> D2.
 - ledger: passed 13/31 · blocked 0 · buildable-remaining 18.
+
+## GATE 2026-07-12T20:20:20Z — C5 (registry round-trip e2e + tester harness) — TEST PASSED (reviews pending)
+- green: LIVE browser round-trip on a real app-base app — issue -> visible execute (highlight ring + setField via native input/change) -> destructive confirm -> cancel; all 7 assertions PASS. driveAppAction is the committed tester-harness helper (dual use).
+- loop history: 5 iterations to get the e2e right — networkidle hang (->domcontentloaded), verify-nondeterminism (->verifyBuilds off), same-window-refusal (->iframe host topology), LLM-landmark dependency (->self-planted probe), main-vs-child frame collision (->explicit child frame). Each was a REAL bug in the DRIVER, not the runtime; the runtime (C3) was correct throughout.
+- GAP flagged to D2 + LANDING: the runtime is postMessage-to-parent (iframe) only; the same-document assistant panel (D2) needs a direct in-window API or an iframe. Recorded in slices/C5/impl-notes.md so D2 doesn't rediscover it.
+- ledger note: the e2e is a feature-run artifact (unmerged branch); build-run SUITE_LEDGER.json left untouched (its census is already in documented committed-baseline debt); operator registers it on merge.
+- fresh-context review + codex slice review scheduled next; ledger updates to passed on their clearance.

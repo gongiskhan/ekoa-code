@@ -1,0 +1,44 @@
+{
+  "slice": "C5",
+  "kind": "mixed",
+  "commit": "5acd1ab",
+  "tag": "operator/c5",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T20:20:20Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "LIVE round-trip e2e PASS (7 assertions): app-base build -> injected runtime -> highlight ring -> setField via native events -> destructive confirm -> cancel. Output captured at slices/C5/round-trip-output.txt.",
+      "at": "2026-07-12T20:20:20Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean",
+      "at": "2026-07-12T20:20:20Z"
+    },
+    "adversarialReview": {
+      "status": "pending"
+    },
+    "codexSliceReview": {
+      "status": "pending"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "THIS slice IS the independent functional pass (the round-trip e2e); kind-conditional"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "runtime driving UI judged in D2 design audit"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "e2e-output",
+      "evidence": "slices/C5/round-trip-output.txt",
+      "verifyDetail": "7 PASS lines + terminal E2E PASS captured from the live run",
+      "at": "2026-07-12T20:20:20Z"
+    }
+  },
+  "status": "gates-pending"
+}

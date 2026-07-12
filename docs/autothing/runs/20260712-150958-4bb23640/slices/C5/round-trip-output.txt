@@ -1,0 +1,9 @@
+PASS admin login
+PASS sample app built from the app base (5a748302-5734-401b-b9e4-815fff1a8fbd)
+PASS action runtime injected into the served app (iframe topology)
+PASS highlight action executed visibly inside the app (ring drawn)
+PASS setField drove the app input through user-equivalent events (value applied)
+PASS destructive action prompted a confirmation card before dispatch
+PASS cancelling the confirmation reports cancelled (destructive action never ran)
+
+E2E PASS: action-registry round-trip (issue -> visible execute -> destructive confirm -> cancel)
