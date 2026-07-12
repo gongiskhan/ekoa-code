@@ -72,3 +72,9 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - evidence: commit 3f06499 (tag operator/b3); 8/8 tests; slices/B3/{gate-status.json,review-verdict.md,b3-evidence.cast}.
 - reviews: codex gpt-5.5/high APPROVE (0 findings); fresh-context APPROVE incl. an explicit placement judgment (assertProgress, not verify-runner, is the deterministic credential-independent home — verify-runner returns ran:false without credentials and is blind to this class).
 - ledger: passed 8/31 · blocked 0 · buildable-remaining 23.
+
+## GATE 2026-07-12T18:23:28Z — C2 (action-registry contract: shared schema + ui_actions capture) — PASSED
+- green: shared/AppActionManifest (7 kinds, cross-field invariants, kebab registry ids in the demo-target namespace, destructive=UX-affordance-only); apps/action-manifest reader (bare-list or object, fail-loud invalid); activateArtifact persists valid manifest / visible error / clears on removal; seam additive-optional.
+- evidence: commits b8ba9a9 + 72e229f (tag operator/c2); 12 tests + schema-coverage; slices/C2/{gate-status.json,review-verdict.md,c2-evidence.cast}.
+- reviews: fresh-context approve; codex gpt-5.5/high 1 finding accepted+fixed (frontmatter fence drift — regexes now identical + pinned by regression test).
+- ledger: passed 9/31 · blocked 0 · buildable-remaining 22 (B2 closing on its live gate).

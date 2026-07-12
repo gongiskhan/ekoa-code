@@ -1,0 +1,56 @@
+{
+  "slice": "C2",
+  "kind": "api",
+  "commit": "72e229f (b8ba9a9+fix)",
+  "tag": "operator/c2",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T18:23:28Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "12 committed tests (reader shapes, invariants, persistence round-trip, fence regression) + schema-coverage green; typecheck x2; eslint; chokepoint",
+      "at": "2026-07-12T18:23:28Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean both commits",
+      "at": "2026-07-12T18:23:28Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/C2/review-verdict.md",
+      "at": "2026-07-12T18:23:28Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "needs-work: 1 finding ACCEPTED+FIXED (frontmatter fence drift vs automation parser -> identical regexes + regression test, 72e229f)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 65679,
+      "at": "2026-07-12T18:23:28Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 batched run-level pass)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/C2/c2-evidence.cast",
+      "videoSha256": "a7f8218196136358e278e65533d825165a99944c3889612e670534d902332664",
+      "videoBytes": 1372,
+      "verifyDetail": "replay shows commits + green C2 suites",
+      "at": "2026-07-12T18:23:28Z"
+    }
+  },
+  "status": "passed"
+}
