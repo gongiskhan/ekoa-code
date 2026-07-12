@@ -32,3 +32,24 @@ code files + the evolved contract; the lead mounted the router in server.ts and 
 - D2 (panel) consumes this endpoint; D3 is the scripted 3-mode gate that exercises it live.
 - The assistant PROPOSES actions in the response; the C3 runtime executes them client-side and C4's
   auditAssistantAction records each — D3 proves that full loop live.
+
+## Worker confirmation (independent re-verification)
+
+The four code files + the evolved contract are authored and self-verified. Re-ran from a clean state:
+- `npm run build -w shared` ok; `api` `tsc --noEmit` (src + test) exit 0; eslint clean on all 5 touched
+  `.ts` files; `gate:chokepoint` clean.
+- 29 tests green across the four named suites; plus a regression spot-check (`shared` 36 tests,
+  `assistant-tools` + `served-app` + `error-envelope` 31 tests) — the additive shared evolution broke
+  nothing.
+- Confirmed `server.ts` already carries the import + `app.use('/api', appAssistantRouter())` (lead-wired;
+  the worker did NOT touch server.ts, honoring the 6-reserved-paths constraint). The no-arg call binds
+  the route's `prodDeps` default (`runOneShot` / `buildGroundingBlock` / `decideForTask` floored WORKHORSE).
+
+Two precise nuances the lead may want to action:
+- **schema-coverage:** `appAssistant.assistantChat` is currently in the PENDING set (count 49); the
+  gate passes green as-is. Now that it has a real contract test, the honest bookkeeping move is to add
+  `'appAssistant.assistantChat'` to `COVERED` and set `EXPECTED_PENDING_COUNT` 49→48 in
+  `api/tests/contract/schema-coverage.test.ts` (left untouched — outside the worker's reserved paths).
+- **Admission strictness:** the assistant REQUIRES an artifact-backed owner (404 for a dev-serve /
+  registry-only / unresolved id), unlike the lenient key-value app-data plane, because it must bind an
+  org (to ground) and a billee (to meter). This is deliberate and matches analysis §3's owner-org chain.

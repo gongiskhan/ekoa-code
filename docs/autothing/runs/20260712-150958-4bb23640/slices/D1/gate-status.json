@@ -1,0 +1,56 @@
+{
+  "slice": "D1",
+  "kind": "api",
+  "commit": "f363557",
+  "tag": "operator/d1",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T21:06:02Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "29 tests: unit (mode inference, grounding->citations, ekoa-actions parse/validate/strip, unknown-tool drop, org-from-owner-not-caller) + contract + schema-coverage + mount-coverage; typecheck; eslint; chokepoint clean",
+      "at": "2026-07-12T21:06:02Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean; chokepoint grep clean (egress only via llm/)",
+      "at": "2026-07-12T21:06:02Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/D1/review-verdict.md",
+      "note": "independently verified owner-org isolation (org/billee only from server-resolved owner), fail-closed admission, chokepoint-only egress, additive contract",
+      "at": "2026-07-12T21:06:02Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-with-disposition",
+      "verdict": "needs-work: 2 findings \u2014 #6 REBUTTED (DomainDescriptorMap is the shared contract mechanism every descriptor imports, not an external dep; original file already imported it); #1 (billingLocked boot-cache staleness) REAL but PRE-EXISTING platform gap affecting the whole served-app plane, NOT a D1 defect, D1 independently guarded by the live allowance check \u2014 FLAGGED to LANDING + the H security block (see RUN_LOG DECISION)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 107305,
+      "at": "2026-07-12T21:06:02Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 the D3 scripted 3-mode gate is the live functional pass over this endpoint)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/D1/d1-evidence.cast",
+      "videoSha256": "3da4e51fbd625dba1c227590e772bcdbd17194a524e0e49d361f24bf8c4b1be7",
+      "videoBytes": 1732,
+      "at": "2026-07-12T21:06:02Z"
+    }
+  },
+  "status": "passed"
+}
