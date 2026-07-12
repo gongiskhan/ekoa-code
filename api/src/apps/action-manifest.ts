@@ -26,9 +26,13 @@ export type UiActionsResult =
   | { status: 'valid'; manifest: AppActionManifest }
   | { status: 'invalid'; error: string };
 
-/** Extract the YAML frontmatter text between the leading `---` fences. */
+/** Extract the YAML frontmatter text between the leading `---` fences.
+ *  The pattern is BYTE-COMPATIBLE with automation/manifest-parser.ts
+ *  extractFrontmatter (codex C2 finding: a laxer/stricter fence here would let
+ *  one parser see a section the other reports absent — the drift this module's
+ *  header promises cannot happen). Keep the two regexes identical. */
 function frontmatterOf(text: string): string | null {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(text);
+  const m = /^---\s*\n([\s\S]+?)\n---\s*(\n|$)/.exec(text);
   return m ? (m[1] ?? null) : null;
 }
 

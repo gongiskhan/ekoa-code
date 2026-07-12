@@ -46,6 +46,13 @@ describe('readUiActions (C2)', () => {
     expect((await readUiActions(noSection)).status).toBe('absent');
   });
 
+  it('fence tolerance matches the automation parser (trailing whitespace after ---)', async () => {
+    // codex C2 finding regression: "--- " with trailing spaces is valid frontmatter
+    // for automation/manifest-parser.ts and must be for this reader too.
+    const d = await withManifest(`---   \nname: X\npurpose: y\nui_actions:\n  - id: ir-x\n    kind: navigate\n    labelPt: X\n    description: X\n    route: /x\n---  \n\n# X\n`);
+    expect((await readUiActions(d)).status).toBe('valid');
+  });
+
   it('bare-list shape validates and wraps as version 1', async () => {
     const d = await withManifest(HEADER(`ui_actions:
   - id: novo-cliente
