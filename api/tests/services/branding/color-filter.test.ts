@@ -17,16 +17,31 @@ describe('isGrayscale', () => {
 });
 
 describe('sanitizeBrandColors', () => {
-  it('promotes a non-gray accent when the primary is gray', () => {
+  it('promotes a non-gray accent when the primary is gray - and the demoted gray is dropped, not parked in the accent slot', () => {
     const out = sanitizeBrandColors({ primaryColor: '#111111', accentColor: '#0d9488' });
     expect(out.primaryColor).toBe('#0d9488');
-    expect(out.accentColor).toBe('#111111');
+    // No slot ever persists a neutral: the gray swapped into accent is nulled by the accent rule.
+    expect(out.accentColor).toBeNull();
   });
 
   it('nulls a gray primary with no coloured alternative (so the merge skips it, never a fake default)', () => {
     const out = sanitizeBrandColors({ primaryColor: '#222222', secondaryColor: '#333333' });
     expect(out.primaryColor).toBeNull();
     expect(out.secondaryColor).toBeNull();
+  });
+
+  it('nulls a gray accent (live 2026-07-12: #9d9d9d persisted as the org accent while primary/secondary were dropped)', () => {
+    const out = sanitizeBrandColors({ primaryColor: '#0d9488', secondaryColor: '#1032cf', accentColor: '#9d9d9d' });
+    expect(out.primaryColor).toBe('#0d9488');
+    expect(out.secondaryColor).toBe('#1032cf');
+    expect(out.accentColor).toBeNull();
+  });
+
+  it('an all-grayscale result ends with every color slot null - nothing neutral ever merges', () => {
+    const out = sanitizeBrandColors({ primaryColor: '#ffffff', secondaryColor: '#000000', accentColor: '#9d9d9d' });
+    expect(out.primaryColor).toBeNull();
+    expect(out.secondaryColor).toBeNull();
+    expect(out.accentColor).toBeNull();
   });
 
   it('leaves a valid palette untouched', () => {

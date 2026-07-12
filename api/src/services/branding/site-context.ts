@@ -28,11 +28,13 @@ export type HueBucket =
 /**
  * Where a candidate came from. `css` = parsed out of raw HTML/stylesheets, count
  * is literal-occurrence frequency. `rendered-area` = sampled from a live-rendered
- * page, count is cumulative visible pixel area. The two scales are not
- * comparable; the agent prompt treats rendered-area as higher-priority because
- * it reflects what a human actually SEES.
+ * page, count is cumulative visible pixel area. `screenshot` = quantized from the
+ * rendered page's PIXELS (the low-confidence fallback for imagery-branded sites
+ * whose computed styles paint nothing non-neutral), count is sampled pixels.
+ * The scales are not comparable; the agent prompt treats rendered-area as
+ * higher-priority because it reflects what a human actually SEES.
  */
-export type ColorCandidateSource = 'css' | 'rendered-area';
+export type ColorCandidateSource = 'css' | 'rendered-area' | 'screenshot';
 
 export interface ColorCandidate {
   hex: string;
@@ -316,7 +318,9 @@ export function seedWithThemeColor(candidates: ColorCandidate[], themeColor: str
   return [seeded, ...candidates];
 }
 
-function normalizeHexLike(raw: string): string | null {
+/** Normalize a `#rgb`/`#rrggbb` string to lowercase 6-digit hex; null for anything else.
+ *  Exported for the snapshot's allowed-hex collection and the research membership guard. */
+export function normalizeHexLike(raw: string): string | null {
   const s = raw.trim().toLowerCase();
   if (s.startsWith('#')) {
     const rest = s.slice(1);

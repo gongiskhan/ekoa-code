@@ -11,7 +11,7 @@
  */
 
 import { normalizeFontKey, type SiteBuilder } from './site-builder.js';
-import { summarizeSiteContext, type SiteContext } from './site-context.js';
+import { normalizeHexLike, summarizeSiteContext, type SiteContext } from './site-context.js';
 import { summarizeDesignSystem, filterDesignSystemChrome, type DesignSystem } from './design-system.js';
 import { summarizeVisualVibe, type VisualVibe } from './visual-vibe.js';
 import type { RenderedCandidates } from './rendered-candidates.js';
@@ -31,6 +31,7 @@ Regras absolutas:
 Responde com EXATAMENTE um objeto JSON (sem texto antes ou depois, sem cercas de código):
 {
   "websiteUrl": "<o URL final do snapshot>",
+  "companyName": "<o nome da empresa tal como o site o apresenta: título, og:site_name ou texto visível - NÃO o domínio em bruto>",
   "primaryColor": "#rrggbb",
   "secondaryColor": "#rrggbb",
   "accentColor": "#rrggbb",
@@ -51,6 +52,7 @@ export const KNOWLEDGE_SYSTEM = `És o investigador de marca da plataforma. NÃO
 Responde com EXATAMENTE um objeto JSON (sem texto antes ou depois, sem cercas de código):
 {
   "websiteUrl": "<o URL recebido>",
+  "companyName": "<o nome real da empresa, se o conheceres; senão OMITE este campo>",
   "primaryColor": "#rrggbb",
   "accentColor": "#rrggbb",
   "secondaryColor": "#rrggbb",
@@ -130,6 +132,16 @@ export function buildGroundedPrompt(input: BuildSnapshotInput): string {
   const designSection = designSystem ? '\n\n' + summarizeDesignSystem(designSystem) : '';
   const vibeSection = visualVibe ? '\n\n' + summarizeVisualVibe(visualVibe) : '';
 
+  // Imagery-branded fallback (present only when the computed-style walk painted nothing
+  // non-neutral): the page's own pixels, quantized. Without this section an imagery-branded
+  // site reads as structurally monochrome and the model can only return neutrals - which the
+  // sanitizer then drops, leaving the org colorless (observed live 2026-07-12).
+  const pixelCandidates = rendered.screenshotCandidates ?? [];
+  const pixelSection =
+    pixelCandidates.length > 0
+      ? `\n\n## Cores amostradas dos píxeis da página (FALLBACK, confiança baixa)\nNenhuma cor não-neutra pinta esta página via estilos CSS - a identidade visual vive em imagens (ex.: fotografia/overlay do herói). Estas cores foram amostradas dos PÍXEIS da página renderizada e são candidatos VÁLIDOS, ordenadas por área visível:\n${pixelCandidates.map((c, i) => `  ${i + 1}. ${c.hex} (${c.count} amostras, ${c.bucket}, L=${c.lightness.toFixed(2)})`).join('\n')}`
+      : '';
+
   // On a builder site the raw-CSS scan surfaces the builder's whole theme font
   // catalog (fonts the owner never uses, zero rendered area) - prefer the fonts
   // that actually paint. Not applied to normal sites, where a brand font can
@@ -166,17 +178,27 @@ Os candidatos estão agrupados por bucket de matiz, já ordenados por qualidade 
 - accentColor: qualquer bucket restante, distinto de primary e secondary; senão omite.
 - Não inventes cores: cada hex tem de aparecer literalmente na lista de candidatos.`;
 
+  // Neutral ban + pixel-fallback rule, appended to whichever branch applies. A neutral pick is
+  // dropped server-side anyway (sanitizeBrandColors), so instruct omission honestly instead of
+  // letting the model "succeed" with white/black - and when the pixel section is the only
+  // non-neutral source, point primaryColor at it explicitly.
+  const neutralRule = `\n- Um neutro (branco/preto/cinzento, ex.: #ffffff/#000000/#9d9d9d) NUNCA serve como primaryColor/secondaryColor/accentColor: se só existirem candidatos neutros, OMITE esses campos em vez de devolveres um neutro.`;
+  const pixelRule =
+    pixelCandidates.length > 0
+      ? `\n- A secção "Cores amostradas dos píxeis da página" contém candidatos VÁLIDOS (amostrados de imagens/overlays). Quando as restantes listas só têm neutros, usa a PRIMEIRA entrada não-neutra dessa secção como primaryColor.`
+      : '';
+
   return `Foi obtido um snapshot do site abaixo. Usa APENAS a informação do snapshot - não especules sobre cores, tipos de letra ou traços que não estejam presentes. Se não conseguires determinar um campo, omite-o.
 
 ## Snapshot do site
 
-${snapshotSection}${renderedFontsSection}${designSection}${vibeSection}
+${snapshotSection}${pixelSection}${renderedFontsSection}${designSection}${vibeSection}
 
 ## Tarefa
 
 Devolve um único objeto JSON com a estrutura do teu prompt de sistema. Escolhe as cores das fontes acima, seguindo as regras de prioridade.
 
-${colorRules}
+${colorRules}${neutralRule}${pixelRule}
 
 ## Orientação de identidade visual (para o campo "instructions")
 Escreve 3-6 frases que um gerador de UI possa USAR para reproduzir a sensação da marca:
@@ -184,4 +206,33 @@ Escreve 3-6 frases que um gerador de UI possa USAR para reproduzir a sensação 
 - Nomeia o ambiente (mood), densidade e textura - se apareceu uma secção "Vibe visual", cita os seus rótulos.
 - Menciona o estilo do botão principal se foi extraído (raio + espaçamento + fundo).
 - Não escrevas prosa de marketing. Escreve instruções de estilo concretas e acionáveis.`;
+}
+
+/**
+ * Every hex the grounded snapshot can legitimately offer the model, normalized to lowercase
+ * 6-digit form. The system prompt's "every color must appear literally in a candidate list"
+ * rule was prompt-only in both the old platform and this port - nothing stopped a hallucinated
+ * saturated hex from merging onto the org. The research apply-step nulls any returned color
+ * absent from this set (grounded path only; the knowledge path proposes by design).
+ * Deliberately a superset of what the prompt SHOWS (the prompt trims lists for brevity):
+ * enforcement only needs "never a color the site evidence doesn't contain".
+ */
+export function collectAllowedHexes(input: BuildSnapshotInput): Set<string> {
+  const { site, rendered, designSystem } = input;
+  const out = new Set<string>();
+  const add = (raw: unknown): void => {
+    if (typeof raw !== 'string') return;
+    const norm = normalizeHexLike(raw);
+    if (norm) out.add(norm);
+  };
+  for (const c of site.colorCandidates) add(c.hex);
+  add(site.themeColor);
+  for (const c of rendered.candidates) add(c.hex);
+  for (const c of rendered.screenshotCandidates ?? []) add(c.hex);
+  for (const p of designSystem?.colors?.palette ?? []) {
+    add(p.normalized);
+    add(p.color);
+  }
+  for (const v of Object.values(designSystem?.colors?.cssVariables ?? {})) add(v.value);
+  return out;
 }

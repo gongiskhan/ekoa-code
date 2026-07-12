@@ -40,6 +40,10 @@ export interface JobRecord extends Doc {
     /** brand-research: the parsed structured result + whether it was merged onto org branding. */
     branding?: Record<string, unknown>;
     brandingApplied?: boolean;
+    /** brand-research: whether a usable primaryColor was applied (the fail-loud color outcome). */
+    colorsApplied?: boolean;
+    /** brand-research: non-fatal degradation codes (e.g. NO_PRIMARY_COLOR). */
+    warnings?: string[];
     /** brand-research: whether the target site was reachable (false = honest knowledge fallback). */
     siteReachable?: boolean;
   };
@@ -85,6 +89,9 @@ export function jobView(j: JobRecord): {
   artifactId?: string;
   slug?: string;
   createdAt: string;
+  brandingApplied?: boolean;
+  colorsApplied?: boolean;
+  warnings?: string[];
   error?: { code: string; message: string };
 } {
   return {
@@ -93,6 +100,11 @@ export function jobView(j: JobRecord): {
     ...(j.artifactId ? { artifactId: j.artifactId } : {}),
     ...(j.result?.slug ? { slug: j.result.slug } : {}),
     createdAt: j.createdAt,
+    // brand-research fail-loud outcome: a client that missed the stream's complete event (page
+    // reload, reconnect) still learns whether colors were applied from GET /jobs/:id.
+    ...(j.result?.brandingApplied !== undefined ? { brandingApplied: j.result.brandingApplied } : {}),
+    ...(j.result?.colorsApplied !== undefined ? { colorsApplied: j.result.colorsApplied } : {}),
+    ...(j.result?.warnings && j.result.warnings.length > 0 ? { warnings: j.result.warnings } : {}),
     // F7: surface the CAUSE (structured code + a safe generic message) so a failed job is not
     // cause-less — NEVER the raw persisted message, which can carry model-derived PII (Codex
     // checkpoint finding). The detailed message stays server-side on the JobRecord.

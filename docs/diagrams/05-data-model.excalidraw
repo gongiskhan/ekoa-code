@@ -990,6 +990,38 @@
       "containerId": null,
       "lineHeight": 1.25,
       "rawText": "AS-BUILT 2026-07-11 (integration builder): new persisted collection integration_builder_sessions\n(userId, orgId, integrationKey?, messages[], currentPackage?, validationErrors[]) - the builder\nchat survives restarts. Integration DEFINITIONS gain a runtime tier: <dataDir>/integrations/\nruntime/<key>/ (userCreated: true) shadowing the read-only baseline under api/assets/integrations;\nwritten only by the builder save route after server-side re-validation (reserved baseline keys refused)."
+    },
+    {
+      "type": "text",
+      "id": "plat_deltas_branding_20260712",
+      "x": 76,
+      "y": 768,
+      "width": 620,
+      "height": 65,
+      "text": "Amendment 3 (brand research, 2026-07-12):\njobs.result += colorsApplied + warnings[] (NO_PRIMARY_COLOR fail-loud signal, on jobView too)\nBrandResearchResult += companyName -> org.displayName (never merged into branding)\norg.branding colors: only site-evidence hexes ever merge; neutrals never persist in any slot",
+      "originalText": "Amendment 3 (brand research, 2026-07-12):\njobs.result += colorsApplied + warnings[] (NO_PRIMARY_COLOR fail-loud signal, on jobView too)\nBrandResearchResult += companyName -> org.displayName (never merged into branding)\norg.branding colors: only site-evidence hexes ever merge; neutrals never persist in any slot",
+      "fontSize": 13,
+      "fontFamily": 3,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "strokeColor": "#6d28d9",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "angle": 0,
+      "seed": 20260712,
+      "version": 1,
+      "versionNonce": 20260712,
+      "isDeleted": false,
+      "groupIds": [],
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "containerId": null,
+      "lineHeight": 1.25
     }
   ]
 }

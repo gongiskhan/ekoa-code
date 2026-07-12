@@ -58,11 +58,19 @@ export function orgRouter(deps: { now: () => number; genId: () => string }): Rou
   return r;
 }
 
-/** The branding save (F4). Exported so the contract-path router aliases this exact handler. */
+/** The branding save (F4). Exported so the contract-path router aliases this exact handler.
+ *  MERGES onto the org's existing branding: the dashboard sends only its editable fields, and
+ *  `updateOrg` replaces top-level keys wholesale - a raw write here would wipe the
+ *  server-attached research outputs (designSystem, visualVibe, researched colors) on every
+ *  Save. Same merge semantics as the research apply-step; omitted keys are never touched. */
 export async function saveBrandingHandler(req: AuthedRequest, res: Response): Promise<void> {
   const body = parseBody(res, BrandingSaveRequest, req.body) as { branding: unknown; displayName?: string } | undefined;
   if (!body) return;
-  const updated = await updateOrg(actorOf(req).orgId, { branding: body.branding as Record<string, unknown>, ...(body.displayName ? { displayName: body.displayName } : {}) });
+  const orgId = actorOf(req).orgId;
+  const org = await getOrg(orgId);
+  if (!org) return notFound(res);
+  const merged = { ...((org.branding as Record<string, unknown>) ?? {}), ...(body.branding as Record<string, unknown>) };
+  const updated = await updateOrg(orgId, { branding: merged, ...(body.displayName ? { displayName: body.displayName } : {}) });
   if (!updated) return notFound(res);
   res.json(orgView(updated));
 }

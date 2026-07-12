@@ -82,6 +82,14 @@ export interface RenderedCandidates {
   logoCandidates?: RenderedLogoCandidate[];
   /** JPEG screenshot of the page's top strip - the vision ground truth for logo confirmation. */
   headerShot?: Buffer | null;
+  /**
+   * Pixel-quantized candidates from the page SCREENSHOT - the low-confidence fallback for
+   * imagery-branded sites, present ONLY when the computed-style walk painted nothing
+   * non-neutral. A brand color living exclusively in a hero photo/overlay is invisible to
+   * computed-style sampling (observed live 2026-07-12, mariliasantoscabral.webnode.pt: navy
+   * hero JPEG, all-grayscale computed styles - research came back colorless).
+   */
+  screenshotCandidates?: ColorCandidate[];
 }
 
 export interface FetchRenderedOptions {
@@ -211,6 +219,58 @@ const LOGO_WALK_SOURCE = `function () {
 /** Height of the header strip screenshot used as vision ground truth for the logo pick. */
 const HEADER_SHOT_HEIGHT = 220;
 
+/** Pixel fallback: sample every Nth pixel in both axes (1280x900 / 6 ≈ 32k samples). */
+const PIXEL_SAMPLE_STRIDE = 6;
+/** Pixel fallback: a cluster below this share of sampled pixels is noise, not a brand color. */
+const PIXEL_MIN_SHARE = 0.02;
+const MAX_SCREENSHOT_CANDIDATES = 6;
+
+/**
+ * In-page pixel quantizer (plain-JS string, same constraints as RENDERED_WALK_SOURCE).
+ * The screenshot bytes are injected back as a data: URL and drawn onto a canvas INSIDE the
+ * page - drawing the site's own cross-origin imagery would taint the canvas and make
+ * getImageData throw, but a data: image is same-origin, so the round-trip through
+ * Playwright's screenshot is what makes pixel access possible at all. Quantizes to 16
+ * levels per channel and returns the average color + sample count of the top clusters.
+ */
+const PIXEL_SAMPLE_SOURCE = `function (args) {
+  return new Promise(function (resolve) {
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        var stride = args.stride;
+        var acc = {};
+        var total = 0;
+        for (var y = 0; y < canvas.height; y += stride) {
+          for (var x = 0; x < canvas.width; x += stride) {
+            var i = (y * canvas.width + x) * 4;
+            if (data[i + 3] < 128) continue;
+            var r = data[i], g = data[i + 1], b = data[i + 2];
+            var key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+            var c = acc[key];
+            if (c) { c.n++; c.r += r; c.g += g; c.b += b; } else { acc[key] = { n: 1, r: r, g: g, b: b }; }
+            total++;
+          }
+        }
+        var clusters = Object.keys(acc).map(function (k) {
+          var c = acc[k];
+          var hx = function (v) { return ('0' + Math.round(v / c.n).toString(16)).slice(-2); };
+          return { hex: '#' + hx(c.r) + hx(c.g) + hx(c.b), count: c.n };
+        }).sort(function (a, b) { return b.count - a.count; }).slice(0, 24);
+        resolve({ total: total, clusters: clusters });
+      } catch (e) { resolve({ total: 0, clusters: [] }); }
+    };
+    img.onerror = function () { resolve({ total: 0, clusters: [] }); };
+    img.src = args.dataUrl;
+  });
+}`;
+
 /**
  * Sample area-weighted color candidates (and dominant fonts) from a rendered
  * page. Non-fatal by design - any failure returns an empty result so the caller
@@ -282,6 +342,28 @@ export async function fetchRenderedCandidates(
       ),
     ];
 
+    // Imagery-branded fallback: the computed-style walk painted NOTHING non-neutral, so the
+    // brand color (if any) lives in photos/overlays. Quantize the rendered pixels themselves.
+    // Builder/consent chrome was DOM-stripped above, so the screenshot is chrome-free. Kept
+    // out of `paintedHexes` on purpose: the builder-scrub intersection must stay a
+    // computed-style signal. Non-fatal like every other signal here.
+    let screenshotCandidates: ColorCandidate[] | undefined;
+    if (paintedHexes.length === 0) {
+      try {
+        const shot = await page.screenshot({ type: 'png' });
+        const sampled = (await page.evaluate(
+          `(${PIXEL_SAMPLE_SOURCE})(${JSON.stringify({
+            dataUrl: `data:image/png;base64,${shot.toString('base64')}`,
+            stride: PIXEL_SAMPLE_STRIDE,
+          })})`,
+        )) as { total: number; clusters: Array<{ hex: string; count: number }> };
+        const fromPixels = screenshotClustersToCandidates(sampled.clusters, sampled.total);
+        if (fromPixels.length > 0) screenshotCandidates = fromPixels;
+      } catch (err) {
+        console.warn(`[rendered-candidates] pixel sampling failed for ${url}: ${errMsg(err)}`);
+      }
+    }
+
     return {
       ok: true,
       candidates,
@@ -291,6 +373,7 @@ export async function fetchRenderedCandidates(
       chromeFonts: chrome.chromeFonts,
       logoCandidates,
       headerShot,
+      ...(screenshotCandidates ? { screenshotCandidates } : {}),
     };
   } catch (err) {
     console.warn(`[rendered-candidates] Sampling failed for ${url}: ${errMsg(err)}`);
@@ -337,6 +420,38 @@ export function normalizeCandidates(raw: Array<[string, number]>): ColorCandidat
   const filtered = brandScoped.filter((c) => rankScore(c) >= minScore);
 
   return filtered.slice(0, MAX_CANDIDATES);
+}
+
+/**
+ * Turn the in-page quantizer's clusters into screenshot-sourced candidates: drop neutrals
+ * and sub-{PIXEL_MIN_SHARE} noise, keep AREA order. Deliberately no brand-fit floor or
+ * fit-based ranking: pixel clusters of a photo overlay are inherently desaturated, and the
+ * floor that trims the computed-style list would erase exactly the color this fallback
+ * exists to find. Exported for unit tests (pure transform; the entry point needs Playwright).
+ */
+export function screenshotClustersToCandidates(
+  clusters: Array<{ hex: string; count: number }>,
+  totalSampled: number,
+): ColorCandidate[] {
+  if (!Number.isFinite(totalSampled) || totalSampled <= 0) return [];
+  const out: ColorCandidate[] = [];
+  for (const { hex, count } of clusters) {
+    if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/.test(hex)) continue;
+    if (isNeutralGray(hex)) continue;
+    if (count / totalSampled < PIXEL_MIN_SHARE) continue;
+    const { s, l } = toHsl(hex);
+    out.push({
+      hex,
+      count,
+      bucket: classifyHue(hex),
+      saturation: s,
+      lightness: l,
+      brandFit: computeBrandFit(s, l),
+      source: 'screenshot',
+    });
+  }
+  out.sort((a, b) => b.count - a.count);
+  return out.slice(0, MAX_SCREENSHOT_CANDIDATES);
 }
 
 function rankScore(c: ColorCandidate): number {

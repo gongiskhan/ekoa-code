@@ -340,10 +340,14 @@ function ColorPicker({
   label,
   value,
   onChange,
+  notSetLabel,
 }: {
   label: string;
-  value: string;
+  /** null = no color set. Rendered as an explicit empty state - NEVER a fabricated default
+   *  (a hardcoded teal fallback here read as a successful research result; live 2026-07-12). */
+  value: string | null;
   onChange: (color: string) => void;
+  notSetLabel: string;
 }) {
   const colorInputRef = useRef<HTMLInputElement>(null);
 
@@ -353,21 +357,31 @@ function ColorPicker({
         {label}
       </label>
       <div className="flex items-center space-x-2">
-        <div
-          className="w-10 h-10 rounded-lg border border-neutral-200 cursor-pointer"
-          style={{ backgroundColor: value }}
-          onClick={() => colorInputRef.current?.click()}
-        />
+        {value ? (
+          <div
+            className="w-10 h-10 rounded-lg border border-neutral-200 cursor-pointer"
+            style={{ backgroundColor: value }}
+            onClick={() => colorInputRef.current?.click()}
+          />
+        ) : (
+          <div
+            className="w-10 h-10 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 cursor-pointer flex items-center justify-center"
+            onClick={() => colorInputRef.current?.click()}
+          >
+            <X size={12} className="text-neutral-300" />
+          </div>
+        )}
         <Input
-          value={value}
+          value={value ?? ""}
           onChange={(e) => onChange(e.target.value)}
+          placeholder={notSetLabel}
           wrapperClassName="flex-1"
           className="font-mono"
         />
         <input
           ref={colorInputRef}
           type="color"
-          value={value}
+          value={value ?? "#888888"}
           onChange={(e) => onChange(e.target.value)}
           className="sr-only"
         />
@@ -377,14 +391,14 @@ function ColorPicker({
 }
 
 function BrandPreview({
-  primaryColor,
-  secondaryColor,
+  primaryColor: primaryProp,
+  accentColor: accentProp,
   fontFamily,
   logoPreview,
   labels,
 }: {
-  primaryColor: string;
-  secondaryColor: string;
+  primaryColor: string | null;
+  accentColor: string | null;
   fontFamily: string;
   logoPreview: string | null;
   labels: {
@@ -394,6 +408,10 @@ function BrandPreview({
     accentColor: string;
   };
 }) {
+  // Unset colors preview as plain neutrals - visibly "no brand yet", never a plausible brand
+  // default that could be mistaken for (and saved as) a research result.
+  const primaryColor = primaryProp ?? "#d4d4d4";
+  const secondaryColor = accentProp ?? "#737373";
   return (
     <Card padding="none" className="overflow-hidden">
       <div className="flex items-center space-x-2 px-4 py-2.5 border-b border-line">
@@ -517,11 +535,16 @@ export default function BrandingSettingsPage() {
   const [isResearching, setIsResearching] = useState(false);
   const [researchJobId, setResearchJobId] = useState<string | null>(null);
   const [researchStatus, setResearchStatus] = useState<"idle" | "running" | "complete" | "failed">("idle");
+  // Non-fatal degradation codes from the research result (NO_PRIMARY_COLOR = the site yielded
+  // no usable brand color; the user must set colors manually - fail-loud, never silent success).
+  const [researchWarnings, setResearchWarnings] = useState<string[]>([]);
   const researchProgress = useResearchProgress(isResearching);
 
-  // Branding local state
-  const [localPrimaryColor, setLocalPrimaryColor] = useState("#0d9488");
-  const [localSecondaryColor, setLocalSecondaryColor] = useState("#1e293b");
+  // Branding local state. Colors are null until the org actually has them - the previous
+  // hardcoded #0d9488/#1e293b fallbacks displayed the OLD platform defaults as if research
+  // had picked them, and Save persisted them (live defect 2026-07-12).
+  const [localPrimaryColor, setLocalPrimaryColor] = useState<string | null>(null);
+  const [localAccentColor, setLocalAccentColor] = useState<string | null>(null);
   const [localFontFamily, setLocalFontFamily] = useState("Inter");
   const [localDisplayName, setLocalDisplayName] = useState("");
   const [localInstructions, setLocalInstructions] = useState("");
@@ -576,11 +599,20 @@ export default function BrandingSettingsPage() {
     const offProgress = (["ready", "routing", "text_chunk", "tool_event", "plan_step"] as const).map(
       (type) => stream.on(type, arm),
     );
-    const offComplete = stream.on("complete", () => {
+    const offComplete = stream.on("complete", (ev) => {
       clear();
       setIsResearching(false);
       setResearchStatus("complete");
-      toast.success(b.researchComplete);
+      // The fail-loud color outcome rides the complete payload: research can succeed for
+      // logo/design-system while finding no usable brand color (colorsApplied: false).
+      const r = (ev.result ?? {}) as { colorsApplied?: boolean; warnings?: string[] };
+      const warns = Array.isArray(r.warnings) ? r.warnings : [];
+      setResearchWarnings(warns);
+      if (r.colorsApplied === false || warns.includes("NO_PRIMARY_COLOR")) {
+        toast.info(b.researchNoColors);
+      } else {
+        toast.success(b.researchComplete);
+      }
       fetchCompany();
     });
     const offError = stream.on("error", () => {
@@ -596,7 +628,7 @@ export default function BrandingSettingsPage() {
       offError();
       stream.close();
     };
-  }, [researchJobId, b.researchComplete, b.researchFailed, fetchCompany]);
+  }, [researchJobId, b.researchComplete, b.researchFailed, b.researchNoColors, fetchCompany]);
 
   // Sync local state from company data (render-time adjustment)
   // Use updatedAt as fingerprint so re-sync triggers after research updates the same company
@@ -604,13 +636,13 @@ export default function BrandingSettingsPage() {
   if (company && companyFingerprint && companyFingerprint !== prevCompanyId) {
     const branding = (company.branding ?? {}) as {
       primaryColor?: string;
-      secondaryColor?: string;
+      accentColor?: string;
       logo?: string;
       [key: string]: unknown;
     };
     setPrevCompanyId(companyFingerprint);
-    setLocalPrimaryColor(branding.primaryColor || "#0d9488");
-    setLocalSecondaryColor(branding.secondaryColor || "#1e293b");
+    setLocalPrimaryColor(branding.primaryColor || null);
+    setLocalAccentColor(branding.accentColor || null);
     setLocalFontFamily(
       (branding as Record<string, unknown>).fontFamily as string || "Inter"
     );
@@ -641,11 +673,13 @@ export default function BrandingSettingsPage() {
   async function handleSaveBranding() {
     setIsSaving(true);
     const brandingData: Record<string, unknown> = {
-      primaryColor: localPrimaryColor,
-      secondaryColor: localSecondaryColor,
       fontFamily: localFontFamily,
       instructions: localInstructions,
     };
+    // Unset colors are OMITTED, never sent: Save must not be able to persist a color the
+    // user never chose (the server merge leaves omitted keys untouched).
+    if (localPrimaryColor) brandingData.primaryColor = localPrimaryColor;
+    if (localAccentColor) brandingData.accentColor = localAccentColor;
     if (logoPreview) {
       brandingData.logo = logoPreview;
     }
@@ -665,12 +699,12 @@ export default function BrandingSettingsPage() {
     if (company) {
       const branding = (company.branding ?? {}) as {
       primaryColor?: string;
-      secondaryColor?: string;
+      accentColor?: string;
       logo?: string;
       [key: string]: unknown;
     };
-      setLocalPrimaryColor(branding.primaryColor || "#0d9488");
-      setLocalSecondaryColor(branding.secondaryColor || "#1e293b");
+      setLocalPrimaryColor(branding.primaryColor || null);
+      setLocalAccentColor(branding.accentColor || null);
       setLocalFontFamily(
         (branding as Record<string, unknown>).fontFamily as string || "Inter"
       );
@@ -690,6 +724,7 @@ export default function BrandingSettingsPage() {
     if (!researchUrl.trim()) return;
     setIsResearching(true);
     setResearchStatus("running");
+    setResearchWarnings([]);
     const result = await tryCall(() => api.org.researchBranding({ websiteUrl: researchUrl.trim() }));
     if (result.ok) {
       setResearchJobId(result.data.jobId);
@@ -783,8 +818,25 @@ export default function BrandingSettingsPage() {
           </motion.div>
         )}
 
-        {/* Research complete */}
-        {researchStatus === "complete" && (
+        {/* Research complete - amber when no usable brand color was found (fail-loud: the user
+            must know to set colors manually, not read absence as a successful teal). */}
+        {researchStatus === "complete" && researchWarnings.includes("NO_PRIMARY_COLOR") && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.2 }}
+            className="bg-amber-50 border border-amber-200 rounded-xl p-5 flex items-center space-x-3"
+          >
+            <AlertTriangle size={18} className="text-amber-600 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-800">{b.researchNoColors}</p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                {researchUrl}
+              </p>
+            </div>
+          </motion.div>
+        )}
+        {researchStatus === "complete" && !researchWarnings.includes("NO_PRIMARY_COLOR") && (
           <motion.div
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -891,11 +943,13 @@ export default function BrandingSettingsPage() {
                     label={b.primaryColor}
                     value={localPrimaryColor}
                     onChange={setLocalPrimaryColor}
+                    notSetLabel={b.colorNotSet}
                   />
                   <ColorPicker
                     label={b.accentColor}
-                    value={localSecondaryColor}
-                    onChange={setLocalSecondaryColor}
+                    value={localAccentColor}
+                    onChange={setLocalAccentColor}
+                    notSetLabel={b.colorNotSet}
                   />
                 </div>
               </Card>
@@ -937,7 +991,7 @@ export default function BrandingSettingsPage() {
             <div>
               <BrandPreview
                 primaryColor={localPrimaryColor}
-                secondaryColor={localSecondaryColor}
+                accentColor={localAccentColor}
                 fontFamily={localFontFamily}
                 logoPreview={resolveLogoUrl(logoPreview)}
                 labels={{

@@ -473,6 +473,7 @@ export interface Translations {
       colorScheme: string;
       primaryColor: string;
       accentColor: string;
+      colorNotSet: string;
       typography: string;
       fontSize: string;
       fontFamily: string;
@@ -492,6 +493,7 @@ export interface Translations {
       researchBrand: string;
       researching: string;
       researchComplete: string;
+      researchNoColors: string;
       researchFailed: string;
       researchRunning: string;
       analyzingWebsite: string;

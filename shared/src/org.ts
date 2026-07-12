@@ -104,6 +104,10 @@ export const BrandResearchResult = z
     primaryColor: z.string().optional(),
     accentColor: z.string().optional(),
     secondaryColor: z.string().optional(),
+    /** Company display name read from the site (title / og:site_name / visible text). Applied
+     *  to org.displayName, never merged into branding (the seeded bootstrap name is a
+     *  placeholder research must be able to replace, as the old platform did). */
+    companyName: z.string().optional(),
     websiteUrl: z.string().optional(),
     fonts: z.array(z.string()).optional(),
     fontFamily: z.string().optional(),

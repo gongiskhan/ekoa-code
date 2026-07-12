@@ -11,6 +11,14 @@ export const Job = z
     artifactId: z.string().optional(),
     slug: z.string().optional(),
     createdAt: z.string(),
+    /** brand-research: whether the merge wrote anything onto org.branding. */
+    brandingApplied: z.boolean().optional(),
+    /** brand-research: whether usable brand COLORS were applied. `false` means the site yielded
+     *  no non-neutral color the research could trust — the fail-loud signal the old platform
+     *  raised as NO_PRIMARY_COLOR; the client tells the user to set colors manually. */
+    colorsApplied: z.boolean().optional(),
+    /** brand-research: non-fatal degradation codes (e.g. NO_PRIMARY_COLOR). */
+    warnings: z.array(z.string()).optional(),
     /** The terminal failure cause (F7): the record has always persisted it, but jobView omitted
      *  it, so a failed job looked cause-less to clients. Present only on a failed job. */
     error: z.object({ code: z.string(), message: z.string() }).optional(),

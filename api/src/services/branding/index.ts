@@ -19,11 +19,12 @@ import type { LlmAttribution } from '../../llm/index.js';
 // Re-export the surface the orchestrator + tests consume so they import from one place.
 export { detectSiteBuilder, type SiteBuilder } from './site-builder.js';
 export { trimDesignSystem, isUsableLogoUrl, type DesignSystem, type StoredDesignSystem } from './design-system.js';
-export { scrubBuilderChrome, buildGroundedPrompt, GROUNDED_SYSTEM, KNOWLEDGE_SYSTEM } from './snapshot.js';
+export { scrubBuilderChrome, buildGroundedPrompt, collectAllowedHexes, GROUNDED_SYSTEM, KNOWLEDGE_SYSTEM } from './snapshot.js';
 export { sanitizeBrandColors, isGrayscale } from './color-filter.js';
 export { getBrandAssetsDir, storeSvgLogo } from './brand-assets.js';
 export { pickLogoByVision } from './logo-vision.js';
 export type { ResolveBrandLogoInput, LogoCandidate } from './brand-assets.js';
+export { normalizeHexLike } from './site-context.js';
 export type { SiteContext } from './site-context.js';
 export type { RenderedCandidates, RenderedLogoCandidate } from './rendered-candidates.js';
 export type { VisualVibe } from './visual-vibe.js';

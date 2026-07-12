@@ -97,7 +97,8 @@
         "privacy-grants-ledger",
         "trust-chip",
         "reference-attach",
-        "live-bridge"
+        "live-bridge",
+        "branding-colors"
       ]
     }
   },

@@ -228,6 +228,7 @@ describe('verifyRunner — honest credential-skip (ch07 §7.2.6)', () => {
     // A not-run must NOT claim passed:true — only a real ran+passed verification does (was a bug:
     // the skip returned passed:true, so build.ts surfaced no note and the skip read as "clean").
     expect(verdict.passed).toBe(false);
-    expect(verdict.note).toMatch(/credential unavailable/);
+    // The note is user-facing PT-PT since the bounded-honest-verify change (bc22eb8).
+    expect(verdict.note).toMatch(/credencial de modelo indisponível/);
   });
 });

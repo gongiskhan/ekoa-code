@@ -88,7 +88,7 @@ describe('parseIntegrationOutput', () => {
     const cfg = validConfig({ authType: 'none', configSchema: [] });
     delete (cfg as Record<string, unknown>).credentialGuide; // no-auth needs no guide either
     // drop the credential header the api_key action carried — a no-auth action authenticates nothing
-    (cfg.actions as Array<{ httpConfig: { headers?: unknown } }>)[0].httpConfig.headers = {};
+    (cfg.actions as Array<{ httpConfig: { headers?: unknown } }>)[0]!.httpConfig.headers = {};
     const r = parseIntegrationOutput(withBlocks(JSON.stringify(cfg)));
     expect(r.errors, JSON.stringify(r.errors)).toEqual([]);
     expect(r.pkg?.authType).toBe('none');

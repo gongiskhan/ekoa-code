@@ -23,6 +23,8 @@ import {
   detectSiteBuilder,
   scrubBuilderChrome,
   buildGroundedPrompt,
+  collectAllowedHexes,
+  normalizeHexLike,
   trimDesignSystem,
   sanitizeBrandColors,
   isUsableLogoUrl,
@@ -41,8 +43,14 @@ import { registerRun, removeRun, finalizeOnce } from './registry.js';
 import { JobStreamSink, emitBrandingUpdated } from './streaming.js';
 import { persistJob, patchJob, jobView, type JobRecord } from './jobs.js';
 
-/** Research-metadata keys: ride the job record, never written onto org branding. */
-const RESEARCH_META_KEYS = new Set(['summary', 'confidence', 'status']);
+/** Research-metadata keys: ride the job record, never written onto org branding.
+ *  `companyName` is applied to org.displayName, not branding (§5.6.4). */
+const RESEARCH_META_KEYS = new Set(['summary', 'confidence', 'status', 'companyName']);
+
+/** The fail-loud degradation code (the old platform's NO_PRIMARY_COLOR guard, adapted to the
+ *  port's partial-apply semantics): research finished but produced no usable primary color, so
+ *  the client must tell the user to set colors manually instead of showing plain success. */
+export const WARNING_NO_PRIMARY_COLOR = 'NO_PRIMARY_COLOR';
 
 /**
  * Build the org-branding patch from a validated research result plus the server-attached
@@ -65,32 +73,77 @@ function buildBrandingPatch(
   return patch;
 }
 
+/** The apply-step outcome: what merged, whether COLORS made it, and degradation warnings. */
+export interface AppliedBranding {
+  branding: BrandResearchResult | null;
+  applied: boolean;
+  /** True only when this research wrote a usable primaryColor. */
+  colorsApplied: boolean;
+  /** Non-fatal degradation codes (WARNING_NO_PRIMARY_COLOR) for the job result + stream. */
+  warnings: string[];
+}
+
 /**
  * Parse the model's text into a BrandResearchResult and MERGE the branding-shaped fields (plus
  * the server-attached design system / visual vibe / logo) onto the org's branding. Defined fields
  * only - a research result never wipes an existing value. Unparseable prose is not an error: the
  * job completes with `brandingApplied: false`.
+ *
+ * `allowedHexes` (grounded path only) enforces the system prompt's "every color must appear
+ * literally in a candidate list" rule server-side: a returned color outside the snapshot's
+ * evidence is nulled, never merged - the prompt-only rule left hallucinated colors free to
+ * merge in both the old platform and this port. A research that ends with no usable primary
+ * completes with `colorsApplied: false` + WARNING_NO_PRIMARY_COLOR instead of silent success
+ * (the old platform's fail-loud guard, kept partial-apply so the logo/design-system still land).
+ *
+ * A non-empty `companyName` updates org.displayName (the old platform did this; without it the
+ * seeded bootstrap name - "Founder" - shows forever as if it were a research result).
+ *
+ * Exported for unit tests (the deterministic half of the research flow).
  */
-async function applyResearchedBranding(
+export async function applyResearchedBranding(
   actor: Actor,
   text: string,
   extras: { logo?: string | null; designSystem?: StoredDesignSystem; visualVibe?: VisualVibe | null },
-): Promise<{ branding: BrandResearchResult | null; applied: boolean }> {
+  allowedHexes?: Set<string>,
+): Promise<AppliedBranding> {
   const parsed = parseFirstJsonObject(text);
-  if (!parsed) return { branding: null, applied: false };
+  if (!parsed) return { branding: null, applied: false, colorsApplied: false, warnings: [WARNING_NO_PRIMARY_COLOR] };
   const validated = BrandResearchResult.safeParse(parsed);
-  if (!validated.success) return { branding: null, applied: false };
+  if (!validated.success) return { branding: null, applied: false, colorsApplied: false, warnings: [WARNING_NO_PRIMARY_COLOR] };
 
   // Sanitize a CLONE for the patch (a hallucinated grayscale primary is dropped), leaving the
   // job-result `branding` pristine so it still validates against the shared schema.
-  const forPatch = sanitizeBrandColors({ ...validated.data });
+  const forPatch: BrandResearchResult = { ...validated.data };
+  if (allowedHexes) {
+    for (const key of ['primaryColor', 'secondaryColor', 'accentColor'] as const) {
+      const value = forPatch[key];
+      if (typeof value !== 'string') continue;
+      const norm = normalizeHexLike(value);
+      if (!norm || !allowedHexes.has(norm)) {
+        console.warn(`[brand-research] dropped ${key} ${value}: not in the snapshot's candidate evidence`);
+        (forPatch as Record<string, unknown>)[key] = null;
+      }
+    }
+  }
+  sanitizeBrandColors(forPatch);
   const patch = buildBrandingPatch(forPatch, extras);
-  if (Object.keys(patch).length === 0) return { branding: validated.data, applied: false };
+
+  const warnings: string[] = [];
+  const colorsApplied = typeof patch.primaryColor === 'string' && patch.primaryColor !== '';
+  if (!colorsApplied) warnings.push(WARNING_NO_PRIMARY_COLOR);
+
+  const companyName = typeof validated.data.companyName === 'string' ? validated.data.companyName.trim() : '';
+  if (Object.keys(patch).length === 0 && !companyName) {
+    return { branding: validated.data, applied: false, colorsApplied, warnings };
+  }
 
   const org = await getOrg(actor.orgId);
   const merged = { ...((org?.branding as Record<string, unknown>) ?? {}), ...patch };
-  const updated = await updateOrg(actor.orgId, { branding: merged });
-  return { branding: validated.data, applied: Boolean(updated) };
+  const orgPatch: Record<string, unknown> = { branding: merged };
+  if (companyName) orgPatch.displayName = companyName;
+  const updated = await updateOrg(actor.orgId, orgPatch);
+  return { branding: validated.data, applied: Boolean(updated) && Object.keys(patch).length > 0, colorsApplied, warnings };
 }
 
 export interface BrandResearchInput {
@@ -139,6 +192,8 @@ async function gatherSnapshot(
   logoPreStored: Array<{ localPath: string; filename: string; size: number; score: number }>;
   /** Rendered header strip - the vision ground truth for the logo pick. */
   headerShot: Buffer | null;
+  /** Every hex the snapshot evidence contains - the apply-step's membership guard. */
+  allowedHexes: Set<string>;
 }> {
   const pipeline = getBrandingPipeline();
   const builder = detectSiteBuilder(site.finalUrl, site.generator);
@@ -152,7 +207,9 @@ async function gatherSnapshot(
   ]);
 
   const scrubbed = scrubBuilderChrome(site, rendered, designSystemRaw, builder);
-  const prompt = buildGroundedPrompt({ site: scrubbed.site, rendered, designSystem: scrubbed.designSystem, visualVibe, builder });
+  const snapshotInput = { site: scrubbed.site, rendered, designSystem: scrubbed.designSystem, visualVibe, builder };
+  const prompt = buildGroundedPrompt(snapshotInput);
+  const allowedHexes = collectAllowedHexes(snapshotInput);
 
   // Logo hints, strongest first: what the RENDERED page shows as the logo (URL candidates +
   // inline SVGs stored immediately), then dembrandt's pick, then derived assets (favicons,
@@ -180,6 +237,7 @@ async function gatherSnapshot(
     logoHints,
     logoPreStored,
     headerShot: rendered.headerShot ?? null,
+    allowedHexes,
   };
 }
 
@@ -210,6 +268,8 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
     let logoHints: Array<{ url: string; source: string; score?: number }> = [];
     let logoPreStored: Array<{ localPath: string; filename: string; size: number; score: number }> = [];
     let headerShot: Buffer | null = null;
+    // Grounded runs enforce candidate membership; the knowledge path proposes by design.
+    let allowedHexes: Set<string> | undefined;
 
     if (reachable && site) {
       // 2-3) Parallel signal gathering + grounded snapshot.
@@ -222,6 +282,7 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
       logoHints = snap.logoHints;
       logoPreStored = snap.logoPreStored;
       headerShot = snap.headerShot;
+      allowedHexes = snap.allowedHexes;
     } else {
       // Honest degradation: no snapshot, knowledge-only proposals.
       sink.planStep('running', 'Site inacessível - a propor identidade a partir de conhecimento de marca.');
@@ -268,20 +329,33 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
     if (abort.signal.aborted) { removeRun(jobId); return; }
 
     // 5) Parse + merge-write onto org branding (colours/fonts/tone/instructions + designSystem +
-    // visualVibe + logo). This is the persistence step the pre-port research skipped.
-    const { branding, applied } = await applyResearchedBranding(input.actor, finalText, { logo, designSystem, visualVibe });
+    // visualVibe + logo + displayName). This is the persistence step the pre-port research skipped.
+    const { branding, applied, colorsApplied, warnings } = await applyResearchedBranding(
+      input.actor,
+      finalText,
+      { logo, designSystem, visualVibe },
+      allowedHexes,
+    );
     // Live brand refresh: the header logo/theme must follow WITHOUT a page reload
     // (operator report 2026-07-11: "kept the old brand until a refresh").
     if (applied) emitBrandingUpdated(input.actor.userId);
 
     if (finalizeOnce(jobId)) {
-      sink.complete({ result: finalText }, input.deps.now() - start);
+      // The fail-loud outcome rides the complete event's free-form `result` (JobEvent keeps its
+      // union shape) so the client can distinguish "researched colors" from "set them manually".
+      sink.complete(
+        { result: { text: finalText, brandingApplied: applied, colorsApplied, warnings } },
+        input.deps.now() - start,
+      );
       await patchJob(jobId, {
         status: 'completed',
         result: {
           text: finalText,
           branding: (branding ?? undefined) as Record<string, unknown> | undefined,
           brandingApplied: applied,
+          // The fail-loud color outcome (old NO_PRIMARY_COLOR guard, partial-apply form).
+          colorsApplied,
+          ...(warnings.length > 0 ? { warnings } : {}),
           // Honest signal for the job viewer: whether the site could be read.
           siteReachable: reachable,
         },

@@ -35,11 +35,15 @@ export interface BrandColors {
 }
 
 /**
- * Replace a grayscale primary/secondary with a distinctive alternative, mutating
- * and returning the input. Primary: promote a non-gray accent, else a non-gray
- * secondary, else drop it (null) so the caller's "no usable primary" guard trips
- * rather than persisting a gray. Secondary grayscale is dropped to null (never a
- * fabricated default - the merge keeps any prior value).
+ * Replace a grayscale primary/secondary/accent with a distinctive alternative,
+ * mutating and returning the input. Primary: promote a non-gray accent, else a
+ * non-gray secondary, else drop it (null) so the caller's no-usable-primary
+ * guard trips rather than persisting a gray. Grayscale secondary and accent are
+ * dropped to null (never a fabricated default - the merge keeps any prior
+ * value). The accent rule runs LAST: a gray demoted into the accent slot by the
+ * promotion swap is dropped too - no slot ever persists a neutral (observed
+ * live 2026-07-12: gray #9d9d9d survived as the org accent while primary and
+ * secondary were correctly dropped).
  */
 export function sanitizeBrandColors<T extends BrandColors>(branding: T): T {
   if (!branding) return branding;
@@ -62,6 +66,11 @@ export function sanitizeBrandColors<T extends BrandColors>(branding: T): T {
   const secondaryNow = branding.secondaryColor;
   if (typeof secondaryNow === 'string' && isGrayscale(secondaryNow)) {
     branding.secondaryColor = null;
+  }
+
+  const accentNow = branding.accentColor;
+  if (typeof accentNow === 'string' && isGrayscale(accentNow)) {
+    branding.accentColor = null;
   }
 
   return branding;

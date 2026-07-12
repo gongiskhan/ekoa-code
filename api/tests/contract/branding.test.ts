@@ -20,7 +20,7 @@ import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
-import { BrandingResearchResponse, BrandResearchResult, OrgConfig, ErrorEnvelope } from '@ekoa/shared';
+import { BrandingResearchResponse, BrandResearchResult, OrgConfig, ErrorEnvelope, Job } from '@ekoa/shared';
 
 /**
  * F4 (batch-1 S6): the branding surface must live at its CONTRACT paths.
@@ -135,6 +135,31 @@ describe('PUT /api/v1/branding (the contract path)', () => {
     expect(res.status).toBe(400);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
   });
+
+  it('MERGES onto existing branding - a dashboard Save never wipes research outputs (pre-fix: updateOrg replaced branding wholesale)', async () => {
+    await mkUser('admin', 'org-admin');
+    await orgs.update('orgA', (o) => ({
+      ...o,
+      branding: {
+        primaryColor: '#2a3547',
+        toneOfVoice: 'sóbrio e profissional',
+        designSystem: { palette: [{ hex: '#2a3547', count: 10, confidence: 'high', sources: ['header'] }] },
+        visualVibe: { mood: 'clássico', bullets: [], shape: 'angular', density: 'balanced', texture: 'photo', hero: 'overlay escuro' },
+      },
+    }));
+    const t = await tokenFor('admin');
+    // The dashboard sends only its editable fields - here, just a font change.
+    const res = await authed('/api/v1/branding', t, { method: 'PUT', body: JSON.stringify({ branding: { fontFamily: 'Lora' } }) });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(OrgConfig.safeParse(body).success).toBe(true);
+    const b = body.branding as Record<string, unknown>;
+    expect(b.fontFamily).toBe('Lora');
+    expect(b.primaryColor).toBe('#2a3547'); // untouched
+    expect(b.toneOfVoice).toBe('sóbrio e profissional'); // untouched
+    expect((b.designSystem as { palette?: unknown[] }).palette).toHaveLength(1); // survived the save
+    expect((b.visualVibe as { mood?: string }).mood).toBe('clássico'); // survived the save
+  });
 });
 
 describe('POST /api/v1/branding/research', () => {
@@ -218,7 +243,13 @@ describe('POST /api/v1/branding/research', () => {
       url: 'https://marca.pt/',
       extractedAt: 'x',
       colors: {
-        palette: [{ color: '#0d9488', normalized: '#0d9488', count: 200, confidence: 'high', sources: ['button'] }],
+        // Every hex the fake model returns must exist in the snapshot evidence: the apply-step
+        // now enforces the literal-candidates rule server-side and drops out-of-snapshot colors.
+        palette: [
+          { color: '#0d9488', normalized: '#0d9488', count: 200, confidence: 'high', sources: ['button'] },
+          { color: '#1032cf', normalized: '#1032cf', count: 60, confidence: 'medium', sources: ['link'] },
+          { color: '#f0b11a', normalized: '#f0b11a', count: 30, confidence: 'medium', sources: ['icon'] },
+        ],
         cssVariables: { '--primary': { value: '#0d9488' } },
       },
       // dembrandt 0.23 typography spellings, to prove the normalization survives persistence.
@@ -278,6 +309,138 @@ describe('POST /api/v1/branding/research', () => {
     // Research metadata never rides branding.
     expect(b.summary).toBeUndefined();
     expect(b.confidence).toBeUndefined();
+  });
+
+  it('a grounded site with only NEUTRAL evidence completes fail-loud: colorsApplied false + NO_PRIMARY_COLOR, org stays colorless (live 2026-07-12: silent success read as a teal research result)', async () => {
+    await mkUser('admin', 'org-admin');
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    __setBrandingPipelineForTests({
+      fetchSiteContext: async (url) => ({ ...unreachableSite(url), ok: true, status: 200, textSample: 'Advogada.' }),
+      fetchRenderedCandidates: async () => okRendered, // render ran; nothing non-neutral painted
+      fetchDesignSystem: async () => null,
+      fetchVisualVibe: async () => null,
+      resolveBrandLogo: async () => '/brand-assets/mono.webp',
+    });
+    // A compliant model on an all-neutral snapshot can only return neutrals.
+    __setTransportForTests(makeFakeTransport({
+      oneShotText: JSON.stringify({ websiteUrl: 'https://mono.pt/', primaryColor: '#ffffff', secondaryColor: '#000000', accentColor: '#9d9d9d', confidence: 'medium' }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://mono.pt' }) });
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+    const jr = job?.result as { brandingApplied?: boolean; colorsApplied?: boolean; warnings?: string[] };
+    expect(jr.brandingApplied).toBe(true); // the logo still landed - partial apply
+    expect(jr.colorsApplied).toBe(false); // fail-loud: the user must set colors manually
+    expect(jr.warnings).toContain('NO_PRIMARY_COLOR');
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    const b = orgBody.branding as Record<string, unknown>;
+    expect(b.primaryColor).toBeUndefined();
+    expect(b.secondaryColor).toBeUndefined();
+    expect(b.accentColor).toBeUndefined(); // the gray accent is dropped too now
+    expect(b.logo).toBe('/brand-assets/mono.webp');
+    // The exact defect: the old platform default teal must appear NOWHERE in the org record.
+    expect(JSON.stringify(orgBody)).not.toContain('0d9488');
+
+    // GET /jobs/:id carries the fail-loud outcome for clients that missed the stream event,
+    // and still validates the shared Job schema.
+    const jobBody = await readJson(await authed(`/api/v1/jobs/${jobId}`, t));
+    expect(Job.safeParse(jobBody).success).toBe(true);
+    expect(jobBody.colorsApplied).toBe(false);
+    expect(jobBody.warnings).toContain('NO_PRIMARY_COLOR');
+  });
+
+  it('a returned color ABSENT from the snapshot evidence is dropped, never merged (server-side literal-candidates enforcement)', async () => {
+    await mkUser('admin', 'org-admin');
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    __setBrandingPipelineForTests({
+      fetchSiteContext: async (url) => ({ ...unreachableSite(url), ok: true, status: 200 }),
+      // The only non-neutral evidence is the pixel-sampled navy.
+      fetchRenderedCandidates: async () => ({
+        ...okRendered,
+        screenshotCandidates: [{ hex: '#2a3547', count: 9_000, bucket: 'blue' as const, saturation: 0.26, lightness: 0.22, brandFit: 0.26, source: 'screenshot' as const }],
+      }),
+      fetchDesignSystem: async () => null,
+      fetchVisualVibe: async () => null,
+      resolveBrandLogo: async () => null,
+    });
+    // The model hallucinates the old platform teal instead of picking from the snapshot.
+    __setTransportForTests(makeFakeTransport({
+      oneShotText: JSON.stringify({ websiteUrl: 'https://firma.pt/', primaryColor: '#0d9488', confidence: 'high' }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://firma.pt' }) });
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+    expect((job?.result as { colorsApplied?: boolean }).colorsApplied).toBe(false);
+    expect((job?.result as { warnings?: string[] }).warnings).toContain('NO_PRIMARY_COLOR');
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    expect((orgBody.branding as Record<string, unknown> | undefined)?.primaryColor).toBeUndefined();
+    expect(JSON.stringify(orgBody)).not.toContain('0d9488');
+  });
+
+  it('an imagery-branded site: the pixel-sampled navy is legitimate evidence and merges as primary (screenshot fallback)', async () => {
+    await mkUser('admin', 'org-admin');
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    __setBrandingPipelineForTests({
+      fetchSiteContext: async (url) => ({ ...unreachableSite(url), ok: true, status: 200 }),
+      fetchRenderedCandidates: async () => ({
+        ...okRendered,
+        screenshotCandidates: [{ hex: '#2a3547', count: 9_000, bucket: 'blue' as const, saturation: 0.26, lightness: 0.22, brandFit: 0.26, source: 'screenshot' as const }],
+      }),
+      fetchDesignSystem: async () => null,
+      fetchVisualVibe: async () => null,
+      resolveBrandLogo: async () => null,
+    });
+    __setTransportForTests(makeFakeTransport({
+      oneShotText: JSON.stringify({ websiteUrl: 'https://firma.pt/', primaryColor: '#2a3547', confidence: 'medium' }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://firma.pt' }) });
+    const { jobId } = (await readJson(res)) as { jobId: string };
+
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+    const jr = job?.result as { colorsApplied?: boolean; warnings?: string[] };
+    expect(jr.colorsApplied).toBe(true);
+    expect(jr.warnings ?? []).not.toContain('NO_PRIMARY_COLOR');
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    expect((orgBody.branding as Record<string, unknown>).primaryColor).toBe('#2a3547');
+  });
+
+  it('a researched companyName updates org.displayName (the seeded bootstrap name is replaceable) and never rides branding', async () => {
+    await mkUser('admin', 'org-admin');
+    await setCredential({ mode: 'oauth', secret: 'tok' });
+    // Knowledge path (default unreachable pipeline): proposals are unconstrained by evidence.
+    __setTransportForTests(makeFakeTransport({
+      oneShotText: JSON.stringify({
+        websiteUrl: 'https://mariliasantoscabral.webnode.pt/',
+        companyName: 'Marília Santos Cabral Advogada R.L.',
+        primaryColor: '#2a3547',
+        confidence: 'medium',
+      }),
+    }));
+
+    const t = await tokenFor('admin');
+    const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://mariliasantoscabral.webnode.pt' }) });
+    const { jobId } = (await readJson(res)) as { jobId: string };
+    const job = await awaitJobDone(jobId);
+    expect(job?.status, JSON.stringify(job)).toBe('completed');
+
+    const orgBody = await readJson(await authed('/api/v1/org', t));
+    expect(orgBody.displayName).toBe('Marília Santos Cabral Advogada R.L.');
+    expect((orgBody.branding as Record<string, unknown>).companyName).toBeUndefined(); // metadata, not branding
+    expect((orgBody.branding as Record<string, unknown>).primaryColor).toBe('#2a3547');
   });
 
   it('prose-only research output completes WITHOUT touching org branding (brandingApplied false)', async () => {

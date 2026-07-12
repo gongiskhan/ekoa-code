@@ -21,9 +21,10 @@ function fakeMechanics(over: Partial<BuildMechanics> = {}): { mech: BuildMechani
   const calls = { persistSdkSessionId: [] as Array<[string, string]>, activate: 0 };
   const mech: BuildMechanics = {
     async prepareFirstBuild() { return { artifactId: 'artNew', projectDir: '/pd', slug: 'my-app', appUrl: 'http://app' }; },
-    async resolveFollowUp() { return { projectDir: '/pd', resumeSessionId: 'old-sess' }; },
+    async resolveFollowUp() { return { projectDir: '/pd', resumeSessionId: 'old-sess', slug: 'my-app', appUrl: 'http://app' }; },
     async finalizeBundle() { return { ok: true }; },
     async snapshot() {},
+    async watchRebuilds() {},
     screenshot() {},
     async persistSdkSessionId(id, sid) { calls.persistSdkSessionId.push([id, sid]); },
     async activateArtifact() { calls.activate++; },

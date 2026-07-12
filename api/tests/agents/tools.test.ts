@@ -14,7 +14,8 @@ describe('toolPolicyFor (§5.4.4)', () => {
     for (const t of CODING_PRESET) expect(p.allowedTools).toContain(t);
     for (const t of KNOWLEDGE_TOOLS) expect(p.allowedTools).toContain(t);
     expect(p.allowedTools).toContain(DELEGATION_TOOL);
-    expect(p.maxTurns).toBe(100);
+    // The config default (MAX_TURNS_BUILD, config.ts) — raised from 100 to 500 for real builds.
+    expect(p.maxTurns).toBe(500);
   });
 
   it('a text+attachments run allows only Read/Glob/Grep', () => {

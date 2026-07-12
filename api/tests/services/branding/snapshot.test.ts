@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scrubBuilderChrome, buildGroundedPrompt } from '../../../src/services/branding/snapshot.js';
+import { scrubBuilderChrome, buildGroundedPrompt, collectAllowedHexes } from '../../../src/services/branding/snapshot.js';
 import { extractColorCandidates, type SiteContext } from '../../../src/services/branding/site-context.js';
 import { SITE_BUILDERS } from '../../../src/services/branding/site-builder.js';
 import type { RenderedCandidates } from '../../../src/services/branding/rendered-candidates.js';
@@ -108,5 +108,66 @@ describe('buildGroundedPrompt', () => {
     // The guidance text references "Vibe visual" unconditionally; the SECTION header (## ...) is
     // what's absent when there is no vibe.
     expect(prompt).not.toContain('## Vibe visual');
+  });
+
+  it('injects the pixel-sampled section + rule when the render surfaced screenshot candidates (imagery-branded site)', () => {
+    // Live 2026-07-12 (mariliasantoscabral.webnode.pt): the navy exists only inside the hero
+    // JPEG; without this section the prompt offered exactly four grayscale hexes and the model
+    // could only return neutrals.
+    const site = makeSite({ generator: null, colorCandidates: [] });
+    const rendered: RenderedCandidates = {
+      ...emptyRendered,
+      ok: true,
+      screenshotCandidates: [
+        { hex: '#2a3547', count: 9_000, bucket: 'blue', saturation: 0.26, lightness: 0.22, brandFit: 0.26, source: 'screenshot' },
+      ],
+    };
+    const prompt = buildGroundedPrompt({ site, rendered, designSystem: null, visualVibe: null, builder: null });
+    expect(prompt).toContain('## Cores amostradas dos píxeis da página');
+    expect(prompt).toContain('#2a3547');
+    // The neutral ban + the pixel preference rule ride the color rules.
+    expect(prompt).toContain('NUNCA serve como primaryColor');
+    expect(prompt).toContain('usa a PRIMEIRA entrada não-neutra dessa secção como primaryColor');
+  });
+
+  it('omits the pixel section when the computed-style walk painted real colors', () => {
+    const site = makeSite({ generator: null });
+    const prompt = buildGroundedPrompt({ site, rendered: emptyRendered, designSystem: null, visualVibe: null, builder: null });
+    expect(prompt).not.toContain('## Cores amostradas dos píxeis da página');
+  });
+});
+
+describe('collectAllowedHexes', () => {
+  it('gathers every snapshot-evidence hex (site CSS, theme-color, rendered, screenshot, design-system palette + css vars), normalized', () => {
+    const site = makeSite({ generator: null, themeColor: '#ABC' }); // 3-digit uppercase -> #aabbcc
+    const rendered: RenderedCandidates = {
+      ...emptyRendered,
+      ok: true,
+      candidates: [{ hex: '#1032cf', count: 100, bucket: 'blue', saturation: 0.8, lightness: 0.44, brandFit: 0.8, source: 'rendered-area' }],
+      screenshotCandidates: [{ hex: '#2a3547', count: 9_000, bucket: 'blue', saturation: 0.26, lightness: 0.22, brandFit: 0.26, source: 'screenshot' }],
+    };
+    const ds: DesignSystem = {
+      url: 'https://site.pt/',
+      extractedAt: 'x',
+      colors: {
+        palette: [{ color: '#F0B11A', normalized: '#f0b11a', count: 10, confidence: 'medium', sources: ['icon'] }],
+        cssVariables: { '--brand': { value: '#00AA88' } },
+      },
+    };
+    const allowed = collectAllowedHexes({ site, rendered, designSystem: ds, visualVibe: null, builder: null });
+    expect(allowed.has('#aabbcc')).toBe(true); // theme-color, expanded + lowercased
+    expect(allowed.has('#1032cf')).toBe(true); // rendered
+    expect(allowed.has('#2a3547')).toBe(true); // screenshot fallback
+    expect(allowed.has('#f0b11a')).toBe(true); // palette
+    expect(allowed.has('#00aa88')).toBe(true); // css variable, lowercased
+    expect(allowed.has('#0d9488')).toBe(true); // the site CSS scan fixture carries the teal literal
+    // Nothing outside the evidence.
+    expect(allowed.has('#123456')).toBe(false);
+  });
+
+  it('yields an empty set for an evidence-free snapshot (nothing is ever allowed by default)', () => {
+    const site = makeSite({ generator: null, colorCandidates: [], themeColor: null });
+    const allowed = collectAllowedHexes({ site, rendered: emptyRendered, designSystem: null, visualVibe: null, builder: null });
+    expect(allowed.size).toBe(0);
   });
 });

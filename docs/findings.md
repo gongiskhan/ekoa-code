@@ -112,6 +112,63 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-12 brand research colors (operator round 3)
+
+- **`brand-colors-fake-teal`** (operator-reported, 2026-07-12) - research on
+  mariliasantoscabral.webnode.pt showed primary `#0d9488` (teal-600, the OLD platform default) on a
+  navy/white site with no teal anywhere. Root-cause forensics (live DB + job records + a live
+  extraction probe) proved the teal never existed in the pipeline, the model output, or the org
+  record: it was the branding page's HARDCODED display fallbacks (`#0d9488`/`#1e293b`) rendered
+  whenever `org.branding` lacked colors - indistinguishable from a research result, and
+  `handleSaveBranding` would persist them verbatim on Guardar. Fixed: unset colors are `null` state
+  end-to-end (explicit "Não definida" swatch/placeholder, neutral preview placeholders), Save OMITS
+  unset colors, and the exact pair appears nowhere. Tests: `web/e2e/branding-colors.spec.ts`.
+- **`brand-research-silent-no-color`** (same run) - the research flow structurally could not produce
+  a color for this site yet reported success: the grounded snapshot contained ONLY grayscale hexes,
+  the model complied, `sanitizeBrandColors` nulled them, the patch dropped the nulls, and the job
+  completed `brandingApplied:true` with no signal (the old cortex NO_PRIMARY_COLOR fail-loud guard
+  was never ported - color-filter.ts's own comment referenced a "no usable primary guard" that did
+  not exist). Fixed as partial-apply-with-warning: the job result + complete event + `jobView` carry
+  `colorsApplied` and `warnings: [NO_PRIMARY_COLOR]`; the web shows an amber "defina-as manualmente"
+  banner/toast instead of green success. Tests: `api/tests/contract/branding.test.ts` (fail-loud
+  monochrome case), shared `Job` schema extended.
+- **`brand-colors-image-only-blind`** (same run, the actual extraction gap) - the firm's navy lives
+  ONLY as pixels in the hero JPEG; the rendered walker samples computed styles, so `paintedHexes`
+  came back empty, the Webnode builder scrub then intersected the CSS candidates against that empty
+  set and wiped all 8, leaving the model four grayscale hexes. Fixed with a screenshot-PIXEL
+  quantization fallback in `rendered-candidates.ts` (fires only when nothing non-neutral paints;
+  in-page canvas quantization of the Playwright screenshot - a data: image, so no cross-origin
+  taint), surfaced as an explicitly low-confidence "Cores amostradas dos píxeis" prompt section with
+  a neutral-ban rule, deliberately exempt from the brandFit floor (the desaturated navy ~0.26 is the
+  point). Live-verified against the real site: research now persists primary `#374559` (the actual
+  hero navy) and no neutrals. Tests: `api/tests/services/branding/rendered-candidates.test.ts`
+  (`screenshotClustersToCandidates`), `snapshot.test.ts` (pixel section + rules).
+- **`brand-colors-no-membership-guard`** (found during the fix, latent in old cortex too) - the
+  "every returned hex must appear literally in a candidate list" rule was prompt-only; a
+  hallucinated saturated color would have merged unchecked. Fixed: `collectAllowedHexes` gathers the
+  snapshot evidence and the apply-step NULLS any returned color outside it (grounded path only).
+  Tests: `api/tests/contract/branding.test.ts` (out-of-snapshot teal dropped),
+  `snapshot.test.ts` (`collectAllowedHexes`).
+- **`sanitize-accent-gap`** (same run) - `sanitizeBrandColors` never checked `accentColor`, so gray
+  `#9d9d9d` persisted as the org accent; and the promotion swap PARKED the demoted gray in the
+  accent slot. Fixed: a grayscale accent is nulled last (no slot ever persists a neutral). Tests:
+  `api/tests/services/branding/color-filter.test.ts`.
+- **`branding-save-wholesale-wipe`** (found during the fix) - `saveBrandingHandler` passed the
+  client's 4-field branding object straight to `updateOrg`, which replaces top-level keys wholesale:
+  every dashboard Guardar silently WIPED `designSystem`/`visualVibe`/researched fields. Fixed: the
+  handler merges onto existing branding (same semantics as the research apply-step). Test:
+  `api/tests/contract/branding.test.ts` (save-merge case).
+- **`accent-picker-secondary-binding`** (same run) - the "Cor de Destaque" picker was bound to
+  `secondaryColor`, so the persisted `accentColor` was never displayed and Save wrote the fallback
+  slate into `secondaryColor` under an accent label. Fixed: the accent picker binds `accentColor`.
+  Test: `web/e2e/branding-colors.spec.ts` (accent stays unset when only primary is saved).
+- **`founder-name-never-updated`** (operator-visible in the same screenshot) - "Founder" is the
+  seedAdmin bootstrap displayName; `BrandResearchResult` had no `companyName` field, so research
+  could never replace it (old cortex wrote displayName from the extracted companyName). Fixed:
+  `companyName` added to the shared schema + both system prompts, applied to `org.displayName`
+  (never merged into branding, via `RESEARCH_META_KEYS`). Live-verified: displayName became
+  "Marília Santos Cabral". Test: `api/tests/contract/branding.test.ts` (companyName case).
+
 ## Recently fixed - 2026-07-11 operator round 2 (build surface + verify + logo)
 
 - **`verify-runner-portscan-hang`** (operator-reported, 2026-07-11) - a simple flyer build sat in
