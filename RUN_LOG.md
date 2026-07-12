@@ -55,3 +55,14 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - reviews: fresh-context approve (12+ citations spot-checked, zero wrong; A4 arithmetic re-derived); codex gpt-5.5/high 8 findings ALL REBUTTED (descriptions of existing mechanisms, not new security design). Batching note: one review + one codex call covered the five docs slices; per-slice records point at the shared evidence.
 - minor non-blocking notes carried to LANDING: A4 did not literally grep the archived spec tag (seam evidence suffices); A4 judgment-rows foot 14 chars off headline (flagged ~ estimates).
 - ledger: passed 6/31 · blocked 0 · buildable-remaining 25.
+
+## DECISION 2026-07-12T17:34:44Z — J3-live failure classified INFRA-FLAKE (no ceiling cost to B1)
+- First J3 build1 died ADAPTER_ERROR on a stack provisioned from the legacy ~/.ekoa/claude-auth.json snapshot (rotating-token class, matches the 2026-07-09 boot-b flake). B1's diff is inert on that path (no templateId ⇒ identical system prompt) — verified by a hung minimal chat probe independent of the build pipeline. Remediation: switched to the SANCTIONED dedicated-account bring-up (boot-b.mjs up; claudeAuth.ok=true mode=oauth). Flake recorded in docs/known-flakes.md + docs/autothing/known-flakes.md. J3 re-running on the credentialed stack.
+- Note for the LANDING packet: the auto-mode classifier denied generic credential-store scanning during remediation (three denials logged verbatim in-transcript); the final path used only the repo's own committed harness. No credential material ever reached the transcript.
+
+## GATE 2026-07-12T17:43:57Z — B1 (base registry + loader + build-flow selection) — PASSED
+- green: loader (zod manifest, closed enum, fail-loud) + templateId selection + templateScaffoldFiles consumption + extends persistence + prompt-section seam threading (first+follow-up); default path proven byte-identical; generic starters intact.
+- evidence: commits e879e06 + d1247b4 (tag operator/b1); 7/7 tests; J3 live 14 PASS 0 FAIL on the dedicated-credential stack (earlier ADAPTER_ERROR classified INFRA-FLAKE, see DECISION above); slices/B1/{gate-status.json,review-verdict.md,b1-evidence.cast}.
+- reviews: fresh-context approve (independent evidence incl. imports/diagram/emoji sweeps); codex gpt-5.5/high 1 finding accepted+fixed with a determinism-ratchet regression test, 2 rebutted.
+- duration: ~50 min wall (incl. the credential-infra remediation); models: fable-5 lead + fresh reviewer, gpt-5.5 codex.
+- ledger: passed 7/31 · blocked 0 · buildable-remaining 24.

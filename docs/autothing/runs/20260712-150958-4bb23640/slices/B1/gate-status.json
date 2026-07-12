@@ -1,0 +1,56 @@
+{
+  "slice": "B1",
+  "kind": "api",
+  "commit": "d1247b4 (e879e06+fix)",
+  "tag": "operator/b1",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T17:43:57Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "7/7 committed tests (loader unit + real-scaffold integration); api typecheck x2; eslint; chokepoint+semgrep gates; J3 live 14 PASS 0 FAIL (build1 completed 86s, served plane green) after infra-flake remediation (dedicated-credential boot-b)",
+      "at": "2026-07-12T17:43:57Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean both commits; semgrep exit 0",
+      "at": "2026-07-12T17:43:57Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/B1/review-verdict.md",
+      "at": "2026-07-12T17:43:57Z"
+    },
+    "codexSliceReview": {
+      "status": "passed-after-fix",
+      "verdict": "needs-work: 3 findings; 1 ACCEPTED+FIXED (silent-drop of '..'-bearing base paths -> fail-loud + regression test, d1247b4), 2 REBUTTED (2MB caps on repo-authored manifest/markdown: immaterial, zod bounds the manifest)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 69182,
+      "at": "2026-07-12T17:43:57Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 batched run-level pass)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/B1/b1-evidence.cast",
+      "videoSha256": "17f9ae98f3ce1cb28177168275e07d39d51cc1c7373b6185afe5fb7f074a63a4",
+      "videoBytes": 2555,
+      "verifyDetail": "replay shows commits, 7/7 tests, J3 14 PASS",
+      "at": "2026-07-12T17:43:57Z"
+    }
+  },
+  "status": "passed"
+}

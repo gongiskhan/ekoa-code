@@ -71,6 +71,20 @@
       "tag": "operator/a-group",
       "gateStatus": "slices/A5/gate-status.json",
       "deliverable": "memos/{registry,tour-format,base-set}.md"
+    },
+    "B1": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "d1247b4",
+      "tag": "operator/b1",
+      "gateStatus": "slices/B1/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/B1/b1-evidence.cast",
+        "videoSha256": "17f9ae98f3ce1cb28177168275e07d39d51cc1c7373b6185afe5fb7f074a63a4",
+        "videoBytes": 2555
+      }
     }
   },
   "globalGate": {
