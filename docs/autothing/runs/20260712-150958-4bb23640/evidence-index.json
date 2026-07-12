@@ -141,6 +141,20 @@
         "videoSha256": "d3355dd8c1833b992fa65b9d0968b94b2a943147fc64ac040d0620c712587632",
         "videoBytes": 1580
       }
+    },
+    "C4": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "88e027d",
+      "tag": "operator/c4",
+      "gateStatus": "slices/C4/gate-status.json",
+      "video": {
+        "mode": "asciinema",
+        "status": "verified",
+        "path": "slices/C4/c4-evidence.cast",
+        "videoSha256": "e9a77a3633b3ac6b69481f8f296b5c85b3d01602a6f338992a5f0ae52b2b397a",
+        "videoBytes": 1086
+      }
     }
   },
   "globalGate": {

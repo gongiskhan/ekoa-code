@@ -1,0 +1,55 @@
+{
+  "slice": "C4",
+  "kind": "api",
+  "commit": "88e027d",
+  "tag": "operator/c4",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-12T19:35:00Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "5 committed tests incl. real-store audit round-trip (mongo-mem, ids-only metadata asserted); typecheck x2; eslint; chokepoint",
+      "at": "2026-07-12T19:35:00Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks pre-commit clean",
+      "at": "2026-07-12T19:35:00Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "approve",
+      "by": "fresh-context agent",
+      "actualModel": "claude-fable-5",
+      "evidence": "slices/C4/review-verdict.md",
+      "at": "2026-07-12T19:35:00Z"
+    },
+    "codexSliceReview": {
+      "status": "passed",
+      "verdict": "approve (0 findings)",
+      "actualModel": "gpt-5.5",
+      "effort": "high",
+      "tokens": 52956,
+      "at": "2026-07-12T19:35:00Z"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (api \u2014 batched run-level pass)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional (api)"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "mode": "asciinema",
+      "evidence": "slices/C4/c4-evidence.cast",
+      "videoSha256": "e9a77a3633b3ac6b69481f8f296b5c85b3d01602a6f338992a5f0ae52b2b397a",
+      "videoBytes": 1086,
+      "at": "2026-07-12T19:35:00Z"
+    }
+  },
+  "status": "passed"
+}

@@ -95,3 +95,8 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - reviews: codex 2 findings accepted+fixed (0137e54); fresh-context approve.
 - note: live emission of ui_actions by the coding agent awaits the base instructions slice (C3 teaches the declaration); C2's capture is unit-proven.
 - ledger: passed 11/31 · blocked 0 · buildable-remaining 20.
+
+## GATE 2026-07-12T19:35:00Z — C4 (assistant tool definitions from manifest + audit) — PASSED
+- green: manifest -> namespaced tool defs (JSON-schema inputs, option enums, destructive flag carried, action forwarded verbatim); auditAssistantAction writes one row via the single logActivity path (category app-assistant, ids-only metadata) proven against real mongo-mem. No permission logic, no DOM, no llm import.
+- reviews: codex gpt-5.5/high APPROVE (0 findings); fresh-context approve.
+- ledger: passed 12/31 · blocked 0 · buildable-remaining 19.
