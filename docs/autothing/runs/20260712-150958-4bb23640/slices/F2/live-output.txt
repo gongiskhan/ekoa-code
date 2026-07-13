@@ -1,0 +1,10 @@
+PASS admin login
+PASS fees build created (11382545-f326-4da5-8972-461f23b93b39) with 1 seeded knowledgeDoc "Circular EKF-2211"
+  build poll transient 1/30 (status 502) — retrying
+PASS fees build completed (artifact 62524cc7-0dcd-4b1d-8f44-d1a6e4c95bc5); captured 73 job stream events
+PASS NARRATED knowledge-scope: financeira domain, PT-PT, no emoji/dash ("Esta aplicação parece assentar em conhecimento especializado (área jurídica e fi...")
+PASS INGESTED (narrated) knowledge-indexed: exactly 1 document, PT-PT, no emoji/dash ("Foi indexado 1 documento na área de conhecimento da organização; já está disponí...")
+PASS CITED: assistant cited the build-ingested doc "EKF-2211" in 5 citation(s); reply carries the seeded fact and is not a refusal
+  reply: A taxa base de justiça fixada pela Circular EKF-2211 é de **55 euros** [1][2]. Se pretender, posso ajudá-lo a efetuar o cálculo de custas para um processo concreto — bastando indicar o valor da ação 
+  citations: ["Circular EKF-2211","Circular EKF-2211","Acórdão do Tribunal da Relação de Lisboa","Acórdão do Supremo Tribunal de Justiça","Acórdão do Tribunal da Relação de Lisboa"]
+F2 LIVE GATE: PASS
