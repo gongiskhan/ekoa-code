@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import express from 'express';
+import type { Server } from 'node:http';
+import { servingRouter } from '../../src/apps/serving.js';
 // The panel-runtime compile step is an untyped build helper (.mjs, outside the api src
 // project) - drive it directly rather than typing the module.
 // @ts-expect-error no declaration file for the panel-runtime build helper
@@ -80,9 +85,12 @@ describe('G2 launcher - React-free + under the byte budget', () => {
     // Open-intent EVENT (late leg): every click also dispatches this, so a click
     // landing after an idle-preload mount still opens the panel (intent never lost).
     expect(MOUNT).toContain("'ekoa:assistant-open'");
-    // Transport-failure retry (review-g2 Low-1): onerror resets the once-only guard,
-    // so a failed inject never bricks the launcher for the page session.
+    // Failed-load retry (review-g2 Low-1 + codex-g2 Medium 1/2): onerror resets the
+    // once-only guard (next click retries - the server 404s a missing artifact, so
+    // onerror genuinely fires) AND clears the open-intent flag (a later idle preload
+    // must mount collapsed, never consume a click from a failed load).
     expect(MOUNT).toContain('onerror');
+    expect(MOUNT).toMatch(/onerror[\s\S]{0,400}__ekoaAssistantAutoOpen\s*=\s*false/);
     const panelJsx = readFileSync(panelSrcFile('AssistantPanel.jsx'), 'utf-8');
     expect(panelJsx).toContain("'ekoa:assistant-open'"); // ...and the panel listens for it
     // No emoji (UI-code rule).
@@ -123,4 +131,53 @@ describe('G2 panel-runtime asset - compiles clean + self-mounts + egress-clean',
     const ANTHROPIC = 'anthrop' + 'ic';
     expect(new RegExp(ANTHROPIC, 'i').test(code)).toBe(false);
   }, 60_000);
+});
+
+describe('G2 panel-runtime route - BOTH availability branches (codex-g2 Low)', () => {
+  // The route is driven through the REAL servingRouter with an injected asset path, so
+  // the operationally-critical branch (artifact missing) is unit-asserted, not assumed.
+  const listen = (app: express.Express) =>
+    new Promise<{ server: Server; port: number }>((resolve) => {
+      const server = app.listen(0, '127.0.0.1', () => {
+        resolve({ server, port: (server.address() as { port: number }).port });
+      });
+    });
+  const routerApp = (panelRuntimePath: string) => {
+    const app = express();
+    app.use(
+      servingRouter({
+        verifyToken: () => {
+          throw new Error('token auth not exercised in this suite');
+        },
+        panelRuntimePath,
+      }),
+    );
+    return app;
+  };
+
+  it('serves the built artifact with the JS content-type when it exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ekoa-panel-rt-'));
+    const asset = join(dir, 'panel-runtime.js');
+    writeFileSync(asset, '"use strict";(()=>{/* fixture runtime */})();');
+    const { server, port } = await listen(routerApp(asset));
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/__ekoa/panel-runtime.js`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('javascript');
+      expect(await res.text()).toContain('fixture runtime');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('answers 404 when the artifact is missing - NEVER a 200 comment body (a 200 would "load" fine, the launcher onerror would not fire, and its once-only guard would latch a dead launcher)', async () => {
+    const { server, port } = await listen(routerApp(join(tmpdir(), 'ekoa-nonexistent', 'panel-runtime.js')));
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/__ekoa/panel-runtime.js`);
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toMatch(/^\/\*/); // no comment-body fallback
+    } finally {
+      server.close();
+    }
+  });
 });

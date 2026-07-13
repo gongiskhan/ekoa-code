@@ -53,6 +53,9 @@ export interface ServingDeps {
   hydrateAppRepoIfMissing?: (projectDir: string, appId: string) => Promise<{ hydrated: boolean }>;
   /** Optional rebuild hook used after a successful hydration. */
   rebuildApp?: (appId: string, projectDir: string) => Promise<unknown>;
+  /** Test-only override for the panel-runtime asset path (codex-g2: both branches of
+   *  the availability behaviour are unit-asserted; the default is the real artifact). */
+  panelRuntimePath?: string;
 }
 
 /** Resolve the dist directory for a registered app (slug fallback). Carried. */
@@ -277,21 +280,10 @@ try {
  *  eagerly injected: the app bundle carries only a tiny launcher that lazy-loads this
  *  asset on first interaction/idle. The asset is BUILT (npm run build --workspace api ->
  *  assets/panel-runtime.js, gitignored); a missing build serves the clear comment body. */
+// Read LAZILY inside servingRouter (unlike the eager siblings above): the artifact may
+// not exist at module load (tests run before the build step; a dev boot can race it),
+// and a missing artifact must be a 404, not a 200 comment - see the route (codex-g2).
 const PANEL_RUNTIME_PATH = join(__dirname, '..', '..', 'assets', 'panel-runtime.js');
-let panelRuntimeSource = '/* ekoa panel runtime unavailable */';
-try {
-  panelRuntimeSource = readFileSync(PANEL_RUNTIME_PATH, 'utf-8');
-} catch (err) {
-  // Louder than the committed siblings ON PURPOSE (review-g2 Low-2): this is the one
-  // /__ekoa asset that is a BUILD ARTIFACT, so a build-skipping deploy reaches here and
-  // the assistant launcher in every served app becomes a dead affordance (the fallback
-  // body is a 200 comment - nothing client-side can detect it).
-  console.error(
-    '[panel-runtime] client unavailable - the assistant panel will NOT load in served apps. ' +
-      'Run "npm run build --workspace api" (builds assets/panel-runtime.js) and restart:',
-    err instanceof Error ? err.message : String(err),
-  );
-}
 
 export function servingRouter(deps: ServingDeps): Router {
   const r = Router();
@@ -455,12 +447,37 @@ export function servingRouter(deps: ServingDeps): Router {
 
   // Operator assistant panel runtime (operator-run G2) - lazy-loaded by the app
   // bundle's launcher (not eagerly injected). Same byte-serving posture as the action
-  // runtime (JS content-type, CORS *, 5-min cache).
+  // runtime (JS content-type, CORS *, 5-min cache) with ONE deliberate difference
+  // (codex-g2 Medium 1): a missing artifact is a 404, NEVER a 200 comment body. The
+  // eagerly-injected siblings use a comment fallback to keep consoles quiet, but for
+  // the LAZY panel a 200 "loads" successfully - the launcher's onerror never fires,
+  // its once-only guard stays latched, and the dead launcher can't even retry. The
+  // 404 makes the broken state loud AND recoverable (onerror -> guard reset -> the
+  // next click retries, succeeding once the asset exists). Lazy-read + memo so a
+  // router built in tests (or a dev boot racing the build step) reads on first hit.
+  let panelRuntime: string | null | undefined; // undefined = not read yet, null = unavailable
+  const panelRuntimePath = deps.panelRuntimePath ?? PANEL_RUNTIME_PATH;
   r.get('/__ekoa/panel-runtime.js', (_req, res) => {
+    if (panelRuntime === undefined) {
+      try {
+        panelRuntime = readFileSync(panelRuntimePath, 'utf-8');
+      } catch (err) {
+        panelRuntime = null;
+        console.error(
+          '[panel-runtime] client unavailable - the assistant panel will NOT load in served apps. ' +
+            'Run "npm run build --workspace api" (builds assets/panel-runtime.js) and restart:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+    if (panelRuntime === null) {
+      res.status(404).type('text/plain').send('panel runtime unavailable');
+      return;
+    }
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.send(panelRuntimeSource);
+    res.send(panelRuntime);
   });
 
   // Public demo registry (ch03 §3.8.23, carried): versioned demo specs + assets.

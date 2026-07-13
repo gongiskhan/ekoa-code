@@ -69,11 +69,16 @@ function ensurePanelLoaded() {
   const s = document.createElement('script');
   s.src = PANEL_RUNTIME_SRC;
   s.async = true;
-  // A transport failure must not brick the launcher for the whole page session
-  // (review-g2 Low-1): reset the once-only guard so the NEXT click retries. Without
-  // this, injected stays true, the asset never mounts, and every later click no-ops.
+  // A failed load must not brick the launcher for the whole page session (review-g2
+  // Low-1): reset the once-only guard so the NEXT click retries. The server answers a
+  // missing artifact with a 404 (never a 200 comment body), so onerror genuinely fires
+  // for BOTH transport failures and an unbuilt asset (codex-g2 Medium 1). The open
+  // intent is cleared too (codex-g2 Medium 2): a later IDLE preload succeeding must
+  // mount collapsed, not consume a click from a failed load minutes earlier - the
+  // visitor re-expresses intent by clicking again.
   s.onerror = () => {
     injected = false;
+    window.__ekoaAssistantAutoOpen = false;
     if (s.parentNode) s.parentNode.removeChild(s);
   };
   (document.head || document.documentElement).appendChild(s);
