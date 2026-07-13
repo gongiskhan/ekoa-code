@@ -5,7 +5,7 @@ scripted gate — `api/tests/e2e/assistant-modes.e2e.mjs` — drives the operato
 modes plus the operate-loop properties D2 deferred, live in a REAL served `app`-base app, in a REAL
 Chromium, on the credentialed boot-b stack (`/health` `claudeAuth.ok`, oauth). No product source
 touched — test-only slice. Model-call budget honoured: 4 live turns on the green run (do, show,
-teach, cited), DO carrying a 1-retry margin.
+teach, cited), with DO and CITED each carrying a 1-retry margin (≤6 total).
 
 ## Properties proven (real served app, real browser, credentialed stack)
 
@@ -25,8 +25,11 @@ teach, cited), DO carrying a 1-retry margin.
 - **TEACH (Ensinar).** Unpinned "Ensine-me passo a passo como criar um cliente" →
   `response.mode === 'teach'`, reflected on the toggle; step-structured 1139-char reply. Screenshot
   `live-03-teach.png`.
-- **CITED.** "Durante quanto tempo devemos reter os documentos…" → 5 citations; the panel rendered
-  the "Fontes" block. Screenshot `live-04-fontes.png`.
+- **CITED.** "Quantos anos de retenção estabelece a Circular Interna EKZ-7788…" → the SEEDED doc
+  surfaced as a citation (asserted by its distinctive token in `response.citations`, not merely
+  `citations.length>0`) and the model gave a real grounded answer — *"…estabelece dez anos como
+  prazo de retenção dos documentos dos clientes [2][3]"* (NOT a refusal); the panel rendered the
+  "Fontes" block. Screenshot `live-04-fontes.png`.
 - **Zero non-benign console errors** — strict gate green after allowlisting EXACTLY the same two
   pre-existing platform signatures the D2 gate documented (below).
 
@@ -39,8 +42,12 @@ The operate surface is CONTROLLED: the driver PATCHes a known action manifest on
 matching `data-demo-target` landmark (C5 technique). Mode assertions ride the SERVER's deterministic
 `inferMode` classifier (the driver never pins a mode). The destructive-confirm and
 pause-on-user-input properties are driven directly through the same-document `window.__ekoaActions`
-API the panel uses — no model call — so they are fully deterministic. Only the DO turn depends on
-the model emitting a structured action, and it carries one retry.
+API the panel uses — no model call — so they are fully deterministic. CITED grounds on a seeded doc
+carrying a distinctive reference token the query names verbatim, so it ranks #1 against the
+authority-boosted ~200k-doc `_shared` legal corpus (verified offline against the live FTS index),
+with the answer adjacent to the token so it survives grounding's 12-token snippet — the assertion
+pins that seeded doc in `response.citations` and rejects a refusal reply. Only the DO and CITED turns
+depend on model prose, each carrying one retry.
 
 ## Pre-existing platform findings (flagged, NOT fixed here — inherited from D2)
 

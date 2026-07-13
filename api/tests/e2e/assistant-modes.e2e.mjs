@@ -82,15 +82,26 @@ const MANIFEST = {
   ],
 };
 
-// A seeded knowledge doc in the owner's org so the CITED turn has something real to ground on.
+// A seeded knowledge doc in the owner's org that the CITED turn grounds on. The boot-b owner org
+// searches its OWN partition AND a huge authority-boosted `_shared` legal corpus (≈200k
+// jurisprudência docs), so a generic retention-policy doc gets buried below the top-k. The doc
+// therefore carries a DISTINCTIVE reference token ("Circular Interna EKZ-7788") in title + body,
+// and the CITED query names it verbatim — so the seeded doc ranks #1 by a commanding margin
+// (verified offline against the live FTS index: rel ≈81 vs ≈27 for the next hit). This is what
+// lets the gate assert the SEEDED doc surfaces (not merely that citations are non-empty) and that
+// the model actually answers from it rather than refusing.
 const KB_DOC = {
   collection: 'manual-interno',
-  title: 'Política de Retenção de Documentos',
+  title: 'Circular Interna EKZ-7788',
+  // The answer ("dez anos") sits immediately after the distinctive token so it falls INSIDE the
+  // grounding block's short (12-token) snippet — grounding.ts formats snippet(...,12), so a longer
+  // preamble would truncate the answer out of the excerpt and the model would (correctly) refuse.
   text:
-    'Segundo a política interna do escritório, os documentos dos clientes devem ser retidos durante um ' +
-    'período mínimo de dez anos após o encerramento do processo. Findo esse prazo, os documentos são ' +
-    'arquivados de forma segura ou eliminados de acordo com o regulamento de proteção de dados.',
+    'A Circular Interna EKZ-7788 estabelece dez anos como prazo de retenção obrigatória dos ' +
+    'documentos dos clientes, após o encerramento do processo.',
 };
+// The distinctive token the CITED assertions pin on (present in the seeded doc's title + body).
+const KB_TOKEN = 'EKZ-7788';
 
 function fail(msg) { console.error(`E2E FAIL: ${msg}`); process.exit(1); }
 function ok(msg) { console.log(`PASS ${msg}`); }
@@ -355,7 +366,11 @@ async function main() {
   const teachBody = await assistantTurn(page, 'Ensine-me passo a passo como criar um cliente');
   assert(teachBody.mode === 'teach', `TEACH turn: server mode "${teachBody.mode}", expected "teach"`);
   const teachReply = String(teachBody.reply || '');
-  assert(/\d+[.)]/.test(teachReply) || /passo/i.test(teachReply), `TEACH turn: reply is not step-structured: "${teachReply.slice(0, 160)}"`);
+  // Require GENUINE step structure: at least two line-anchored numbered-step markers ("1." / "1)" /
+  // "Passo 1."). Line-anchoring (not a bare /\d+[.)]/ anywhere) rejects prose that merely cites an
+  // article number, and there is no /passo/i escape hatch (the loose word "passo" no longer passes).
+  const stepMarkers = (teachReply.match(/(?:^|\n)\s*(?:passo\s+)?\d+[.)]/gi) || []).length;
+  assert(stepMarkers >= 2, `TEACH turn: reply is not step-structured (${stepMarkers} numbered markers): "${teachReply.slice(0, 200)}"`);
   await page.waitForFunction(() => {
     const b = document.querySelector('.ekoa-assistant-mode[aria-pressed="true"]');
     return b && b.textContent.trim() === 'Ensinar';
@@ -364,15 +379,32 @@ async function main() {
   ok(`TEACH: server-inferred mode 'teach' reflected on the toggle; step-structured reply (${teachReply.length} chars)`);
 
   // ============================================================================================
-  // 5. CITED: a domain question grounded on the seeded doc -> non-empty citations -> panel renders
-  //    the "Fontes" block.
+  // 5. CITED: a domain question that names the SEEDED doc -> the seeded doc surfaces as a citation
+  //    (grounding is unconditional for chat, so citations.length>0 alone proves nothing — the
+  //    assertion pins the SEEDED doc's distinctive token in response.citations), the reply is a real
+  //    grounded answer (NOT a refusal), and the panel renders the "Fontes" block. One retry for
+  //    model nondeterminism (the grounding is deterministic; only the prose can vary).
   // ============================================================================================
-  const citedBody = await assistantTurn(page, 'Durante quanto tempo devemos reter os documentos dos clientes segundo a política interna?');
-  assert(Array.isArray(citedBody.citations) && citedBody.citations.length > 0, `CITED turn: response carried no citations: ${JSON.stringify(citedBody.citations)}`);
+  const CITED_Q = `Quantos anos de retenção estabelece a Circular Interna ${KB_TOKEN} para os documentos dos clientes?`;
+  const REFUSAL = /n[aã]o\s+(?:posso|consigo)\s+.*(?:responder|ajudar)|sem\s+conhecimento|n[aã]o\s+(?:tenho|há)\s+.*(?:conhecimento|informa|acesso)/i;
+  let citedBody = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const body = await assistantTurn(page, CITED_Q);
+    const cites = Array.isArray(body.citations) ? body.citations : [];
+    const seededCited = cites.some((c) => typeof c.title === 'string' && c.title.includes(KB_TOKEN));
+    const reply = String(body.reply || '');
+    const refused = REFUSAL.test(reply);
+    if (seededCited && !refused) { citedBody = body; break; }
+    if (attempt === 2) {
+      // The grounding is deterministic (verified offline: the seeded doc ranks #1). If the seeded
+      // doc STILL does not surface here, that is a real knowledge-retrieval defect — fail loud.
+      fail(`CITED turn: seeded doc surfaced=${seededCited}, refused=${refused}. citations=${JSON.stringify(cites.map((c) => c.title))}; reply="${reply.slice(0, 200)}"`);
+    }
+  }
   const fontes = page.locator('.ekoa-assistant-citations-title', { hasText: 'Fontes' }).last();
   await fontes.waitFor({ state: 'visible', timeout: 10_000 });
   await page.screenshot({ path: join(EVID, 'live-04-fontes.png') });
-  ok(`CITED: ${citedBody.citations.length} citation(s); panel rendered the "Fontes" block (${citedBody.citations.map((c) => c.title).join(', ')})`);
+  ok(`CITED: seeded doc "${KB_TOKEN}" surfaced in ${citedBody.citations.length} citation(s); reply is a grounded answer (not a refusal); panel rendered "Fontes"`);
 
   // ============================================================================================
   // 6. ZERO non-benign page JS console errors throughout.

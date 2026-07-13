@@ -24,8 +24,11 @@ are C3/D1/D2 code, already landed).
 5. **TEACH (Ensinar).** "Ensine-me passo a passo como criar um cliente" unpinned →
    `response.mode === 'teach'`, reflected on the toggle; a step-structured reply. Screenshot
    `live-03-teach.png`.
-6. **CITED.** A domain question grounds on real org knowledge → non-empty `citations`; the panel
-   renders the "Fontes" block. Screenshot `live-04-fontes.png`.
+6. **CITED.** A domain question that names a SEEDED knowledge doc surfaces that doc as a citation
+   (asserted by its distinctive token in `response.citations` — not merely `citations.length>0`,
+   which grounding's unconditional-for-chat behaviour would make trivially true), the reply is a
+   real grounded answer (NOT a refusal), and the panel renders the "Fontes" block. Screenshot
+   `live-04-fontes.png`.
 7. **Zero non-benign page JS console errors** throughout, using the SAME documented allowlist as
    the D2 driver (anonymous whoami 401 + dev-proxy app-health 5xx).
 
@@ -55,10 +58,19 @@ non-determinism were removed at the seams, leaving the model calls asserted only
   `teach`, everything else → `do`. The driver never pins a mode (never clicks a mode button), so the
   server infers and echoes it; the panel reflects `response.mode` on the toggle. The assertions are
   on the echoed mode + the reflected toggle label, never on model prose.
+- **CITED grounding is made deterministic against a huge shared corpus.** The boot-b owner org
+  searches its own partition AND an authority-boosted `_shared` legal corpus (~200k jurisprudência
+  docs; `collectionAuthority` gives `jurisprud*` a 1.25× boost). A generic retention-policy doc gets
+  buried below the top-k, so the seeded doc carries a DISTINCTIVE reference token
+  (`Circular Interna EKZ-7788`) that the query names verbatim — verified offline against the live
+  FTS index, this ranks the seeded doc #1 by a commanding margin (rel ≈81 vs ≈27 for the next hit).
+  The answer ("dez anos") sits immediately after the token so it falls inside grounding's short
+  12-token `snippet(...)` excerpt — otherwise the model sees a truncated snippet and (correctly)
+  refuses. The CITED turn carries ONE retry (grounding is deterministic; only the prose can vary).
 - **Only the DO turn depends on the model emitting a structured action** (the one irreducibly
   model-driven step). It carries ONE retry (the field-fill + action-present check); the other turns
-  assert deterministic properties (mode echo, citation presence). Model-call budget: at most 5
-  (do[+1 retry], show, teach, cited).
+  assert deterministic properties (mode echo, seeded-citation presence). Model-call budget: at most 6
+  (do[+1], show, teach, cited[+1]).
 
 ## Key mechanics
 
@@ -79,14 +91,29 @@ non-determinism were removed at the seams, leaving the model calls asserted only
   pre-existing platform signatures (whoami 401 `injected-context.ts:110`, app-health 5xx
   `injected-context.ts:244`); every other console error fails the gate.
 
+## Diagnosis behind the CITED fix (review finding)
+
+A first cut asserted only `citations.length>0` and used a generic retention-policy doc + query. It
+false-passed structurally (5 citations rendered) but the seeded doc NEVER surfaced and the reply was
+a refusal. Root cause — diagnosed by querying the live FTS index directly (`~/.ekoa/data/knowledge/
+index/fts.db`), NOT an org mismatch: the seeded doc landed correctly in the app-owner org, but the
+~200k-doc authority-boosted `_shared` legal corpus buried it (the query's common tokens
+— documentos/prazo/clientes — match thousands of acórdãos), and grounding's 12-token snippet
+truncated the answer even when the doc did rank. Fix: a distinctive doc-reference token named
+verbatim in the query (ranks the doc #1) with the answer adjacent to the token (keeps it inside the
+snippet). Now the seeded doc is cited AND the model answers *"…estabelece dez anos como prazo de
+retenção dos documentos dos clientes [2][3]"* — verified with a real model call before the re-run.
+
 ## Observed on the green run
 
 - The DO turn's model reply: *"Vou adicionar o cliente 'Ana' ao registo. Preenchi o campo de
   registo com o nome 'Ana'…"* — a genuine grounded PT-PT turn; the runtime drove the field to "Ana".
-- CITED returned 5 citations — the boot-b owner org already carries a legal corpus
-  (jurisprudência / legislação), so grounding surfaced those; the driver ALSO seeds one
-  `manual-interno` doc so a hit is guaranteed regardless of corpus state. The assertion is on
-  `citations.length > 0` + the rendered "Fontes" block, so it holds either way.
+- CITED reply: *"A Circular Interna EKZ-7788 estabelece **dez anos** como prazo de retenção dos
+  documentos dos clientes [2][3]"* — the seeded doc surfaced as the top citation(s) and the model
+  answered from it (`live-04-fontes.png`).
+- TEACH step-structure check requires ≥2 line-anchored numbered markers
+  (`/(?:^|\n)\s*(?:passo\s+)?\d+[.)]/gi`) — the real reply enumerated 1./2./3./4. steps; the loose
+  `/passo/i` escape hatch was dropped (review finding).
 - Grounding is unconditional for `kind:'chat'`, so the DO turn ALSO rendered a "Fontes" block
   (visible in `live-01`); harmless — an extra, correct affordance.
 
