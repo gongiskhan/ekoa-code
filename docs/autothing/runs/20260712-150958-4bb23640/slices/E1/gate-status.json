@@ -1,0 +1,17 @@
+{
+  "slice": "E1",
+  "kind": "api",
+  "commit": "64c2cea",
+  "commits": ["8724dea", "24bffeb", "64c2cea"],
+  "tag": "operator/e1",
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-13T01:37:20Z", "detail": "tour-writer.ts (readTours: MANIFEST frontmatter + sibling tours/*.json, bounded+confined) + demo schema tourId/kind extension + activation capture onto artifact.data.tours (fail-loud toursError) + /api/demos/:appId additive generated-overview fallback + authoring-tours.md base skill" },
+    "test": { "status": "passed", "detail": "22 tour-writer (incl. 28-legacy compat iterating real legal-*.json + bound/symlink tests) + 14 serving-tours (reserved-key strip + fallback provenance/404 cases) + demo-registry + build-mechanics + served-app suites; tsc + eslint + chokepoint clean", "at": "2026-07-13T01:37:20Z" },
+    "securityWall": { "status": "passed", "detail": "gitleaks clean on all 3 commits; chokepoint clean; codex-caught stored-content-injection surface closed (server-owned reserved keys + appId-provenance filter); sibling-file reads bounded + symlink-confined", "at": "2026-07-13T01:37:20Z" },
+    "liveVerification": { "status": "passed", "detail": "integration-level over mongo-mem: real servingRouter + real artifacts store proves GET /api/demos/:appId serves the stored overview and rejects mismatched-appId/empty; the full real-build-emits-tours + panel-playback + rebuild-selector-stability end-to-end is E2's gate (E1 = generate+validate+store per FLOW_PLAN)", "at": "2026-07-13T01:37:20Z" },
+    "freshReview": { "status": "passed", "detail": "VERDICT: approve - all 7 risk checks PASS (frontmatter byte-identical across 3 parsers, 28-legacy test iterates real files, 24bffeb earliest-match preserved via 14 adversarial phrasings, E2 gets the FULL set while the route serves overview-only); its advisory limits finding closed by 64c2cea", "at": "2026-07-13T01:37:20Z" },
+    "codexSliceReview": { "status": "passed", "detail": "gpt-5.5/high read-only: needs-work with 4 findings, ALL fixed in 64c2cea (reserved keys + provenance filter [high], bounded/confined reads [med], serving tests [med], ekoa-data duplicate schema [low, gitignored-reference so noted-not-committed])", "at": "2026-07-13T01:37:20Z" },
+    "designAudit": { "status": "skipped", "reason": "api slice: no UI surface (the panel PLAYER is E2)", "at": "2026-07-13T01:37:20Z" },
+    "walkthrough": { "status": "skipped", "reason": "api slice: the committed integration tests are the evidence; visible tour playback is E2's walkthrough", "at": "2026-07-13T01:37:20Z" }
+  }
+}

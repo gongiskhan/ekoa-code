@@ -242,6 +242,17 @@
         "slices/D3/impl-notes.md"
       ],
       "at": "2026-07-13T00:56:00Z"
+    },
+    "E1": {
+      "status": "passed",
+      "commit": "64c2cea",
+      "tag": "operator/e1",
+      "evidence": [
+        "slices/E1/impl-notes.md",
+        "slices/E1/review-verdict.md",
+        "slices/E1/codex-review.md"
+      ],
+      "at": "2026-07-13T01:37:20Z"
     }
   },
   "resume": {
