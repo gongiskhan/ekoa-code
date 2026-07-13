@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import type { Server } from 'node:http';
+import express from 'express';
+import jwt from 'jsonwebtoken';
 import type { AppAction, AppActionManifest } from '@ekoa/shared';
+import { AppAssistantWhoamiResponse } from '@ekoa/shared';
 import type { SearchHit } from '../../src/knowledge/index.js';
 import type { OneShotOptions, LlmAttribution, RouterDecision } from '../../src/llm/index.js';
 import { assistantToolsFromManifest } from '../../src/apps/assistant-tools.js';
@@ -9,6 +13,15 @@ import {
   extractActions,
   type AppAssistantDeps,
 } from '../../src/apps/app-assistant.js';
+import { appAssistantRouter, isOwnerOrgAdmin } from '../../src/apps/app-assistant-route.js';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
+import { connectMongo, closeMongo } from '../../src/data/mongo.js';
+import { users, artifacts } from '../../src/data/stores.js';
+import { setActivation, bumpTokenEpoch, __resetActivationForTests } from '../../src/data/activation.js';
+import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
+import { login } from '../../src/auth/service.js';
+import { hashPassword } from '../../src/auth/password.js';
+import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 
 /**
  * operator-run D1 — the served-app assistant pure logic, over an INJECTED one-shot (no real model),
@@ -225,5 +238,200 @@ describe('runAppAssistant (D1)', () => {
       billeeUserId: 'owner-1',
       artifactId: 'art-99',
     });
+  });
+});
+
+/**
+ * operator-run H2 — the admin-detection DECISION (`isOwnerOrgAdmin`), the PURE role/org/capability
+ * core of `GET /api/app-assistant/whoami`. It reuses H1's `can('canEditApps')` as the capability
+ * gate, then scopes org-admins to the owner org and lets super-admins span every org. No token /
+ * verification here — that layer is exercised by the route matrix below.
+ */
+describe('isOwnerOrgAdmin (H2 detection decision)', () => {
+  it('an org-admin of the OWNER org is an admin (capability + org match)', () => {
+    expect(isOwnerOrgAdmin({ role: 'org-admin', orgId: 'org-owner' }, 'org-owner')).toBe(true);
+  });
+  it('an org-admin of ANOTHER org is NOT (org mismatch, fail-closed)', () => {
+    expect(isOwnerOrgAdmin({ role: 'org-admin', orgId: 'org-other' }, 'org-owner')).toBe(false);
+  });
+  it('a super-admin is an admin of ANY org (spans orgs)', () => {
+    expect(isOwnerOrgAdmin({ role: 'super-admin', orgId: 'org-other' }, 'org-owner')).toBe(true);
+    expect(isOwnerOrgAdmin({ role: 'super-admin', orgId: 'org-owner' }, 'org-owner')).toBe(true);
+  });
+  it('a plain user is never an admin (H1 capability gate denies canEditApps)', () => {
+    expect(isOwnerOrgAdmin({ role: 'user', orgId: 'org-owner' }, 'org-owner')).toBe(false);
+  });
+});
+
+/**
+ * operator-run H2 — the `GET /api/app-assistant/whoami` FAIL-CLOSED matrix over the REAL router,
+ * the REAL verification chain (verifyToken + jti + isRevoked + activation-active + tokenEpoch, via
+ * verifySseToken) and REAL owner resolution. The router is wired with THROWING llm deps: whoami
+ * must never ground/route/bill, so any accidental model touch would blow the request up (it does
+ * not — every case returns 200). Binding invariants asserted here:
+ *   - admin:true ONLY for an org-admin/super-admin of the OWNER org WITH canEditApps.
+ *   - EVERYTHING else -> 200 { admin:false }: no token, invalid, expired, epoch-stale, user role,
+ *     wrong-org admin. NEVER a 4xx on a bad/missing token (a 401/403 would be an oracle).
+ *   - the ONLY non-200 is a malformed X-Ekoa-App-Id (the SAME 400 POST gives) / unknown app (404).
+ */
+describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
+  let mem: MongoMemoryServer;
+  let server: Server;
+  let port: number;
+  let seq = 0;
+  const loginDeps = { now: () => 1_700_000_000_000 + seq++, genId: () => `jti_${seq++}` };
+
+  // whoami must NEVER reach these — it neither grounds, routes, nor bills.
+  const throwingDeps: AppAssistantDeps = {
+    oneShot: async () => { throw new Error('whoami must not call the model (visitor-blindness exception is detection-only)'); },
+    ground: () => { throw new Error('whoami must not ground'); },
+    decide: () => { throw new Error('whoami must not route'); },
+  };
+
+  const APP_ID = 'app-h2'; // owned by owner-1 (org-owner)
+  const tokens: Record<string, string> = {};
+
+  async function mkUser(id: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
+    await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId, active: true } as never);
+    setActivation(id, { active: true, billingLocked: false });
+  }
+  const whoami = (headers: Record<string, string>) =>
+    fetch(`http://127.0.0.1:${port}/api/app-assistant/whoami`, { headers });
+  const postAssistant = (headers: Record<string, string>) =>
+    fetch(`http://127.0.0.1:${port}/api/app-assistant`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ message: 'olá' }),
+    });
+
+  beforeAll(async () => {
+    process.env.ENCRYPTION_KEY = 'k';
+    process.env.JWT_SECRET = 's';
+    __resetConfigForTests();
+    loadConfig();
+    __resetActivationForTests();
+    __resetRevocationsForTests();
+    mem = await createMem();
+    await connectMongo(mem.getUri(), 'ekoa_h2_whoami');
+
+    // The app + its owner (org-owner). Owner org is resolved server-side from this user record.
+    await mkUser('owner-1', 'org-owner', 'org-admin');
+    await artifacts.insert({ _id: APP_ID, name: 'H2', userId: 'owner-1', orgId: 'org-owner', visibility: 'private' } as never);
+
+    // Callers.
+    await mkUser('admin-owner', 'org-owner', 'org-admin'); // a DIFFERENT admin in the owner org
+    await mkUser('super-1', 'org-other', 'super-admin'); // super-admin in a DIFFERENT org
+    await mkUser('admin-other', 'org-other', 'org-admin'); // org-admin of the WRONG org
+    await mkUser('user-owner', 'org-owner', 'user'); // owner-org member without canEditApps
+    await mkUser('stale-admin', 'org-owner', 'org-admin'); // owner-org admin, token then epoch-staled
+
+    for (const u of ['owner-1', 'admin-owner', 'super-1', 'admin-other', 'user-owner', 'stale-admin']) {
+      tokens[u] = (await login(u, 'pw123456', false, loginDeps)).token;
+    }
+    // Epoch-stale: bump stale-admin's epoch far past its freshly-minted token's iat, so the SAME
+    // (otherwise-admin) token is now stale — proving the tokenEpoch leg of the chain rejects it.
+    bumpTokenEpoch('stale-admin', Math.floor(Date.now() / 1000) + 100_000);
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api', appAssistantRouter(throwingDeps));
+    await new Promise<void>((r) => { server = app.listen(0, () => r()); });
+    port = (server.address() as { port: number }).port;
+  }, 60_000);
+
+  afterAll(async () => {
+    server?.close();
+    await closeMongo();
+    await mem?.stop();
+    __resetActivationForTests();
+    __resetRevocationsForTests();
+  });
+
+  const bearer = (u: string) => ({ 'x-ekoa-app-id': APP_ID, authorization: `Bearer ${tokens[u]}` });
+
+  it('an org-admin of the OWNER org -> 200 { admin:true }', async () => {
+    const res = await whoami(bearer('admin-owner'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(AppAssistantWhoamiResponse.safeParse(body).success).toBe(true);
+    expect(body).toEqual({ admin: true });
+  });
+
+  it('the artifact owner (org-admin of the owner org) -> 200 { admin:true }', async () => {
+    const res = await whoami(bearer('owner-1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: true });
+  });
+
+  it('a super-admin (any org) -> 200 { admin:true }', async () => {
+    const res = await whoami(bearer('super-1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: true });
+  });
+
+  it('an org-admin of ANOTHER org -> 200 { admin:false } (never 403 — no cross-org oracle)', async () => {
+    const res = await whoami(bearer('admin-other'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('a plain user of the owner org -> 200 { admin:false } (H1 capability gate)', async () => {
+    const res = await whoami(bearer('user-owner'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('NO token -> 200 { admin:false } (never a 401 — token absence is not an oracle)', async () => {
+    const res = await whoami({ 'x-ekoa-app-id': APP_ID });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('an INVALID token -> 200 { admin:false } (never a 401)', async () => {
+    const res = await whoami({ 'x-ekoa-app-id': APP_ID, authorization: 'Bearer not-a-jwt' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('an EXPIRED token (would-be admin) -> 200 { admin:false }', async () => {
+    // A structurally-admin token (org-admin of the owner org) but already expired: the verify
+    // chain rejects it at verifyToken, so detection is false — expiry alone denies.
+    const expired = jwt.sign(
+      { sub: 'owner-1', role: 'org-admin', scope: 'user', orgId: 'org-owner', username: 'owner-1', jti: 'expired.1' },
+      's',
+      { expiresIn: -10 },
+    );
+    const res = await whoami({ 'x-ekoa-app-id': APP_ID, authorization: `Bearer ${expired}` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('an EPOCH-STALE token (would-be admin) -> 200 { admin:false }', async () => {
+    // stale-admin is an org-admin of the owner org; its token predates the epoch bump, so the
+    // tokenEpoch leg of the chain rejects it — a demoted/rotated session cannot detect as admin.
+    const res = await whoami(bearer('stale-admin'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('a malformed X-Ekoa-App-Id -> 400 — the SAME status POST gives (charset check reused)', async () => {
+    const bad = { 'x-ekoa-app-id': 'bad app!', authorization: `Bearer ${tokens['admin-owner']}` };
+    const wRes = await whoami(bad);
+    const pRes = await postAssistant(bad);
+    expect(wRes.status).toBe(400);
+    expect(pRes.status).toBe(400); // POST rejects the same header identically
+    const wBody = (await wRes.json()) as { error: { code: string } };
+    expect(wBody.error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('the reserved usr. prefix on X-Ekoa-App-Id -> 400 (same as POST)', async () => {
+    const res = await whoami({ 'x-ekoa-app-id': 'usr.owner-1', authorization: `Bearer ${tokens['admin-owner']}` });
+    expect(res.status).toBe(400);
+  });
+
+  it('an unknown app id -> 404 { NOT_FOUND } (the SAME existence surface POST already exposes)', async () => {
+    const res = await whoami({ 'x-ekoa-app-id': 'no-such-app', authorization: `Bearer ${tokens['admin-owner']}` });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });

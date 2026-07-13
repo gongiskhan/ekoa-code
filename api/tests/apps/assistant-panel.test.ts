@@ -113,6 +113,73 @@ describe('D2 panel source contract', () => {
   });
 });
 
+describe('H2 admin detection (detect-then-ask)', () => {
+  it('reads the platform token DEFENSIVELY from localStorage (try/catch, swallow to null)', () => {
+    // The panel reads the SAME key web/lib/api/token.ts uses; a cross-origin / sandboxed iframe
+    // throws a SecurityError on localStorage access, so the read is wrapped and degrades to null.
+    expect(PANEL).toContain('ekoa_token');
+    expect(PANEL).toContain('readPlatformToken');
+    expect(PANEL).toContain('getItem(TOKEN_STORAGE_KEY)');
+    // The defensive read has a try/catch that returns null (no crash on a cross-origin iframe).
+    const helper = PANEL.slice(PANEL.indexOf('function readPlatformToken'), PANEL.indexOf('function readPlatformToken') + 500);
+    expect(helper).toMatch(/try\s*\{/);
+    expect(helper).toMatch(/catch\s*\{[\s\S]*return null/);
+  });
+
+  it('calls GET /api/app-assistant/whoami exactly ONCE, on mount, with X-Ekoa-App-Id + an OPTIONAL Bearer', () => {
+    // The endpoint literal lives once (in the WHOAMI_ENDPOINT constant); the fetch uses the const.
+    expect(PANEL).toContain('/api/app-assistant/whoami');
+    expect((PANEL.match(/\/api\/app-assistant\/whoami/g) || []).length).toBe(1);
+    expect(PANEL).toContain('WHOAMI_ENDPOINT');
+    // A mount-only, once-guarded detection (no per-render loop; idempotent under StrictMode).
+    expect(PANEL).toContain('whoamiDoneRef');
+    expect(PANEL).toContain('whoamiDoneRef.current = true');
+    // It is a GET carrying the app id; the platform Bearer is attached only when readable.
+    const effect = PANEL.slice(PANEL.indexOf('const id = appId();'), PANEL.indexOf('const nextId = ()'));
+    expect(effect).toContain('WHOAMI_ENDPOINT');
+    expect(effect).toMatch(/method:\s*'GET'/);
+    expect(effect).toContain("'X-Ekoa-App-Id': id");
+    expect(effect).toMatch(/token \? \{ Authorization: `Bearer \$\{token\}` \}/);
+    // The mount effect closes with an empty dependency array (runs once for the panel's lifetime).
+    expect(effect).toMatch(/\},\s*\[\]\);/);
+  });
+
+  it('a false detection renders NO admin affordance (the indicator is gated on admin)', () => {
+    // admin defaults false (fail-closed) and the discreet indicator is conditionally rendered:
+    // false -> null (nothing on screen), true -> the quiet "Administrador" badge.
+    expect(PANEL).toMatch(/const \[admin, setAdmin\] = useState\(false\)/);
+    expect(PANEL).toContain('Administrador');
+    expect(PANEL).toMatch(/\{admin \? \(/);
+    // The whole badge block is guarded by `admin ? (...) : null`, so nothing renders when false.
+    const header = PANEL.slice(PANEL.indexOf('ekoa-assistant-titlegroup'), PANEL.indexOf('ekoa-assistant-close'));
+    expect(header).toMatch(/admin \? \([\s\S]*\) : null/);
+  });
+
+  it('DETECT-THEN-ASK: admin:true never auto-enables anything (no edit mode, no privileged call)', () => {
+    // The indicator is inert: no click handler, no mode change, no fetch driven by `admin`.
+    const badge = PANEL.slice(PANEL.indexOf('ekoa-assistant-admin-badge'), PANEL.indexOf('Administrador') + 20);
+    expect(badge).not.toContain('onClick');
+    // `admin` is SET once (the detection) and READ only to render the badge — it drives no action.
+    expect((PANEL.match(/setAdmin\(/g) || []).length).toBe(1);
+    // H2 builds no edit-mode machinery / opt-in switch (that is H3): none of the tokens an actual
+    // edit-mode implementation would introduce exist yet. (Comments MAY mention "edit mode" as the
+    // deferred H3 work; these tokens name the affordance itself, so they won't collide with prose.)
+    expect(PANEL).not.toMatch(/setEditMode|editEnabled|isEditing|enterEditMode|edit-mode-toggle/);
+    // The invariant is stated in the source so review can pin it.
+    expect(PANEL).toContain('detect-then-ask');
+    expect(PANEL).toContain('H3');
+  });
+
+  it('detection is zero-token: whoami is a non-LLM GET, never an assistant turn', () => {
+    // The detection path must not post to the assistant endpoint or dispatch actions.
+    const effect = PANEL.slice(PANEL.indexOf('const id = appId();'), PANEL.indexOf('const nextId = ()'));
+    expect(effect).not.toContain('runActions');
+    expect(effect).not.toMatch(/method:\s*'POST'/);
+    // The zero-token invariant is stated on the detection effect so review can pin it.
+    expect(PANEL).toContain('zero-token');
+  });
+});
+
 describe('D2/G2 lazy-load wiring', () => {
   it('the app bundle carries only a plain-DOM launcher (no React) that lazy-loads the platform panel-runtime', () => {
     // Since G2 the panel is NOT baked into the app bundle: mount.js renders a launcher

@@ -83,6 +83,17 @@ export const AssistantChatResponse = z.object({
 });
 export type AssistantChatResponse = z.infer<typeof AssistantChatResponse>;
 
+/** Admin-detection response for the served-app assistant (operator-run H2; detect-then-ask).
+ *
+ *  The panel asks `GET /api/app-assistant/whoami` (X-Ekoa-App-Id + an OPTIONAL platform Bearer)
+ *  whether the current viewer is an admin of the app OWNER's org WITH the `canEditApps` capability.
+ *  The answer is a single boolean and NOTHING else: `.strict()` so no identity, org, role, or
+ *  reason ever leaks onto the wire (the endpoint is fail-closed and oracle-free — see the route).
+ *  `admin: true` is a capability HINT only; every privileged action stays gated server-side by the
+ *  H1 admission plane, and the panel never auto-enables anything from it (edit mode is H3). */
+export const AppAssistantWhoamiResponse = z.object({ admin: z.boolean() }).strict();
+export type AppAssistantWhoamiResponse = z.infer<typeof AppAssistantWhoamiResponse>;
+
 export const appAssistantEndpoints = {
   assistantChat: {
     method: 'POST',
@@ -90,5 +101,14 @@ export const appAssistantEndpoints = {
     auth: 'header-scoped',
     request: AssistantChatRequest,
     response: AssistantChatResponse,
+  },
+  // H2 admin detection. Header-scoped like its sibling (X-Ekoa-App-Id resolves the app); the
+  // platform Bearer is OPTIONAL and read only to detect the viewer — never required, never an
+  // oracle (a missing/invalid token is always a 200 { admin: false }, never a 401/403).
+  whoami: {
+    method: 'GET',
+    path: '/api/app-assistant/whoami',
+    auth: 'header-scoped',
+    response: AppAssistantWhoamiResponse,
   },
 } as const satisfies DomainDescriptorMap;

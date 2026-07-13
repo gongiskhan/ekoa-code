@@ -33,6 +33,15 @@ import { createTourPlayer } from './tour-player';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
+// H2 admin DETECTION (detect-then-ask). A cheap, non-LLM GET that answers ONLY "is the current
+// viewer an admin of this app's owner org?". It NEVER issues an assistant turn (the zero-token
+// invariant holds) and its result NEVER auto-enables anything - it only lights a discreet
+// indicator. The edit-mode switch + its opt-in UX are H3; this panel does not build them.
+const WHOAMI_ENDPOINT = '/api/app-assistant/whoami';
+// The platform session token key web/lib/api/token.ts uses. Read best-effort for detection only:
+// a served app on the SAME origin as the dashboard can read it; a CROSS-origin / sandboxed iframe
+// (the dev preview) throws on access, so detection simply falls back to "not admin".
+const TOKEN_STORAGE_KEY = 'ekoa_token';
 // Bounds (codex-d2): the transcript kept in memory, the history slice sent per turn,
 // and a hard timeout on the assistant fetch so a hung turn can never lock the composer.
 const MAX_MESSAGES = 200;
@@ -60,6 +69,21 @@ const MAX_ACTION_RESULTS = 8;
 /** The served-app id stamped by injectAppContext(); absent in a standalone preview. */
 function appId() {
   return typeof window !== 'undefined' && window.__EKOA_APP_ID ? window.__EKOA_APP_ID : undefined;
+}
+
+/** Best-effort read of the platform session token for admin DETECTION only (H2). Same-origin
+ *  served pages can read the dashboard's localStorage; a cross-origin or sandboxed iframe throws
+ *  a SecurityError on `localStorage` access - swallow it to null so detection just degrades to
+ *  "not admin" (no affordance) instead of crashing the panel. Reads nothing else and stores
+ *  nothing - the token is attached to the one whoami GET and never kept. */
+function readPlatformToken() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const t = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    return typeof t === 'string' && t ? t : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The app's current route/page, best-effort: the shell may expose it on
@@ -231,6 +255,11 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   // is 100% client-side and issues ZERO model calls: it fetches the pre-generated
   // tour from GET /api/demos/:appId and drives it in the page.
   const [tour, setTour] = useState(null);
+  // H2 detect-then-ask: whether the current viewer is an admin of this app's owner org.
+  // Default false (fail-closed). Set ONCE by the mount detection below. This flag NEVER
+  // auto-enables anything - it only lights the discreet indicator in the header (the actual
+  // edit-mode switch is H3). Every privileged action stays gated server-side by H1.
+  const [admin, setAdmin] = useState(false);
 
   const idRef = useRef(0);
   const messagesRef = useRef(messages);
@@ -238,6 +267,7 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   const listRef = useRef(null);
   const textareaRef = useRef(null);
   const playerRef = useRef(null);
+  const whoamiDoneRef = useRef(false); // guards the once-only admin detection (H2)
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -253,6 +283,48 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     if (defaultOpen && textareaRef.current) textareaRef.current.focus();
     // Mount-only: the handoff intent is fixed at mount time.
   }, [defaultOpen]);
+
+  // H2 admin DETECTION (detect-then-ask): ask the server ONCE, on mount, whether the current
+  // viewer is an admin of this app's owner org. Reads the platform token defensively (a
+  // cross-origin/sandboxed iframe throws) and attaches it as an OPTIONAL Bearer alongside the
+  // X-Ekoa-App-Id header the POST path already sends. This is a cheap non-LLM GET - it does NOT
+  // count as an assistant turn (zero-token invariant). The result only lights the discreet
+  // indicator; it NEVER auto-enables anything and issues no privileged call (edit mode is H3).
+  useEffect(() => {
+    const id = appId();
+    // No app id (standalone preview) or already detected once -> nothing to do. The ref keeps the
+    // detection to exactly ONE request per mounted panel (also idempotent under StrictMode).
+    if (!id || whoamiDoneRef.current) return;
+    whoamiDoneRef.current = true;
+
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const token = readPlatformToken();
+    void (async () => {
+      try {
+        const res = await fetch(WHOAMI_ENDPOINT, {
+          method: 'GET',
+          ...(controller ? { signal: controller.signal } : {}),
+          headers: {
+            'X-Ekoa-App-Id': id,
+            // OPTIONAL: sent only when a same-origin token was readable. Absent -> the server
+            // fails closed to { admin: false }, so cross-origin dev simply shows no affordance.
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        if (!res.ok) return; // fail closed: stay non-admin on any non-200 (never an oracle anyway)
+        const data = await res.json();
+        setAdmin(!!(data && data.admin === true));
+      } catch {
+        // network error / aborted unmount / bad JSON -> stay non-admin. Detection is best-effort.
+      }
+    })();
+
+    return () => {
+      if (controller) controller.abort();
+    };
+    // Mount-only: detection is a one-shot for the panel's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const nextId = () => {
     idRef.current += 1;
@@ -488,7 +560,33 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   return (
     <aside className="ekoa-assistant" data-collapsed="false" role="complementary" aria-label="Assistente">
       <header className="ekoa-assistant-header">
-        <span className="ekoa-assistant-title">Assistente</span>
+        <span className="ekoa-assistant-titlegroup" style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2, 0.5rem)' }}>
+          <span className="ekoa-assistant-title">Assistente</span>
+          {/* H2 detect-then-ask: a DISCREET, non-intrusive indicator that an admin capability
+              exists. It does NOTHING - no click handler, no mode change, no privileged call. The
+              opt-in edit-mode switch is H3. Styled inline (brand-neutral via the panel CSS vars)
+              so it inherits the app's theme without a bespoke stylesheet rule. */}
+          {admin ? (
+            <span
+              className="ekoa-assistant-admin-badge"
+              data-admin="true"
+              title="Tem permissões de administrador nesta aplicação."
+              style={{
+                fontSize: 'var(--text-sm, 0.8125rem)',
+                fontWeight: 600,
+                color: 'var(--color-text-muted, #475569)',
+                border: '1px solid var(--color-border, #E2E8F0)',
+                borderRadius: 'var(--radius-sm, 0.375rem)',
+                padding: '0.05rem 0.4rem',
+                lineHeight: 1.4,
+                letterSpacing: '0.02em',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Administrador
+            </span>
+          ) : null}
+        </span>
         <button type="button" className="ekoa-assistant-close" onClick={collapsePanel} aria-label="Fechar o assistente">
           <CloseIcon />
         </button>

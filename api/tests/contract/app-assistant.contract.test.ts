@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   AssistantChatRequest,
   AssistantChatResponse,
+  AppAssistantWhoamiResponse,
   appAssistantEndpoints,
   ErrorEnvelope,
   ALL_ENDPOINTS,
@@ -95,6 +96,38 @@ describe('appAssistant endpoint descriptor (D1)', () => {
 
   it('stays accounted for in the shared descriptor census (schema-coverage input)', () => {
     expect(ALL_ENDPOINTS.appAssistant?.assistantChat).toBeTruthy();
+  });
+});
+
+describe('AppAssistantWhoamiResponse contract (H2)', () => {
+  it('validates BOTH branches: { admin:true } and { admin:false }', () => {
+    expect(AppAssistantWhoamiResponse.safeParse({ admin: true }).success).toBe(true);
+    expect(AppAssistantWhoamiResponse.safeParse({ admin: false }).success).toBe(true);
+  });
+
+  it('is strict: admin must be a boolean and NOTHING else may ride the wire', () => {
+    // A non-boolean admin is rejected...
+    expect(AppAssistantWhoamiResponse.safeParse({ admin: 'true' }).success).toBe(false);
+    expect(AppAssistantWhoamiResponse.safeParse({}).success).toBe(false);
+    // ...and .strict() forbids leaking any identity/org/role/reason field alongside the boolean
+    // (the endpoint is fail-closed and oracle-free — the boolean is the entire answer).
+    expect(AppAssistantWhoamiResponse.safeParse({ admin: true, orgId: 'org-owner' }).success).toBe(false);
+    expect(AppAssistantWhoamiResponse.safeParse({ admin: false, reason: 'wrong-org' }).success).toBe(false);
+  });
+});
+
+describe('appAssistant whoami descriptor (H2)', () => {
+  it('is an additive GET detection endpoint pointing at the strict boolean schema', () => {
+    const d = appAssistantEndpoints.whoami;
+    expect(d.method).toBe('GET');
+    expect(d.path).toBe('/api/app-assistant/whoami');
+    expect(d.auth).toBe('header-scoped'); // app-id scoped; the platform Bearer is optional
+    expect('request' in d).toBe(false); // a GET carries no request body
+    expect(d.response?.safeParse({ admin: true }).success).toBe(true);
+  });
+
+  it('stays accounted for in the shared descriptor census (schema-coverage input)', () => {
+    expect(ALL_ENDPOINTS.appAssistant?.whoami).toBeTruthy();
   });
 });
 

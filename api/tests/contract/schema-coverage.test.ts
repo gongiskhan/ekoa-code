@@ -86,6 +86,10 @@ const COVERED = new Set<string>([
   'ekoaLocal.bridgeStatus',
   // Local-bridge consumer run s5 — FC-408 masking summary (masking-summary.test.ts)
   'registo.maskingSummary',
+  // operator-run H2 — served-app assistant admin detection (app-assistant.contract.test.ts +
+  // the whoami route matrix in tests/apps/app-assistant.test.ts). Additive endpoint: covering it
+  // keeps EXPECTED_PENDING_COUNT unchanged (assistantChat stays PENDING as before).
+  'appAssistant.whoami',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
