@@ -11,6 +11,8 @@ describe('classifyArtifactType (C1)', () => {
     const cases: Array<[string, ArtifactType]> = [
       ['Uma apresentação sobre o novo regime fiscal', 'presentation'],
       ['Landing page para o escritório', 'landing'],
+      ['A static page', 'landing'], // deterministic: never falls through to the model in credential-less envs
+      ['Uma página estática de apresentação do escritório', 'landing'],
       ['Relatório mensal de honorários', 'report'],
       ['Um contrato de prestação de serviços', 'document'],
       ['Minuta de procuração forense', 'document'],

@@ -19,7 +19,7 @@ import type { BaseId } from './base-loader.js';
  *  lists are PT-PT-first (the product surface) with EN fallbacks. */
 const SIGNALS: Array<{ type: ArtifactType; rx: RegExp }> = [
   { type: 'presentation', rx: /\b(apresenta[çc][ãa]o|slides?|diapositivo|deck|pitch)\b/i },
-  { type: 'landing', rx: /\b(landing|p[áa]gina de (marketing|captura|vendas)|site promocional|one[- ]?pager)\b/i },
+  { type: 'landing', rx: /\b(landing|p[áa]gina de (marketing|captura|vendas)|site promocional|one[- ]?pager|static (page|site)|p[áa]gina est[áa]tica|site est[áa]tico)\b/i },
   { type: 'report', rx: /\b(relat[óo]rio|report)\b/i },
   { type: 'document', rx: /\b(documento|contrato|parecer|minuta|carta|of[íi]cio|acordo|procura[çc][ãa]o|peti[çc][ãa]o|requerimento|flyer|folheto|impress[ãa]o|imprim[íi]vel|word|pdf)\b/i },
   { type: 'app', rx: /\b(app|aplica[çc][ãa]o|gestor|gest[ãa]o|dashboard|painel|calculadora|formul[áa]rio|lista de|tracker|crm|kanban|agenda)\b/i },
