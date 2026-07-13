@@ -29,6 +29,12 @@
 
 const LAUNCHER_MARKER = 'data-ekoa-boot-launcher';
 const PANEL_RUNTIME_SRC = '/__ekoa/panel-runtime.js';
+// Open-intent event: the flag below covers a click BEFORE the panel mounts (read at
+// mount), this event covers a click AFTER it mounts (the mounted panel listens). Both
+// fire on every click, so visitor intent survives ANY race with the idle preload -
+// without the event, a click landing between the idle inject and the boot-launcher
+// removal would be silently lost (ensurePanelLoaded no-ops, the flag is never re-read).
+const OPEN_EVENT = 'ekoa:assistant-open';
 // Floor the idle preload so a promptly-interacting visitor (and the perf gate) always
 // trigger the load via their CLICK, not an eager idle fetch; after the floor we defer
 // to real idle (requestIdleCallback), or a plain timeout where it is absent.
@@ -92,9 +98,11 @@ export function mountAssistant() {
   btn.style.cssText = LAUNCHER_STYLE;
   btn.innerHTML = CHAT_ICON + '<span>Assistente</span>';
   btn.addEventListener('click', () => {
-    // Explicit visitor intent: open the panel on mount (handoff via the window flag).
+    // Explicit visitor intent: open the panel on mount (handoff via the window flag)
+    // AND right now if it already mounted collapsed (handoff via the event).
     window.__ekoaAssistantAutoOpen = true;
     ensurePanelLoaded();
+    window.dispatchEvent(new CustomEvent(OPEN_EVENT));
   });
 
   (document.body || document.documentElement).appendChild(btn);

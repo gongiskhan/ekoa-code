@@ -446,6 +446,16 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     }, 0);
   }, []);
 
+  // Open-intent handoff, late leg (G2): the boot launcher dispatches
+  // 'ekoa:assistant-open' on every click. The defaultOpen flag covers a click BEFORE
+  // this panel mounts; this listener covers a click AFTER it mounted collapsed (an
+  // idle preload racing the visitor's click) - intent is never lost between the two.
+  useEffect(() => {
+    const onOpenIntent = () => open();
+    window.addEventListener('ekoa:assistant-open', onOpenIntent);
+    return () => window.removeEventListener('ekoa:assistant-open', onOpenIntent);
+  }, [open]);
+
   const onExample = useCallback((example) => {
     setMode(example.mode);
     setDraft(example.prompt);

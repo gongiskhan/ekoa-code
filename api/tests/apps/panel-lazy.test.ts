@@ -77,6 +77,11 @@ describe('G2 launcher - React-free + under the byte budget', () => {
     expect(MOUNT).toMatch(/requestIdleCallback/);
     // Handoff intent flag consumed by the asset's index.jsx.
     expect(MOUNT).toContain('__ekoaAssistantAutoOpen');
+    // Open-intent EVENT (late leg): every click also dispatches this, so a click
+    // landing after an idle-preload mount still opens the panel (intent never lost).
+    expect(MOUNT).toContain("'ekoa:assistant-open'");
+    const panelJsx = readFileSync(panelSrcFile('AssistantPanel.jsx'), 'utf-8');
+    expect(panelJsx).toContain("'ekoa:assistant-open'"); // ...and the panel listens for it
     // No emoji (UI-code rule).
     const m = MOUNT.match(/\p{Extended_Pictographic}/u);
     expect(m, m ? `mount emoji: ${JSON.stringify(m[0])}` : '').toBeNull();

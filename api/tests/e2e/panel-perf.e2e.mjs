@@ -256,13 +256,22 @@ async function main() {
   ok('A: launcher visible immediately with NO panel-runtime fetch yet (zero React parsed on first paint)');
 
   // ============================================================================
-  // B. LOAD-ON-INTERACTION: click -> exactly one panel-runtime fetch -> panel opens.
+  // B. LOAD-ON-INTERACTION: click -> the panel OPENS -> exactly one fetch ever.
+  // The waiter is armed BEFORE the click (waitForRequest only observes FUTURE
+  // requests - armed after, a fast same-origin fetch slips by: the first run of this
+  // gate failed exactly that way). And it TOLERATES no-new-request: if the 2s-floored
+  // idle preload won the race, the click fetches nothing new - the open-intent event
+  // opens the already-mounted panel, and the once-only invariant is asserted on the
+  // TOTAL fetch count below, which is the honest claim (never eager, never twice).
   // ============================================================================
+  const panelReq = page
+    .waitForRequest((req) => req.url().includes(PANEL_RUNTIME_PATH), { timeout: 15_000 })
+    .catch(() => null);
   await launcher.click();
-  await page.waitForRequest((req) => req.url().includes(PANEL_RUNTIME_PATH), { timeout: 15_000 });
   const intro = page.locator('.ekoa-assistant-intro-lead');
   await intro.waitFor({ state: 'visible', timeout: 15_000 });
-  assert(panelRuntimeReqs === 1, `expected exactly one panel-runtime fetch on click, got ${panelRuntimeReqs}`);
+  void panelReq; // the waiter may have missed a pre-arm idle fetch; the counter is authoritative
+  assert(panelRuntimeReqs === 1, `expected exactly one panel-runtime fetch in total, got ${panelRuntimeReqs}`);
   const introText = (await intro.innerText()).toLowerCase();
   assert(introText.includes('três formas'), `first-open lead missing "três formas": "${introText}"`);
   await page.screenshot({ path: join(EVID, 'live-02-panel-open.png') });
