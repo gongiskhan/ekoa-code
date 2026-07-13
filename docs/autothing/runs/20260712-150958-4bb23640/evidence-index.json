@@ -281,7 +281,7 @@
    "commit": "4503624",
    "tag": "operator/f2",
    "at": "2026-07-13T14:25:02Z",
-   "note": "codexSliceReview blocked-external (quota); retry owed"
+   "note": "codexSliceReview retry landed 2026-07-13 (NEEDS-WORK 4/4 fixed, replay-verified); no longer blocked-external"
   },
   "G2": {
    "status": "passed",

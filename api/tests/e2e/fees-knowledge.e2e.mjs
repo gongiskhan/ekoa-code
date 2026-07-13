@@ -89,7 +89,10 @@ const FEES_DESC = 'Uma aplicação para calcular taxas de justiça e custas proc
 // The DISTINCTIVE reference token the seeded doc + the CITED assertions pin on (title + body + query).
 // UNIQUE PER RUN (timestamp + random, base36, uppercased) so the CITED leg can only match THIS run's
 // own ingest - never a residue doc a prior run left in the shared owner org (see RE-RUN ISOLATION).
-const KB_TOKEN = `EKF-${(Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36)).toUpperCase()}`;
+// The digit 5 is mapped out of the token (codex-f2 High): a token like EKF-AB55CD would let the FACT
+// regex match the token ECHOED in the reply instead of the fee amount - a false-green on the core
+// CITED assertion. Uniqueness is unaffected (timestamp+random space).
+const KB_TOKEN = `EKF-${(Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36)).toUpperCase().replace(/5/g, 'Z')}`;
 // The seeded reference doc carried on the build request's `knowledgeDocs`. The fee FACT
 // ("cinquenta e cinco euros") sits IMMEDIATELY after the distinctive token so it falls inside
 // grounding's short snippet window (a longer preamble would truncate the fact out of the excerpt and
@@ -103,8 +106,10 @@ const KB_DOC = {
 };
 // The fees question, naming this run's seeded circular verbatim so the seeded doc ranks #1.
 const FEES_Q = `Qual é o valor da taxa base de justiça fixada pela Circular ${KB_TOKEN}?`;
-// A grounded answer must NAME the seeded fact, not merely avoid refusing (codex-d3 #1).
-const FACT = /cinquenta\s+e\s+cinco|55/i;
+// A grounded answer must NAME the seeded fact, not merely avoid refusing (codex-d3 #1). The numeric
+// form requires the currency unit (codex-f2 High): a bare /55/ could match digits inside an echoed
+// token or citation index, greening a reply that never states the fee.
+const FACT = /cinquenta\s+e\s+cinco|\b55\b\s*(?:\u20ac|euros?)/i;
 // Refusal shapes (copied from the D3 CITED gate - the same owner-org grounding path).
 const REFUSAL = /n[aã]o\s+(?:posso|consigo)\s+.*(?:responder|ajudar)|sem\s+conhecimento|n[aã]o\s+(?:tenho|há)\s+.*(?:conhecimento|informa|acesso)/i;
 
@@ -113,7 +118,11 @@ const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
 const DASH = /[—–]/; // em-dash / en-dash detector (this line intentionally contains the chars)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function fail(msg) { console.error(`E2E FAIL: ${msg}`); process.exit(1); }
+class E2EFailure extends Error {}
+// fail() THROWS (not process.exit) so mainWithCleanup's finally always runs - with exit(1)
+// here, every assertion failure (SSE loss, timeout, budget) skipped cleanup, which was
+// exactly the leak path codex-f2 Low identified. The terminal catch prints + exits 1.
+function fail(msg) { throw new E2EFailure(`E2E FAIL: ${msg}`); }
 function ok(msg) { console.log(`PASS ${msg}`); }
 function assert(cond, msg) { if (!cond) fail(msg); }
 
@@ -155,7 +164,7 @@ async function login() {
  * never throws. Passing Last-Event-ID:0 on the FIRST connect replays anything buffered before we
  * attached (closes the attach-after-fire race).
  */
-async function collectJobEvents(jobId, token, events, signal) {
+async function collectJobEvents(jobId, token, events, signal, health) {
   let lastId = 0;
   let reconnects = 0;
   while (!signal.aborted) {
@@ -165,7 +174,7 @@ async function collectJobEvents(jobId, token, events, signal) {
         signal,
       });
       if (!res.ok || !res.body) {
-        if (++reconnects > MAX_SSE_RECONNECTS) return;
+        if (++reconnects > MAX_SSE_RECONNECTS) { health.lost = true; return; }
         await sleep(1000);
         continue;
       }
@@ -190,7 +199,7 @@ async function collectJobEvents(jobId, token, events, signal) {
       }
     } catch { /* aborted or dropped */ }
     if (signal.aborted) return;
-    if (++reconnects > MAX_SSE_RECONNECTS) return;
+    if (++reconnects > MAX_SSE_RECONNECTS) { health.lost = true; return; }
     await sleep(1000);
   }
 }
@@ -233,6 +242,12 @@ async function awaitBuild(token, jobId) {
     await sleep(6000);
     const res = await safeJson(`${BASE}/api/v1/jobs/${jobId}`, { headers: H });
     if (!res.ok) {
+      // A structured 4xx JSON body is the API answering deterministically (auth/route/store bug) -
+      // retrying cannot fix it and only masks the real failure (codex-f2 Medium). The transient
+      // class this loop tolerates is the proxy's text/plain 502 (non-JSON) + 5xx blips.
+      if (res.json && res.status >= 400 && res.status < 500) {
+        fail(`build poll: deterministic API error ${res.status} (not a transient): ${res.text.slice(0, 200)}`);
+      }
       transients += 1;
       if (transients > MAX_POLL_TRANSIENTS) fail(`build poll: ${transients} consecutive transient responses (last status ${res.status}: ${res.text.slice(0, 120)})`);
       console.log(`  build poll transient ${transients}/${MAX_POLL_TRANSIENTS} (status ${res.status}) - retrying`);
@@ -272,22 +287,36 @@ async function assistantTurn(artifactId, message) {
   }
 }
 
-/** Best-effort cleanup: DELETE this run's seeded doc(s) (the citation carrying this run's unique
- *  token) so the shared owner org does not accumulate residue across runs. Non-fatal: the gate
- *  verdict already held; a delete blip only leaves one doc behind. Uses the existing knowledge delete
- *  route (DELETE /knowledge/collections/:collection/documents/:id). */
+/** Best-effort cleanup: DELETE this run's seeded doc(s) so the shared owner org does not accumulate
+ *  residue across runs. Runs on EVERY exit path (finally in main - codex-f2 Low: cleanup only after a
+ *  successful CITED pass left failed reruns leaking one doc each). Finds targets by LISTING the
+ *  seeded collection and matching THIS run's unique token in the title (works even when the run died
+ *  before any citation existed); cited ids, when available, are folded in as extra candidates.
+ *  Non-fatal: a delete/list blip only leaves one doc behind, and the per-run token keeps any residue
+ *  inert for future runs' assertions. */
 async function cleanupSeededDoc(token, cites) {
   const H = { Authorization: `Bearer ${token}` };
-  const targets = cites.filter((c) => typeof c.title === 'string' && c.title.includes(KB_TOKEN) && c.collection && c.docId);
+  const targets = new Map(); // docId -> collection
+  const list = await safeJson(
+    `${BASE}/api/v1/knowledge/documents?collection=${encodeURIComponent(KB_DOC.collection)}&limit=500`,
+    { headers: H },
+  );
+  const items = list.ok && list.json && Array.isArray(list.json.items) ? list.json.items : [];
+  for (const d of items) {
+    if (d && typeof d.title === 'string' && d.title.includes(KB_TOKEN) && d.id) targets.set(String(d.id), d.collection || KB_DOC.collection);
+  }
+  for (const c of cites || []) {
+    if (c && typeof c.title === 'string' && c.title.includes(KB_TOKEN) && c.collection && c.docId) targets.set(String(c.docId), c.collection);
+  }
   let removed = 0;
-  for (const c of targets) {
+  for (const [docId, collection] of targets) {
     const del = await safeJson(
-      `${BASE}/api/v1/knowledge/collections/${encodeURIComponent(c.collection)}/documents/${encodeURIComponent(c.docId)}`,
+      `${BASE}/api/v1/knowledge/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(docId)}`,
       { method: 'DELETE', headers: H },
     );
     if (del.ok) removed += 1;
   }
-  console.log(`  cleanup: removed ${removed}/${targets.length} seeded doc(s) for token ${KB_TOKEN} (best-effort)`);
+  console.log(`  cleanup: removed ${removed}/${targets.size} seeded doc(s) for token ${KB_TOKEN} (best-effort)`);
 }
 
 async function main() {
@@ -300,7 +329,10 @@ async function main() {
   ok(`fees build created (${jobId}) with 1 seeded knowledgeDoc "${KB_DOC.title}"`);
   const events = [];
   const sseCtl = new AbortController();
-  const sseDone = collectJobEvents(jobId, token, events, sseCtl.signal);
+  // Health surfaced (codex-f2 Medium): reconnect exhaustion must fail as a TRANSPORT loss,
+  // never masquerade as "F1 did not narrate".
+  const sseHealth = { lost: false };
+  const sseDone = collectJobEvents(jobId, token, events, sseCtl.signal, sseHealth);
 
   const artifactId = await awaitBuild(token, jobId);
   // Give the SSE a beat to flush any final buffered frames, then close it.
@@ -310,6 +342,10 @@ async function main() {
   ok(`fees build completed (artifact ${artifactId}); captured ${events.length} job stream events`);
 
   // 2. NARRATED - the build stream carried F1's two plan_step narrations, PT-PT, no emoji/dash.
+  // TRANSPORT honesty first (codex-f2 Medium): if the collector died (reconnects exhausted), the
+  // narrations may have been emitted but never received - that is an infrastructure failure of THIS
+  // driver's stream, NOT an F1 product failure, and must be reported as such.
+  assert(!sseHealth.lost, `job SSE transport lost after ${MAX_SSE_RECONNECTS} reconnects - narration capture is unreliable; TRANSPORT failure, not an F1 narration failure (captured ${events.length} events before loss)`);
   const seenStatuses = () => JSON.stringify(events.filter((e) => e && e.type === 'plan_step').map((e) => e.status));
   const scope = planStep(events, 'knowledge-scope');
   assert(scope, `no plan_step{status:'knowledge-scope'} in the build stream - F1 hook did not narrate. plan_step statuses seen: ${seenStatuses()}`);
@@ -339,6 +375,11 @@ async function main() {
   for (let attempt = 1; attempt <= LLM_BUDGET && !cited; attempt++) {
     const { status, json } = await assistantTurn(artifactId, FEES_Q);
     if (status !== 200 || !json) {
+      // Deterministic 4xx JSON = the API refusing this request (bad admission/artifact) - burning
+      // the remaining turn budget on retries only hides it (codex-f2 Medium).
+      if (json && status >= 400 && status < 500) {
+        fail(`app-assistant deterministic API error ${status} (not a transient): ${JSON.stringify(json).slice(0, 200)}`);
+      }
       if (llmTurns >= LLM_BUDGET) fail(`app-assistant did not return 200 within ${LLM_BUDGET} turns (last status ${status})`);
       console.log(`  assistant turn ${attempt} transient/non-200 (status ${status}) - retrying`);
       await sleep(1000);
@@ -361,11 +402,27 @@ async function main() {
   ok(`CITED: assistant cited THIS run's build-ingested doc "${KB_TOKEN}" in ${cited.cites.length} citation(s); reply carries the seeded fact and is not a refusal`);
   console.log(`  reply: ${cited.reply.slice(0, 200).replace(/\s+/g, ' ')}`);
   console.log(`  citations: ${JSON.stringify(cited.cites.map((c) => c.title))}`);
-
-  // Housekeeping (non-fatal): remove this run's seeded doc so the shared org stays clean across runs.
-  await cleanupSeededDoc(token, cited.cites);
+  lastCites = cited.cites;
 
   console.log('F2 LIVE GATE: PASS');
 }
 
-main().catch((e) => fail(e && e.stack ? e.stack : String(e)));
+/** Citations from a successful CITED pass, folded into cleanup as extra candidates. */
+let lastCites = null;
+
+/** Cleanup on EVERY exit path (codex-f2 Low) - a failed rerun must not leak its seeded doc. */
+async function mainWithCleanup() {
+  try {
+    await main();
+  } finally {
+    try {
+      const token = await login();
+      await cleanupSeededDoc(token, lastCites);
+    } catch { /* best-effort - never mask the run's real outcome */ }
+  }
+}
+
+mainWithCleanup().catch((e) => {
+  console.error(e instanceof E2EFailure ? e.message : `E2E FAIL: ${e && e.stack ? e.stack : String(e)}`);
+  process.exit(1);
+});

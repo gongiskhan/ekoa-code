@@ -2,16 +2,52 @@
   "slice": "F2",
   "kind": "mixed",
   "commit": "4503624",
-  "commits": ["528cd9b", "f75f2ad", "4503624"],
+  "commits": [
+    "528cd9b",
+    "f75f2ad",
+    "4503624"
+  ],
   "tag": "operator/f2",
   "gates": {
-    "implement": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "proof slice, NO production code: committed re-runnable black-box driver api/tests/e2e/fees-knowledge.e2e.mjs (528cd9b) over the credentialed boot-b stack - one real fees build via POST /jobs carrying knowledgeDocs, narration captured off the job SSE (Last-Event-ID replay, reconnect-bounded), cited answer via POST /api/app-assistant with X-Ekoa-App-Id; transient-502-hardened (F-2026-07-12-preview-502 class); per-run unique token EKF-<runstamp> (f75f2ad); build deadline recalibrated 10->20min on observed healthy 12-17min cold-stack builds (4503624)" },
-    "test": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "the driver IS the committed test (re-runnable, budget-capped 1 build + 3 assistant HTTP turns hard cap, cleanup best-effort deletes this run's seeded doc); node --check clean; e2e drivers are lint-ignored by pattern like the rest of tests/e2e; registered in SUITE_LEDGER node_drivers (ac1f3d3)" },
-    "securityWall": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "gitleaks clean on all commits; chokepoint grep clean; no production/auth/permission code touched (git show --stat verified by fresh review); seeded doc enters via the public jobs contract only - no side-channel ingest" },
-    "liveVerification": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "F2 LIVE GATE: PASS 2026-07-13 (build 1187614e -> artifact a4a3b81c, 93 stream events, 1 tolerated 502): NARRATED knowledge-scope naming financeira + knowledge-indexed exactly '1 documento' (PT-PT, no emoji/dash, captured off THIS build's SSE); INGESTED org-scoped through the build; CITED with the per-run token EKF-MRJAMZPIEJOZ pinned in citations + fact '55'/'cinquenta e cinco' + not-a-refusal - WITH real cross-run residue present (EKF-MRJA4XWQ68XW from the deadline-bailed run also in citations), proving the isolation fix does exactly what the fresh review demanded. Evidence: slices/F2/live-output.txt + evidence-live.cast (local, casts repo-ignored). Builds burned across all F2 runs: 4 (crashed-poll run1, green pre-fix run2 528cd9b, deadline-bail run3, green gate run4); assistant turns: 2" },
-    "freshReview": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "VERDICT: NEEDS-WORK -> fixed -> green (slices/F2/review-verdict.md): assertion honesty held on all four sub-checks (narration keyed to real plan_step shape + count-sensitive '1 documento' regex; CITED requires all three legs, refusal-with-citations fails); the one Medium blocker (fixed KB_TOKEN broke re-run isolation, residue accumulation in the shared org) fixed via per-run unique token in title+body+query (f75f2ad) and the fix PROVEN live against actual residue in the gate run" },
-    "codexSliceReview": { "status": "blocked-external", "at": "2026-07-13T14:25:02Z", "detail": "codex exec quota-exhausted (OpenAI plan) - failed twice 2026-07-13T01:47Z and re-probed still exhausted 2026-07-13T13:47Z (slices/F2/codex-blocked.md). Recorded blocked-external, NOT skipped: retry owed on quota reset; H6 contingency stands (probe before opening H; if still dry, stop cleanly after G2)" },
-    "designAudit": { "status": "skipped", "reason": "proof slice: no UI surface (panel Fontes rendering proven by D2/D3)", "at": "2026-07-13T14:25:02Z" },
-    "walkthrough": { "status": "passed", "at": "2026-07-13T14:25:02Z", "detail": "evidence-live.cast (asciinema of the green gate run) + live-output.txt (committed)" }
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "proof slice, NO production code: committed re-runnable black-box driver api/tests/e2e/fees-knowledge.e2e.mjs (528cd9b) over the credentialed boot-b stack - one real fees build via POST /jobs carrying knowledgeDocs, narration captured off the job SSE (Last-Event-ID replay, reconnect-bounded), cited answer via POST /api/app-assistant with X-Ekoa-App-Id; transient-502-hardened (F-2026-07-12-preview-502 class); per-run unique token EKF-<runstamp> (f75f2ad); build deadline recalibrated 10->20min on observed healthy 12-17min cold-stack builds (4503624)"
+    },
+    "test": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "the driver IS the committed test (re-runnable, budget-capped 1 build + 3 assistant HTTP turns hard cap, cleanup best-effort deletes this run's seeded doc); node --check clean; e2e drivers are lint-ignored by pattern like the rest of tests/e2e; registered in SUITE_LEDGER node_drivers (ac1f3d3)"
+    },
+    "securityWall": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "gitleaks clean on all commits; chokepoint grep clean; no production/auth/permission code touched (git show --stat verified by fresh review); seeded doc enters via the public jobs contract only - no side-channel ingest"
+    },
+    "liveVerification": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "F2 LIVE GATE: PASS 2026-07-13 (build 1187614e -> artifact a4a3b81c, 93 stream events, 1 tolerated 502): NARRATED knowledge-scope naming financeira + knowledge-indexed exactly '1 documento' (PT-PT, no emoji/dash, captured off THIS build's SSE); INGESTED org-scoped through the build; CITED with the per-run token EKF-MRJAMZPIEJOZ pinned in citations + fact '55'/'cinquenta e cinco' + not-a-refusal - WITH real cross-run residue present (EKF-MRJA4XWQ68XW from the deadline-bailed run also in citations), proving the isolation fix does exactly what the fresh review demanded. Evidence: slices/F2/live-output.txt + evidence-live.cast (local, casts repo-ignored). Builds burned across all F2 runs: 4 (crashed-poll run1, green pre-fix run2 528cd9b, deadline-bail run3, green gate run4); assistant turns: 2"
+    },
+    "freshReview": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "VERDICT: NEEDS-WORK -> fixed -> green (slices/F2/review-verdict.md): assertion honesty held on all four sub-checks (narration keyed to real plan_step shape + count-sensitive '1 documento' regex; CITED requires all three legs, refusal-with-citations fails); the one Medium blocker (fixed KB_TOKEN broke re-run isolation, residue accumulation in the shared org) fixed via per-run unique token in title+body+query (f75f2ad) and the fix PROVEN live against actual residue in the gate run"
+    },
+    "codexSliceReview": {
+      "status": "passed",
+      "at": "2026-07-13T16:35:00Z",
+      "detail": "RETRY LANDED (quota returned 2026-07-13; was blocked-external): gpt-5.5/high NEEDS-WORK with 1 High + 2 Medium + 1 Low, ALL fixed same-day (driver-only, no production code) - (High) FACT regex could false-green on the run token itself (base36 tokens can contain 55; a reply echoing 'Circular EKF-AB55CD' without the fee would satisfy the CITED triple): token now generated 5-free + numeric FACT form requires the currency unit; REPLAY-VERIFIED against the recorded green evidence (recorded reply still passes, codex's adversarial counterexample now fails, 2000 generated tokens carry no 5) and the committed green runs were verified GENUINE (neither token contained 55, reply stated 'cinquenta e cinco euros' explicitly); (Med) SSE reconnect exhaustion now surfaces as a distinct TRANSPORT failure before the narration asserts, never masquerading as an F1 product failure; (Med) deterministic 4xx JSON responses fast-fail the poll and assistant loops instead of burning transient/turn budget; (Low) cleanup runs on EVERY exit path (fail() throws instead of process.exit; finally re-logins and deletes by token-search of the seeded collection, cited ids folded in). slices/F2/codex-review.md"
+    },
+    "designAudit": {
+      "status": "skipped",
+      "reason": "proof slice: no UI surface (panel Fontes rendering proven by D2/D3)",
+      "at": "2026-07-13T14:25:02Z"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "at": "2026-07-13T14:25:02Z",
+      "detail": "evidence-live.cast (asciinema of the green gate run) + live-output.txt (committed)"
+    }
   }
 }
