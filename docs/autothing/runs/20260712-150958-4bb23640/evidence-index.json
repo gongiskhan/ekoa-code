@@ -282,6 +282,13 @@
    "tag": "operator/f2",
    "at": "2026-07-13T14:25:02Z",
    "note": "codexSliceReview blocked-external (quota); retry owed"
+  },
+  "G2": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "3254e23",
+   "tag": "operator/g2",
+   "at": "2026-07-13T16:05:00Z"
   }
  },
  "resume": {
@@ -292,8 +299,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 23,
-  "resumePoint": "G2 (panel lazy-load, brief final at slices/G2/brief.md)",
-  "note": "Run continues ON MAIN. 23/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1-F2,G1). F2 gated 2026-07-13 with codexSliceReview blocked-external (OpenAI quota; retry owed). Next G2, then the atomic H1-H6 security block (H6 gated on codex availability - probe before opening H, else stop cleanly after G2)."
+  "landed": 24,
+  "resumePoint": "H1 (security block OPEN - codex quota returned)",
+  "note": "Run continues ON MAIN. 24/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1-F2,G1-G2). Codex quota RETURNED 2026-07-13 (~16:55 local): G2 codex pass ran (NEEDS-WORK 3/3 fixed); F2 retro pass owed next; H-block contingency CLEARED - H1-H6 opens (atomic, together-or-not-at-all; can() stub gets its real implementation in H1)."
  }
 }

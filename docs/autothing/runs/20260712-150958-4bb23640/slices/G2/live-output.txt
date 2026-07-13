@@ -1,0 +1,8 @@
+PASS admin login
+PASS fresh app-base app built (ecd8826e-431a-40be-b3f3-c56716766dd7) - the app bundle carries only the lazy launcher
+PASS A: launcher visible immediately with NO panel-runtime fetch yet (zero React parsed on first paint)
+PASS B: clicking the launcher triggered exactly ONE panel-runtime fetch and the panel opened
+PASS C: the lazy-mounted panel played the tour to "concluído" (navigate + spotlight + await-action + inject-prompt)
+PASS D: zero POST /api/app-assistant throughout; exactly one panel-runtime fetch (no idle double-load)
+PASS E: zero non-benign page JS console errors throughout
+G2 LIVE GATE: PASS
