@@ -90,6 +90,10 @@ const COVERED = new Set<string>([
   // the whoami route matrix in tests/apps/app-assistant.test.ts). Additive endpoint: covering it
   // keeps EXPECTED_PENDING_COUNT unchanged (assistantChat stays PENDING as before).
   'appAssistant.whoami',
+  // operator-run H4 — the request-changes queue (change-requests.test.ts contract +
+  // tests/routes/change-requests.test.ts integration). A NEW domain: covering all four keeps
+  // EXPECTED_PENDING_COUNT unchanged.
+  'changeRequests.file', 'changeRequests.list', 'changeRequests.convert', 'changeRequests.dismiss',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

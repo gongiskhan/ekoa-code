@@ -28,4 +28,13 @@ describe('lib/navigation NAV_ITEMS', () => {
     const users = NAV_ITEMS.find((i) => i.href === '/users');
     expect(users?.adminOnly).toBe(true);
   });
+
+  it('exposes the H4 change-requests queue as an admin-only surface (raw PT label, like registo)', () => {
+    const pedidos = NAV_ITEMS.find((i) => i.href === '/pedidos');
+    expect(pedidos).toBeTruthy();
+    expect(pedidos?.adminOnly).toBe(true);
+    expect(pedidos?.superAdminOnly).toBeFalsy(); // org-admin AND super-admin, like registo
+    expect(pedidos?.label).toBe('Pedidos');
+    expect(pedidos?.icon).toBeTruthy();
+  });
 });

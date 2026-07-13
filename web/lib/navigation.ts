@@ -8,6 +8,7 @@ import {
   Palette,
   Users,
   ScrollText,
+  Inbox,
   Building2,
   ShieldCheck,
   Settings as SettingsIcon,
@@ -56,6 +57,8 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/users", icon: Users, labelKey: "users", adminOnly: true },
   // FC-502: the Registo admin read surface (metadata + artifacts only).
   { href: "/registo", icon: ScrollText, label: "Registo", adminOnly: true },
+  // H4: the request-changes queue (users' change requests; org-admin converts one to a patch run).
+  { href: "/pedidos", icon: Inbox, label: "Pedidos", adminOnly: true },
   // FC-501: super-admin org management.
   { href: "/orgs", icon: Building2, label: "Escritórios", superAdminOnly: true },
   // FC-404 (RESOLVED Q-07): the "Privacidade e ponte local" surface, absorbing the

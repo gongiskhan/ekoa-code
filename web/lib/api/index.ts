@@ -44,6 +44,7 @@ import {
   billingEndpoints,
   uploadsEndpoints,
   registoEndpoints,
+  changeRequestsEndpoints,
   appAssistantEndpoints,
   servedAppEndpoints,
   ekoaLocalEndpoints,
@@ -100,8 +101,9 @@ export function createClient<T extends Record<string, DomainDescriptorMap>>(maps
 
 // -- The bound client -------------------------------------------------------------------
 //
-// Domain keys mirror ch03 / `shared` ALL_ENDPOINTS one to one (24 domains; no `teams` -
-// removed end to end, Amendment 2; `company` -> `org`, renamed resource). Written as an
+// Domain keys mirror ch03 / `shared` ALL_ENDPOINTS one to one (25 domains incl. H4
+// changeRequests; no `teams` - removed end to end, Amendment 2; `company` -> `org`, renamed
+// resource; `credentials` is api-only, not surfaced here). Written as an
 // object literal (not `ALL_ENDPOINTS`) so the DOMAIN keys stay literal and autocomplete.
 
 const domainMaps = {
@@ -125,6 +127,7 @@ const domainMaps = {
   billing: billingEndpoints,
   uploads: uploadsEndpoints,
   registo: registoEndpoints,
+  changeRequests: changeRequestsEndpoints,
   appAssistant: appAssistantEndpoints,
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,

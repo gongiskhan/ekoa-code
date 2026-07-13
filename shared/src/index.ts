@@ -25,6 +25,7 @@ import { billingEndpoints } from './billing.js';
 import { credentialsEndpoints } from './credentials.js';
 import { uploadsEndpoints } from './uploads.js';
 import { registoEndpoints } from './registo.js';
+import { changeRequestsEndpoints } from './change-request.js';
 import { appAssistantEndpoints } from './app-assistant.js';
 import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
@@ -55,6 +56,7 @@ export * from './billing.js';
 export * from './credentials.js';
 export * from './uploads.js';
 export * from './registo.js';
+export * from './change-request.js';
 export * from './capabilities.js';
 export * from './action-manifest.js';
 export * from './artifact-type.js';
@@ -87,6 +89,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   credentials: credentialsEndpoints,
   uploads: uploadsEndpoints,
   registo: registoEndpoints,
+  changeRequests: changeRequestsEndpoints,
   appAssistant: appAssistantEndpoints,
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,

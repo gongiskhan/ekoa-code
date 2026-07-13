@@ -67,6 +67,23 @@ export interface ActivityLogDoc extends Doc {
   timestamp: string;
   metadata?: Record<string, unknown>;
 }
+/** Change-requests queue (operator-run H4). A user's request to change a served app; the app
+ *  OWNER's org-admins read + convert it. `orgId` is the isolation boundary (owner org for a
+ *  served-app filing, the requester's own org for a dashboard refused-build filing) — always
+ *  stamped server-side, never from the caller's body. `appId`/`route`/`screenState` are absent
+ *  for a refused first-build filing. `jobId` is set when an admin converts it into a patch run. */
+export interface ChangeRequestDoc extends Doc {
+  appId?: string;
+  orgId: string;
+  requesterUserId: string;
+  requesterName: string;
+  route?: string;
+  screenState?: string;
+  text: string;
+  status: 'open' | 'converted' | 'dismissed';
+  createdAt: string;
+  jobId?: string;
+}
 export interface SettingsDoc extends Doc {
   [k: string]: unknown;
 }
@@ -92,6 +109,7 @@ export const integrationConfigs = new Store<Doc>('integration_configs');
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */
 export const integrationBuilderSessions = new Store<Doc>('integration_builder_sessions');
 export const activityLogs = new Store<ActivityLogDoc>('activity_logs');
+export const changeRequests = new Store<ChangeRequestDoc>('change_requests');
 export const jobs = new Store<Doc>('jobs');
 export const settings = new Store<SettingsDoc>('settings');
 export const userSettings = new Store<UserSettingsDoc>('user_settings');

@@ -36,6 +36,10 @@ import { createTourPlayer } from './tour-player';
 // /api/app-assistant. Every action it calls is H1-gated server-side; this panel only SHOWS
 // the affordance when detection said admin, and only after the admin OPTS IN (detect-then-ask).
 import { runEditPatch, guardedRollback, degradeMessage, progressLine, EDIT_COPY } from './edit-mode';
+// H4 CHANGE REQUESTS (non-admins): a viewer who cannot edit this app can file a change request
+// into the app OWNER's org-admin queue (a SEPARATE thin platform endpoint; the visitor-blind
+// POST /api/app-assistant plane is untouched). Filing requires a logged-in platform user.
+import { fileChangeRequest, REQUEST_COPY } from './change-request';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
@@ -107,6 +111,22 @@ function currentRoute() {
   const loc = window.location;
   const r = (loc && (loc.hash || loc.pathname)) || '';
   return r ? String(r) : undefined;
+}
+
+/** Best-effort short screen-context descriptor for a filed change request (H4): the shell may
+ *  expose a `screenState` string on window.__ekoaApp; otherwise fall back to the document title so
+ *  the org-admin has a hint of WHERE the request came from. Bounded; undefined when nothing known.
+ *  Never throws (a cross-origin access is swallowed). Org-internal - never egressed to a model. */
+function captureScreenState() {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const app = window.__ekoaApp;
+    if (app && typeof app.screenState === 'string' && app.screenState) return app.screenState.slice(0, 8000);
+    const title = typeof document !== 'undefined' && document.title ? String(document.title) : '';
+    return title ? title.slice(0, 8000) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -288,6 +308,15 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   // Admin discovery (proactive teaching, shown ONCE, dismissible). Suppressed after the admin
   // dismisses it OR opts into edit mode. It never auto-enables edit - its CTA is an explicit click.
   const [discoveryDismissed, setDiscoveryDismissed] = useState(false);
+
+  // H4 CHANGE REQUEST (non-admins only): the "Pedir alteração" flow. idle (a discreet button) ->
+  // compose (type the request) -> note (a calm terminal message: filed / needs-login / failed).
+  // Shown ONLY when admin === false; an admin uses edit mode instead. Filing requires a logged-in
+  // platform user - no readable token / a 401 lands on the calm "inicie sessão" note.
+  const [requestPhase, setRequestPhase] = useState('idle');
+  const [requestDraft, setRequestDraft] = useState('');
+  const [requestMessage, setRequestMessage] = useState(''); // calm PT-PT copy for the 'note' phase
+  const [requestBusy, setRequestBusy] = useState(false); // guards double-submit during a file call
 
   const idRef = useRef(0);
   const messagesRef = useRef(messages);
@@ -710,6 +739,54 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     }
   }, [editPreview]);
 
+  // ---- H4 change request (non-admins only) --------------------------------
+  // A viewer who cannot edit this app (admin === false) can file a change request to the app
+  // OWNER's org-admin queue. A THIN wire over POST /api/v1/change-requests - a SEPARATE plane
+  // from the visitor-blind POST /api/app-assistant. The SERVER authorises (requires a logged-in
+  // platform user + resolves the owner org from X-Ekoa-App-Id); this only drives the flow.
+
+  /** Open the compose box (an explicit non-admin click). */
+  const openRequest = useCallback(() => {
+    setRequestPhase('compose');
+    setRequestMessage('');
+  }, []);
+
+  /** Cancel back to idle without sending. */
+  const cancelRequest = useCallback(() => {
+    setRequestPhase('idle');
+    setRequestDraft('');
+  }, []);
+
+  /** Close a terminal note back to a clean idle state. */
+  const resetRequest = useCallback(() => {
+    setRequestPhase('idle');
+    setRequestDraft('');
+    setRequestMessage('');
+  }, []);
+
+  /** Submit the request. Reads the served-app id + the platform token best-effort and captures the
+   *  current route + screen context so the request arrives contextualised. No readable token / a
+   *  401 -> the calm "inicie sessão" note (filing requires a session); any other failure -> a calm
+   *  retry note. Never throws. */
+  const submitRequest = useCallback(async () => {
+    const text = requestDraft.trim();
+    if (!text) return;
+    setRequestBusy(true);
+    const result = await fileChangeRequest({
+      fetchImpl: (url, opts) => fetch(url, opts),
+      appId: appId(),
+      token: readPlatformToken(),
+      text,
+      route: currentRoute(),
+      screenState: captureScreenState(),
+    });
+    setRequestBusy(false);
+    if (result.outcome === 'filed') setRequestMessage(REQUEST_COPY.filed);
+    else if (result.outcome === 'needs-login') setRequestMessage(REQUEST_COPY.needsLogin);
+    else setRequestMessage(REQUEST_COPY.failed);
+    setRequestPhase('note');
+  }, [requestDraft]);
+
   if (collapsed) {
     return (
       <button type="button" className="ekoa-assistant-launcher" onClick={open} aria-label="Abrir o assistente">
@@ -924,6 +1001,56 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
                   Nova alteração
                 </button>
               </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* H4 change request (non-admins): a discreet "Pedir alteração" affordance for a viewer who
+          cannot edit this app. It NEVER auto-sends - an explicit click opens the composer; submit
+          files to the owner's org-admin queue (requires a logged-in platform user; a 401 / no token
+          shows the calm "inicie sessão" note). Distinct from the admin edit switch (admin only). */}
+      {!admin ? (
+        <section className="ekoa-assistant-request" data-request-phase={requestPhase} aria-label="Pedir alteração">
+          {requestPhase === 'idle' ? (
+            <button type="button" className="ekoa-assistant-request-open" onClick={openRequest}>
+              {REQUEST_COPY.open}
+            </button>
+          ) : null}
+
+          {requestPhase === 'compose' ? (
+            <div className="ekoa-assistant-request-compose">
+              <p className="ekoa-assistant-request-intro">{REQUEST_COPY.intro}</p>
+              <textarea
+                className="ekoa-assistant-request-textarea"
+                placeholder={REQUEST_COPY.placeholder}
+                value={requestDraft}
+                onChange={(e) => setRequestDraft(e.target.value)}
+                rows={2}
+                aria-label="Pedido de alteração"
+              />
+              <div className="ekoa-assistant-request-actions">
+                <button
+                  type="button"
+                  className="ekoa-assistant-request-primary"
+                  onClick={submitRequest}
+                  disabled={!requestDraft.trim() || requestBusy}
+                >
+                  {REQUEST_COPY.submit}
+                </button>
+                <button type="button" className="ekoa-assistant-request-secondary" onClick={cancelRequest}>
+                  {REQUEST_COPY.cancel}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {requestPhase === 'note' ? (
+            <div className="ekoa-assistant-request-note" role="status">
+              <p className="ekoa-assistant-request-note-text">{requestMessage}</p>
+              <button type="button" className="ekoa-assistant-request-secondary" onClick={resetRequest}>
+                {REQUEST_COPY.close}
+              </button>
             </div>
           ) : null}
         </section>

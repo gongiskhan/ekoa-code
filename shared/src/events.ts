@@ -188,6 +188,10 @@ export const NotificationEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('integration_build_intent'), sessionId: z.string(), hint: z.string().optional() }),
   z.object({ type: z.literal('integration_ready'), integrationKey: z.string() }),
   z.object({ type: z.literal('usage_updated') }),
+  // A user filed a change request against an app this org-admin oversees (operator-run H4):
+  // the live push into the org-admin's per-user notifications channel telling the dashboard
+  // queue to refetch. `appId` is the served app it concerns (absent for a refused-build filing).
+  z.object({ type: z.literal('change_request'), appId: z.string().optional() }),
   // Org branding changed (brand research applied) - clients refetch the company/branding
   // config so the header logo + theme update live instead of waiting for a page reload.
   z.object({ type: z.literal('branding_updated') }),

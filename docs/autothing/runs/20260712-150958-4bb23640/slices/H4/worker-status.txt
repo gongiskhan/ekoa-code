@@ -1,0 +1,27 @@
+DONE-GREEN
+
+H4 request-changes QUEUE (users file; org-admin converts) + refused-build feed. GREENFIELD.
+
+api vitest (FULL lane): 177 files, 1601 passed, 1 skipped, 0 failed
+shared vitest: 2 files, 36 passed
+web vitest: 30 files, 168 passed
+api tsc (src) 0; api tsc (test) 0; web tsc 0
+eslint (api+shared+web touched) 0 errors
+panel build (build.mjs) OK (248463 bytes)
+gate:chokepoint clean
+diagram 03-request-crud updated (+1 note, no overlap, valid JSON)
+
+New H4 tests:
+- api/tests/contract/change-requests.test.ts (contract: shapes + live-response schema validation)
+- api/tests/routes/change-requests.test.ts (integration: file->owner-org queue; org-admin OWN org
+  only; CROSS-ORG ISOLATION; user 403; convert flips status+jobId; cross-org convert 404; dismiss;
+  refused-build own-org filing)
+- api/tests/apps/change-request.test.ts (panel controller fake-fetch + AssistantPanel source pins)
+- schema-coverage COVERED += 4 changeRequests.* keys (EXPECTED_PENDING_COUNT unchanged = 49)
+- web/__tests__/navigation.test.ts += pedidos nav pin
+
+Cross-org isolation: orgId is ALWAYS server-stamped (owner org for served-app filing; requester
+own org for refused-build filing), never from the caller body; read/convert/dismiss org-scoped like
+registo (org-admin OWN org; super-admin across orgs); cross-org convert/dismiss -> uniform 404.
+
+No commits, no stack ops, no real builds. Working tree only.

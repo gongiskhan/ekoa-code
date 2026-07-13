@@ -145,6 +145,14 @@ export function emitChatAnswer(userId: string, ev: { sessionId: string; sourceRu
   sseManager.emit('notifications', userId, 'chat_answer', payload);
 }
 
+/** A user filed a change request into an org-admin's queue (operator-run H4): push a live
+ *  refetch signal onto that admin's per-user notifications channel. Fired once per org-admin of
+ *  the target org — the queue is org-scoped, so only that org's admins are notified. */
+export function emitChangeRequest(userId: string, ev: { appId?: string }): void {
+  const payload: NotificationEvent = { type: 'change_request', ...(ev.appId ? { appId: ev.appId } : {}) };
+  sseManager.emit('notifications', userId, 'change_request', payload);
+}
+
 /** Org branding changed (brand research applied): tell the user's clients to refetch the
  *  company config so the header logo + theme update live (no page reload). Per-user channel -
  *  other org members pick the change up on their next company fetch. */

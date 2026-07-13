@@ -31,6 +31,7 @@ import { settingsRouter } from './routes/settings.js';
 import { sessionsRouter } from './routes/sessions.js';
 import { memoriesRouter } from './routes/memories.js';
 import { registoRouter } from './routes/registo.js';
+import { changeRequestsRouter } from './routes/change-requests.js';
 import { billingRouter } from './routes/billing.js';
 import { credentialsRouter } from './routes/credentials.js';
 import { llmHealth, registerGateway, loadCredential, setRulesetResolver } from './llm/index.js';
@@ -564,6 +565,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/sessions', sessionsRouter(deps));
   app.use('/api/v1/memories', memoriesRouter(deps));
   app.use('/api/v1/registo', registoRouter(deps));
+  app.use('/api/v1/change-requests', changeRequestsRouter(deps));
   app.use('/api/v1/billing', billingRouter(deps));
   // F2 — model-credential provisioning (super-admin, write-only, audit-logged; ch06 §6.2).
   app.use('/api/v1/credentials', credentialsRouter(deps));

@@ -390,6 +390,111 @@
   cursor: not-allowed;
 }
 
+/* -- H4 change request (non-admin zone) ----------------------------------- */
+/* A discreet affordance for a viewer who cannot edit the app. Brand-neutral via the panel CSS
+   vars; visually calmer than the admin edit zone (no accent bar) - it is a request, not an edit. */
+
+.ekoa-assistant-request {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+  padding: var(--space-3, 0.75rem) var(--space-6, 1.5rem);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.ekoa-assistant-request-open {
+  align-self: flex-start;
+  padding: var(--space-1, 0.25rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  font: inherit;
+  font-size: var(--text-sm, 0.8125rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-request-open:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+  color: var(--color-text, #0F172A);
+}
+
+.ekoa-assistant-request-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+}
+
+.ekoa-assistant-request-intro,
+.ekoa-assistant-request-note-text {
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.5;
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-request-textarea {
+  width: 100%;
+  min-height: 56px;
+  max-height: 160px;
+  resize: vertical;
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-bg, #FFFFFF);
+  color: var(--color-text, #0F172A);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.4;
+}
+
+.ekoa-assistant-request-textarea:focus {
+  outline: 2px solid var(--color-primary, #0F766E);
+  outline-offset: -1px;
+}
+
+.ekoa-assistant-request-actions {
+  display: flex;
+  gap: var(--space-2, 0.5rem);
+  flex-wrap: wrap;
+}
+
+.ekoa-assistant-request-primary {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-primary, #0F766E);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-primary, #0F766E);
+  color: var(--color-bg, #FFFFFF);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ekoa-assistant-request-primary:hover {
+  filter: brightness(0.96);
+}
+
+.ekoa-assistant-request-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ekoa-assistant-request-secondary {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text, #0F172A);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-request-secondary:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
 .ekoa-assistant-edit-running {
   display: flex;
   align-items: center;
