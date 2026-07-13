@@ -260,6 +260,13 @@
       "commit": "c20aa23",
       "tag": "operator/f1",
       "at": "2026-07-13T07:48:19Z"
+    },
+    "E2": {
+      "status": "passed",
+      "kind": "mixed",
+      "commit": "16bded0",
+      "tag": "operator/e2",
+      "at": "2026-07-13T08:48:58Z"
     }
   },
   "resume": {
@@ -269,8 +276,8 @@
   },
   "globalGate": {
     "status": "in-progress",
-    "at": "2026-07-13T07:48:19Z",
-    "landed": 20,
-    "note": "20/31 gated. E2 live gate running; then G1/G2, F2, then the atomic H block."
+    "at": "2026-07-13T08:48:58Z",
+    "landed": 21,
+    "note": "21/31 gated. G1 in flight (live probe resuming), G2+F2 next, then the atomic H block."
   }
 }
