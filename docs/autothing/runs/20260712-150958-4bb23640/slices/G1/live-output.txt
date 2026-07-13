@@ -1,0 +1,15 @@
+PASS admin login (artifact owner + super-admin for breakdown)
+PASS distinct visitor provisioned + logged in (userId=14fb2aca-1f55-49e8-a36d-d781376ee0c9) — drives the panel, must never be billed
+PASS fresh app-base app built by admin (owner=admin, artifact=6a513cdd-cfea-4b7f-8273-4196620f05ec)
+PASS document-access contrast: owner 200 / non-owner 410 unpublished; featured -> visitor 200 (visitor is a genuine non-owner who can now drive the shared app)
+PASS tour serving route live (GET /api/demos/:appId -> 404)
+PASS panel opened as the visitor; same-document C3 action runtime installed
+PASS REGISTRY: setField ran in-page (field -> "REGISTO-LOCAL-G1"); zero assistant POSTs; zero new owner billing rows
+PASS TOUR: full overview tour reached "concluído"; zero assistant POSTs; zero new owner billing rows (client-side, zero-token)
+PASS turn 1/2 fired (200, mode="teach", reply 1724 chars)
+PASS turn 2/2 fired (200, mode="teach", reply 1668 chars)
+PASS METERED: 2 visitor-driven turns -> exactly 2 new 'assistant-chat' rows on the OWNER ledger (tokens=1134,3230); VISITOR ledger unchanged (billed to owner, NOT the caller)
+PASS BREAKDOWN: /billing/breakdown groups an 'assistant-chat' line (tokens=4364)
+PASS zero non-benign page JS console errors throughout
+PASS test app un-featured (cleanup ok)
+G1 LIVE GATE: PASS
