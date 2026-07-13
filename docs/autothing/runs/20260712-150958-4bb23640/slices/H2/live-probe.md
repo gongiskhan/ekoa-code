@@ -27,3 +27,22 @@ The panel consumes `admin` only to render a discreet inert badge; no privileged 
 change follows detection (the edit-mode switch is H3). The org-admin-of-owner-org true case and the
 full role/org grid are additionally pinned in tests/apps/app-assistant.test.ts over the REAL verify
 chain (mongodb-memory-server), and the contract both-branches in the contract suite.
+
+## Codex-fix re-probe (2026-07-13, mirror-the-H1-gate dist)
+
+After whoami was changed to mirror the H1 edit gate (can(canEditApps) + loadWritable), re-probed
+task-manager (a featured app in the founder org):
+
+| caller                    | observed                          |
+|---------------------------|-----------------------------------|
+| no token                  | `200 {"admin":false}`             |
+| cross-org `user`          | `200 {"admin":false}`             |
+| super-admin (founder org) | `200 {"admin":true}`              |
+| invalid token             | `200 {"admin":false}`             |
+| malformed X-Ekoa-App-Id   | `400` (== POST)                   |
+
+The super-admin `true` is correct under the new semantics: task-manager is in the super-admin's OWN
+(founder) org and writable (loadWritable ok) - NOT a cross-org grant. A super-admin against an app
+in ANOTHER org now reads `admin:false` (loadWritable notfound), matching what the H1 follow-up build
+would actually allow. The full org-scoped matrix (org-shared true / same-org private-draft false /
+cross-org false / orphaned-owner false) is pinned deterministically in tests/apps/app-assistant.test.ts.
