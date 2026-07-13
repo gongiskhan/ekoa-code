@@ -83,11 +83,12 @@ const DOMAINS: KnowledgeDomain[] = [
     key: 'saude',
     label: 'clínica',
     keywords: [
-      // PT
-      'clinic', 'clinico', 'paciente', 'doente', 'diagnostico', 'prescricao', 'medicamento',
-      'sintoma', 'terapeutica',
-      // EN
-      'patient', 'clinical', 'diagnosis', 'prescription', 'dosage', 'healthcare',
+      // PT ('medic' stem covers medica/medicos/medicina/medicamento/medical; 'consultas' is the
+      // safe plural - bare 'consulta' would prefix-fire on EN "consultant")
+      'clinic', 'clinico', 'paciente', 'doente', 'diagnostico', 'prescricao', 'medic',
+      'sintoma', 'terapeutica', 'hospital', 'consultas', 'enfermeir', 'enfermagem',
+      // EN ('doctors' not bare 'doctor', which would prefix-fire on "doctorate")
+      'patient', 'clinical', 'diagnosis', 'prescription', 'dosage', 'healthcare', 'doctors',
     ],
   },
   {

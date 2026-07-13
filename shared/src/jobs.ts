@@ -40,6 +40,19 @@ export const JobCreateRequest = z.object({
   attachments: z.array(UploadRef).optional(),
   fieldValues: z.record(z.unknown()).optional(),
   configValues: z.record(z.unknown()).optional(),
+  // F1 knowledge-during-build: scoping-provided reference documents a domain-heavy FIRST build
+  // ingests into the org knowledge area (org-scoped server-side by the run's actor). Additive +
+  // optional. Bounded at the boundary: max 20 docs, 256 KiB of text each.
+  knowledgeDocs: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(300),
+        text: z.string().min(1).max(262144),
+        collection: z.string().min(1).max(100).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 export type JobCreateRequest = z.infer<typeof JobCreateRequest>;
 

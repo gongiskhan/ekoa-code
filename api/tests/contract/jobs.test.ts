@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { JobCreateResponse, Job, JobCancelResponse, ErrorEnvelope } from '@ekoa/shared';
+import { JobCreateRequest, JobCreateResponse, Job, JobCancelResponse, ErrorEnvelope } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, userSettings } from '../../src/data/stores.js';
@@ -62,6 +62,21 @@ describe('build jobs contract (§3.8.8)', () => {
 
     const cancelled = await api(`/api/v1/jobs/${jobId}/cancel`, t, { method: 'POST' });
     expect(JobCancelResponse.safeParse(await cancelled.json()).success).toBe(true);
+  });
+
+  it('JobCreateRequest carries knowledgeDocs (additive, bounded) - codex F1 finding 1', () => {
+    const doc = { title: 'Manual de subscrição', text: 'regras de subscrição' };
+    const base = { kind: 'build', description: 'seguros', sessionId: 's1' };
+    // The field must SURVIVE parsing (it was silently stripped before the fix).
+    const parsed = JobCreateRequest.safeParse({ ...base, knowledgeDocs: [doc] });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.knowledgeDocs).toEqual([doc]);
+    // Bounds enforced at the boundary: count and per-doc text size.
+    expect(JobCreateRequest.safeParse({ ...base, knowledgeDocs: Array(21).fill(doc) }).success).toBe(false);
+    expect(JobCreateRequest.safeParse({ ...base, knowledgeDocs: [{ title: 't', text: 'x'.repeat(262145) }] }).success).toBe(false);
+    expect(JobCreateRequest.safeParse({ ...base, knowledgeDocs: [{ title: '', text: 'x' }] }).success).toBe(false);
+    // Optional: absent field stays valid (older clients unaffected).
+    expect(JobCreateRequest.safeParse(base).success).toBe(true);
   });
 
   it('POST /jobs with an invalid kind → 400 error envelope', async () => {

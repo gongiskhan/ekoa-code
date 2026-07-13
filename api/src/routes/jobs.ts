@@ -48,6 +48,7 @@ export function jobsRouter(deps: { now: () => number; genId: () => string }): Ro
       ...(body.attachments ? { attachments: body.attachments } : {}),
       ...(body.fieldValues ? { fieldValues: body.fieldValues } : {}),
       ...(body.configValues ? { configValues: body.configValues } : {}),
+      ...(body.knowledgeDocs ? { knowledgeDocs: body.knowledgeDocs } : {}),
       deps,
     });
     if (result.status === 'conflict') return sendError(res, 'DUPLICATE_BUILD', 'Já existe uma construção em curso para esta aplicação.');

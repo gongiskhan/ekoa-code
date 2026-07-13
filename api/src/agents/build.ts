@@ -70,8 +70,8 @@ export interface BuildCreateInput {
   configValues?: Record<string, unknown>;
   /** F1 knowledge-during-build: scoping-provided reference documents to ingest into the org
    *  knowledge area DURING a domain-heavy first build (org-scoped by the run's actor, immediately
-   *  searchable to the run's knowledge tools). Additive + optional; populated by the scoping UI +
-   *  jobs route in a later slice, exercised directly by the build tests here. */
+   *  searchable to the run's knowledge tools). Additive + optional; carried by JobCreateRequest
+   *  (shared/src/jobs.ts, size/count-capped there) and forwarded by the jobs route. */
   knowledgeDocs?: Array<{ title: string; text: string; collection?: string }>;
   deps: { now: () => number; genId: () => string };
 }
@@ -232,6 +232,11 @@ interface ExecOpts {
  * served). The honest-completion gate below is the SYSTEM's catch for when the model errs
  * anyway — this prompt just makes the miss rare.
  */
+/** Hard cap on scoping-provided knowledge docs ingested per first build. The contract
+ *  (JobCreateRequest.knowledgeDocs) enforces the same cap + per-doc size at the boundary;
+ *  this re-cap protects direct programmatic callers of handleBuildCreate. */
+const MAX_KNOWLEDGE_DOCS = 20;
+
 const BUILD_SYSTEM_PROMPT = [
   'You are building a web app inside an Ekoa app workspace.',
   'The served application is compiled from the manifest entrypoint: frontend/src/index.jsx, which renders frontend/src/App.jsx.',
@@ -347,21 +352,27 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // documents to the org knowledge area) and, when the request carried scoping-provided
     // documents, ingests them into the org knowledge area for THIS run - org-scoped by the run's
     // actor, refused for the reserved _shared partition, and immediately searchable to the
-    // knowledge tools mounted below. Non-blocking + non-fatal: the build never waits on or fails
-    // for knowledge scoping (mirrors the content/grounding layers).
+    // knowledge tools mounted below. The ingest IS awaited before the run starts - deliberately,
+    // so the docs are searchable to this same run - but it is bounded (doc count/size capped at
+    // the contract, count re-capped here) and non-fatal per doc: one bad document neither fails
+    // the build nor blocks the remaining documents.
     if (opts.firstBuild) {
       try {
         const scope = detectDomainHeavy(input.description);
         if (scope.domainHeavy) {
           sink.planStep('knowledge-scope', knowledgeScopingNarration(scope.domains));
           let indexed = 0;
-          for (const doc of input.knowledgeDocs ?? []) {
-            const { id } = await ingestBuildKnowledge(
-              input.actor,
-              { collection: doc.collection || 'uploads', title: doc.title, text: doc.text, sourceType: 'build-scoping' },
-              input.deps,
-            );
-            if (id) indexed++;
+          for (const doc of (input.knowledgeDocs ?? []).slice(0, MAX_KNOWLEDGE_DOCS)) {
+            try {
+              const { id } = await ingestBuildKnowledge(
+                input.actor,
+                { collection: doc.collection || 'uploads', title: doc.title, text: doc.text, sourceType: 'build-scoping' },
+                input.deps,
+              );
+              if (id) indexed++;
+            } catch (err) {
+              console.warn(`[build] knowledge doc "${doc.title}" not ingested (non-fatal):`, err instanceof Error ? err.message : err);
+            }
           }
           if (indexed > 0) sink.planStep('knowledge-indexed', knowledgeIndexedNarration(indexed));
         }

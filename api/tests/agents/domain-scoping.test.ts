@@ -46,6 +46,12 @@ describe('detectDomainHeavy (deterministic, PT + EN)', () => {
     expect(detectDomainHeavy('A GDPR compliance register for the organisation').domains).toContain('conformidade');
   });
 
+  it('fires on health apps in PT and EN (codex F1 finding 3 repros)', () => {
+    expect(detectDomainHeavy('Aplicação médica para médicos e hospitais').domains).toContain('saude');
+    expect(detectDomainHeavy('Medical scheduling app for doctors and hospitals').domains).toContain('saude');
+    expect(detectDomainHeavy('Marcação de consultas de enfermagem').domains).toContain('saude');
+  });
+
   it('stays silent on generic apps (PT + EN), avoiding substring false positives', () => {
     for (const generic of [
       'build a crm',
@@ -56,6 +62,8 @@ describe('detectDomainHeavy (deterministic, PT + EN)', () => {
       'a taxonomy browser for animals', // must NOT fire on "taxonomy"
       'personal budget tracker', // "budget" is deliberately not a keyword
       'um blog pessoal com comentários',
+      'crm for a consultant team', // must NOT fire saude via "consultas" prefix
+      'doctorate thesis tracker', // must NOT fire saude via "doctors"
     ]) {
       const r = detectDomainHeavy(generic);
       expect(r.domainHeavy, `"${generic}" must not be domain-heavy`).toBe(false);
