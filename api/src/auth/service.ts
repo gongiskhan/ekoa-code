@@ -53,6 +53,20 @@ export function mintIat(userId: string): number {
   return Math.max(nowSec, getActivation(userId)?.tokenEpoch ?? 0);
 }
 
+/**
+ * Bump the token epoch in BOTH planes as one operation (H1 durability): the in-memory activation
+ * map (the fast admission path every request consults — bumped first, so the effect is immediate)
+ * AND the user row (so the epoch survives a restart). Without the row write the epoch reloads as 0
+ * at boot and EVERY revocation — role change, password change/reset, admin logout, deactivation,
+ * the builder→user migration — silently un-revokes its outstanding tokens after the process
+ * restarts. Callers that already touch the row in their own `users.update` fold `tokenEpoch` into
+ * that write instead of calling this; this helper is for the standalone bumps (e.g. admin logout).
+ */
+export async function bumpTokenEpochDurable(userId: string, epochSec: number): Promise<void> {
+  bumpTokenEpoch(userId, epochSec);
+  await users.update(userId, (u) => ({ ...u, tokenEpoch: epochSec }));
+}
+
 /** First-boot super-admin seeding: creates the founder's org + super-admin account if absent. */
 export async function seedAdmin(username: string, password: string, deps: Deps): Promise<void> {
   const existing = await users.find({ role: 'super-admin' });
@@ -84,7 +98,15 @@ export async function login(username: string, password: string, rememberMe: bool
   // authenticates and is refused per-request at the admission plane (middleware) with
   // BILLING_LOCKED (ch09 §9.7.1); that lock is preserved in the map from its cached value.
   const cached = getActivation(u._id);
-  setActivation(u._id, { active: u.active, billingLocked: cached?.billingLocked ?? false });
+  // Sync the write-through map from the AUTHORITATIVE row (login holds it — no cache-miss window).
+  // Prefer the durable column values (H1: persisted `billingLocked`/`tokenEpoch`) so a lock and a
+  // revocation survive a restart even on a cold cache; fall back to the cached map value, then the
+  // default. The epoch carried here also feeds mintIat below (a pre-bump token stays dead).
+  setActivation(u._id, {
+    active: u.active,
+    billingLocked: u.billingLocked ?? cached?.billingLocked ?? false,
+    tokenEpoch: u.tokenEpoch ?? cached?.tokenEpoch ?? 0,
+  });
   if (!u.active) throw new AuthError('ACCOUNT_DISABLED', 403, 'A sua conta está bloqueada. Contacte o suporte.');
   const { token, expiresIn } = signToken(
     { sub: u._id, role: u.role, scope: 'user', orgId: u.orgId, username: u.username, jti: `${u._id}.${deps.genId()}`, iat: mintIat(u._id) },
@@ -117,8 +139,9 @@ export async function logoutOther(
   if (!target) return 'not-found';
   if (caller.role === 'org-admin' && target.orgId !== caller.orgId) return 'not-found';
   // Epoch shares the JWT iat clock (real seconds), strictly after any token minted this second
-  // (the setUserActive rule): every outstanding token for the target dies at once.
-  bumpTokenEpoch(targetUserId, Math.floor(Date.now() / 1000) + 1);
+  // (the setUserActive rule): every outstanding token for the target dies at once. DURABLE (H1) —
+  // an admin logout that reset to 0 on the next boot would re-admit the very tokens it revoked.
+  await bumpTokenEpochDurable(targetUserId, Math.floor(Date.now() / 1000) + 1);
   return 'ok';
 }
 
@@ -134,11 +157,14 @@ export async function changePassword(userId: string, currentPassword: string, ne
     throw new AuthError('UNAUTHENTICATED', 401, 'A palavra-passe atual está incorreta.');
   }
   const passwordHash = await hashPassword(newPassword);
-  await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: false }));
+  const epochSec = Math.floor(Date.now() / 1000) + 1;
   // Changing a password invalidates EVERY token minted under the old one — including the caller's
   // (they re-login). A password change is the standard response to a suspected compromise; leaving
   // a stolen token admissible would defeat it. Epoch bump, not a new token scheme (F1 non-goal).
-  bumpTokenEpoch(userId, Math.floor(Date.now() / 1000) + 1);
+  // The epoch is persisted in the SAME store write as the new hash (H1 durability) and mirrored to
+  // the in-memory map, so a restart cannot re-admit a token minted under the old password.
+  await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: false, tokenEpoch: epochSec }));
+  bumpTokenEpoch(userId, epochSec);
 }
 
 /**
@@ -148,11 +174,14 @@ export async function changePassword(userId: string, currentPassword: string, ne
  */
 export async function resetPassword(userId: string, newPassword: string): Promise<boolean> {
   const passwordHash = await hashPassword(newPassword);
-  const updated = await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: true }));
-  if (!updated) return false;
+  const epochSec = Math.floor(Date.now() / 1000) + 1;
   // An admin reset is the offboarding / compromised-account lever: the target's outstanding
-  // tokens must die with the old password, not linger to their JWT expiry.
-  bumpTokenEpoch(userId, Math.floor(Date.now() / 1000) + 1);
+  // tokens must die with the old password, not linger to their JWT expiry — and the revocation
+  // must survive a restart (H1), so the epoch is persisted in this SAME store write and mirrored
+  // to the in-memory map below.
+  const updated = await users.update(userId, (doc) => ({ ...doc, passwordHash, passwordChangeRequired: true, tokenEpoch: epochSec }));
+  if (!updated) return false;
+  bumpTokenEpoch(userId, epochSec);
   return true;
 }
 
@@ -177,11 +206,17 @@ export async function setUserActive(
   // minted this second, so every outstanding token is invalidated. deps.now drives stored
   // record timestamps; the epoch must track real time to align with jsonwebtoken's iat.
   const epochSec = Math.floor(Date.now() / 1000) + 1;
-  setActivation(userId, { active, billingLocked: cur?.billingLocked ?? false, tokenEpoch: active ? cur?.tokenEpoch ?? 0 : epochSec });
+  // A deactivation bumps the epoch (invalidating every outstanding token); a re-activation keeps
+  // the prior epoch. Both the epoch and the billing lock are persisted to the row in the SAME
+  // operation as `active` (H1 durability), so a deactivation's revocation is not un-done on restart
+  // and a billing lock is not reset to false at boot.
+  const newEpoch = active ? cur?.tokenEpoch ?? 0 : epochSec;
+  const billingLocked = cur?.billingLocked ?? false;
+  setActivation(userId, { active, billingLocked, tokenEpoch: newEpoch });
   if (!active) {
     for (const t of jtisToRevoke) await revoke(t.jti, userId, t.expiresAtSec, deps.now());
   }
-  const updated = await users.update(userId, (u) => ({ ...u, active }));
+  const updated = await users.update(userId, (u) => ({ ...u, active, tokenEpoch: newEpoch, billingLocked }));
   if (!updated) {
     // The user vanished — restore the prior cache entry if we had one to avoid a phantom state.
     if (cur) setActivation(userId, cur);

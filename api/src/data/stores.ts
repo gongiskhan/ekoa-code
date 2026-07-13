@@ -14,6 +14,16 @@ export interface UserDoc extends Doc {
   orgId: string;
   active: boolean;
   passwordChangeRequired?: boolean;
+  /** Durable revocation clock (unix seconds): a token whose `iat` is earlier than this is invalid.
+   *  Bumped on EVERY revocation (role change, password change/reset, admin logout, deactivation, the
+   *  builder→user migration) and written to the row in the SAME operation as the in-memory
+   *  `bumpTokenEpoch`. Persisted here because `loadActivation` reloads the activation map from these
+   *  rows at boot — without the column every revocation silently un-does on the next restart (H1). */
+  tokenEpoch?: number;
+  /** Durable account-level billing lock. Persisted (and boot-reloaded via `loadActivation`) so a
+   *  lock is not reset to `false` on every process restart — the in-memory activation map alone
+   *  defaulted it to `false` at boot (H1; the carried LANDING billing-lock item). */
+  billingLocked?: boolean;
   preferences?: Record<string, unknown>;
 }
 export interface OrgDoc extends Doc {

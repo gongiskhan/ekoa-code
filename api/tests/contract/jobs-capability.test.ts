@@ -7,10 +7,11 @@
  * Matrix under test:
  *  - first build: a `user` (no canBuildApps) is refused 403; an org-admin proceeds.
  *  - follow-up (artifactId): requires canEditApps AND writability. A `user` is refused on the
- *    capability (before any ownership probe — no existence leak). An org-admin who is not the
- *    owner of a PRIVATE target is refused 403 (the IDOR: previously any user could drive an agent
- *    against ANY artifact by id). A cross-org target is 404. An org-shared same-org target — and
- *    the actor's OWN app — proceed.
+ *    capability (before any ownership probe — no existence leak). An org-admin who is not the owner
+ *    of a PRIVATE target gets a uniform 404 (the IDOR is closed, and the LOW oracle fix collapses
+ *    the 'forbidden' verdict to notfound so private-app existence never leaks to a canEditApps
+ *    holder). A cross-org target is 404 too. An org-shared same-org target — and the actor's OWN
+ *    app — proceed.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
@@ -97,12 +98,13 @@ describe('POST /jobs — follow-up build gate (canEditApps + writability, IDOR f
     expect(handleBuildCreateMock).not.toHaveBeenCalled();
   });
 
-  it("an org-admin targeting ANOTHER user's PRIVATE app in-org is refused 403 (the IDOR) — an ownership denial, no capability field, executor never called", async () => {
+  it("an org-admin targeting ANOTHER user's PRIVATE app in-org is a uniform 404 (IDOR closed + LOW oracle fix: forbidden collapses to notfound so existence never leaks), executor never called", async () => {
+    // The actor HAS canEditApps (org-admin), so the capability gate passes; the writability check
+    // returns 'forbidden' (another user's private artifact). The follow-up gate collapses that to
+    // the SAME 404 as missing/cross-org, so a canEditApps holder cannot probe private-app existence.
     const res = await api('/api/v1/jobs', await tokenFor('adminA'), { method: 'POST', body: build({ artifactId: 'artA-priv' }) });
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { error: { code: string; details?: { capability?: string } } };
-    expect(body.error.code).toBe('FORBIDDEN');
-    expect(body.error.details?.capability).toBeUndefined(); // ownership denial, not a capability refusal
+    expect(res.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
     expect(handleBuildCreateMock).not.toHaveBeenCalled();
   });
 

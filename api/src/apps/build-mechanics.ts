@@ -16,7 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { artifacts, slugs, users } from '../data/stores.js';
 import { generateSlug, type ArtifactDoc } from './artifacts-service.js';
-import { newProjectDir, projectDirFor, patchArtifactData } from './app-paths.js';
+import { newProjectDir, projectDirFor, patchArtifactData, loadWritable } from './app-paths.js';
 import { indexSlug } from './slug-index.js';
 import { scaffoldApp } from './scaffold.js';
 import { appBuilder, validateBundle } from './builder.js';
@@ -26,7 +26,7 @@ import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-lo
 import { readUiActions } from './action-manifest.js';
 import { readTours } from './tour-writer.js';
 import { classifyArtifactType, baseForType, typeForBase } from './artifact-type.js';
-import type { ArtifactType } from '@ekoa/shared';
+import type { ArtifactType, Actor } from '@ekoa/shared';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 
@@ -218,6 +218,15 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         appUrl,
         ...(base ? { basePromptSections: base.promptSections } : {}),
       };
+    },
+
+    /** TOCTOU re-check (H1 MEDIUM): the actor's writability on the target artifact, re-evaluated at
+     *  EXECUTION time. The create-time gate on POST /jobs can go stale before a queued follow-up
+     *  resolves (the owner flips org→private, or deletes the artifact); build.ts calls this right
+     *  before resuming and fails the job on a non-`ok` verdict. Reuses the same loadWritable rule
+     *  the artifact write routes use, so the follow-up build cannot outrun a revoked write. */
+    async revalidateWritable(actor: Actor, artifactId: string): Promise<'ok' | 'notfound' | 'forbidden'> {
+      return (await loadWritable(actor, artifactId)).verdict;
     },
 
     /**

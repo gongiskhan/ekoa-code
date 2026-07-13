@@ -84,3 +84,43 @@ NOT touched (deliberately): `shared/src/capabilities.ts` (vocabulary unchanged),
 
 ## Known pre-existing (out of H1 scope)
 - `web/app/(dashboard)/users/page.tsx:328` react-hooks/set-state-in-effect WARNING in `SetLimitDialog` (reset-on-open pattern) — predates H1, untouched; fixing it is a UI refactor outside the security block. Noted, not addressed.
+
+## Codex-fix round
+
+Loop-back on the Codex review of e2c165e (2 High + 1 Medium + 1 Low, all real). Built ON TOP of
+e2c165e in the working tree (no commits). All four closed; full api vitest lane green
+(**173 files, 1522 passed, 1 skipped** — was 172/1506/1 at e2c165e: +1 file, +16 tests). tsc
+src+test clean, eslint 0 on every touched file, `gate:chokepoint` clean. No web file touched, so
+no web typecheck run. 14 files changed, all inside the H-block reservation.
+
+### HIGH-1 — durable `tokenEpoch` + `billingLocked` (revocation survives restart)
+Root cause: `loadActivation` reloaded only `{active}`, so `tokenEpoch`/`billingLocked` defaulted to
+`0`/`false` at every boot — every revocation and the billing lock silently un-did on restart.
+- `api/src/data/stores.ts` `UserDoc` (:19-28) — added `tokenEpoch?: number` and `billingLocked?: boolean` (durable columns).
+- `api/src/server.ts` `bootState` (:679) — `loadActivation` now maps `{ userId, active, billingLocked, tokenEpoch }` from every row (the loader already accepted both optionals).
+- `api/src/auth/service.ts`:
+  - New `bumpTokenEpochDurable(userId, epochSec)` — bumps the in-memory map AND writes `tokenEpoch` to the row in one op. Used by `logoutOther` (the one standalone bump). Exported (the durable-revocation test seeds through it).
+  - `login` — syncs the map from the AUTHORITATIVE row, preferring the durable `u.billingLocked`/`u.tokenEpoch` (falls back to cache, then default), so a lock/revocation is restored even on a cold cache; the reloaded epoch feeds `mintIat`.
+  - `changePassword`, `resetPassword`, `setUserActive` — fold `tokenEpoch` (and, for `setUserActive`, `billingLocked`) into their EXISTING `users.update` write (the "same operation" the brief calls for), keeping the in-memory bump as the fast path.
+- `api/src/auth/users-service.ts` — `patchUser` (role change) and `migrateBuilderRole` fold `tokenEpoch` into their existing role `users.update`.
+- Note: no code path sets `billingLocked = true` today (grep-confirmed — it is read-only in every plane), so the billing-lock work is the persistence plumbing + boot reload that makes a future/persisted lock survive restart (closes the carried LANDING "bootState loads activation without billingLocked" item). `createUser`/`seedAdmin` insert without the columns (absent = default), consistent with the loader's defaulting.
+- **Proof** — `api/tests/auth/role-migration.test.ts`: the migration test now also asserts the ROW carries the bumped epoch (durability, not just the map); new `describe('durable revocation survives restart (H1 boot path)')` seeds a durable epoch, `simulateRestart()` (clears the map + re-runs `loadActivation` from the store exactly as `bootState` does), and asserts the epoch survived (an old-iat token still rejected, a fresh one admitted); same for a persisted `billingLocked=true`; plus a legacy-row-without-columns clean-default case.
+
+### HIGH-2 — gate the OTHER app build/edit vectors (app-type-aware)
+A `user` OWNS the artifacts they create, so `writable()` passed and they could change app code
+without touching `POST /jobs`.
+- `api/src/apps/app-paths.ts` — new `isAppArtifact(art)` (:67-): a BUILT app is signalled primarily by a recorded `data.projectDir` (only pipeline-built artifacts have one; a bare `POST /artifacts` record does not), secondarily by `data.artifactType === 'app'`. Non-app artifacts match neither and stay user-manageable.
+- `api/src/routes/artifacts.ts` — a local `denyAppEdit(req,res,art)` helper (FORBIDDEN + `details.capability:'canEditApps'` when `isAppArtifact` and no `canEditApps`) wired AFTER `writable()`/`readable()` (ownership still applies first) on: `bundle-update`, `PUT /file`, `versions/:sha/restore`, `backend/enabled`, `backend/sample-run`, `backups` (snapshot), `backups/restore`. `POST /import` → `canBuildApps` (a bundle is always an app export). `POST /:id/fork` → app-type-aware: `canBuildApps` for an app, `canCreateArtifacts` for a non-app (users keep it). Read routes + `DELETE` left as-is (per brief; not over-gated for H5).
+- **Scope decision:** gated EXACTLY the brief's vector list. `featured-update/apply|ignore` are NOT in that list and are left ungated (documented here rather than silently widening scope — revisit if H5 wants them).
+- **Proof** — new `api/tests/contract/artifacts-capability.test.ts` (mongo-mem, real `artifactsRouter`; only the two heavy services a 2xx path reaches — `importArtifact`/`updateArtifactFromBundle`/`forkArtifact` — are factory-mocked so no real build): a `user` owning an APP gets 403 `canEditApps` on all seven in-place vectors and 403 `canBuildApps` on import/fork-of-app (service never called); an org-admin proceeds (service reached); a `user` forking a NON-app artifact they own is NOT refused (201, `canCreateArtifacts` preserved). No census/ledger bump needed — the suite-ledger runner censuses only Playwright specs / node drivers / web unit files, explicitly NOT `api/tests/contract/**` (scripts/suite-ledger-run.mjs:185-190).
+
+### MEDIUM — follow-up TOCTOU (re-validate writability at execution)
+`resolveFollowUp` re-fetched the artifact by id with no ownership check, so an owner could flip
+`org→private` between the create-time gate and execution and the queued job still edited it.
+- **Seam decision (boundary preserved):** `agents/build.ts` reaches `apps/` only through the injected mechanics seam (ch02 §2.7, confirmed by ekoa-architecture) — it must not import `loadWritable`. Added `revalidateWritable(actor, artifactId): Promise<'ok'|'notfound'|'forbidden'>` to the `BuildMechanics` seam (`api/src/agents/seams.ts`, interface + noop default returns `'ok'`), implemented in `api/src/apps/build-mechanics.ts` (delegates to `loadWritable`). The verdict union is inlined in the seam (no `apps/` type import into `agents/`).
+- `api/src/agents/build.ts` — the follow-up execute branch calls `mech.revalidateWritable(input.actor, artifactId)` IMMEDIATELY before `resolveFollowUp`; a non-`ok` verdict is a distinct terminal `failed { EDIT_FORBIDDEN, "Já não tem permissão para alterar esta aplicação." }` (job error `code` is a free `z.string()` in shared/jobs — additive, validates). resolveFollowUp is never reached, so the agent is not resumed.
+- **Proof** — `api/tests/agents/build.test.ts`: new test with `revalidateWritable → 'forbidden'` and a `resolveFollowUp` spy — asserts the job ends `failed`/`EDIT_FORBIDDEN` and the spy count is 0. `fakeMechanics` gained `revalidateWritable → 'ok'` so the existing follow-up-execute tests still proceed.
+
+### LOW — existence oracle in the follow-up 403/404 split
+- `api/src/routes/jobs.ts` — in the follow-up gate, collapsed `loadWritable` `'forbidden'` into the SAME 404 as missing/cross-org (`if (verdict !== 'ok') return notFound(res)`). This is LOCAL to the build gate; the artifact routes keep their 403/404 distinction (they may legitimately differ). **This overrides the H1 brief's 403/404 split for the follow-up path** — security over the brief's convenience.
+- **Proof** — `api/tests/contract/jobs-capability.test.ts`: the org-admin-vs-other-user-private case now expects **404** (was 403), asserting the ErrorEnvelope and that the executor was never called; header comment updated.

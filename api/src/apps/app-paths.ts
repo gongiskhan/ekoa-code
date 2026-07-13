@@ -64,6 +64,21 @@ export function backendBundlePath(art: ArtifactDoc): string | null {
   return existsSync(bundle) ? bundle : null;
 }
 
+/**
+ * Is this artifact a BUILT app — a code sandbox the app build/edit capabilities govern (H1 HIGH-2)?
+ * The primary, reliable signal is a recorded `data.projectDir`: ONLY an artifact produced by the
+ * build pipeline (`prepareFirstBuild`) carries one — a bare `POST /artifacts` record does not, and
+ * that projectDir is what feeds every code-editing route (`projectDirFor`). The secondary signal is
+ * a stored `data.artifactType === 'app'` (a pre-build row that named its type before a sandbox
+ * existed). An artifact matching NEITHER is a non-app artifact a plain `user` may still manage
+ * (canCreateArtifacts) — the gates below only tighten APP build/edit, never generic artifact CRUD.
+ */
+export function isAppArtifact(art: ArtifactDoc): boolean {
+  const data = (art.data ?? {}) as Record<string, unknown>;
+  if (typeof data.projectDir === 'string' && data.projectDir.length > 0) return true;
+  return data.artifactType === 'app';
+}
+
 export type OwnershipVerdict = 'ok' | 'notfound' | 'forbidden';
 
 /**

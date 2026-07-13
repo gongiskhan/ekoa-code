@@ -676,7 +676,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
 export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> {
   await connectMongo(); // fail-fast on a bad connection string
   const allUsers = await users.find({});
-  loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active })));
+  // Reload the FULL admission state per user, not just `active` (H1): the durable `tokenEpoch` and
+  // `billingLocked` columns must survive restart, or every revocation and every billing lock resets
+  // at boot (a demoted admin's old JWT re-admits, a locked account re-opens). loadActivation defaults
+  // the two optionals when a legacy row predates the columns.
+  loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active, billingLocked: u.billingLocked, tokenEpoch: u.tokenEpoch })));
   // H1 idempotent migration: rewrite any retired `builder` role → `user` and bump its token epoch
   // (runs after loadActivation so the epoch lands in the in-memory map; no-op once migrated).
   const migratedRoles = await migrateBuilderRole();

@@ -11,10 +11,20 @@ import jwt from 'jsonwebtoken';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users } from '../../src/data/stores.js';
-import { getActivation, __resetActivationForTests } from '../../src/data/activation.js';
+import { getActivation, loadActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { migrateBuilderRole } from '../../src/auth/users-service.js';
+import { bumpTokenEpochDurable } from '../../src/auth/service.js';
 import { verifyToken, signToken } from '../../src/auth/jwt.js';
+
+/** Re-run the boot-time activation reload from the persisted user rows (server.ts bootState),
+ *  simulating a process restart: the in-memory map is cleared and rebuilt from the store — the
+ *  ONLY thing that carries `tokenEpoch`/`billingLocked` across a restart (H1). */
+async function simulateRestart(): Promise<void> {
+  __resetActivationForTests();
+  const all = await users.find({});
+  loadActivation(all.map((u) => ({ userId: u._id, active: u.active, billingLocked: u.billingLocked, tokenEpoch: u.tokenEpoch })));
+}
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 
 let mem: MongoMemoryServer;
@@ -56,6 +66,9 @@ describe('migrateBuilderRole — idempotent boot-step migration', () => {
 
     const epochAfterFirst = getActivation('legacy1')?.tokenEpoch ?? 0;
     expect(epochAfterFirst).toBeGreaterThan(0); // epoch bumped → outstanding legacy JWTs invalid
+    // H1 durability: the epoch is written to the ROW too, not just the in-memory map — so the
+    // legacy-JWT invalidation survives a restart (the map alone reloads as 0 at boot).
+    expect((await users.get('legacy1'))?.tokenEpoch).toBe(epochAfterFirst);
 
     // Second run: nothing carries 'builder' now → no rows migrated, no further epoch bump.
     const secondCount = await migrateBuilderRole();
@@ -87,5 +100,45 @@ describe('verifyToken — legacy-window role normalization shim', () => {
     expect(verifyToken(userTok).role).toBe('user');
     const adminTok = signToken({ sub: 'u3', role: 'org-admin', scope: 'user', orgId: 'o1', username: 'chefe', jti: 'j3' }).token;
     expect(verifyToken(adminTok).role).toBe('org-admin');
+  });
+});
+
+/**
+ * H1 durable revocation (HIGH-1): `tokenEpoch` and `billingLocked` are persisted on the user row
+ * and reloaded by `loadActivation` at boot, so a revocation / billing lock is NOT lost on restart.
+ * The pre-fix loader read only `{active}`, defaulting both to 0/false at every boot — every
+ * revocation (role change, admin logout, password reset, deactivation, the builder migration) and
+ * every billing lock silently un-did on the next process start.
+ */
+describe('durable revocation survives restart (H1 boot path)', () => {
+  it('a bumped tokenEpoch is reloaded from the row after a restart (an old-iat token stays rejected)', async () => {
+    await users.insert({ _id: 'dur1', username: 'dur1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
+    // A revocation via the standalone durable bump (the admin-logout path): map + row both carry it.
+    const epoch = Math.floor(Date.now() / 1000) + 1;
+    await bumpTokenEpochDurable('dur1', epoch);
+    expect(getActivation('dur1')?.tokenEpoch).toBe(epoch);          // in-memory map
+    expect((await users.get('dur1'))?.tokenEpoch).toBe(epoch);       // persisted row
+
+    // Restart: clear the map, reload it from the store the way bootState does.
+    await simulateRestart();
+    const reloaded = getActivation('dur1')?.tokenEpoch ?? 0;
+    expect(reloaded).toBe(epoch); // survived the restart (pre-fix this reloaded as 0)
+    // The middleware rejects a token whose iat < tokenEpoch: an OLD token minted before the bump is
+    // still rejected after the restart, a token minted at/after the epoch is admissible.
+    expect(epoch - 5).toBeLessThan(reloaded);       // stale token → rejected
+    expect(epoch).toBeGreaterThanOrEqual(reloaded);  // fresh token → admitted
+  });
+
+  it('a persisted billingLocked=true is reloaded from the row after a restart (lock not reset to false)', async () => {
+    await users.insert({ _id: 'dur2', username: 'dur2', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true, billingLocked: true });
+    await simulateRestart();
+    expect(getActivation('dur2')?.billingLocked).toBe(true); // pre-fix this reloaded as false
+  });
+
+  it('legacy rows without the columns default cleanly (tokenEpoch 0, billingLocked false)', async () => {
+    await users.insert({ _id: 'dur3', username: 'dur3', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
+    await simulateRestart();
+    expect(getActivation('dur3')?.tokenEpoch).toBe(0);
+    expect(getActivation('dur3')?.billingLocked).toBe(false);
   });
 });

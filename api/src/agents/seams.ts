@@ -322,6 +322,17 @@ export interface FollowUpResolution {
 export interface BuildMechanics {
   prepareFirstBuild(input: { userId: string; sessionId: string; description: string; language: string; templateId?: string }): Promise<FirstBuildPrep>;
   resolveFollowUp(artifactId: string): Promise<FollowUpResolution | null>;
+  /**
+   * Re-validate at EXECUTION time that `actor` may still WRITE `artifactId` (H1 MEDIUM, TOCTOU
+   * close). The create-time gate on `POST /jobs` (loadWritable in routes/) can go stale before a
+   * queued follow-up actually resolves: the owner may flip the artifact org→private, or it may be
+   * deleted, between the check and execution. build.ts calls this immediately before resuming the
+   * follow-up and FAILS the job on a non-`ok` verdict rather than editing an artifact the actor may
+   * no longer write. Kept on the mechanics seam because the ownership rule lives in apps/
+   * (loadWritable) and agents/ reaches apps/ only through this seam (tier direction, ch02 §2.7).
+   * Verdict mirrors loadWritable: 'ok' | 'notfound' | 'forbidden'.
+   */
+  revalidateWritable(actor: Actor, artifactId: string): Promise<'ok' | 'notfound' | 'forbidden'>;
   /** Final bundle (stop watcher, clean, build w/ 2 attempts, validate). Returns an error note on failure. */
   finalizeBundle(input: { artifactId: string; projectDir: string }): Promise<{ ok: boolean; error?: string }>;
   /** Version snapshot through the app repo lock (broken builds snapshotted with a failure tag). */
@@ -352,6 +363,9 @@ const noopBuildMechanics: BuildMechanics = {
   },
   async resolveFollowUp() {
     return null;
+  },
+  async revalidateWritable() {
+    return 'ok';
   },
   async finalizeBundle() {
     return { ok: true };

@@ -51,9 +51,13 @@ export function jobsRouter(deps: { now: () => number; genId: () => string }): Ro
       if (!can(actor, 'canEditApps')) {
         return sendError(res, 'FORBIDDEN', 'Não tem permissão para alterar aplicações; pode pedir ao administrador da organização.', { capability: 'canEditApps' });
       }
+      // LOW oracle fix: collapse 'forbidden' (another user's PRIVATE artifact in the same org) into
+      // the SAME 404 as missing/cross-org, LOCAL to the follow-up build gate. A distinct 403 here
+      // is an existence oracle — it lets any canEditApps holder probe whether a private app exists
+      // by id. Security over the H1 brief's 403/404 split (that split stays on the artifact routes,
+      // which may legitimately distinguish); here writability failing for ANY reason reads as 404.
       const { verdict } = await loadWritable(actor, body.artifactId);
-      if (verdict === 'notfound') return notFound(res);
-      if (verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+      if (verdict !== 'ok') return notFound(res);
     } else if (!can(actor, 'canBuildApps')) {
       // A first build CREATES an app.
       return sendError(res, 'FORBIDDEN', 'Não tem permissão para criar aplicações; pode pedir ao administrador da organização.', { capability: 'canBuildApps' });

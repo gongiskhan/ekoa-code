@@ -30,7 +30,7 @@ import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import type { SnapshotAudit } from '../services/commit-guard.js';
 import { SecretCommitError } from '../services/commit-guard.js';
 import type { AppDataDeps } from '../apps/app-data-access.js';
-import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag } from '../apps/app-paths.js';
+import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag, isAppArtifact } from '../apps/app-paths.js';
 import { forkArtifact } from '../apps/artifact-fork.js';
 import { exportArtifact, importArtifact, updateArtifactFromBundle, ManifestIdMismatchError } from '../apps/artifact-bundle.js';
 import { applyFeaturedUpdate, ignoreFeaturedUpdate } from '../apps/artifact-featured-update.js';
@@ -70,6 +70,22 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
     return art!;
   }
 
+  /**
+   * H1 HIGH-2 app-edit capability gate. `writable()`/ownership passes for an artifact the actor
+   * OWNS — but a plain `user` OWNS the apps they created, so ownership alone lets them change app
+   * CODE (bundle-update, file write, version restore, backend toggle/sample-run, app-data
+   * snapshot/restore). An in-place edit of a BUILT app additionally requires `canEditApps`
+   * (admin-only). NON-app artifacts stay user-manageable (the check is app-type-aware). Returns
+   * true (and writes the FORBIDDEN + details.capability refusal) when the edit is denied.
+   */
+  function denyAppEdit(req: AuthedRequest, res: Response, art: ArtifactDoc): boolean {
+    if (isAppArtifact(art) && !can(actorOf(req), 'canEditApps')) {
+      sendError(res, 'FORBIDDEN', 'Não tem permissão para alterar aplicações; pode pedir ao administrador da organização.', { capability: 'canEditApps' });
+      return true;
+    }
+    return false;
+  }
+
   // ---- base CRUD (ch03 §3.8.9) ----
   r.get('/', async (req: AuthedRequest, res: Response) => {
     const { items, featured } = await listArtifacts(actorOf(req));
@@ -92,6 +108,11 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/import', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, ImportArtifactRequest, req.body) as { bundle: import('@ekoa/shared').ArtifactBundle } | undefined;
     if (!body) return;
+    // H1 HIGH-2: a bundle is always an app export; importing it CREATES and BUILDS a new app →
+    // canBuildApps (a plain user cannot import an app the same way they cannot first-build one).
+    if (!can(actorOf(req), 'canBuildApps')) {
+      return sendError(res, 'FORBIDDEN', 'Não tem permissão para criar aplicações; pode pedir ao administrador da organização.', { capability: 'canBuildApps' });
+    }
     const created = await importArtifact(body.bundle, actorOf(req), deps);
     res.status(201).json(artifactView(created));
   });
@@ -134,6 +155,15 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/fork', async (req: AuthedRequest, res: Response) => {
     const src = await readable(req, res);
     if (!src) return;
+    // H1 HIGH-2: forking an APP builds a new one → canBuildApps; forking a NON-app artifact is a
+    // plain create → canCreateArtifacts (kept for users). App-type-aware so users still fork the
+    // artifacts they may create, but cannot mint apps.
+    const forkCap = isAppArtifact(src) ? 'canBuildApps' as const : 'canCreateArtifacts' as const;
+    if (!can(actorOf(req), forkCap)) {
+      return sendError(res, 'FORBIDDEN', forkCap === 'canBuildApps'
+        ? 'Não tem permissão para criar aplicações; pode pedir ao administrador da organização.'
+        : 'Não tem permissão para criar artefactos; pode pedir ao administrador da organização.', { capability: forkCap });
+    }
     const body = parseBody(res, ForkBody, req.body ?? {}) as { name?: string } | undefined;
     if (!body) return;
     const { artifact } = await forkArtifact(src._id, actorOf(req), deps, body.name);
@@ -159,6 +189,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/bundle-update', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: in-place app edit → canEditApps
     const body = parseBody(res, BundleUpdateRequest, req.body) as { bundle: import('@ekoa/shared').ArtifactBundle; force?: boolean } | undefined;
     if (!body) return;
     try {
@@ -200,6 +231,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/versions/:sha/restore', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: restoring app code → canEditApps
     const authorName = req.user!.username;
     const result = await restoreAndRebuild(
       art._id,
@@ -233,6 +265,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.put('/:id/file', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: writing app source → canEditApps
     const body = parseBody(res, WriteFileRequest, req.body) as { path: string; content: string } | undefined;
     if (!body) return;
     try {
@@ -298,6 +331,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/backups', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: mutating an app's data state → canEditApps
     res.json(await new AppDataBackups(appDeps).saveSnapshot(art._id, 'manual'));
   });
 
@@ -322,6 +356,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/backups/restore', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: mutating an app's data state → canEditApps
     const body = parseBody(res, BackupPointRef, req.body) as { pointId: string; source: string; at: string } | undefined;
     if (!body) return;
     res.json(await new AppDataBackups(appDeps).restoreTo(art._id, body));
@@ -355,6 +390,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.put('/:id/backend/enabled', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: a backend exists only on an app → canEditApps
     const body = parseBody(res, BackendSetEnabledRequest, req.body) as { enabled: boolean } | undefined;
     if (!body) return;
     getArtifactBackendRuntime().setEnabled(art._id, body.enabled);
@@ -364,6 +400,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/:id/backend/sample-run', async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
+    if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: invoking an app's backend → canEditApps
     const body = parseBody(res, BackendSampleRunRequest, req.body) as { entrypoint: string; input: unknown } | undefined;
     if (!body) return;
     const declared = await readDeclaredBackend(art);

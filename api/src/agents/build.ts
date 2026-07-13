@@ -323,6 +323,22 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (entry) entry.artifactId = artifactId;
       await patchJob(jobId, { artifactId });
     } else {
+      // TOCTOU close (H1 MEDIUM): the create-time writability gate on POST /jobs can be stale by the
+      // time this queued follow-up runs — the owner may have flipped the artifact org→private, or
+      // deleted it, between check and execution. Re-validate writability at USE time (through the
+      // mechanics seam — agents/ reaches apps/ only via the seam, ch02 §2.7) and FAIL the job rather
+      // than resume a code-writing agent against an artifact the actor may no longer write.
+      const writeVerdict = await mech.revalidateWritable(input.actor, artifactId);
+      if (writeVerdict !== 'ok') {
+        clearTimers();
+        if (finalizeOnce(jobId)) {
+          const message = 'Já não tem permissão para alterar esta aplicação.';
+          sink.error('EDIT_FORBIDDEN', message);
+          await patchJob(jobId, { status: 'failed', error: { code: 'EDIT_FORBIDDEN', message }, endedAt: new Date(input.deps.now()).toISOString() });
+        }
+        terminalReached = true;
+        return;
+      }
       const resolved = await mech.resolveFollowUp(artifactId);
       if (!resolved) { clearTimers(); await finishError('ADAPTER_ERROR'); return; }
       projectDir = resolved.projectDir;

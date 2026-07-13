@@ -23,6 +23,7 @@ function fakeMechanics(over: Partial<BuildMechanics> = {}): { mech: BuildMechani
   const mech: BuildMechanics = {
     async prepareFirstBuild() { return { artifactId: 'artNew', projectDir: '/pd', slug: 'my-app', appUrl: 'http://app' }; },
     async resolveFollowUp() { return { projectDir: '/pd', resumeSessionId: 'old-sess', slug: 'my-app', appUrl: 'http://app' }; },
+    async revalidateWritable() { return 'ok'; }, // TOCTOU re-check: writable by default (H1 MEDIUM)
     async finalizeBundle() { return { ok: true }; },
     async snapshot() {},
     async watchRebuilds() {},
@@ -152,6 +153,29 @@ describe('build execution (§5.4, §5.6.2)', () => {
     await executeBuildJob(jobId2, { actor, username: 'u1', sessionId: 's1', description: 'change', language: 'pt', artifactId: 'artF2', deps: deps() }, abort2, { firstBuild: false, artifactId: 'artF2' });
     expect(fm.calls.persistSdkSessionId).toEqual([]);
     void t;
+  });
+
+  it('TOCTOU: a follow-up whose artifact became UNWRITABLE between create and execute fails the job (EDIT_FORBIDDEN), never resuming the agent (H1 MEDIUM)', async () => {
+    resetAgentState({ finalText: 'ok' });
+    startEvents();
+    // The artifact flipped org→private (or was deleted) after the create-time gate: revalidate now
+    // returns 'forbidden'. resolveFollowUp MUST NOT be reached (it would resume the code agent).
+    let resolveCalled = 0;
+    const { mech } = fakeMechanics({
+      async revalidateWritable() { return 'forbidden'; },
+      async resolveFollowUp() { resolveCalled++; return { projectDir: '/pd', slug: 'my-app', appUrl: 'http://app' }; },
+    });
+    const jobId = 'job-toctou';
+    const abort = new AbortController();
+    registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, artifactId: 'artT', sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', artifactId: 'artT', request: { description: 'x', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'change', language: 'pt', artifactId: 'artT', deps: deps() }, abort, { firstBuild: false, artifactId: 'artT' });
+
+    const job = (await jobs.get(jobId)) as JobRecord & { error?: { code: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('EDIT_FORBIDDEN');
+    expect(resolveCalled).toBe(0); // the code-writing agent was never resumed
   });
 
   it('a genuine ran+failed verification GATES completion: full-depth on a first build, the request threaded to the runner, failure a distinct terminal (F28)', async () => {

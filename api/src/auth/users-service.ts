@@ -53,11 +53,15 @@ export async function patchUser(
   deps: Deps,
 ): Promise<AuthUserView> {
   if (patch.role && patch.role !== target.role) {
-    await users.update(target._id, (u) => ({ ...u, role: patch.role as UserDoc['role'] }));
     // A role change invalidates the user's outstanding tokens: bump the token epoch (real
     // JWT-iat clock, strictly after any token minted this second) so a demoted admin cannot
     // keep using a stale privileged JWT (ch09 §9.6). The user re-logs in with the new role.
-    bumpTokenEpoch(target._id, Math.floor(Date.now() / 1000) + 1);
+    // The epoch is persisted in the SAME store write as the role and mirrored to the in-memory
+    // map (H1 durability) — without the row write a restart would re-admit the demoted admin's
+    // old org-admin JWT.
+    const epochSec = Math.floor(Date.now() / 1000) + 1;
+    await users.update(target._id, (u) => ({ ...u, role: patch.role as UserDoc['role'], tokenEpoch: epochSec }));
+    bumpTokenEpoch(target._id, epochSec);
   }
   if (patch.active !== undefined) await setUserActive(target._id, patch.active, [], deps);
   return authUserView((await users.get(target._id)) as UserDoc);
@@ -91,7 +95,10 @@ export async function migrateBuilderRole(): Promise<number> {
   const legacy = await users.find({ role: 'builder' });
   const epochSec = Math.floor(Date.now() / 1000) + 1;
   for (const u of legacy) {
-    await users.update(u._id, (doc) => ({ ...doc, role: 'user' }));
+    // Persist the rewritten role AND the bumped epoch in one store write (H1 durability): the
+    // legacy-JWT invalidation must survive restart, or a re-boot after the migration would re-admit
+    // outstanding `builder` tokens (their iat < epoch is only enforced while the epoch is loaded).
+    await users.update(u._id, (doc) => ({ ...doc, role: 'user', tokenEpoch: epochSec }));
     bumpTokenEpoch(u._id, epochSec);
   }
   return legacy.length;
