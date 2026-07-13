@@ -24,6 +24,7 @@ import { appRegistry } from './app-registry.js';
 import { readManifest, writeManifest } from './manifest.js';
 import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-loader.js';
 import { readUiActions } from './action-manifest.js';
+import { readTours } from './tour-writer.js';
 import { classifyArtifactType, baseForType, typeForBase } from './artifact-type.js';
 import type { ArtifactType } from '@ekoa/shared';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
@@ -312,11 +313,14 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       // an otherwise working build; absent → both keys cleared (a re-build that
       // removed the section removes the operator surface).
       let uiActions: { actionManifest?: unknown; actionManifestError?: string } = {};
+      let actionTargets: string[] = [];
       if (input.projectDir) {
         try {
           const res = await readUiActions(input.projectDir);
-          if (res.status === 'valid') uiActions = { actionManifest: res.manifest };
-          else if (res.status === 'invalid') {
+          if (res.status === 'valid') {
+            uiActions = { actionManifest: res.manifest };
+            actionTargets = res.manifest.actions.map((x) => x.target).filter((t): t is string => typeof t === 'string' && t.length > 0);
+          } else if (res.status === 'invalid') {
             console.warn(`[build-mechanics] ${input.artifactId}: ui_actions invalid — ${res.error}`);
             uiActions = { actionManifestError: res.error };
           }
@@ -324,11 +328,38 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
           console.warn(`[build-mechanics] ${input.artifactId}: ui_actions read failed (non-fatal):`, err instanceof Error ? err.message : err);
         }
       }
+
+      // operator-run E1: capture the app's DECLARED guided tours (overview + per
+      // journey) the same way — validated against the extended demo-spec schema
+      // and STAMPED with this artifact's id, then stored WITH the artifact so
+      // GET /api/demos/:appId can serve them (the in-app panel reads the full set,
+      // E2). Unknown selectors WARN (the app may add data-demo-targets the
+      // registry does not know) against the app's declared ui_action targets +
+      // the shell landmarks; a present-but-invalid tour set records `toursError`
+      // (fail-loud) without failing an otherwise working build.
+      let tours: { tours?: unknown; toursError?: string } = {};
+      if (input.projectDir) {
+        try {
+          const res = await readTours(input.projectDir, { appId: input.artifactId, knownTargets: actionTargets });
+          if (res.status === 'valid') {
+            tours = { tours: res.tours };
+            for (const w of res.warnings) console.warn(`[build-mechanics] ${input.artifactId}: tour warning — ${w}`);
+          } else if (res.status === 'invalid') {
+            console.warn(`[build-mechanics] ${input.artifactId}: tours invalid — ${res.error}`);
+            tours = { toursError: res.error };
+          }
+        } catch (err) {
+          console.warn(`[build-mechanics] ${input.artifactId}: tours read failed (non-fatal):`, err instanceof Error ? err.message : err);
+        }
+      }
+
       await artifacts.update(input.artifactId, (a) => {
         const prev = { ...((a.data as Record<string, unknown> | undefined) ?? {}) };
         delete prev.actionManifest;
         delete prev.actionManifestError;
-        const data = { ...prev, appUrl: input.appUrl, ...uiActions };
+        delete prev.tours;
+        delete prev.toursError;
+        const data = { ...prev, appUrl: input.appUrl, ...uiActions, ...tours };
         return { ...a, status: 'active', slug: input.slug, data };
       });
     },

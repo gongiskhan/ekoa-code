@@ -120,10 +120,23 @@ const cardSchema = z.strictObject({
   thumbnail: z.string().min(1).optional(),
 });
 
+/** Kebab id for per-app tours (operator-run E1) - the same shape as an action
+ *  registry id (shared/action-manifest). Shared here so the tour writer applies
+ *  one rule. */
+export const TOUR_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
 export const demoSpecSchema = z
   .strictObject({
     version: z.literal(1),
     appId: z.string().min(1),
+    // operator-run E1: a single app now carries MULTIPLE generated tours - an
+    // overview plus one per main journey. They are keyed within the app by an
+    // optional kebab `tourId` and marked `kind`. Both are OPTIONAL and additive:
+    // the 28 hand-authored platform specs omit them and stay valid (strictObject
+    // rejects unknown fields, so this MUST be declared on the schema to be
+    // accepted); the build-time tour writer stamps them on every generated tour.
+    tourId: z.string().regex(TOUR_ID_RE, 'tourId must be kebab-case').optional(),
+    kind: z.enum(['overview', 'journey']).optional(),
     card: cardSchema,
     steps: z.array(stepSchema).min(1),
   })
@@ -174,6 +187,7 @@ export type DemoSimulateAction = z.infer<typeof simulateActionSchema>;
 export type DemoStep = z.infer<typeof stepSchema>;
 export type DemoCard = z.infer<typeof cardSchema>;
 export type DemoSpec = z.infer<typeof demoSpecSchema>;
+export type DemoKind = 'overview' | 'journey';
 
 export interface DemoValidationResult {
   valid: boolean;
@@ -269,4 +283,23 @@ export function getDemoSpec(appId: string): DemoSpec | null {
 /** Card summaries for the landing/gallery panel: `{ appId, card }` per spec. */
 export function listDemoCards(): Array<{ appId: string; card: DemoCard }> {
   return loadDemoSpecs().map((s) => ({ appId: s.appId, card: s.card }));
+}
+
+/**
+ * Validate the per-app tours read off an artifact's data bag (`artifact.data.tours`,
+ * operator-run E1). Pure + never throws: a non-array yields `[]`, and any invalid
+ * entry is dropped (the build-time writer already recorded a `toursError` fail-loud
+ * at activation, so a bad entry never reaching here is expected). This is the single
+ * source of truth for the STORED-tour shape, so the serving route and the in-app
+ * panel player resolve generated tours through ONE validator - no drift with the
+ * writer that produced them.
+ */
+export function parseStoredTours(raw: unknown): DemoSpec[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DemoSpec[] = [];
+  for (const item of raw) {
+    const r = demoSpecSchema.safeParse(item);
+    if (r.success) out.push(r.data);
+  }
+  return out;
 }

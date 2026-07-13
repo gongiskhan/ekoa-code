@@ -1078,6 +1078,36 @@
       "link": null,
       "locked": false,
       "lineHeight": 1.25
+    },
+    {
+      "type": "text",
+      "id": "e1-tours-text",
+      "x": 70,
+      "y": 1312,
+      "width": 470,
+      "height": 100,
+      "text": "artifact.data.tours (operator-run E1):\nDemoSpec[] (optional tourId + kind, extended zod) declared in\nMANIFEST.md tours: / tours/*.json; stamped appId + persisted at\nactivation; invalid -> toursError (fail-loud); unknown target warns.\nGET /api/demos/:appId serves the overview; panel reads the full set (E2)",
+      "originalText": "artifact.data.tours (operator-run E1):\nDemoSpec[] (optional tourId + kind, extended zod) declared in\nMANIFEST.md tours: / tours/*.json; stamped appId + persisted at\nactivation; invalid -> toursError (fail-loud); unknown target warns.\nGET /api/demos/:appId serves the overview; panel reads the full set (E2)",
+      "fontSize": 24,
+      "fontFamily": 3,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "strokeColor": "#1e40af",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "angle": 0,
+      "seed": 1276746302,
+      "version": 2,
+      "versionNonce": 1516213456,
+      "isDeleted": false,
+      "groupIds": [],
+      "link": null,
+      "locked": false,
+      "lineHeight": 1.25
     }
   ]
 }

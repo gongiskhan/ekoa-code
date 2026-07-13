@@ -13,6 +13,15 @@
       "minLength": 1,
       "description": "Canonical app id / slug of the served artifact (e.g. legal-prazos). The tour opens /apps/<appId>/ in an iframe."
     },
+    "tourId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "operator-run E1: kebab id keying one tour within an app (overview + one per journey). Optional and additive - the shipped platform specs omit it. The build-time tour writer stamps it on generated tours."
+    },
+    "kind": {
+      "enum": ["overview", "journey"],
+      "description": "operator-run E1: overview tour vs a per-journey tour. Optional and additive - the shipped platform specs omit it."
+    },
     "card": { "$ref": "#/definitions/card" },
     "steps": {
       "type": "array",

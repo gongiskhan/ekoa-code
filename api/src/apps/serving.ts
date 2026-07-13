@@ -33,7 +33,7 @@ import { appRegistry } from './app-registry.js';
 import { getAppIdBySlug } from './slug-index.js';
 import { lookupShareable } from './share-lookup.js';
 import { injectAppContext } from './injected-context.js';
-import { listDemoCards, getDemoSpec, demoAssetsDir } from '../services/demo-registry.js';
+import { listDemoCards, getDemoSpec, demoAssetsDir, parseStoredTours } from '../services/demo-registry.js';
 import { resolveWithinJail } from '../services/safe-path.js';
 import { verifyPreviewToken } from '../services/preview-token.js';
 import { artifacts, jobs } from '../data/stores.js';
@@ -448,14 +448,34 @@ export function servingRouter(deps: ServingDeps): Router {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ demos: listDemoCards() });
   });
-  r.get('/api/demos/:appId', (req, res) => {
+  r.get('/api/demos/:appId', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    const spec = getDemoSpec(String(req.params.appId || ''));
-    if (!spec) {
-      res.status(404).json({ error: 'Demonstração não encontrada' });
+    const appIdParam = String(req.params.appId || '');
+    // Platform catalog first (the 28 shipped legal-*.json tours) — shape unchanged.
+    const spec = getDemoSpec(appIdParam);
+    if (spec) {
+      res.json(spec);
       return;
     }
-    res.json(spec);
+    // operator-run E1: per-app tours generated at build time are stored WITH the
+    // artifact (artifact.data.tours). Resolve the artifact (slug or raw id, the
+    // same order /apps/* uses) and return its OVERVIEW tour as the single-spec
+    // body — backward-compatible shape. The full overview+journey set stays on
+    // the artifact for the in-app panel player (E2). Revalidated through the
+    // registry's parser so the served shape is one source of truth.
+    try {
+      const artifactId = getAppIdBySlug(appIdParam) ?? appIdParam;
+      const art = (await artifacts.get(artifactId)) as Doc | null;
+      const tours = parseStoredTours((art?.data as { tours?: unknown } | undefined)?.tours);
+      const overview = tours.find((t) => t.kind === 'overview') ?? tours[0];
+      if (overview) {
+        res.json(overview);
+        return;
+      }
+    } catch (err) {
+      console.warn('[serving] generated-tour resolution failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+    res.status(404).json({ error: 'Demonstração não encontrada' });
   });
 
   // In-page health probe sink (§7.11, carried): no auth (probes have no token);
