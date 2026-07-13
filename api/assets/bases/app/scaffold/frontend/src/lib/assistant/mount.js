@@ -1,55 +1,104 @@
 /*
- * Operator assistant panel mount - platform-shipped for the `app` base (operator-run D2).
+ * Operator assistant LAUNCHER + lazy loader - platform-shipped for the `app` base
+ * (operator-run D2; lazy-load rework operator-run G2).
  *
- * Mounts <AssistantPanel/> into the shell's reserved <div id="ekoa-assistant-root">.
- * Called once from index.jsx after the app renders. Guarded three ways:
+ * Since G2 the assistant panel is NOT baked into the app bundle. This is the only
+ * assistant code the app bundle carries: a tiny plain-DOM launcher (NO React) plus a
+ * lazy loader. It does two things and nothing else:
  *
- *   - It WAITS for the node. The mount point is rendered BY the app (inside App.jsx),
- *     and React 18's createRoot().render() commits the initial tree asynchronously,
- *     so the node is NOT in the DOM the instant index.jsx calls this. We poll a
- *     bounded number of animation frames until it appears (typically frame 1-2).
- *   - It only mounts once per document (the node carries a flag), so a repeat call
- *     (or a hot reload) never double-mounts.
- *   - It gives up quietly after the bounded retries when the node never appears
- *     (a standalone preview / a non-app shell) - a no-op, never a crash or a spin.
+ *   1. Render the launcher immediately - a fixed bottom-right "Assistente" button,
+ *      visually identical to the panel's own launcher (same CSS-var contract, so it
+ *      inherits the org brand from /api/design-tokens.css), with zero parse cost from
+ *      the panel/React on the app's first paint. No blocking work on the main thread.
+ *   2. Lazy-load the platform panel-runtime asset (/__ekoa/panel-runtime.js) on the
+ *      FIRST launcher interaction OR an idle preload, whichever comes first. The
+ *      loaded asset bundles its own React, self-mounts <AssistantPanel/> into the
+ *      shell's #ekoa-assistant-root, and takes over the launcher (see the asset's
+ *      index.jsx - it keeps the three mount guards: bounded wait-for-node, once-only,
+ *      quiet give-up). The C3 action runtime stays EAGERLY injected (injected-context),
+ *      so declared actions still work even if the panel is never opened.
  *
- * The panel is a SEPARATE React root from the app, rendered into a node the app
- * leaves permanently empty, so it never blocks or re-renders the product and
- * survives the app's own re-renders. The coding agent never calls this itself and
- * never renders into #ekoa-assistant-root.
+ * The handoff: a CLICK sets window.__ekoaAssistantAutoOpen so the panel opens on
+ * mount (explicit visitor intent); an idle preload does not, so the panel mounts
+ * collapsed (warmed, but never steals the screen). Loading/mounting the panel issues
+ * ZERO calls to /api/app-assistant - opening the assistant never costs a token.
+ *
+ * index.jsx calls mountAssistant() once after the app renders. The coding agent never
+ * calls this itself and never renders into #ekoa-assistant-root.
  */
-import { createRoot } from 'react-dom/client';
-import { AssistantPanel } from './AssistantPanel';
 
-const MOUNT_ID = 'ekoa-assistant-root';
-const MAX_FRAMES = 60; // ~1s worth of frames; past this the mount point isn't coming
+const LAUNCHER_MARKER = 'data-ekoa-boot-launcher';
+const PANEL_RUNTIME_SRC = '/__ekoa/panel-runtime.js';
+// Floor the idle preload so a promptly-interacting visitor (and the perf gate) always
+// trigger the load via their CLICK, not an eager idle fetch; after the floor we defer
+// to real idle (requestIdleCallback), or a plain timeout where it is absent.
+const IDLE_PRELOAD_MS = 2000;
 
-function schedule(fn) {
-  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-    window.requestAnimationFrame(fn);
-  } else {
-    setTimeout(fn, 16);
-  }
+// The launcher's chat glyph - the SAME inline SVG as the panel's ChatIcon. No emoji.
+const CHAT_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto">' +
+  '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/></svg>';
+
+// Inline launcher styles mirroring .ekoa-assistant-launcher (AssistantPanel.css) via
+// the same CSS-var contract with fallbacks - the panel CSS is not loaded yet, so the
+// launcher must carry its own look until the asset takes over.
+const LAUNCHER_STYLE =
+  'position:fixed;right:var(--space-4,1rem);bottom:var(--space-4,1rem);z-index:2147482000;' +
+  'display:inline-flex;align-items:center;gap:var(--space-2,0.5rem);' +
+  'padding:var(--space-3,0.75rem) var(--space-4,1rem);' +
+  'border:1px solid var(--color-primary,#0F766E);border-radius:var(--radius-lg,0.75rem);' +
+  'background:var(--color-primary,#0F766E);color:var(--color-bg,#FFFFFF);' +
+  "font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);" +
+  'font-size:var(--text-sm,0.875rem);font-weight:600;line-height:1;cursor:pointer;' +
+  'box-shadow:var(--shadow-md,0 8px 24px rgba(15,23,42,0.18));';
+
+let injected = false;
+
+/** Inject the platform panel-runtime asset exactly once. The asset self-mounts and
+ *  removes the launcher; a second call (idle after click, or vice versa) is a no-op. */
+function ensurePanelLoaded() {
+  if (injected || typeof document === 'undefined') return;
+  injected = true;
+  const s = document.createElement('script');
+  s.src = PANEL_RUNTIME_SRC;
+  s.async = true;
+  (document.head || document.documentElement).appendChild(s);
+}
+
+/** Preload the asset when the page goes idle (after a floor delay), so a returning
+ *  visitor's first click opens an already-warm panel. No auto-open: mount collapsed. */
+function scheduleIdlePreload() {
+  if (typeof window === 'undefined') return;
+  window.setTimeout(() => {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(() => ensurePanelLoaded(), { timeout: 2000 });
+    } else {
+      ensurePanelLoaded();
+    }
+  }, IDLE_PRELOAD_MS);
 }
 
 export function mountAssistant() {
   if (typeof document === 'undefined') return;
+  // Once-only: never render two launchers (a repeat call / hot reload).
+  if (document.querySelector('[' + LAUNCHER_MARKER + ']')) return;
 
-  let frames = 0;
-  const attempt = () => {
-    const node = document.getElementById(MOUNT_ID);
-    if (node) {
-      if (node.__ekoaAssistantMounted) return; // already mounted - never mount twice
-      node.__ekoaAssistantMounted = true;
-      createRoot(node).render(<AssistantPanel />);
-      return;
-    }
-    frames += 1;
-    if (frames >= MAX_FRAMES) return; // no mount point (standalone preview) - no-op
-    schedule(attempt);
-  };
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ekoa-assistant-launcher';
+  btn.setAttribute(LAUNCHER_MARKER, '');
+  btn.setAttribute('aria-label', 'Abrir o assistente');
+  btn.style.cssText = LAUNCHER_STYLE;
+  btn.innerHTML = CHAT_ICON + '<span>Assistente</span>';
+  btn.addEventListener('click', () => {
+    // Explicit visitor intent: open the panel on mount (handoff via the window flag).
+    window.__ekoaAssistantAutoOpen = true;
+    ensurePanelLoaded();
+  });
 
-  attempt();
+  (document.body || document.documentElement).appendChild(btn);
+  scheduleIdlePreload();
 }
 
 export default mountAssistant;

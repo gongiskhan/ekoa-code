@@ -250,6 +250,11 @@
     "name": "fees-knowledge",
     "targetGate": "operator-run F2",
     "note": "feature-run operator-run: knowledge-during-build live proof (narration + build-ingest + cited answer; per-run token EKF-<runstamp>; burns 1 build + 1 turn)."
+   },
+   {
+    "name": "panel-perf",
+    "targetGate": "operator-run G2",
+    "note": "feature-run operator-run: panel lazy-load perf gate - launcher immediate + no panel-runtime fetch before interaction, one fetch on click, tour still plays after lazy mount, zero assistant POSTs (burns 1 build)."
    }
   ]
  },

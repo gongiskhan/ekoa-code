@@ -8,9 +8,9 @@ import { validateDemoSpec } from '../../src/services/demo-registry.js';
  * declarative tour inside the served app, driven from the assistant panel.
  *
  * The player + its panel wiring + the runtime spotlight hook are browser assets
- * bundled per-app from esm.sh at real build time (like the C3 runtime and the D2
- * panel, they are not in the vitest module stack), so this suite asserts their
- * SOURCE contract; the behavioural loop (playback + zero-token + rebuild
+ * compiled platform-side into the panel-runtime asset (operator-run G2; the source
+ * now lives at api/assets/panel-runtime/src, not the app scaffold), so this suite
+ * asserts their SOURCE contract; the behavioural loop (playback + zero-token + rebuild
  * selector-stability) lands in the live gate api/tests/e2e/tour-playback.e2e.mjs.
  *
  * The load-bearing invariants:
@@ -25,7 +25,7 @@ import { validateDemoSpec } from '../../src/services/demo-registry.js';
  *  - no emoji anywhere (UI-code rule).
  */
 
-const ASSIST = new URL('../../assets/bases/app/scaffold/frontend/src/lib/assistant/', import.meta.url);
+const ASSIST = new URL('../../assets/panel-runtime/src/', import.meta.url);
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, ASSIST)), 'utf-8');
 
 const PLAYER_PATH = fileURLToPath(new URL('tour-player.js', ASSIST));

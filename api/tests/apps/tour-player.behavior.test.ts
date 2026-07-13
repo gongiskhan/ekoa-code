@@ -17,10 +17,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 // (adding it globally breaks Node fetch typings in src), so declare the two globals locally.
 declare const window: any;
 declare const document: any;
-// The player is an untyped browser asset (served verbatim into generated apps, outside the
-// api src project) - declare the one import this suite drives rather than typing the module.
-// @ts-expect-error no declaration file for the scaffold browser asset
-import { createTourPlayer } from '../../assets/bases/app/scaffold/frontend/src/lib/assistant/tour-player.js';
+// The player is an untyped browser asset (compiled into the platform panel-runtime, outside
+// the api src project) - declare the one import this suite drives rather than typing the module.
+// @ts-expect-error no declaration file for the panel-runtime browser asset
+import { createTourPlayer } from '../../assets/panel-runtime/src/tour-player.js';
 
 const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

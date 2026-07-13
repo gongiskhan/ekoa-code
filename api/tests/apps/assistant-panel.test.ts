@@ -3,25 +3,31 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
- * operator-run D2 — the operator assistant PANEL that mounts into every app-base app.
+ * operator-run D2 — the operator assistant PANEL that mounts into every app-base app
+ * (lazy-loaded as a platform runtime asset since operator-run G2).
  *
- * The panel + its mount are React/JSX browser assets bundled per-app from esm.sh at
- * real build time (like the C3 action runtime, they are not in the vitest module
- * stack), so this suite asserts their SOURCE contract: the three-capability PT-PT
+ * The panel is a React/JSX browser asset compiled platform-side into the panel-runtime
+ * (api/assets/panel-runtime, served at /__ekoa/panel-runtime.js) - not in the vitest
+ * module stack - so this suite asserts its SOURCE contract: the three-capability PT-PT
  * first-open copy, the three mode labels, the /api/app-assistant fetch with the
- * X-Ekoa-App-Id header, the window.__ekoaActions.execute dispatch for the
- * assistant's proposed actions, the "Fontes" citations rendering, no emoji, and the
- * index.jsx + mount.js wiring (mount is node-guarded and mounts once). The full
- * behavioural loop (three modes + pause + cited answer) lands in D3's live gate.
+ * X-Ekoa-App-Id header, the window.__ekoaActions.execute dispatch for the assistant's
+ * proposed actions, the "Fontes" citations rendering, no emoji, and the lazy-load
+ * wiring: the app bundle's plain-DOM launcher (mount.js) loads the asset, whose entry
+ * (index.jsx) self-mounts into #ekoa-assistant-root, node-guarded and once-only. The
+ * full behavioural loop lands in D3's live gate; the lazy-load perf invariants live in
+ * tests/e2e/panel-perf.e2e.mjs + tests/apps/panel-lazy.test.ts.
  */
 
 const SCAFFOLD = new URL('../../assets/bases/app/scaffold/frontend/src/', import.meta.url);
+const PANEL_SRC = new URL('../../assets/panel-runtime/src/', import.meta.url);
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, SCAFFOLD)), 'utf-8');
+const readPanel = (rel: string) => readFileSync(fileURLToPath(new URL(rel, PANEL_SRC)), 'utf-8');
 
-const PANEL_PATH = fileURLToPath(new URL('lib/assistant/AssistantPanel.jsx', SCAFFOLD));
+const PANEL_PATH = fileURLToPath(new URL('AssistantPanel.jsx', PANEL_SRC));
 const PANEL = readFileSync(PANEL_PATH, 'utf-8');
-const CSS = read('lib/assistant/AssistantPanel.css');
-const MOUNT = read('lib/assistant/mount.js');
+const CSS = readPanel('AssistantPanel.css');
+const ENTRY = readPanel('index.jsx'); // the panel-runtime self-mounting entry
+const MOUNT = read('lib/assistant/mount.js'); // the app-bundle plain-DOM launcher
 const INDEX = read('index.jsx');
 const SKILL = readFileSync(
   fileURLToPath(new URL('../../assets/bases/app/skills/using-the-assistant-panel.md', import.meta.url)),
@@ -29,10 +35,11 @@ const SKILL = readFileSync(
 );
 
 describe('D2 assistant panel — files exist', () => {
-  it('the panel, its css, and its mount all ship in the app base scaffold', () => {
+  it('the panel + css + entry ship in the platform panel-runtime; the launcher ships in the app scaffold', () => {
     expect(existsSync(PANEL_PATH)).toBe(true);
     expect(PANEL.length).toBeGreaterThan(0);
     expect(CSS.length).toBeGreaterThan(0);
+    expect(ENTRY.length).toBeGreaterThan(0);
     expect(MOUNT.length).toBeGreaterThan(0);
   });
 });
@@ -106,23 +113,29 @@ describe('D2 panel source contract', () => {
   });
 });
 
-describe('D2 mount wiring', () => {
-  it('mount.js guards on the node existing and mounts exactly once', () => {
-    expect(MOUNT).toContain('ekoa-assistant-root');
-    expect(MOUNT).toContain('getElementById');
-    expect(MOUNT).toContain('if (node)'); // only mounts when the node is present
-    expect(MOUNT).toContain('__ekoaAssistantMounted'); // once-guard flag
-    expect(MOUNT).toMatch(/createRoot\(node\)\.render/);
+describe('D2/G2 lazy-load wiring', () => {
+  it('the app bundle carries only a plain-DOM launcher (no React) that lazy-loads the platform panel-runtime', () => {
+    // Since G2 the panel is NOT baked into the app bundle: mount.js renders a launcher
+    // with plain DOM and injects the platform asset on interaction/idle. No React here.
+    expect(MOUNT).not.toMatch(/from\s+['"]react/);
+    expect(MOUNT).not.toContain('createRoot');
+    expect(MOUNT).toContain('ekoa-assistant-launcher'); // the launcher it renders
+    expect(MOUNT).toContain('/__ekoa/panel-runtime.js'); // the asset it lazy-loads
+    expect(MOUNT).toContain('__ekoaAssistantAutoOpen'); // open-intent handoff to the asset
   });
 
-  it('mount.js waits for React to commit the node (async initial render) with a bounded retry', () => {
-    // #ekoa-assistant-root is rendered BY App, and React 18 createRoot().render() is
-    // async — the node is absent the instant index.jsx calls mountAssistant(). The
-    // mounter must poll (bounded) rather than no-op immediately, else the panel never
-    // mounts; past the cap it gives up quietly (standalone preview).
-    expect(MOUNT).toContain('requestAnimationFrame');
-    expect(MOUNT).toContain('MAX_FRAMES');
-    expect(MOUNT).toMatch(/frames\s*>=\s*MAX_FRAMES/); // bounded give-up (no infinite spin)
+  it('the panel-runtime entry self-mounts into #ekoa-assistant-root, once, waiting for the node', () => {
+    // The three mount guards moved from the old in-bundle mount.js to the ASSET entry:
+    // #ekoa-assistant-root is rendered BY App and createRoot().render() commits async,
+    // so the node is absent the instant the asset runs. The entry polls (bounded) then
+    // gives up quietly (standalone preview), and mounts exactly once per document.
+    expect(ENTRY).toContain('ekoa-assistant-root');
+    expect(ENTRY).toContain('getElementById');
+    expect(ENTRY).toContain('__ekoaAssistantMounted'); // once-guard flag
+    expect(ENTRY).toMatch(/createRoot\(node\)\.render/);
+    expect(ENTRY).toContain('requestAnimationFrame');
+    expect(ENTRY).toContain('MAX_FRAMES');
+    expect(ENTRY).toMatch(/frames\s*>=\s*MAX_FRAMES/); // bounded give-up (no infinite spin)
   });
 
   it('index.jsx mounts the panel after rendering App (without changing the App render)', () => {

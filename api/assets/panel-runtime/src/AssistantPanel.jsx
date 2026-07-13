@@ -1,8 +1,11 @@
 /*
- * Operator Assistant Panel - platform-shipped for the `app` base (operator-run D2).
+ * Operator Assistant Panel - platform-shipped for the `app` base (operator-run D2;
+ * lazy-loaded as a platform runtime asset since operator-run G2).
  *
- * The in-app assistant every generated app carries. It mounts INTO the shell's
- * <div id="ekoa-assistant-root"> (see mount.js) and speaks ONLY two things:
+ * The in-app assistant every generated app carries. It is compiled into the
+ * platform panel-runtime asset (api/assets/panel-runtime) and mounts INTO the
+ * shell's <div id="ekoa-assistant-root"> (see index.jsx, the asset entry) and
+ * speaks ONLY two things:
  *
  *   1. POST /api/app-assistant (D1) - the served-app assistant endpoint. It carries
  *      the visitor's message, the running history, the pinned/echoed mode, the
@@ -209,8 +212,12 @@ function TourView({ tour, onNext, onClose }) {
   );
 }
 
-export function AssistantPanel() {
-  const [collapsed, setCollapsed] = useState(true);
+export function AssistantPanel({ defaultOpen = false } = {}) {
+  // Collapsed on mount UNLESS the launcher handed off an explicit open intent. Since
+  // G2 the panel is lazy-loaded: the app-bundle launcher (scaffold mount.js) injects
+  // this asset and passes `defaultOpen` true when the VISITOR clicked it (open now),
+  // false when the asset was idle-preloaded (mount collapsed, show only the launcher).
+  const [collapsed, setCollapsed] = useState(!defaultOpen);
   // `mode` is the mode CURRENTLY shown on the toggle - the server's inference (echoed
   // on each response) unless the visitor pins one. `pinnedMode` is non-null only when
   // the visitor explicitly picked a mode: only then do we send it, so by default the
@@ -238,6 +245,14 @@ export function AssistantPanel() {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    // Auto-open handoff (G2): the visitor clicked the launcher, so the panel mounts
+    // already open - focus the composer once, matching an explicit open. Never runs
+    // on an idle-preloaded (collapsed) mount, so it never steals focus from the app.
+    if (defaultOpen && textareaRef.current) textareaRef.current.focus();
+    // Mount-only: the handoff intent is fixed at mount time.
+  }, [defaultOpen]);
 
   const nextId = () => {
     idRef.current += 1;

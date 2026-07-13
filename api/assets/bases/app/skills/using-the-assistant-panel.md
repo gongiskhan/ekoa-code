@@ -6,9 +6,12 @@ description: The operator assistant panel is platform-shipped and mounts automat
 # Using the Assistant Panel
 
 This base ships an operator assistant PANEL and mounts it automatically into the
-shell's `#ekoa-assistant-root` (wired in `frontend/src/index.jsx` via
-`frontend/src/lib/assistant/`). You do NOT build a chat UI, a floating button, or a
-message list - the platform owns all of it.
+shell's `#ekoa-assistant-root`. The app bundle carries only a tiny launcher (wired in
+`frontend/src/index.jsx` via `frontend/src/lib/assistant/mount.js`); the panel itself is
+a PLATFORM-SERVED runtime asset the launcher lazy-loads on first use, so panel
+improvements reach every app without a rebuild. You do NOT build a chat UI, a floating
+button, or a message list - the platform owns all of it, and you must never render into
+`#ekoa-assistant-root` yourself.
 
 ## What it does (for free)
 
@@ -43,8 +46,9 @@ operator for your app.
 
 - Do not build your own assistant, chat widget, or help button - the platform
   ships one. Do not remove the `mountAssistant()` call or the
-  `#ekoa-assistant-root` node.
-- Do not edit or restyle `frontend/src/lib/assistant/` - it is platform code that
-  travels with every app; your changes would be lost and break the operate loop.
+  `#ekoa-assistant-root` node, and never render into that node yourself.
+- Do not edit or restyle `frontend/src/lib/assistant/mount.js` - it is the platform
+  launcher that lazy-loads the platform-served panel; your changes would be lost and
+  break the operate loop.
 - Do not treat the destructive-confirmation card as authorization - it is a UX
   affordance; real authority is enforced server-side.

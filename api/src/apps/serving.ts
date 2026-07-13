@@ -271,6 +271,20 @@ try {
   console.error('[action-runtime] client unavailable:', err instanceof Error ? err.message : String(err));
 }
 
+/** The operator assistant panel runtime (AssistantPanel + tour player, React included;
+ *  operator-run G2), served at /__ekoa/panel-runtime.js. Same read-once-at-boot posture
+ *  and unavailable-fallback as the action runtime. UNLIKE the action runtime it is NOT
+ *  eagerly injected: the app bundle carries only a tiny launcher that lazy-loads this
+ *  asset on first interaction/idle. The asset is BUILT (npm run build --workspace api ->
+ *  assets/panel-runtime.js, gitignored); a missing build serves the clear comment body. */
+const PANEL_RUNTIME_PATH = join(__dirname, '..', '..', 'assets', 'panel-runtime.js');
+let panelRuntimeSource = '/* ekoa panel runtime unavailable */';
+try {
+  panelRuntimeSource = readFileSync(PANEL_RUNTIME_PATH, 'utf-8');
+} catch (err) {
+  console.error('[panel-runtime] client unavailable:', err instanceof Error ? err.message : String(err));
+}
+
 export function servingRouter(deps: ServingDeps): Router {
   const r = Router();
 
@@ -429,6 +443,16 @@ export function servingRouter(deps: ServingDeps): Router {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.send(actionRuntimeSource);
+  });
+
+  // Operator assistant panel runtime (operator-run G2) - lazy-loaded by the app
+  // bundle's launcher (not eagerly injected). Same byte-serving posture as the action
+  // runtime (JS content-type, CORS *, 5-min cache).
+  r.get('/__ekoa/panel-runtime.js', (_req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(panelRuntimeSource);
   });
 
   // Public demo registry (ch03 §3.8.23, carried): versioned demo specs + assets.
