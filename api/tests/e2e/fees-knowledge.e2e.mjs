@@ -68,7 +68,10 @@ const PORT = readFileSync(join(REPO_ROOT, 'backend.port'), 'utf-8').trim();
 const BASE = `http://localhost:${PORT}`;
 const ADMIN = { username: 'admin', password: 'tmp12345' };
 
-const BUILD_TIMEOUT_MS = 10 * 60_000;
+// 20min: a real fees build on a fresh boot-b stack was observed COMPLETING at ~12min
+// (2026-07-13, job 74556178 - the old 10min deadline bailed while the build was healthy
+// and still landed), so 10min was miscalibrated for cold-stack builds, not generous.
+const BUILD_TIMEOUT_MS = 20 * 60_000;
 const TURN_TIMEOUT_MS = 150_000;
 // Hard cap on /api/app-assistant HTTP turns (1 cited turn + up to 2 retries). The build is ONE job.
 const LLM_BUDGET = 3;
@@ -226,7 +229,7 @@ async function awaitBuild(token, jobId) {
   const deadline = Date.now() + BUILD_TIMEOUT_MS;
   let transients = 0;
   for (;;) {
-    if (Date.now() > deadline) fail(`build ${jobId} did not finish in 10min`);
+    if (Date.now() > deadline) fail(`build ${jobId} did not finish in ${BUILD_TIMEOUT_MS / 60_000}min`);
     await sleep(6000);
     const res = await safeJson(`${BASE}/api/v1/jobs/${jobId}`, { headers: H });
     if (!res.ok) {

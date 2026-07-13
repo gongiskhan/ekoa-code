@@ -1,3 +1,11 @@
 PASS admin login
-PASS fees build created (693c5331-a8b3-44c8-8489-a300e3299bc9) with 1 seeded knowledgeDoc "Circular EKF-MRJ3SQ551EU5"
+PASS fees build created (1187614e-372a-4a9a-b743-2c911ab5d2bb) with 1 seeded knowledgeDoc "Circular EKF-MRJAMZPIEJOZ"
   build poll transient 1/30 (status 502) - retrying
+PASS fees build completed (artifact a4a3b81c-a7ab-4539-a44c-ff909cc593ea); captured 93 job stream events
+PASS NARRATED knowledge-scope: financeira domain, PT-PT, no emoji/dash ("Esta aplicação parece assentar em conhecimento especializado (área jurídica e fi...")
+PASS INGESTED (narrated) knowledge-indexed: exactly 1 document, PT-PT, no emoji/dash ("Foi indexado 1 documento na área de conhecimento da organização; já está disponí...")
+PASS CITED: assistant cited THIS run's build-ingested doc "EKF-MRJAMZPIEJOZ" in 5 citation(s); reply carries the seeded fact and is not a refusal
+  reply: A Circular EKF-MRJAMZPIEJOZ fixa a taxa base de justiça em cinquenta e cinco euros (55 €) [1].
+  citations: ["Circular EKF-MRJAMZPIEJOZ","Circular EKF-MRJA4XWQ68XW","Acórdão do Supremo Tribunal de Justiça","Acórdão do Tribunal da Relação de Lisboa","Acórdão do Tribunal da Relação de Lisboa"]
+  cleanup: removed 1/1 seeded doc(s) for token EKF-MRJAMZPIEJOZ (best-effort)
+F2 LIVE GATE: PASS
