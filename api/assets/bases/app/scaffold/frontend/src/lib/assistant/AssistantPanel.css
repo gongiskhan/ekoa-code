@@ -309,6 +309,121 @@
   background: var(--color-danger, #DC2626);
 }
 
+/* -- Guided tour (E2, same-document playback) ----------------------------- */
+
+.ekoa-assistant-tour-launch {
+  flex: 0 0 auto;
+  padding: var(--space-3, 0.75rem) var(--space-6, 1.5rem);
+  border-top: 1px solid var(--color-border, #E2E8F0);
+}
+
+.ekoa-assistant-tour-start {
+  width: 100%;
+  padding: var(--space-3, 0.75rem);
+  border: 1px solid var(--color-primary, #0F766E);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-primary, #0F766E);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ekoa-assistant-tour-start:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
+.ekoa-assistant-tour {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+  padding: var(--space-4, 1rem) var(--space-6, 1.5rem);
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  background: var(--color-surface, #F8FAFC);
+}
+
+.ekoa-assistant-tour-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.ekoa-assistant-tour-title {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  color: var(--color-primary, #0F766E);
+}
+
+.ekoa-assistant-tour-progress {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-tour-copy-title {
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-text, #0F172A);
+}
+
+.ekoa-assistant-tour-copy-body {
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.5;
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-tour-note,
+.ekoa-assistant-tour-status {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-tour-image {
+  max-width: 100%;
+  border-radius: var(--radius-md, 0.5rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.ekoa-assistant-tour-controls {
+  display: flex;
+  gap: var(--space-2, 0.5rem);
+  justify-content: flex-end;
+  margin-top: var(--space-1, 0.25rem);
+}
+
+.ekoa-assistant-tour-next {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-primary, #0F766E);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-primary, #0F766E);
+  color: var(--color-bg, #FFFFFF);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ekoa-assistant-tour-next:hover {
+  filter: brightness(0.96);
+}
+
+.ekoa-assistant-tour-close {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text, #0F172A);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-tour-close:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
 /* -- Composer ------------------------------------------------------------- */
 
 .ekoa-assistant-composer {

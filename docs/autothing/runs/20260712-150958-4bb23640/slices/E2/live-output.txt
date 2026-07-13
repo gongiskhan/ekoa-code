@@ -1,0 +1,14 @@
+PASS admin login
+PASS fresh app-base app built (05250353-7074-4e7d-a9c8-6f2e5d3ad545)
+PASS serving route live for the built app (GET /api/demos/:appId -> 404)
+PASS A: teach launcher started the tour; panel fetched GET /api/demos/:appId and rendered the tour block
+PASS A: spotlight ring drawn on the real app-nav element (highlight matches a real element)
+PASS A: spotlight ring drawn on the planted app target e2-tour-alvo
+PASS A: await-action advanced on a real user click on the target
+PASS A: inject-prompt dropped the suggestion into the composer and did NOT send it
+PASS A: tour reached "concluído" (data-tour-status=done)
+PASS B: zero POST /api/app-assistant during playback (client-side, zero-token)
+PASS C: the SAME app was rebuilt (follow-up build on the same artifactId)
+PASS C: after the rebuild the same tour selectors still resolve real elements (selector stability via registry-ID names)
+PASS D: zero non-benign page JS console errors throughout
+E2 LIVE GATE: PASS

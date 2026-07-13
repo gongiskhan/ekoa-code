@@ -1,0 +1,9 @@
+PASS admin login
+PASS fresh app-base app built (d1f8641b-4459-4287-b28a-a645f083df71)
+PASS serving route live for the built app (GET /api/demos/:appId -> 404)
+PASS A: teach launcher started the tour; panel fetched GET /api/demos/:appId and rendered the tour block
+E2E FAIL: page.waitForSelector: Timeout 10000ms exceeded.
+Call log:
+[2m  - waiting for locator('[data-ekoa-actions-ui="spotlight"]') to be visible[22m
+
+    at main (/Users/ggomes/dev/ekoa-code/api/tests/e2e/tour-playback.e2e.mjs:246:14)

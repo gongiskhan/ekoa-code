@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "appId": "e2-sample-app",
+  "tourId": "visao-geral",
+  "kind": "overview",
+  "card": {
+    "titlePt": "Visão geral",
+    "descriptionPt": "Conheça os elementos principais da aplicação em poucos passos.",
+    "durationSec": 45
+  },
+  "steps": [
+    {
+      "id": "abrir",
+      "type": "navigate",
+      "to": "/",
+      "copy": { "titlePt": "Bem-vindo", "bodyPt": "Vamos ver os elementos principais desta aplicação." }
+    },
+    {
+      "id": "ver-navegacao",
+      "type": "spotlight",
+      "target": "app-nav",
+      "copy": { "titlePt": "Navegação", "bodyPt": "Aqui muda entre as páginas da aplicação." }
+    },
+    {
+      "id": "destacar-registo",
+      "type": "spotlight",
+      "target": "e2-tour-alvo",
+      "copy": { "titlePt": "Registo", "bodyPt": "Este cartão é um alvo que as ações do assistente conhecem." }
+    },
+    {
+      "id": "clicar-navegacao",
+      "type": "await-action",
+      "target": "app-nav",
+      "event": "click",
+      "simulate": { "actions": [{ "kind": "click", "target": "app-nav" }] }
+    },
+    {
+      "id": "ver-inicio",
+      "type": "spotlight",
+      "target": "app-content",
+      "copy": { "titlePt": "Área principal", "bodyPt": "O conteúdo de cada página aparece nesta zona." }
+    },
+    {
+      "id": "sugerir",
+      "type": "inject-prompt",
+      "surface": "chat",
+      "sendInHarness": false,
+      "prompt": "Como adiciono um novo registo?",
+      "copy": { "titlePt": "Peça ajuda ao assistente", "bodyPt": "Deixámos esta sugestão na caixa de mensagem para rever antes de enviar." }
+    }
+  ]
+}

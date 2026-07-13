@@ -148,28 +148,18 @@
 
   // ---- highlight / driving indicator ----------------------------------------
 
-  var hlOverlay = null;
-  var hlTimer = null;
-
-  function clearHighlight() {
-    if (hlTimer) { window.clearTimeout(hlTimer); hlTimer = null; }
-    if (!hlOverlay) return;
-    try {
-      window.removeEventListener('scroll', hlOverlay.reposition, true);
-      window.removeEventListener('resize', hlOverlay.reposition, true);
-    } catch (_) { /* ignore */ }
-    if (hlOverlay.root && hlOverlay.root.parentNode) hlOverlay.root.parentNode.removeChild(hlOverlay.root);
-    hlOverlay = null;
-  }
-
-  // Spotlight ring around the element being driven (mirrors demo-bridge
-  // drawOverlay minus the tooltip). Auto-clears after ~2.5s or on the next call.
-  function highlightTarget(el) {
-    clearHighlight();
-    if (!el || !document.body) return;
-
+  // Build a fixed, full-viewport overlay carrying a highlight ring around `el`
+  // (and, for a tour spotlight, a small copy tooltip anchored to it). The overlay
+  // follows the element on scroll/resize and is pointer-events:none, so the user
+  // (and an awaited real action) can still reach the element beneath. Returns a
+  // handle whose clear() detaches the listeners and removes the node. This is the
+  // ONE ring-drawing primitive: the transient driving highlight (highlightTarget)
+  // and the persistent same-document tour spotlight (E2) both build on it - the
+  // runtime OWNS this visible UI so the tour player never redraws it.
+  function buildRingOverlay(el, opts) {
+    opts = opts || {};
     var root = document.createElement('div');
-    root.setAttribute('data-ekoa-actions-ui', 'highlight');
+    root.setAttribute('data-ekoa-actions-ui', opts.uiKind || 'highlight');
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
 
     var ring = document.createElement('div');
@@ -178,8 +168,38 @@
       'outline:2px solid var(--color-primary, #0f766e);outline-offset:2px;' +
       'transition:top .15s ease,left .15s ease,width .15s ease,height .15s ease;';
     if (!reducedMotion) ring.style.animation = 'ekoaActionsPulse 1.4s ease-in-out infinite';
-
     root.appendChild(ring);
+
+    // Optional tooltip: the tour step's PT-PT copy, rendered right where the user
+    // is looking. Narration only (pointer-events:none via the root) - the advance
+    // controls (Seguinte / Sair) live in the assistant panel, not here.
+    var tip = null;
+    var copy = opts.copy;
+    if (copy && (copy.titlePt || copy.bodyPt)) {
+      tip = document.createElement('div');
+      tip.setAttribute('data-ekoa-actions-ui', 'spotlight-tip');
+      tip.style.cssText =
+        'position:fixed;max-width:280px;box-sizing:border-box;padding:12px 14px;' +
+        'background:var(--color-surface, #ffffff);color:var(--color-text, #0f172a);' +
+        'border:1px solid var(--color-border, #e2e8f0);border-radius:var(--radius-md, 8px);' +
+        'box-shadow:0 12px 32px rgba(15,23,42,.20);' +
+        'font-family:var(--font-sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif);' +
+        'font-size:var(--text-sm, 13px);line-height:1.45;';
+      if (copy.titlePt) {
+        var tt = document.createElement('div');
+        tt.style.cssText = 'font-weight:600;margin-bottom:4px;';
+        tt.textContent = copy.titlePt;
+        tip.appendChild(tt);
+      }
+      if (copy.bodyPt) {
+        var tb = document.createElement('div');
+        tb.style.cssText = 'color:var(--color-text-muted, #475569);';
+        tb.textContent = copy.bodyPt;
+        tip.appendChild(tb);
+      }
+      root.appendChild(tip);
+    }
+
     document.body.appendChild(root);
 
     var reposition = function () {
@@ -188,13 +208,84 @@
       ring.style.left = Math.round(r.left - 4) + 'px';
       ring.style.width = Math.round(r.width + 8) + 'px';
       ring.style.height = Math.round(r.height + 8) + 'px';
+      if (tip) {
+        // Prefer below the element; flip above when there is no room below.
+        var th = tip.offsetHeight || 96;
+        var tw = tip.offsetWidth || 280;
+        var below = r.bottom + 10;
+        var top = below + th > window.innerHeight && r.top - 10 - th > 0 ? r.top - 10 - th : below;
+        var left = Math.max(8, Math.min(r.left, window.innerWidth - tw - 8));
+        tip.style.top = Math.round(top) + 'px';
+        tip.style.left = Math.round(left) + 'px';
+      }
     };
 
-    hlOverlay = { root: root, reposition: reposition };
     reposition();
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition, true);
+
+    return {
+      root: root,
+      reposition: reposition,
+      clear: function () {
+        try {
+          window.removeEventListener('scroll', reposition, true);
+          window.removeEventListener('resize', reposition, true);
+        } catch (_) { /* ignore */ }
+        if (root.parentNode) root.parentNode.removeChild(root);
+      },
+    };
+  }
+
+  var hlOverlay = null;
+  var hlTimer = null;
+
+  function clearHighlight() {
+    if (hlTimer) { window.clearTimeout(hlTimer); hlTimer = null; }
+    if (hlOverlay) { hlOverlay.clear(); hlOverlay = null; }
+  }
+
+  // Transient driving highlight around the element an action is driving.
+  // Auto-clears after ~2.5s or on the next call.
+  function highlightTarget(el) {
+    clearHighlight();
+    if (!el || !document.body) return;
+    hlOverlay = buildRingOverlay(el, { uiKind: 'highlight' });
     hlTimer = window.setTimeout(clearHighlight, HIGHLIGHT_MS);
+  }
+
+  // ---- same-document tour spotlight (E2) -------------------------------------
+  // A PERSISTENT ring + copy tooltip the in-app tour player (assistant panel,
+  // tour-player.js) draws on a step's data-demo-target element. Unlike
+  // highlightTarget it does NOT auto-clear and is NOT an execution-queue item, so a
+  // real user click on the highlighted element (an await-action step) is NOT
+  // treated as pause-on-user-input - the player advances the tour instead. Pure
+  // client-side: no model call is ever made to draw or clear it.
+  var spotlightOverlay = null;
+
+  function clearSpotlight() {
+    if (spotlightOverlay) { spotlightOverlay.clear(); spotlightOverlay = null; }
+  }
+
+  // Draw the spotlight on `name`, polling briefly (a target may not exist yet, e.g.
+  // right after a navigate). Resolves true once drawn, false if it never appears.
+  function drawSpotlight(name, copy) {
+    return new Promise(function (resolve) {
+      var draw = function (node) {
+        clearSpotlight();
+        spotlightOverlay = buildRingOverlay(node, { uiKind: 'spotlight', copy: copy });
+        try { node.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' }); } catch (_) { /* ignore */ }
+        resolve(true);
+      };
+      var found = findTarget(name);
+      if (found) { draw(found); return; }
+      var deadline = Date.now() + TARGET_TIMEOUT_MS;
+      var timer = window.setInterval(function () {
+        var el = findTarget(name);
+        if (el) { window.clearInterval(timer); draw(el); return; }
+        if (Date.now() > deadline) { window.clearInterval(timer); resolve(false); }
+      }, POLL_MS);
+    });
   }
 
   var badge = null;
@@ -582,6 +673,15 @@
     },
     /** Cancel a pending/active same-document action by the id returned in a result. */
     cancel: function (id) { cancelById(id); },
+    /** SAME-DOCUMENT TOUR SPOTLIGHT (E2). Draw a persistent highlight ring + PT-PT
+     *  copy tooltip on a data-demo-target element; resolves true once drawn, false
+     *  if the target never appears within the poll window. The in-app tour player
+     *  (tour-player.js) owns step sequencing + controls; the runtime owns this
+     *  visible highlight, so it is never duplicated. No model call - pure client-
+     *  side rendering of a pre-generated declarative tour. */
+    spotlight: function (target, copy) { return drawSpotlight(target, copy); },
+    /** Clear the current tour spotlight (advance to the next step / end of tour). */
+    clearSpotlight: function () { clearSpotlight(); },
   };
 
   // Keyframes for the (motion-safe) accent pulse on the driven target.

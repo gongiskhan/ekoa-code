@@ -26,6 +26,7 @@
  * from the app and every failure renders a calm message instead of crashing.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createTourPlayer } from './tour-player';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
@@ -131,6 +132,79 @@ function ChatIcon() {
   );
 }
 
+/** PT-PT status line for a non-stepping tour phase (playing/awaiting show the copy). */
+function tourStatusText(status) {
+  switch (status) {
+    case 'loading':
+      return 'A carregar o tutorial...';
+    case 'awaiting':
+      return 'Aguardando a sua ação na aplicação...';
+    case 'done':
+      return 'Tutorial concluído.';
+    case 'error':
+      return 'Não foi possível carregar o tutorial guiado.';
+    default:
+      return '';
+  }
+}
+
+/**
+ * The tour block rendered in the panel while a same-document tour plays. The
+ * on-page highlight/tooltip is drawn by the C3 runtime (window.__ekoaActions
+ * spotlight); this block carries the step counter, the narration, and the
+ * Seguinte / Sair controls. It exposes data-tour-status + data-tour-step-index for
+ * the deterministic live gate. No emoji; brand-neutral via the panel CSS vars.
+ */
+function TourView({ tour, onNext, onClose }) {
+  const { status, stepIndex, total, copy, imageUrl, injectedPrompt } = tour;
+  const stepping = status === 'playing' || status === 'awaiting';
+  const stepNo = total > 0 ? Math.min(stepIndex + 1, total) : 0;
+  const statusLine = tourStatusText(status);
+  return (
+    <section
+      className="ekoa-assistant-tour"
+      data-tour-status={status}
+      data-tour-step-index={stepIndex}
+      aria-label="Tutorial guiado"
+    >
+      <div className="ekoa-assistant-tour-head">
+        <span className="ekoa-assistant-tour-title">Tutorial guiado</span>
+        {stepping && total > 0 ? (
+          <span className="ekoa-assistant-tour-progress">{`Passo ${stepNo} de ${total}`}</span>
+        ) : null}
+      </div>
+
+      {copy ? (
+        <div className="ekoa-assistant-tour-copy">
+          {copy.titlePt ? <div className="ekoa-assistant-tour-copy-title">{copy.titlePt}</div> : null}
+          {copy.bodyPt ? <div className="ekoa-assistant-tour-copy-body">{copy.bodyPt}</div> : null}
+        </div>
+      ) : null}
+
+      {injectedPrompt ? (
+        <div className="ekoa-assistant-tour-note">
+          Sugestão colocada na caixa de mensagem, para rever antes de enviar.
+        </div>
+      ) : null}
+
+      {imageUrl ? <img className="ekoa-assistant-tour-image" src={imageUrl} alt="" /> : null}
+
+      {statusLine ? <div className="ekoa-assistant-tour-status">{statusLine}</div> : null}
+
+      <div className="ekoa-assistant-tour-controls">
+        {stepping ? (
+          <button type="button" className="ekoa-assistant-tour-next" onClick={onNext}>
+            Seguinte
+          </button>
+        ) : null}
+        <button type="button" className="ekoa-assistant-tour-close" onClick={onClose}>
+          {status === 'done' || status === 'error' ? 'Fechar' : 'Sair'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function AssistantPanel() {
   const [collapsed, setCollapsed] = useState(true);
   // `mode` is the mode CURRENTLY shown on the toggle - the server's inference (echoed
@@ -142,12 +216,17 @@ export function AssistantPanel() {
   const [messages, setMessages] = useState([]); // { id, role, content, citations?, runs? }
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // E2 same-document tour playback state (null when no tour is active). The player
+  // is 100% client-side and issues ZERO model calls: it fetches the pre-generated
+  // tour from GET /api/demos/:appId and drives it in the page.
+  const [tour, setTour] = useState(null);
 
   const idRef = useRef(0);
   const messagesRef = useRef(messages);
   const actionResultsRef = useRef([]); // rolling buffer of recent action results for context
   const listRef = useRef(null);
   const textareaRef = useRef(null);
+  const playerRef = useRef(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -171,6 +250,44 @@ export function AssistantPanel() {
     if (buf.length > MAX_ACTION_RESULTS) buf.splice(0, buf.length - MAX_ACTION_RESULTS);
   }, []);
 
+  // ---- E2 tour playback (same-document, zero-token) ------------------------
+  // Lazily build ONE client-side tour player. Its state drives the tour block in
+  // the panel; when a step surfaces a suggested prompt (inject-prompt) it lands in
+  // the composer - never auto-sent. No path here calls /api/app-assistant.
+  const ensurePlayer = useCallback(() => {
+    if (!playerRef.current) {
+      playerRef.current = createTourPlayer({
+        onState: (state) => {
+          setTour(state);
+          if (state && state.injectedPrompt) setDraft(state.injectedPrompt);
+        },
+      });
+    }
+    return playerRef.current;
+  }, []);
+
+  /** Start playing the app's guided tour in the page. Triggered by teach mode or a
+   *  startTour action. Fetches GET /api/demos/:appId inside the player - no model
+   *  turn is issued. `tourId` is forwarded for forward-compat (the route serves the
+   *  app's overview tour today). */
+  const startTourPlayback = useCallback(
+    (tourId) => {
+      const player = ensurePlayer();
+      setCollapsed(false);
+      void player.start(undefined, tourId);
+    },
+    [ensurePlayer],
+  );
+
+  const tourNext = useCallback(() => {
+    if (playerRef.current) playerRef.current.next();
+  }, []);
+
+  const tourClose = useCallback(() => {
+    if (playerRef.current) playerRef.current.cancel();
+    setTour(null);
+  }, []);
+
   /** Run the assistant's proposed actions in order through the C3 runtime. The
    *  runtime draws the driving badge / highlight / destructive confirm and pauses
    *  on real user input - the panel only reflects each run's state. */
@@ -186,13 +303,25 @@ export function AssistantPanel() {
             runs: (m.runs || []).map((r) => (r.id === runId ? { ...r, status, detail } : r)),
           }));
 
+        // A startTour action is played by the SAME-DOCUMENT tour player, not the
+        // runtime executor: the runtime's cross-frame startTour only posts a
+        // tour-request (a no-op in-page) and drops the tourId. The panel owns the
+        // player, so it starts playback here. Client-side + zero-token.
+        const runtimeAction = toRuntimeAction(a);
+        if (runtimeAction && runtimeAction.kind === 'startTour') {
+          startTourPlayback(runtimeAction.tourId);
+          setStatus('done');
+          recordResult({ toolName: a && a.toolName, status: 'done' });
+          continue;
+        }
+
         if (!runtime || typeof runtime.execute !== 'function') {
           setStatus('unavailable');
           recordResult({ toolName: a && a.toolName, status: 'unavailable' });
           continue;
         }
         try {
-          const result = await runtime.execute(toRuntimeAction(a));
+          const result = await runtime.execute(runtimeAction);
           const status = (result && result.status) || 'done';
           setStatus(status, result && result.detail);
           recordResult({ toolName: a && a.toolName, status, detail: result && result.detail });
@@ -202,7 +331,7 @@ export function AssistantPanel() {
         }
       }
     },
-    [patchTurn, recordResult],
+    [patchTurn, recordResult, startTourPlayback],
   );
 
   const send = useCallback(
@@ -315,6 +444,9 @@ export function AssistantPanel() {
     );
   }
 
+  // A tour is on-screen for every phase except idle/cancelled (both mean "no tour").
+  const tourActive = !!(tour && tour.status && tour.status !== 'idle' && tour.status !== 'cancelled');
+
   return (
     <aside className="ekoa-assistant" data-collapsed="false" role="complementary" aria-label="Assistente">
       <header className="ekoa-assistant-header">
@@ -392,6 +524,20 @@ export function AssistantPanel() {
           ))
         )}
       </div>
+
+      {tourActive ? (
+        <TourView tour={tour} onNext={tourNext} onClose={tourClose} />
+      ) : mode === 'teach' ? (
+        <div className="ekoa-assistant-tour-launch">
+          <button
+            type="button"
+            className="ekoa-assistant-tour-start"
+            onClick={() => startTourPlayback()}
+          >
+            Iniciar tutorial guiado
+          </button>
+        </div>
+      ) : null}
 
       <div className="ekoa-assistant-composer">
         <textarea
