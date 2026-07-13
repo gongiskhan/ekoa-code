@@ -259,5 +259,12 @@
     "at": "2026-07-12T21:45:57Z",
     "note": "operator resumed after stop; see RUN_LOG RESUME entry",
     "resumePoint": "D2"
+  },
+  "globalGate": {
+    "status": "aborted-operator-stop",
+    "at": "2026-07-13T01:47:20Z",
+    "landed": 19,
+    "resumePoint": "E2",
+    "note": "Operator-requested stop. 19/31 slices gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1). E2-H not started. can() stays a permissive stub; H untouched by design. Nothing merged to main."
   }
 }
