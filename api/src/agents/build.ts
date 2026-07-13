@@ -39,7 +39,8 @@ import {
   resetArtifactToDraft,
   type JobRecord,
 } from './jobs.js';
-import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, verifyRunner } from './seams.js';
+import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, ingestBuildKnowledge, verifyRunner } from './seams.js';
+import { detectDomainHeavy, knowledgeScopingNarration, knowledgeIndexedNarration } from './domain-scoping.js';
 import { logActivity } from '../data/activity.js';
 
 /** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
@@ -67,6 +68,11 @@ export interface BuildCreateInput {
   attachments?: unknown[];
   fieldValues?: Record<string, unknown>;
   configValues?: Record<string, unknown>;
+  /** F1 knowledge-during-build: scoping-provided reference documents to ingest into the org
+   *  knowledge area DURING a domain-heavy first build (org-scoped by the run's actor, immediately
+   *  searchable to the run's knowledge tools). Additive + optional; populated by the scoping UI +
+   *  jobs route in a later slice, exercised directly by the build tests here. */
+  knowledgeDocs?: Array<{ title: string; text: string; collection?: string }>;
   deps: { now: () => number; genId: () => string };
 }
 
@@ -334,6 +340,35 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const decision = decideForTask(input.description, undefined, 'EXPERT');
     sink.routing(decision.tier, opts.firstBuild ? 'first build' : 'follow-up build');
     await patchJob(jobId, { routing: { tier: decision.tier, reason: opts.firstBuild ? 'first build' : 'follow-up build' } });
+
+    // F1 knowledge-during-build (§5.5.2 knowledge area). The first-build scoping phase runs a
+    // DETERMINISTIC domain-heavy detector (no model call, no egress) over the request. A
+    // domain-heavy app NARRATES a knowledge request on the build stream (upload reference
+    // documents to the org knowledge area) and, when the request carried scoping-provided
+    // documents, ingests them into the org knowledge area for THIS run - org-scoped by the run's
+    // actor, refused for the reserved _shared partition, and immediately searchable to the
+    // knowledge tools mounted below. Non-blocking + non-fatal: the build never waits on or fails
+    // for knowledge scoping (mirrors the content/grounding layers).
+    if (opts.firstBuild) {
+      try {
+        const scope = detectDomainHeavy(input.description);
+        if (scope.domainHeavy) {
+          sink.planStep('knowledge-scope', knowledgeScopingNarration(scope.domains));
+          let indexed = 0;
+          for (const doc of input.knowledgeDocs ?? []) {
+            const { id } = await ingestBuildKnowledge(
+              input.actor,
+              { collection: doc.collection || 'uploads', title: doc.title, text: doc.text, sourceType: 'build-scoping' },
+              input.deps,
+            );
+            if (id) indexed++;
+          }
+          if (indexed > 0) sink.planStep('knowledge-indexed', knowledgeIndexedNarration(indexed));
+        }
+      } catch (err) {
+        console.warn('[build] knowledge scoping failed (non-fatal):', err instanceof Error ? err.message : err);
+      }
+    }
 
     const policy = toolPolicyFor('build');
     const liveMarkers = new MarkerProcessor();

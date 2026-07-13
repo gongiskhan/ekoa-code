@@ -9,6 +9,7 @@
  * Each seam has a safe, honest default: an empty context / no grounding / a no-op verifier that
  * reports "not run". A missing collaborator degrades gracefully, never crashes a run.
  */
+import type { Actor } from '@ekoa/shared';
 
 // --- Content loader (ch05 §5.5.1, ch08) --------------------------------------------------
 
@@ -59,6 +60,44 @@ export function setKnowledgeGrounding(fn: KnowledgeGroundingFn): void {
 }
 export function knowledgeGrounding(input: KnowledgeGroundingInput): Promise<string> {
   return knowledgeGroundingFn(input);
+}
+
+// --- Mid-build knowledge ingest (F1 knowledge-during-build) -------------------------------
+
+/** A scoping-provided document the build persists into the org knowledge area DURING a run. */
+export interface BuildKnowledgeDoc {
+  collection: string;
+  title: string;
+  text: string;
+  /** Marks the doc as build-originated (default at the binding: `build-scoping`). */
+  sourceType?: string;
+  language?: string;
+}
+
+/**
+ * Persist a scoping-provided document into the org knowledge area during a build. The orgId rides
+ * the run's actor (org-scoped BY CONSTRUCTION - never a tool/request argument), and the real
+ * binding forwards to the knowledge service's `ingestDocument`, which refuses the reserved
+ * `_shared` partition (assertNotSharedActor) and indexes the doc immediately (searchable to the
+ * run's knowledge tools with no rebuild/optimize). Honest default: an unwired root ingests nothing
+ * and returns an empty id, so the build narrates no false "indexed" confirmation.
+ */
+export type IngestBuildKnowledgeFn = (
+  actor: Actor,
+  doc: BuildKnowledgeDoc,
+  deps: { now: () => number; genId: () => string },
+) => Promise<{ id: string }>;
+const defaultIngestBuildKnowledge: IngestBuildKnowledgeFn = async () => ({ id: '' });
+let ingestBuildKnowledgeFn: IngestBuildKnowledgeFn = defaultIngestBuildKnowledge;
+export function setIngestBuildKnowledge(fn: IngestBuildKnowledgeFn): void {
+  ingestBuildKnowledgeFn = fn;
+}
+export function ingestBuildKnowledge(
+  actor: Actor,
+  doc: BuildKnowledgeDoc,
+  deps: { now: () => number; genId: () => string },
+): Promise<{ id: string }> {
+  return ingestBuildKnowledgeFn(actor, doc, deps);
 }
 
 // --- In-process MCP knowledge tools (ch05 §5.4.4) -----------------------------------------
@@ -338,6 +377,7 @@ export function getBuildMechanics(): BuildMechanics {
 export function __resetAgentSeamsForTests(): void {
   assembleAgentContextFn = defaultAssembleAgentContext;
   knowledgeGroundingFn = defaultKnowledgeGrounding;
+  ingestBuildKnowledgeFn = defaultIngestBuildKnowledge;
   knowledgeToolSearchFn = defaultKnowledgeToolSearch;
   knowledgeToolReadFn = defaultKnowledgeToolRead;
   loadContextContentFn = defaultLoadContextContent;

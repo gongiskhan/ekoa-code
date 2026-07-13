@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { sseManager } from '../../src/events/sse-manager.js';
 import { handleBuildCreate, executeBuildJob, type BuildCreateInput } from '../../src/agents/build.js';
-import { registerRun, getRun, liveRunCount } from '../../src/agents/registry.js';
+import { registerRun, liveRunCount } from '../../src/agents/registry.js';
 import { persistJob, type JobRecord } from '../../src/agents/jobs.js';
-import { setBuildMechanics, setVerifyRunner, type BuildMechanics, type VerifyRunResult } from '../../src/agents/seams.js';
+import { setBuildMechanics, setVerifyRunner, setIngestBuildKnowledge, __resetAgentSeamsForTests, type BuildMechanics, type VerifyRunResult, type BuildKnowledgeDoc } from '../../src/agents/seams.js';
+import type { Actor } from '@ekoa/shared';
 import { jobs, userSettings, activityLogs } from '../../src/data/stores.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
-import type { FakeTransport, FakeTransportScript } from './_fake-transport.js';
+import type { FakeTransport } from './_fake-transport.js';
 
 /**
  * Build jobs (ch05 §5.6.2). Acceptance criteria 1 (409, reservation, aborted-classifier bail),
@@ -222,6 +223,95 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build', language: 'pt', deps: deps() });
     expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
     expect(calls.activate).toBe(1);
+  });
+});
+
+describe('F1 knowledge-during-build — scoping narrates a knowledge request and ingests scoping docs', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_build_f1'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => { await seedUser('u1', 'o1'); });
+  afterEach(async () => { __resetAgentSeamsForTests(); vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); });
+
+  const passVerify = () => setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
+  const planSteps = (events: Array<{ stream: string; type: string; data: unknown }>, status: string) =>
+    events.filter((e) => e.stream === 'job' && e.type === 'plan_step' && (e.data as { status?: string }).status === status);
+
+  it('a domain-heavy first build NARRATES a knowledge-scope plan_step (PT-PT, no emoji)', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    passVerify();
+    let ingestCalls = 0;
+    setIngestBuildKnowledge(async () => { ingestCalls++; return { id: 'x' }; });
+    const { mech } = fakeMechanics();
+    // "taxas"/"custas" -> financial domain; no knowledgeDocs -> narrate only, no ingest.
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'Aplicação para calcular as taxas e custas de um processo', language: 'pt', deps: deps() });
+
+    const scoped = planSteps(events, 'knowledge-scope');
+    expect(scoped).toHaveLength(1);
+    const msg = (scoped[0]!.data as { description?: string }).description ?? '';
+    expect(msg).toContain('área de conhecimento da organização');
+    expect(msg).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u); // no emoji
+    expect(msg).not.toMatch(/[—–]/); // no em/en dash
+    expect(ingestCalls).toBe(0); // nothing to ingest without knowledgeDocs
+    expect(planSteps(events, 'knowledge-indexed')).toHaveLength(0);
+  });
+
+  it('scoping-provided documents are ingested via the seam with the RUN ACTOR org + narrated', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    passVerify();
+    const seen: Array<{ actor: Actor; doc: BuildKnowledgeDoc }> = [];
+    setIngestBuildKnowledge(async (a, doc) => { seen.push({ actor: a, doc }); return { id: `kd_${seen.length}` }; });
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, {
+      actor, username: 'u1', sessionId: 's1', language: 'pt', deps: deps(),
+      description: 'Gestão de apólices de seguro e sinistros',
+      knowledgeDocs: [{ title: 'Manual de subscrição', text: 'regras de subscrição e franquias' }],
+    });
+
+    // the seam saw the build actor's org (org-scoped by construction) + the scoping doc
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.actor.orgId).toBe('o1');
+    expect(seen[0]!.doc.title).toBe('Manual de subscrição');
+    expect(seen[0]!.doc.sourceType).toBe('build-scoping');
+    // and the build narrated the indexed confirmation
+    const indexed = planSteps(events, 'knowledge-indexed');
+    expect(indexed).toHaveLength(1);
+    expect((indexed[0]!.data as { description?: string }).description).toContain('Foi indexado 1 documento');
+  });
+
+  it('a generic (non-domain-heavy) first build neither narrates nor ingests', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    passVerify();
+    let ingestCalls = 0;
+    setIngestBuildKnowledge(async () => { ingestCalls++; return { id: 'x' }; });
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, {
+      actor, username: 'u1', sessionId: 's1', language: 'pt', deps: deps(),
+      description: 'Cria uma lista de tarefas com um painel de estatísticas',
+      knowledgeDocs: [{ title: 'irrelevante', text: 'nao deve ser indexado' }], // ignored: not domain-heavy
+    });
+    expect(planSteps(events, 'knowledge-scope')).toHaveLength(0);
+    expect(ingestCalls).toBe(0);
+  });
+
+  it('follow-up builds skip knowledge scoping (scoping is a first-build phase)', async () => {
+    resetAgentState({ finalText: 'ok' });
+    const { events } = startEvents();
+    passVerify();
+    let ingestCalls = 0;
+    setIngestBuildKnowledge(async () => { ingestCalls++; return { id: 'x' }; });
+    const fm = fakeMechanics();
+    const jobId = 'job-f1-followup';
+    const abort = new AbortController();
+    registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, artifactId: 'artK', sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', artifactId: 'artK', request: { description: 'x', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(fm.mech);
+    // a domain-heavy description on a FOLLOW-UP must not trigger scoping
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'adiciona o cálculo de taxas e custas', language: 'pt', artifactId: 'artK', knowledgeDocs: [{ title: 'x', text: 'y' }], deps: deps() }, abort, { firstBuild: false, artifactId: 'artK' });
+    expect(planSteps(events, 'knowledge-scope')).toHaveLength(0);
+    expect(ingestCalls).toBe(0);
   });
 });
 

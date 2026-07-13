@@ -78,6 +78,7 @@ import { jobsRouter } from './routes/jobs.js';
 import {
   setAssembleAgentContext,
   setKnowledgeGrounding,
+  setIngestBuildKnowledge,
   setKnowledgeToolSearch,
   setKnowledgeToolRead,
   setLoadContextContent,
@@ -90,7 +91,7 @@ import {
   sweepOrphans,
 } from './agents/index.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
-import { backfillKnowledgeIndex, buildGroundingBlock, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
+import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
 // G8 — automation engine + integrations execution layer + delivery targets + canvas.
 import { automationsRouter } from './routes/automations.js';
 import { platformIntegrationsRouter, oauthCallbackRouter } from './routes/platform-integrations.js';
@@ -215,6 +216,23 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // build-only-legal rule internally, so the adapter only maps agentKind → its chat|build kind.
   setKnowledgeGrounding(async ({ orgId, query, agentKind }) =>
     buildGroundingBlock({ orgId, query, kind: agentKind === 'chat' ? 'chat' : 'build' }).block,
+  );
+  // F1 knowledge-during-build: the mid-build ingest seam. The orgId rides the run's actor (org
+  // partitioning is structural, not a request argument); ingestDocument refuses the reserved
+  // _shared partition and indexes the doc immediately, so a scoping-provided doc is searchable to
+  // the same run's knowledge tools. sourceType marks it build-originated.
+  setIngestBuildKnowledge(async (actor, doc, deps) =>
+    ingestDocument(
+      actor,
+      {
+        collection: doc.collection,
+        title: doc.title,
+        text: doc.text,
+        sourceType: doc.sourceType ?? 'build-scoping',
+        ...(doc.language ? { language: doc.language } : {}),
+      },
+      deps,
+    ),
   );
   setVerifyRunner(verifyRunner); // per-build verification (ch07 §7.2.6)
   setBuildMechanics(createBuildMechanics(deps)); // the G6 build pipeline (ch07 §7.2-§7.4)

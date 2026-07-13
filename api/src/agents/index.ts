@@ -20,6 +20,7 @@ export { getJob, jobView, sweepOrphans, type JobRecord } from './jobs.js';
 export {
   setAssembleAgentContext,
   setKnowledgeGrounding,
+  setIngestBuildKnowledge,
   setKnowledgeToolSearch,
   setKnowledgeToolRead,
   setLoadContextContent,
@@ -31,6 +32,8 @@ export {
   setBuildMechanics,
   type AssembleAgentContext,
   type KnowledgeGroundingFn,
+  type IngestBuildKnowledgeFn,
+  type BuildKnowledgeDoc,
   type KnowledgeToolSearchFn,
   type KnowledgeToolReadFn,
   type KnowledgeToolHit,

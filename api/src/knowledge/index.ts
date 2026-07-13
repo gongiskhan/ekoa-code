@@ -12,6 +12,10 @@ export {
   backfillKnowledgeIndex,
   KnowledgeError,
   readDocWithShared,
+  // The mid-build ingest path (F1): server.ts binds this to the agents/ ingestBuildKnowledge seam
+  // so a build can persist scoping-provided docs into the org knowledge area (org-scoped by actor,
+  // _shared refused, immediately searchable). agents/ never imports knowledge/ - it goes via the seam.
+  ingestDocument,
   type CreateDocumentInput,
 } from './service.js';
 export { buildGroundingBlock, isLegalContext, type GroundingInput, type GroundingResult } from './grounding.js';
