@@ -305,6 +305,14 @@
    "tag": "operator/h2",
    "at": "2026-07-13T21:45:00Z",
    "note": "security block 2/6; dual review incl codex re-review APPROVE; whoami mirrors the H1 edit gate (fail-closed, oracle-free, no false offer)"
+  },
+  "H3": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "1901055",
+   "tag": "operator/h3",
+   "at": "2026-07-13T22:40:00Z",
+   "note": "security block 3/6; dual review incl codex re-review APPROVE; edit mode - detect-then-ask, patch-run preview/approve/guarded-rollback"
   }
  },
  "resume": {
@@ -315,8 +323,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 26,
-  "resumePoint": "H3 (edit mode - admin opt-in + patch-run preview/approve/rollback)",
-  "note": "Run continues ON MAIN. 26/31 gated. H BLOCK 2/6 (atomic): H1 (capability layer + IDOR + durable revocation), H2 (whoami detection, detect-then-ask). Remaining H3-H6. App-edit is org-scoped (documented policy). Codex healthy."
+  "landed": 27,
+  "resumePoint": "H4 (request-changes queue - brief-draft ready)",
+  "note": "Run continues ON MAIN. 27/31 gated. H BLOCK 3/6 (atomic): H1 (capability layer + IDOR + durable revocation), H2 (whoami), H3 (edit mode). Remaining H4-H6. Codex healthy."
  }
 }
