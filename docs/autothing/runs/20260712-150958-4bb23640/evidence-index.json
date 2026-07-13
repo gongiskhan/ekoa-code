@@ -289,6 +289,14 @@
    "commit": "3254e23",
    "tag": "operator/g2",
    "at": "2026-07-13T16:05:00Z"
+  },
+  "H1": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "49dc5f6",
+   "tag": "operator/h1",
+   "at": "2026-07-13T19:40:00Z",
+   "note": "security block slice 1/6; dual review incl codex re-review APPROVE; closed a live IDOR + carried LANDING billingLocked finding"
   }
  },
  "resume": {
@@ -299,8 +307,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 24,
-  "resumePoint": "H1 (security block OPEN - codex quota returned)",
-  "note": "Run continues ON MAIN. 24/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1-F2,G1-G2). Codex quota RETURNED 2026-07-13 (~16:55 local): G2 codex pass ran (NEEDS-WORK 3/3 fixed); F2 retro pass owed next; H-block contingency CLEARED - H1-H6 opens (atomic, together-or-not-at-all; can() stub gets its real implementation in H1)."
+  "landed": 25,
+  "resumePoint": "H2 (identity handoff; memo at slices/H2/decision-memo.md)",
+  "note": "Run continues ON MAIN. 25/31 gated. H BLOCK in progress (atomic): H1 landed (real capability layer, builder->user, IDOR closed, durable revocation). Remaining H2-H6. can() stub is now REAL. Codex healthy (one hang killed+rerun)."
  }
 }
