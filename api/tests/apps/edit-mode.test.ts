@@ -23,11 +23,13 @@ import { fileURLToPath } from 'node:url';
 type FetchInit = { method?: string; headers?: Record<string, string>; body?: string; signal?: unknown };
 type FetchImpl = (url: string, init?: FetchInit) => Promise<unknown>;
 interface JobEvent { type: string; [k: string]: unknown }
+type Sleep = (ms: number) => Promise<void>;
 interface EditModeApi {
   JOBS_ENDPOINT: string;
   versionsEndpoint(appId: string): string;
   restoreEndpoint(appId: string, sha: string): string;
   jobEventsUrl(jobId: string, token: string): string;
+  jobEndpoint(jobId: string): string;
   degradeMessage(status: number): string;
   parseSseBuffer(buffer: string): { events: JobEvent[]; rest: string };
   newEditSessionId(appId: string): string;
@@ -36,9 +38,14 @@ interface EditModeApi {
   startEditJob(a: { fetchImpl: FetchImpl; appId: string; token: string; description: string; sessionId?: string }): Promise<{ ok: boolean; status?: number | string; jobId?: string; reason?: string }>;
   readVersions(a: { fetchImpl: FetchImpl; appId: string; token: string }): Promise<{ ok: boolean; status?: number; items?: unknown[]; head?: string }>;
   rollbackToVersion(a: { fetchImpl: FetchImpl; appId: string; token: string; sha: string }): Promise<{ ok: boolean; status?: number; newHeadSha?: string }>;
+  guardedRollback(a: { fetchImpl: FetchImpl; appId: string; token: string; preRunSha?: string; expectedHeadSha?: string }): Promise<{ ok: boolean; status?: number; newHeadSha?: string; reason?: string }>;
   streamJobEvents(a: { fetchImpl: FetchImpl; jobId: string; token: string; onEvent?: (ev: JobEvent) => void; signal?: unknown }): Promise<{ outcome: string; status?: number; event?: JobEvent }>;
-  runEditPatch(a: { fetchImpl: FetchImpl; appId: string; token: string; description: string; onProgress?: (ev: JobEvent) => void; signal?: unknown }): Promise<{ outcome: string; status?: number; preRunSha?: string; newHeadSha?: string; reason?: string; event?: JobEvent }>;
+  pollJobUntilTerminal(a: { fetchImpl: FetchImpl; jobId: string; token: string; pollMs?: number; deadlineMs?: number; maxTransients?: number; now?: () => number; sleep?: Sleep; signal?: unknown }): Promise<{ outcome: string; status?: number | string; job?: unknown }>;
+  runEditPatch(a: { fetchImpl: FetchImpl; appId: string; token: string; description: string; onProgress?: (ev: JobEvent) => void; signal?: unknown; pollMs?: number; deadlineMs?: number; now?: () => number; sleep?: Sleep }): Promise<{ outcome: string; status?: number; preRunSha?: string; newHeadSha?: string; reason?: string; job?: unknown }>;
 }
+
+/** A no-op sleep so the poll loop never waits on a real timer in tests. */
+const noSleep: Sleep = async () => {};
 
 const MODULE_URL = new URL('../../assets/panel-runtime/src/edit-mode.js', import.meta.url);
 const MODULE_SRC = readFileSync(fileURLToPath(MODULE_URL), 'utf-8');
@@ -74,19 +81,38 @@ function jsonRes(status: number, data: unknown) {
  */
 function scenario(opts: {
   versionsHeads?: string[];
+  versionsItems?: Array<Array<{ sha: string }>>;
   versionsStatus?: number;
   jobs?: { status: number; data?: unknown };
+  jobStatus?: string[]; // successive GET /jobs/:id statuses (M1 poll); default 'completed'
   restore?: { status: number; data?: unknown };
   sseFrames?: string[];
   sseStatus?: number;
 }) {
   const calls: Recorded[] = [];
   let versionsIdx = 0;
+  let jobPollIdx = 0;
   const fetchImpl: FetchImpl = async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', headers: init.headers || {}, body: init.body });
     if (url === em.JOBS_ENDPOINT) {
       const j = opts.jobs || { status: 202, data: { status: 'created', job: { id: 'job-1', status: 'running' } } };
       return jsonRes(j.status, j.data ?? {});
+    }
+    if (url.includes('/jobs/') && url.includes('/events')) {
+      if (opts.sseStatus) return jsonRes(opts.sseStatus, {});
+      return { ok: true, status: 200, body: sseBody(opts.sseFrames || ['data: {"type":"complete","durationMs":10}\n\n']) };
+    }
+    if (url.startsWith('/api/v1/jobs/')) {
+      // GET /jobs/:id status poll (M1): the AUTHORITATIVE terminal signal. Successive statuses.
+      const seq = opts.jobStatus || ['completed'];
+      const s = seq[Math.min(jobPollIdx, seq.length - 1)];
+      jobPollIdx += 1;
+      return jsonRes(200, {
+        id: 'job-1',
+        status: s,
+        ...(s === 'completed' ? { artifactId: 'app' } : {}),
+        ...(s === 'failed' ? { error: { code: 'BUILD_FAILED', message: 'boom' } } : {}),
+      });
     }
     if (url.includes('/versions/') && url.endsWith('/restore')) {
       const r = opts.restore || { status: 200, data: { newHeadSha: 'restored-head' } };
@@ -94,19 +120,23 @@ function scenario(opts: {
     }
     if (url.endsWith('/versions')) {
       if (opts.versionsStatus) return jsonRes(opts.versionsStatus, {});
+      if (opts.versionsItems) {
+        const items = opts.versionsItems[Math.min(versionsIdx, opts.versionsItems.length - 1)];
+        versionsIdx += 1;
+        return jsonRes(200, { items });
+      }
       const heads = opts.versionsHeads || ['head-a', 'head-b'];
       const head = heads[Math.min(versionsIdx, heads.length - 1)];
       versionsIdx += 1;
       return jsonRes(200, { items: [{ sha: head }, { sha: 'older-1' }] });
     }
-    if (url.includes('/jobs/') && url.includes('/events')) {
-      if (opts.sseStatus) return jsonRes(opts.sseStatus, {});
-      return { ok: true, status: 200, body: sseBody(opts.sseFrames || ['data: {"type":"complete","durationMs":10}\n\n']) };
-    }
     return jsonRes(404, {});
   };
   return { fetchImpl, calls };
 }
+
+const jobPolls = (calls: Recorded[]) => calls.filter((c) => c.url.startsWith('/api/v1/jobs/') && !c.url.includes('/events'));
+const versionReads = (calls: Recorded[]) => calls.filter((c) => c.url.endsWith('/versions'));
 
 describe('H3 edit-mode controller - endpoints + copy (the admin /api/v1/* plane)', () => {
   it('builds the platform version + restore + job-event paths (encoded)', () => {
@@ -114,6 +144,7 @@ describe('H3 edit-mode controller - endpoints + copy (the admin /api/v1/* plane)
     expect(em.versionsEndpoint('app 1')).toBe('/api/v1/artifacts/app%201/versions');
     expect(em.restoreEndpoint('app1', 'sha/x')).toBe('/api/v1/artifacts/app1/versions/sha%2Fx/restore');
     expect(em.jobEventsUrl('job1', 't ok')).toBe('/api/v1/jobs/job1/events?token=t%20ok');
+    expect(em.jobEndpoint('job 1')).toBe('/api/v1/jobs/job%201'); // the M1 status-poll target
   });
 
   it('degradeMessage maps 401/403/404 to distinct calm PT-PT lines (no emoji, no em/en-dash)', () => {
@@ -190,6 +221,7 @@ describe('H3 runEditPatch - the confirmed patch flow', () => {
       appId: 'app-42',
       token: 'TKN',
       description: 'adicione um botão de exportação',
+      sleep: noSleep,
       onProgress: (ev) => {
         const line = em.progressLine(ev);
         if (line) progress.push(line);
@@ -199,6 +231,9 @@ describe('H3 runEditPatch - the confirmed patch flow', () => {
     expect(r.preRunSha).toBe('before-sha'); // the rollback target / diff point
     expect(r.newHeadSha).toBe('after-sha');
     expect(progress).toContain('A editar a tabela de honorários'); // plan_step narration surfaced
+    // The JOB record was polled to a terminal status before the preview (M1): the new head reflects
+    // the CONFIRMED completed build, not a mid-build snapshot.
+    expect(jobPolls(calls).length).toBeGreaterThanOrEqual(1);
 
     // ORDER matters: the pre-run version read must happen BEFORE the POST /jobs, so the rollback
     // target is the head as it was before the patch.
@@ -224,19 +259,94 @@ describe('H3 runEditPatch - the confirmed patch flow', () => {
     expect(calls.some((c) => c.url === '/api/v1/jobs')).toBe(false);
   });
 
-  it('a build error event resolves to outcome:failed', async () => {
+  it('a job that reaches terminal FAILED status resolves to outcome:failed', async () => {
+    // M1: failure is AUTHORITATIVE from the job record, not the SSE. Even with an error frame on the
+    // stream, the terminal decision is the polled job status.
     const { fetchImpl } = scenario({
-      versionsHeads: ['before', 'before'],
+      jobStatus: ['failed'],
       sseFrames: ['data: {"type":"error","code":"BUILD_FAILED","message":"boom"}\n\n'],
     });
-    const r = await em.runEditPatch({ fetchImpl, appId: 'a', token: 'T', description: 'x' });
+    const r = await em.runEditPatch({ fetchImpl, appId: 'a', token: 'T', description: 'x', sleep: noSleep });
     expect(r.outcome).toBe('failed');
   });
 
   it('an answered follow-up (no job) resolves to outcome:answered', async () => {
     const { fetchImpl } = scenario({ jobs: { status: 200, data: { status: 'answered', reason: 'question' } } });
-    const r = await em.runEditPatch({ fetchImpl, appId: 'a', token: 'T', description: 'x' });
+    const r = await em.runEditPatch({ fetchImpl, appId: 'a', token: 'T', description: 'x', sleep: noSleep });
     expect(r.outcome).toBe('answered');
+  });
+
+  // ---- M1: an SSE early-close must NOT read as "done"; the job status is the arbiter ------------
+  it('M1: an SSE that closes WITHOUT a terminal event polls the job to completion (no false no-change)', async () => {
+    // The stream carries progress but NO complete/error frame (a proxy/network blip). The build then
+    // finishes (poll running -> completed) and activates a NEW head. runEditPatch must poll the job
+    // record and only preview the CONFIRMED completed build - never treat the early close as done and
+    // report the unchanged pre-run head as "no change".
+    const { fetchImpl, calls } = scenario({
+      sseFrames: ['data: {"type":"plan_step","status":"go","description":"a editar a tabela"}\n\n'], // no terminal
+      jobStatus: ['running', 'completed'],
+      versionsHeads: ['before', 'after'],
+    });
+    const progress: string[] = [];
+    const r = await em.runEditPatch({
+      fetchImpl,
+      appId: 'app-42',
+      token: 'TKN',
+      description: 'x',
+      sleep: noSleep,
+      onProgress: (ev) => {
+        const line = em.progressLine(ev);
+        if (line) progress.push(line);
+      },
+    });
+    expect(r.outcome).toBe('ready');
+    expect(r.newHeadSha).toBe('after'); // reflects the build that completed AFTER the blip
+    expect(r.preRunSha).toBe('before');
+    expect(jobPolls(calls).length).toBe(2); // polled running, then completed
+    expect(progress).toContain('a editar a tabela'); // progress still surfaced off the (dropped) stream
+    // the post-run head read happened AFTER the job was confirmed completed
+    const lastVersions = calls.map((c) => c.url).lastIndexOf('/api/v1/artifacts/app-42/versions');
+    const lastJobPoll = calls.reduce((acc, c, i) => (c.url.startsWith('/api/v1/jobs/') && !c.url.includes('/events') ? i : acc), -1);
+    expect(lastVersions).toBeGreaterThan(lastJobPoll);
+  });
+
+  it('M1: a build still running at the poll deadline returns pending (never a false ready/no-change)', async () => {
+    const { fetchImpl, calls } = scenario({ jobStatus: ['running'], versionsHeads: ['before', 'before'] });
+    let t = 1000;
+    const now = () => t;
+    const sleep: Sleep = async () => {
+      t += 1000; // each poll interval advances the clock so the bounded deadline is reached
+    };
+    const r = await em.runEditPatch({ fetchImpl, appId: 'a', token: 'T', description: 'x', now, sleep, deadlineMs: 50 });
+    expect(r.outcome).toBe('pending');
+    // it did NOT read a post-run head (no false preview): only the pre-run versions read happened.
+    expect(versionReads(calls).length).toBe(1);
+  });
+});
+
+describe('H3 pollJobUntilTerminal - transient-tolerant job-status poll (M1)', () => {
+  it('tolerates a transient 502 / non-JSON blip, then returns the completed terminal status', async () => {
+    let n = 0;
+    const fetchImpl: FetchImpl = async () => {
+      n += 1;
+      if (n === 1) return { ok: false, status: 502, json: async () => { throw new Error('proxy error (text/plain)'); } };
+      return jsonRes(200, { id: 'job-1', status: 'completed', artifactId: 'app' });
+    };
+    const r = await em.pollJobUntilTerminal({ fetchImpl, jobId: 'job-1', token: 'T', sleep: noSleep });
+    expect(r.outcome).toBe('terminal');
+    expect(r.status).toBe('completed');
+  });
+
+  it('degrades on a deterministic 401 (no endless retry masking an auth failure)', async () => {
+    const fetchImpl: FetchImpl = async () => jsonRes(401, { error: { code: 'UNAUTHENTICATED' } });
+    const r = await em.pollJobUntilTerminal({ fetchImpl, jobId: 'job-1', token: 'T', sleep: noSleep });
+    expect(r).toMatchObject({ outcome: 'degraded', status: 401 });
+  });
+
+  it('treats a cancelled job as a terminal failure', async () => {
+    const fetchImpl: FetchImpl = async () => jsonRes(200, { id: 'job-1', status: 'cancelled' });
+    const r = await em.pollJobUntilTerminal({ fetchImpl, jobId: 'job-1', token: 'T', sleep: noSleep });
+    expect(r).toMatchObject({ outcome: 'terminal', status: 'failed' });
   });
 });
 
@@ -256,6 +366,41 @@ describe('H3 rollbackToVersion - one-click restore to the pre-run head', () => {
     const { fetchImpl } = scenario({ restore: { status: 404, data: {} } });
     const r = await em.rollbackToVersion({ fetchImpl, appId: 'a', token: 'T', sha: 's' });
     expect(r).toEqual({ ok: false, status: 404 });
+  });
+});
+
+describe('H3 guardedRollback - refuse a stale rollback (M2)', () => {
+  it('restores to the pre-run head ONLY when HEAD is still the head THIS edit produced', async () => {
+    // Current HEAD (items[0].sha) is still 'after' (the edit head), and the pre-run target 'before'
+    // is still in history -> the guarded rollback fires restore to 'before'.
+    const { fetchImpl, calls } = scenario({ versionsItems: [[{ sha: 'after' }, { sha: 'before' }, { sha: 'older' }]] });
+    const r = await em.guardedRollback({ fetchImpl, appId: 'app-42', token: 'TKN', preRunSha: 'before', expectedHeadSha: 'after' });
+    expect(r).toEqual({ ok: true, newHeadSha: 'restored-head' });
+    const restore = calls.find((c) => c.url.endsWith('/restore'));
+    expect(restore!.url).toBe('/api/v1/artifacts/app-42/versions/before/restore');
+    expect(restore!.headers.Authorization).toBe('Bearer TKN');
+  });
+
+  it('REFUSES (no restore fired) when HEAD advanced - a concurrent change would be wiped', async () => {
+    // Someone else moved HEAD to 'someone-else' between preview and the Reverter click. Restoring to
+    // 'before' would silently wipe that change, so the guard refuses.
+    const { fetchImpl, calls } = scenario({ versionsItems: [[{ sha: 'someone-else' }, { sha: 'after' }, { sha: 'before' }]] });
+    const r = await em.guardedRollback({ fetchImpl, appId: 'app-42', token: 'TKN', preRunSha: 'before', expectedHeadSha: 'after' });
+    expect(r).toEqual({ ok: false, reason: 'head-advanced' });
+    expect(calls.some((c) => c.url.endsWith('/restore'))).toBe(false); // NO blind restore
+  });
+
+  it('REFUSES (no restore fired) when the pre-run target sha is gone from history', async () => {
+    const { fetchImpl, calls } = scenario({ versionsItems: [[{ sha: 'after' }, { sha: 'older' }]] });
+    const r = await em.guardedRollback({ fetchImpl, appId: 'app-42', token: 'TKN', preRunSha: 'before', expectedHeadSha: 'after' });
+    expect(r).toEqual({ ok: false, reason: 'target-missing' });
+    expect(calls.some((c) => c.url.endsWith('/restore'))).toBe(false);
+  });
+
+  it('degrades (ok:false + status) when the versions re-read itself is refused', async () => {
+    const { fetchImpl } = scenario({ versionsStatus: 403 });
+    const r = await em.guardedRollback({ fetchImpl, appId: 'app-42', token: 'TKN', preRunSha: 'before', expectedHeadSha: 'after' });
+    expect(r).toEqual({ ok: false, status: 403 });
   });
 });
 

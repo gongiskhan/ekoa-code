@@ -50,6 +50,17 @@ export function jobEventsUrl(jobId, token) {
   return `/api/v1/jobs/${encodeURIComponent(jobId)}/events?token=${encodeURIComponent(token)}`;
 }
 
+/** GET the persisted job record (its terminal status is the AUTHORITATIVE "did the build finish?"
+ *  signal - not the SSE, which a proxy/network blip can close early). auth:'user' (admin Bearer). */
+export function jobEndpoint(jobId) {
+  return `/api/v1/jobs/${encodeURIComponent(jobId)}`;
+}
+
+/** Job record terminal statuses (mirrors api/src/agents/jobs.ts isTerminal / patchJob writes):
+ *  'completed' is success; 'failed' and 'cancelled' are failure; 'created'/'running' are in-flight. */
+const TERMINAL_SUCCESS = 'completed';
+const TERMINAL_FAILURE = new Set(['failed', 'cancelled']);
+
 /** PT-PT copy for the edit flow. Kept here so the panel and the tests share one source
  *  of truth for the confirmation wording, the progress fallback and the empty-diff note. */
 export const EDIT_COPY = {
@@ -59,6 +70,12 @@ export const EDIT_COPY = {
   noChange: 'A revisão terminou sem alterações ao código.',
   approved: 'Alteração mantida.',
   rolledBack: 'Alteração revertida.',
+  // The build did not reach a terminal state within the poll deadline (a dropped stream + a slow
+  // build). NOT a failure and NOT a false "no change": tell the admin it is still running.
+  stillRunning: 'A revisão ainda está em curso. Verifique novamente dentro de momentos.',
+  // The head moved between the preview and the Reverter click (another admin / a dashboard action /
+  // a later restore). Refuse the rollback rather than wipe that unrelated change; ask for a refresh.
+  headAdvanced: 'A aplicação foi alterada entretanto; atualize a pré-visualização.',
 };
 
 /** Map a mid-flow platform failure onto a calm PT-PT message (graceful degradation).
@@ -203,6 +220,30 @@ export async function rollbackToVersion({ fetchImpl, appId, token, sha }) {
 }
 
 /**
+ * One-click rollback, GUARDED against a stale target (M2). Reverter forward-restores to the pre-run
+ * head; a blind restore would silently WIPE any change that moved HEAD between the preview and the
+ * click (another admin, a dashboard action, a later restore). So before restoring: RE-READ the
+ * versions and require HEAD to still be EXACTLY the head THIS edit produced (`expectedHeadSha`), and
+ * require the pre-run target to still exist in history. If HEAD advanced or the target is gone, the
+ * rollback is REFUSED (no restore call) so the panel can show a calm "refresh the preview" message.
+ * Returns:
+ *   - { ok:true, newHeadSha }             - restore fired to the pre-run head
+ *   - { ok:false, reason:'head-advanced' }- HEAD is no longer this edit's head (someone else changed it)
+ *   - { ok:false, reason:'target-missing'}- the pre-run target sha is no longer in the history
+ *   - { ok:false, status }                - a mid-flow refusal reading versions / restoring
+ */
+export async function guardedRollback({ fetchImpl, appId, token, preRunSha, expectedHeadSha }) {
+  const cur = await readVersions({ fetchImpl, appId, token });
+  if (!cur.ok) return { ok: false, status: cur.status };
+  // HEAD must still be the exact head this edit produced - else a concurrent change moved it.
+  if (cur.head !== expectedHeadSha) return { ok: false, reason: 'head-advanced' };
+  // The pre-run target must still exist (hardening: never restore to a sha the history dropped).
+  const hasTarget = Array.isArray(cur.items) && cur.items.some((v) => v && v.sha === preRunSha);
+  if (!hasTarget) return { ok: false, reason: 'target-missing' };
+  return rollbackToVersion({ fetchImpl, appId, token, sha: preRunSha });
+}
+
+/**
  * Consume the job SSE stream with fetch, forwarding each JobEvent to `onEvent`, and
  * resolve once a terminal event lands (or the stream ends). Outcomes:
  *   - { outcome:'complete', event } - the build finished
@@ -254,18 +295,97 @@ export async function streamJobEvents({ fetchImpl, jobId, token, onEvent, signal
   return { outcome: 'closed' };
 }
 
+/** Fetch + parse JSON WITHOUT throwing (mirrors the e2e safeJson idiom): a non-2xx status or a body
+ *  that is not valid JSON (e.g. the dev-proxy's text/plain "proxy error" 502) comes back as
+ *  { ok:false, status, json:null } rather than an exception, so the poll below can class blips. */
+async function safeJson(fetchImpl, url, init) {
+  try {
+    const r = await fetchImpl(url, init);
+    if (!r) return { ok: false, status: 0, json: null };
+    let json = null;
+    try { json = await r.json(); } catch { json = null; }
+    return { ok: !!r.ok && json !== null, status: r.status, json };
+  } catch {
+    return { ok: false, status: 0, json: null };
+  }
+}
+
 /**
- * Run the whole confirmed patch, front-to-back, as a sequence of the H1-gated platform
- * calls. Returns a discriminated result the panel maps straight onto its UI; every
- * network refusal is a graceful outcome, never a throw:
- *   - { outcome:'ready', preRunSha, newHeadSha } - build done; show APPROVE vs ROLLBACK
+ * Poll GET /api/v1/jobs/:id until the JOB RECORD reaches a terminal status - the AUTHORITATIVE
+ * "did the build finish?" signal (the SSE is only live progress and can drop on a proxy/network
+ * blip while the build keeps running and then activates a new head). Transient-tolerant, exactly
+ * like the fees-knowledge e2e build poll: a deterministic 4xx (auth/route/store - will not
+ * self-heal) degrades on its status; a 5xx / non-JSON / network blip is tolerated up to a bounded
+ * count; the deadline yields `pending` (still running, not a false "done"). Outcomes:
+ *   - { outcome:'terminal', status:'completed', job } | { outcome:'terminal', status:'failed', job }
+ *   - { outcome:'degraded', status } - a real 4xx, or too many transients
+ *   - { outcome:'pending' }          - the deadline passed with no terminal status
+ * `now`/`sleep` are injectable so the flow is testable without real timers.
+ */
+export async function pollJobUntilTerminal({
+  fetchImpl,
+  jobId,
+  token,
+  pollMs = 3000,
+  deadlineMs = 20 * 60 * 1000,
+  maxTransients = 30,
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  signal,
+}) {
+  const init = { method: 'GET', headers: { Authorization: `Bearer ${token}` }, ...(signal ? { signal } : {}) };
+  const deadline = now() + deadlineMs;
+  let transients = 0;
+  for (;;) {
+    if (now() > deadline) return { outcome: 'pending' };
+    const res = await safeJson(fetchImpl, jobEndpoint(jobId), init);
+    if (!res.ok) {
+      // A deterministic 4xx (auth/route/store) will not self-heal; retrying only masks it -> degrade.
+      if (res.status >= 400 && res.status < 500) return { outcome: 'degraded', status: res.status };
+      // 5xx / non-JSON / network (proxy-502 blips) are transient -> tolerate a bounded number.
+      transients += 1;
+      if (transients > maxTransients) return { outcome: 'degraded', status: res.status || 0 };
+      await sleep(pollMs);
+      continue;
+    }
+    transients = 0;
+    const status = res.json && typeof res.json.status === 'string' ? res.json.status : undefined;
+    if (status === TERMINAL_SUCCESS) return { outcome: 'terminal', status: 'completed', job: res.json };
+    if (status && TERMINAL_FAILURE.has(status)) return { outcome: 'terminal', status: 'failed', job: res.json };
+    await sleep(pollMs);
+  }
+}
+
+/**
+ * Run the whole confirmed patch, front-to-back, as a sequence of the H1-gated platform calls.
+ * Returns a discriminated result the panel maps straight onto its UI; every network refusal is a
+ * graceful outcome, never a throw:
+ *   - { outcome:'ready', preRunSha, newHeadSha } - build CONFIRMED completed; show APPROVE vs ROLLBACK
  *   - { outcome:'answered', reason }             - no job (in-build classifier answered)
- *   - { outcome:'failed', event }                - the build reported an error event
+ *   - { outcome:'failed', job }                  - the JOB reached a terminal failure status
+ *   - { outcome:'pending' }                      - the poll deadline passed (still running)
  *   - { outcome:'degraded', status }             - a mid-flow 401/403/404/... → calm msg
  *
  * `onProgress(jobEvent)` receives each streamed JobEvent (the panel narrates plan_step).
+ *
+ * The SSE is streamed ONLY for live progress; it is NOT treated as terminal (M1): a blip that
+ * closes the stream before `complete` would otherwise read as "no change" while the build finishes
+ * moments later and deploys a real edit. So after the stream ends (or drops), the JOB RECORD is
+ * polled to a terminal status, and only a CONFIRMED 'completed' reads the new head for the preview.
  */
-export async function runEditPatch({ fetchImpl, appId, token, description, onProgress, signal }) {
+export async function runEditPatch({
+  fetchImpl,
+  appId,
+  token,
+  description,
+  onProgress,
+  signal,
+  pollMs,
+  deadlineMs,
+  maxTransients,
+  now,
+  sleep,
+}) {
   // 1. Capture the pre-run head BEFORE the build - the rollback target and diff point.
   const before = await readVersions({ fetchImpl, appId, token });
   if (!before.ok) return { outcome: 'degraded', status: before.status };
@@ -282,8 +402,8 @@ export async function runEditPatch({ fetchImpl, appId, token, description, onPro
   if (!started.ok) return { outcome: 'degraded', status: started.status };
   if (started.status === 'answered') return { outcome: 'answered', reason: started.reason };
 
-  // 3. Stream the job SSE - live plan_step narration to onProgress.
-  const stream = await streamJobEvents({
+  // 3. Stream the job SSE for LIVE progress only (best-effort). A dropped stream is NOT terminal.
+  await streamJobEvents({
     fetchImpl,
     jobId: started.jobId,
     token,
@@ -292,11 +412,15 @@ export async function runEditPatch({ fetchImpl, appId, token, description, onPro
       if (onProgress) onProgress(ev);
     },
   });
-  if (stream.outcome === 'http-error') return { outcome: 'degraded', status: stream.status };
-  if (stream.outcome === 'error') return { outcome: 'failed', event: stream.event };
 
-  // 4. Read the new head for the preview (the versions read is the source of truth for the
-  //    head; a soft close still lands here, and an unchanged head reads as "no change").
+  // 4. AUTHORITATIVELY confirm the build finished by polling the job record (transient-tolerant).
+  const poll = await pollJobUntilTerminal({ fetchImpl, jobId: started.jobId, token, pollMs, deadlineMs, maxTransients, now, sleep, signal });
+  if (poll.outcome === 'degraded') return { outcome: 'degraded', status: poll.status };
+  if (poll.outcome === 'pending') return { outcome: 'pending' };
+  if (poll.status === 'failed') return { outcome: 'failed', job: poll.job };
+
+  // 5. Job CONFIRMED completed -> the versions read now reflects the FINISHED build (never a
+  //    mid-build snapshot). An unchanged head here is a true "no change".
   const after = await readVersions({ fetchImpl, appId, token });
   if (!after.ok) return { outcome: 'degraded', status: after.status };
   return { outcome: 'ready', preRunSha, newHeadSha: after.head, jobId: started.jobId };

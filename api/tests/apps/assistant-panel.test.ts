@@ -233,12 +233,12 @@ describe('H3 edit mode (admins only) — opt-in switch + detect-then-ask wiring'
     // The edit machinery is the separate module (a follow-up build + versions/restore), imported here.
     expect(PANEL).toContain("from './edit-mode'");
     expect(PANEL).toContain('runEditPatch'); // POST /api/v1/jobs (the H1-gated follow-up build)
-    expect(PANEL).toContain('rollbackToVersion'); // POST /api/v1/artifacts/:id/versions/:sha/restore
+    expect(PANEL).toContain('guardedRollback'); // guarded POST /api/v1/artifacts/:id/versions/:sha/restore
     // The confirm step gates the patch run behind an explicit confirmation (PT-PT).
     expect(PANEL).toContain('EDIT_COPY.confirm');
-    expect(PANEL).toMatch(/const confirmEdit[\s\S]{0,600}runEditPatch/);
+    expect(PANEL).toMatch(/const confirmEdit[\s\S]{0,700}runEditPatch/);
     // The served-app POST /api/app-assistant plane stays visitor-blind: the edit handlers never
-    // route through ENDPOINT. runEditPatch/rollbackToVersion drive the /api/v1/* plane instead.
+    // route through ENDPOINT. runEditPatch/guardedRollback drive the /api/v1/* plane instead.
     const confirmEdit = PANEL.slice(PANEL.indexOf('const confirmEdit'), PANEL.indexOf('const approveEdit'));
     expect(confirmEdit).not.toContain('ENDPOINT');
     expect(confirmEdit).not.toContain('/api/app-assistant');
@@ -250,7 +250,24 @@ describe('H3 edit mode (admins only) — opt-in switch + detect-then-ask wiring'
     expect(PANEL).toMatch(/outcome === 'ready'/);
     expect(PANEL).toMatch(/setEditPhase\('note'\)/);
     // Rollback is one click and also degrades on a refusal rather than throwing.
-    expect(PANEL).toMatch(/const rollbackEdit[\s\S]{0,600}rollbackToVersion/);
+    expect(PANEL).toMatch(/const rollbackEdit[\s\S]{0,700}guardedRollback/);
+  });
+
+  it('M1: an early SSE close is not "done" - the preview waits on the confirmed job (pending stays calm)', () => {
+    // The panel surfaces the M1 outcomes: a still-running build after a dropped stream shows the calm
+    // "still running" note (never a false "no change"); a real preview only comes from outcome:ready.
+    expect(PANEL).toMatch(/outcome === 'pending'/);
+    expect(PANEL).toContain('EDIT_COPY.stillRunning');
+  });
+
+  it('M2: Reverter re-checks HEAD before restoring and refuses a stale rollback with a calm message', () => {
+    // The rollback passes BOTH the pre-run target AND the head this edit produced, so guardedRollback
+    // can refuse if HEAD advanced (a concurrent change) rather than blind-restoring and wiping it.
+    expect(PANEL).toMatch(/guardedRollback\(\{[\s\S]{0,200}expectedHeadSha/);
+    expect(PANEL).toMatch(/reason === 'head-advanced'/);
+    expect(PANEL).toContain('EDIT_COPY.headAdvanced');
+    // Reverter is only offered when there is a pre-run head to restore to.
+    expect(PANEL).toMatch(/editPreview\.preRunSha \? \(/);
   });
 });
 

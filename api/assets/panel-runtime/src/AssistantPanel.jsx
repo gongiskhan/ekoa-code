@@ -35,7 +35,7 @@ import { createTourPlayer } from './tour-player';
 // the admin's platform Bearer - a SEPARATE plane from the visitor-blind POST
 // /api/app-assistant. Every action it calls is H1-gated server-side; this panel only SHOWS
 // the affordance when detection said admin, and only after the admin OPTS IN (detect-then-ask).
-import { runEditPatch, rollbackToVersion, degradeMessage, progressLine, EDIT_COPY } from './edit-mode';
+import { runEditPatch, guardedRollback, degradeMessage, progressLine, EDIT_COPY } from './edit-mode';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
@@ -647,11 +647,18 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     });
     setEditBusy(false);
     if (result.outcome === 'ready') {
+      // The JOB was CONFIRMED completed (poll), so newHeadSha reflects the finished build - never a
+      // mid-build snapshot. preRunSha is the diff point; newHeadSha is the head THIS edit produced.
       setEditPreview({ preRunSha: result.preRunSha, newHeadSha: result.newHeadSha });
       setEditPhase('preview');
     } else if (result.outcome === 'answered') {
       // The in-build classifier resolved the request without a build (no revision was created).
       setEditMessage('Não foi criada nenhuma revisão para este pedido. Reformule a alteração pretendida.');
+      setEditPhase('note');
+    } else if (result.outcome === 'pending') {
+      // The stream dropped and the build did not reach a terminal status within the deadline. NOT a
+      // failure and NOT a false "no change" (M1): tell the admin it is still running.
+      setEditMessage(EDIT_COPY.stillRunning);
       setEditPhase('note');
     } else if (result.outcome === 'failed') {
       setEditMessage('A revisão não foi concluída. Tente reformular o pedido.');
@@ -671,21 +678,30 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     setEditPhase('note');
   }, []);
 
-  /** ROLLBACK (one click) = forward-restore to the pre-run head. H1-gated server-side. */
+  /** ROLLBACK (one click) = forward-restore to the pre-run head. H1-gated server-side, and GUARDED
+   *  against a stale target (M2): guardedRollback re-reads the versions and REFUSES if HEAD is no
+   *  longer the head THIS edit produced (a concurrent change moved it) rather than blind-restoring
+   *  to preRunSha and wiping that unrelated change. A refusal shows a calm "refresh" message. */
   const rollbackEdit = useCallback(async () => {
     const id = appId();
     const token = readPlatformToken();
-    const sha = editPreview && editPreview.preRunSha;
-    if (!id || !token || !sha) {
+    const preRunSha = editPreview && editPreview.preRunSha;
+    const expectedHeadSha = editPreview && editPreview.newHeadSha;
+    if (!id || !token || !preRunSha || !expectedHeadSha) {
       setEditMessage(degradeMessage(token ? 0 : 401));
       setEditPhase('note');
       return;
     }
     setEditBusy(true);
-    const result = await rollbackToVersion({ fetchImpl: (url, opts) => fetch(url, opts), appId: id, token, sha });
+    const result = await guardedRollback({ fetchImpl: (url, opts) => fetch(url, opts), appId: id, token, preRunSha, expectedHeadSha });
     setEditBusy(false);
     if (result.ok) {
       setEditMessage(EDIT_COPY.rolledBack);
+      setEditPreview(null);
+      setEditPhase('note');
+    } else if (result.reason === 'head-advanced' || result.reason === 'target-missing') {
+      // HEAD moved (or the target is gone) between preview and click - refuse, never blind-restore.
+      setEditMessage(EDIT_COPY.headAdvanced);
       setEditPreview(null);
       setEditPhase('note');
     } else {
@@ -872,14 +888,19 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
                     <button type="button" className="ekoa-assistant-edit-primary" onClick={approveEdit}>
                       Aprovar
                     </button>
-                    <button
-                      type="button"
-                      className="ekoa-assistant-edit-secondary"
-                      onClick={rollbackEdit}
-                      disabled={editBusy}
-                    >
-                      Reverter
-                    </button>
+                    {/* Reverter only when there is a pre-run head to restore to (a follow-up build on
+                        an existing app always has one; guarded defensively). The click re-checks HEAD
+                        (M2) before restoring, so a concurrent change refuses rather than gets wiped. */}
+                    {editPreview.preRunSha ? (
+                      <button
+                        type="button"
+                        className="ekoa-assistant-edit-secondary"
+                        onClick={rollbackEdit}
+                        disabled={editBusy}
+                      >
+                        Reverter
+                      </button>
+                    ) : null}
                   </div>
                 </>
               ) : (

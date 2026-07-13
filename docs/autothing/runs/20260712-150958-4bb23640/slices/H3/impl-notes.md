@@ -128,3 +128,52 @@ here; no e2e driver added. The flow is correct + unit-proven.
 - `npx vitest run tests/apps tests/contract` -> 57 files, 559 tests, all pass
 - `node assets/panel-runtime/build.mjs` -> built (panel compiles, 240389 bytes)
 - repo root `npm run gate:chokepoint` -> clean (nothing outside api/src/llm touches the provider)
+
+## Codex-fix round (2026-07-13) - 2 Mediums closed (commit 28a6e12 review)
+
+Codex review of H3 returned NEEDS-WORK with 2 real Mediums; a fresh review APPROVED. Both fixed in
+the working tree (edit-mode.js + AssistantPanel.jsx + tests) - no commit; the lead runs the gate.
+
+- **M1 (SSE early-close false "no change"): CLOSED.** Before, `runEditPatch` treated the SSE stream
+  outcome as terminal: a proxy/network blip that closed the stream BEFORE the `complete` event read
+  as done, one versions read showed the head unchanged, and the panel said "no change" - while the
+  follow-up build could complete moments later and activate a real new head (a deployed edit the
+  admin was told did not happen). FIX: the SSE is now streamed for LIVE PROGRESS ONLY and is NOT
+  terminal. After the stream ends (or drops), the new `pollJobUntilTerminal` polls
+  `GET /api/v1/jobs/:id` until the JOB RECORD reaches a terminal status - transient-tolerant exactly
+  like the fees-knowledge e2e build poll (`safeJson` never throws; a deterministic 4xx degrades on
+  its status; a 5xx / non-JSON / network blip is tolerated up to a bounded count; the deadline yields
+  `pending`). Only a CONFIRMED `completed` reads the new head for the preview (never a mid-build
+  snapshot); `failed`/`cancelled` -> the calm failure note; the deadline -> a new `pending` outcome
+  the panel shows as "A revisão ainda está em curso..." (never a false ready/no-change). Terminal
+  statuses mirror `api/src/agents/jobs.ts` (`completed` success; `failed`/`cancelled` failure).
+  TESTS: an SSE that closes with NO terminal frame polls running->completed and previews the head the
+  build produced AFTER the blip (post-run versions read strictly after the job poll); a never-terminal
+  job at the deadline returns `pending` and does NOT read a post-run head; `pollJobUntilTerminal`
+  tolerates a 502/non-JSON blip then completes, degrades on a deterministic 401, and treats
+  `cancelled` as terminal failure.
+
+- **M2 (stale rollback sha wipes concurrent changes): CLOSED.** Before, Reverter forward-restored to
+  `preRunSha` with no guard that HEAD was still the head THIS edit produced; if another admin / a
+  dashboard action / a later restore moved HEAD between preview and the click, restoring to
+  `preRunSha` silently wiped that newer unrelated change. FIX: the preview now captures the new head
+  this edit produced (`editPreview.newHeadSha`, the confirmed-completed head), and the Reverter click
+  goes through the new `guardedRollback`, which RE-READS `GET /versions` and requires
+  `items[0].sha === expectedHeadSha` (the edit's head) AND that `preRunSha` still exists in history
+  before restoring. If HEAD advanced (or the target is gone) it REFUSES with no restore call, and the
+  panel shows the calm PT-PT "A aplicação foi alterada entretanto; atualize a pré-visualização." The
+  Reverter button is also only rendered when a `preRunSha` exists (never restore to undefined).
+  TESTS: a rollback where HEAD still == the edit's new head fires restore to `preRunSha`; a rollback
+  where HEAD advanced is REFUSED (`reason:'head-advanced'`, no restore call); a missing pre-run
+  target is REFUSED (`reason:'target-missing'`); a refused versions re-read degrades. Panel pins:
+  `guardedRollback({... expectedHeadSha ...})`, the `head-advanced` branch + `EDIT_COPY.headAdvanced`,
+  and the `preRunSha`-guarded Reverter.
+
+The detect-then-ask + visitor-blindness pins are intact (the visitor-endpoint slice check on
+`confirmEdit` still passes; the switch/discovery opt-in tests unchanged). No new endpoints; `shared/`
+still untouched (M1 reuses `GET /jobs/:id`, M2 reuses `GET /versions` + restore).
+
+VERIFY (all green): `tsc -p tsconfig.json` 0; `tsc -p tsconfig.test.json` 0; eslint touched .ts 0
+errors; `vitest run tests/apps` -> 20 files, 253 tests pass (edit-mode.test.ts now 25, +9 for M1/M2;
+assistant-panel.test.ts H3 block +2 M1/M2 pins); `node assets/panel-runtime/build.mjs` compiles
+(242378 bytes); `npm run gate:chokepoint` clean.
