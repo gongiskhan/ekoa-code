@@ -97,10 +97,21 @@ const injectPromptStepSchema = z.strictObject({
   copy: optionalCopySchema.optional(),
 });
 
+// external-image-step images are served UNDER /api/demos/assets/. Contain the path to
+// that mount: no dot-segment (`..`), no leading slash (absolute), no scheme (`:`), no
+// backslash — so a hostile/compromised tour spec cannot point the browser at an
+// arbitrary same-origin path (e.g. `../app-assistant`). Defence in depth alongside the
+// in-player check (tour-player.js isSafeImagePath). The shipped platform specs use a
+// plain filename (e.g. `citius-portal.svg`), which stays valid.
+const SAFE_DEMO_IMAGE_RE = /^(?!.*\.\.)[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
 const externalImageStepSchema = z.strictObject({
   id: z.string().min(1),
   type: z.literal('external-image-step'),
-  image: z.string().min(1),
+  image: z
+    .string()
+    .min(1)
+    .regex(SAFE_DEMO_IMAGE_RE, 'image must be a relative path inside /api/demos/assets/ (no "..", absolute, scheme, or backslash)'),
   copy: copySchema,
 });
 

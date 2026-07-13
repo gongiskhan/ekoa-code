@@ -214,3 +214,49 @@ describe('E2 live-gate tour fixture', () => {
     expect(inject.sendInHarness).toBe(false);
   });
 });
+
+describe('E2 tour player — lifecycle source contract (findings 1 + 2)', () => {
+  it('is single-flight + abortable via a generation token checked after every await', () => {
+    expect(PLAYER).toContain('generation');
+    expect(PLAYER).toMatch(/function isCurrent/);
+    expect(PLAYER).toContain('abortPending');
+    expect(PLAYER).toMatch(/generation \+= 1/); // start() and cancel() bump the token
+    expect(PLAYER).toMatch(/if \(!isCurrent\(gen\)\) return/); // guards after awaits
+    // the target wait lives in the PLAYER (abortable), not the runtime's internal poll
+    expect(PLAYER).toContain('waitForTarget');
+  });
+
+  it('validates external-image-step paths before building a URL (finding 3)', () => {
+    expect(PLAYER).toContain('isSafeImagePath');
+    expect(PLAYER).toContain('imageBlocked');
+  });
+
+  it('the panel cancels the active tour when the panel is collapsed (finding 2)', () => {
+    expect(PANEL).toContain('collapsePanel');
+    // collapsePanel cancels the player then collapses
+    expect(PANEL).toMatch(/collapsePanel[\s\S]{0,160}\.cancel\(\)/);
+    expect(PANEL).toContain('onClick={collapsePanel}');
+  });
+});
+
+describe('demoSpecSchema — external-image-step path containment (finding 3)', () => {
+  const specWithImage = (image: string) => ({
+    version: 1,
+    appId: 'art-img',
+    tourId: 'demo',
+    kind: 'overview',
+    card: { titlePt: 'c', descriptionPt: 'd', durationSec: 10 },
+    steps: [{ id: 'img', type: 'external-image-step', image, copy: { titlePt: 't', bodyPt: 'b' } }],
+  });
+
+  it('accepts the shipped filename form + safe subpaths (the compat bar)', () => {
+    expect(validateDemoSpec(specWithImage('citius-portal.svg')).valid).toBe(true);
+    expect(validateDemoSpec(specWithImage('sub/dir/frame.svg')).valid).toBe(true);
+  });
+
+  it('rejects traversal / absolute / scheme / backslash image paths', () => {
+    for (const bad of ['../../app-assistant', '../frame.svg', '/api/app-assistant', 'http://evil/x', 'a\\b', '..']) {
+      expect(validateDemoSpec(specWithImage(bad)).valid, bad).toBe(false);
+    }
+  });
+});

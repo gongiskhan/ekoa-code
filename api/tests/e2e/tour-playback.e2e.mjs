@@ -74,6 +74,17 @@ function buildTour(appId) {
   return { ...TOUR_FIXTURE, appId };
 }
 
+// A schema-valid app-assistant reply that carries a startTour ACTION — the SECOND
+// trigger (per acceptance a): the assistant proposes startTour and the panel routes it
+// to the player. Fulfilled at the browser boundary so the section is deterministic (no
+// real model turn), the way the D3 driver stubs assistant surfaces.
+const ASSISTANT_STARTTOUR_REPLY = {
+  reply: 'Vou mostrar-lhe um tutorial guiado.',
+  mode: 'teach',
+  citations: [],
+  actions: [{ toolName: 'app_action__ver_tutorial', action: { kind: 'startTour', tourId: 'visao-geral' }, input: {} }],
+};
+
 function fail(msg) { console.error(`E2E FAIL: ${msg}`); process.exit(1); }
 function ok(msg) { console.log(`PASS ${msg}`); }
 function assert(cond, msg) { if (!cond) fail(msg); }
@@ -238,9 +249,13 @@ async function main() {
 
   // Deterministic served tour: fulfil the panel's GET /api/demos/:appId at the
   // browser boundary with the schema-valid overview spec (a schema-validated stub).
-  await page.route('**/api/demos/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) }),
-  );
+  // Count the fulfils so the gate PROVES the panel actually fetched the route (not a
+  // cached/embedded tour) — a regression that stopped fetching would drop this to 0.
+  let demosFetches = 0;
+  await page.route('**/api/demos/**', (route) => {
+    demosFetches += 1;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) });
+  });
 
   const appUrl = `${BASE}/apps/${artifactId}/`;
   await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
@@ -251,7 +266,8 @@ async function main() {
   // ============================================================================
   await openPanelAndStartTour(page);
   const tour = page.locator('.ekoa-assistant-tour');
-  ok('A: teach launcher started the tour; panel fetched GET /api/demos/:appId and rendered the tour block');
+  assert(demosFetches >= 1, `panel never actually fetched GET /api/demos/:appId (fulfil count ${demosFetches})`);
+  ok(`A: teach launcher started the tour; panel actually fetched GET /api/demos/:appId (${demosFetches}x) and rendered the tour block`);
 
   // Step 1 (navigate, "Bem-vindo") — the counter + copy render.
   await tour.locator('.ekoa-assistant-tour-progress', { hasText: 'Passo 1 de 6' }).waitFor({ state: 'visible', timeout: 10_000 });
@@ -330,6 +346,30 @@ async function main() {
   await page.screenshot({ path: join(EVID, 'live-04-rebuild-replay.png') });
   assert(assistantPosts === postsBeforeReplay, `rebuild replay issued ${assistantPosts - postsBeforeReplay} assistant POST(s)`);
   ok('C: after the rebuild the same tour selectors still resolve real elements (selector stability via registry-ID names)');
+
+  // ============================================================================
+  // E. STARTTOUR ACTION PATH — the assistant-returned startTour action drives the
+  //    player (the SECOND trigger), distinct from the teach launcher exercised in A.
+  //    Deterministic: the assistant reply is a schema-valid stub carrying the action;
+  //    the ONE app-assistant POST here is the trigger — the playback it starts must
+  //    still be zero-token.
+  // ============================================================================
+  await page.locator('.ekoa-assistant-tour-close').click(); // close the replay tour -> composer reachable
+  await page.route('**/api/app-assistant', (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ASSISTANT_STARTTOUR_REPLY) });
+  });
+  const postsBeforeAction = assistantPosts;
+  const demosBeforeAction = demosFetches;
+  await page.locator('.ekoa-assistant-textarea').fill('Mostre-me um tutorial');
+  await page.locator('.ekoa-assistant-send').click();
+  // The reply's startTour action routes to the player, which FETCHES the tour and plays
+  // it — proving the assistant-action trigger, not the teach launcher, started it.
+  await page.locator('.ekoa-assistant-tour[data-tour-status]').waitFor({ state: 'visible', timeout: 15_000 });
+  assert(demosFetches > demosBeforeAction, 'startTour action did not drive a GET /api/demos fetch');
+  assert(assistantPosts === postsBeforeAction + 1, `startTour playback was not zero-token (${assistantPosts - postsBeforeAction} assistant POSTs, expected only the 1 trigger)`);
+  await page.screenshot({ path: join(EVID, 'live-05-starttour-action.png') });
+  ok('E: an assistant startTour action routed to the player, fetched the tour, and started playback (zero further tokens)');
 
   // ============================================================================
   // D. ZERO non-benign page JS console errors throughout.

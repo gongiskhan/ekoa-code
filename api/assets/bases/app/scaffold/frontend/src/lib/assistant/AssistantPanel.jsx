@@ -156,7 +156,7 @@ function tourStatusText(status) {
  * the deterministic live gate. No emoji; brand-neutral via the panel CSS vars.
  */
 function TourView({ tour, onNext, onClose }) {
-  const { status, stepIndex, total, copy, imageUrl, injectedPrompt } = tour;
+  const { status, stepIndex, total, copy, imageUrl, imageBlocked, injectedPrompt } = tour;
   const stepping = status === 'playing' || status === 'awaiting';
   const stepNo = total > 0 ? Math.min(stepIndex + 1, total) : 0;
   const statusLine = tourStatusText(status);
@@ -188,6 +188,10 @@ function TourView({ tour, onNext, onClose }) {
       ) : null}
 
       {imageUrl ? <img className="ekoa-assistant-tour-image" src={imageUrl} alt="" /> : null}
+
+      {imageBlocked ? (
+        <div className="ekoa-assistant-tour-note">Imagem ignorada (caminho não permitido).</div>
+      ) : null}
 
       {statusLine ? <div className="ekoa-assistant-tour-status">{statusLine}</div> : null}
 
@@ -286,6 +290,15 @@ export function AssistantPanel() {
   const tourClose = useCallback(() => {
     if (playerRef.current) playerRef.current.cancel();
     setTour(null);
+  }, []);
+
+  /** Collapse the panel. A tour is bound to the visible panel, so collapsing it
+   *  CANCELS any active tour (clears the on-page spotlight + aborts the run) rather
+   *  than leaving a ring on screen with no reachable controls. */
+  const collapsePanel = useCallback(() => {
+    if (playerRef.current) playerRef.current.cancel();
+    setTour(null);
+    setCollapsed(true);
   }, []);
 
   /** Run the assistant's proposed actions in order through the C3 runtime. The
@@ -451,7 +464,7 @@ export function AssistantPanel() {
     <aside className="ekoa-assistant" data-collapsed="false" role="complementary" aria-label="Assistente">
       <header className="ekoa-assistant-header">
         <span className="ekoa-assistant-title">Assistente</span>
-        <button type="button" className="ekoa-assistant-close" onClick={() => setCollapsed(true)} aria-label="Fechar o assistente">
+        <button type="button" className="ekoa-assistant-close" onClick={collapsePanel} aria-label="Fechar o assistente">
           <CloseIcon />
         </button>
       </header>

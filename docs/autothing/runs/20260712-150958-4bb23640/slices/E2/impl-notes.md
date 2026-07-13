@@ -3,6 +3,72 @@
 **Slice:** E2 (SAME-DOCUMENT tour playback in the operator assistant panel, zero-token;
 plus a rebuild selector-stability gate). **Branch:** operator-run. **Do NOT commit — the lead runs the gates.**
 
+## Codex NEEDS-WORK round (post-`fde090e`) — all 4 findings fixed
+
+The cross-model Codex review of `fde090e`/`fc27f10` returned NEEDS-WORK with 4 findings
+(`slices/E2/codex-review.md`). All fixed; NONE required a runtime-asset change, so no stack
+restart is needed (the scaffold player/panel are read per-build; the schema change is
+covered by unit tests and is not exercised by the live gate). Static wall re-green:
+**93 unit tests** (incl. new jsdom behavioural tests), `tsc --noEmit` 0, eslint 0 (src +
+tests), chokepoint clean.
+
+1. **Med — tour-run lifecycle (abort + single-flight).** The player
+   (`tour-player.js`) now carries a `generation` token bumped by every `start()` and
+   `cancel()`; `isCurrent(gen)` is checked after EVERY await, so a superseded/cancelled run
+   returns without drawing or wedging. The spotlight target-wait moved OUT of the runtime's
+   internal poll into an abortable player-side `waitForTarget(name, gen)` that resolves
+   `null` the moment the generation moves — so cancel()/double-start abort an in-flight wait
+   and a late-appearing target never redraws the ring. `start()` is single-flight
+   (cancel-then-start via the token). `abortPending()` resolves any parked manual/await wait
+   so no Promise leaks. Pinned by `tour-player.behavior.test.ts` (jsdom): "cancel during a
+   spotlight target-poll never draws and never wedges" + "a second start supersedes the
+   first — exactly one live run draws".
+
+2. **Med — panel close cancels the tour.** `AssistantPanel.jsx` header close button now
+   calls `collapsePanel()` = `player.cancel()` (clears the on-page spotlight + aborts the
+   run) + `setCollapsed(true)`, so collapsing never strands a ring with no reachable
+   controls. Pinned source-level in `tour-player.test.ts`.
+
+3. **Med — external-image path containment (defence in depth, BOTH layers).** The player
+   rejects any `step.image` containing `..`, a leading `/`, a scheme (`:`), or a backslash
+   (`isSafeImagePath`) and renders a SKIPPED state (`imageBlocked`, PT-PT "Imagem ignorada")
+   instead of concatenating it into a fetched URL — so a hostile spec's `../../app-assistant`
+   can never issue an off-mount same-origin GET. AND `demoSpecSchema`
+   (`api/src/services/demo-registry.ts`) now constrains `image` with `SAFE_DEMO_IMAGE_RE`
+   (forbids dot-segments/absolute/scheme/backslash). **Compat checked:** all shipped platform
+   specs use `citius-portal.svg` (a plain filename), which stays valid. Pinned by
+   `tour-player.behavior.test.ts` (player skips traversal, renders the safe path) + schema
+   tests in `tour-player.test.ts` (rejects `../../app-assistant` / `/api/...` / `http://` /
+   `a\b` / `..`; accepts `citius-portal.svg` + safe subpaths).
+
+4. **Low — gate honesty.** `tour-playback.e2e.mjs` now (a) COUNTS the GET /api/demos/:appId
+   route-fulfils and asserts the panel actually fetched it (`demosFetches >= 1`), so a
+   regression that stopped fetching or embedded the tour would fail; and (b) adds section
+   **E** exercising the assistant-returned `startTour` ACTION path — a schema-valid stub
+   assistant reply carrying `startTour` is route-fulfilled, a message is sent, and the gate
+   asserts the action routed to the player, drove a fresh /api/demos fetch, and the playback
+   it started was zero-token (only the single trigger POST). Deterministic, no real model
+   turn (D3-style stub).
+
+### Fresh-context review (APPROVE, 4 Low) — the one code item folded in
+
+The independent fresh-context review APPROVED. Its #1 (double-start re-entrancy) and #2
+(panel-close orphans the spotlight) are the SAME defects as Codex 1-2 above (fixed). #4
+(selector stability rests on the App.jsx convention, not a lint rule) is context — the lead
+records it in the LANDING packet, no code. The one code item, **#3 (annotate-result +
+external-image-step had zero behavioural coverage)**, is now covered in
+`tour-player.behavior.test.ts`: an `annotate-result` step draws the spotlight on the present
+result element and advances; `external-image-step` covers both the traversal SKIP and the
+safe render. Per the lead's steer I verified the constructed image URL against the REAL
+serving route — `serving.ts:443` mounts `expressStatic(demoAssetsDir())` at
+`/api/demos/assets`, and `api/assets/demos/assets/citius-portal.svg` exists — so the player's
+`/api/demos/assets/<image>` URL resolves; the path is correct, no fix needed. The
+behavioural test asserts that exact URL against the shipped filename.
+
+**Static wall after this addendum:** 95 unit tests, `tsc --noEmit` 0, eslint 0, chokepoint
+clean. Zero-token remains structural (no send path in the player) and the C3 transient-ring
+behaviour is unchanged (untouched this round). Still no runtime-asset change → no restart.
+
 ## What E2 delivers
 
 Per `FLOW_PLAN.md:63`, E2 is the IN-APP tour PLAYER: the assistant panel plays a
