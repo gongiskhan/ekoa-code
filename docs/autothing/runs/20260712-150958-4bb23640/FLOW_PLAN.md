@@ -26,7 +26,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | D3 | three-modes scripted gate + pause assertion + cited answer | mixed | 3 | D | D1,D2 | passed |
 | E1 | build-time tour generation (overview + per-journey, registry-ID selectors) | api | 4 | E | C2,A2 | passed |
 | E2 | tour playback via panel (zero-token) + rebuild selector-stability gate | mixed | 4 | E | E1,D2 | pending |
-| F1 | knowledge-during-build (detect domain-heavy, request uploads, index mid-build, narrate) | api | 5 | F | A3 | pending |
+| F1 | knowledge-during-build (detect domain-heavy, request uploads, index mid-build, narrate) | api | 5 | F | A3 | passed |
 | F2 | fees sample app + seeded docs + cited-answer gate | mixed | 2 | F | F1,D1 | pending |
 | G1 | assistant metering + billing-truth probe extension (tours/registry free) | api | 3 | G | D1 | pending |
 | G2 | panel perf budget (lazy-load) + perf gate | mixed | 2 | G | D2 | pending |

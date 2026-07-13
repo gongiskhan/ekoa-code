@@ -253,6 +253,13 @@
         "slices/E1/codex-review.md"
       ],
       "at": "2026-07-13T01:37:20Z"
+    },
+    "F1": {
+      "status": "passed",
+      "kind": "api",
+      "commit": "c20aa23",
+      "tag": "operator/f1",
+      "at": "2026-07-13T07:48:19Z"
     }
   },
   "resume": {
@@ -262,8 +269,8 @@
   },
   "globalGate": {
     "status": "in-progress",
-    "at": "2026-07-13T07:01:57Z",
-    "landed": 19,
-    "note": "Resumed at E2. Remaining: E2, F1-F2, G1-G2, H1-H6 (security block last, together-or-not-at-all)."
+    "at": "2026-07-13T07:48:19Z",
+    "landed": 20,
+    "note": "20/31 gated. E2 live gate running; then G1/G2, F2, then the atomic H block."
   }
 }

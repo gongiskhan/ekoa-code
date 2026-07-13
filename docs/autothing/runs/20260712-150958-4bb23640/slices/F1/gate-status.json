@@ -1,0 +1,17 @@
+{
+  "slice": "F1",
+  "kind": "api",
+  "commit": "c20aa23",
+  "commits": ["376f560", "c20aa23", "a2e3e1b"],
+  "tag": "operator/f1",
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "domain-scoping.ts (deterministic 6-domain PT+EN detector + PT-PT narration builders) + ingestBuildKnowledge seam (agents/seams.ts, bound in server.ts to knowledge ingestDocument, sourceType build-scoping) + first-build hook in executeBuildJob (narrate knowledge-scope, ingest scoping docs, narrate knowledge-indexed; awaited-by-design for same-run searchability, per-doc non-fatal, count/size capped) + JobCreateRequest.knowledgeDocs carried additively through the jobs route" },
+    "test": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "31 new (detector positives/negatives incl. substring guards + codex saude repros; seam over real FTS+mongo-mem incl. org isolation, _shared 403, honest unwired default; build-flow narrate/ingest/generic-silent/follow-up-skip; contract carry+bounds) + agents/knowledge regression 163/163; tsc shared+api-src+api-test clean; eslint 0/0; a2e3e1b fixed 3 pre-existing E1 test-project tsc errors surfaced by this wall" },
+    "securityWall": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "gitleaks clean on all commits; chokepoint grep clean (detector is purely lexical, no egress); org isolation structural (orgId only from run actor, verified in source by fresh review; no orgId channel in doc argument); _shared refused by existing assertNotSharedActor; ingest bounded at the contract boundary (20 docs, 256KiB text) + re-capped in build.ts; NO new permission logic (H-block constraint honoured)" },
+    "liveVerification": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "integration-level: seam wired exactly as server.ts over real FTS + mongo-mem proves ingest -> immediately searchable in the actor org only; the full live proof (real build narrates + ingests + assistant cites seeded content on the credentialed stack) is F2's gate BY PLAN (FLOW_PLAN F2 = fees sample app + seeded docs + cited-answer gate)" },
+    "freshReview": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "VERDICT: APPROVE (fresh context, evidence-mandatory; re-ran all suites itself; verified org isolation structurally at service.ts:172-201 + seams.ts:82-101; confirmed isolation tests are real assertions not tautologies). Its one substantive note (detector precision, non-blocking) was subsumed by codex finding 3 and fixed in c20aa23" },
+    "codexSliceReview": { "status": "passed", "at": "2026-07-13T07:48:19Z", "detail": "gpt-5.5/high read-only: NEEDS-WORK with 3 findings, ALL fixed in c20aa23 - (1 High) knowledgeDocs unreachable via public API: now carried by JobCreateRequest (bounded) + forwarded by jobs route + contract-tested; (2 Med) per-doc try/catch + caps (await-before-run kept BY DESIGN for same-run searchability, now documented as such); (3 Med) saude false negatives: medic/hospital/consultas/enfermeir/doctors added with codex repros pinned + new negative guards. Codex explicitly found no org-isolation hole or _shared bypass" },
+    "designAudit": { "status": "skipped", "reason": "api slice: no UI surface (narration copy is asserted in unit tests; the scoping UI is a later slice)", "at": "2026-07-13T07:48:19Z" },
+    "walkthrough": { "status": "skipped", "reason": "api slice: committed deterministic suites are the evidence; F2 carries the visible live proof per FLOW_PLAN", "at": "2026-07-13T07:48:19Z" }
+  }
+}
