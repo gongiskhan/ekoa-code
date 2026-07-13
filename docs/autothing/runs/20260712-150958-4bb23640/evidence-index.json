@@ -297,6 +297,14 @@
    "tag": "operator/h1",
    "at": "2026-07-13T19:40:00Z",
    "note": "security block slice 1/6; dual review incl codex re-review APPROVE; closed a live IDOR + carried LANDING billingLocked finding"
+  },
+  "H2": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "61c0372",
+   "tag": "operator/h2",
+   "at": "2026-07-13T21:45:00Z",
+   "note": "security block 2/6; dual review incl codex re-review APPROVE; whoami mirrors the H1 edit gate (fail-closed, oracle-free, no false offer)"
   }
  },
  "resume": {
@@ -307,8 +315,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 25,
-  "resumePoint": "H2 (identity handoff; memo at slices/H2/decision-memo.md)",
-  "note": "Run continues ON MAIN. 25/31 gated. H BLOCK in progress (atomic): H1 landed (real capability layer, builder->user, IDOR closed, durable revocation). Remaining H2-H6. can() stub is now REAL. Codex healthy (one hang killed+rerun)."
+  "landed": 26,
+  "resumePoint": "H3 (edit mode - admin opt-in + patch-run preview/approve/rollback)",
+  "note": "Run continues ON MAIN. 26/31 gated. H BLOCK 2/6 (atomic): H1 (capability layer + IDOR + durable revocation), H2 (whoami detection, detect-then-ask). Remaining H3-H6. App-edit is org-scoped (documented policy). Codex healthy."
  }
 }
