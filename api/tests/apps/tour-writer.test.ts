@@ -207,6 +207,22 @@ describe('readTours — target cross-validation warns, never fails', () => {
       expect(res.warnings.some((w) => w.includes('app-nav'))).toBe(false);
     }
   });
+
+  it('warns on home-empty - the replaceable HomePage placeholder is NOT a landmark (E2 live-gate finding)', async () => {
+    const dir = await tmpProject();
+    const tour = overviewTour();
+    (tour.steps as Array<Record<string, unknown>>)[1] = {
+      id: 'destacar-vazio', type: 'spotlight', target: 'home-empty',
+      copy: { titlePt: 'Início', bodyPt: 'O estado vazio da página inicial.' },
+    };
+    await writeManifestTours(dir, [tour]);
+    const res = await readTours(dir, { appId: 'art-he' });
+    expect(res.status).toBe('valid'); // WARN, not fail
+    if (res.status === 'valid') {
+      expect(SHELL_LANDMARKS).not.toContain('home-empty');
+      expect(res.warnings.some((w) => w.includes('home-empty'))).toBe(true);
+    }
+  });
 });
 
 describe('readTours — kebab/dup/kind fail-loud rules', () => {

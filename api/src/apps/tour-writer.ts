@@ -44,7 +44,9 @@ export const SHELL_LANDMARKS = [
   'app-nav',
   'app-content',
   'assistant-root',
-  'home-empty',
+  // 'home-empty' is deliberately NOT a landmark: it lives in the scaffold's default HomePage
+  // placeholder, which a generated app REPLACES - a tour targeting it validates clean but points
+  // at nothing in the built app (E2 live-gate finding). Keeping it out makes the writer WARN.
 ] as const;
 
 export type ToursResult =
