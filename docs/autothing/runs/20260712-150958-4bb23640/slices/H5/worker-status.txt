@@ -1,0 +1,19 @@
+DONE-GREEN | vitest: 180 files, 1627 passed, 1 skipped, 0 failed (FULL api lane; was 177/1601/1 at H4 -> +3 test files, +26 tests)
+
+H5 = the ASSERTION layer. No api/src/shared/src/web production file touched (H5 asserts, adds no auth code). 5 deliverables built + green:
+ D1 capability matrix + gate-wiring: api/tests/auth/capabilities.test.ts EXTENDED (+ stale/unknown-role fail-closed cell; + a wiring inventory tying every capability to its route can() gate; cross-refs jobs-capability/artifacts-capability, no dup).
+ D2 grep gates: api/tests/security/grep-gates.test.ts NEW - no PERMISSIVE-STUB in api/src+shared/src; no orphan quoted 'builder' role literal outside the commented allowlist (jwt.ts shim, users-service migrateBuilderRole, web/stores/orchestration.ts session-kind). Non-tautology proven in-suite AND by a planted probe (both gates failed, then green after removal).
+ D3 cross-org assistant-retrieval isolation: api/tests/security/assistant-cross-org-isolation.test.ts NEW - deterministic over the REAL grounding seam + real FTS partitions; an org-A app cites org A's fact and NEVER org B's (and reverse); owner org, not visitor context, decides the partition.
+ D4 destructive-action authz server-side: api/tests/security/destructive-action-authz.test.ts NEW - app-sso set-password (mutating) 401 without a session / 401 with a WRONG-APP session / 200 only same-app; m365 proxy same. Client confirmation is UX; the app-sso identity is the boundary.
+ D5 live journeys (AUTHORED, not run - the lead runs them): api/tests/e2e/edit-journey.e2e.mjs + request-changes-journey.e2e.mjs, budget-capped + transient-tolerant, node --check clean, registered in api/tests/SUITE_LEDGER.json (operator-run H5).
+
+VERIFY: tsc src 0 / test 0; eslint 4 touched .ts 0 errors (.mjs config-ignored, node --check gate passes); vitest FULL lane green; grep gate proven non-tautological; npm run gate:chokepoint clean.
+
+DESTRUCTIVE-ACTION-AUTHZ FINDING (documented, not a hole): the general /api/app-data plane a C3 submit/delete lands on is app-id-SCOPED (owner-activation admission), NOT app-sso-gated - a deliberate, pre-existing, already-documented design (served-data.ts + docs/security.md). The app-sso IDENTITY plane gates the PRIVILEGED end-user ops (set-password, Graph proxy) - asserted. Recorded in docs/security.md (H5 assertion-layer subsection).
+
+OBSERVATIONS (non-blocking; NOT fixed - outside H5's reserved set / remit; the lead decides):
+ (1) assistant-billing.e2e.mjs:138 uses role:'builder' in POST /users - H1's rename made that an invalid Role enum value, so it will 400 when the operator runs that (existing, non-H5) driver. One-char fix ('builder'->'user'); flagged, not touched (outside reservation / possibly concurrently owned).
+ (2) collection-rule access:{write:'session'|'server'} is DECLARED in the manifest schema but UNENFORCED by served-data.ts (all writes app-id-scoped). Pre-existing C3/data-plane concern, outside the H-block; flagged for the data-plane owner.
+ (3) minor: shared/src/capabilities.ts header comment is stale (says "PERMISSIVE stub ... until then"); no hyphenated marker so the D2 gate is unaffected; shared/src outside H5 reservation, not touched.
+
+Neither observation is a GAP in H1-H4's platform authz (no missing platform gate, no isolation hole, no missing server authz) -> DONE-GREEN, not GAP-FOUND.

@@ -139,6 +139,39 @@ shared namespace (`/api/app-shared`, resolved owner + same-origin guard + `share
 behind the platform JWT / app-SSO session. This open posture is a documented decision, not an
 oversight.
 
+**Security-block assertion layer (H5).** The access-control invariants above are held by committed,
+re-runnable gates so they cannot silently regress:
+- *Capability matrix + gate wiring* (`api/tests/auth/capabilities.test.ts`): the full role x
+  capability grid (grants AND denials; a null/undefined/unknown-role actor holds nothing, fail
+  closed), plus a wiring inventory that ties every capability to the route `can(actor, '...')` call
+  site that enforces it - so a matrix that stays green while a route loses its gate fails the suite.
+  Behavior is driven end-to-end by `jobs-capability`/`artifacts-capability`.
+- *Grep gates* (`api/tests/security/grep-gates.test.ts`): a committed tree scan (mirroring
+  `gate:chokepoint`'s style, self-proving via an in-suite non-tautology test) that fails if the
+  retired `PERMISSIVE-STUB`/`PERMISSIVE_STUB` marker reappears in `api/src`/`shared/src`, or if a
+  quoted `builder` ROLE literal appears anywhere in `api/src`/`shared/src`/`web{app,components,stores}`
+  outside a small commented allowlist (the legacy-JWT shim, the migration query, and the web
+  SESSION-KIND `builder` - a session kind, not a role).
+- *Cross-org assistant-retrieval isolation* (`api/tests/security/assistant-cross-org-isolation.test.ts`):
+  over the real FTS grounding seam, the served-app assistant (`runAppAssistant`, which grounds under
+  the server-resolved `owner.orgId`) retrieves + cites ONLY the owner org's knowledge and can never
+  reach another org's - the org-B token never even enters an org-A app's prompt. Live evidence is
+  folded into the operator journey drivers + `fees-knowledge.e2e.mjs`.
+- *Destructive-action authorization, server-side* (`api/tests/security/destructive-action-authz.test.ts`):
+  a mutating served-app op that is meant to be end-user-gated is authorized SERVER-SIDE by the
+  per-app SSO identity, not by any client confirmation (the Phase 4 confirm dialog is UX). The
+  canonical case - `POST /api/app-sso/set-password` (writes a bcrypt hash onto the app's data) - is
+  rejected 401 WITHOUT a valid app-sso session and with a WRONG-APP session (`session.appId`
+  isolation via `findValidAppSession`), and proceeds only for the correct same-app session; the
+  visitor-acting `/api/app-sso/m365/*` proxy is gated the same way. **Finding (documented boundary,
+  not a hole):** the GENERAL `/api/app-data` plane a C3 submit/delete lands on is deliberately
+  app-id-SCOPED (see *Served-app admission planes* above) - its per-app server boundary is
+  `X-Ekoa-App-Id` scope + owner-activation admission, NOT an app-sso session; the app-sso IDENTITY
+  plane gates the PRIVILEGED end-user ops. A related pre-existing OBSERVATION outside the H-block's
+  scope: the collection-rule `access: { read, write: 'session' | 'server' }` level is DECLARED in the
+  manifest schema but not enforced by `served-data.ts` (writes are app-id-scoped regardless) - flagged
+  for the C3/data-plane owner, not fixed by H5 (H5 asserts, it adds no auth code).
+
 **Frame headers (current state).** The api plane sets `X-Frame-Options: DENY` / `frame-ancestors
 'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`. The `/apps` embed
 allowlist (so the cross-origin dashboard can iframe a served artifact) is **PENDING** - tracked as an

@@ -1,9 +1,10 @@
 /**
  * Capability vocabulary for the platform permission seam (operator-run S0).
- * NAMES ONLY — no role mapping, no enforcement, no authorization semantics.
- * The real role→capability mapping and every authorization decision land in the
- * operator-run security block (H1); until then `api/src/auth/capabilities.ts`
- * exposes a PERMISSIVE stub over these names.
+ * NAMES ONLY — no role mapping here (this is the shared contract vocabulary).
+ * The real role→capability mapping and every authorization decision live in
+ * `api/src/auth/capabilities.ts` (the `can()` matrix) since the operator-run
+ * security block (H1); the former permissive stub is gone (H5 grep-gates that
+ * the retired stub marker never resurfaces anywhere in the tree).
  */
 import { z } from 'zod';
 

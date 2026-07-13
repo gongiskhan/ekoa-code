@@ -109,6 +109,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `settings/branding/page.tsx` not re-seeding after `fetchCompany()`. Close with a deterministic
   test that researches (fake transport), switches to the Marca tab and asserts the fresh hex.
 
+- **`collection-rule-access-unenforced`** (medium, data-plane; H5 assertion-layer surfaced). A
+  collection rule's `access:{write:'session'|'server'}` is DECLARED in the app manifest schema but
+  NOT enforced by served-data.ts - all app-data writes are app-id-scoped (owner-activation
+  admission), so the per-collection write mode is decorative. Pre-existing C3/data-plane concern,
+  OUTSIDE the H security block (which gates the PLATFORM authz; the served-data plane is a separate,
+  documented app-id-scoped design). Close by enforcing the declared write mode in served-data.ts OR
+  by removing the unenforced field from the manifest schema. Flagged by H5's destructive-action-authz
+  assertion (the privileged app-sso ops ARE gated + asserted; this is the general data plane).
+
 ### Operator-blocked / external
 
 - **`prod-corpus-import`** (external). The real production knowledge corpus import is pending, blocked

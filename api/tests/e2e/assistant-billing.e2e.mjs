@@ -135,7 +135,7 @@ async function provisionVisitor(adminToken) {
   const orgId = (await orgRes.json()).id;
   const userRes = await fetch(`${BASE}/api/v1/users`, {
     method: 'POST', headers: H,
-    body: JSON.stringify({ username: VISITOR.username, password: VISITOR.password, role: 'builder', orgId }),
+    body: JSON.stringify({ username: VISITOR.username, password: VISITOR.password, role: 'user', orgId }),
   });
   assert(userRes.ok, `visitor user create ${userRes.status}`);
   const token = await login(VISITOR.username, VISITOR.password);

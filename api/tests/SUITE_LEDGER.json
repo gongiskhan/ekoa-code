@@ -255,6 +255,16 @@
     "name": "panel-perf",
     "targetGate": "operator-run G2",
     "note": "feature-run operator-run: panel lazy-load perf gate - launcher immediate + no panel-runtime fetch before interaction, one fetch on click, tour still plays after lazy mount, zero assistant POSTs (burns 1 build)."
+   },
+   {
+    "name": "edit-journey",
+    "targetGate": "operator-run H5",
+    "note": "security block H5 (authored by H5, run by the operator): served-app admin EDIT-MODE journey - whoami true -> opt-in (client-only) -> H1-gated follow-up patch run -> preview/diff (versions) -> approve -> rollback restores (forward-restore); AND a role:'user' session cannot reach edit (whoami false + POST /jobs follow-up 403 canEditApps). Budget: up to 2 builds (setup + patch-run, or 1 with EDIT_APP_ID) + 1 rollback restore."
+   },
+   {
+    "name": "request-changes-journey",
+    "targetGate": "operator-run H5",
+    "note": "security block H5 (authored by H5, run by the operator): request-changes queue journey - a user files from inside an org-shared app (route+screen context) -> lands in the OWNER org queue -> org-admin sees it with context -> convert starts an H1-gated patch run + links the jobId; folds in H4's live cross-org proof (a different-org user filing -> 404, no injection). Budget: 1 setup build + 1 follow-up build STARTED then cancelled (convert asserted at the API level, not awaited); 1 build with REQCHG_APP_ID."
    }
   ]
  },
