@@ -1,5 +1,11 @@
 # LANDING — Ekoa Apps Get an Operator (run 20260712-150958-4bb23640)
 
+> **STALE — superseded 2026-07-13.** This packet describes the FIRST abort (16 slices, resume point D2).
+> The run has since resumed and landed D2, D3, E1, E2, F1, G1 (22/31 gated; F2 in flight), and the
+> operator MERGED everything to main (ff `d55bd02..1a3e9ad`) with the run continuing ON MAIN.
+> Current state: `RUN_LOG.md` (repo root) + `evidence-index.json`. A fresh LANDING packet is written
+> at the run's actual end. The "NEEDS HUMAN EYES" and assumptions-ledger sections below remain valid.
+
 **Terminal state: ABORTED on operator request ("stop the run").** Not a failure — a clean operator stop with the operate spine complete. Nothing merged to main; everything sits on branch `operator-run` awaiting your diff review.
 
 ## What landed (16 fully-gated slices + 1 enabling change)
