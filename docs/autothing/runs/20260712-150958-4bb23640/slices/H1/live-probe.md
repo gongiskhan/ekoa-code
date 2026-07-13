@@ -40,3 +40,24 @@ seeded builder row -> user once, epoch bumped once, second boot = 0).
 The org-admin allow-build path (202 + real build) is proven by the contract + integration suites
 without spending an LLM build; the live probe deliberately exercises only the zero-cost deny/allow
 gate decisions.
+
+## Codex-fix round re-probe (2026-07-13, H1 codex-fixed dist)
+
+After the codex-fix round (commit 49dc5f6) added app-type-aware gates to the other build/edit
+vectors, re-probed on the rebuilt+restarted stack:
+
+- **A. user creates a NON-app artifact -> 201.** `POST /artifacts {name}` succeeds - a `user`
+  keeps `canCreateArtifacts` and the full non-app artifacts area. Proves the new gates are
+  app-type-aware, NOT a blanket deny (the "not over-gated" guarantee).
+- **B. user imports an app bundle -> 403 canBuildApps.** `POST /artifacts/import` (valid bundle
+  shape) returns the FORBIDDEN envelope + `details.capability: canBuildApps`, PT-PT - the newly
+  gated import vector (create-and-build a new app) denies a user live. Nothing was created.
+- **C. user forks a featured app -> 404.** `POST /artifacts/task-manager/fork` - the source
+  readability check fires first for a cross-org featured source, so the user is denied (404)
+  before the canBuildApps gate; either way the user cannot fork an app. (The fork capability gate
+  on an OWNED app is proven by the integration suite artifacts-capability.test.ts.)
+
+The precise per-vector capability behaviour (canEditApps on bundle-update/file/versions-restore/
+backend/backups for an OWNED app, canBuildApps on import/fork) is proven deterministically by
+api/tests/contract/artifacts-capability.test.ts; the live probe is the smoke proof that the gates
+are wired and enforcing on the running stack.
