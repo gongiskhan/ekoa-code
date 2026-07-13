@@ -35,6 +35,7 @@ import { verifySseToken } from '../auth/middleware.js';
 import { can } from '../auth/capabilities.js';
 import type { JwtClaims } from '../auth/jwt.js';
 import { resolveApp, type ResolvedApp } from './registry.js';
+import { loadWritable } from './app-paths.js';
 import { runAppAssistant, type AppAssistantDeps } from './app-assistant.js';
 
 const SHARED_SCOPE_PREFIX = 'usr.';
@@ -74,33 +75,46 @@ async function resolveAssistantApp(header: unknown): Promise<AssistantAppResolut
 }
 
 /**
- * Is this verified caller an admin of the app OWNER's org WITH the app-edit capability? PURE role
- * decision (the token is already verified by the caller). Gated by H1's `can()` so the role→
- * capability grid is the single source of truth — a `user` fails the capability gate, so only
- * `org-admin`/`super-admin` reach the org check. A super-admin spans every org; an org-admin must
- * belong to the owner's exact org. Fail-closed for any other shape. Exported for the unit matrix.
+ * Can this verified caller EDIT this specific app? Detection MIRRORS the H1 follow-up-build gate
+ * EXACTLY (routes/jobs.ts): `can(canEditApps)` AND the artifact is writable by this actor
+ * (loadWritable: own always; org-shared within the org ok; another user's private → not-ok;
+ * missing/cross-org → not-ok). Making detection identical to the actual edit authority is what
+ * closes BOTH codex-h2 findings and a false-offer bug at once:
+ *   - Medium (fail-closed on a missing owner org): an orphaned/cross-org/unresolvable artifact is
+ *     never writable, so admin is false even for a super-admin — no false positive.
+ *   - Low (org-admin membership oracle): admin:true only for apps loadWritable already grants, i.e.
+ *     the caller's OWN + org-shared apps — exactly what they already enumerate via GET /artifacts
+ *     (listVisible). It reveals nothing new; a same-org OTHER user's PRIVATE app reads not-writable
+ *     → admin:false, so it is not an existence oracle for private in-org apps.
+ *   - No false offer: admin:true ⟺ H3's edit mode / the follow-up build will actually succeed for
+ *     this caller on this app. The panel never promises an edit the gate would then refuse.
+ * NOTE: like the H1 gate, loadWritable is org-scoped, so a super-admin is NOT granted cross-org app
+ * edit here (a super-admin only edits apps in their own org). If platform-wide cross-org app editing
+ * is ever wanted, that is a deliberate policy change to loadWritable/the H1 gate AND this detection
+ * together — not a silent divergence. Exported for the unit matrix.
  */
-export function isOwnerOrgAdmin(claims: Pick<JwtClaims, 'role' | 'orgId'>, ownerOrgId: string): boolean {
+export function isAppEditor(claims: Pick<JwtClaims, 'role' | 'orgId'>, writableVerdict: 'ok' | 'forbidden' | 'notfound'): boolean {
   if (!can(claims, 'canEditApps')) return false; // capability gate (H1): a plain user stops here
-  if (claims.role === 'super-admin') return true; // super-admin edits apps in any org
-  if (claims.role === 'org-admin') return claims.orgId === ownerOrgId; // org-admin scoped to owner org
-  return false; // unreachable given the capability gate, but fail-closed by construction
+  return writableVerdict === 'ok'; // ...and the actor must actually be able to write THIS artifact
 }
 
 /**
- * Detect whether the OPTIONAL platform Bearer on this request belongs to an admin of `ownerOrgId`.
- * FAIL-CLOSED and oracle-free: any deviation — no token, a non-Bearer header, or a token that does
- * not clear the standard verification chain — returns false, never throws, never distinguishes a
- * bad token from a wrong-org one. The verification is the EXACT chain requireAuth/verifySseToken
- * run (verifyToken + jti + isRevoked + activation-active + tokenEpoch); this endpoint does NOT
- * hand-roll a weaker check and adds NO second identity path.
+ * Detect whether the OPTIONAL platform Bearer on this request can EDIT app `appId`. FAIL-CLOSED and
+ * oracle-free: any deviation — no token, a non-Bearer header, or a token that does not clear the
+ * standard verification chain — returns false, never throws, never distinguishes a bad token from a
+ * not-writable one. The verification is the EXACT chain requireAuth/verifySseToken run (verifyToken
+ * + jti + isRevoked + activation-active + tokenEpoch); the edit decision is the EXACT H1 gate
+ * (can(canEditApps) + loadWritable). This endpoint does NOT hand-roll a weaker check and adds NO
+ * second identity path.
  */
-function detectOwnerOrgAdmin(authHeader: string | undefined, ownerOrgId: string): boolean {
+async function detectAppEditor(authHeader: string | undefined, appId: string): Promise<boolean> {
   const m = /^Bearer\s+(.+)$/i.exec(authHeader ?? '');
   if (!m) return false; // no/malformed Authorization header (incl. the cross-origin dev case) → false
   const verified = verifySseToken(m[1]); // the one verification chain; returns claims-or-error, never throws
   if (!verified.ok) return false; // invalid / expired / revoked / epoch-stale / deactivated → false
-  return isOwnerOrgAdmin(verified.claims, ownerOrgId);
+  const actor = { userId: verified.claims.sub, orgId: verified.claims.orgId, role: verified.claims.role };
+  const { verdict } = await loadWritable(actor, appId); // the SAME writability rule the H1 edit gate uses
+  return isAppEditor(verified.claims, verdict);
 }
 
 /** What the admission middleware resolves and stashes for the handler + allowance gate. */
@@ -223,12 +237,14 @@ export function appAssistantRouter(deps: AppAssistantDeps = prodDeps): Router {
    * GET /app-assistant/whoami — admin DETECTION for the panel (operator-run H2; detect-then-ask).
    *
    * A DECLARED, DOCUMENTED exception to this plane's visitor-blindness: it is the ONE place the
-   * served-app assistant reads the caller's platform JWT, and it does so ONLY to answer "is the
-   * current viewer an admin of this app's owner org?". It NEVER grounds, NEVER bills, NEVER widens
-   * admission, and issues NO model call (the zero-token GET) — the POST grounding/billing path
-   * above stays byte-for-byte visitor-blind (it still never reads the caller JWT). Every privileged
-   * action remains gated server-side by the H1 admission plane with this same JWT; `admin: true`
-   * here is only a HINT the panel may surface (edit mode is H3).
+   * served-app assistant reads the caller's platform JWT, and it does so ONLY to answer "can the
+   * current viewer EDIT this app?" — the SAME decision the H1 follow-up-build gate makes
+   * (can(canEditApps) + loadWritable). It NEVER grounds, NEVER bills, NEVER widens admission, and
+   * issues NO model call (the zero-token GET) — the POST grounding/billing path above stays
+   * byte-for-byte visitor-blind (it still never reads the caller JWT). Every privileged action
+   * remains gated server-side by the H1 admission plane with this same JWT; `admin: true` here is
+   * only a HINT the panel may surface (edit mode is H3), and it exactly matches what that edit will
+   * actually be allowed to do — never a false offer.
    *
    * FAIL-CLOSED + oracle-free: the ONLY non-200 responses are the SAME ones POST already gives for
    * the app-id header itself (400 malformed / 404 unknown app — so whoami is not a new existence
@@ -247,13 +263,12 @@ export function appAssistantRouter(deps: AppAssistantDeps = prodDeps): Router {
       return;
     }
 
-    // Owner org — resolved server-side from the owner user record (same source admit() uses),
-    // NEVER from anything the caller supplied.
-    const owner = (await users.get(resolution.app.ownerUserId)) as { orgId?: string } | null;
-    const ownerOrgId = owner?.orgId ?? '';
-
+    // "admin" == can this caller edit THIS app, decided by the SAME rule the H1 edit gate uses
+    // (can(canEditApps) + loadWritable on the resolved artifact id). Ownership/org is resolved
+    // server-side inside loadWritable from the artifact record, NEVER from anything the caller
+    // supplied. Fail-closed + no oracle: see detectAppEditor / isAppEditor above.
     const response: AppAssistantWhoamiResponse = {
-      admin: detectOwnerOrgAdmin(req.header('authorization'), ownerOrgId),
+      admin: await detectAppEditor(req.header('authorization'), resolution.app.appId),
     };
     res.json(response); // always 200 — the boolean IS the answer
   };

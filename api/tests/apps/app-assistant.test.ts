@@ -13,7 +13,7 @@ import {
   extractActions,
   type AppAssistantDeps,
 } from '../../src/apps/app-assistant.js';
-import { appAssistantRouter, isOwnerOrgAdmin } from '../../src/apps/app-assistant-route.js';
+import { appAssistantRouter, isAppEditor } from '../../src/apps/app-assistant-route.js';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, artifacts } from '../../src/data/stores.js';
@@ -242,24 +242,26 @@ describe('runAppAssistant (D1)', () => {
 });
 
 /**
- * operator-run H2 — the admin-detection DECISION (`isOwnerOrgAdmin`), the PURE role/org/capability
- * core of `GET /api/app-assistant/whoami`. It reuses H1's `can('canEditApps')` as the capability
- * gate, then scopes org-admins to the owner org and lets super-admins span every org. No token /
- * verification here — that layer is exercised by the route matrix below.
+ * operator-run H2 — the admin-detection DECISION (`isAppEditor`), the PURE core of
+ * `GET /api/app-assistant/whoami`. Detection MIRRORS the H1 follow-up-build edit gate exactly
+ * (codex-h2): H1's `can('canEditApps')` capability gate AND the artifact-writability verdict
+ * loadWritable produces (own always; org-shared within the org ok; another user's private / a
+ * cross-org / missing artifact → not-ok). So `admin:true` ⟺ this caller can ACTUALLY edit this app
+ * (no false offer, no owner-org membership oracle). The verdict is computed by loadWritable in the
+ * route (exercised by the matrix below); this unit pins the pure combine.
  */
-describe('isOwnerOrgAdmin (H2 detection decision)', () => {
-  it('an org-admin of the OWNER org is an admin (capability + org match)', () => {
-    expect(isOwnerOrgAdmin({ role: 'org-admin', orgId: 'org-owner' }, 'org-owner')).toBe(true);
+describe('isAppEditor (H2 detection decision — mirrors the H1 edit gate)', () => {
+  it('an app-edit-capable caller with a WRITABLE artifact is an editor', () => {
+    expect(isAppEditor({ role: 'org-admin', orgId: 'org-owner' }, 'ok')).toBe(true);
+    expect(isAppEditor({ role: 'super-admin', orgId: 'org-any' }, 'ok')).toBe(true);
   });
-  it('an org-admin of ANOTHER org is NOT (org mismatch, fail-closed)', () => {
-    expect(isOwnerOrgAdmin({ role: 'org-admin', orgId: 'org-other' }, 'org-owner')).toBe(false);
+  it('a NOT-writable artifact (forbidden/notfound) is never editable, even for an admin (fail-closed: closes the empty-owner-org + oracle findings)', () => {
+    expect(isAppEditor({ role: 'org-admin', orgId: 'org-owner' }, 'forbidden')).toBe(false);
+    expect(isAppEditor({ role: 'org-admin', orgId: 'org-owner' }, 'notfound')).toBe(false);
+    expect(isAppEditor({ role: 'super-admin', orgId: 'org-any' }, 'notfound')).toBe(false);
   });
-  it('a super-admin is an admin of ANY org (spans orgs)', () => {
-    expect(isOwnerOrgAdmin({ role: 'super-admin', orgId: 'org-other' }, 'org-owner')).toBe(true);
-    expect(isOwnerOrgAdmin({ role: 'super-admin', orgId: 'org-owner' }, 'org-owner')).toBe(true);
-  });
-  it('a plain user is never an admin (H1 capability gate denies canEditApps)', () => {
-    expect(isOwnerOrgAdmin({ role: 'user', orgId: 'org-owner' }, 'org-owner')).toBe(false);
+  it('a plain user is never an editor (H1 capability gate denies canEditApps), even on a writable artifact', () => {
+    expect(isAppEditor({ role: 'user', orgId: 'org-owner' }, 'ok')).toBe(false);
   });
 });
 
@@ -288,7 +290,8 @@ describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
     decide: () => { throw new Error('whoami must not route'); },
   };
 
-  const APP_ID = 'app-h2'; // owned by owner-1 (org-owner)
+  const APP_ID = 'app-h2'; // ORG-SHARED, owned by owner-1 (org-owner)
+  const PRIV_ID = 'app-h2-priv'; // PRIVATE draft, owned by owner-1 (org-owner)
   const tokens: Record<string, string> = {};
 
   async function mkUser(id: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
@@ -314,18 +317,23 @@ describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
     mem = await createMem();
     await connectMongo(mem.getUri(), 'ekoa_h2_whoami');
 
-    // The app + its owner (org-owner). Owner org is resolved server-side from this user record.
+    // The app + its owner (org-owner). APP_ID is ORG-SHARED (visibility:'org') - the org's real
+    // app that org-admins manage; loadWritable grants own-org admins write on it. PRIV_ID is a
+    // PRIVATE draft of the same owner - only the owner can edit it (loadWritable forbids even a
+    // same-org admin), which proves detection mirrors the H1 gate and is not an existence oracle.
     await mkUser('owner-1', 'org-owner', 'org-admin');
-    await artifacts.insert({ _id: APP_ID, name: 'H2', userId: 'owner-1', orgId: 'org-owner', visibility: 'private' } as never);
+    await artifacts.insert({ _id: APP_ID, name: 'H2', userId: 'owner-1', orgId: 'org-owner', visibility: 'org' } as never);
+    await artifacts.insert({ _id: PRIV_ID, name: 'H2priv', userId: 'owner-1', orgId: 'org-owner', visibility: 'private' } as never);
 
     // Callers.
     await mkUser('admin-owner', 'org-owner', 'org-admin'); // a DIFFERENT admin in the owner org
-    await mkUser('super-1', 'org-other', 'super-admin'); // super-admin in a DIFFERENT org
+    await mkUser('super-1', 'org-other', 'super-admin'); // super-admin in a DIFFERENT org (org-scoped edit → not this app)
+    await mkUser('super-owner', 'org-owner', 'super-admin'); // super-admin IN the owner org
     await mkUser('admin-other', 'org-other', 'org-admin'); // org-admin of the WRONG org
     await mkUser('user-owner', 'org-owner', 'user'); // owner-org member without canEditApps
     await mkUser('stale-admin', 'org-owner', 'org-admin'); // owner-org admin, token then epoch-staled
 
-    for (const u of ['owner-1', 'admin-owner', 'super-1', 'admin-other', 'user-owner', 'stale-admin']) {
+    for (const u of ['owner-1', 'admin-owner', 'super-1', 'super-owner', 'admin-other', 'user-owner', 'stale-admin']) {
       tokens[u] = (await login(u, 'pw123456', false, loginDeps)).token;
     }
     // Epoch-stale: bump stale-admin's epoch far past its freshly-minted token's iat, so the SAME
@@ -347,9 +355,9 @@ describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
     __resetRevocationsForTests();
   });
 
-  const bearer = (u: string) => ({ 'x-ekoa-app-id': APP_ID, authorization: `Bearer ${tokens[u]}` });
+  const bearer = (u: string, appId: string = APP_ID) => ({ 'x-ekoa-app-id': appId, authorization: `Bearer ${tokens[u]}` });
 
-  it('an org-admin of the OWNER org -> 200 { admin:true }', async () => {
+  it('an org-admin of the OWNER org, on the ORG-SHARED app -> 200 { admin:true } (loadWritable ok)', async () => {
     const res = await whoami(bearer('admin-owner'));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -357,16 +365,27 @@ describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
     expect(body).toEqual({ admin: true });
   });
 
-  it('the artifact owner (org-admin of the owner org) -> 200 { admin:true }', async () => {
-    const res = await whoami(bearer('owner-1'));
+  it('the artifact owner -> 200 { admin:true } (own artifact, any visibility)', async () => {
+    expect(await (await whoami(bearer('owner-1'))).json()).toEqual({ admin: true }); // org-shared
+    expect(await (await whoami(bearer('owner-1', PRIV_ID))).json()).toEqual({ admin: true }); // own private draft
+  });
+
+  it('a super-admin IN the owner org, on the org-shared app -> 200 { admin:true }', async () => {
+    const res = await whoami(bearer('super-owner'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ admin: true });
   });
 
-  it('a super-admin (any org) -> 200 { admin:true }', async () => {
+  it('a super-admin in ANOTHER org -> 200 { admin:false } (app-edit is org-scoped, mirrors the H1 gate; cross-org loadWritable is notfound)', async () => {
     const res = await whoami(bearer('super-1'));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ admin: true });
+    expect(await res.json()).toEqual({ admin: false });
+  });
+
+  it('an org-admin of the owner org, on another member PRIVATE draft -> 200 { admin:false } (loadWritable forbids; closes the in-org private-app existence oracle)', async () => {
+    const res = await whoami(bearer('admin-owner', PRIV_ID));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ admin: false });
   });
 
   it('an org-admin of ANOTHER org -> 200 { admin:false } (never 403 — no cross-org oracle)', async () => {

@@ -107,3 +107,35 @@ No commits, no stack ops - working tree only.
 - `npx vitest run tests/apps tests/contract` -> 56 files, 536 tests, all pass
 - `node assets/panel-runtime/build.mjs` -> built (panel compiles)
 - repo root `npm run gate:chokepoint` -> clean
+
+## Codex-fix round (2026-07-13) — mirror the H1 edit gate exactly
+
+Codex H2 review returned NEEDS-WORK with a Medium + a Low; the fresh review returned APPROVE.
+Both codex findings are closed by ONE principled change: whoami's `admin` is now defined as
+"can this caller EDIT this app", computed by the SAME rule the H1 follow-up-build gate uses -
+`can(caller,'canEditApps')` AND `loadWritable(caller, appId).verdict === 'ok'` - instead of the
+weaker "admin of the owner org" (role + org).
+
+- **Medium (fail-closed on a missing/empty owner org): CLOSED.** An orphaned/corrupt or cross-org
+  artifact is never writable (loadWritable → notfound), so `admin:false` even for a super-admin.
+  There is no `ownerOrgId ?? ''` path that a super-admin can satisfy anymore.
+- **Low (org-admin owner-org membership oracle): CLOSED.** `admin:true` now fires ONLY for apps
+  loadWritable already grants the caller - their OWN apps + ORG-SHARED apps in their org - which are
+  exactly the apps they already enumerate via `GET /artifacts` (listVisible). A same-org OTHER
+  member's PRIVATE draft reads not-writable → `admin:false`, so whoami is not an existence oracle
+  for in-org private apps. A cross-org app → notfound → false. No new information over listArtifacts.
+- **Bonus (no false offer): CLOSED.** `admin:true` ⟺ H3's edit mode / the follow-up build will
+  ACTUALLY succeed for this caller on this app. The panel never surfaces an edit the H1 gate would
+  then refuse. Previously an org-admin of the owner org (or a super-admin of another org) could get
+  `admin:true` yet be 404'd by the follow-up gate.
+
+Semantics note (flagged for the operator / H5): app-edit authority is ORG-SCOPED (H1's loadWritable)
+- an org-admin edits their OWN + ORG-SHARED apps in their org; a super-admin edits apps in their own
+org, NOT cross-org. This is the coherent reading of "org-admin edits apps" = the org's shared apps;
+private drafts stay with their owner. If platform-wide cross-org app editing is ever desired, that is
+a deliberate policy change to loadWritable / the H1 gate AND this detection together - never a silent
+divergence. `isOwnerOrgAdmin` was replaced by `isAppEditor(claims, writableVerdict)`; the route now
+calls `detectAppEditor(authHeader, appId)` → verify chain → loadWritable. Tests updated: the unit
+`isAppEditor` grid (capability × verdict) + the route matrix now seeds an ORG-SHARED app (own-org
+admins/super-admin true) AND a PRIVATE draft (only the owner true; a same-org admin false - the
+oracle-closure case). 47 whoami+contract tests green; full lane re-run by the lead.
