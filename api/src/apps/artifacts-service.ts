@@ -36,6 +36,12 @@ export const RESERVED_ARTIFACT_DATA_KEYS: readonly string[] = [
   'projectDir', 'appUrl', 'sessionId', 'sdkSessionId',
   'seededFrom', 'seededVersion', 'updateAvailable',
   'importedFrom', 'forkedFrom', 'lastBundleUpdateAt', 'customized',
+  // Server-owned build outputs, set ONLY at activation from the app's own project
+  // (never client-writable via the artifact patch route): the C2 action registry
+  // and its classification, and the E1 tour capture. `tours` is served publicly at
+  // GET /api/demos/:appId, so a client-writable `tours` would be a stored-content
+  // injection into that surface — reserve it (and its sibling error/manifest keys).
+  'actionManifest', 'artifactType', 'tours', 'toursError',
 ];
 
 /** Drop every server-owned reserved key from a client-supplied `data` bag (see the constant). */

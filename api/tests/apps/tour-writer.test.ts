@@ -295,3 +295,40 @@ describe('activateArtifact — captures tours onto artifact.data.tours (E1 persi
     expect(data.toursError).toBeUndefined();
   });
 });
+
+// ---- sibling tours/ channel: bounded + confined (codex-e1 #2) ---------------
+
+describe('readTours — tours/ channel bounds + symlink confinement', () => {
+  it('rejects a tours/ dir with more than the file cap', async () => {
+    const dir = await tmpProject();
+    await mkdir(join(dir, 'tours'), { recursive: true });
+    for (let i = 0; i < 51; i++) {
+      await writeFile(join(dir, 'tours', `t${i}.json`), JSON.stringify({ version: 1, ...overviewTour(), tourId: `t-${i}` }), 'utf-8');
+    }
+    const res = await readTours(dir, { appId: 'art-cap' });
+    expect(res.status).toBe('invalid');
+    if (res.status === 'invalid') expect(res.error).toMatch(/limit is 50/);
+  });
+
+  it('rejects an oversized tour file (> per-file byte cap)', async () => {
+    const dir = await tmpProject();
+    await mkdir(join(dir, 'tours'), { recursive: true });
+    const bloated = { version: 1, ...overviewTour(), pad: 'x'.repeat(300 * 1024) };
+    await writeFile(join(dir, 'tours', 'big.json'), JSON.stringify(bloated), 'utf-8');
+    const res = await readTours(dir, { appId: 'art-big' });
+    expect(res.status).toBe('invalid');
+    if (res.status === 'invalid') expect(res.error).toMatch(/bytes; the limit is/);
+  });
+
+  it('rejects a tours/*.json that is a symlink escaping the tours directory', async () => {
+    const { symlink, writeFile: wf } = await import('node:fs/promises');
+    const dir = await tmpProject();
+    await mkdir(join(dir, 'tours'), { recursive: true });
+    const outside = join(dir, 'secret.json');
+    await wf(outside, JSON.stringify({ version: 1, ...overviewTour() }), 'utf-8');
+    await symlink(outside, join(dir, 'tours', 'link.json'));
+    const res = await readTours(dir, { appId: 'art-link' });
+    expect(res.status).toBe('invalid');
+    if (res.status === 'invalid') expect(res.error).toMatch(/outside the tours directory|not a regular file/);
+  });
+});

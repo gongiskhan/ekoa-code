@@ -466,7 +466,12 @@ export function servingRouter(deps: ServingDeps): Router {
     try {
       const artifactId = getAppIdBySlug(appIdParam) ?? appIdParam;
       const art = (await artifacts.get(artifactId)) as Doc | null;
-      const tours = parseStoredTours((art?.data as { tours?: unknown } | undefined)?.tours);
+      // Defence in depth: `tours`/`toursError` are server-owned reserved keys (set only at
+      // activation from the app's OWN project, stripped from client patches), so a stored tour's
+      // `appId` is the activation-stamped artifact id. We still filter by the RESOLVED id here so
+      // a tour can only ever be served under the artifact it belongs to — provenance, not just shape.
+      const tours = parseStoredTours((art?.data as { tours?: unknown } | undefined)?.tours)
+        .filter((t) => t.appId === artifactId);
       const overview = tours.find((t) => t.kind === 'overview') ?? tours[0];
       if (overview) {
         res.json(overview);

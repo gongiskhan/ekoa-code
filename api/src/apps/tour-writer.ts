@@ -30,8 +30,8 @@
  * records on the artifact (`artifact.data.toursError`) so the failure is visible
  * without failing an otherwise working build.
  */
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, readdir, lstat, realpath } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { demoSpecSchema, TOUR_ID_RE, type DemoSpec } from '../services/demo-registry.js';
 
@@ -104,20 +104,43 @@ async function toursFromManifest(projectDir: string): Promise<{ tours: unknown[]
   return { tours: raw };
 }
 
-/** Read sibling `<projectDir>/tours/*.json` files (one authored tour each). */
+/** Bounds on the sibling `tours/` channel — an untrusted build tree, so capture must not spend
+ *  unbounded I/O/parse time nor follow a symlink out of the directory. */
+const MAX_TOUR_FILES = 50;
+const MAX_TOUR_FILE_BYTES = 256 * 1024; // 256 KiB per file (a declarative tour is small)
+
+/** Read sibling `<projectDir>/tours/*.json` files (one authored tour each), bounded + confined. */
 async function toursFromFiles(projectDir: string): Promise<{ tours: unknown[]; invalidReason?: string }> {
   const dir = join(projectDir, 'tours');
+  const dirReal = await realpath(dir).catch(() => null);
+  if (!dirReal) return { tours: [] }; // no tours/ dir
   let entries: string[];
   try {
     entries = (await readdir(dir)).filter((f) => f.endsWith('.json') && !f.startsWith('_')).sort();
   } catch {
-    return { tours: [] }; // no tours/ dir
+    return { tours: [] };
+  }
+  if (entries.length > MAX_TOUR_FILES) {
+    return { tours: [], invalidReason: `tours/ has ${entries.length} files; the limit is ${MAX_TOUR_FILES}` };
   }
   const tours: unknown[] = [];
   for (const file of entries) {
+    const full = join(dir, file);
+    // Reject non-regular files and any entry whose realpath escapes tours/ (a symlink out).
+    const st = await lstat(full).catch(() => null);
+    if (!st || !st.isFile()) {
+      return { tours: [], invalidReason: `tours/${file} is not a regular file` };
+    }
+    const real = await realpath(full).catch(() => null);
+    if (!real || (real !== resolve(dirReal, file) && !real.startsWith(dirReal + '/'))) {
+      return { tours: [], invalidReason: `tours/${file} resolves outside the tours directory` };
+    }
+    if (st.size > MAX_TOUR_FILE_BYTES) {
+      return { tours: [], invalidReason: `tours/${file} is ${st.size} bytes; the limit is ${MAX_TOUR_FILE_BYTES}` };
+    }
     let raw: unknown;
     try {
-      raw = JSON.parse(await readFile(join(dir, file), 'utf-8'));
+      raw = JSON.parse(await readFile(full, 'utf-8'));
     } catch (err) {
       return { tours: [], invalidReason: `tours/${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
     }
