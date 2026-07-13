@@ -118,6 +118,26 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-13 preview probe CORS duplicate header (operator)
+
+- **`F-2026-07-13-proxy-duplicate-acao`** (operator-reported, 2026-07-13) - in dev, the preview
+  probe's `HEAD /apps/<slug>/` from the dashboard origin failed CORS on EVERY request:
+  `The 'Access-Control-Allow-Origin' header contains multiple values '*, http://localhost:3000'`
+  (`net::ERR_FAILED` despite a 200), so `probePreviewDocument` classified every served app as
+  `transient` and the panel's probe-gated first render churned through its retry budget. Root
+  cause: both dev CORS proxies (`.claude/skills/run-ekoa-code/driver.mjs` and its verbatim copy in
+  `api/tests/journeys/boot-b.mjs`) merged response headers with
+  `{ ...proxyRes.headers, ...corsHeaders(req) }` - Node lowercases upstream header names while
+  `corsHeaders()` uses mixed case, so on planes where the api sets its OWN CORS header
+  (`/apps/*` and design tokens send `Access-Control-Allow-Origin: *` - `serving.ts`,
+  `design-tokens.ts`) the spread kept BOTH keys and the wire carried two ACAO values, which
+  browsers reject outright. Dev-only (prod is same-origin, no proxy). Fixed in both files:
+  upstream-wins per-header merge (`mergeResponseHeaders`) - the proxy only injects the CORS
+  headers upstream did not already set, so `/apps/*` answers a single `ACAO: *` exactly as
+  `web/lib/preview-probe.ts` documents, and `/api/*` keeps the reflected-origin set. Verified
+  live through a restarted boot-b stack: `/apps/legal-agenda-reservas/` ACAO count 1 (`*`),
+  `/health` reflected origin single-valued, OPTIONS preflight unchanged.
+
 ## Recently fixed - 2026-07-12 preview "proxy error" (operator)
 
 - **`F-2026-07-12-preview-502`** (operator-reported, 2026-07-12) - during a build, the side-panel

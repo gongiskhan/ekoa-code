@@ -239,6 +239,20 @@ function corsHeaders(req) {
   };
 }
 
+// Upstream-wins header merge: the api sets its own Access-Control-* on some planes
+// (/apps/* and design tokens answer Access-Control-Allow-Origin: *, which
+// web/lib/preview-probe.ts relies on). proxyRes.headers arrive lowercased while
+// corsHeaders() names are mixed-case, so a plain object spread emitted BOTH copies,
+// and a multi-valued Access-Control-Allow-Origin is rejected by browsers outright.
+// Only inject the CORS headers upstream did not already set.
+function mergeResponseHeaders(proxyRes, req) {
+  const headers = { ...proxyRes.headers };
+  for (const [k, v] of Object.entries(corsHeaders(req))) {
+    if (!(k.toLowerCase() in headers)) headers[k] = v;
+  }
+  return headers;
+}
+
 function startProxy() {
   return new Promise((resolve, reject) => {
     proxyServer = http.createServer((req, res) => {
@@ -250,8 +264,7 @@ function startProxy() {
       const proxyReq = http.request(
         { host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers: req.headers },
         (proxyRes) => {
-          const headers = { ...proxyRes.headers, ...corsHeaders(req) };
-          res.writeHead(proxyRes.statusCode || 502, headers);
+          res.writeHead(proxyRes.statusCode || 502, mergeResponseHeaders(proxyRes, req));
           proxyRes.pipe(res);
         },
       );
