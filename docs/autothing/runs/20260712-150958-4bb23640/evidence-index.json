@@ -1,291 +1,291 @@
 {
-  "runId": "20260712-150958-4bb23640",
-  "project": "ekoa-code",
-  "branch": "operator-run",
-  "gatesConfig": {
-    "test": true,
-    "adversarialReview": true,
-    "adversarialTest": true,
-    "codexSliceReview": true,
-    "design": true,
-    "walkthrough": true,
-    "deliberateRed": true,
-    "mutation": true,
-    "report": true,
-    "foundation": true,
-    "codexCheckpoint": true,
-    "askQuestions": false,
-    "profile": "build"
+ "runId": "20260712-150958-4bb23640",
+ "project": "ekoa-code",
+ "branch": "operator-run",
+ "gatesConfig": {
+  "test": true,
+  "adversarialReview": true,
+  "adversarialTest": true,
+  "codexSliceReview": true,
+  "design": true,
+  "walkthrough": true,
+  "deliberateRed": true,
+  "mutation": true,
+  "report": true,
+  "foundation": true,
+  "codexCheckpoint": true,
+  "askQuestions": false,
+  "profile": "build"
+ },
+ "slices": {
+  "S0": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "f9dee3c",
+   "tag": "operator/s0",
+   "gateStatus": "slices/S0/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/S0/s0-evidence.cast",
+    "videoSha256": "c43a474313953ee743c7a35bec928fd6d6834798b44ff788f43075977bc3d6cd",
+    "videoBytes": 1569
+   }
   },
-  "slices": {
-    "S0": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "f9dee3c",
-      "tag": "operator/s0",
-      "gateStatus": "slices/S0/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/S0/s0-evidence.cast",
-        "videoSha256": "c43a474313953ee743c7a35bec928fd6d6834798b44ff788f43075977bc3d6cd",
-        "videoBytes": 1569
-      }
-    },
-    "A1": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "97f66d6",
-      "tag": "operator/a-group",
-      "gateStatus": "slices/A1/gate-status.json",
-      "deliverable": "analysis/01-automations-actions.md"
-    },
-    "A2": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "97f66d6",
-      "tag": "operator/a-group",
-      "gateStatus": "slices/A2/gate-status.json",
-      "deliverable": "analysis/02-demos-tutorials.md"
-    },
-    "A3": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "97f66d6",
-      "tag": "operator/a-group",
-      "gateStatus": "slices/A3/gate-status.json",
-      "deliverable": "analysis/03-knowledge-hooks.md"
-    },
-    "A4": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "97f66d6",
-      "tag": "operator/a-group",
-      "gateStatus": "slices/A4/gate-status.json",
-      "deliverable": "analysis/04-internal-templates.md"
-    },
-    "A5": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "97f66d6",
-      "tag": "operator/a-group",
-      "gateStatus": "slices/A5/gate-status.json",
-      "deliverable": "memos/{registry,tour-format,base-set}.md"
-    },
-    "B1": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "d1247b4",
-      "tag": "operator/b1",
-      "gateStatus": "slices/B1/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/B1/b1-evidence.cast",
-        "videoSha256": "17f9ae98f3ce1cb28177168275e07d39d51cc1c7373b6185afe5fb7f074a63a4",
-        "videoBytes": 2555
-      }
-    },
-    "B3": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "3f06499",
-      "tag": "operator/b3",
-      "gateStatus": "slices/B3/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/B3/b3-evidence.cast",
-        "videoSha256": "2f527b0556fa7bd546808c6d4e100280fafbde0b97417f2e085ebefc9c90a5b6",
-        "videoBytes": 1285
-      }
-    },
-    "C2": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "72e229f",
-      "tag": "operator/c2",
-      "gateStatus": "slices/C2/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/C2/c2-evidence.cast",
-        "videoSha256": "a7f8218196136358e278e65533d825165a99944c3889612e670534d902332664",
-        "videoBytes": 1372
-      }
-    },
-    "B2": {
-      "status": "passed",
-      "kind": "mixed",
-      "commit": "9e92757 (576e641+a034ca1+prose)",
-      "tag": "operator/b2",
-      "gateStatus": "slices/B2/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/B2/b2-evidence.cast",
-        "videoSha256": "c192833f8841513f0f656162ccce3696e9c944a6adfd3b086844c054cc5ffcb9",
-        "videoBytes": 2250
-      }
-    },
-    "C1": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "0137e54 (a179a75+fix)",
-      "tag": "operator/c1",
-      "gateStatus": "slices/C1/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/C1/c1-evidence.cast",
-        "videoSha256": "d3355dd8c1833b992fa65b9d0968b94b2a943147fc64ac040d0620c712587632",
-        "videoBytes": 1580
-      }
-    },
-    "C4": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "88e027d",
-      "tag": "operator/c4",
-      "gateStatus": "slices/C4/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/C4/c4-evidence.cast",
-        "videoSha256": "e9a77a3633b3ac6b69481f8f296b5c85b3d01602a6f338992a5f0ae52b2b397a",
-        "videoBytes": 1086
-      }
-    },
-    "C3": {
-      "status": "passed",
-      "kind": "mixed",
-      "commit": "aec0181",
-      "tag": "operator/c3",
-      "gateStatus": "slices/C3/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/C3/c3-evidence.cast",
-        "videoSha256": "67d7111bcf83bbb75720775be456ea5e59e1016b9d20d4b884780b7be83576cd",
-        "videoBytes": 1256
-      }
-    },
-    "C5": {
-      "status": "passed",
-      "kind": "mixed",
-      "commit": "2d9cd42",
-      "tag": "operator/c5",
-      "gateStatus": "slices/C5/gate-status.json",
-      "video": {
-        "mode": "e2e-output",
-        "status": "verified",
-        "path": "slices/C5/round-trip-output.txt"
-      }
-    },
-    "B4": {
-      "status": "passed",
-      "kind": "docs",
-      "commit": "280e2c7",
-      "tag": "operator/b4",
-      "gateStatus": "slices/B4/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/B4/b4-evidence.cast",
-        "videoSha256": "a270e37c8efae178200cd58a64ff7332d32e822cb6264924a1a698c11a19084b",
-        "videoBytes": 1705
-      }
-    },
-    "D1": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "f363557",
-      "tag": "operator/d1",
-      "gateStatus": "slices/D1/gate-status.json",
-      "video": {
-        "mode": "asciinema",
-        "status": "verified",
-        "path": "slices/D1/d1-evidence.cast",
-        "videoSha256": "3da4e51fbd625dba1c227590e772bcdbd17194a524e0e49d361f24bf8c4b1be7",
-        "videoBytes": 1732
-      }
-    },
-    "D2": {
-      "status": "passed",
-      "commit": "486fb1b",
-      "tag": "operator/d2",
-      "evidence": [
-        "slices/D2/evidence-live.cast",
-        "slices/D2/live-01-launcher.png",
-        "slices/D2/live-02-panel-open.png",
-        "slices/D2/live-03-reply.png",
-        "slices/D2/live-gate.md",
-        "slices/D2/review-verdict.md",
-        "slices/D2/codex-review.md",
-        "slices/D2/impl-notes.md"
-      ],
-      "at": "2026-07-12T23:25:51Z"
-    },
-    "D3": {
-      "status": "passed",
-      "commit": "6520a15",
-      "tag": "operator/d3",
-      "evidence": [
-        "slices/D3/evidence-live.cast",
-        "slices/D3/live-01-do-highlight.png",
-        "slices/D3/live-02-confirm.png",
-        "slices/D3/live-03-teach.png",
-        "slices/D3/live-04-fontes.png",
-        "slices/D3/live-gate.md",
-        "slices/D3/review-verdict.md",
-        "slices/D3/codex-review.md",
-        "slices/D3/impl-notes.md"
-      ],
-      "at": "2026-07-13T00:56:00Z"
-    },
-    "E1": {
-      "status": "passed",
-      "commit": "64c2cea",
-      "tag": "operator/e1",
-      "evidence": [
-        "slices/E1/impl-notes.md",
-        "slices/E1/review-verdict.md",
-        "slices/E1/codex-review.md"
-      ],
-      "at": "2026-07-13T01:37:20Z"
-    },
-    "F1": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "c20aa23",
-      "tag": "operator/f1",
-      "at": "2026-07-13T07:48:19Z"
-    },
-    "E2": {
-      "status": "passed",
-      "kind": "mixed",
-      "commit": "16bded0",
-      "tag": "operator/e2",
-      "at": "2026-07-13T08:48:58Z"
-    },
-    "G1": {
-      "status": "passed",
-      "kind": "api",
-      "commit": "a10d4d4",
-      "tag": "operator/g1",
-      "at": "2026-07-13T10:02:16Z"
-    }
+  "A1": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "97f66d6",
+   "tag": "operator/a-group",
+   "gateStatus": "slices/A1/gate-status.json",
+   "deliverable": "analysis/01-automations-actions.md"
   },
-  "resume": {
-    "at": "2026-07-13T07:01:57Z",
-    "note": "operator resumed after second stop; see RUN_LOG RESUME entry",
-    "resumePoint": "E2"
+  "A2": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "97f66d6",
+   "tag": "operator/a-group",
+   "gateStatus": "slices/A2/gate-status.json",
+   "deliverable": "analysis/02-demos-tutorials.md"
   },
-  "globalGate": {
-    "status": "aborted-operator-stop",
-    "at": "2026-07-13T10:58:23Z",
-    "landed": 22,
-    "resumePoint": "F2 (fix applied, ungated)",
-    "note": "Operator stop. 22/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1,G1). F2 fix-applied-but-ungated (per-run-token fix in tree, rerun was confirming green; codex blocked on quota). G2+H not started. can() stays a permissive stub; H untouched. Nothing merged to main. Dev boot-b stack is DOWN (terminated with the run stop; re-boot on resume)."
+  "A3": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "97f66d6",
+   "tag": "operator/a-group",
+   "gateStatus": "slices/A3/gate-status.json",
+   "deliverable": "analysis/03-knowledge-hooks.md"
+  },
+  "A4": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "97f66d6",
+   "tag": "operator/a-group",
+   "gateStatus": "slices/A4/gate-status.json",
+   "deliverable": "analysis/04-internal-templates.md"
+  },
+  "A5": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "97f66d6",
+   "tag": "operator/a-group",
+   "gateStatus": "slices/A5/gate-status.json",
+   "deliverable": "memos/{registry,tour-format,base-set}.md"
+  },
+  "B1": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "d1247b4",
+   "tag": "operator/b1",
+   "gateStatus": "slices/B1/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/B1/b1-evidence.cast",
+    "videoSha256": "17f9ae98f3ce1cb28177168275e07d39d51cc1c7373b6185afe5fb7f074a63a4",
+    "videoBytes": 2555
+   }
+  },
+  "B3": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "3f06499",
+   "tag": "operator/b3",
+   "gateStatus": "slices/B3/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/B3/b3-evidence.cast",
+    "videoSha256": "2f527b0556fa7bd546808c6d4e100280fafbde0b97417f2e085ebefc9c90a5b6",
+    "videoBytes": 1285
+   }
+  },
+  "C2": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "72e229f",
+   "tag": "operator/c2",
+   "gateStatus": "slices/C2/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/C2/c2-evidence.cast",
+    "videoSha256": "a7f8218196136358e278e65533d825165a99944c3889612e670534d902332664",
+    "videoBytes": 1372
+   }
+  },
+  "B2": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "9e92757 (576e641+a034ca1+prose)",
+   "tag": "operator/b2",
+   "gateStatus": "slices/B2/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/B2/b2-evidence.cast",
+    "videoSha256": "c192833f8841513f0f656162ccce3696e9c944a6adfd3b086844c054cc5ffcb9",
+    "videoBytes": 2250
+   }
+  },
+  "C1": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "0137e54 (a179a75+fix)",
+   "tag": "operator/c1",
+   "gateStatus": "slices/C1/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/C1/c1-evidence.cast",
+    "videoSha256": "d3355dd8c1833b992fa65b9d0968b94b2a943147fc64ac040d0620c712587632",
+    "videoBytes": 1580
+   }
+  },
+  "C4": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "88e027d",
+   "tag": "operator/c4",
+   "gateStatus": "slices/C4/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/C4/c4-evidence.cast",
+    "videoSha256": "e9a77a3633b3ac6b69481f8f296b5c85b3d01602a6f338992a5f0ae52b2b397a",
+    "videoBytes": 1086
+   }
+  },
+  "C3": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "aec0181",
+   "tag": "operator/c3",
+   "gateStatus": "slices/C3/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/C3/c3-evidence.cast",
+    "videoSha256": "67d7111bcf83bbb75720775be456ea5e59e1016b9d20d4b884780b7be83576cd",
+    "videoBytes": 1256
+   }
+  },
+  "C5": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "2d9cd42",
+   "tag": "operator/c5",
+   "gateStatus": "slices/C5/gate-status.json",
+   "video": {
+    "mode": "e2e-output",
+    "status": "verified",
+    "path": "slices/C5/round-trip-output.txt"
+   }
+  },
+  "B4": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "280e2c7",
+   "tag": "operator/b4",
+   "gateStatus": "slices/B4/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/B4/b4-evidence.cast",
+    "videoSha256": "a270e37c8efae178200cd58a64ff7332d32e822cb6264924a1a698c11a19084b",
+    "videoBytes": 1705
+   }
+  },
+  "D1": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "f363557",
+   "tag": "operator/d1",
+   "gateStatus": "slices/D1/gate-status.json",
+   "video": {
+    "mode": "asciinema",
+    "status": "verified",
+    "path": "slices/D1/d1-evidence.cast",
+    "videoSha256": "3da4e51fbd625dba1c227590e772bcdbd17194a524e0e49d361f24bf8c4b1be7",
+    "videoBytes": 1732
+   }
+  },
+  "D2": {
+   "status": "passed",
+   "commit": "486fb1b",
+   "tag": "operator/d2",
+   "evidence": [
+    "slices/D2/evidence-live.cast",
+    "slices/D2/live-01-launcher.png",
+    "slices/D2/live-02-panel-open.png",
+    "slices/D2/live-03-reply.png",
+    "slices/D2/live-gate.md",
+    "slices/D2/review-verdict.md",
+    "slices/D2/codex-review.md",
+    "slices/D2/impl-notes.md"
+   ],
+   "at": "2026-07-12T23:25:51Z"
+  },
+  "D3": {
+   "status": "passed",
+   "commit": "6520a15",
+   "tag": "operator/d3",
+   "evidence": [
+    "slices/D3/evidence-live.cast",
+    "slices/D3/live-01-do-highlight.png",
+    "slices/D3/live-02-confirm.png",
+    "slices/D3/live-03-teach.png",
+    "slices/D3/live-04-fontes.png",
+    "slices/D3/live-gate.md",
+    "slices/D3/review-verdict.md",
+    "slices/D3/codex-review.md",
+    "slices/D3/impl-notes.md"
+   ],
+   "at": "2026-07-13T00:56:00Z"
+  },
+  "E1": {
+   "status": "passed",
+   "commit": "64c2cea",
+   "tag": "operator/e1",
+   "evidence": [
+    "slices/E1/impl-notes.md",
+    "slices/E1/review-verdict.md",
+    "slices/E1/codex-review.md"
+   ],
+   "at": "2026-07-13T01:37:20Z"
+  },
+  "F1": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "c20aa23",
+   "tag": "operator/f1",
+   "at": "2026-07-13T07:48:19Z"
+  },
+  "E2": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "16bded0",
+   "tag": "operator/e2",
+   "at": "2026-07-13T08:48:58Z"
+  },
+  "G1": {
+   "status": "passed",
+   "kind": "api",
+   "commit": "a10d4d4",
+   "tag": "operator/g1",
+   "at": "2026-07-13T10:02:16Z"
   }
+ },
+ "resume": {
+  "at": "2026-07-13T07:01:57Z",
+  "note": "operator resumed after second stop; see RUN_LOG RESUME entry",
+  "resumePoint": "E2"
+ },
+ "globalGate": {
+  "status": "in-progress",
+  "resumedAt": "2026-07-13T13:47:57Z",
+  "landed": 22,
+  "resumePoint": "F2 gate (fix applied, green-rerun pending)",
+  "note": "Operator resumed 2026-07-13: operator-run MERGED to main (ff d55bd02..1a3e9ad, pushed) and the run now continues ON MAIN by explicit operator instruction - no branches. Sentinel re-armed (iter 1435). Boot-b re-booting. Codex probe 2026-07-13T13:47Z: still quota-exceeded - F2 codexSliceReview stays blocked-external; H6 contingency stands (re-probe before H, else stop cleanly after G2)."
+ }
 }
