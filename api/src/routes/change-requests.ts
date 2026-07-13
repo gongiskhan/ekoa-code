@@ -19,6 +19,7 @@ import { Router, type Response } from 'express';
 import { ChangeRequestFileRequest, ChangeRequestConvertRequest, type ChangeRequestStatus } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { resolveApp } from '../apps/registry.js';
+import { loadReadable } from '../apps/app-paths.js';
 import { emitChangeRequest } from '../agents/streaming.js';
 import {
   fileChangeRequest,
@@ -45,6 +46,15 @@ export function changeRequestsRouter(deps: { now: () => number; genId: () => str
     if (header !== undefined && header !== '') {
       const app = await resolveApp(header);
       if (!app || !app.artifactBacked || !app.ownerUserId) {
+        return sendError(res, 'NOT_FOUND', 'Aplicação não encontrada.');
+      }
+      // CROSS-ORG INJECTION GUARD (codex HIGH): filing about a served app requires the REQUESTER to
+      // be able to READ it - own, or org-shared WITHIN THEIR OWN org. loadReadable returns null for a
+      // cross-org row, another user's private row, or an unknown id -> a UNIFORM 404 (indistinguishable
+      // from an unknown app, so it is NOT a cross-org existence oracle). Because a readable app is
+      // always in the requester's own org, the owner-org stamp is reachable ONLY for apps the requester
+      // can see - a request can NEVER be injected into another org's queue (nor its admins notified).
+      if (!(await loadReadable(actorOf(req), app.appId))) {
         return sendError(res, 'NOT_FOUND', 'Aplicação não encontrada.');
       }
       target = { ownerUserId: app.ownerUserId, appId: app.appId };

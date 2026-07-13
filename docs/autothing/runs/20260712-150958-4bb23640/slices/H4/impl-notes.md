@@ -142,3 +142,36 @@ the refused-build own-org path. +1 element, valid JSON.
 - repo-root `npm run gate:chokepoint` -> clean
 - `cd shared && npx vitest run` -> 2 files, 36 passed
 - `cd web && npx tsc --noEmit` -> 0; `npx eslint <touched>` -> 0; `npm test` -> 30 files, 168 passed
+
+## Codex-fix round (HIGH - cross-org queue INJECTION)
+
+Codex review of H4 found a real HIGH: `POST /api/v1/change-requests` with an `X-Ekoa-App-Id`
+resolved ANY app by id/slug and stamped the request into that RESOLVED APP OWNER's org with NO
+check that the requester could access the app - so an org-A user who knew/guessed an org-B app
+id/slug could inject a request into org-B's `/pedidos` queue and fire a live notification to org-B's
+admins (a cross-org write / isolation break). The original test baked this in as expected.
+
+FIX (`api/src/routes/change-requests.ts`): the served-app filing path now gates on
+`loadReadable(actorOf(req), app.appId)` (apps/app-paths.ts) BEFORE resolving/stamping. `loadReadable`
+returns the artifact only when it is the requester's OWN app or an org-shared app WITHIN THE
+REQUESTER's OWN org (it rejects any cross-org row, another user's private row, or an unknown id).
+A `null` verdict -> a UNIFORM 404 (indistinguishable from an unknown app, so it is NOT a cross-org
+existence oracle). Because a readable app is ALWAYS in the requester's own org, the owner-org stamp
+(kept unchanged, resolved from the owner user record) is now reachable ONLY for apps the requester
+can see - so a request can never land in, or notify, another org. The refused-build path (no
+`X-Ekoa-App-Id`) is unchanged: it already stamps the requester's OWN org and needs no app gate.
+
+TESTS (`api/tests/routes/change-requests.test.ts`, retopologised): all filers are `reqU` (plain
+user, orgA); seeded apps `appA` (orgA org-shared, owned by admA), `appOwn` (orgA private, owned by
+reqU), `appApriv` (orgA private, owned by admA), `appB` (orgB org-shared, owned by admB).
+- FLIPPED: the old "files about an org-B app -> lands in org-B" now asserts 404 + NO row created
+  anywhere + org-B's admin queue empty (no injection, no notification).
+- ADDED: files about `appA` (org-shared, own org) -> 200 stamped to orgA; files about `appOwn`
+  (own) -> 200; files about `appApriv` (another user's private, same org) -> 404.
+- Read-isolation + convert/dismiss cross-org tests kept, retargeted to the orgA request (admA acts;
+  admB cross-org -> 404). Refused-build own-org test kept (files with no header -> orgA).
+
+VERIFY (all green): api tsc src 0 / test 0; eslint touched 0; `vitest run tests/routes tests/contract
+tests/apps` -> 60 files, 593 passed; `npm run gate:chokepoint` clean; `node
+assets/panel-runtime/build.mjs` OK. (H4 subset: 3 files, 23 passed - up from 20, +3 access-gate
+cases.)

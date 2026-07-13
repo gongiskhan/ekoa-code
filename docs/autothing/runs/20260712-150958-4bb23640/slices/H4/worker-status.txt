@@ -25,3 +25,10 @@ own org for refused-build filing), never from the caller body; read/convert/dism
 registo (org-admin OWN org; super-admin across orgs); cross-org convert/dismiss -> uniform 404.
 
 No commits, no stack ops, no real builds. Working tree only.
+
+| codex-fix DONE-GREEN: cross-org queue INJECTION (HIGH) closed - served-app filing now gated on
+loadReadable(requester, appId) (own or org-shared within requester's own org; else uniform 404), so
+a request can never be injected into another org's queue. Tests flipped+added (cross-org file ->
+404 + no row/notification; same-org org-shared + own-app -> 200; another-user private -> 404).
+VERIFY: api tsc src 0 / test 0; eslint 0; vitest tests/routes+contract+apps 60 files / 593 passed
+(H4 subset 3 files / 23 passed); gate:chokepoint clean; panel build OK.

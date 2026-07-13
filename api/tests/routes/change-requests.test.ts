@@ -14,14 +14,20 @@ import { ChangeRequest, ChangeRequestListResponse, ErrorEnvelope } from '@ekoa/s
 /**
  * Operator-run H4 — the request-changes queue, driven through the REAL router (mongo-mem).
  *
- * The security crux is CROSS-ORG ISOLATION: a served-app filing lands in the app OWNER's org
- * queue (never the requester's), an org-admin reads/acts on ONLY its own org, and a plain user
- * cannot read the queue at all. requesterUserId + orgId are always server-stamped, never trusted
- * from the caller body. The refused-build feed files to the requester's OWN org (no served app).
+ * The security crux is CROSS-ORG ISOLATION on BOTH directions:
+ *  - WRITE (codex HIGH - queue injection): filing about a served app requires the REQUESTER to be
+ *    able to READ that app (own, or org-shared WITHIN THEIR org). A user cannot inject a request
+ *    into another org's queue by naming that org's app id/slug - loadReadable rejects it as a
+ *    uniform 404. Because a readable app is always in the requester's org, the request always lands
+ *    in the requester's OWN org.
+ *  - READ: an org-admin reads/acts on ONLY its own org; a plain user cannot read the queue at all.
+ * requesterUserId + orgId are always server-stamped, never trusted from the caller body.
  *
- * Topology: reqU (plain user, orgA) is the filer; appX is an ORG app OWNED by admB in orgB. So a
- * filing about appX must surface to admB (orgB), NOT to admA (orgA) — proving both the owner-org
- * routing and the isolation boundary in one shape.
+ * Topology (all filers are `reqU`, a plain user in orgA):
+ *   appA     - orgA, OWNED by admA, visibility 'org'    -> reqU CAN read (org-shared, same org)
+ *   appOwn   - orgA, OWNED by reqU, visibility 'private' -> reqU CAN read (own)
+ *   appApriv - orgA, OWNED by admA, visibility 'private' -> reqU CANNOT read (another user's private)
+ *   appB     - orgB, OWNED by admB, visibility 'org'     -> reqU CANNOT read (cross-org)
  */
 let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
@@ -33,6 +39,7 @@ const readJson = async (r: Response): Promise<Record<string, unknown>> => (await
 const tokenFor = async (u: string) => (await login(u, 'pw123456', false, deps)).token;
 const fileWithApp = (t: string, appId: string, body: Record<string, unknown>) =>
   authed('/api/v1/change-requests', t, { method: 'POST', headers: { 'x-ekoa-app-id': appId }, body: JSON.stringify(body) });
+const queueOf = async (u: string) => (await readJson(await authed('/api/v1/change-requests', await tokenFor(u)))).items as Array<Record<string, unknown>>;
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();
@@ -51,49 +58,71 @@ beforeEach(async () => {
     setActivation(id, { active: true, billingLocked: false });
     await userSettings.put({ _id: id, memory: { autoExtract: false }, build: { verifyBuilds: false } } as never);
   }
-  // An ORG app owned by admB in orgB (org-shared so an org-admin can loadWritable it later).
-  await artifacts.insert({ _id: 'appX', name: 'App X', slug: 'app-x', userId: 'admB', orgId: 'orgB', visibility: 'org', status: 'active', data: { projectDir: '/sbx/user-admB/appX' } } as never);
+  const seedApp = (id: string, userId: string, orgId: string, visibility: 'org' | 'private') =>
+    artifacts.insert({ _id: id, name: id, slug: id, userId, orgId, visibility, status: 'active', data: { projectDir: `/sbx/user-${userId}/${id}` } } as never);
+  await seedApp('appA', 'admA', 'orgA', 'org');        // reqU can read (org-shared, same org)
+  await seedApp('appOwn', 'reqU', 'orgA', 'private');   // reqU can read (own)
+  await seedApp('appApriv', 'admA', 'orgA', 'private'); // reqU cannot read (another user's private)
+  await seedApp('appB', 'admB', 'orgB', 'org');         // reqU cannot read (cross-org)
 });
 
-describe('H4 change-requests: file (served-app) lands in the OWNER org queue', () => {
-  it('a plain user files via X-Ekoa-App-Id -> the request lands in the app owner org, server-stamped', async () => {
-    const res = await fileWithApp(await tokenFor('reqU'), 'appX', { text: 'Adicione um botão de exportação na tabela', route: '/faturas' });
+describe('H4 change-requests: filing requires the requester can READ the app; lands in own org', () => {
+  it('a user files about an org-shared app in their org -> 200, stamped to their org', async () => {
+    const res = await fileWithApp(await tokenFor('reqU'), 'appA', { text: 'Adicione um botão de exportação', route: '/faturas' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ChangeRequest.safeParse(body).success, JSON.stringify(ChangeRequest.safeParse(body))).toBe(true);
-    expect(body.orgId).toBe('orgB');           // the OWNER org, NOT the requester's orgA
+    expect(body.orgId).toBe('orgA');           // the requester's own org (== the app owner org)
     expect(body.requesterUserId).toBe('reqU'); // from the verified JWT, never the body
     expect(body.requesterName).toBe('reqU');
-    expect(body.appId).toBe('appX');
+    expect(body.appId).toBe('appA');
     expect(body.status).toBe('open');
     expect(body.route).toBe('/faturas');
+  });
+
+  it('a user files about their OWN (private) app -> 200', async () => {
+    const res = await fileWithApp(await tokenFor('reqU'), 'appOwn', { text: 'Mude a cor do cabeçalho' });
+    expect(res.status).toBe(200);
+    expect((await readJson(res)).orgId).toBe('orgA');
+  });
+
+  it('CROSS-ORG INJECTION is blocked: filing about another org app -> 404, NO row, NO notification', async () => {
+    const res = await fileWithApp(await tokenFor('reqU'), 'appB', { text: 'inject into org B' });
+    expect(res.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+    // The injection would have landed a row in org B's queue (and fired an SSE to org B admins).
+    // Neither happened: org B's admin sees nothing, and no row exists anywhere.
+    expect((await queueOf('admB')).length).toBe(0);
+    expect(await changeRequests.find({})).toHaveLength(0);
+  });
+
+  it('filing about another user PRIVATE app the requester cannot read -> 404 (uniform, no oracle)', async () => {
+    const res = await fileWithApp(await tokenFor('reqU'), 'appApriv', { text: 'peek' });
+    expect(res.status).toBe(404);
+    expect(await changeRequests.find({})).toHaveLength(0);
   });
 
   it('an unknown app id is a 404 (shared error envelope), never a silent misfile', async () => {
     const res = await fileWithApp(await tokenFor('reqU'), 'no-such-app', { text: 'Olá' });
     expect(res.status).toBe(404);
-    const body = await readJson(res);
-    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
-    expect((body.error as { code: string }).code).toBe('NOT_FOUND');
+    expect(((await readJson(res)).error as { code: string }).code).toBe('NOT_FOUND');
   });
 });
 
 describe('H4 change-requests: the org-admin queue read is org-scoped (cross-org isolation)', () => {
   it('an org-admin sees its OWN org only; another org-admin never sees it', async () => {
-    await fileWithApp(await tokenFor('reqU'), 'appX', { text: 'pedido 1' }); // -> orgB
+    await fileWithApp(await tokenFor('reqU'), 'appA', { text: 'pedido 1' }); // -> orgA
 
-    const admBList = await readJson(await authed('/api/v1/change-requests', await tokenFor('admB')));
-    expect(ChangeRequestListResponse.safeParse(admBList).success).toBe(true);
-    const bItems = admBList.items as Array<Record<string, unknown>>;
-    expect(bItems.length).toBe(1);
-    expect(bItems.every((r) => r.orgId === 'orgB')).toBe(true);
-
-    // admA is in orgA — the crux: it MUST NOT see orgB's request.
     const admAList = await readJson(await authed('/api/v1/change-requests', await tokenFor('admA')));
+    expect(ChangeRequestListResponse.safeParse(admAList).success).toBe(true);
     const aItems = admAList.items as Array<Record<string, unknown>>;
-    expect(admAList.total).toBe(0);
-    expect(aItems.some((r) => r.requesterUserId === 'reqU')).toBe(false);
+    expect(aItems.length).toBe(1);
     expect(aItems.every((r) => r.orgId === 'orgA')).toBe(true);
+
+    // admB is in orgB — the crux: it MUST NOT see orgA's request.
+    const admBList = await readJson(await authed('/api/v1/change-requests', await tokenFor('admB')));
+    expect(admBList.total).toBe(0);
+    expect((admBList.items as Array<Record<string, unknown>>).some((r) => r.requesterUserId === 'reqU')).toBe(false);
   });
 
   it('a plain user cannot read the queue -> 403 FORBIDDEN (shared envelope)', async () => {
@@ -108,27 +137,27 @@ describe('H4 change-requests: the org-admin queue read is org-scoped (cross-org 
     await users.insert({ _id: 'root', username: 'root', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'orgRoot', active: true });
     setActivation('root', { active: true, billingLocked: false });
     await userSettings.put({ _id: 'root', memory: { autoExtract: false }, build: { verifyBuilds: false } } as never);
-    await fileWithApp(await tokenFor('reqU'), 'appX', { text: 'pedido super' }); // -> orgB
+    await fileWithApp(await tokenFor('reqU'), 'appA', { text: 'pedido super' }); // -> orgA
 
     const all = await readJson(await authed('/api/v1/change-requests', await tokenFor('root')));
     expect((all.items as unknown[]).length).toBe(1);
-    const scoped = await readJson(await authed('/api/v1/change-requests?orgId=orgA', await tokenFor('root')));
-    expect((scoped.items as unknown[]).length).toBe(0); // no orgA requests exist
+    const scoped = await readJson(await authed('/api/v1/change-requests?orgId=orgB', await tokenFor('root')));
+    expect((scoped.items as unknown[]).length).toBe(0); // no orgB requests exist
   });
 });
 
 describe('H4 change-requests: convert / dismiss are org-scoped', () => {
   it('convert flips status to converted + links the jobId; a cross-org convert is a uniform 404', async () => {
-    const filed = await readJson(await fileWithApp(await tokenFor('reqU'), 'appX', { text: 'Adicione um campo de data' }));
+    const filed = await readJson(await fileWithApp(await tokenFor('reqU'), 'appA', { text: 'Adicione um campo de data' })); // -> orgA
     const id = filed.id as string;
 
-    // admA (orgA) must NOT be able to convert orgB's request — uniform 404, no cross-org oracle.
-    const cross = await authed(`/api/v1/change-requests/${id}/convert`, await tokenFor('admA'), { method: 'POST', body: JSON.stringify({ jobId: 'job-xyz' }) });
+    // admB (orgB) must NOT be able to convert orgA's request — uniform 404, no cross-org oracle.
+    const cross = await authed(`/api/v1/change-requests/${id}/convert`, await tokenFor('admB'), { method: 'POST', body: JSON.stringify({ jobId: 'job-xyz' }) });
     expect(cross.status).toBe(404);
     expect((await readJson(cross)).error).toBeTruthy();
 
-    // admB (owner org) converts, linking the follow-up-build job the dashboard already started.
-    const conv = await authed(`/api/v1/change-requests/${id}/convert`, await tokenFor('admB'), { method: 'POST', body: JSON.stringify({ jobId: 'job-xyz' }) });
+    // admA (own org) converts, linking the follow-up-build job the dashboard already started.
+    const conv = await authed(`/api/v1/change-requests/${id}/convert`, await tokenFor('admA'), { method: 'POST', body: JSON.stringify({ jobId: 'job-xyz' }) });
     expect(conv.status).toBe(200);
     const cbody = await readJson(conv);
     expect(ChangeRequest.safeParse(cbody).success).toBe(true);
@@ -137,9 +166,9 @@ describe('H4 change-requests: convert / dismiss are org-scoped', () => {
   });
 
   it('dismiss flips status to dismissed (own org)', async () => {
-    const filed = await readJson(await fileWithApp(await tokenFor('reqU'), 'appX', { text: 'pedido a dispensar' }));
+    const filed = await readJson(await fileWithApp(await tokenFor('reqU'), 'appA', { text: 'pedido a dispensar' })); // -> orgA
     const id = filed.id as string;
-    const res = await authed(`/api/v1/change-requests/${id}/dismiss`, await tokenFor('admB'), { method: 'POST' });
+    const res = await authed(`/api/v1/change-requests/${id}/dismiss`, await tokenFor('admA'), { method: 'POST' });
     expect(res.status).toBe(200);
     expect((await readJson(res)).status).toBe('dismissed');
   });
@@ -148,19 +177,17 @@ describe('H4 change-requests: convert / dismiss are org-scoped', () => {
 describe('H4 change-requests: the refused-build feed files to the requester OWN org', () => {
   it('filing WITHOUT the served-app header lands in the requester own org (never a dead end)', async () => {
     // No X-Ekoa-App-Id header: the dashboard refused-build path. orgId is the requester's OWN org
-    // (orgA), the body appId is kept only as an informational label.
-    const res = await authed('/api/v1/change-requests', await tokenFor('reqU'), { method: 'POST', body: JSON.stringify({ text: 'Não consegui construir; peço ao administrador.', appId: 'appX' }) });
+    // (orgA), the body appId is kept only as an informational label (no loadReadable gate applies -
+    // there is no served app to read; the request is confined to the requester's own org anyway).
+    const res = await authed('/api/v1/change-requests', await tokenFor('reqU'), { method: 'POST', body: JSON.stringify({ text: 'Não consegui construir; peço ao administrador.', appId: 'appB' }) });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ChangeRequest.safeParse(body).success).toBe(true);
-    expect(body.orgId).toBe('orgA');           // the REQUESTER's own org
+    expect(body.orgId).toBe('orgA');           // the REQUESTER's own org, NOT appB's orgB
     expect(body.requesterUserId).toBe('reqU');
-    expect(body.appId).toBe('appX');           // informational label; convert re-gates via H1
 
     // It surfaces to admA (orgA), and NOT to admB (orgB) — isolation holds on this path too.
-    const admAList = await readJson(await authed('/api/v1/change-requests', await tokenFor('admA')));
-    expect((admAList.items as Array<Record<string, unknown>>).some((r) => r.requesterUserId === 'reqU')).toBe(true);
-    const admBList = await readJson(await authed('/api/v1/change-requests', await tokenFor('admB')));
-    expect((admBList.items as Array<Record<string, unknown>>).some((r) => r.text === 'Não consegui construir; peço ao administrador.')).toBe(false);
+    expect((await queueOf('admA')).some((r) => r.requesterUserId === 'reqU')).toBe(true);
+    expect((await queueOf('admB')).some((r) => r.text === 'Não consegui construir; peço ao administrador.')).toBe(false);
   });
 });
