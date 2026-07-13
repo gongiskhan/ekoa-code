@@ -167,3 +167,8 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - Operator stop received while the E2 worker was authoring the same-document tour player (it had committed NO files - working tree clean at HEAD 46ed436). E2 not started in git; its reservations released. Goal-loop sentinel deleted.
 - This session advanced the run 16 -> 19 gated slices: D1 (assistant endpoint), D2 (assistant panel), D3 (scripted three-mode live gate), E1 (build-time tours) - each fully gated with dual review (fresh + codex) that caught + fixed real defects (D2 XSS/param-forge hardening; D3 citation-grounding; E1 stored-content-injection via client-writable artifact.data.tours + a latent C2 actionManifest exposure, both closed by server-owned reserved keys).
 - NOT started: E2 (resume point), F1-F2 (knowledge-during-build), G1-G2 (metering), H1-H6 (security block - untouched by design; can() stays a permissive stub). Nothing merged to main.
+
+## RESUME 2026-07-13T07:01:57Z — operator instruction "resume the work" (model: Fable 5)
+- Operator resumed the run after the 2026-07-13T01:47Z stop. Goal-loop sentinel re-armed (iteration 978, turnCap 2480). evidence-index globalGate abort marker cleared. Resume point per LANDING/FLOW_PLAN: E2 (same-document tour playback + rebuild selector-stability gate); then F1-F2, G1-G2, then the atomic H1-H6 security block.
+- Interim (between stop and resume, same branch): 6c6b4e0 fix(dev-proxy) - duplicate Access-Control-Allow-Origin through the CORS proxy broke the preview probe in dev; both proxies fixed, ledgered F-2026-07-13-proxy-duplicate-acao. Boot-b stack restarted with the fix (fresh mem-mongo).
+- E2 worker re-delegated with the verbatim pre-stop brief (HEAD reference updated 46ed436 -> 6c6b4e0).
