@@ -280,6 +280,24 @@ describe('F1 knowledge-during-build — scoping narrates a knowledge request and
     expect((indexed[0]!.data as { description?: string }).description).toContain('Foi indexado 1 documento');
   });
 
+  it('an ALL-FAILED ingest is narrated honestly (review-f1 Low: it used to be silent), build still completes', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    passVerify();
+    setIngestBuildKnowledge(async () => { throw new Error('índice indisponível'); });
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, {
+      actor, username: 'u1', sessionId: 's1', language: 'pt', deps: deps(),
+      description: 'Gestão de apólices e sinistros',
+      knowledgeDocs: [{ title: 'Manual', text: 'regras' }, { title: 'Anexo', text: 'franquias' }],
+    });
+    const indexed = planSteps(events, 'knowledge-indexed');
+    expect(indexed).toHaveLength(1);
+    const msg = (indexed[0]!.data as { description?: string }).description ?? '';
+    expect(msg).toContain('Não foi possível indexar os 2 documentos fornecidos');
+    expect(msg).not.toContain('Foram indexados'); // never pretends success
+  });
+
   it('a generic (non-domain-heavy) first build neither narrates nor ingests', async () => {
     const t = resetAgentState({ finalText: 'built' });
     const { events } = startEvents();

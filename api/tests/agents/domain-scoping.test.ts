@@ -3,6 +3,7 @@ import {
   detectDomainHeavy,
   knowledgeScopingNarration,
   knowledgeIndexedNarration,
+  knowledgeNotIndexedNarration,
 } from '../../src/agents/domain-scoping.js';
 
 /**
@@ -64,6 +65,12 @@ describe('detectDomainHeavy (deterministic, PT + EN)', () => {
       'um blog pessoal com comentários',
       'crm for a consultant team', // must NOT fire saude via "consultas" prefix
       'doctorate thesis tracker', // must NOT fire saude via "doctors"
+      // review-f1 finding 1 repros (empirically confirmed false positives, fixed in the follow-up)
+      'multi-tenant admin dashboard', // must NOT fire imobiliario via "tenant"
+      'tennis court booking app', // must NOT fire juridico via token "court"
+      'a courtesy reminder app', // must NOT fire juridico via "court" prefix
+      'página de login seguro para a equipa', // must NOT fire seguros via adjective "seguro"
+      'pagamento seguro na loja online', // same - "seguro" as adjective
     ]) {
       const r = detectDomainHeavy(generic);
       expect(r.domainHeavy, `"${generic}" must not be domain-heavy`).toBe(false);
@@ -74,6 +81,13 @@ describe('detectDomainHeavy (deterministic, PT + EN)', () => {
   it('is accent-insensitive and tolerant of empty input', () => {
     expect(detectDomainHeavy('APOLICE de SEGURO').domainHeavy).toBe(true);
     expect(detectDomainHeavy('').domainHeavy).toBe(false);
+  });
+
+  it('keeps recall after the precision follow-up (tightened terms still fire on real domain apps)', () => {
+    expect(detectDomainHeavy('court case management for the firm').domains).toContain('juridico');
+    expect(detectDomainHeavy('gestão de obrigações fiscais da empresa').domains).toContain('financeiro'); // 'fiscais' plural (review-f1 Low)
+    expect(detectDomainHeavy('portal for landlords to manage tenants and leases').domains).toContain('imobiliario');
+    expect(detectDomainHeavy('gestão de seguros e apólices').domains).toContain('seguros');
   });
 });
 
@@ -95,6 +109,11 @@ describe('knowledgeScopingNarration (PT-PT, formal, brand-neutral)', () => {
     expect(msg).not.toMatch(EMOJI_RE);
     expect(msg).not.toMatch(EM_DASH_RE);
   });
+
+  it('reads grammatically for the seguros domain ("área de seguros", review-f1 Low)', () => {
+    expect(knowledgeScopingNarration(['seguros'])).toContain('área de seguros');
+    expect(knowledgeScopingNarration(['seguros'])).not.toContain('área seguros');
+  });
 });
 
 describe('knowledgeIndexedNarration (PT-PT confirmation)', () => {
@@ -109,6 +128,35 @@ describe('knowledgeIndexedNarration (PT-PT confirmation)', () => {
 
     for (const msg of [one, many]) {
       expect(msg).toContain('área de conhecimento da organização');
+      expect(msg).not.toMatch(EMOJI_RE);
+      expect(msg).not.toMatch(EM_DASH_RE);
+      expect(msg.toLowerCase()).not.toContain('ekoa');
+    }
+  });
+
+  it('appends an honest shortfall on a partial ingest and keeps the base sentence intact', () => {
+    const partial = knowledgeIndexedNarration(2, 3);
+    expect(partial).toContain('Foram indexados 2 documentos'); // base unchanged (F2 gate asserts on it)
+    expect(partial).toContain('Não foi possível indexar 1 documento.');
+    expect(knowledgeIndexedNarration(1, 4)).toContain('Não foi possível indexar 3 documentos.');
+    // full success with attempted supplied: NO shortfall sentence
+    expect(knowledgeIndexedNarration(2, 2)).not.toContain('Não foi possível');
+    expect(partial).not.toMatch(EMOJI_RE);
+    expect(partial).not.toMatch(EM_DASH_RE);
+  });
+});
+
+describe('knowledgeNotIndexedNarration (all-failed ingest, review-f1 Low)', () => {
+  it('narrates the all-failed case honestly, in number, within the copy rules', () => {
+    const one = knowledgeNotIndexedNarration(1);
+    expect(one).toContain('Não foi possível indexar o documento fornecido');
+    expect(one).toContain('prossegue sem ele');
+
+    const many = knowledgeNotIndexedNarration(3);
+    expect(many).toContain('Não foi possível indexar os 3 documentos fornecidos');
+    expect(many).toContain('prossegue sem eles');
+
+    for (const msg of [one, many]) {
       expect(msg).not.toMatch(EMOJI_RE);
       expect(msg).not.toMatch(EM_DASH_RE);
       expect(msg.toLowerCase()).not.toContain('ekoa');

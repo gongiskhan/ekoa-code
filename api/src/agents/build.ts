@@ -40,7 +40,7 @@ import {
   type JobRecord,
 } from './jobs.js';
 import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, ingestBuildKnowledge, verifyRunner } from './seams.js';
-import { detectDomainHeavy, knowledgeScopingNarration, knowledgeIndexedNarration } from './domain-scoping.js';
+import { detectDomainHeavy, knowledgeScopingNarration, knowledgeIndexedNarration, knowledgeNotIndexedNarration } from './domain-scoping.js';
 import { logActivity } from '../data/activity.js';
 
 /** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
@@ -361,8 +361,9 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         const scope = detectDomainHeavy(input.description);
         if (scope.domainHeavy) {
           sink.planStep('knowledge-scope', knowledgeScopingNarration(scope.domains));
+          const docs = (input.knowledgeDocs ?? []).slice(0, MAX_KNOWLEDGE_DOCS);
           let indexed = 0;
-          for (const doc of (input.knowledgeDocs ?? []).slice(0, MAX_KNOWLEDGE_DOCS)) {
+          for (const doc of docs) {
             try {
               const { id } = await ingestBuildKnowledge(
                 input.actor,
@@ -374,7 +375,10 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
               console.warn(`[build] knowledge doc "${doc.title}" not ingested (non-fatal):`, err instanceof Error ? err.message : err);
             }
           }
-          if (indexed > 0) sink.planStep('knowledge-indexed', knowledgeIndexedNarration(indexed));
+          // Honest confirmation: partial ingests name the shortfall; an all-failed ingest is
+          // narrated too (review-f1 Low: it used to be silent), never pretending success.
+          if (indexed > 0) sink.planStep('knowledge-indexed', knowledgeIndexedNarration(indexed, docs.length));
+          else if (docs.length > 0) sink.planStep('knowledge-indexed', knowledgeNotIndexedNarration(docs.length));
         }
       } catch (err) {
         console.warn('[build] knowledge scoping failed (non-fatal):', err instanceof Error ? err.message : err);

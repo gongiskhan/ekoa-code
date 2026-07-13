@@ -63,8 +63,10 @@ const DOMAINS: KnowledgeDomain[] = [
       'tribunal', 'acordao', 'jurisprudencia', 'advogado', 'advocacia', 'juridic', 'peticao',
       'penhora', 'sentenca', 'citacao', 'clausula', 'contrato', 'litigio', 'processo judicial',
       'diligencia', 'contestacao', 'escritura', 'notario',
-      // EN
-      'lawsuit', 'litigation', 'court', 'attorney', 'plaintiff', 'defendant', 'statute',
+      // EN - bare 'court' is out (review-f1 finding 1: prefix-fired on "courtesy" and
+      // token-fired on "tennis court"); only unambiguous multi-word forms remain
+      'lawsuit', 'litigation', 'court case', 'court fees', 'court order', 'court hearing',
+      'court ruling', 'attorney', 'plaintiff', 'defendant', 'statute',
       'jurisdiction', 'case law', 'legal case',
     ],
   },
@@ -74,7 +76,9 @@ const DOMAINS: KnowledgeDomain[] = [
     keywords: [
       // PT - fees/tax/accounting (NOT "orcamento"/budget, which is common in generic apps)
       'taxa', 'taxas', 'custas', 'honorarios', 'juros', 'imposto', 'iva', 'fatura', 'faturacao',
-      'contabil', 'contabilidade', 'tesouraria', 'tarifario', 'fiscal',
+      // 'fiscais' listed explicitly: the stem rule is prefix-only and 'fiscal' does not
+      // prefix-match the PT plural 'fiscais' (review-f1 Low)
+      'contabil', 'contabilidade', 'tesouraria', 'tarifario', 'fiscal', 'fiscais',
       // EN - "tax" is omitted on purpose ("syntax"/"taxonomy"); the specific forms below are safe
       'fee', 'fees', 'invoice', 'invoicing', 'vat', 'accounting', 'tariff', 'levy',
     ],
@@ -93,10 +97,11 @@ const DOMAINS: KnowledgeDomain[] = [
   },
   {
     key: 'seguros',
-    label: 'seguros',
+    label: 'de seguros',
     keywords: [
-      // PT
-      'seguro', 'apolice', 'sinistro', 'resseguro', 'segurado',
+      // PT - bare 'seguro' is out (review-f1 finding 1: it is also the everyday adjective
+      // "secure/safe" - "login seguro", "pagamento seguro"); the insurance-specific forms remain
+      'seguros', 'apolice', 'sinistro', 'resseguro', 'segurado',
       // EN
       'insurance', 'underwriting', 'actuarial', 'insurance claim', 'insurance policy',
     ],
@@ -117,8 +122,9 @@ const DOMAINS: KnowledgeDomain[] = [
     keywords: [
       // PT
       'imovel', 'imoveis', 'arrendamento', 'senhorio', 'inquilino', 'imobiliaria', 'hipoteca',
-      // EN
-      'real estate', 'property lease', 'landlord', 'tenant', 'mortgage',
+      // EN - bare 'tenant' is out (review-f1 finding 1: token-fired on SaaS "multi-tenant");
+      // the plural 'tenants' keeps real-estate recall without the SaaS collision
+      'real estate', 'property lease', 'landlord', 'tenants', 'mortgage',
     ],
   },
 ];
@@ -168,11 +174,30 @@ export function knowledgeScopingNarration(domainKeys: string[]): string {
 
 /**
  * Confirmation narrated after scoping-provided documents are indexed into the org knowledge area
- * during the build. Same register/constraints as {@link knowledgeScopingNarration}.
+ * during the build. Same register/constraints as {@link knowledgeScopingNarration}. When
+ * `attempted` is given and exceeds `count` (a partial ingest - some docs failed non-fatally),
+ * an honest shortfall sentence is APPENDED; the base sentence never changes, so consumers
+ * asserting on it (the F2 live gate) are unaffected.
  */
-export function knowledgeIndexedNarration(count: number): string {
+export function knowledgeIndexedNarration(count: number, attempted?: number): string {
   const verb = count === 1 ? 'Foi indexado' : 'Foram indexados';
   const noun = count === 1 ? 'documento' : 'documentos';
   const avail = count === 1 ? 'já está disponível' : 'já estão disponíveis';
-  return `${verb} ${count} ${noun} na área de conhecimento da organização; ${avail} para esta construção.`;
+  const base = `${verb} ${count} ${noun} na área de conhecimento da organização; ${avail} para esta construção.`;
+  if (attempted !== undefined && attempted > count) {
+    const miss = attempted - count;
+    const missNoun = miss === 1 ? 'documento' : 'documentos';
+    return `${base} Não foi possível indexar ${miss} ${missNoun}.`;
+  }
+  return base;
+}
+
+/**
+ * Narrated when scoping-provided documents were supplied but NONE could be indexed (review-f1 Low:
+ * the all-failed case was previously silent). Same register/constraints; the build carries on.
+ */
+export function knowledgeNotIndexedNarration(attempted: number): string {
+  return attempted === 1
+    ? 'Não foi possível indexar o documento fornecido; a construção prossegue sem ele.'
+    : `Não foi possível indexar os ${attempted} documentos fornecidos; a construção prossegue sem eles.`;
 }
