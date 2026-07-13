@@ -161,10 +161,12 @@ describe('H2 admin detection (detect-then-ask)', () => {
     expect(badge).not.toContain('onClick');
     // `admin` is SET once (the detection) and READ only to render the badge — it drives no action.
     expect((PANEL.match(/setAdmin\(/g) || []).length).toBe(1);
-    // H2 builds no edit-mode machinery / opt-in switch (that is H3): none of the tokens an actual
-    // edit-mode implementation would introduce exist yet. (Comments MAY mention "edit mode" as the
-    // deferred H3 work; these tokens name the affordance itself, so they won't collide with prose.)
-    expect(PANEL).not.toMatch(/setEditMode|editEnabled|isEditing|enterEditMode|edit-mode-toggle/);
+    // H3 now introduces the edit-mode switch (setEditMode), but detect-then-ask still binds: the
+    // DETECTION effect never enables edit mode — it only sets `admin`. (The full H3 opt-in invariants
+    // are pinned in the "H3 edit mode" block below.)
+    const whoamiEffect = PANEL.slice(PANEL.indexOf('const id = appId();'), PANEL.indexOf('const nextId = ()'));
+    expect(whoamiEffect).toContain('setAdmin');
+    expect(whoamiEffect).not.toContain('setEditMode');
     // The invariant is stated in the source so review can pin it.
     expect(PANEL).toContain('detect-then-ask');
     expect(PANEL).toContain('H3');
@@ -177,6 +179,78 @@ describe('H2 admin detection (detect-then-ask)', () => {
     expect(effect).not.toMatch(/method:\s*'POST'/);
     // The zero-token invariant is stated on the detection effect so review can pin it.
     expect(PANEL).toContain('zero-token');
+  });
+});
+
+describe('H3 edit mode (admins only) — opt-in switch + detect-then-ask wiring', () => {
+  it('the edit-mode switch is ABSENT unless admin, and starts OFF (opt-in, fail-closed)', () => {
+    // editMode starts false: entering edit mode is never the default — it is an explicit opt-in.
+    expect(PANEL).toMatch(/const \[editMode, setEditMode\] = useState\(false\)/);
+    // The admin bar (which holds the switch) is rendered only when detection said admin.
+    expect(PANEL).toContain('ekoa-assistant-adminbar');
+    expect(PANEL).toMatch(/\{admin \? \(/); // admin-gated block
+    // The switch is a real accessible toggle reflecting editMode.
+    expect(PANEL).toContain('ekoa-assistant-editswitch');
+    expect(PANEL).toMatch(/role="switch"/);
+    expect(PANEL).toMatch(/aria-checked=\{editMode\}/);
+  });
+
+  it('enabling the switch reveals the edit affordance (gated on admin && editMode)', () => {
+    // The edit section renders only for an admin who has opted in — not from detection alone.
+    expect(PANEL).toMatch(/admin && editMode \? \(/);
+    expect(PANEL).toContain('ekoa-assistant-edit'); // the distinct edit section
+    expect(PANEL).toContain('data-edit-phase'); // its phase machine (compose→confirm→running→preview→note)
+    // Kept visually distinct from the visitor OPERAR/MOSTRAR/ENSINAR modes so an admin always knows.
+    expect(PANEL).toContain('Modo de edição');
+  });
+
+  it('DETECT-THEN-ASK is binding: edit mode is entered ONLY by an explicit click, never by detection', () => {
+    // setEditMode(true) is reachable through exactly one path: openEditMode (the explicit opt-in).
+    expect(PANEL).toContain('const openEditMode');
+    expect(PANEL).toMatch(/openEditMode[\s\S]{0,120}setEditMode\(true\)/);
+    // The only setEditMode(true) in the file is inside that explicit handler — detection cannot flip it.
+    expect((PANEL.match(/setEditMode\(true\)/g) || []).length).toBe(1);
+    // openEditMode is wired to click handlers (the switch + the discovery CTA), never to an effect.
+    expect((PANEL.match(/onClick=\{[^}]*openEditMode/g) || []).length).toBeGreaterThanOrEqual(1);
+    // The whoami DETECTION effect touches neither the switch nor the discovery state.
+    const whoamiEffect = PANEL.slice(PANEL.indexOf('const id = appId();'), PANEL.indexOf('const nextId = ()'));
+    expect(whoamiEffect).not.toContain('setEditMode');
+    expect(whoamiEffect).not.toContain('openEditMode');
+  });
+
+  it('admin discovery is surfaced once, dismissibly, and NEVER auto-enables edit', () => {
+    // Shown only to a detected admin who has not opted in and not dismissed it.
+    expect(PANEL).toContain('ekoa-assistant-discovery');
+    expect(PANEL).toMatch(/admin && !editMode && !discoveryDismissed \? \(/);
+    // A concrete PT-PT suggestion (the conversion moment), plus a dismiss — non-blocking.
+    expect(PANEL).toContain('Pode pedir alterações a esta aplicação');
+    expect(PANEL).toContain('dismissDiscovery');
+    // The banner's CTA is the same explicit opt-in (a click), so it never auto-enables edit.
+    expect(PANEL).toMatch(/discovery-cta[\s\S]{0,80}onClick=\{openEditMode\}/);
+  });
+
+  it('the edit flow uses the PLATFORM /api/v1/* plane (via edit-mode), NOT the visitor assistant endpoint', () => {
+    // The edit machinery is the separate module (a follow-up build + versions/restore), imported here.
+    expect(PANEL).toContain("from './edit-mode'");
+    expect(PANEL).toContain('runEditPatch'); // POST /api/v1/jobs (the H1-gated follow-up build)
+    expect(PANEL).toContain('rollbackToVersion'); // POST /api/v1/artifacts/:id/versions/:sha/restore
+    // The confirm step gates the patch run behind an explicit confirmation (PT-PT).
+    expect(PANEL).toContain('EDIT_COPY.confirm');
+    expect(PANEL).toMatch(/const confirmEdit[\s\S]{0,600}runEditPatch/);
+    // The served-app POST /api/app-assistant plane stays visitor-blind: the edit handlers never
+    // route through ENDPOINT. runEditPatch/rollbackToVersion drive the /api/v1/* plane instead.
+    const confirmEdit = PANEL.slice(PANEL.indexOf('const confirmEdit'), PANEL.indexOf('const approveEdit'));
+    expect(confirmEdit).not.toContain('ENDPOINT');
+    expect(confirmEdit).not.toContain('/api/app-assistant');
+  });
+
+  it('degrades gracefully on a mid-flow 401/403/404 (a calm PT-PT message, never a crash)', () => {
+    // The panel maps a degraded outcome onto degradeMessage and a terminal 'note' phase.
+    expect(PANEL).toContain('degradeMessage');
+    expect(PANEL).toMatch(/outcome === 'ready'/);
+    expect(PANEL).toMatch(/setEditPhase\('note'\)/);
+    // Rollback is one click and also degrades on a refusal rather than throwing.
+    expect(PANEL).toMatch(/const rollbackEdit[\s\S]{0,600}rollbackToVersion/);
   });
 });
 

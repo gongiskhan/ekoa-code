@@ -2302,6 +2302,38 @@
       "locked": false,
       "containerId": null,
       "lineHeight": 1.25
+    },
+    {
+      "type": "text",
+      "id": "h3_edit_mode",
+      "x": 72,
+      "y": 332,
+      "width": 452,
+      "height": 112,
+      "text": "H3 served-app EDIT MODE (admins only) - the panel admin plane:\ndetect (H2 whoami) -> OPT-IN switch (never auto) -> confirm ->\nPOST /jobs {artifactId} + admin JWT = the SAME follow-up build\n  (H1 re-gates it) -> stream SSE -> preview:\nGET /artifacts/:id/versions (new head + pre-run head).\nAPPROVE keeps head | ROLLBACK = POST versions/:sha/restore.\nSeparate plane from visitor-blind POST /api/app-assistant.",
+      "originalText": "H3 served-app EDIT MODE (admins only) - the panel admin plane:\ndetect (H2 whoami) -> OPT-IN switch (never auto) -> confirm ->\nPOST /jobs {artifactId} + admin JWT = the SAME follow-up build\n  (H1 re-gates it) -> stream SSE -> preview:\nGET /artifacts/:id/versions (new head + pre-run head).\nAPPROVE keeps head | ROLLBACK = POST versions/:sha/restore.\nSeparate plane from visitor-blind POST /api/app-assistant.",
+      "fontSize": 12,
+      "fontFamily": 3,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "strokeColor": "#047857",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "angle": 0,
+      "seed": 930471,
+      "version": 1,
+      "versionNonce": 930472,
+      "isDeleted": false,
+      "groupIds": [],
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "containerId": null,
+      "lineHeight": 1.25
     }
   ]
 }

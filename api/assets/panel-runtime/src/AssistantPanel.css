@@ -150,6 +150,286 @@
   font-weight: 600;
 }
 
+/* -- H3 admin bar + edit-mode switch (admins only) ------------------------ */
+/* A distinct control from the visitor mode toggle: an admin always knows entering
+   edit mode is a separate, opt-in action. Brand-neutral via the CSS-var contract. */
+
+.ekoa-assistant-adminbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3, 0.75rem);
+  flex: 0 0 auto;
+  padding: var(--space-2, 0.5rem) var(--space-6, 1.5rem);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  background: var(--color-surface, #F8FAFC);
+}
+
+.ekoa-assistant-adminbar-label {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-editswitch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-editswitch-track {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--color-surface-muted, #F1F5F9);
+  border: 1px solid var(--color-border, #E2E8F0);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ekoa-assistant-editswitch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-text-muted, #475569);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.ekoa-assistant-editswitch[data-on='true'] .ekoa-assistant-editswitch-track {
+  background: var(--color-primary, #0F766E);
+  border-color: var(--color-primary, #0F766E);
+}
+
+.ekoa-assistant-editswitch[data-on='true'] .ekoa-assistant-editswitch-thumb {
+  transform: translateX(16px);
+  background: var(--color-bg, #FFFFFF);
+}
+
+.ekoa-assistant-editswitch[data-on='true'] .ekoa-assistant-editswitch-state {
+  color: var(--color-primary, #0F766E);
+  font-weight: 600;
+}
+
+/* -- H3 admin discovery banner (once, dismissible) ------------------------ */
+
+.ekoa-assistant-discovery {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+  padding: var(--space-3, 0.75rem) var(--space-6, 1.5rem);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  background: var(--color-surface, #F8FAFC);
+}
+
+.ekoa-assistant-discovery-text {
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.5;
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-discovery-actions {
+  display: flex;
+  gap: var(--space-2, 0.5rem);
+}
+
+.ekoa-assistant-discovery-cta {
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-primary, #0F766E);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-primary, #0F766E);
+  color: var(--color-bg, #FFFFFF);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ekoa-assistant-discovery-cta:hover {
+  filter: brightness(0.96);
+}
+
+.ekoa-assistant-discovery-dismiss {
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-discovery-dismiss:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
+/* -- H3 edit affordance (distinct admin zone) ----------------------------- */
+/* A left accent bar + tinted surface set the edit section clearly apart from the
+   visitor chat, so the admin always knows they are editing the app. */
+
+.ekoa-assistant-edit {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+  padding: var(--space-4, 1rem) var(--space-6, 1.5rem);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  border-left: 3px solid var(--color-primary, #0F766E);
+  background: var(--color-surface, #F8FAFC);
+}
+
+.ekoa-assistant-edit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.ekoa-assistant-edit-title {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  color: var(--color-primary, #0F766E);
+}
+
+.ekoa-assistant-edit-hint {
+  font-size: var(--text-sm, 0.8125rem);
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-edit-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+}
+
+.ekoa-assistant-edit-textarea {
+  width: 100%;
+  min-height: 56px;
+  max-height: 160px;
+  resize: vertical;
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-bg, #FFFFFF);
+  color: var(--color-text, #0F172A);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.4;
+}
+
+.ekoa-assistant-edit-textarea:focus {
+  outline: 2px solid var(--color-primary, #0F766E);
+  outline-offset: -1px;
+}
+
+.ekoa-assistant-edit-confirm-text,
+.ekoa-assistant-edit-preview-text,
+.ekoa-assistant-edit-note-text {
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.5;
+  color: var(--color-text, #0F172A);
+}
+
+.ekoa-assistant-edit-actions {
+  display: flex;
+  gap: var(--space-2, 0.5rem);
+  flex-wrap: wrap;
+}
+
+.ekoa-assistant-edit-primary {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-primary, #0F766E);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-primary, #0F766E);
+  color: var(--color-bg, #FFFFFF);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ekoa-assistant-edit-primary:hover {
+  filter: brightness(0.96);
+}
+
+.ekoa-assistant-edit-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ekoa-assistant-edit-secondary {
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text, #0F172A);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+
+.ekoa-assistant-edit-secondary:hover {
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
+.ekoa-assistant-edit-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ekoa-assistant-edit-running {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-edit-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--color-border, #E2E8F0);
+  border-top-color: var(--color-primary, #0F766E);
+  animation: ekoaAssistantSpin 0.8s linear infinite;
+}
+
+.ekoa-assistant-edit-diff {
+  display: flex;
+  gap: var(--space-4, 1rem);
+  margin: 0;
+  font-size: var(--text-sm, 0.8125rem);
+}
+
+.ekoa-assistant-edit-diff dt {
+  color: var(--color-text-muted, #475569);
+}
+
+.ekoa-assistant-edit-diff dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes ekoaAssistantSpin {
+  to { transform: rotate(360deg); }
+}
+
 /* -- Message list --------------------------------------------------------- */
 
 .ekoa-assistant-messages {
@@ -495,6 +775,9 @@
 @media (prefers-reduced-motion: reduce) {
   .ekoa-assistant { transition: none; }
   .ekoa-assistant-run[data-status='running'] .ekoa-assistant-run-dot { animation: none; }
+  .ekoa-assistant-edit-spinner { animation: none; }
+  .ekoa-assistant-editswitch-track,
+  .ekoa-assistant-editswitch-thumb { transition: none; }
 }
 
 /* -- Responsive ----------------------------------------------------------- */

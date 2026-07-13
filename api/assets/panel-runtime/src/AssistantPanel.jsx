@@ -30,6 +30,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createTourPlayer } from './tour-player';
+// H3 EDIT MODE (admins only): the network side of the admin patch-run flow, factored out
+// so it is unit-provable against a fake fetch. It targets the PLATFORM /api/v1/* API with
+// the admin's platform Bearer - a SEPARATE plane from the visitor-blind POST
+// /api/app-assistant. Every action it calls is H1-gated server-side; this panel only SHOWS
+// the affordance when detection said admin, and only after the admin OPTS IN (detect-then-ask).
+import { runEditPatch, rollbackToVersion, degradeMessage, progressLine, EDIT_COPY } from './edit-mode';
 import './AssistantPanel.css';
 
 const ENDPOINT = '/api/app-assistant';
@@ -84,6 +90,11 @@ function readPlatformToken() {
   } catch {
     return null;
   }
+}
+
+/** A short display sha for the edit-mode preview (7 chars, like git). Undefined -> a dash. */
+function shortSha(sha) {
+  return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-';
 }
 
 /** The app's current route/page, best-effort: the shell may expose it on
@@ -257,9 +268,26 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   const [tour, setTour] = useState(null);
   // H2 detect-then-ask: whether the current viewer is an admin of this app's owner org.
   // Default false (fail-closed). Set ONCE by the mount detection below. This flag NEVER
-  // auto-enables anything - it only lights the discreet indicator in the header (the actual
-  // edit-mode switch is H3). Every privileged action stays gated server-side by H1.
+  // auto-enables anything - it only decides whether the H3 edit-mode SWITCH is shown (and
+  // lights the discreet header indicator). Every privileged action stays gated server-side by H1.
   const [admin, setAdmin] = useState(false);
+
+  // H3 EDIT MODE (admins only) - detect-then-ask is BINDING. `editMode` is the OPT-IN switch:
+  // it starts OFF and is flipped ONLY by an explicit admin click (the switch, or the discovery
+  // banner's CTA). Detection (setAdmin above) NEVER touches it - being an admin shows the switch,
+  // it does not enter edit mode. The rest is the edit flow's UI state, inert until editMode is on.
+  const [editMode, setEditMode] = useState(false);
+  // The edit flow phase: compose (typing) -> confirm (confirm intent) -> running (patch run) ->
+  // preview (approve/rollback) | note (a terminal calm message: answered/approved/reverted/degraded).
+  const [editPhase, setEditPhase] = useState('compose');
+  const [editDraft, setEditDraft] = useState(''); // the admin's edit request text
+  const [editProgress, setEditProgress] = useState(''); // latest plan_step narration line (PT-PT)
+  const [editPreview, setEditPreview] = useState(null); // { preRunSha, newHeadSha } after a run
+  const [editMessage, setEditMessage] = useState(''); // calm PT-PT copy for the 'note' phase
+  const [editBusy, setEditBusy] = useState(false); // guards double-submit during a run / rollback
+  // Admin discovery (proactive teaching, shown ONCE, dismissible). Suppressed after the admin
+  // dismisses it OR opts into edit mode. It never auto-enables edit - its CTA is an explicit click.
+  const [discoveryDismissed, setDiscoveryDismissed] = useState(false);
 
   const idRef = useRef(0);
   const messagesRef = useRef(messages);
@@ -292,8 +320,9 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   // indicator; it NEVER auto-enables anything and issues no privileged call (edit mode is H3).
   useEffect(() => {
     const id = appId();
-    // No app id (standalone preview) or already detected once -> nothing to do. The ref keeps the
-    // detection to exactly ONE request per mounted panel (also idempotent under StrictMode).
+    // No app id (standalone preview) or already detected once -> nothing to do. Empty deps make
+    // this a mount-only effect; the ref keeps detection to exactly ONE request per mounted panel
+    // even if the effect is ever re-entered. The panel-runtime entry mounts WITHOUT StrictMode.
     if (!id || whoamiDoneRef.current) return;
     whoamiDoneRef.current = true;
 
@@ -545,6 +574,126 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     [send],
   );
 
+  // ---- H3 edit mode (admins only) -----------------------------------------
+  // A thin front-end over the H1-gated follow-up-build machinery. The SERVER is the
+  // authority (can(canEditApps) + loadWritable on every call); the panel only decides
+  // whether to SHOW the affordance (admin) and drives the confirmed flow. Every mid-flow
+  // 401/403/404 lands on a calm PT-PT message via degradeMessage - never a crash.
+
+  /** Turn edit mode ON. An EXPLICIT admin action (switch or discovery CTA) - the only way
+   *  edit mode is ever entered. Detection never calls this (detect-then-ask). */
+  const openEditMode = useCallback(() => {
+    setEditMode(true);
+    setDiscoveryDismissed(true); // opting in dismisses the discovery banner
+    setEditPhase('compose');
+  }, []);
+
+  /** Turn edit mode OFF and clear the whole edit flow (back to a clean compose state). */
+  const closeEditMode = useCallback(() => {
+    setEditMode(false);
+    setEditPhase('compose');
+    setEditDraft('');
+    setEditPreview(null);
+    setEditMessage('');
+    setEditProgress('');
+    setEditBusy(false);
+  }, []);
+
+  /** Dismiss the discovery banner without entering edit mode. */
+  const dismissDiscovery = useCallback(() => setDiscoveryDismissed(true), []);
+
+  /** compose -> confirm: the panel asks the admin to confirm the intent before any build. */
+  const askEditConfirm = useCallback(() => {
+    if (editDraft.trim()) setEditPhase('confirm');
+  }, [editDraft]);
+
+  /** confirm -> compose: step back without running anything. */
+  const cancelEditConfirm = useCallback(() => setEditPhase('compose'), []);
+
+  /** note -> compose: start a fresh edit after a terminal message. */
+  const resetEdit = useCallback(() => {
+    setEditPhase('compose');
+    setEditDraft('');
+    setEditPreview(null);
+    setEditMessage('');
+    setEditProgress('');
+  }, []);
+
+  /** confirm -> running -> preview | note: run the CONFIRMED patch over the existing build
+   *  machinery. Reads the platform token best-effort (a cross-origin/sandboxed iframe has
+   *  none); with no app id / no token it degrades calmly rather than firing a doomed call. */
+  const confirmEdit = useCallback(async () => {
+    const id = appId();
+    const token = readPlatformToken();
+    const description = editDraft.trim();
+    if (!id || !token || !description) {
+      // No token readable (cross-origin) reads as an expired session; otherwise a generic note.
+      setEditMessage(degradeMessage(token ? 0 : 401));
+      setEditPhase('note');
+      return;
+    }
+    setEditBusy(true);
+    setEditProgress('');
+    setEditPhase('running');
+    const result = await runEditPatch({
+      fetchImpl: (url, opts) => fetch(url, opts),
+      appId: id,
+      token,
+      description,
+      onProgress: (ev) => {
+        const line = progressLine(ev);
+        if (line) setEditProgress(line);
+      },
+    });
+    setEditBusy(false);
+    if (result.outcome === 'ready') {
+      setEditPreview({ preRunSha: result.preRunSha, newHeadSha: result.newHeadSha });
+      setEditPhase('preview');
+    } else if (result.outcome === 'answered') {
+      // The in-build classifier resolved the request without a build (no revision was created).
+      setEditMessage('Não foi criada nenhuma revisão para este pedido. Reformule a alteração pretendida.');
+      setEditPhase('note');
+    } else if (result.outcome === 'failed') {
+      setEditMessage('A revisão não foi concluída. Tente reformular o pedido.');
+      setEditPhase('note');
+    } else {
+      // degraded (401/403/404/network) -> a calm, specific PT-PT message.
+      setEditMessage(degradeMessage(result.status));
+      setEditPhase('note');
+    }
+  }, [editDraft]);
+
+  /** APPROVE = keep the new head. The build already activated it, so there is nothing to
+   *  call - just clear the preview and confirm. */
+  const approveEdit = useCallback(() => {
+    setEditMessage(EDIT_COPY.approved);
+    setEditPreview(null);
+    setEditPhase('note');
+  }, []);
+
+  /** ROLLBACK (one click) = forward-restore to the pre-run head. H1-gated server-side. */
+  const rollbackEdit = useCallback(async () => {
+    const id = appId();
+    const token = readPlatformToken();
+    const sha = editPreview && editPreview.preRunSha;
+    if (!id || !token || !sha) {
+      setEditMessage(degradeMessage(token ? 0 : 401));
+      setEditPhase('note');
+      return;
+    }
+    setEditBusy(true);
+    const result = await rollbackToVersion({ fetchImpl: (url, opts) => fetch(url, opts), appId: id, token, sha });
+    setEditBusy(false);
+    if (result.ok) {
+      setEditMessage(EDIT_COPY.rolledBack);
+      setEditPreview(null);
+      setEditPhase('note');
+    } else {
+      setEditMessage(degradeMessage(result.status));
+      setEditPhase('note');
+    }
+  }, [editPreview]);
+
   if (collapsed) {
     return (
       <button type="button" className="ekoa-assistant-launcher" onClick={open} aria-label="Abrir o assistente">
@@ -609,6 +758,155 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
           </button>
         ))}
       </div>
+
+      {/* H3 admin bar - the OPT-IN edit-mode switch. Shown ONLY when detection said admin
+          (detect-then-ask); OFF by default; flipped only by this explicit click. It is a
+          distinct control from the visitor mode toggle above, so an admin always knows they
+          are entering a different plane (editing the app, not chatting as a visitor). */}
+      {admin ? (
+        <div className="ekoa-assistant-adminbar">
+          <span className="ekoa-assistant-adminbar-label">Modo de edição</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={editMode}
+            className="ekoa-assistant-editswitch"
+            data-on={editMode ? 'true' : 'false'}
+            onClick={editMode ? closeEditMode : openEditMode}
+          >
+            <span className="ekoa-assistant-editswitch-track" aria-hidden="true">
+              <span className="ekoa-assistant-editswitch-thumb" />
+            </span>
+            <span className="ekoa-assistant-editswitch-state">{editMode ? 'Ativado' : 'Desativado'}</span>
+          </button>
+        </div>
+      ) : null}
+
+      {/* H3 admin discovery (proactive teaching): surfaced ONCE, discreetly, dismissibly, to a
+          detected admin who has not yet opted in. It suggests the app is changeable and offers
+          an explicit CTA - it NEVER auto-enables edit mode (detect-then-ask). */}
+      {admin && !editMode && !discoveryDismissed ? (
+        <div className="ekoa-assistant-discovery" role="note">
+          <p className="ekoa-assistant-discovery-text">
+            Pode pedir alterações a esta aplicação - por exemplo, adicionar um campo ou um botão.
+            Ative o modo de edição para preparar uma revisão.
+          </p>
+          <div className="ekoa-assistant-discovery-actions">
+            <button type="button" className="ekoa-assistant-discovery-cta" onClick={openEditMode}>
+              Ativar modo de edição
+            </button>
+            <button type="button" className="ekoa-assistant-discovery-dismiss" onClick={dismissDiscovery}>
+              Agora não
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* H3 edit affordance - a dedicated, visually distinct section (only when editMode is on).
+          The whole patch flow lives here: compose -> confirm -> running -> preview -> note. */}
+      {admin && editMode ? (
+        <section className="ekoa-assistant-edit" data-edit-phase={editPhase} aria-label="Modo de edição (administrador)">
+          <div className="ekoa-assistant-edit-head">
+            <span className="ekoa-assistant-edit-title">Modo de edição</span>
+            <span className="ekoa-assistant-edit-hint">Alterações à aplicação (administrador)</span>
+          </div>
+
+          {editPhase === 'compose' ? (
+            <div className="ekoa-assistant-edit-compose">
+              <textarea
+                className="ekoa-assistant-edit-textarea"
+                placeholder="Descreva a alteração. Por exemplo: adicione um botão de exportação na tabela de honorários."
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={2}
+                aria-label="Pedido de alteração"
+              />
+              <button
+                type="button"
+                className="ekoa-assistant-edit-primary"
+                onClick={askEditConfirm}
+                disabled={!editDraft.trim()}
+              >
+                Preparar alteração
+              </button>
+            </div>
+          ) : null}
+
+          {editPhase === 'confirm' ? (
+            <div className="ekoa-assistant-edit-confirm">
+              <p className="ekoa-assistant-edit-confirm-text">{EDIT_COPY.confirm}</p>
+              <div className="ekoa-assistant-edit-actions">
+                <button type="button" className="ekoa-assistant-edit-primary" onClick={confirmEdit}>
+                  Confirmar
+                </button>
+                <button type="button" className="ekoa-assistant-edit-secondary" onClick={cancelEditConfirm}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {editPhase === 'running' ? (
+            <div className="ekoa-assistant-edit-running" role="status">
+              <span className="ekoa-assistant-edit-spinner" aria-hidden="true" />
+              <span className="ekoa-assistant-edit-progress">{editProgress || EDIT_COPY.preparing}</span>
+            </div>
+          ) : null}
+
+          {editPhase === 'preview' && editPreview ? (
+            <div className="ekoa-assistant-edit-preview">
+              {editPreview.newHeadSha && editPreview.newHeadSha !== editPreview.preRunSha ? (
+                <>
+                  <p className="ekoa-assistant-edit-preview-text">{EDIT_COPY.applied}</p>
+                  <dl className="ekoa-assistant-edit-diff">
+                    <div>
+                      <dt>Versão anterior</dt>
+                      <dd>{shortSha(editPreview.preRunSha)}</dd>
+                    </div>
+                    <div>
+                      <dt>Nova versão</dt>
+                      <dd>{shortSha(editPreview.newHeadSha)}</dd>
+                    </div>
+                  </dl>
+                  <div className="ekoa-assistant-edit-actions">
+                    <button type="button" className="ekoa-assistant-edit-primary" onClick={approveEdit}>
+                      Aprovar
+                    </button>
+                    <button
+                      type="button"
+                      className="ekoa-assistant-edit-secondary"
+                      onClick={rollbackEdit}
+                      disabled={editBusy}
+                    >
+                      Reverter
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="ekoa-assistant-edit-preview-text">{EDIT_COPY.noChange}</p>
+                  <div className="ekoa-assistant-edit-actions">
+                    <button type="button" className="ekoa-assistant-edit-secondary" onClick={resetEdit}>
+                      Nova alteração
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {editPhase === 'note' ? (
+            <div className="ekoa-assistant-edit-note" role="status">
+              <p className="ekoa-assistant-edit-note-text">{editMessage}</p>
+              <div className="ekoa-assistant-edit-actions">
+                <button type="button" className="ekoa-assistant-edit-secondary" onClick={resetEdit}>
+                  Nova alteração
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="ekoa-assistant-messages" ref={listRef}>
         {messages.length === 0 ? (
