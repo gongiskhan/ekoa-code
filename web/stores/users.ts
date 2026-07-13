@@ -21,18 +21,18 @@ interface UsersState {
   addUser: (data: {
     username: string;
     password?: string;
-    role: 'org-admin' | 'builder';
+    role: 'org-admin' | 'user';
     orgId?: string;
     passwordChangeRequired?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
   /**
-   * Amendment 2 (FC-500): activate/deactivate and the builder<->org-admin role
+   * Amendment 2 (FC-500): activate/deactivate and the user<->org-admin role
    * toggle. `PATCH /users/:id { role?, active? }` (auth `org-admin`; the server
    * scopes an org-admin to its own org). super-admin is never a toggle target.
    */
   updateUser: (
     userId: string,
-    patch: { role?: Extract<Role, 'org-admin' | 'builder'>; active?: boolean },
+    patch: { role?: Extract<Role, 'org-admin' | 'user'>; active?: boolean },
   ) => Promise<{ success: boolean; error?: string }>;
   removeUser: (userId: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;

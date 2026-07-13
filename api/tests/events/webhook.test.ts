@@ -10,7 +10,7 @@ import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 /** Webhook HMAC pipeline (ch09 invariant 9): verify, disabled-after-signature, dedup, audit. */
 let mem: MongoMemoryServer; let seq = 0;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
-const actor = { userId: 'u1', orgId: 'orgA', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'orgA', role: 'user' as const };
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();

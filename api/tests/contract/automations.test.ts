@@ -61,7 +61,7 @@ beforeAll(async () => {
   await connectMongo(mem.getUri(), 'ekoa_contract_automations');
   await orgs.insert({ _id: 'o1', name: 'orgA' } as never);
   await users.insert({ _id: 'admin1', username: 'admin1', passwordHash: await hashPassword('pw123456'), role: 'org-admin', orgId: 'o1', active: true } as never);
-  await users.insert({ _id: 'b1', username: 'b1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'o1', active: true } as never);
+  await users.insert({ _id: 'b1', username: 'b1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o1', active: true } as never);
   setActivation('admin1', { active: true, billingLocked: false });
   setActivation('b1', { active: true, billingLocked: false });
   const app = express();

@@ -29,17 +29,17 @@ describe('crypto (AES-256-GCM, one module)', () => {
 
 describe('jwt (claim set {sub, role, scope, orgId, username})', () => {
   it('signs and verifies with the full claim set', () => {
-    const { token, expiresIn } = signToken({ sub: 'u1', role: 'builder', scope: 'user', orgId: 'o1', username: 'ana' });
+    const { token, expiresIn } = signToken({ sub: 'u1', role: 'user', scope: 'user', orgId: 'o1', username: 'ana' });
     expect(expiresIn).toBe(24 * 3600);
     const claims = verifyToken(token);
     expect(claims.sub).toBe('u1');
-    expect(claims.role).toBe('builder');
+    expect(claims.role).toBe('user');
     expect(claims.orgId).toBe('o1');
     expect(claims.username).toBe('ana');
   });
 
   it('rememberMe extends expiry to 30 days', () => {
-    const { expiresIn } = signToken({ sub: 'u', role: 'builder', scope: 'user', orgId: 'o', username: 'x' }, true);
+    const { expiresIn } = signToken({ sub: 'u', role: 'user', scope: 'user', orgId: 'o', username: 'x' }, true);
     expect(expiresIn).toBe(30 * 24 * 3600);
   });
 });

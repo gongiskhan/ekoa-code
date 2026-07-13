@@ -23,7 +23,7 @@ const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` 
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
 async function mkUser(id: string, orgId = 'orgA') {
-  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role: 'builder', orgId, active: true });
+  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role: 'user', orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
 const tokenFor = async (u: string) => (await login(u, 'pw123456', false, deps)).token;

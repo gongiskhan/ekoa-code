@@ -21,7 +21,7 @@ let mem: MongoMemoryServer;
 let fixtureRoot: string;
 let seq = 0;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
-const actor = { userId: 'owner-1', orgId: 'orgA', role: 'builder' as const };
+const actor = { userId: 'owner-1', orgId: 'orgA', role: 'user' as const };
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k';

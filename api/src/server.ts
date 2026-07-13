@@ -21,6 +21,7 @@ import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
+import { migrateBuilderRole } from './auth/users-service.js';
 import { sendError } from './routes/helpers.js';
 import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
@@ -369,7 +370,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   });
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {
-    const all = await listVisibleMemories({ userId: q.ownerUserId, orgId: q.orgId, role: 'builder' });
+    const all = await listVisibleMemories({ userId: q.ownerUserId, orgId: q.orgId, role: 'user' });
     const tag = `automation:${q.automationId}`;
     return all
       .filter((m) => (m.tags ?? []).includes(tag) && typeof m.content === 'string')
@@ -676,6 +677,10 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   await connectMongo(); // fail-fast on a bad connection string
   const allUsers = await users.find({});
   loadActivation(allUsers.map((u) => ({ userId: u._id, active: u.active })));
+  // H1 idempotent migration: rewrite any retired `builder` role → `user` and bump its token epoch
+  // (runs after loadActivation so the epoch lands in the in-memory map; no-op once migrated).
+  const migratedRoles = await migrateBuilderRole();
+  if (migratedRoles > 0) console.log(`[role-migration] builder -> user: ${migratedRoles} user(s) migrated`);
   await loadRevocations(Math.floor(deps.now() / 1000));
   await loadCredential(); // G7: load the central model credential (§6.2; no-op when unconfigured)
 

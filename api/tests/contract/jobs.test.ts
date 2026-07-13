@@ -27,7 +27,8 @@ beforeAll(async () => {
   mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_contract_jobs');
   await setCredential({ mode: 'oauth', secret: 'tok' });
   __setTransportForTests(makeFakeTransport({ finalText: 'built' }));
-  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'o1', active: true });
+  // H1: u1 POSTs real builds below, which now require canBuildApps → seed it as an org-admin.
+  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'org-admin', orgId: 'o1', active: true });
   setActivation('u1', { active: true, billingLocked: false });
   await userSettings.put({ _id: 'u1', memory: { autoExtract: false }, build: { verifyBuilds: false } });
   const app = express();
@@ -97,7 +98,7 @@ describe('build jobs contract (§3.8.8)', () => {
     const t1 = await tokenFor();
     const created = await api('/api/v1/jobs', t1, { method: 'POST', body: JSON.stringify({ kind: 'build', description: 'u1 private job', sessionId: 'sOwn', language: 'pt' }) });
     const jobId = ((await created.json()) as { job: { id: string } }).job.id;
-    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'o2', active: true });
+    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o2', active: true });
     setActivation('u2', { active: true, billingLocked: false });
     await userSettings.put({ _id: 'u2', memory: { autoExtract: false }, build: { verifyBuilds: false } });
     const t2 = (await login('u2', 'pw123456', false, deps)).token;
@@ -105,5 +106,22 @@ describe('build jobs contract (§3.8.8)', () => {
     expect(res.status).toBe(403);
     expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
     await drain();
+  });
+
+  it('a user without canBuildApps is refused a first build → 403 FORBIDDEN envelope + details.capability (H1)', async () => {
+    // The refusal is the machine-readable FORBIDDEN shape the H4 request-to-admin flow consumes:
+    // a stable code + `details.capability`, validating against the shared error envelope.
+    await users.insert({ _id: 'plain1', username: 'plain1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o1', active: true });
+    setActivation('plain1', { active: true, billingLocked: false });
+    await userSettings.put({ _id: 'plain1', memory: { autoExtract: false }, build: { verifyBuilds: false } });
+    const t = (await login('plain1', 'pw123456', false, deps)).token;
+    const res = await api('/api/v1/jobs', t, { method: 'POST', body: JSON.stringify({ kind: 'build', description: 'build me an app', sessionId: 'sCap', language: 'pt' }) });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; message: string; details?: { capability?: string } } };
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.details?.capability).toBe('canBuildApps');
+    // No job is created when the capability gate refuses (the gate runs before handleBuildCreate).
+    expect(body.error.message).not.toContain('undefined');
   });
 });

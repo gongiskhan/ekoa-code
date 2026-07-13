@@ -71,7 +71,7 @@ async function awaitJobDone(jobId: string): Promise<Record<string, unknown> | nu
   return null;
 }
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -113,7 +113,7 @@ describe('PUT /api/v1/branding (the contract path)', () => {
   });
 
   it('a builder gets a 403 envelope; nothing is saved', async () => {
-    await mkUser('bob', 'builder');
+    await mkUser('bob', 'user');
     const t = await tokenFor('bob');
     const res = await authed('/api/v1/branding', t, { method: 'PUT', body: JSON.stringify({ branding: { primaryColor: '#000000' } }) });
     expect(res.status).toBe(403);
@@ -488,7 +488,7 @@ describe('POST /api/v1/branding/research', () => {
   });
 
   it('a builder gets a 403 envelope and NO job is created', async () => {
-    await mkUser('bob', 'builder');
+    await mkUser('bob', 'user');
     const t = await tokenFor('bob');
     const res = await authed('/api/v1/branding/research', t, { method: 'POST', body: JSON.stringify({ websiteUrl: 'https://exemplo.pt' }) });
     expect(res.status).toBe(403);

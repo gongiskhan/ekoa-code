@@ -67,7 +67,7 @@ describe('terminal JSON-404 for unmounted /api/v1 paths (F6)', () => {
     expect(anon.status).toBe(401);
     expect(ErrorEnvelope.safeParse(await anon.json()).success).toBe(true);
 
-    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+    await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
     setActivation('u2', { active: true, billingLocked: false });
     const { token } = await login('u2', 'pw123456', false, deps);
     const res = await authed('/api/v1/memories/deep/unknown/path', token);
@@ -78,7 +78,7 @@ describe('terminal JSON-404 for unmounted /api/v1 paths (F6)', () => {
   });
 
   it('an AUTHENTICATED caller on an unmounted /api/v1 path also gets the envelope', async () => {
-    await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+    await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
     setActivation('u1', { active: true, billingLocked: false });
     const { token } = await login('u1', 'pw123456', false, deps);
     const res = await authed('/api/v1/definitely-not-mounted', token);

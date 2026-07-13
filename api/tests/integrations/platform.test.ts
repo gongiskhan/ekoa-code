@@ -36,7 +36,7 @@ const env: PlatformOAuthEnv = {
   microsoft: { clientId: 'mid', clientSecret: 'msecret', redirectBaseUrl: 'https://app.example', tenantId: 'common' },
 };
 const admin = { userId: 'admin1', orgId: 'orgA', username: 'admin1' };
-const member = { userId: 'u2', orgId: 'orgA', role: 'builder' } as const;
+const member = { userId: 'u2', orgId: 'orgA', role: 'user' } as const;
 
 interface FakeRes {
   ok: boolean;

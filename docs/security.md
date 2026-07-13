@@ -95,9 +95,39 @@ Ekoa core; the PT-PT ruleset and per-org deny-lists are loaded configuration, ne
 Deny by default: every `/api/v1` route passes auth middleware; pre-auth exemptions are exactly the
 `public` class, enforced by a route-census contract test. Authorization is deterministic code, never
 the model. Object-level ownership/org checks on every resource fetch, uniform 403/404. Three roles
-(`super-admin`/`org-admin`/`builder`); privileged routes re-resolve the user from the store. Private
+(`super-admin`/`org-admin`/`user`); privileged routes re-resolve the user from the store. Private
 items (memories, artifacts) are invisible to org admins - their existence appears in Registo
-metadata, never their content; sharing is explicit via `visibility`. Credential planes are mutually
+metadata, never their content; sharing is explicit via `visibility`.
+
+**Capability layer (H1).** Authorization is a capability check composed with the ownership/org
+check, never a bare role string. The single seam `can(actor, capability)`
+(`api/src/auth/capabilities.ts`) is a pure role->capability map: `super-admin` and `org-admin` hold
+all four capabilities; a `user` holds `canUseChat` + `canCreateArtifacts` only (chat + non-app
+artifacts, never app build/edit); a null/undefined actor holds nothing (fail closed). It carries no
+org/resource context by design - tenancy + object ownership stay in the separate `loadReadable`/
+`loadWritable` and org-scoping checks, which the gates COMPOSE with `can()`.
+
+| capability | super-admin | org-admin | user |
+| --- | --- | --- | --- |
+| canBuildApps | yes | yes | no |
+| canEditApps | yes | yes | no |
+| canCreateArtifacts | yes | yes | yes |
+| canUseChat | yes | yes | yes |
+
+Four gates enforce it: `POST /jobs` first build requires `canBuildApps`; `POST /jobs` follow-up
+requires `canEditApps` AND a `loadWritable` ownership check on the target artifact; `POST
+/chat/runs` requires `canUseChat`; `POST /artifacts` requires `canCreateArtifacts`. A refusal is the
+shared FORBIDDEN envelope carrying `details.capability` (the machine-readable hook a request-to-admin
+flow consumes). The base role `builder` was renamed `user` (the persona is retired): an idempotent
+boot-step migration rewrites every legacy row and bumps its token epoch (invalidating outstanding
+`builder` JWTs), and a verify-boundary shim in `verifyToken` normalises any legacy `builder` JWT to
+`user` for the window between boot and re-login.
+
+**Follow-up-build ownership (IDOR fix, H1).** A follow-up build (`POST /jobs` with `artifactId`)
+resumes a code-writing agent inside the target app's owner sandbox. It is gated by `canEditApps` +
+`loadWritable(actor, artifactId)` (own always; org-shared within the org ok; another user's private
+-> 403; missing/cross-org -> 404) BEFORE any job is created or agent spawned - closing the prior gap
+where any authenticated user could drive an agent against ANY artifact by id. Credential planes are mutually
 non-interchangeable: platform session JWT (24 h / 30 d rememberMe), bridge token (600 s,
 `aud: ekoa-bridge`), app-SSO session (8 h HttpOnly cookie), gateway key (static, constant-compare).
 Deactivation is write-through (immediate) and bumps the token epoch, invalidating outstanding JWTs.

@@ -100,7 +100,7 @@ describe('base-loader — build-flow wiring (B1 integration)', () => {
     process.env.SANDBOX_ROOT = sandbox;
     mem = await createMem();
     await connectMongo(mem.getUri(), 'ekoa_base_loader');
-    await users.insert({ _id: USER, username: 'base', passwordHash: 'x', role: 'builder', orgId: 'org-1', active: true } as never);
+    await users.insert({ _id: USER, username: 'base', passwordHash: 'x', role: 'user', orgId: 'org-1', active: true } as never);
   }, 60_000);
 
   afterAll(async () => {

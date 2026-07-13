@@ -32,7 +32,7 @@ let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -57,7 +57,7 @@ beforeEach(async () => {
 
 describe('GET /billing/usage (derived view, §6.6.2)', () => {
   it('validates BillingUsage and carries the full gauge surface', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: 'chat', model: 'm', tier: 'EXPERT', raw: { input: 200_000, output: 30_000, cacheCreate: 0, cacheRead: 800_000 }, now: deps.now() });
     const res = await jwtApi('/api/v1/billing/usage', t);
@@ -73,7 +73,7 @@ describe('GET /billing/usage (derived view, §6.6.2)', () => {
 
 describe('GET /billing/history (§3.8.21)', () => {
   it('validates BillingHistoryResponse; newest-first, paginated', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     for (let i = 0; i < 3; i++) {
       await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: `agent${i}`, model: 'm', tier: 'FAST', raw: { input: 1000, output: 0, cacheCreate: 0, cacheRead: 0 }, now: 1_700_000_000_000 + i });
@@ -92,7 +92,7 @@ describe('GET /billing/history (§3.8.21)', () => {
 
 describe('POST /billing/credits + PUT /billing/overage (user)', () => {
   it('purchase-credits validates PurchaseCreditsResponse and increments the balance', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await jwtApi('/api/v1/billing/credits', t, { method: 'POST', body: JSON.stringify({ amountUsd: 10 }) });
     const body = await readJson(res);
@@ -103,7 +103,7 @@ describe('POST /billing/credits + PUT /billing/overage (user)', () => {
   });
 
   it('a non-positive amount → 400 VALIDATION_FAILED (error envelope)', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await jwtApi('/api/v1/billing/credits', t, { method: 'POST', body: JSON.stringify({ amountUsd: -1 }) });
     expect(res.status).toBe(400);
@@ -113,7 +113,7 @@ describe('POST /billing/credits + PUT /billing/overage (user)', () => {
   });
 
   it('toggle-overage validates ToggleOverageResponse', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await jwtApi('/api/v1/billing/overage', t, { method: 'PUT', body: JSON.stringify({ enabled: true }) });
     const body = await readJson(res);
@@ -124,7 +124,7 @@ describe('POST /billing/credits + PUT /billing/overage (user)', () => {
 
 describe('super-admin surfaces (§6.6.2)', () => {
   it('breakdown: builder → 403 FORBIDDEN (envelope); super-admin → BillingBreakdownResponse grouped by agentType', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     await mkUser('admin', 'super-admin');
     // seed platform-wide events across two agent types / two users
     await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: 'chat', model: 'm', tier: 'FAST', raw: { input: 1000, output: 0, cacheCreate: 0, cacheRead: 0 }, now: deps.now() });
@@ -156,7 +156,7 @@ describe('super-admin surfaces (§6.6.2)', () => {
 
   it('admin list/reset/set-limit validate their schemas and round-trip', async () => {
     await mkUser('admin', 'super-admin');
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('admin');
     await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: 'chat', model: 'm', tier: 'FAST', raw: { input: 5000, output: 0, cacheCreate: 0, cacheRead: 0 }, now: deps.now() });
 
@@ -182,8 +182,8 @@ describe('super-admin surfaces (§6.6.2)', () => {
 
   it('admin usage rows carry identity + gauge fields; account-less users appear zeroed', async () => {
     await mkUser('admin', 'super-admin');
-    await mkUser('u1', 'builder');
-    await mkUser('fresh', 'builder'); // never made a metered call → no billing account row
+    await mkUser('u1', 'user');
+    await mkUser('fresh', 'user'); // never made a metered call → no billing account row
     const t = await tokenFor('admin');
     await recordTokenEvent({ billeeUserId: 'u1', attributionKind: 'user_work', agentType: 'chat', model: 'm', tier: 'FAST', raw: { input: 5000, output: 0, cacheCreate: 0, cacheRead: 0 }, now: deps.now() });
 
@@ -192,7 +192,7 @@ describe('super-admin surfaces (§6.6.2)', () => {
 
     const u1 = list.items.find((r: { userId: string }) => r.userId === 'u1');
     expect(u1).toMatchObject({
-      username: 'u1', role: 'builder', isActive: true,
+      username: 'u1', role: 'user', isActive: true,
       tokensUsed: 100, tokensBase: 10_000_000, tokensRemaining: 10_000_000 - 100,
       tokenLimit: null, isCustomLimit: false, percentage: 0, lastLoginAt: null,
     });
@@ -201,7 +201,7 @@ describe('super-admin surfaces (§6.6.2)', () => {
     // The account-less user still appears, zeroed against the platform default base.
     const fresh = list.items.find((r: { userId: string }) => r.userId === 'fresh');
     expect(fresh).toMatchObject({
-      username: 'fresh', role: 'builder', isActive: true,
+      username: 'fresh', role: 'user', isActive: true,
       tokensUsed: 0, tokensBase: 10_000_000, tokensRemaining: 10_000_000,
       tokenLimit: null, isCustomLimit: false, percentage: 0,
     });
@@ -214,7 +214,7 @@ describe('super-admin surfaces (§6.6.2)', () => {
   });
 
   it('a builder is refused every admin route with 403 FORBIDDEN (envelope)', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     for (const [p, init] of [
       ['/api/v1/billing/admin/usage', {}],

@@ -42,7 +42,7 @@ type Action = { actionName: string; description?: string; mutates?: boolean; htt
 type Def = Record<string, unknown> & { key: string; integrationKey?: string; authType?: string; actions?: Action[]; configSchema?: Array<{ secret?: boolean }>; credentialGuide?: string; listenerConfig?: { pollAction?: string; dedupKeyField?: string; eventArrayField?: string } };
 type Active = { key: string; actions?: Array<{ actionName: string }>; listenerEvents?: Array<{ name: string }> };
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -73,7 +73,7 @@ beforeEach(async () => {
 
 describe('integration definitions registry (ch03 §3.8.13) — list / active / refresh', () => {
   it('GET /integrations lists the ported packages; CITIUS carries the driver-asserted shapes', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const res = await api('/api/v1/integrations', await tokenFor('u1'));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: Def[] };
@@ -145,7 +145,7 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
   });
 
   it('definitions never surface configured credential VALUES (registry is not the config store)', async () => {
-    await mkUser('u2', 'u2', 'orgA', 'builder');
+    await mkUser('u2', 'u2', 'orgA', 'user');
     const t = await tokenFor('u2');
     await api('/api/v1/integrations/configs', t, { method: 'POST', body: JSON.stringify({ integrationKey: 'stripe', configValues: { apiKey: 'sk-live-SECRETdeadbeef' } }) });
     const text = await (await api('/api/v1/integrations', t)).text();
@@ -154,7 +154,7 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
 
   it('POST /integrations/refresh reloads from disk — org-admin only (builder 403)', async () => {
     await mkUser('adm', 'adm', 'orgA', 'org-admin');
-    await mkUser('bld', 'bld', 'orgA', 'builder');
+    await mkUser('bld', 'bld', 'orgA', 'user');
 
     // Builder is forbidden (ch03 §3.8.13: refresh is org-admin).
     const forb = await api('/api/v1/integrations/refresh', await tokenFor('bld'), { method: 'POST' });

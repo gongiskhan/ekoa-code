@@ -14,7 +14,7 @@ import type { FakeTransport } from './_fake-transport.js';
  * 4 (session resume persist-only-when-changed), 5 (build tool surface), and the per-build
  * verification stage (§5.6.2 step 5).
  */
-const actor = { userId: 'u1', orgId: 'o1', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'o1', role: 'user' as const };
 let seq = 0;
 const deps = () => ({ now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` });
 

@@ -20,6 +20,7 @@ import {
 } from '@ekoa/shared';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
+import { can } from '../auth/capabilities.js';
 import { loadConfig } from '../config.js';
 import {
   listArtifacts, createArtifact, getVisibleArtifact, patchArtifact, deleteArtifact,
@@ -78,6 +79,12 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   r.post('/', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, CreateArtifact, req.body) as { name: string; visibility?: 'private' | 'org' } | undefined;
     if (!body) return;
+    // H1 capability gate: creating an artifact requires canCreateArtifacts (held by user +
+    // org-admin + super-admin — this is the base "artifacts area" capability, distinct from the
+    // app build/edit capabilities). Refusal is the FORBIDDEN envelope + details.capability.
+    if (!can(actorOf(req), 'canCreateArtifacts')) {
+      return sendError(res, 'FORBIDDEN', 'Não tem permissão para criar artefactos; pode pedir ao administrador da organização.', { capability: 'canCreateArtifacts' });
+    }
     res.status(201).json(artifactView(await createArtifact(actorOf(req), body, deps)));
   });
 

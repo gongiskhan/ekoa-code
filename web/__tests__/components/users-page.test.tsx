@@ -62,7 +62,7 @@ function user(partial: Partial<AuthUser>): AuthUser {
   return {
     id: 'u',
     username: 'user',
-    role: 'builder',
+    role: 'user',
     orgId: 'org1',
     active: true,
     ...partial,
@@ -71,7 +71,7 @@ function user(partial: Partial<AuthUser>): AuthUser {
 
 const SUPER = user({ id: 'u-super', username: 'admin', role: 'super-admin' });
 const MARIA = user({ id: 'u-maria', username: 'maria', role: 'org-admin' });
-const JOAO = user({ id: 'u-joao', username: 'joao', role: 'builder' });
+const JOAO = user({ id: 'u-joao', username: 'joao', role: 'user' });
 
 function seedAuth(role: AuthUser['role']) {
   useAuthStore.setState({ user: user({ id: 'me', username: 'me', role }), hasHydrated: true });
@@ -84,7 +84,7 @@ beforeEach(() => {
   mocked.org.listOrgs.mockResolvedValue({ items: [OWN_ORG] });
   mocked.org.getOrg.mockResolvedValue(OWN_ORG);
   mocked.users.update.mockImplementation(async (arg: { id: string; role?: string; active?: boolean }) =>
-    user({ id: arg.id, username: 'joao', role: (arg.role as AuthUser['role']) ?? 'builder', active: arg.active ?? true }),
+    user({ id: arg.id, username: 'joao', role: (arg.role as AuthUser['role']) ?? 'user', active: arg.active ?? true }),
   );
   useUsersStore.setState({ users: [], isLoading: false, error: null });
   useCompanyStore.setState({ company: OWN_ORG as never, isLoading: false, error: null });
@@ -124,7 +124,7 @@ describe('UsersPage', () => {
     await waitFor(() => expect(mocked.users.update).toHaveBeenCalledWith({ id: 'u-joao', active: false }));
   });
 
-  it('promoting a builder calls api.users.update with { role: org-admin }', async () => {
+  it('promoting a user calls api.users.update with { role: org-admin }', async () => {
     seedAuth('super-admin');
     renderPage();
 

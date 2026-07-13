@@ -24,7 +24,7 @@ const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'tes
 let server: Server;
 let port: number;
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -60,7 +60,7 @@ beforeEach(async () => {
 describe('cross-org adversarial suite (ch09 invariant 5)', () => {
   it('org A org-admin gets 404 reading org B users / memories, 404 patching a B user', async () => {
     await mkUser('a-admin', 'aadmin', 'orgA', 'org-admin');
-    await mkUser('b-user', 'buser', 'orgB', 'builder');
+    await mkUser('b-user', 'buser', 'orgB', 'user');
     await memories.insert({ _id: 'mB', orgId: 'orgB', userId: 'b-user', visibility: 'org', title: 'B secret' } as never);
     const tA = await tokenFor('aadmin');
 
@@ -84,7 +84,7 @@ describe('cross-org adversarial suite (ch09 invariant 5)', () => {
   });
 
   it('org A user gets 404 on org B org record via GET /org (own org only)', async () => {
-    await mkUser('a-user', 'auser', 'orgA', 'builder');
+    await mkUser('a-user', 'auser', 'orgA', 'user');
     const tA = await tokenFor('auser');
     const res = await api('/api/v1/org', tA);
     expect(res.status).toBe(200);
@@ -93,7 +93,7 @@ describe('cross-org adversarial suite (ch09 invariant 5)', () => {
   });
 
   it('a builder cannot reach super-admin org management (403)', async () => {
-    await mkUser('a-user2', 'auser2', 'orgA', 'builder');
+    await mkUser('a-user2', 'auser2', 'orgA', 'user');
     const t = await tokenFor('auser2');
     const res = await api('/api/v1/orgs', t);
     expect(res.status).toBe(403);
@@ -102,8 +102,8 @@ describe('cross-org adversarial suite (ch09 invariant 5)', () => {
 
 describe('in-org sharing (visibility private|org, ch13 §13.5)', () => {
   it("builder A reading builder B's PRIVATE memory in the same org gets 404", async () => {
-    await mkUser('u-a', 'ua', 'orgA', 'builder');
-    await mkUser('u-b', 'ub', 'orgA', 'builder');
+    await mkUser('u-a', 'ua', 'orgA', 'user');
+    await mkUser('u-b', 'ub', 'orgA', 'user');
     await memories.insert({ _id: 'mPriv', orgId: 'orgA', userId: 'u-b', visibility: 'private', title: 'B private' } as never);
     const t = await tokenFor('ua');
     const res = await api('/api/v1/memories/mPriv', t);
@@ -111,8 +111,8 @@ describe('in-org sharing (visibility private|org, ch13 §13.5)', () => {
   });
 
   it('an org-shared memory IS visible to another org member', async () => {
-    await mkUser('u-c', 'uc', 'orgA', 'builder');
-    await mkUser('u-d', 'ud', 'orgA', 'builder');
+    await mkUser('u-c', 'uc', 'orgA', 'user');
+    await mkUser('u-d', 'ud', 'orgA', 'user');
     await memories.insert({ _id: 'mShared', orgId: 'orgA', userId: 'u-d', visibility: 'org', title: 'shared' } as never);
     const t = await tokenFor('uc');
     const res = await api('/api/v1/memories/mShared', t);
@@ -121,7 +121,7 @@ describe('in-org sharing (visibility private|org, ch13 §13.5)', () => {
 
   it("a private memory is invisible to the ORG ADMIN too (existence only in Registo)", async () => {
     await mkUser('oadmin', 'oadmin', 'orgA', 'org-admin');
-    await mkUser('u-e', 'ue', 'orgA', 'builder');
+    await mkUser('u-e', 'ue', 'orgA', 'user');
     await memories.insert({ _id: 'mPriv2', orgId: 'orgA', userId: 'u-e', visibility: 'private', title: 'private2' } as never);
     const t = await tokenFor('oadmin');
     const res = await api('/api/v1/memories/mPriv2', t);
@@ -133,8 +133,8 @@ describe('in-org sharing (visibility private|org, ch13 §13.5)', () => {
   });
 
   it("editing another builder's PRIVATE artifact/memory is 403", async () => {
-    await mkUser('u-f', 'uf', 'orgA', 'builder');
-    await mkUser('u-g', 'ug', 'orgA', 'builder');
+    await mkUser('u-f', 'uf', 'orgA', 'user');
+    await mkUser('u-g', 'ug', 'orgA', 'user');
     await memories.insert({ _id: 'mPriv3', orgId: 'orgA', userId: 'u-g', visibility: 'private', title: 'g private' } as never);
     const t = await tokenFor('uf');
     const res = await api('/api/v1/memories/mPriv3', t, { method: 'PATCH', body: JSON.stringify({ title: 'hacked' }) });
@@ -168,7 +168,7 @@ describe('role-change token invalidation (Codex-review regression, ch09 §9.6)',
     expect((await api('/api/v1/users', staleAdminToken)).status).toBe(200);
     // super-admin demotes victim to builder
     const bossT = await tokenFor('boss');
-    const demote = await api('/api/v1/users/victim', bossT, { method: 'PATCH', body: JSON.stringify({ role: 'builder' }) });
+    const demote = await api('/api/v1/users/victim', bossT, { method: 'PATCH', body: JSON.stringify({ role: 'user' }) });
     expect(demote.status).toBe(200);
     // the stale org-admin token is now rejected (its iat predates the bumped epoch)
     const after = await api('/api/v1/users', staleAdminToken);
@@ -178,7 +178,7 @@ describe('role-change token invalidation (Codex-review regression, ch09 §9.6)',
 
 describe('activation admission (ch09 §9.7.1)', () => {
   it('a deactivated user is refused ACCOUNT_DISABLED on a CRUD route', async () => {
-    await mkUser('u-h', 'uh', 'orgA', 'builder');
+    await mkUser('u-h', 'uh', 'orgA', 'user');
     const t = await tokenFor('uh');
     setActivation('u-h', { active: false, billingLocked: false }); // write-through deactivate
     const res = await api('/api/v1/memories', t);

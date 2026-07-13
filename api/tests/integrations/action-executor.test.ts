@@ -29,7 +29,7 @@ let seq = 0;
 let fixtureRoot: string;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 
-const actor = (userId: string, role: 'org-admin' | 'builder' = 'builder') => ({ userId, orgId: 'orgA', role } as const);
+const actor = (userId: string, role: 'org-admin' | 'user' = 'user') => ({ userId, orgId: 'orgA', role } as const);
 
 interface FakeResponse {
   ok: boolean;

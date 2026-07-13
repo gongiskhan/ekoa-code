@@ -22,7 +22,7 @@ let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -70,7 +70,7 @@ describe('POST /api/v1/credentials (super-admin, write-only, audit-logged)', () 
   });
 
   it('non-super-admin gets a 403 error envelope; nothing is stored or audited', async () => {
-    await mkUser('bob', 'builder');
+    await mkUser('bob', 'user');
     const t = await tokenFor('bob');
     const res = await jwtApi('/api/v1/credentials', t, { method: 'POST', body: JSON.stringify({ mode: 'api-key', secret: SECRET }) });
     expect(res.status).toBe(403);

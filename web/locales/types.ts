@@ -389,7 +389,7 @@ export interface Translations {
       email: string;
       role: string;
       roleAdmin: string;
-      roleBuilder: string;
+      roleUser: string;
       action: string;
       createdBy: string;
       on: string;

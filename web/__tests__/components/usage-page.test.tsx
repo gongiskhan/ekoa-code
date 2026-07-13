@@ -61,7 +61,7 @@ const USAGE_ROWS = [
   {
     userId: 'u-maria',
     username: 'maria',
-    role: 'builder',
+    role: 'user',
     tokensUsed: 4_200_000,
     tokensBase: 10_000_000,
     tokensRemaining: 5_800_000,

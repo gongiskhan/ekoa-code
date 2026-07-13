@@ -45,8 +45,8 @@ afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   await users.deleteMany({}); await sessions.deleteMany({}); await messages.deleteMany({});
-  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
-  await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgB', active: true });
+  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
+  await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgB', active: true });
   setActivation('u1', { active: true, billingLocked: false });
   setActivation('u2', { active: true, billingLocked: false });
 });

@@ -173,7 +173,7 @@ describe('shared contract - security ratchet (G12)', () => {
 
   it('AuthUser is strict - a passwordHash-bearing object cannot validate as an AuthUser (no secret leak)', async () => {
     const { AuthUser } = await import('./auth.js');
-    const base = { id: 'u1', username: 'a', role: 'builder', orgId: 'o1', active: true };
+    const base = { id: 'u1', username: 'a', role: 'user', orgId: 'o1', active: true };
     expect(AuthUser.safeParse(base).success).toBe(true);
     expect(AuthUser.safeParse({ ...base, passwordHash: '$2b$...' }).success).toBe(false);
     expect(AuthUser.safeParse({ ...base, resetToken: 'deadbeef' }).success).toBe(false);

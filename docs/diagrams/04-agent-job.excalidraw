@@ -2270,6 +2270,38 @@
       "link": null,
       "locked": false,
       "lineHeight": 1.25
+    },
+    {
+      "type": "text",
+      "id": "h1_authz_gate",
+      "x": 95,
+      "y": 105,
+      "width": 440,
+      "height": 108,
+      "text": "H1 build authz gate (before the job record):\nfirst build -> can(canBuildApps) else 403\nfollow-up (artifactId) -> can(canEditApps)\n  AND loadWritable(actor, artifactId):\n  other-user private=403, cross-org=404\n  (closes the follow-up-build IDOR)\n403 = FORBIDDEN + details.capability",
+      "originalText": "H1 build authz gate (before the job record):\nfirst build -> can(canBuildApps) else 403\nfollow-up (artifactId) -> can(canEditApps)\n  AND loadWritable(actor, artifactId):\n  other-user private=403, cross-org=404\n  (closes the follow-up-build IDOR)\n403 = FORBIDDEN + details.capability",
+      "fontSize": 12,
+      "fontFamily": 3,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "strokeColor": "#7c3aed",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "angle": 0,
+      "seed": 815501,
+      "version": 1,
+      "versionNonce": 815502,
+      "isDeleted": false,
+      "groupIds": [],
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "containerId": null,
+      "lineHeight": 1.25
     }
   ]
 }

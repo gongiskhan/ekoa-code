@@ -26,7 +26,7 @@ let mem: MongoMemoryServer;
 let dir: string;
 let n = 0;
 const deps = { now: () => 1_700_000_000_000 + n, genId: () => `d${n++}` };
-const actor = (orgId: string): Actor => ({ userId: `u-${orgId}`, orgId, role: 'builder' });
+const actor = (orgId: string): Actor => ({ userId: `u-${orgId}`, orgId, role: 'user' });
 
 // The production binding (server.ts): forward to ingestDocument, default sourceType 'build-scoping'.
 const bindLikeServer = (): void =>

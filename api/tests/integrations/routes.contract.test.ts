@@ -51,7 +51,7 @@ const fakeOAuthHttp: PlatformHttp = async (url) => {
   return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body), headers: { forEach: () => undefined } } as unknown as Response;
 };
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true } as never);
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -96,7 +96,7 @@ beforeEach(async () => {
 
 describe('platform-integrations routes (ch03 §3.8.15)', () => {
   it('GET /platform-integrations lists providers (user)', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const res = await api('/api/v1/platform-integrations', await tokenFor('u1'));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -106,7 +106,7 @@ describe('platform-integrations routes (ch03 §3.8.15)', () => {
 
   it('POST /:provider/connect is org-admin only', async () => {
     await mkUser('adm', 'adm', 'orgA', 'org-admin');
-    await mkUser('bld', 'bld', 'orgA', 'builder');
+    await mkUser('bld', 'bld', 'orgA', 'user');
 
     const forb = await api('/api/v1/platform-integrations/google/connect', await tokenFor('bld'), { method: 'POST' });
     expect(forb.status).toBe(403);
@@ -118,7 +118,7 @@ describe('platform-integrations routes (ch03 §3.8.15)', () => {
   });
 
   it('GET /:provider status validates; an unknown provider is a 400 envelope', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const t = await tokenFor('u1');
     const ok = await api('/api/v1/platform-integrations/google', t);
     expect(ok.status).toBe(200);
@@ -152,7 +152,7 @@ describe('platform-integrations routes (ch03 §3.8.15)', () => {
 
 describe('pipedream routes (ch03 §3.8.16)', () => {
   it('GET /pipedream status (user)', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const res = await api('/api/v1/pipedream', await tokenFor('u1'));
     expect(res.status).toBe(200);
     expect(PipedreamStatus.safeParse(await res.json()).success).toBe(true);
@@ -160,7 +160,7 @@ describe('pipedream routes (ch03 §3.8.16)', () => {
 
   it('PUT /pipedream/config is org-admin only; then accounts + connect-token + disconnect + remove', async () => {
     await mkUser('adm', 'adm', 'orgA', 'org-admin');
-    await mkUser('bld', 'bld', 'orgA', 'builder');
+    await mkUser('bld', 'bld', 'orgA', 'user');
     const admT = await tokenFor('adm');
 
     const forb = await api('/api/v1/pipedream/config', await tokenFor('bld'), { method: 'PUT', body: JSON.stringify({ clientId: 'c', clientSecret: 's', projectId: 'p', environment: 'production' }) });

@@ -57,5 +57,13 @@ export function verifyToken(token: string): JwtClaims {
   if (decoded.aud === 'ekoa-bridge' || decoded.pairingId !== undefined || decoded.connectionId !== undefined) {
     throw new Error('bridge token presented on the platform verifier (token-class separation, ch18 §18.3.6)');
   }
+  // Legacy-window shim (H1 role rename `builder` → `user`). A JWT minted before the rename carries
+  // role 'builder', which is no longer a valid Role. Normalise it HERE — the single verify
+  // chokepoint every admission path (requireAuth, verifySseToken, and every ?token= consumer)
+  // funnels through — so no downstream role/capability check ever sees the dead value. The boot
+  // migration bumps each migrated user's token epoch, so such tokens are rejected at the admission
+  // plane once the epoch lands and the user re-logs in; this shim only covers the window between
+  // boot and that next login. Remove once the fleet has rotated its tokens.
+  if ((decoded.role as string) === 'builder') decoded.role = 'user';
   return decoded as JwtClaims;
 }

@@ -82,7 +82,7 @@ beforeEach(async () => {
 });
 
 async function seedUser(userId: string, orgId: string) {
-  await users.insert({ _id: userId, username: userId, passwordHash: 'x', role: 'builder', orgId, active: true });
+  await users.insert({ _id: userId, username: userId, passwordHash: 'x', role: 'user', orgId, active: true });
 }
 async function connectGoogle(orgId: string, http: PlatformHttp) {
   const admin = { userId: 'admin', orgId, username: 'admin' };

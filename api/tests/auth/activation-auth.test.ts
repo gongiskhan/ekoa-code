@@ -43,7 +43,7 @@ beforeEach(async () => {
 });
 
 async function makeUser(id: string, username: string, password: string, active = true) {
-  await users.insert({ _id: id, username, passwordHash: await hashPassword(password), role: 'builder', orgId: 'org-1', active });
+  await users.insert({ _id: id, username, passwordHash: await hashPassword(password), role: 'user', orgId: 'org-1', active });
   setActivation(id, { active, billingLocked: false });
 }
 
@@ -103,7 +103,7 @@ describe('token security (P-03, ch09 §9.6) — Codex-review regressions', () =>
 
   it('a hand-forged token without a jti is refused (revocation-bypass guard)', async () => {
     const jwt = (await import('jsonwebtoken')).default;
-    const noJti = jwt.sign({ sub: 'u7', role: 'builder', scope: 'user', orgId: 'org-1', username: 'gwen' }, cfg.jwtSecret, { expiresIn: 3600 });
+    const noJti = jwt.sign({ sub: 'u7', role: 'user', scope: 'user', orgId: 'org-1', username: 'gwen' }, cfg.jwtSecret, { expiresIn: 3600 });
     setActivation('u7', { active: true, billingLocked: false });
     const app = buildApp(cfg, deps);
     await new Promise<void>((r) => { server = app.listen(0, () => r()); });

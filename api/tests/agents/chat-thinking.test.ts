@@ -17,7 +17,7 @@ import type { FakeTransportScript } from './_fake-transport.js';
 let tick = 0;
 let seq = 0;
 const deps = { now: () => 1_700_000_000_000 + (tick += 10), genId: () => `id_${seq++}` };
-const actor = { userId: 'u1', orgId: 'o1', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'o1', role: 'user' as const };
 
 interface Captured { stream: string; streamId: string; type: string; data: unknown }
 let events: Captured[];

@@ -222,7 +222,7 @@ export interface RehearseAutomationResult extends RunAutomationResult {
 
 /** Build the tenant-scoped actor for the memory-backed cache from a run context. */
 function actorFromCtx(ctx: RunContext): Actor {
-  return { userId: ctx.ownerUserId, orgId: ctx.orgId, role: 'builder' };
+  return { userId: ctx.ownerUserId, orgId: ctx.orgId, role: 'user' };
 }
 
 // ============================================================================

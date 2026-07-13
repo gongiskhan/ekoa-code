@@ -368,7 +368,7 @@ export const pt: Translations = {
       email: 'Email',
       role: 'Função',
       roleAdmin: 'Administrador',
-      roleBuilder: 'Construtor',
+      roleUser: 'Utilizador',
       action: 'Ação',
       createdBy: 'Criado por',
       on: 'em',

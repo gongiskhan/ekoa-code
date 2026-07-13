@@ -7,10 +7,11 @@
 import { Router, type Request, type Response } from 'express';
 import { ChatRunCreateRequest } from '@ekoa/shared';
 import { requireAuth, verifySseToken, type AuthedRequest } from '../auth/middleware.js';
+import { can } from '../auth/capabilities.js';
 import { sseManager } from '../events/sse-manager.js';
 import { createChatRun, executeChatRun, getRun, cancelRun } from '../agents/index.js';
 import { chatRunView } from '../agents/registry.js';
-import { actorOf, notFound, parseBody } from './helpers.js';
+import { actorOf, notFound, parseBody, sendError } from './helpers.js';
 
 export function chatRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
@@ -34,6 +35,12 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
     const body = parseBody(res, ChatRunCreateRequest, req.body);
     if (!body) return;
     const actor = actorOf(req);
+    // H1 capability gate: chat requires canUseChat. Every role holds it today, so this never
+    // refuses now — wired so the matrix is enforced, not merely implied (a future role without
+    // canUseChat is denied here, with the machine-readable FORBIDDEN + details.capability shape).
+    if (!can(actor, 'canUseChat')) {
+      return sendError(res, 'FORBIDDEN', 'Não tem permissão para usar o assistente; pode pedir ao administrador da organização.', { capability: 'canUseChat' });
+    }
     const input = {
       actor,
       username: req.user!.username,

@@ -18,7 +18,7 @@ import { resolveMemoryInjection } from '../../src/memory/resolver.js';
  */
 let mem: MongoMemoryServer;
 const deps = { now: () => 1_700_000_000_000, genId: () => 'id' };
-const actor = { userId: 'u1', orgId: 'orgA', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'orgA', role: 'user' as const };
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's';

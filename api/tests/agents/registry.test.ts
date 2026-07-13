@@ -14,8 +14,8 @@ import {
 
 /** Run registry guards (ch05 §5.2.2, §5.3.1, §5.3.3, §5.3.4). Acceptance criterion 1. */
 
-const owner: Actor = { userId: 'u1', orgId: 'o1', role: 'builder' };
-const other: Actor = { userId: 'u2', orgId: 'o1', role: 'builder' };
+const owner: Actor = { userId: 'u1', orgId: 'o1', role: 'user' };
+const other: Actor = { userId: 'u2', orgId: 'o1', role: 'user' };
 const orgAdmin: Actor = { userId: 'a1', orgId: 'o1', role: 'org-admin' };
 
 beforeEach(() => __resetRegistryForTests());

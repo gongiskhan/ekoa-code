@@ -47,7 +47,7 @@ beforeAll(async () => {
   const app = buildApp(cfg, deps);
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
   port = (server.address() as { port: number }).port;
-  await users.insert({ _id: 'owner1', username: 'owner1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+  await users.insert({ _id: 'owner1', username: 'owner1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
   setActivation('owner1', { active: true, billingLocked: false });
 }, 60_000);
 afterAll(async () => { server.close(); await appRegistry.stop(); await closeMongo(); await mem.stop(); await rm(tmpRoot, { recursive: true, force: true }); });

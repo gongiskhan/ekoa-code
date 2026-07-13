@@ -28,7 +28,7 @@ beforeAll(async () => {
   mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_contract_chat');
   await setCredential({ mode: 'oauth', secret: 'tok' });
   __setTransportForTests(makeFakeTransport({ finalText: 'answer' }));
-  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'o1', active: true });
+  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o1', active: true });
   setActivation('u1', { active: true, billingLocked: false });
   await userSettings.put({ _id: 'u1', memory: { autoExtract: false } }); // keep the test LLM-call-free
   const app = express();

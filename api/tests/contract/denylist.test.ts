@@ -39,7 +39,7 @@ afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests(); __resetDenyListCacheForTests();
   await users.deleteMany({}); await anonymisationDenyLists.deleteMany({}); await activityLogs.deleteMany({});
-  for (const [id, role, org] of [['admA', 'org-admin', 'orgA'], ['bldA', 'builder', 'orgA'], ['admB', 'org-admin', 'orgB']] as const) {
+  for (const [id, role, org] of [['admA', 'org-admin', 'orgA'], ['bldA', 'user', 'orgA'], ['admB', 'org-admin', 'orgB']] as const) {
     await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: org, active: true });
     setActivation(id, { active: true, billingLocked: false });
   }

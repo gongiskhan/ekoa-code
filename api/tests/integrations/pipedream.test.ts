@@ -28,7 +28,7 @@ let mem: MongoMemoryServer;
 let mock: Awaited<ReturnType<typeof startMockPipedream>>;
 
 const admin = { userId: 'admin1', orgId: 'orgA', role: 'org-admin' } as const;
-const user = { userId: 'user1', orgId: 'orgA', role: 'builder' } as const;
+const user = { userId: 'user1', orgId: 'orgA', role: 'user' } as const;
 
 /** Transport pointed at the local mock (the guarded default would block a 127.0.0.1 mock). */
 function mockDeps(): PipedreamDeps {
@@ -77,7 +77,7 @@ describe('Pipedream config + status (ch03 §3.8.16)', () => {
 
   it('config is org-scoped — another org sees not configured', async () => {
     await configure();
-    const otherOrgUser = { userId: 'x', orgId: 'orgB', role: 'builder' } as const;
+    const otherOrgUser = { userId: 'x', orgId: 'orgB', role: 'user' } as const;
     expect((await getPipedreamStatus(otherOrgUser, mockDeps())).configured).toBe(false);
   });
 

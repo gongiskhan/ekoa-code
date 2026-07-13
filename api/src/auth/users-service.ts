@@ -17,7 +17,7 @@ export async function listUsers(actor: Actor): Promise<AuthUserView[]> {
 }
 
 export async function createUser(
-  input: { username: string; password: string; role: UserDoc['role']; orgId?: string },
+  input: { username: string; password: string; role?: UserDoc['role']; orgId?: string },
   deps: Deps,
 ): Promise<{ ok: true; user: AuthUserView } | { ok: false; reason: 'taken' }> {
   let orgId = input.orgId;
@@ -30,7 +30,9 @@ export async function createUser(
     _id: id,
     username: input.username,
     passwordHash: await hashPassword(input.password),
-    role: input.role,
+    // H1: `user` is the base non-admin role and the default when a caller omits one (the HTTP
+    // contract still requires `role` via CreateUserRequest; this default protects direct callers).
+    role: input.role ?? 'user',
     orgId,
     active: true,
     passwordChangeRequired: true,
@@ -72,4 +74,25 @@ export async function deleteUser(id: string): Promise<boolean> {
   const ok = await users.delete(id);
   if (ok) clearActivation(id);
   return ok;
+}
+
+/**
+ * H1 role rename `builder` → `user`: an idempotent boot-step migration (the repo has no migration
+ * framework — schema/data evolution rides idempotent steps in `bootState`, ch09 §9.7). Every user
+ * row still carrying the retired `builder` role is rewritten to `user` and its token epoch bumped,
+ * reusing the exact role-change revocation path (`patchUser`): a bumped epoch invalidates every
+ * outstanding legacy JWT (its `iat < epoch`), forcing a re-login that mints a `user` token. Runs
+ * AFTER `loadActivation` so the epoch bump lands in the freshly-loaded in-memory map. Idempotent:
+ * once no row carries `builder`, the query matches nothing and nothing is bumped. Returns the count
+ * migrated (0 on a clean/already-migrated store). The `role: 'builder'` filter reads a legacy value
+ * no longer in the Role type, so it is a string filter (the store's `find` takes `Record<string,
+ * unknown>`); the update writes the current `user` value. */
+export async function migrateBuilderRole(): Promise<number> {
+  const legacy = await users.find({ role: 'builder' });
+  const epochSec = Math.floor(Date.now() / 1000) + 1;
+  for (const u of legacy) {
+    await users.update(u._id, (doc) => ({ ...doc, role: 'user' }));
+    bumpTokenEpoch(u._id, epochSec);
+  }
+  return legacy.length;
 }

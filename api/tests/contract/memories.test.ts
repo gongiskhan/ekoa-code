@@ -40,7 +40,7 @@ afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   await users.deleteMany({}); await memories.deleteMany({});
-  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
   setActivation('u1', { active: true, billingLocked: false });
 });
 const tokenFor = async () => (await login('u1', 'pw123456', false, deps)).token;

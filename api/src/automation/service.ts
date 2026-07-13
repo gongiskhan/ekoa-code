@@ -199,10 +199,12 @@ export async function getAutomation(actor: Actor, id: string): Promise<WireAutom
   return toWireAutomation(await loadAutomationForRead(actor, id));
 }
 
-/** Creation authority: org-admin/super-admin, or a builder when the org enables builder authoring. */
+/** Creation authority: org-admin/super-admin, or a plain user when the org enables member authoring.
+ *  The persisted org-setting key `allowBuilderAutomations` keeps its wire name (data compatibility);
+ *  only the role value it grants was renamed `builder` → `user` (H1). */
 export function canCreateAutomation(actor: Actor, orgSettings?: { allowBuilderAutomations?: boolean }): boolean {
   if (isAdmin(actor)) return true;
-  return actor.role === 'builder' && orgSettings?.allowBuilderAutomations === true;
+  return actor.role === 'user' && orgSettings?.allowBuilderAutomations === true;
 }
 
 export async function createAutomation(

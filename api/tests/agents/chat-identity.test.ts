@@ -13,7 +13,7 @@ import { __resetAgentSeamsForTests } from '../../src/agents/seams.js';
  * engine. Builds carry their own workspace instruction, so this is chat-only.
  */
 let mem: MongoMemoryServer;
-const actor = { userId: 'u1', orgId: 'orgA', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'orgA', role: 'user' as const };
 const base = { groundKnowledge: false, now: () => 1_700_000_000_000 };
 
 beforeAll(async () => {

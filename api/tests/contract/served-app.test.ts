@@ -30,7 +30,7 @@ let tmpRoot: string;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -228,7 +228,7 @@ describe('served-app data plane (ch03 §3.9) - the old wire envelope, byte-compa
 
 describe('artifacts (ch03 §3.8.9) - CRUD + visibility + slug', () => {
   it('create returns a deterministic slug; list is the single {items,featured} shape', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const t = await tokenFor('u1');
     const created = (await (await jwtApi('/api/v1/artifacts', t, { method: 'POST', body: JSON.stringify({ name: 'Gestor de Clientes' }) })).json()) as { slug: string };
     expect(created.slug).toBe('gestor-clientes'); // stop-words stripped, deterministic
@@ -238,8 +238,8 @@ describe('artifacts (ch03 §3.8.9) - CRUD + visibility + slug', () => {
   });
 
   it("a private artifact of another user is 404; editing it is 403", async () => {
-    await mkUser('ua', 'ua', 'orgA', 'builder');
-    await mkUser('ub', 'ub', 'orgA', 'builder');
+    await mkUser('ua', 'ua', 'orgA', 'user');
+    await mkUser('ub', 'ub', 'orgA', 'user');
     await artifacts.insert({ _id: 'p1', name: 'B priv', userId: 'ub', orgId: 'orgA', visibility: 'private' } as never);
     const t = await tokenFor('ua');
     expect((await jwtApi('/api/v1/artifacts/p1', t)).status).toBe(404);
@@ -267,7 +267,7 @@ describe('static serving pipeline (ch07 §7.5, carried exactly)', () => {
   });
 
   it('shareability gate (§7.7): revoked slug → 410 PT page; owner bypass via ?token=; direct id hit is not gated', async () => {
-    await mkUser('owner1', 'owner1', 'orgA', 'builder');
+    await mkUser('owner1', 'owner1', 'orgA', 'user');
     await mkServedApp('svpriv');
     await artifacts.insert({ _id: 'svpriv', name: 'Priv', slug: 'privslug', userId: 'owner1', orgId: 'orgA', visibility: 'private', shareable: false } as never);
     indexSlug('privslug', 'svpriv');

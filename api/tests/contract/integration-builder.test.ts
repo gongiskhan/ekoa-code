@@ -87,7 +87,7 @@ function modelReply(key: string, baseUrl: string): string {
   ].join('\n');
 }
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
   setActivation(id, { active: true, billingLocked: false });
 }

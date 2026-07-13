@@ -55,7 +55,10 @@ afterAll(async () => {
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   await users.deleteMany({}); await activityLogs.deleteMany({}); await userSettings.deleteMany({});
-  for (const [id, role, org] of [['admA', 'org-admin', 'orgA'], ['bldA', 'builder', 'orgA'], ['admB', 'org-admin', 'orgB']] as const) {
+  // H1: building an app now requires canBuildApps (org-admin+); the org-member-of-record that
+  // POSTs the build below is an org-admin so its build.created row is produced (a plain `user`
+  // would be refused 403 at the capability gate before any job/audit row exists).
+  for (const [id, role, org] of [['admA', 'org-admin', 'orgA'], ['bldA', 'org-admin', 'orgA'], ['admB', 'org-admin', 'orgB']] as const) {
     await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: org, active: true });
     setActivation(id, { active: true, billingLocked: false });
     await userSettings.put({ _id: id, memory: { autoExtract: false }, build: { verifyBuilds: false } } as never);

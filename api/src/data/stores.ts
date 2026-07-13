@@ -10,7 +10,7 @@ import { Store, type Doc } from './store.js';
 export interface UserDoc extends Doc {
   username: string;
   passwordHash: string;
-  role: 'super-admin' | 'org-admin' | 'builder';
+  role: 'super-admin' | 'org-admin' | 'user';
   orgId: string;
   active: boolean;
   passwordChangeRequired?: boolean;

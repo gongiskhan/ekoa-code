@@ -27,7 +27,7 @@ let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number; l
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -59,7 +59,7 @@ beforeEach(async () => {
 
 describe('vault documents (ch03 §3.8.20)', () => {
   it('ingest → list → collections → delete, each validating its shared schema', async () => {
-    await mkUser('u1', 'orgA', 'builder');
+    await mkUser('u1', 'orgA', 'user');
     const t = await tokenFor('u1');
 
     const created = await api('/api/v1/knowledge/documents', t, { method: 'POST', body: JSON.stringify({ collection: 'jurisprudencia', title: 'Prazos de recurso', text: 'o prazo de recurso é de 30 dias' }) });
@@ -88,7 +88,7 @@ describe('vault documents (ch03 §3.8.20)', () => {
   });
 
   it('deleting an unknown document returns the uniform 404 error envelope', async () => {
-    await mkUser('u1', 'orgA', 'builder');
+    await mkUser('u1', 'orgA', 'user');
     const res = await api('/api/v1/knowledge/collections/c/documents/nope', await tokenFor('u1'), { method: 'DELETE' });
     expect(res.status).toBe(404);
     expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
@@ -97,7 +97,7 @@ describe('vault documents (ch03 §3.8.20)', () => {
 
 describe('uploads (raw body + X-Filename/X-Collection)', () => {
   it('a .md upload is ingested + searchable; a binary upload is registered un-indexed', async () => {
-    await mkUser('u1', 'orgA', 'builder');
+    await mkUser('u1', 'orgA', 'user');
     const t = await tokenFor('u1');
 
     const md = await upload(t, 'nota.md', 'uploads', 'texto sobre penhora de bens', 'text/markdown');
@@ -122,7 +122,7 @@ describe('uploads (raw body + X-Filename/X-Collection)', () => {
   });
 
   it('GET /uploads validates UploadsResponse (rows carry `id`, not the store `_id`)', async () => {
-    await mkUser('u1', 'orgA', 'builder');
+    await mkUser('u1', 'orgA', 'user');
     const t = await tokenFor('u1');
     const created = await upload(t, 'nota.md', 'uploads', 'texto sobre penhora de bens', 'text/markdown');
     expect(created.status).toBe(201);
@@ -140,7 +140,7 @@ describe('uploads (raw body + X-Filename/X-Collection)', () => {
   });
 
   it('rejects an upload with no X-Filename (400 envelope)', async () => {
-    await mkUser('u1', 'orgA', 'builder');
+    await mkUser('u1', 'orgA', 'user');
     const t = await tokenFor('u1');
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/knowledge/uploads`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'text/plain' }, body: 'x' });
     expect(res.status).toBe(400);
@@ -151,7 +151,7 @@ describe('uploads (raw body + X-Filename/X-Collection)', () => {
 describe('org-admin heal operations', () => {
   it('reindex is org-admin-gated (builder 403, org-admin 202) and index-status validates', async () => {
     await mkUser('adm', 'orgA', 'org-admin');
-    await mkUser('bld', 'orgA', 'builder');
+    await mkUser('bld', 'orgA', 'user');
 
     const bldRes = await api('/api/v1/knowledge/reindex', await tokenFor('bld'), { method: 'POST' });
     expect(bldRes.status).toBe(403);
@@ -168,8 +168,8 @@ describe('org-admin heal operations', () => {
 
 describe('cross-org isolation', () => {
   it('orgB never sees orgA documents, collections, or uploads', async () => {
-    await mkUser('a', 'orgA', 'builder');
-    await mkUser('b', 'orgB', 'builder');
+    await mkUser('a', 'orgA', 'user');
+    await mkUser('b', 'orgB', 'user');
     const ta = await tokenFor('a'); const tb = await tokenFor('b');
     await api('/api/v1/knowledge/documents', ta, { method: 'POST', body: JSON.stringify({ collection: 'c', title: 'Segredo', text: 'cláusula confidencial do processo' }) });
     await upload(ta, 'a.md', 'c', 'texto privado', 'text/markdown');

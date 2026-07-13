@@ -46,7 +46,7 @@ beforeAll(async () => {
   process.env.SANDBOX_ROOT = sandbox;
   mem = await createMem();
   await connectMongo(mem.getUri(), 'ekoa_build_mechanics');
-  await users.insert({ _id: USER, username: 'abc', passwordHash: 'x', role: 'builder', orgId: 'org-1', active: true } as never);
+  await users.insert({ _id: USER, username: 'abc', passwordHash: 'x', role: 'user', orgId: 'org-1', active: true } as never);
 }, 60_000);
 
 afterAll(async () => {

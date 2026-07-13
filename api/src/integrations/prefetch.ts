@@ -75,7 +75,7 @@ export async function integrationPrefetch(input: { userId: string; message: stri
     if (!user?.orgId) return '';
     const orgId = user.orgId;
 
-    const connected = (await listPlatform({ userId: input.userId, orgId, role: 'builder' }))
+    const connected = (await listPlatform({ userId: input.userId, orgId, role: 'user' }))
       .filter((p) => p.connected)
       .map((p) => p.provider);
     if (connected.length === 0) return '';

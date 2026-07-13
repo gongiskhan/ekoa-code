@@ -30,7 +30,7 @@ let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'builder', opts: { orgId?: string; passwordChangeRequired?: boolean } = {}) {
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user', opts: { orgId?: string; passwordChangeRequired?: boolean } = {}) {
   await users.insert({
     _id: id, username: id, passwordHash: await hashPassword('pw123456'), role,
     orgId: opts.orgId ?? 'orgA', active: true,
@@ -62,7 +62,7 @@ beforeEach(async () => {
 
 describe('POST /api/v1/auth/refresh', () => {
   it('re-signs the authed claims: 200 RefreshResponse, and the new token works on /me', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await authed('/api/v1/auth/refresh', t, { method: 'POST' });
     expect(res.status).toBe(200);
@@ -82,7 +82,7 @@ describe('POST /api/v1/auth/refresh', () => {
 
 describe('POST /api/v1/auth/logout', () => {
   it('revokes the caller token: 200 OkResponse, then GET /me with the SAME token -> 401', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     expect((await authed('/api/v1/auth/me', t)).status).toBe(200);
     const res = await authed('/api/v1/auth/logout', t, { method: 'POST', body: JSON.stringify({}) });
@@ -95,8 +95,8 @@ describe('POST /api/v1/auth/logout', () => {
 
   it('admin variant: super-admin logs out ANOTHER user (their outstanding token dies); a builder may not', async () => {
     await mkUser('root', 'super-admin');
-    await mkUser('victim', 'builder');
-    await mkUser('bob', 'builder');
+    await mkUser('victim', 'user');
+    await mkUser('bob', 'user');
     const rootT = await tokenFor('root');
     const victimT = await tokenFor('victim');
     const bobT = await tokenFor('bob');
@@ -116,7 +116,7 @@ describe('POST /api/v1/auth/logout', () => {
 
   it('org-admin variant is scoped to its own org: cross-org logout -> 403/404 envelope', async () => {
     await mkUser('orgadminA', 'org-admin', { orgId: 'orgA' });
-    await mkUser('outsider', 'builder', { orgId: 'orgB' });
+    await mkUser('outsider', 'user', { orgId: 'orgB' });
     const aT = await tokenFor('orgadminA');
     const oT = await tokenFor('outsider');
     const res = await authed('/api/v1/auth/logout', aT, { method: 'POST', body: JSON.stringify({ userId: 'outsider' }) });
@@ -128,7 +128,7 @@ describe('POST /api/v1/auth/logout', () => {
 
 describe('POST /api/v1/auth/password (self password change)', () => {
   it('verifies the current password, changes it, clears passwordChangeRequired on re-login', async () => {
-    await mkUser('u1', 'builder', { passwordChangeRequired: true });
+    await mkUser('u1', 'user', { passwordChangeRequired: true });
     const t = await tokenFor('u1');
     const res = await authed('/api/v1/auth/password', t, {
       method: 'POST', body: JSON.stringify({ currentPassword: 'pw123456', newPassword: 'newpw9999' }),
@@ -144,7 +144,7 @@ describe('POST /api/v1/auth/password (self password change)', () => {
   });
 
   it('a wrong current password -> 401 envelope, nothing changed', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await authed('/api/v1/auth/password', t, {
       method: 'POST', body: JSON.stringify({ currentPassword: 'WRONG', newPassword: 'newpw9999' }),
@@ -155,7 +155,7 @@ describe('POST /api/v1/auth/password (self password change)', () => {
   });
 
   it('schema-invalid body -> 400 envelope', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('u1');
     const res = await authed('/api/v1/auth/password', t, { method: 'POST', body: JSON.stringify({ newPassword: 'x' }) });
     expect(res.status).toBe(400);
@@ -165,7 +165,7 @@ describe('POST /api/v1/auth/password (self password change)', () => {
 
 describe('device flow: /auth/device -> /auth/device/poll -> /auth/device/approve', () => {
   it('start (public) -> DeviceStartResponse; poll pending; approve by an authed user; poll returns the token ONCE (single-use)', async () => {
-    await mkUser('approver', 'builder');
+    await mkUser('approver', 'user');
     const start = await api('/api/v1/auth/device', { method: 'POST', body: JSON.stringify({}) });
     expect(start.status).toBe(200);
     const s = await readJson(start);
@@ -200,7 +200,7 @@ describe('device flow: /auth/device -> /auth/device/poll -> /auth/device/approve
   });
 
   it('deny marks the code denied', async () => {
-    await mkUser('approver', 'builder');
+    await mkUser('approver', 'user');
     const s = await readJson(await api('/api/v1/auth/device', { method: 'POST', body: JSON.stringify({}) }));
     const t = await tokenFor('approver');
     await authed('/api/v1/auth/device/approve', t, { method: 'POST', body: JSON.stringify({ userCode: s.userCode, deny: true }) });
@@ -222,7 +222,7 @@ describe('device flow: /auth/device -> /auth/device/poll -> /auth/device/approve
 describe('lifecycle hardening (S4 security-review findings)', () => {
   it('a DELETED user cannot refresh: their token dies immediately, no unbounded session (review finding 1)', async () => {
     await mkUser('root', 'super-admin');
-    await mkUser('victim', 'builder');
+    await mkUser('victim', 'user');
     const rootT = await tokenFor('root');
     const victimT = await tokenFor('victim');
     expect((await authed('/api/v1/auth/refresh', victimT, { method: 'POST' })).status).toBe(200);
@@ -240,7 +240,7 @@ describe('lifecycle hardening (S4 security-review findings)', () => {
 
   it('an admin password RESET kills the target\'s outstanding sessions (review finding 3)', async () => {
     await mkUser('root', 'super-admin');
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const rootT = await tokenFor('root');
     const u1T = await tokenFor('u1');
     expect((await authed('/api/v1/auth/me', u1T)).status).toBe(200);
@@ -254,7 +254,7 @@ describe('lifecycle hardening (S4 security-review findings)', () => {
   });
 
   it('a self password change kills EVERY outstanding session for that user (a stolen token dies with the old password)', async () => {
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const stolenT = await tokenFor('u1'); // an attacker's copy of an older session
     const curT = await tokenFor('u1');    // the session performing the change
     const res = await authed('/api/v1/auth/password', curT, {
@@ -272,7 +272,7 @@ describe('lifecycle hardening (S4 security-review findings)', () => {
   });
 
   it('the approved device poll is single-use under a CONCURRENT double poll (review finding 2)', async () => {
-    await mkUser('approver', 'builder');
+    await mkUser('approver', 'user');
     const s = await readJson(await api('/api/v1/auth/device', { method: 'POST', body: JSON.stringify({}) }));
     const t = await tokenFor('approver');
     await authed('/api/v1/auth/device/approve', t, { method: 'POST', body: JSON.stringify({ userCode: s.userCode }) });
@@ -291,7 +291,7 @@ describe('lifecycle hardening (S4 security-review findings)', () => {
 describe('POST /api/v1/users/:id/password (super-admin reset)', () => {
   it('super-admin resets a user password and sets passwordChangeRequired', async () => {
     await mkUser('root', 'super-admin');
-    await mkUser('u1', 'builder', { passwordChangeRequired: false });
+    await mkUser('u1', 'user', { passwordChangeRequired: false });
     const rootT = await tokenFor('root');
     const res = await authed('/api/v1/users/u1/password', rootT, { method: 'POST', body: JSON.stringify({ newPassword: 'resetpw99' }) });
     expect(res.status).toBe(200);
@@ -303,7 +303,7 @@ describe('POST /api/v1/users/:id/password (super-admin reset)', () => {
 
   it('non-super-admin -> 403 envelope; nothing changed', async () => {
     await mkUser('orgadmin', 'org-admin');
-    await mkUser('u1', 'builder');
+    await mkUser('u1', 'user');
     const t = await tokenFor('orgadmin');
     const res = await authed('/api/v1/users/u1/password', t, { method: 'POST', body: JSON.stringify({ newPassword: 'resetpw99' }) });
     expect(res.status).toBe(403);

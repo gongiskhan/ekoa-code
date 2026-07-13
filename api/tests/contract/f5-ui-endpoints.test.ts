@@ -42,7 +42,7 @@ beforeEach(async () => {
   await users.deleteMany({}); await orgs.deleteMany({}); await knowledgeSources.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'A', createdAt: 'x' } as never);
   await orgs.insert({ _id: 'orgB', name: 'B', createdAt: 'x' } as never);
-  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'builder', orgId: 'orgA', active: true });
+  await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
   setActivation('u1', { active: true, billingLocked: false });
 });
 const tokenFor = async () => (await login('u1', 'pw123456', false, deps)).token;

@@ -55,5 +55,5 @@ export function restoreTransport(): void {
 }
 
 export async function seedUser(id: string, orgId: string): Promise<void> {
-  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role: 'builder', orgId, active: true });
+  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role: 'user', orgId, active: true });
 }

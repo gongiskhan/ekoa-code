@@ -35,8 +35,8 @@ import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport
  * with responses validated against the shared/automations.ts zod schemas.
  */
 const admin: Actor = { userId: 'admin1', orgId: 'o1', role: 'org-admin' };
-const builder: Actor = { userId: 'u1', orgId: 'o1', role: 'builder' };
-const otherOrg: Actor = { userId: 'x1', orgId: 'o2', role: 'builder' };
+const builder: Actor = { userId: 'u1', orgId: 'o1', role: 'user' };
+const otherOrg: Actor = { userId: 'x1', orgId: 'o2', role: 'user' };
 
 const OK_PLAN = JSON.stringify({
   status: 'ok', name: 'Guardar página', description: 'abre e guarda', reasoning: 'r',

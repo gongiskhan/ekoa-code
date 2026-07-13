@@ -7,6 +7,8 @@
 import { Router, type Request, type Response } from 'express';
 import { JobCreateRequest } from '@ekoa/shared';
 import { requireAuth, verifySseToken, type AuthedRequest } from '../auth/middleware.js';
+import { can } from '../auth/capabilities.js';
+import { loadWritable } from '../apps/app-paths.js';
 import { sseManager } from '../events/sse-manager.js';
 import { handleBuildCreate, cancelRun } from '../agents/index.js';
 import { getJob, jobView } from '../agents/jobs.js';
@@ -36,6 +38,26 @@ export function jobsRouter(deps: { now: () => number; genId: () => string }): Ro
     const body = parseBody(res, JobCreateRequest, req.body);
     if (!body) return;
     const actor = actorOf(req);
+    // Capability + ownership gates BEFORE any job is created or agent spawned (H1). Refusals carry
+    // the FORBIDDEN envelope with `details.capability` (the machine-readable hook the H4
+    // request-to-admin flow consumes); object-ownership denials carry no capability field.
+    if (body.artifactId) {
+      // A follow-up build EDITS an existing app: it requires canEditApps AND writability on the
+      // target artifact. The writability check (own always; org-shared within org ok; another
+      // user's private → 403; missing/cross-org → 404) closes the follow-up-build IDOR (map §5.1),
+      // where any authenticated user could drive a code-writing agent against ANY artifact by id.
+      // The capability check runs FIRST so a user without canEditApps gets a uniform refusal that
+      // never leaks whether the target exists.
+      if (!can(actor, 'canEditApps')) {
+        return sendError(res, 'FORBIDDEN', 'Não tem permissão para alterar aplicações; pode pedir ao administrador da organização.', { capability: 'canEditApps' });
+      }
+      const { verdict } = await loadWritable(actor, body.artifactId);
+      if (verdict === 'notfound') return notFound(res);
+      if (verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    } else if (!can(actor, 'canBuildApps')) {
+      // A first build CREATES an app.
+      return sendError(res, 'FORBIDDEN', 'Não tem permissão para criar aplicações; pode pedir ao administrador da organização.', { capability: 'canBuildApps' });
+    }
     const result = await handleBuildCreate({
       actor,
       username: req.user!.username,

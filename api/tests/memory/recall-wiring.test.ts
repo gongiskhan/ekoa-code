@@ -14,7 +14,7 @@ import { __resetAgentSeamsForTests } from '../../src/agents/seams.js';
  * asserts the memory demonstrably shapes the system prompt.
  */
 let mem: MongoMemoryServer;
-const actor = { userId: 'u1', orgId: 'orgA', role: 'builder' as const };
+const actor = { userId: 'u1', orgId: 'orgA', role: 'user' as const };
 const base = { agentKind: 'chat' as const, isChat: true, groundKnowledge: false, now: () => 1_700_000_000_000 };
 
 beforeAll(async () => {

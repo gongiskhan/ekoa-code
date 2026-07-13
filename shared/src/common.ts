@@ -29,8 +29,9 @@ export const Language = z.enum(['pt', 'en']).default('pt');
 /** Org sharing visibility (Amendment 2): default private. */
 export const Visibility = z.enum(['private', 'org']);
 
-/** The three-role model (Amendment 2). */
-export const Role = z.enum(['super-admin', 'org-admin', 'builder']);
+/** The three-role model (Amendment 2; H1 security block renamed the base role `builder` → `user`
+ *  — the builder persona is retired, `user` is the base non-admin role). */
+export const Role = z.enum(['super-admin', 'org-admin', 'user']);
 export type Role = z.infer<typeof Role>;
 
 /** The per-request actor context derived from the verified JWT. A plain type (no wire

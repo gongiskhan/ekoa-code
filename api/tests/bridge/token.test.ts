@@ -23,7 +23,7 @@ beforeAll(() => {
 });
 
 function platformToken(): string {
-  return signToken({ sub: 'u-1', role: 'builder', scope: 'auth:read agent:execute agent:read', orgId: 'org-1', username: 'ana' }).token;
+  return signToken({ sub: 'u-1', role: 'user', scope: 'auth:read agent:execute agent:read', orgId: 'org-1', username: 'ana' }).token;
 }
 
 describe('bridge token mint + verify', () => {

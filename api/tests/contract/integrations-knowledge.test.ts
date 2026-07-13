@@ -18,7 +18,7 @@ let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number;
 const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` };
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -41,7 +41,7 @@ beforeEach(async () => {
 
 describe('integration configs (ch03 §3.8.13) — encrypted, org-scoped, credentials never returned', () => {
   it('creates a config; the credential is encrypted at rest and never in the response', async () => {
-    await mkUser('u1', 'u1', 'orgA', 'builder');
+    await mkUser('u1', 'u1', 'orgA', 'user');
     const t = await tokenFor('u1');
     const res = await api('/api/v1/integrations/configs', t, { method: 'POST', body: JSON.stringify({ integrationKey: 'stripe', configValues: { apiKey: 'sk-secret-123' } }) });
     expect(res.status).toBe(201);
@@ -63,7 +63,7 @@ describe('integration configs (ch03 §3.8.13) — encrypted, org-scoped, credent
 
   it('a builder cannot overwrite or delete an org-admin-authored SHARED config (Codex regression)', async () => {
     await mkUser('adm', 'adm', 'orgA', 'org-admin');
-    await mkUser('bld', 'bld', 'orgA', 'builder');
+    await mkUser('bld', 'bld', 'orgA', 'user');
     // org-admin creates a shared config (ownerUserId undefined)
     await api('/api/v1/integrations/configs', await tokenFor('adm'), { method: 'POST', body: JSON.stringify({ integrationKey: 'stripe', configValues: { apiKey: 'admin-secret' } }) });
     const bld = await tokenFor('bld');
@@ -81,7 +81,7 @@ describe('integration configs (ch03 §3.8.13) — encrypted, org-scoped, credent
 
 describe('knowledge sources (ch03 §3.8.20) — org-partitioned + SSRF-validated at write', () => {
   it('rejects a private-address source URL with 400 VALIDATION_FAILED (SSRF, per-entry-point)', async () => {
-    await mkUser('k1', 'k1', 'orgA', 'builder');
+    await mkUser('k1', 'k1', 'orgA', 'user');
     const t = await tokenFor('k1');
     const res = await api('/api/v1/knowledge/sources', t, { method: 'POST', body: JSON.stringify({ url: 'http://169.254.169.254/latest/meta-data/' }) });
     expect(res.status).toBe(400);
@@ -89,8 +89,8 @@ describe('knowledge sources (ch03 §3.8.20) — org-partitioned + SSRF-validated
   });
 
   it('accepts a public source URL and org-partitions it', async () => {
-    await mkUser('k2', 'k2', 'orgA', 'builder');
-    await mkUser('k3', 'k3', 'orgB', 'builder');
+    await mkUser('k2', 'k2', 'orgA', 'user');
+    await mkUser('k3', 'k3', 'orgB', 'user');
     const res = await api('/api/v1/knowledge/sources', await tokenFor('k2'), { method: 'POST', body: JSON.stringify({ url: 'https://dgsi.pt/jtrl' }) });
     expect(res.status).toBe(201);
     // org B does not see org A's source

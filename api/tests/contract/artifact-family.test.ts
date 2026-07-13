@@ -53,7 +53,7 @@ function expectValid(schema: { safeParse: (v: unknown) => { success: boolean; er
   expect(r.success).toBe(true);
 }
 
-async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'builder') {
+async function mkUser(id: string, username: string, orgId: string, role: 'super-admin' | 'org-admin' | 'user') {
   await users.insert({ _id: id, username, passwordHash: await hashPassword('pw123456'), role, orgId, active: true } as never);
   setActivation(id, { active: true, billingLocked: false });
 }
@@ -131,7 +131,7 @@ beforeEach(async () => {
   for (const s of [users, artifacts, slugs]) await s.deleteMany({});
   await getDb().collection('app_data').deleteMany({});
   await mkUser('owner1', 'owner1', 'orgA', 'org-admin');
-  await mkUser('owner2', 'owner2', 'orgA', 'builder');
+  await mkUser('owner2', 'owner2', 'orgA', 'user');
   await mkUser('sa', 'sa', 'orgA', 'super-admin');
 });
 

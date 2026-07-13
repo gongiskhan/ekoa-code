@@ -70,11 +70,11 @@ function RoleBadge({ role }: { role: string }) {
   if (role === "org-admin") {
     return <Badge tone="brand">{t.roleAdmin}</Badge>;
   }
-  return <Badge tone="neutral">{t.roleBuilder}</Badge>;
+  return <Badge tone="neutral">{t.roleUser}</Badge>;
 }
 
 /**
- * FC-500 role toggle between 'builder' and 'org-admin'. A super-admin is never a
+ * FC-500 role toggle between 'user' and 'org-admin'. A super-admin is never a
  * toggle target - its badge is shown read-only. Available to org-admins (own
  * org) and super-admins.
  */
@@ -85,15 +85,15 @@ function RoleToggle({
 }: {
   user: AuthUser;
   disabled: boolean;
-  onToggle: (role: "org-admin" | "builder") => void;
+  onToggle: (role: "org-admin" | "user") => void;
 }) {
   const { pages } = useTranslation();
   const t = pages.users;
   if (user.role === "super-admin") {
     return <RoleBadge role={user.role} />;
   }
-  const options: { value: "builder" | "org-admin"; label: string }[] = [
-    { value: "builder", label: t.roleBuilder },
+  const options: { value: "user" | "org-admin"; label: string }[] = [
+    { value: "user", label: t.roleUser },
     { value: "org-admin", label: t.roleAdmin },
   ];
   return (
@@ -140,7 +140,7 @@ function AddUserDialog({
   onAdd: (data: {
     username: string;
     password: string;
-    role: "org-admin" | "builder";
+    role: "org-admin" | "user";
     orgId?: string;
   }) => void;
 }) {
@@ -148,7 +148,7 @@ function AddUserDialog({
   const t = pages.users;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"org-admin" | "builder">("builder");
+  const [role, setRole] = useState<"org-admin" | "user">("user");
   const [orgId, setOrgId] = useState("");
 
   function handleSubmit(e: React.FormEvent) {
@@ -162,7 +162,7 @@ function AddUserDialog({
     });
     setUsername("");
     setPassword("");
-    setRole("builder");
+    setRole("user");
     setOrgId("");
   }
 
@@ -204,11 +204,11 @@ function AddUserDialog({
           <div className="flex gap-2">
             <Button
               type="button"
-              variant={role === "builder" ? "primary" : "secondary"}
+              variant={role === "user" ? "primary" : "secondary"}
               className="flex-1 justify-center"
-              onClick={() => setRole("builder")}
+              onClick={() => setRole("user")}
             >
-              {t.roleBuilder}
+              {t.roleUser}
             </Button>
             <Button
               type="button"
@@ -495,7 +495,7 @@ export default function UsersPage() {
   async function handleAddUser(data: {
     username: string;
     password: string;
-    role: "org-admin" | "builder";
+    role: "org-admin" | "user";
     orgId?: string;
   }) {
     setActionLoading(true);
@@ -512,12 +512,12 @@ export default function UsersPage() {
     }
   }
 
-  // FC-500: activate/deactivate and the builder<->org-admin role toggle.
+  // FC-500: activate/deactivate and the user<->org-admin role toggle.
   async function handleToggleActive(user: AuthUser, active: boolean) {
     await updateUser(user.id, { active });
   }
 
-  async function handleToggleRole(user: AuthUser, role: "org-admin" | "builder") {
+  async function handleToggleRole(user: AuthUser, role: "org-admin" | "user") {
     await updateUser(user.id, { role });
   }
 
