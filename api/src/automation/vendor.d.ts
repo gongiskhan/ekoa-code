@@ -9,6 +9,7 @@
  */
 declare module 'js-yaml' {
   export function load(input: string): unknown;
-  const _default: { load(input: string): unknown };
+  export function dump(input: unknown): string;
+  const _default: { load(input: string): unknown; dump(input: unknown): string };
   export default _default;
 }

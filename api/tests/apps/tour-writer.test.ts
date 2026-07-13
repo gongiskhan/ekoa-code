@@ -128,7 +128,7 @@ describe('demoSpecSchema — E1 tourId/kind extension', () => {
 describe('parseStoredTours — the stored-tour resolver (serving + panel share it)', () => {
   it('drops invalid entries, keeps valid ones, and never throws on a non-array', () => {
     const valid = { version: 1, appId: 'art-9', ...overviewTour() };
-    const invalid = { version: 1, appId: 'art-9', tourId: 'quebrado', kind: 'journey', card: valid.card, steps: [] };
+    const invalid = { version: 1, appId: 'art-9', tourId: 'quebrado', kind: 'journey', card: overviewTour().card, steps: [] };
     expect(parseStoredTours([valid, invalid]).map((t) => t.tourId)).toEqual(['visao-geral']);
     expect(parseStoredTours(undefined)).toEqual([]);
     expect(parseStoredTours('nope')).toEqual([]);

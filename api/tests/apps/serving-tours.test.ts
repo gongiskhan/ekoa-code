@@ -73,7 +73,8 @@ describe('E1 — GET /api/demos/:appId generated-tour fallback (integration)', (
     mem = await createMem();
     await connectMongo(mem.getUri(), 'ekoa');
     const app = express();
-    app.use(servingRouter({}));
+    // The /api/demos fallback under test is public; token auth is never exercised here.
+    app.use(servingRouter({ verifyToken: () => { throw new Error('token auth not exercised in this suite'); } }));
     await new Promise<void>((resolve) => {
       server = app.listen(0, PORT_HOST, () => {
         port = (server.address() as { port: number }).port;
