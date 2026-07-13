@@ -28,7 +28,7 @@ Derives from `RUN_SPEC.md` (read it first; its assumptions ledger governs). Prof
 | E2 | tour playback via panel (zero-token) + rebuild selector-stability gate | mixed | 4 | E | E1,D2 | passed |
 | F1 | knowledge-during-build (detect domain-heavy, request uploads, index mid-build, narrate) | api | 5 | F | A3 | passed |
 | F2 | fees sample app + seeded docs + cited-answer gate | mixed | 2 | F | F1,D1 | pending |
-| G1 | assistant metering + billing-truth probe extension (tours/registry free) | api | 3 | G | D1 | pending |
+| G1 | assistant metering + billing-truth probe extension (tours/registry free) | api | 3 | G | D1 | passed |
 | G2 | panel perf budget (lazy-load) + perf gate | mixed | 2 | G | D2 | pending |
 | H1 | SECURITY: roles capability layer, builder→user migration, permission-gated build requests | mixed | 6 | H | all A–G | pending |
 | H2 | SECURITY: identity/session handoff (explore, decide-and-document, implement; detect-then-ask) | api | 5 | H | H1 | pending |

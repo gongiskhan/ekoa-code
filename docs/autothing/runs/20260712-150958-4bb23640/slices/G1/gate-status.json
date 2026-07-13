@@ -1,0 +1,17 @@
+{
+  "slice": "G1",
+  "kind": "api",
+  "commit": "a10d4d4",
+  "commits": ["20b1c70", "a10d4d4"],
+  "tag": "operator/g1",
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "PROOF slice, zero production change: D1's metering verified correct (ground-truth read of app-assistant.ts attribution + header-scoped owner resolution, independently confirmed by codex). Deliverable: assistant-billing.e2e.mjs - the billing-truth probe extended to the assistant plane" },
+    "test": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "the committed probe IS the test (re-runnable, hard turn budget, unique per-run provisioning, cleanup); node --check + chokepoint clean; no TS surface changed" },
+    "securityWall": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "gitleaks clean; no permission logic; probe proves the owner-attribution boundary OBSERVABLY (visitor drives, owner billed, visitor ledger +0) - the load-bearing D1 security property demonstrated cross-ledger" },
+    "liveVerification": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "G1 LIVE GATE: PASS (final refined run): exactly 2 new assistant-chat rows BY ID on the owner ledger (tokens 1076+3183, in-window), visitor +0 any agentType; breakdown DELTA exactly this run's tokens (4259); tour playback + registry-only action dual-proven free (zero POSTs + zero rows both ledgers); owner's 6 in-window non-assistant rows printed + identified (pi-fast-loop x5, memory-extract x1 - own build/anonymisation, none mis-attributed); strict console; cleanup. Loop history: launcher failure #1 was the scaffold-mid-edit build collision (sequencing rule in the E2 RUN_LOG entry); #2 was the driver's own click-interception; the strict any-agentType interim assertion caught the owner's async build-billing and was refined to identity-exact + log-and-verify" },
+    "freshReview": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "VERDICT: APPROVE (static, claims verified against source; did not run the paid driver). 1 Low: suite-ledger census - the run-wide LANDING obligation (all operator-run drivers register on merge-fold by convention)" },
+    "codexSliceReview": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "gpt-5.5/high read-only: NEEDS-WORK with 5 findings, ALL fixed in a10d4d4 (row-identity isolation [High], budget-claim honesty, per-run unique provisioning, both-ledger free assertions, favicon allowlist). Codex independently confirmed the attribution path (owner from X-Ekoa-App-Id, caller JWT never consulted)" },
+    "designAudit": { "status": "skipped", "reason": "api proof slice: no UI surface changed", "at": "2026-07-13T10:02:16Z" },
+    "walkthrough": { "status": "passed", "at": "2026-07-13T10:02:16Z", "detail": "evidence-live.cast + live-output.txt (15 PASS + G1 LIVE GATE: PASS) + 3 screenshots under slices/G1/ (casts/PNGs gitignored per convention)" }
+  }
+}
