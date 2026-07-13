@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { sseManager } from '../../src/events/sse-manager.js';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -87,13 +88,22 @@ describe('H4 change-requests: filing requires the requester can READ the app; la
   });
 
   it('CROSS-ORG INJECTION is blocked: filing about another org app -> 404, NO row, NO notification', async () => {
-    const res = await fileWithApp(await tokenFor('reqU'), 'appB', { text: 'inject into org B' });
-    expect(res.status).toBe(404);
-    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
-    // The injection would have landed a row in org B's queue (and fired an SSE to org B admins).
-    // Neither happened: org B's admin sees nothing, and no row exists anywhere.
-    expect((await queueOf('admB')).length).toBe(0);
-    expect(await changeRequests.find({})).toHaveLength(0);
+    // Spy on the ACTUAL notification sink (codex-h4 re-review: assert NO emit directly, not only
+    // inferred from an empty queue). A successful file fires sseManager.emit('notifications', ...)
+    // via emitChangeRequest; a blocked cross-org file must fire NOTHING on that channel.
+    const emitSpy = vi.spyOn(sseManager, 'emit');
+    try {
+      const res = await fileWithApp(await tokenFor('reqU'), 'appB', { text: 'inject into org B' });
+      expect(res.status).toBe(404);
+      expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+      // No row landed in org B's queue AND no notification was fired to org B's admins.
+      expect((await queueOf('admB')).length).toBe(0);
+      expect(await changeRequests.find({})).toHaveLength(0);
+      const notifs = emitSpy.mock.calls.filter((c) => c[0] === 'notifications');
+      expect(notifs, `a blocked cross-org file must fire no notification, saw ${JSON.stringify(notifs)}`).toHaveLength(0);
+    } finally {
+      emitSpy.mockRestore();
+    }
   });
 
   it('filing about another user PRIVATE app the requester cannot read -> 404 (uniform, no oracle)', async () => {
