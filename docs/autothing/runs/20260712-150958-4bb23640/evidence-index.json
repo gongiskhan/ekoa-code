@@ -1,7 +1,7 @@
 {
  "runId": "20260712-150958-4bb23640",
  "project": "ekoa-code",
- "branch": "operator-run",
+ "branch": "main (operator-run merged + continued on main 2026-07-13, operator instruction)",
  "gatesConfig": {
   "test": true,
   "adversarialReview": true,
@@ -274,6 +274,14 @@
    "commit": "a10d4d4",
    "tag": "operator/g1",
    "at": "2026-07-13T10:02:16Z"
+  },
+  "F2": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "4503624",
+   "tag": "operator/f2",
+   "at": "2026-07-13T14:25:02Z",
+   "note": "codexSliceReview blocked-external (quota); retry owed"
   }
  },
  "resume": {
@@ -284,8 +292,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 22,
-  "resumePoint": "F2 gate (fix applied, green-rerun pending)",
-  "note": "Operator resumed 2026-07-13: operator-run MERGED to main (ff d55bd02..1a3e9ad, pushed) and the run now continues ON MAIN by explicit operator instruction - no branches. Sentinel re-armed (iter 1435). Boot-b re-booting. Codex probe 2026-07-13T13:47Z: still quota-exceeded - F2 codexSliceReview stays blocked-external; H6 contingency stands (re-probe before H, else stop cleanly after G2)."
+  "landed": 23,
+  "resumePoint": "G2 (panel lazy-load, brief final at slices/G2/brief.md)",
+  "note": "Run continues ON MAIN. 23/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1-F2,G1). F2 gated 2026-07-13 with codexSliceReview blocked-external (OpenAI quota; retry owed). Next G2, then the atomic H1-H6 security block (H6 gated on codex availability - probe before opening H, else stop cleanly after G2)."
  }
 }
