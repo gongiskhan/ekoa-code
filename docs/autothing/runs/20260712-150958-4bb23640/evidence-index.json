@@ -286,6 +286,6 @@
     "at": "2026-07-13T10:58:23Z",
     "landed": 22,
     "resumePoint": "F2 (fix applied, ungated)",
-    "note": "Operator stop. 22/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1,G1). F2 fix-applied-but-ungated (per-run-token fix in tree, rerun was confirming green; codex blocked on quota). G2+H not started. can() stays a permissive stub; H untouched. Nothing merged to main."
+    "note": "Operator stop. 22/31 gated (S0,A1-A5,B1-B4,C1-C5,D1-D3,E1-E2,F1,G1). F2 fix-applied-but-ungated (per-run-token fix in tree, rerun was confirming green; codex blocked on quota). G2+H not started. can() stays a permissive stub; H untouched. Nothing merged to main. Dev boot-b stack is DOWN (terminated with the run stop; re-boot on resume)."
   }
 }
