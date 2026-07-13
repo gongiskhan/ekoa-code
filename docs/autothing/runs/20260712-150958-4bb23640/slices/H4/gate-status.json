@@ -1,0 +1,54 @@
+{
+  "slice": "H4",
+  "kind": "mixed",
+  "commit": "9045e08",
+  "commits": [
+    "791c7e3",
+    "67ad136",
+    "9045e08"
+  ],
+  "tag": "operator/h4",
+  "securityBlock": true,
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "SECURITY request-changes queue + refused-build feed (greenfield: Store + shared contract + service + route + panel button + web /pedidos dashboard). Users file change requests from inside a served app (route+screen captured, requires a logged-in platform user); org-admins see them in an adminOnly dashboard queue (registo-mirrored org scoping) and one-click CONVERT starts a patch run (POST /jobs, H1-gated) or dismiss. The refused-build path (H1 details.capability) feeds the same queue - never a dead end. Diagram 03 updated"
+    },
+    "test": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "full api lane green (1601-scale, exit 0) + shared 36 + web 168; the change-requests integration suite (11) drives the REAL router over mongo-mem with a 4-app cross-org topology: cross-org file->404+no-row+no-notification (direct sseManager.emit spy), same-org org-shared/own->200 stamped to own org, another-user-private->404, org-admin reads OWN org only, user 403 on the queue, convert flips status+jobId, cross-org convert/dismiss->404, dismiss. Contract (shapes+live-response schema) + panel (button for admin===false, route/screen capture, 401 calm). tsc(api src+test) + web tsc clean, eslint 0, chokepoint clean, panel builds, schema-coverage +4 keys"
+    },
+    "securityWall": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "gitleaks clean; chokepoint clean; CROSS-ORG ISOLATION both directions: WRITE - served-app filing requires loadReadable(requester, appId) ok (own or org-shared in the requester's own org) before any stamp/notify, else uniform 404 (no injection into another org's queue, no existence oracle); READ/convert/dismiss force actor.orgId for org-admin (super-admin across orgs), cross-org->404. orgId ALWAYS server-stamped (app owner for served-app filing, requester for refused-build), never from the caller body. requesterUserId from the verified JWT. No new capability logic (queue read is requireRole org-admin/super-admin, exactly like registo)"
+    },
+    "liveVerification": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "COMPOSED: the security crux (cross-org read+write isolation) is proven deterministically by the integration suite driving the REAL router with the exact attack topology (the injection is a 404 with a direct no-notification spy). The convert->patch-run reuses the H1-gated /jobs path already live-proven (H1 probe). A live curl of the cross-org injection block on the running stack is folded into H5's live phase (its acceptance includes the cross-org isolation probe + the request-changes journey), which re-boots the H-block dist"
+    },
+    "freshReview": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "VERDICT: APPROVE (slices/H4/review-verdict.md) - fresh-context security review of the READ isolation (org-admin own-org only, user 403, convert/dismiss org-scoped)"
+    },
+    "codexSliceReview": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "gpt-5.4/5.5 read-only: first pass NEEDS-WORK with 1 HIGH - cross-org queue INJECTION on the WRITE side (a user could file against another org's app id and inject into its queue + notify its admins; orgId stamped from the resolved app owner with no requester access check) - the mirror of the read isolation the fresh review checked. Fixed: served-app filing now requires loadReadable(requester, appId) before stamp/notify, uniform 404 otherwise (slices/H4/codex-review-2.md: High CLOSED, no new bypass, refused-build path OK, orgId server-stamped, read/convert/dismiss intact; one test-strength nit). Nit closed (direct no-notification emit spy) and confirmed (slices/H4/codex-review-3.md: VERDICT APPROVE)"
+    },
+    "designAudit": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "the /pedidos queue mirrors the registo page pattern (adminOnly nav, table over the org-scoped read); the panel request button is PT-PT, no emoji/dash; covered by the fresh review + the web typecheck/test lane"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "at": "2026-07-14T00:00:00Z",
+      "detail": "the integration suite is the deterministic evidence of the security-critical flows; the web queue is structurally tested; a live walkthrough of file->queue->convert is folded into H5's live phase"
+    }
+  }
+}

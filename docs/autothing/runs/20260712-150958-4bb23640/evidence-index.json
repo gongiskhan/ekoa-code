@@ -313,6 +313,14 @@
    "tag": "operator/h3",
    "at": "2026-07-13T22:40:00Z",
    "note": "security block 3/6; dual review incl codex re-review APPROVE; edit mode - detect-then-ask, patch-run preview/approve/guarded-rollback"
+  },
+  "H4": {
+   "status": "passed",
+   "kind": "mixed",
+   "commit": "9045e08",
+   "tag": "operator/h4",
+   "at": "2026-07-14T00:00:00Z",
+   "note": "security block 4/6; dual review incl codex High (cross-org injection) fixed+reverified APPROVE; cross-org isolation both directions"
   }
  },
  "resume": {
@@ -323,8 +331,8 @@
  "globalGate": {
   "status": "in-progress",
   "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 27,
-  "resumePoint": "H4 (request-changes queue - brief-draft ready)",
-  "note": "Run continues ON MAIN. 27/31 gated. H BLOCK 3/6 (atomic): H1 (capability layer + IDOR + durable revocation), H2 (whoami), H3 (edit mode). Remaining H4-H6. Codex healthy."
+  "landed": 28,
+  "resumePoint": "H5 (capability assertion matrix + journeys + cross-org live probe)",
+  "note": "Run continues ON MAIN. 28/31 gated. H BLOCK 4/6 (atomic): H1(capability+IDOR+durable-revocation), H2(whoami), H3(edit mode), H4(request-changes queue, cross-org isolated). Remaining H5(assertions) + H6(codex block review). Codex healthy."
  }
 }
