@@ -36,7 +36,9 @@
  * schema-valid overview fixture E2 uses, fulfilled at the browser boundary (page.route) — the only
  * stub QA permits. The two metered turns are plain informational prompts (no operate surface
  * needed): metering fires on the one-shot regardless of whether the turn proposes actions. The
- * model is called at most 3 times total (2 turns + at most one transient retry).
+ * driver issues at most 3 /api/app-assistant HTTP turns (2 turns + at most one transient retry); each
+ * turn's runOneShot may run up to maxTurns:3 provider turns internally (client.ts:892), so the true
+ * provider-turn worst case is 9, not 3 — the driver bounds HTTP turns, which is what it can enforce.
  *
  * NO PRODUCTION CODE CHANGE — this is a proof slice. Black-box over the running dev cortex
  * (backend.port, the boot-b proxy) + a real Chromium. Builds ONE fresh app-base app (verify OFF).
@@ -55,12 +57,19 @@ const EVID = join(REPO_ROOT, 'docs', 'autothing', 'runs', '20260712-150958-4bb23
 
 const BUILD_TIMEOUT_MS = 10 * 60_000;
 const TURN_TIMEOUT_MS = 150_000;
-const LLM_BUDGET = 3; // hard ceiling on real model calls (2 turns + at most 1 transient retry)
+// Caps the number of /api/app-assistant HTTP TURNS the driver issues at 3 (2 turns + at most one
+// transient retry). NOTE (finding 2): this bounds HTTP turns, NOT provider turns — each turn's
+// runOneShot may itself run up to maxTurns:3 model continuations internally (client.ts:892), which the
+// driver cannot cap. Worst case = 3 HTTP turns x 3 = 9 provider turns. We count only what we can count.
+const LLM_BUDGET = 3;
 
 // The distinct VISITOR principal that drives the assistant panel (a separate, non-owner user, so
-// "billed to the owner, not the visitor" is observable on two separate ledgers). Fixed creds keep
-// the probe idempotent across re-runs (the ephemeral dev Mongo may already carry the user).
-const VISITOR = { orgName: 'g1-visitor-org', username: 'g1-visitor', password: 'pw123456' };
+// "billed to the owner, not the visitor" is observable on two separate ledgers). A per-RUN unique
+// username (finding 3) — usernames are not enforced unique and login() picks matches[0], so a fixed
+// name accumulates duplicate rows on a dirty stack and reruns get flaky. The runstamp gives every run
+// a fresh principal; tryLogin still short-circuits the same-run re-provision case.
+const RUNSTAMP = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+const VISITOR = { orgName: `g1-visitor-org-${RUNSTAMP}`, username: `g1-visitor-${RUNSTAMP}`, password: 'pw123456' };
 
 // The app-specific (non-landmark) registry-ID target the tour spotlights — planted in the page like
 // the E2/D3 gates so the surface is deterministic.
@@ -179,14 +188,44 @@ async function ledgerRows(token) {
   const body = await r.json();
   return (body && body.items) || [];
 }
-const assistantChatRows = (rows) => rows.filter((x) => x.type === 'assistant-chat');
-async function assistantChatCount(token) { return assistantChatRows(await ledgerRows(token)).length; }
+/** TOTAL ledger row count (ALL agentTypes) for a billee. Used for the VISITOR (which has NO billable
+ *  activity, so ANY new row of ANY agentType is a real regression) — NOT for the owner, whose own
+ *  build+anonymisation billing legitimately lands async and would make a total-diff flap. */
+async function totalRows(token) { return (await ledgerRows(token)).length; }
+/** The SET of assistant-chat row ids for a billee — the OWNER free-path/metered assertions diff THIS
+ *  (the assistant surface), never the owner's total, so the owner's own build-family billing is free
+ *  to accrue without failing the gate while any EXTRA assistant-chat billing is still caught. */
+async function ownerAssistantChatIds(token) {
+  return new Set((await ledgerRows(token)).filter((r) => r.type === 'assistant-chat').map((r) => r.id));
+}
 
 /** GET /api/v1/billing/breakdown (super-admin, platform-wide, grouped by agentType). */
 async function billingBreakdown(token) {
   const r = await fetch(`${BASE}/api/v1/billing/breakdown`, { headers: { Authorization: `Bearer ${token}` } });
   assert(r.ok, `billing/breakdown ${r.status}`);
   return ((await r.json()).items) || [];
+}
+/** The assistant-chat token total in a breakdown snapshot (0 if the line is absent). */
+const breakdownAssistantChatTokens = (items) => (items.find((x) => x.agentType === 'assistant-chat')?.tokens ?? 0);
+
+/**
+ * Convergence poll for the metered assertion (finding 1: never race the ledger write). Metering is
+ * awaited inside runOneShot (client.ts:896 meter() -> recordTokenEvent) BEFORE the /api/app-assistant
+ * 200 returns, so the rows are already committed when a turn resolves — but we poll (up to timeoutMs)
+ * for the expected number of NEW assistant-chat rows (by row IDENTITY vs the before-set) so any future
+ * async-write change cannot make this flake. Returns the NEW rows (all agentTypes) once >= `expected`
+ * new assistant-chat rows are visible, else throws on timeout.
+ */
+async function waitForNewOwnerRows(token, idsBefore, expected, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const rows = await ledgerRows(token);
+    const newRows = rows.filter((r) => !idsBefore.has(r.id));
+    const newAc = newRows.filter((r) => r.type === 'assistant-chat');
+    if (newAc.length >= expected) return { rows, newRows, newAc };
+    if (Date.now() > deadline) return { rows, newRows, newAc, timedOut: true };
+    await new Promise((r) => setTimeout(r, 500));
+  }
 }
 
 /**
@@ -198,7 +237,9 @@ function benign(entry) {
   const url = String(entry.url || '');
   const text = String(entry.text || '');
   // 1. favicon: the browser auto-requests /favicon.ico and served apps ship none → 404. Not app code.
-  if (/favicon/i.test(`${url} ${text}`)) return true;
+  //    Match the request URL PATH only (finding 5) — NOT the message text — so a real app error whose
+  //    text merely mentions "favicon" (e.g. `ReferenceError: faviconConfig is undefined`) still fails.
+  if (/\/favicon\.ico(\?|$)/i.test(url)) return true;
   // 2. Anonymous SSO whoami probe (injected-context.ts:110): window.__ekoa.whoami() GETs
   //    /api/app-sso/me and treats 401 as the normal "no visitor session" state (returns null). The
   //    401 is the EXPECTED anonymous state; the browser merely logs the failed resource. Pre-existing.
@@ -376,7 +417,11 @@ async function main() {
   //    C3 runtime the panel itself uses). It runs entirely in-page: the field changes, the promise
   //    resolves 'done', and NO model POST fires + NO billing row lands.
   // ============================================================================================
-  const ownerBeforeReg = await assistantChatCount(adminToken);
+  // Baseline: the OWNER's assistant-chat row ids (the assistant surface) + the VISITOR's TOTAL rows
+  // (any agentType — the visitor has no billable activity, so any new visitor row is a regression —
+  // finding 4). We do NOT freeze the owner's TOTAL: its own build+anonymisation billing lands async.
+  const ownerAcIdsBeforeReg = await ownerAssistantChatIds(adminToken);
+  const visitorTotalBeforeReg = await totalRows(visitor.token);
   const postsBeforeReg = assistantPosts;
   await page.evaluate(({ target, value }) => {
     document.getElementById('g1-set-input').value = '';
@@ -389,16 +434,19 @@ async function main() {
   const regField = await page.evaluate(() => document.getElementById('g1-set-input').value);
   assert(regField.includes(REG_VALUE), `registry setField did not drive the field: "${regField}"`);
   assert(assistantPosts === postsBeforeReg, `registry action fired ${assistantPosts - postsBeforeReg} assistant POST(s) — must be zero`);
-  const ownerAfterReg = await assistantChatCount(adminToken);
-  assert(ownerAfterReg === ownerBeforeReg, `registry action added ${ownerAfterReg - ownerBeforeReg} owner billing row(s) — must be zero`);
+  const ownerAcNewReg = (await ledgerRows(adminToken)).filter((r) => r.type === 'assistant-chat' && !ownerAcIdsBeforeReg.has(r.id));
+  const visitorTotalAfterReg = await totalRows(visitor.token);
+  assert(ownerAcNewReg.length === 0, `registry action added ${ownerAcNewReg.length} OWNER assistant-chat row(s) — must be zero`);
+  assert(visitorTotalAfterReg === visitorTotalBeforeReg, `registry action added ${visitorTotalAfterReg - visitorTotalBeforeReg} VISITOR ledger row(s) (any agentType) — must be zero`);
   await page.screenshot({ path: join(EVID, 'live-01-registry-action.png') });
-  ok(`REGISTRY: setField ran in-page (field -> "${regField}"); zero assistant POSTs; zero new owner billing rows`);
+  ok(`REGISTRY: setField ran in-page (field -> "${regField}"); zero assistant POSTs; zero new OWNER assistant-chat rows; zero new VISITOR rows (any agentType)`);
 
   // ============================================================================================
   // 2. TOUR PLAYBACK IS FREE. Play the FULL overview tour through the E2 teach launcher and assert
   //    zero model POSTs + zero new billing rows across the whole playback.
   // ============================================================================================
-  const ownerBeforeTour = await assistantChatCount(adminToken);
+  const ownerAcIdsBeforeTour = await ownerAssistantChatIds(adminToken);
+  const visitorTotalBeforeTour = await totalRows(visitor.token);
   const postsBeforeTour = assistantPosts;
   await page.locator('.ekoa-assistant-mode', { hasText: 'Ensinar' }).click();
   const startBtn = page.locator('.ekoa-assistant-tour-start');
@@ -440,9 +488,11 @@ async function main() {
   await page.screenshot({ path: join(EVID, 'live-02-tour-done.png') });
 
   assert(assistantPosts === postsBeforeTour, `tour playback fired ${assistantPosts - postsBeforeTour} assistant POST(s) — tours must be zero-token`);
-  const ownerAfterTour = await assistantChatCount(adminToken);
-  assert(ownerAfterTour === ownerBeforeTour, `tour playback added ${ownerAfterTour - ownerBeforeTour} owner billing row(s) — must be zero`);
-  ok('TOUR: full overview tour reached "concluído"; zero assistant POSTs; zero new owner billing rows (client-side, zero-token)');
+  const ownerAcNewTour = (await ledgerRows(adminToken)).filter((r) => r.type === 'assistant-chat' && !ownerAcIdsBeforeTour.has(r.id));
+  const visitorTotalAfterTour = await totalRows(visitor.token);
+  assert(ownerAcNewTour.length === 0, `tour playback added ${ownerAcNewTour.length} OWNER assistant-chat row(s) — must be zero`);
+  assert(visitorTotalAfterTour === visitorTotalBeforeTour, `tour playback added ${visitorTotalAfterTour - visitorTotalBeforeTour} VISITOR ledger row(s) (any agentType) — must be zero`);
+  ok('TOUR: full overview tour reached "concluído"; zero assistant POSTs; zero new OWNER assistant-chat rows; zero new VISITOR rows (any agentType; client-side, zero-token)');
 
   // Close the tour so the composer is clear for the metered turns.
   await page.locator('.ekoa-assistant-tour-close').click();
@@ -452,39 +502,62 @@ async function main() {
   // 3. METERED + ATTRIBUTED. N=2 real assistant turns (driven by the VISITOR) -> exactly TWO new
   //    'assistant-chat' rows in the OWNER's ledger with tokens>0; the VISITOR's ledger unchanged.
   // ============================================================================================
-  const ownerBefore = await assistantChatCount(adminToken);
-  const visitorBefore = await assistantChatCount(visitor.token);
+  // Capture row IDENTITY (not counts) on the OWNER ledger + the VISITOR total + the platform-wide
+  // breakdown assistant-chat total, all BEFORE the turns (finding 1: isolate the proof to THIS run's
+  // rows by id + timestamp window, so a concurrent admin turn on another artifact cannot satisfy it).
+  const ownerIdsBefore = new Set((await ledgerRows(adminToken)).map((r) => r.id));
+  const visitorTotalBefore = await totalRows(visitor.token);
+  const bdAcBefore = breakdownAssistantChatTokens(await billingBreakdown(adminToken));
+  const windowStart = Date.now();
   for (let i = 0; i < TURNS.length; i++) {
     const body = await meteredTurn(page, TURNS[i]);
     ok(`turn ${i + 1}/2 fired (200, mode="${body.mode}", reply ${body.reply.length} chars)`);
   }
+  const windowEnd = Date.now();
   await page.screenshot({ path: join(EVID, 'live-03-metered-turns.png') });
 
-  const ownerRowsAfter = assistantChatRows(await ledgerRows(adminToken));
-  const ownerAfter = ownerRowsAfter.length;
-  const visitorAfter = await assistantChatCount(visitor.token);
-  assert(ownerAfter - ownerBefore === TURNS.length, `owner gained ${ownerAfter - ownerBefore} assistant-chat rows, expected exactly ${TURNS.length}`);
-  assert(visitorAfter - visitorBefore === 0, `visitor (the caller) gained ${visitorAfter - visitorBefore} assistant-chat rows — must be ZERO (owner is the billee)`);
-  // The two NEW rows (history is newest-first) each carry metered tokens > 0.
-  const newRows = ownerRowsAfter.slice(0, TURNS.length);
-  for (const row of newRows) {
-    assert(row.type === 'assistant-chat', `new owner row type "${row.type}", expected "assistant-chat"`);
+  // Converge on the OWNER ledger: wait for the expected NEW assistant-chat rows (by id vs before-set).
+  const conv = await waitForNewOwnerRows(adminToken, ownerIdsBefore, TURNS.length);
+  assert(!conv.timedOut, `owner ledger did not converge to ${TURNS.length} new assistant-chat rows (saw ${conv.newAc.length})`);
+  // The owner ALSO legitimately accrues NON-assistant-chat rows in this window — the build the probe
+  // itself triggered, plus each turn's PII-anonymisation pass, bill the OWNER under build-family
+  // agentTypes (pi-fast-loop / memory-extract / build). That is EXPECTED owner cost, not a defect, so
+  // we LOG it and never fail on it (finding 1, refined by the lead: identity on the assistant surface,
+  // not a freeze of the owner's own activity). We DO assert none is a mis-attributed assistant-chat.
+  const otherNew = conv.newRows.filter((r) => r.type !== 'assistant-chat');
+  const otherByType = otherNew.reduce((m, r) => ((m[r.type] = (m[r.type] || 0) + 1), m), {});
+  console.log(`INFO owner also accrued ${otherNew.length} non-assistant-chat row(s) in-window (owner's own build+anonymisation, EXPECTED, ignored): ${JSON.stringify(otherByType)}`);
+  // EXACTLY TURNS.length NEW assistant-chat rows (by id) — no EXTRA / mis-attributed assistant billing.
+  assert(conv.newAc.length === TURNS.length, `owner gained ${conv.newAc.length} new assistant-chat rows, expected exactly ${TURNS.length} (no extra/mis-attributed assistant billing)`);
+  // Each new assistant-chat row: metered tokens > 0, and createdAt INSIDE this run's turn window (ties
+  // the rows to OUR turns — /billing/history exposes no artifactId, so the residual is the window).
+  const WINDOW_SLACK_MS = 10_000;
+  for (const row of conv.newAc) {
     assert(typeof row.tokens === 'number' && row.tokens > 0, `new owner assistant-chat row metered ${row.tokens} tokens, expected > 0`);
+    const ts = new Date(row.createdAt).getTime();
+    assert(
+      Number.isFinite(ts) && ts >= windowStart - WINDOW_SLACK_MS && ts <= windowEnd + WINDOW_SLACK_MS,
+      `new assistant-chat row createdAt ${row.createdAt} outside the turn window [${new Date(windowStart).toISOString()}..${new Date(windowEnd).toISOString()}]`,
+    );
   }
-  // Ties the ledger rows to browser-issued turns: every POST since the tour is a turn we fired
-  // (the tour + registry fired none), so the count equals llmTurns (== TURNS.length, or +1 if a
-  // transient non-200 was retried — a retried failure writes NO ledger row, so owner still gained
-  // exactly TURNS.length rows above).
+  // The VISITOR (the caller) gained ZERO rows of ANY agentType — nothing billable ran as the visitor;
+  // the owner is the billee. This is the STRICT mis-attribution guard (visitor has no legit billing).
+  const visitorTotalAfter = await totalRows(visitor.token);
+  assert(visitorTotalAfter - visitorTotalBefore === 0, `visitor (the caller) gained ${visitorTotalAfter - visitorTotalBefore} ledger row(s) (any agentType) — must be ZERO (owner is the billee)`);
+  // POST-count tie: every /api/app-assistant POST since the tour is a turn we fired (tour+registry fired none).
   assert(assistantPosts - postsBeforeTour === llmTurns, `assistant POSTs since the tour (${assistantPosts - postsBeforeTour}) != turns fired (${llmTurns})`);
-  ok(`METERED: ${TURNS.length} visitor-driven turns -> exactly ${TURNS.length} new 'assistant-chat' rows on the OWNER ledger (tokens=${newRows.map((r) => r.tokens).join(',')}); VISITOR ledger unchanged (billed to owner, NOT the caller)`);
+  const meteredTokens = conv.newAc.map((r) => r.tokens);
+  ok(`METERED: ${TURNS.length} visitor-driven turns -> exactly ${TURNS.length} new 'assistant-chat' rows on the OWNER ledger by id (tokens=${meteredTokens.join(',')}), timestamped in-window; VISITOR ledger +0 rows (billed to owner, NOT the caller)`);
 
   // ============================================================================================
-  // 4. BREAKDOWN carries the assistant-chat agentType with tokens > 0.
+  // 4. BREAKDOWN DELTA: the platform-wide assistant-chat total grew by EXACTLY this run's tokens
+  //    (before-vs-after delta, not mere presence — finding 1).
   // ============================================================================================
-  const breakdown = await billingBreakdown(adminToken);
-  const acLine = breakdown.find((x) => x.agentType === 'assistant-chat');
-  assert(acLine && acLine.tokens > 0, `breakdown missing assistant-chat with tokens>0: ${JSON.stringify(breakdown)}`);
-  ok(`BREAKDOWN: /billing/breakdown groups an 'assistant-chat' line (tokens=${acLine.tokens})`);
+  const bdAcAfter = breakdownAssistantChatTokens(await billingBreakdown(adminToken));
+  const bdDelta = bdAcAfter - bdAcBefore;
+  const turnTokenSum = meteredTokens.reduce((a, b) => a + b, 0);
+  assert(bdDelta === turnTokenSum, `breakdown assistant-chat delta ${bdDelta} != this run's metered tokens ${turnTokenSum} (before=${bdAcBefore}, after=${bdAcAfter})`);
+  ok(`BREAKDOWN: /billing/breakdown assistant-chat total grew by EXACTLY this run's tokens (Δ=${bdDelta})`);
 
   // ============================================================================================
   // 5. ZERO non-benign page JS console errors throughout.
