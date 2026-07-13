@@ -57,3 +57,11 @@ shape so "convert" targets it exactly (deep-link vs direct POST /jobs); confirm 
 requires a logged-in platform user or allows anonymous-visitor (recommend: require login - the queue
 is org-internal, and an anonymous served-app visitor has no platform identity); confirm the web
 dashboard nav slot for the queue.
+
+## Web nav slot (lead pre-check, confirmed)
+web/components/sidebar.tsx already gates items with `adminOnly` (line 96: `hasHydrated && isAdmin`,
+where `isAdmin = super-admin || org-admin`). The H4 queue is a NEW `adminOnly` sidebar item pointing
+at a new dashboard page (e.g. `/pedidos` or `/change-requests`), mirroring the registo page
+(web/app/(dashboard)/registo/page.tsx over GET /api/v1/registo). The queue read reuses the exact
+org-admin/super-admin scoping registo.ts uses. Locales: add the nav label + page copy to
+web/locales/{pt,en}.ts (PT-PT primary).
