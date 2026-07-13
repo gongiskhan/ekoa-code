@@ -60,3 +60,14 @@ Both fire on EVERY served app and predate this run; the driver's `benign()` is c
    `injected-context.ts:244`; a dev-proxy artifact, not present same-origin in prod).
 
 Anything else still fails the console gate.
+
+## Final run (codex-review fixes, 2026-07-13)
+
+The committed evidence cast is the FINAL green run under the strengthened assertions from the codex
+review: CITED pins the seeded FACT in the reply ("dez anos") + the seeded token in citations + the
+per-TURN "Fontes" DOM block (not a stale earlier block); TEACH requires >=2 line-anchored numbered
+step markers accepting the model's real formats ("1." / "1)" / "Passo 1:" / "**Passo 1 —"). Earlier
+char-count figures in this file describe prior runs and are superseded by the final cast +
+live-output. One TEACH flake occurred mid-hardening exactly as codex predicted (model emitted
+"**Passo 1 —", the interim regex rejected it) — fixed by widening to the observed formats while
+keeping line anchoring and the >=2 marker minimum.

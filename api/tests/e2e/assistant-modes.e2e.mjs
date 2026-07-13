@@ -367,9 +367,13 @@ async function main() {
   assert(teachBody.mode === 'teach', `TEACH turn: server mode "${teachBody.mode}", expected "teach"`);
   const teachReply = String(teachBody.reply || '');
   // Require GENUINE step structure: at least two line-anchored numbered-step markers ("1." / "1)" /
-  // "Passo 1."). Line-anchoring (not a bare /\d+[.)]/ anywhere) rejects prose that merely cites an
-  // article number, and there is no /passo/i escape hatch (the loose word "passo" no longer passes).
-  const stepMarkers = (teachReply.match(/(?:^|\n)\s*(?:passo\s+)?\d+[.)]/gi) || []).length;
+  // "Passo 1." / "Passo 1:"). Line-anchoring (not a bare /\d+[.)]/ anywhere) rejects prose that
+  // merely cites an article number, and there is no /passo/i escape hatch (the loose word "passo"
+  // no longer passes). The colon variant covers the prompt contract's common "Passo N:" format
+  // (codex-d3 #3: the regex must not be stricter than the format the system prompt elicits).
+  // Accept the formats the model actually emits: optional markdown bold ("**Passo 1 —"), the
+  // "Passo N" prefix, and . ) : or dash separators. Still line-anchored and still >=2 markers.
+  const stepMarkers = (teachReply.match(/(?:^|\n)\s*(?:\*\*|__)?\s*(?:passo\s+)?\d+\s*(?:\*\*|__)?\s*[.):\-\u2013\u2014]/gi) || []).length;
   assert(stepMarkers >= 2, `TEACH turn: reply is not step-structured (${stepMarkers} numbered markers): "${teachReply.slice(0, 200)}"`);
   await page.waitForFunction(() => {
     const b = document.querySelector('.ekoa-assistant-mode[aria-pressed="true"]');
@@ -394,15 +398,26 @@ async function main() {
     const seededCited = cites.some((c) => typeof c.title === 'string' && c.title.includes(KB_TOKEN));
     const reply = String(body.reply || '');
     const refused = REFUSAL.test(reply);
-    if (seededCited && !refused) { citedBody = body; break; }
+    // codex-d3 #1: a grounded answer must carry the seeded FACT, not merely avoid refusing —
+    // the seed states "dez anos" immediately after the token, so the reply must name it.
+    const factCited = /dez\s+anos|10\s+anos/i.test(reply);
+    if (seededCited && factCited && !refused) { citedBody = body; break; }
     if (attempt === 2) {
       // The grounding is deterministic (verified offline: the seeded doc ranks #1). If the seeded
       // doc STILL does not surface here, that is a real knowledge-retrieval defect — fail loud.
-      fail(`CITED turn: seeded doc surfaced=${seededCited}, refused=${refused}. citations=${JSON.stringify(cites.map((c) => c.title))}; reply="${reply.slice(0, 200)}"`);
+      fail(`CITED turn: seeded doc surfaced=${seededCited}, fact-cited=${factCited}, refused=${refused}. citations=${JSON.stringify(cites.map((c) => c.title))}; reply="${reply.slice(0, 200)}"`);
     }
   }
-  const fontes = page.locator('.ekoa-assistant-citations-title', { hasText: 'Fontes' }).last();
-  await fontes.waitFor({ state: 'visible', timeout: 10_000 });
+  // codex-d3 #2: scope the "Fontes" DOM assertion to the NEW turn's own citations block (a global
+  // .last() could match a stale block from an earlier grounded turn). The LAST assistant message
+  // must itself contain a citations block whose list includes the seeded token.
+  await page.waitForFunction((token) => {
+    const msgs = document.querySelectorAll('.ekoa-assistant-messages [data-role="assistant"], .ekoa-assistant-messages .ekoa-assistant-message');
+    const last = msgs[msgs.length - 1];
+    if (!last) return false;
+    const block = last.querySelector('.ekoa-assistant-citations');
+    return !!block && /Fontes/.test(block.textContent) && block.textContent.includes(token);
+  }, KB_TOKEN, { timeout: 10_000 });
   await page.screenshot({ path: join(EVID, 'live-04-fontes.png') });
   ok(`CITED: seeded doc "${KB_TOKEN}" surfaced in ${citedBody.citations.length} citation(s); reply is a grounded answer (not a refusal); panel rendered "Fontes"`);
 
