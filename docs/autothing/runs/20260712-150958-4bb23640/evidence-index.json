@@ -225,6 +225,23 @@
         "slices/D2/impl-notes.md"
       ],
       "at": "2026-07-12T23:25:51Z"
+    },
+    "D3": {
+      "status": "passed",
+      "commit": "6520a15",
+      "tag": "operator/d3",
+      "evidence": [
+        "slices/D3/evidence-live.cast",
+        "slices/D3/live-01-do-highlight.png",
+        "slices/D3/live-02-confirm.png",
+        "slices/D3/live-03-teach.png",
+        "slices/D3/live-04-fontes.png",
+        "slices/D3/live-gate.md",
+        "slices/D3/review-verdict.md",
+        "slices/D3/codex-review.md",
+        "slices/D3/impl-notes.md"
+      ],
+      "at": "2026-07-13T00:56:00Z"
     }
   },
   "resume": {

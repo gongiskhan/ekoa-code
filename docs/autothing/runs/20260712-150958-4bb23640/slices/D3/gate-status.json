@@ -1,0 +1,17 @@
+{
+  "slice": "D3",
+  "kind": "mixed",
+  "commit": "6520a15",
+  "commits": ["015777a", "5153dee", "828050a", "6520a15"],
+  "tag": "operator/d3",
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-13T00:56:00Z", "detail": "test-only slice: assistant-modes.e2e.mjs scripted live gate (no product source touched)" },
+    "test": { "status": "passed", "detail": "the driver IS the committed re-runnable test; eslint N/A (e2e drivers ignored by config, same as C5); no product code changed", "at": "2026-07-13T00:56:00Z" },
+    "securityWall": { "status": "passed", "detail": "gitleaks clean on all 4 commits; chokepoint untouched", "at": "2026-07-13T00:56:00Z" },
+    "liveVerification": { "status": "passed", "detail": "FINAL cast green under the fully-hardened assertions: DO (server-inferred, action dispatched via window.__ekoaActions, DOM field visibly driven + runtime UI), destructive confirm-before-dispatch (sentinel un-run until Confirmar), pause-on-user-input (trusted click cancels active AND queued; queue does not continue), SHOW+TEACH inference echoed on the toggle (teach step-structured, >=2 line-anchored markers), CITED (seeded doc token in citations + seeded FACT 'dez anos' in the reply + per-turn Fontes block), zero non-benign console errors (D2's documented 2-signature allowlist, no drift)", "at": "2026-07-13T00:56:00Z" },
+    "freshReview": { "status": "passed", "detail": "initial needs-work (CITED trivially satisfiable + refusal evidence; teach regex loose) -> fix 5153dee re-verified by the SAME reviewer -> VERDICT: approve. Product finding (citations under a refusal) closed per QA rule via docs/findings.md (828050a)", "at": "2026-07-13T00:56:00Z" },
+    "codexSliceReview": { "status": "passed", "detail": "gpt-5.5/high read-only: needs-work with 4 findings, ALL fixed in 6520a15 (fact pin, per-turn Fontes DOM scoping, real-format teach regex, doc drift). Its flake prediction (finding 3) materialized mid-hardening and was fixed exactly as advised. (First codex process hung on stdin - relaunched with stdin closed; friction-logged)", "at": "2026-07-13T00:56:00Z" },
+    "designAudit": { "status": "skipped", "reason": "test-only slice: no UI surface changed (the 4 screenshots re-evidence D2's already-audited panel)", "at": "2026-07-13T00:56:00Z" },
+    "walkthrough": { "status": "passed", "detail": "evidence-live.cast (final green run) + 4 screenshots (do-highlight, confirm card, teach, fontes)", "at": "2026-07-13T00:56:00Z" }
+  }
+}
