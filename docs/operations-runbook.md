@@ -76,6 +76,12 @@ cutover is the founder-gated cutover procedure, outside this run - archived with
 - `Dockerfile.api` - multi-stage `node:20-bookworm-slim`, builds shared+api, ships `api/dist` +
   `api/assets` + production deps only, runs as non-root `node` on `:4111`. Secrets are never baked
   in; they arrive at runtime from Secret Manager.
+  - Since operator-run G2, the api build (`npm run build --workspace api`) ALSO produces
+    `api/assets/panel-runtime.js` (the served-app assistant panel, a gitignored build artifact).
+    Any deploy path must run that build step and ship the produced asset - the Dockerfile copies
+    `api/assets` from the build stage for exactly this reason. If the asset is missing at api boot,
+    the server logs `[panel-runtime] client unavailable` and every served app's assistant launcher
+    is a dead affordance (the route serves a 200 comment fallback).
 - `Dockerfile.web` - Next.js standalone output on `:3000`. `NEXT_PUBLIC_API_URL` is a **build arg**
   (the public API origin the browser calls, inlined at build - not a secret), passed via
   `docker build --build-arg`.

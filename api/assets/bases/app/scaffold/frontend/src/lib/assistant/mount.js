@@ -69,6 +69,13 @@ function ensurePanelLoaded() {
   const s = document.createElement('script');
   s.src = PANEL_RUNTIME_SRC;
   s.async = true;
+  // A transport failure must not brick the launcher for the whole page session
+  // (review-g2 Low-1): reset the once-only guard so the NEXT click retries. Without
+  // this, injected stays true, the asset never mounts, and every later click no-ops.
+  s.onerror = () => {
+    injected = false;
+    if (s.parentNode) s.parentNode.removeChild(s);
+  };
   (document.head || document.documentElement).appendChild(s);
 }
 

@@ -33,9 +33,13 @@ COPY api/package.json api/
 COPY web/package.json web/
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # Compiled output: shared/dist (api imports @ekoa/shared) + api/dist + api runtime assets.
+# Assets come FROM THE BUILD STAGE, not the host context: since G2 the api build also
+# produces api/assets/panel-runtime.js (gitignored build artifact - absent from a CI
+# checkout, possibly STALE on a dev machine). The build stage is the only place the
+# full, fresh asset set is guaranteed to exist (review-g2 Low-2, made concrete here).
 COPY --from=build /app/shared/dist shared/dist
 COPY --from=build /app/api/dist api/dist
-COPY api/assets api/assets
+COPY --from=build /app/api/assets api/assets
 # Drop privileges: run as the built-in non-root `node` user.
 USER node
 EXPOSE 4111

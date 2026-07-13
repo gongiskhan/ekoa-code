@@ -282,7 +282,15 @@ let panelRuntimeSource = '/* ekoa panel runtime unavailable */';
 try {
   panelRuntimeSource = readFileSync(PANEL_RUNTIME_PATH, 'utf-8');
 } catch (err) {
-  console.error('[panel-runtime] client unavailable:', err instanceof Error ? err.message : String(err));
+  // Louder than the committed siblings ON PURPOSE (review-g2 Low-2): this is the one
+  // /__ekoa asset that is a BUILD ARTIFACT, so a build-skipping deploy reaches here and
+  // the assistant launcher in every served app becomes a dead affordance (the fallback
+  // body is a 200 comment - nothing client-side can detect it).
+  console.error(
+    '[panel-runtime] client unavailable - the assistant panel will NOT load in served apps. ' +
+      'Run "npm run build --workspace api" (builds assets/panel-runtime.js) and restart:',
+    err instanceof Error ? err.message : String(err),
+  );
 }
 
 export function servingRouter(deps: ServingDeps): Router {

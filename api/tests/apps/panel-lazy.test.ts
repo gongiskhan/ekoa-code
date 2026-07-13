@@ -80,6 +80,9 @@ describe('G2 launcher - React-free + under the byte budget', () => {
     // Open-intent EVENT (late leg): every click also dispatches this, so a click
     // landing after an idle-preload mount still opens the panel (intent never lost).
     expect(MOUNT).toContain("'ekoa:assistant-open'");
+    // Transport-failure retry (review-g2 Low-1): onerror resets the once-only guard,
+    // so a failed inject never bricks the launcher for the page session.
+    expect(MOUNT).toContain('onerror');
     const panelJsx = readFileSync(panelSrcFile('AssistantPanel.jsx'), 'utf-8');
     expect(panelJsx).toContain("'ekoa:assistant-open'"); // ...and the panel listens for it
     // No emoji (UI-code rule).
