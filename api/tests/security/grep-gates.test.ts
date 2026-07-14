@@ -85,22 +85,30 @@ const STUB_RE = /PERMISSIVE[-_]STUB/;
 // bounded by a single or double quote on both sides. Deliberately does NOT match feature identifiers
 // (`integrationBuilder`, `appBuilder`, `builderSessionId`), the site-builder detection code, the
 // `pages.builder.*` locale namespace, or the `allowBuilderAutomations` org-setting key.
+// A quoted `builder` ROLE string literal. Deliberately quote-only (h5-reviewer L1): a backtick
+// matcher would false-fire on doc-comment PROSE (markdown code formatting like "renamed `builder`
+// -> `user`"), which is worse than the near-zero-risk gap it closes - a role value is written as a
+// plain string literal ('builder'), never a template literal, in this codebase. The per-file COUNT
+// pin below is the real robustness upgrade (a NEW quoted orphan in an allowlisted file now fails).
 const BUILDER_RE = /['"]builder['"]/;
 
 /**
  * The ONLY files permitted to carry a quoted `builder` role literal after the H1 rename. Each is a
  * sanctioned survivor - a NEW hit in ANY other file fails the gate. Repo-relative, forward-slashed.
  */
-const BUILDER_ALLOWLIST = new Set<string>([
+// The ONLY files permitted to carry a `builder` role literal after the H1 rename, each pinned to its
+// EXACT current count (h5-reviewer L2: a file-level allowlist would let a NEW orphan literal added to
+// an allowlisted file pass silently; pinning the count makes any ADDITION fail the gate too).
+const BUILDER_ALLOWLIST = new Map<string, number>([
   // Legacy-JWT normalization shim (H1): a token minted before the rename still carries role
-  // 'builder'; verifyToken maps it to 'user' at the single verify chokepoint (+ its doc comment).
-  'api/src/auth/jwt.ts',
+  // 'builder'; verifyToken maps it to 'user' at the single verify chokepoint (+ its doc comments).
+  ['api/src/auth/jwt.ts', 2],
   // migrateBuilderRole: the idempotent boot migration query `users.find({ role: 'builder' })` that
-  // rewrites any legacy row to 'user' and bumps its token epoch (+ its doc comments).
-  'api/src/auth/users-service.ts',
+  // rewrites any legacy row to 'user' and bumps its token epoch.
+  ['api/src/auth/users-service.ts', 2],
   // web SESSION-KIND 'builder' - the app-building SESSION kind persisted server-side, NOT a user
   // ROLE. Out of the role model entirely (the H1 rename touched roles, not session kinds).
-  'web/stores/orchestration.ts',
+  ['web/stores/orchestration.ts', 1],
 ]);
 
 describe('grep gate: no permissive stub survives (H5)', () => {
@@ -129,11 +137,12 @@ describe('grep gate: no orphan `builder` role ref survives (H5)', () => {
         .map((h) => `  ${h.file}:${h.line}  ${h.text}`)
         .join('\n')}\nIf this is a legitimate survivor, add it to BUILDER_ALLOWLIST with a comment; otherwise rename it to 'user'.`,
     ).toEqual([]);
-    // Sanity: the allowlisted files ARE actually present in the tree (a stale allowlist entry that
-    // no longer matches anything is dead weight the gate should surface).
-    for (const allowed of BUILDER_ALLOWLIST) {
-      const stillHasLiteral = hits.some((h) => h.file === allowed);
-      expect(stillHasLiteral, `allowlist entry ${allowed} no longer carries a builder literal - prune it`).toBe(true);
+    // Per-file COUNT pin (h5-reviewer L2): an allowlisted file must carry EXACTLY its sanctioned
+    // number of builder literals - a NEW one ADDED to an allowlisted file (or a stale entry whose
+    // literals were removed) fails the gate, so the allowlist can never silently hide a fresh orphan.
+    for (const [allowed, expected] of BUILDER_ALLOWLIST) {
+      const actual = hits.filter((h) => h.file === allowed).length;
+      expect(actual, `allowlist entry ${allowed}: expected ${expected} builder literal(s), found ${actual} - a NEW one must be renamed to 'user' or the count updated with justification`).toBe(expected);
     }
   });
 });

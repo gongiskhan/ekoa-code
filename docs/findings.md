@@ -137,6 +137,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   by removing the unenforced field from the manifest schema. Flagged by H5's destructive-action-authz
   assertion (the privileged app-sso ops ARE gated + asserted; this is the general data plane).
 
+- **`h3-edit-mode-no-cancel`** (low, UX fast-follow; H3 fresh review flagged, non-blocking). The admin
+  edit-mode `running` phase (`api/assets/panel-runtime/src/edit-mode.js` / `AssistantPanel.jsx`) has
+  no client-side timeout, no AbortController, and no Cancel affordance - unlike the sibling visitor
+  `send()` in the same panel (which got FETCH_TIMEOUT_MS + AbortController for codex-d2). Toggling the
+  edit switch OFF mid-run does not abort the in-flight `runEditPatch`, so a late resolve can flip the
+  phase to `preview` with stale shas. The stale-sha CONSEQUENCE is already mitigated (the H6/codex
+  fix: `guardedRollback` re-reads HEAD and refuses a stale restore), so this is a UX gap not a data
+  hazard. Fast-follow: mirror the visitor path - an AbortController tied to editMode-off/unmount + a
+  run-generation guard + a Cancel button. Every server action stays H1-gated regardless.
+
 ### Operator-blocked / external
 
 - **`prod-corpus-import`** (external). The real production knowledge corpus import is pending, blocked
