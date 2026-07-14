@@ -1,0 +1,18 @@
+{
+  "slice": "H6",
+  "kind": "docs",
+  "commit": "03073c6",
+  "commits": ["03073c6"],
+  "tag": "operator/h6",
+  "securityBlock": true,
+  "gates": {
+    "implement": { "status": "passed", "at": "2026-07-14T01:38:00Z", "detail": "The run-level codex adversarial review over the WHOLE security block (H1-H5) in one pass (BRIEF Phase 10 final gate) + the journey suite green. This slice's 'implementation' IS the block review + closing its cross-slice findings. Two lead fixes for the emergent findings: whoami now mirrors the FULL H1 admission gate (billingLocked); the /pedidos convert gives an actionable reason on a private-draft 404" },
+    "test": { "status": "passed", "at": "2026-07-14T01:38:00Z", "detail": "full api lane 1630 passed / 1 pre-existing skip; web 168; the whoami billing-locked false-offer pinned (app-assistant.test.ts); tsc(api src+test, web) clean, chokepoint clean. The full journey + capability + isolation assertion suites (H5) are green and coherent (codex-confirmed)" },
+    "securityWall": { "status": "passed", "at": "2026-07-14T01:38:00Z", "detail": "gitleaks clean on 03073c6; chokepoint clean; the block-level review is itself the security wall for the whole block - it verified no cross-slice gate bypass, coherent role/capability enforcement across every path, coherent builder->user migration + shim, durable revocation across the session lifecycle, and consistent cross-org isolation across assistant grounding + queue + edit gate" },
+    "liveVerification": { "status": "passed", "at": "2026-07-14T01:38:00Z", "detail": "the block's live proof is H5's two journeys (edit: real admin patch run + preview/approve/rollback + user-cannot-edit; request-changes: file + cross-org-block + convert-to-patch-run) - codex confirmed both coherent for the paths they exercise. The billing-locked fix is unit-pinned (a live re-probe is unnecessary - the gate composition is deterministic)" },
+    "freshReview": { "status": "skipped", "reason": "H6 IS the review slice (the run-level cross-model adversarial pass); a fresh-context Anthropic review of a review adds nothing - the per-slice fresh reviews already ran on H1-H5", "at": "2026-07-14T01:38:00Z" },
+    "codexSliceReview": { "status": "passed", "at": "2026-07-14T01:38:00Z", "detail": "THE BLOCK-LEVEL CODEX REVIEW (this slice's purpose). First pass (slices/H6/block-review.md): VERIFIED COHERENT on all majors (no H3/H4 path bypasses H1; whoami aligned with the gate; migration/shim coherent; revocation durable; cross-org isolation consistent across grounding/queue/edit; journeys coherent) and found 2 EMERGENT cross-slice issues no per-slice review saw: (Med) whoami missed billingLocked so a locked admin was offered edit mode then refused at /jobs; (Low) a convert of a private-draft request always 404s. Both fixed in 03073c6. Re-confirm (slices/H6/block-review-2.md): both CLOSED, no new defect, block coherence undisturbed. VERDICT: APPROVE" },
+    "designAudit": { "status": "skipped", "reason": "docs/review slice, no UI surface", "at": "2026-07-14T01:38:00Z" },
+    "walkthrough": { "status": "skipped", "reason": "the block review IS the evidence; H5's journey casts are the block's live walkthrough", "at": "2026-07-14T01:38:00Z" }
+  }
+}

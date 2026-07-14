@@ -329,6 +329,14 @@
    "tag": "operator/h5",
    "at": "2026-07-14T01:25:00Z",
    "note": "security block 5/6; dual review incl codex re-review APPROVE; both live journeys PASS; surfaced + honestly flagged a HIGH pre-existing served-app-data gap (operator decision)"
+  },
+  "H6": {
+   "status": "passed",
+   "kind": "docs",
+   "commit": "03073c6",
+   "tag": "operator/h6",
+   "at": "2026-07-14T01:38:00Z",
+   "note": "security block 6/6; block-level codex review APPROVE - verified coherent + 2 emergent cross-slice findings fixed"
   }
  },
  "resume": {
@@ -337,10 +345,10 @@
   "resumePoint": "E2"
  },
  "globalGate": {
-  "status": "in-progress",
-  "resumedAt": "2026-07-13T13:47:57Z",
-  "landed": 29,
-  "resumePoint": "H6 (codex block-level review over the whole security block + journey suite green)",
-  "note": "Run continues ON MAIN. 29/31 gated. H BLOCK 5/6 (atomic): H1-H5 all landed. Remaining ONLY H6 (the run-level codex adversarial review over the whole block). Top operator item: served-app-data-unauthenticated-writes (HIGH, pre-existing, flagged). Codex healthy."
+  "status": "PASSED",
+  "at": "2026-07-14T01:38:00Z",
+  "landed": 31,
+  "of": 31,
+  "note": "ALL 31 slices gated. Security block H1-H6 complete + block-level codex-reviewed. Run on main. TOP operator item: served-app-data-unauthenticated-writes (HIGH, pre-existing, flagged - a served-app data-plane auth decision, separate from the complete platform layer). Fresh LANDING packet owed."
  }
 }
