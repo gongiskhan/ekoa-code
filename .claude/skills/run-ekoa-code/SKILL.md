@@ -40,6 +40,29 @@ Auth is token-based (Bearer in localStorage), so a CORS shim is enough.
 - Playwright's Chromium: `npx playwright install chromium` (already present if
   the e2e suite has run).
 
+## Model credential — required for chat/build runs, re-provision EVERY boot
+
+Login and static pages work unprovisioned, but **any chat turn, app build, or
+assistant call fails with `ADAPTER_ERROR: "Ocorreu um erro ao contactar o
+modelo."` until a model credential is provisioned into the RUNNING stack.** The
+credential lives only in the API's AES-encrypted `credentials` store; there is
+no env fallback (the SDK subprocess env is scrubbed on purpose), and the dev
+Mongo is ephemeral — so this must be re-run after **every** stack (re)start:
+
+```bash
+# OAuth token from a Claude subscription (get one with `claude setup-token`):
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat... node .claude/skills/run-ekoa-code/provision-credential.mjs
+# or an Anthropic API key:
+ANTHROPIC_API_KEY=sk-ant-... node .claude/skills/run-ekoa-code/provision-credential.mjs
+```
+
+The script logs in as the admin, POSTs the secret to `/api/v1/credentials`
+(super-admin only, effective immediately, never printed/persisted to disk), and
+confirms `/health` reports `claudeAuth.configured=true`. Agents cannot read the
+operator's keychain (permission-gated) — when no credential is in the
+environment, **ask the operator to run the line above** (`! <command>` runs it
+in-session).
+
 ## Run (agent path)
 
 ### One-shot proof — boot, real-UI login, screenshot, tear down
