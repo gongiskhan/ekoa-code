@@ -172,6 +172,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   path (an admin patch run dictating the corrected line) - tour + 2 actions now served. Residual
   (minor, open): `actionManifestError`/`toursError` are invisible outside server logs; consider an
   operator-visible surface.
+- **`app-custom-action-unregistered`** (discovery, 2026-07-14, live) - second instance of the
+  agent-content class: the tarefas build declared `ui_actions: - id: tarefa-adicionar, kind: custom`
+  but never registered `window.__ekoaApp.actions['tarefa-adicionar']` (the declaring-ui-actions
+  contract), so the assistant's operate flow ALWAYS failed its second action ("Não foi possível
+  executar a ação.") - observed on camera. No build-time check catches a declared custom id with no
+  registration in the app source. Live app repaired via patch run (kind -> `toggle`, a declarative
+  click, no registration needed). Residual (minor, open): readUiActions could WARN when a custom id
+  has no `__ekoaApp.actions[` registration anywhere in frontend/src.
+- **`assistant-operate-turn-noise-citations`** (minor, open, 2026-07-14) - an operate-mode panel
+  turn ("Adiciona uma tarefa...") rendered a Fontes block citing five irrelevant jurisprudência
+  acórdãos (org grounding ran and cited for a non-question turn). Cosmetic but confusing; consider
+  suppressing citations on do-mode turns whose grounding contributed nothing.
 - **`panel-dead-tour-launcher`** (discovery, 2026-07-14, fixed in d172c2a) - teach mode offered
   "Iniciar tutorial guiado" unconditionally; on an app with no stored tour the player can only
   error ("an app with no tours simply has no teach path", authoring-tours). The panel now probes
