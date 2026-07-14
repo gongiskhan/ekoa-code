@@ -1675,6 +1675,8 @@ export default function UnifiedChatPage() {
                         <button
                           onClick={() => handleSendMessage()}
                           disabled={!chatInput.trim()}
+                          title={chatPanel.sendMessage}
+                          aria-label={chatPanel.sendMessage}
                           className="p-1.5 transition-all disabled:text-neutral-300 disabled:cursor-not-allowed text-teal-600 hover:text-teal-700 cursor-pointer"
                         >
                           <Send size={16} />
