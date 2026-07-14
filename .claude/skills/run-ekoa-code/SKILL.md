@@ -1,6 +1,6 @@
 ---
 name: run-ekoa-code
-description: Run, launch, boot, or screenshot the ekoa-code app locally — the full stack (Express API + Next.js dashboard) with a real-UI login. Use to start the app, see a change working in the real dashboard, or capture a screenshot. Handles the CSP + CORS traps that make a plain `npm run dev` fail to log in.
+description: Run, launch, boot, or screenshot the ekoa-code app locally — the full stack (Express API + Next.js dashboard) with a real-UI login. Use to start the app, see a change working in the real dashboard, or capture a screenshot. Handles the CSP + CORS traps that make a hand-rolled `next dev` + api boot fail to log in (root `npm run dev` wraps this same driver).
 ---
 
 # Run ekoa-code
@@ -12,13 +12,21 @@ dashboard logs in against the API. Driving it is done through
 `playwright-cli` (drives the browser). All paths below are relative to the repo
 root.
 
-**Why you can't just `npm run dev`** (both traps are real; the driver handles both):
+**Why a hand-rolled `next dev` + api boot cannot log in** (both traps are real;
+the driver handles both):
 1. `next.config.ts` builds the dashboard's CSP `connect-src` from
    `process.env.NEXT_PUBLIC_API_URL`. Plain `next dev` leaves it unset, so the
    browser **blocks the login fetch** as a CSP violation.
 2. The API ships **no CORS** on purpose — in production the web and API are
    same-origin behind an edge proxy. Cross-origin dev gets no
    `Access-Control-Allow-Origin`, so login fails preflight.
+
+Root **`npm run dev`** (`scripts/dev.mjs`) is the operator's entrypoint: it wraps
+this same driver (api in ts-node dev mode by default, `--built` to serve
+`api/dist`) and additionally auto-provisions the model credential on every boot -
+refreshing the stored OAuth token or opening the browser for a one-click
+"Authorize" when there is nothing to refresh (`scripts/dev-credential.mjs`).
+Agents driving the stack programmatically use `driver.mjs` directly as below.
 
 The committed e2e harness only ever boots the API; the dashboard specs
 historically relied on an uncommitted "operator full-stack env" (build-run note,
@@ -47,13 +55,24 @@ assistant call fails with `ADAPTER_ERROR: "Ocorreu um erro ao contactar o
 modelo."` until a model credential is provisioned into the RUNNING stack.** The
 credential lives only in the API's AES-encrypted `credentials` store; there is
 no env fallback (the SDK subprocess env is scrubbed on purpose), and the dev
-Mongo is ephemeral — so this must be re-run after **every** stack (re)start:
+Mongo is ephemeral — so this must be re-run after **every** stack (re)start.
+
+**`npm run dev` does all of this automatically**: `scripts/dev-credential.mjs`
+keeps a dedicated OAuth token pair in `~/.config/ekoa/claude-credentials.json`
+(chmod 600; override with `EKOA_CLAUDE_CREDENTIALS`), silently refreshing it on
+expiry and opening the browser for a one-click "Authorize" only when there is
+nothing to refresh. If the token goes bad while the stack is up:
+`npm run dev:auth` (re-authorizes and re-provisions without a restart).
+
+When the stack was booted through `driver.mjs` directly, provision by hand:
 
 ```bash
 # OAuth token from a Claude subscription (get one with `claude setup-token`):
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat... node .claude/skills/run-ekoa-code/provision-credential.mjs
 # or an Anthropic API key:
 ANTHROPIC_API_KEY=sk-ant-... node .claude/skills/run-ekoa-code/provision-credential.mjs
+# or reuse the managed drop-file (refresh + provision, no browser):
+node scripts/dev-credential.mjs --no-browser --provision
 ```
 
 The script logs in as the admin, POSTs the secret to `/api/v1/credentials`

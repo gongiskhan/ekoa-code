@@ -5,7 +5,18 @@ operator and any future agent session. Paths are relative to the repo root.
 
 ## Run
 
-Bring the full stack up with the committed driver, not by hand:
+The operator path is the root dev script - full stack in dev mode plus automatic model-credential
+provisioning (browser one-click "Authorize" on first run, silent token refresh afterwards):
+
+```
+npm run dev                # api (ts-node watch) + CORS proxy + next dev + credential provisioning
+npm run dev -- --built     # serve api/dist instead of ts-node (build first)
+npm run dev:auth           # re-authorize + re-provision into a RUNNING stack (token went bad)
+```
+
+`scripts/dev.mjs` wraps the committed driver below; `scripts/dev-credential.mjs` manages the token
+(drop-file `~/.config/ekoa/claude-credentials.json`, chmod 600, dedicated OAuth session so it never
+rotates under the operator's live `claude` login). Agents and harnesses use the driver directly:
 
 ```
 node .claude/skills/run-ekoa-code/driver.mjs up            # boot api+proxy+web, stay alive, print a READY line
@@ -16,8 +27,10 @@ Ports and login (all overridable by env, defaults shown): the real Express API r
 **internal** `:4211` (`EKOA_API_PORT`); a zero-dependency CORS reverse proxy occupies `:4111`
 (read from the `backend.port` file - the port the web bundle and node drivers already resolve to)
 and forwards to `:4211`; Next.js dev runs on `:3000` (`EKOA_WEB_PORT`). Login is `admin` /
-`tmp12345` (`EKOA_ADMIN_USERNAME` / `EKOA_ADMIN_PASSWORD`). `EKOA_API_MODE` is `built` by default
-(serves `api/dist/server.js`, so run `npm run build` first) or `dev` (ts-node, no build needed).
+`tmp12345` (`EKOA_ADMIN_USERNAME` / `EKOA_ADMIN_PASSWORD`). `EKOA_API_MODE` picks the api serving
+mode: `built` (serves `api/dist/server.js`, so run `npm run build` first) or `dev` (ts-node
+transpile-only watch, no build needed). `npm run dev` defaults to `dev`; the bare driver defaults
+to `built`.
 
 Why booting `next dev` and the api dev server by hand does not work - the driver exists to solve
 exactly this:
@@ -101,8 +114,10 @@ cutover is the founder-gated cutover procedure, outside this run - archived with
 
 **Model credential posture (read this before wondering why chat/build errors on a fresh boot).** The
 provider credential is a single AES-encrypted document in the `credentials` Mongo collection
-(`_id: 'default'`), set **only** through the in-process `setCredential` seam in
-`api/src/llm/credentials.ts`. There is no env var, no HTTP route, and no migration that seeds it. A
+(`_id: 'default'`), written **only** through the in-process `setCredential` seam in
+`api/src/llm/credentials.ts`. No env var and no migration seeds it; the one runtime path is the
+super-admin `POST /api/v1/credentials` route (which itself writes through that seam) - the route
+`provision-credential.mjs` and `npm run dev` use. A
 fresh boot is therefore honestly un-credentialed: `GET /health` reports `claudeAuth.configured=false`
 and `claudeAuth.ok=false`, and every chat/build call errors with "No model credential configured"
 until the credential is provisioned. Because dev Mongo is in-memory and ephemeral (below), the
@@ -144,15 +159,20 @@ Env names the API reads, with dev defaults:
 
 The provider credential is the AES-encrypted `credentials/default` document in Mongo. Dev Mongo is
 `mongodb-memory-server`, created fresh and discarded on every boot, so the credential does not survive
-a restart - re-provision it after every `driver.mjs up` (and after any `api/` rebuild + restart):
+a restart - re-provision it after every stack (re)start. `npm run dev` does this automatically
+(`scripts/dev-credential.mjs`: refresh the stored token, or browser-authorize a new dedicated OAuth
+pair into `~/.config/ekoa/claude-credentials.json`); `npm run dev:auth` repairs a running stack. For a
+stack booted through `driver.mjs` directly, provision by hand:
 
 ```
 export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or an ANTHROPIC_API_KEY for api-key mode
 node .claude/skills/run-ekoa-code/provision-credential.mjs
+# or, no browser and no shell secret handling: node scripts/dev-credential.mjs --no-browser --provision
 ```
 
-This writes the credential through the in-process `setCredential` seam - there is no HTTP route or env
-var that seeds it (invariant 4). Confirm with `GET /health`: `claudeAuth.ok=true`,
+This posts to the super-admin `POST /api/v1/credentials` route, which writes through the in-process
+`setCredential` seam - no env var or boot-time path seeds it (invariant 4). Confirm with `GET /health`:
+`claudeAuth.ok=true`,
 `claudeAuth.configured=true`, `meteringAnomalies=0`, `gatewayUnmeteredCalls=0`. Only then is a live
 model turn trustworthy. Do not use the operator's live Claude Code login token for long-lived stacks -
 it rotates on `/login` and invalidates the seeded snapshot (`docs/known-flakes.md`); provision a

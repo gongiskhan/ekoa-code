@@ -158,6 +158,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## Recently fixed - 2026-07-14 walkthrough-prep sweep (operator evidence pass)
 
+- **`api-js-yaml-undeclared-dependency`** (dev-mode boot, 2026-07-14) - `api/` imports `js-yaml`
+  (action-manifest parsing) but never declared it: at runtime it resolved ONLY as a transitive dep
+  of **eslint** (a devDependency), so a production `npm ci --omit=dev` install would crash the API
+  on import, and types came from an ambient shim (`api/src/automation/vendor.d.ts`) that tsc loads
+  via `include` but the ts-node ESM loader does not (`files: false`) - making `EKOA_API_MODE=dev`
+  die on boot with an unrenderable TS7016 diagnostic (`[Object: null prototype]`). This was the
+  ledgered G8 action the shim itself prescribed. Fixed: `js-yaml` added to api dependencies,
+  `@types/js-yaml` to devDependencies, shim deleted, and the api `dev` script switched to
+  `ts-node/esm/transpile-only` (type checking stays with the `typecheck` gate; dev watch restarts
+  no longer pay a whole-program check and are immune to the ambient-file-loading gap class).
 - **`app-manifest-recipe-dsl-undocumented`** (discovery, 2026-07-14, live) - the app base ships
   skills for `ui_actions` (declaring-ui-actions) and tours (authoring-tours) but NONE for the
   `capabilities:` recipe DSL, so build agents GUESS the shape. Observed live on a fresh tarefas

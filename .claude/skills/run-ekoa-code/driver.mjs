@@ -260,7 +260,9 @@ function teardown(code) {
   for (const c of children) { try { c.kill('SIGTERM'); } catch { /* ignore */ } }
   if (proxyServer) { try { proxyServer.close(); } catch { /* ignore */ } }
   setTimeout(() => {
-    for (const c of children) { try { if (!c.killed) c.kill('SIGKILL'); } catch { /* ignore */ } }
+    // .killed only records that a signal was SENT; a child that ignored SIGTERM still has
+    // exitCode/signalCode null - that is the condition for escalating.
+    for (const c of children) { try { if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL'); } catch { /* ignore */ } }
     process.exit(code);
   }, 1500);
 }
