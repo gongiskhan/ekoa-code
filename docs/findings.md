@@ -180,6 +180,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   registration in the app source. Live app repaired via patch run (kind -> `toggle`, a declarative
   click, no registration needed). Residual (minor, open): readUiActions could WARN when a custom id
   has no `__ekoaApp.actions[` registration anywhere in frontend/src.
+- **`edit-mode-preview-not-visible-in-page`** (UX, open, 2026-07-14, observed live) - after a
+  patch run completes, the panel's preview phase shows only the sha diff; the RUNNING served-app
+  page keeps executing the old bundle (nothing reloads it), and manually reloading to SEE the
+  change destroys the pending approve/revert panel state (client-only), leaving no panel path to
+  revert. The admin therefore decides from shas alone. Fast-follow candidates: an in-panel
+  "recarregar a aplicação" affordance that persists the pending preview (e.g. sessionStorage), or
+  a live-reload signal to the served page on activation (the dashboard preview already gets
+  preview_reload). Sits beside the ledgered `h3-edit-mode-no-cancel` fast-follow. Also note: the
+  post-restore dist rebuild is asynchronous - an immediate reload can race it.
 - **`assistant-operate-turn-noise-citations`** (minor, open, 2026-07-14) - an operate-mode panel
   turn ("Adiciona uma tarefa...") rendered a Fontes block citing five irrelevant jurisprudência
   acórdãos (org grounding ran and cited for a non-question turn). Cosmetic but confusing; consider
