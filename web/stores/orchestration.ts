@@ -41,6 +41,11 @@ export interface ChatMessage {
      *  anonymisation audit, joined by correlation id). Absent on turns that never
      *  touched local files; drives the per-turn trust chip when present. */
     localFileActivity?: LocalFileActivity;
+    /** Refused-build feed (BRIEF 9a): set on the capability-refusal error message
+     *  (POST /jobs 403 canBuildApps/canEditApps) so the bubble can offer to file the
+     *  pre-drafted request to the org-admin queue - a refusal is never a dead end.
+     *  `text` is the user's original request; `appId` the refused follow-up's artifact. */
+    refusal?: { text: string; appId?: string };
   };
 }
 

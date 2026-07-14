@@ -156,6 +156,25 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-14 walkthrough-prep sweep (operator evidence pass)
+
+- **`chat-refusal-affordance-unwired`** (discovery, 2026-07-14) - BRIEF 9a promised a refused
+  build in the dashboard chat "converts into a pre-drafted build request routed to the org-admin
+  - never a dead end", and diagram 03's H4 block + the change-requests store's `fileFromRefusal`
+  action both claimed the feed - but NO component ever called it: a capability refusal
+  (POST /jobs 403 `canBuildApps`/`canEditApps`) rendered as a plain red error with no way to file
+  the pedido (code-behind-diagram drift; the served-app panel path was wired, the dashboard chat
+  path was not). Fixed: `useAgentExecution` attaches the pre-drafted request
+  (`metadata.refusal = { text, appId? }`) to the capability-refusal message, and the chat bubble
+  renders "Pedir ao administrador" -> `fileFromRefusal` -> "Pedido enviado ao administrador."
+  (`data-testid` chat-refusal-file/filed). Pinned by `web/__tests__/refusal-file-request.test.ts`
+  (403+capability carries the payload incl. appId on follow-ups; 500 and capability-less 403 do
+  not). Diagram 03 already depicted the flow - no diagram change needed.
+- **`assistant-panel-e2e-stale-intro-assert`** (discovery, 2026-07-14) - the committed D2 driver
+  `api/tests/e2e/assistant-panel.e2e.mjs` asserted the first-open lead contains "apresentar", but
+  the shipped copy (AssistantPanel.jsx) says "mostrar ... ensinar ... operá-la": a re-run failed at
+  step B on copy drift, not behavior. Fixed the assertion to the shipped copy ('mostrar').
+
 ## Recently fixed - 2026-07-13 preview probe CORS duplicate header (operator)
 
 - **`F-2026-07-13-proxy-duplicate-acao`** (operator-reported, 2026-07-13) - in dev, the preview

@@ -35,6 +35,7 @@ import { TrustChip } from "@/components/privacy/trust-chip";
 import { ThinkingBlock } from "@/components/chat/thinking-block";
 import { redactProviderIdentity } from "@/lib/sanitize-error";
 import { useOrchestrationStore, type ChatMessage, type OutputEntry } from "@/stores/orchestration";
+import { useChangeRequestsStore } from "@/stores/change-requests";
 import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
@@ -627,6 +628,11 @@ function MessageBubble({
   const { chatPanel: chatPanelT } = useTranslation();
   const language = useI18nStore((s) => s.language);
   const [isDetailExpanded, setIsDetailExpanded] = useState(false);
+  // Refused-build feed (BRIEF 9a): file the pre-drafted request carried on a
+  // capability-refusal message to the org-admin queue. Local per-bubble state only;
+  // the request itself lives in the change-requests store.
+  const [refusalState, setRefusalState] = useState<'idle' | 'filing' | 'filed' | 'failed'>('idle');
+  const fileFromRefusal = useChangeRequestsStore((s) => s.fileFromRefusal);
 
   // Look up output entries for this message's job
   const sessionId = useOrchestrationStore((s) => s.activeSessionId);
@@ -761,6 +767,40 @@ function MessageBubble({
                   <RefreshCw size={12} />
                   {language === "pt" ? "Tentar novamente" : "Try again"}
                 </button>
+              </div>
+            )}
+            {isError && message.metadata?.refusal && (
+              <div className="mt-2 not-italic">
+                {refusalState === "filed" ? (
+                  <span
+                    data-testid="chat-refusal-filed"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-600"
+                  >
+                    <CheckCircle2 size={12} className="text-teal-600" />
+                    {language === "pt"
+                      ? "Pedido enviado ao administrador."
+                      : "Request sent to the administrator."}
+                  </span>
+                ) : (
+                  <button
+                    data-testid="chat-refusal-file"
+                    disabled={refusalState === "filing"}
+                    onClick={async () => {
+                      if (refusalState === "filing") return;
+                      setRefusalState("filing");
+                      const filed = await fileFromRefusal(message.metadata!.refusal!);
+                      setRefusalState(filed ? "filed" : "failed");
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded border border-neutral-300 bg-white text-neutral-700 hover:border-teal-600 hover:text-teal-700 transition-colors disabled:opacity-60"
+                  >
+                    <Send size={12} />
+                    {refusalState === "filing"
+                      ? language === "pt" ? "A enviar..." : "Sending..."
+                      : refusalState === "failed"
+                        ? language === "pt" ? "Tentar enviar novamente" : "Try sending again"
+                        : language === "pt" ? "Pedir ao administrador" : "Ask the administrator"}
+                  </button>
+                )}
               </div>
             )}
           </div>
