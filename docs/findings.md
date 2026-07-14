@@ -158,6 +158,28 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## Recently fixed - 2026-07-14 walkthrough-prep sweep (operator evidence pass)
 
+- **`app-manifest-recipe-dsl-undocumented`** (discovery, 2026-07-14, live) - the app base ships
+  skills for `ui_actions` (declaring-ui-actions) and tours (authoring-tours) but NONE for the
+  `capabilities:` recipe DSL, so build agents GUESS the shape. Observed live on a fresh tarefas
+  build: the agent flattened `store.query` (`{ op: store.query, field: ..., op: eq, ... }` - the
+  comparison belongs under `where: { field, op, value }`), duplicating the `op` key; ONE invalid
+  line fails the whole frontmatter YAML parse at activation, so the app lost BOTH its action
+  manifest AND its tours (`actionManifestError` + `toursError`) - the assistant could neither
+  operate nor teach the app, and the errors surface only in server logs (no operator UI). Fixed:
+  (a) new base skill `api/assets/bases/app/skills/declaring-capabilities.md` documenting the EXACT
+  recipe op shapes (source of truth: `api/src/automation/platform-primitives.ts`) with the
+  store.query `where:` mistake called out; (b) the live app repaired through the product's own
+  path (an admin patch run dictating the corrected line) - tour + 2 actions now served. Residual
+  (minor, open): `actionManifestError`/`toursError` are invisible outside server logs; consider an
+  operator-visible surface.
+- **`panel-dead-tour-launcher`** (discovery, 2026-07-14, fixed in d172c2a) - teach mode offered
+  "Iniciar tutorial guiado" unconditionally; on an app with no stored tour the player can only
+  error ("an app with no tours simply has no teach path", authoring-tours). The panel now probes
+  GET /api/demos/:appId once on mount (zero-token) and renders the launcher only when a tour
+  exists. Asset rebuilt; the RUNNING api caches panel bytes in memory, so the live swap (and its
+  live verification) lands on the next stack boot - the E2 driver covers it (its demos stub
+  precedes navigation, so the probe is fulfilled).
+
 - **`chat-refusal-affordance-unwired`** (discovery, 2026-07-14) - BRIEF 9a promised a refused
   build in the dashboard chat "converts into a pre-drafted build request routed to the org-admin
   - never a dead end", and diagram 03's H4 block + the change-requests store's `fileFromRefusal`
