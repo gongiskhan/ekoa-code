@@ -1,0 +1,104 @@
+{
+  "title": "O assistente da aplicação",
+  "project": "ekoa",
+  "folder": "operator",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    { "type": "title", "id": "intro", "text": "O assistente da aplicação",
+      "subtitle": "Cada aplicação Ekoa inclui um assistente - operar, mostrar, ensinar", "duration": 2.8, "reflectFlag": true },
+
+    { "type": "browser", "id": "app", "baseURL": "http://localhost:4111", "startPath": "/apps/5893373f-ea9f-4934-8bae-e2b50a76f083/",
+      "beats": [
+        { "id": "launcher", "caption": "Uma aplicação criada no Ekoa - o assistente vem incluído",
+          "expectedScreen": "a generated task-list app with an 'Assistente' launcher button visible",
+          "actions": [ { "type": "waitFor", "selector": ".ekoa-assistant-launcher", "timeout": 30000 } ],
+          "assert": { "selector": ".ekoa-assistant-launcher", "highlight": true }, "hold": 3600 },
+        { "id": "open", "caption": "O assistente ajuda de três formas: mostrar, ensinar e operar",
+          "expectedScreen": "the assistant panel open on the right with the intro message, three example chips and the Operar/Mostrar/Ensinar mode buttons",
+          "actions": [ { "type": "click", "selector": ".ekoa-assistant-launcher" },
+                       { "type": "waitFor", "selector": ".ekoa-assistant-intro-lead", "timeout": 15000 } ],
+          "assert": { "selector": ".ekoa-assistant-intro-lead", "text": "três formas", "highlight": true }, "hold": 4200 },
+        { "id": "modes", "caption": "Três modos à escolha: Operar, Mostrar, Ensinar",
+          "expectedScreen": "the three mode buttons (Operar, Mostrar, Ensinar) highlighted in the panel header",
+          "assert": { "selector": ".ekoa-assistant-modes", "highlight": true }, "hold": 3200 },
+        { "id": "ask-op", "caption": "Peça por palavras suas: 'Adiciona uma tarefa: Rever o contrato da D. Amélia'",
+          "expectedScreen": "the user's message asking to add the 'Rever o contrato da D. Amélia' task sent in the panel conversation",
+          "actions": [ { "type": "fill", "selector": ".ekoa-assistant-textarea", "text": "Adiciona uma tarefa: Rever o contrato da D. Amélia" },
+                       { "type": "click", "selector": ".ekoa-assistant-send" } ],
+          "assert": { "selector": ".ekoa-assistant-turn[data-role=\"user\"]", "highlight": true }, "hold": 2600 }
+      ] },
+
+    { "type": "browser", "id": "working", "continue": true, "speed": 8, "runTimeoutMs": 420000,
+      "beats": [
+        { "id": "run-starts", "caption": "O assistente interpreta o pedido e opera a própria aplicação",
+          "expectedScreen": "the panel showing an action run entry while the assistant works",
+          "holdUntil": { "selector": ".ekoa-assistant-run", "timeout": 300000 }, "holdAfter": 800 },
+        { "id": "run-done", "caption": "A ação é executada dentro da aplicação, à vista",
+          "expectedScreen": "the action run entry reaching the done state ('Ação executada.')",
+          "holdUntil": { "selector": ".ekoa-assistant-run[data-status=\"done\"]", "timeout": 240000 }, "holdAfter": 1200 }
+      ] },
+
+    { "type": "browser", "id": "op-result", "continue": true,
+      "beats": [
+        { "id": "done", "caption": "Ação executada - a tarefa entrou na lista da aplicação",
+          "expectedScreen": "the task list showing 'Rever o contrato da D. Amélia' and the panel showing 'Ação executada.'",
+          "assert": { "selector": "[data-demo-target=\"app-content\"]", "text": "Rever o contrato da D. Amélia", "highlight": true }, "hold": 4500 },
+        { "id": "teach-pin", "caption": "Modo Ensinar: a aplicação traz o seu tutorial guiado",
+          "expectedScreen": "the Ensinar mode pinned and an 'Iniciar tutorial guiado' launcher visible in the panel",
+          "actions": [ { "type": "click", "selector": "button:Ensinar" },
+                       { "type": "waitFor", "selector": ".ekoa-assistant-tour-start", "timeout": 15000 } ],
+          "assert": { "selector": ".ekoa-assistant-tour-start", "highlight": true }, "hold": 3400 },
+        { "id": "tour-start", "caption": "O tutorial guia passo a passo, destacando a própria aplicação",
+          "expectedScreen": "the guided tour section open (Tutorial guiado, Passo 1) with a spotlight ring over an app element",
+          "actions": [ { "type": "click", "selector": ".ekoa-assistant-tour-start" },
+                       { "type": "waitFor", "selector": ".ekoa-assistant-tour", "timeout": 20000 } ],
+          "assert": { "selector": ".ekoa-assistant-tour", "highlight": true }, "hold": 4500 },
+        { "id": "tour-next", "caption": "Avance ao seu ritmo",
+          "expectedScreen": "the tour advanced to the next step, spotlight moved",
+          "actions": [ { "type": "click", "selector": ".ekoa-assistant-tour-next" } ],
+          "assert": { "selector": ".ekoa-assistant-tour", "highlight": true }, "hold": 3800 },
+        { "id": "tour-exit", "caption": "Saia do tutorial quando quiser",
+          "expectedScreen": "the tour closed, panel back to the conversation",
+          "actions": [ { "type": "click", "selector": ".ekoa-assistant-tour-close" } ],
+          "assert": { "selector": ".ekoa-assistant-modes", "highlight": false }, "hold": 2200 }
+      ] },
+
+    { "type": "title", "id": "bridge", "text": "E quando a aplicação tem um domínio próprio?",
+      "subtitle": "Conhecimento da organização, com fontes", "duration": 2.4 },
+
+    { "type": "browser", "id": "knowledge", "baseURL": "http://localhost:4111", "startPath": "/apps/d4f4cbb2-8742-4090-9516-65ebb4241107/",
+      "beats": [
+        { "id": "b-open", "caption": "Outra aplicação: custas processuais - com o conhecimento do escritório",
+          "expectedScreen": "a court-fees calculator app with the assistant panel open",
+          "actions": [ { "type": "waitFor", "selector": ".ekoa-assistant-launcher", "timeout": 30000 },
+                       { "type": "click", "selector": ".ekoa-assistant-launcher" },
+                       { "type": "waitFor", "selector": ".ekoa-assistant-intro-lead", "timeout": 15000 } ],
+          "assert": { "selector": ".ekoa-assistant-intro-lead", "highlight": true }, "hold": 3600 },
+        { "id": "b-ask", "caption": "Pergunte sobre o domínio da aplicação",
+          "expectedScreen": "the question about Circular Interna TXJ-2026-QZ7 sent in the panel",
+          "actions": [ { "type": "fill", "selector": ".ekoa-assistant-textarea", "text": "Qual é o valor da taxa base de justiça fixada pela Circular Interna TXJ-2026-QZ7?" },
+                       { "type": "click", "selector": ".ekoa-assistant-send" } ],
+          "assert": { "selector": ".ekoa-assistant-turn[data-role=\"user\"]", "highlight": true }, "hold": 2600 }
+      ] },
+
+    { "type": "browser", "id": "b-working", "continue": true, "speed": 8, "runTimeoutMs": 420000,
+      "beats": [
+        { "id": "b-wait", "caption": "A responder com base no conhecimento da organização",
+          "expectedScreen": "the panel waiting for / streaming the grounded answer, citations appearing",
+          "holdUntil": { "selector": ".ekoa-assistant-citations", "timeout": 300000 }, "holdAfter": 1200 }
+      ] },
+
+    { "type": "browser", "id": "b-answer", "continue": true,
+      "beats": [
+        { "id": "fact", "caption": "Resposta fundamentada: a taxa base é de 55 euros",
+          "expectedScreen": "the assistant reply stating the fee of 55 euros",
+          "assert": { "selector": ".ekoa-assistant-turn[data-role=\"assistant\"] .ekoa-assistant-bubble", "text": "55 euros", "highlight": true }, "hold": 5000 },
+        { "id": "fontes", "caption": "Com a fonte citada: a Circular Interna TXJ-2026-QZ7 da organização",
+          "expectedScreen": "the Fontes citations block naming Circular Interna TXJ-2026-QZ7",
+          "assert": { "selector": ".ekoa-assistant-citations", "text": "TXJ-2026-QZ7", "highlight": true }, "hold": 4500 }
+      ] },
+
+    { "type": "title", "id": "outro", "text": "Operar · Mostrar · Ensinar",
+      "subtitle": "O assistente incluído em cada aplicação Ekoa", "duration": 2.4 }
+  ]
+}
