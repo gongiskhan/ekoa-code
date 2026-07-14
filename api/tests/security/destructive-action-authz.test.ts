@@ -12,14 +12,15 @@
  * parameter - the server decides on identity alone). The visitor-acting Microsoft Graph proxy
  * (`/api/app-sso/m365/*`) is asserted the same way.
  *
- * DOCUMENTED BOUNDARY (the destructive-action-authz finding - see docs/security.md + the H5
- * impl-notes): the GENERAL served-app data plane (`/api/app-data/*`, served-data.ts) that a C3
- * action's submit/delete lands on is deliberately app-id-SCOPED and byte-compatible with the legacy
- * key-value plane ("No platform JWT anywhere on this plane") - its per-app server boundary is the
- * `X-Ekoa-App-Id` scope + the owner-activation admission gate, NOT an app-sso session. The app-sso
- * IDENTITY plane asserted here gates the PRIVILEGED end-user ops (set-password, the Graph proxy). No
- * new auth code is added by H5; this suite ASSERTS the authz that H1-H4 and the served-app plane
- * already own.
+ * KNOWN HIGH GAP (codex-h5; see docs/security.md + docs/findings.md
+ * `served-app-data-unauthenticated-writes`): the GENERAL served-app data plane (`/api/app-data/*`,
+ * served-data.ts) that a C3 action's submit/delete lands on authenticates NO caller - it is scoped
+ * ONLY by `X-Ekoa-App-Id` + the owner-activation gate, so anyone who knows an app id can
+ * write/delete that app's data cross-tenant. This is NOT a safe boundary; it is a pre-existing gap
+ * requiring an operator decision, and the `KNOWN GAP` describe block below PINS the current state as
+ * a tripwire so a fix flips it. What IS asserted here as genuinely server-side-authorized is the
+ * app-sso IDENTITY plane's PRIVILEGED end-user ops (set-password, the Graph proxy). No new auth code
+ * is added by H5; this suite ASSERTS the authz that exists and TRIPWIRES the authz that does not.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';

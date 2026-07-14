@@ -133,11 +133,13 @@ non-interchangeable: platform session JWT (24 h / 30 d rememberMe), bridge token
 Deactivation is write-through (immediate) and bumps the token epoch, invalidating outstanding JWTs.
 
 **Served-app admission planes.** The per-app `/api/app-data` plane is unauthenticated app-global
-storage scoped only by `X-Ekoa-App-Id` (carried verbatim for byte-compatibility) - it must never hold
-confidential or per-user-private data. Anything private lives on a server-authenticated plane: the
-shared namespace (`/api/app-shared`, resolved owner + same-origin guard + `sharedData` opt-in) or
-behind the platform JWT / app-SSO session. This open posture is a documented decision, not an
-oversight.
+storage scoped only by `X-Ekoa-App-Id` (carried verbatim for byte-compatibility). Anything private
+is meant to live on a server-authenticated plane: the shared namespace (`/api/app-shared`, resolved
+owner + same-origin guard + `sharedData` opt-in) or behind the platform JWT / app-SSO session.
+**This open posture is a KNOWN HIGH GAP, not a safe boundary** - any caller who knows an app id can
+write/delete that app's `/api/app-data`, and the collection write-mode that was supposed to restrict
+this is unenforced. It is pre-existing and requires an operator decision - see the KNOWN GAP under
+the assertion layer below and `docs/findings.md` `served-app-data-unauthenticated-writes`.
 
 **Security-block assertion layer (H5).** The access-control invariants above are held by committed,
 re-runnable gates so they cannot silently regress:

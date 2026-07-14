@@ -98,7 +98,11 @@ describe('capability gate wiring (H5) - the matrix is enforced at the routes', (
   const WIRING: Array<{ capability: Capability; file: string; vector: string; behavioral: string }> = [
     { capability: 'canBuildApps', file: 'routes/jobs.ts', vector: 'first build (POST /jobs, no artifactId)', behavioral: 'tests/contract/jobs-capability.test.ts (user 403, admin 202)' },
     { capability: 'canEditApps', file: 'routes/jobs.ts', vector: 'follow-up build (POST /jobs, artifactId)', behavioral: 'tests/contract/jobs-capability.test.ts (follow-up 403/404)' },
-    { capability: 'canUseChat', file: 'routes/chat.ts', vector: 'chat run (POST /chat/runs)', behavioral: 'tests/contract/jobs-capability.test.ts + chat suites' },
+    // canUseChat is held by EVERY role (super-admin/org-admin/user), so its gate has NO deny-path to
+    // exercise behaviorally (unlike canBuildApps/canEditApps, which a `user` is denied - proven in
+    // jobs/artifacts-capability). The concrete suite here drives POST /chat/runs end to end (the gate
+    // must admit an authed caller); the matrix test below pins the gate refuses a null actor.
+    { capability: 'canUseChat', file: 'routes/chat.ts', vector: 'chat run (POST /chat/runs) - held by all roles, no deny-path', behavioral: 'tests/contract/chat.test.ts (POST /chat/runs admits an authed caller)' },
     { capability: 'canCreateArtifacts', file: 'routes/artifacts.ts', vector: 'artifact create (POST /artifacts)', behavioral: 'tests/contract/artifacts-capability.test.ts' },
     { capability: 'canEditApps', file: 'routes/artifacts.ts', vector: 'in-place app-edit vectors (denyAppEdit)', behavioral: 'tests/contract/artifacts-capability.test.ts (bundle-update/file/restore/backend 403)' },
     { capability: 'canBuildApps', file: 'routes/artifacts.ts', vector: 'import + fork-of-app', behavioral: 'tests/contract/artifacts-capability.test.ts (import/fork 403)' },
