@@ -400,6 +400,19 @@ describe('GET /api/app-assistant/whoami (H2 fail-closed detection)', () => {
     expect(await res.json()).toEqual({ admin: false });
   });
 
+  it('a BILLING-LOCKED admin -> 200 { admin:false } (codex-h6: mirror the FULL H1 gate; no edit false-offer)', async () => {
+    // owner-1 is an org-admin of the owner org (admin:true normally). Lock their billing: the real
+    // edit path (requireAuth at POST /jobs) would refuse BILLING_LOCKED, so whoami must NOT offer edit.
+    setActivation('owner-1', { active: true, billingLocked: true });
+    try {
+      const res = await whoami(bearer('owner-1'));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ admin: false });
+    } finally {
+      setActivation('owner-1', { active: true, billingLocked: false }); // restore for other cases
+    }
+  });
+
   it('NO token -> 200 { admin:false } (never a 401 — token absence is not an oracle)', async () => {
     const res = await whoami({ 'x-ekoa-app-id': APP_ID });
     expect(res.status).toBe(200);

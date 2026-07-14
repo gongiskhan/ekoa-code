@@ -112,6 +112,13 @@ async function detectAppEditor(authHeader: string | undefined, appId: string): P
   if (!m) return false; // no/malformed Authorization header (incl. the cross-origin dev case) → false
   const verified = verifySseToken(m[1]); // the one verification chain; returns claims-or-error, never throws
   if (!verified.ok) return false; // invalid / expired / revoked / epoch-stale / deactivated → false
+  // Mirror the FULL H1 admission gate, not just its verify+capability+writability legs (codex-h6
+  // Medium): the real edit path is requireAuth (active + NOT billing-locked + epoch) THEN can() +
+  // loadWritable. verifySseToken checks active/epoch but NOT billingLocked, so without this a
+  // billing-locked admin would read admin:true and be OFFERED edit mode (H3) only to be refused
+  // BILLING_LOCKED at POST /jobs - a false offer. A locked/absent activation ⇒ not an editor.
+  const act = getActivation(verified.claims.sub);
+  if (!act || !act.active || act.billingLocked) return false;
   const actor = { userId: verified.claims.sub, orgId: verified.claims.orgId, role: verified.claims.role };
   const { verdict } = await loadWritable(actor, appId); // the SAME writability rule the H1 edit gate uses
   return isAppEditor(verified.claims, verdict);

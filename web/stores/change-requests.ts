@@ -92,7 +92,18 @@ export const useChangeRequestsStore = create<ChangeRequestsState>()((set, get) =
       }),
     );
     if (!job.ok) {
-      set({ actingId: null, error: job.error.message || 'Não foi possível iniciar a alteração.' });
+      // A NOT_FOUND on a request that names an app is the H1 edit gate (loadWritable) refusing the
+      // conversion because the app is not editable by this admin - under the org-scoped edit policy,
+      // a same-org OTHER user's PRIVATE draft is not admin-editable (codex-h6 Low: give an actionable
+      // reason instead of a bare "could not start", so the queue's Converter is never a silent
+      // dead-end). The author must share the app to the organization before it can be edited.
+      const notEditable = Boolean(request.appId) && job.error.status === 404;
+      set({
+        actingId: null,
+        error: notEditable
+          ? 'Esta aplicação é um rascunho privado do autor e não pode ser alterada por si. Peça ao autor para a partilhar com a organização antes de converter o pedido.'
+          : job.error.message || 'Não foi possível iniciar a alteração.',
+      });
       return;
     }
     if (job.data.status !== 'created') {
