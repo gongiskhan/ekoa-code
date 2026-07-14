@@ -158,19 +158,33 @@ re-runnable gates so they cannot silently regress:
   reach another org's - the org-B token never even enters an org-A app's prompt. Live evidence is
   folded into the operator journey drivers + `fees-knowledge.e2e.mjs`.
 - *Destructive-action authorization, server-side* (`api/tests/security/destructive-action-authz.test.ts`):
-  a mutating served-app op that is meant to be end-user-gated is authorized SERVER-SIDE by the
+  the PRIVILEGED served-app end-user ops that carry an identity ARE authorized SERVER-SIDE by the
   per-app SSO identity, not by any client confirmation (the Phase 4 confirm dialog is UX). The
   canonical case - `POST /api/app-sso/set-password` (writes a bcrypt hash onto the app's data) - is
   rejected 401 WITHOUT a valid app-sso session and with a WRONG-APP session (`session.appId`
   isolation via `findValidAppSession`), and proceeds only for the correct same-app session; the
-  visitor-acting `/api/app-sso/m365/*` proxy is gated the same way. **Finding (documented boundary,
-  not a hole):** the GENERAL `/api/app-data` plane a C3 submit/delete lands on is deliberately
-  app-id-SCOPED (see *Served-app admission planes* above) - its per-app server boundary is
-  `X-Ekoa-App-Id` scope + owner-activation admission, NOT an app-sso session; the app-sso IDENTITY
-  plane gates the PRIVILEGED end-user ops. A related pre-existing OBSERVATION outside the H-block's
-  scope: the collection-rule `access: { read, write: 'session' | 'server' }` level is DECLARED in the
-  manifest schema but not enforced by `served-data.ts` (writes are app-id-scoped regardless) - flagged
-  for the C3/data-plane owner, not fixed by H5 (H5 asserts, it adds no auth code).
+  visitor-acting `/api/app-sso/m365/*` proxy is gated the same way.
+
+  **KNOWN GAP (HIGH, pre-existing, requires an operator decision) - unauthenticated served-app data
+  mutations.** The GENERAL `/api/app-data/:collection` plane that a C3 submit/delete/write lands on
+  authenticates NOTHING about the CALLER: `served-data.ts` `scopeFor()` requires only a well-formed
+  `X-Ekoa-App-Id` + the resolved app OWNER's activation (`admitOwner`), then scopes to that app's
+  data partition. So ANY caller who knows an app id/slug can `POST`/`PUT`/`DELETE` that app's data
+  across tenants - the "authorization dimension" Phase 10 requires for a destructive action is NOT
+  met for the primary served-app mutation surface. Two compounding facts: (1) the collection-rule
+  `access: { write: 'session' | 'server' }` level is DECLARED in the manifest schema but NOT enforced
+  by `served-data.ts` (the write mode is decorative); (2) the app-sso session cookie is
+  `Path=/api/app-sso`, so it is not even transmitted to `/api/app-data`, i.e. there is no session to
+  check at that path today. This is PRE-EXISTING (the C3/D-era served-app data plane; the operator-run
+  did not introduce it) and sits on a DIFFERENT axis from the platform role/capability layer H1-H4
+  close (which IS complete and correct). The proper fix - enforce the declared write mode and make an
+  app-sso session verifiable at the data path (cookie-path widening or a session token) - is an
+  architecture change to the served-app data plane spanning the ~200-app estate, and is an operator
+  decision, not a bolt-on to this assertion slice. H5 ASSERTS the current state honestly
+  (`destructive-action-authz.test.ts` pins the unauthenticated write as a KNOWN-GAP TRIPWIRE so a
+  future fix flips the test) and flags it as the top landing item; it does NOT claim the plane is safe
+  and does NOT silently redesign it. Tracked: `docs/findings.md`
+  `served-app-data-unauthenticated-writes`.
 
 **Frame headers (current state).** The api plane sets `X-Frame-Options: DENY` / `frame-ancestors
 'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`. The `/apps` embed

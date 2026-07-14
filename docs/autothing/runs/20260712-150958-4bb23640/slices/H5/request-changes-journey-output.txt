@@ -1,0 +1,11 @@
+PASS admin login (org b5aa59e5-1607-470b-8042-b47ece558df6)
+PASS setup build completed -> app b4557381-438b-44ae-a662-b0e87c833a98
+PASS app set to org-shared (visibility: org)
+PASS created in-org user rc-in-mrjvvd477hd + cross-org user rc-out-mrjvvd477hd
+PASS FILE: request 8bb1bf02-1cd3-4e71-8893-bda720b14c30 filed into owner org b5aa59e5-1607-470b-8042-b47ece558df6 with route/screen context
+PASS CROSS-ORG: a different-org user filing about the app -> 404 (no injection)
+PASS SEE: org-admin sees the request with full context; the cross-org attempt is absent
+PASS CONVERT: admin started the patch-run follow-up build e0dc2b63-b838-4f5d-9aab-f295f38db495 (H1-gated)
+PASS CONVERT: request 8bb1bf02-1cd3-4e71-8893-bda720b14c30 -> 'converted' linked to patch-run job e0dc2b63-b838-4f5d-9aab-f295f38db495
+  cancelled the started patch-run build e0dc2b63-b838-4f5d-9aab-f295f38db495 (budget hygiene; best-effort)
+REQUEST-CHANGES JOURNEY LIVE GATE: PASS

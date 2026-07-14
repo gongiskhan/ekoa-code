@@ -51,6 +51,25 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   (or, if it emits both, integration must win over build in `agents/chat.ts` — currently build is
   checked first). Add a deterministic test asserting one signal per confirmation turn.
 
+- **`served-app-data-unauthenticated-writes`** (HIGH, pre-existing, operator decision - surfaced by
+  H5's destructive-action-authz assertion). The served-app data plane `/api/app-data/:collection`
+  authenticates NOTHING about the CALLER: `served-data.ts` `scopeFor()` requires only a well-formed
+  `X-Ekoa-App-Id` header + the app OWNER's activation, then scopes to that app's partition. So ANY
+  caller who knows an app id/slug can `POST`/`PUT`/`DELETE` that app's data ACROSS TENANTS (a private
+  org app's data can be tampered/deleted by an outsider who learns its id). Two compounding facts:
+  (1) the manifest collection-rule `access:{ write:'session'|'server' }` is DECLARED but NOT enforced
+  by served-data.ts (the write mode is decorative); (2) the app-sso session cookie is
+  `Path=/api/app-sso`, so it is not even sent to `/api/app-data` - there is no session to check at
+  that path today. NOT introduced by the operator-run (C3/D-era served-app data plane); on a
+  DIFFERENT axis from the platform role/capability layer H1-H4 close (which is complete). Phase 10's
+  "destructive-action authorization asserted server-side" is NOT met for this surface. FIX (an
+  operator architecture decision, a dedicated post-H slice): enforce the declared collection write
+  mode and make an app-sso session verifiable at the data path (widen the app-sso cookie path or mint
+  a session token the data plane checks); `write:'server'` collections should reject ALL client
+  mutations. Pinned as a TRIPWIRE in `api/tests/security/destructive-action-authz.test.ts` (a fix
+  flips the test) + behaviorally green today in `api/tests/contract/served-app.test.ts`. Tracked in
+  `docs/security.md`.
+
 ### Gateway / egress
 
 - **`gateway-502-masks-401`** - CLOSED (local-bridge consumer run s7, 2026-07-11, merged from the

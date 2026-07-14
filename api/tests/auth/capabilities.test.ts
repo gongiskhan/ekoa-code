@@ -5,7 +5,7 @@
  * survives; this suite pins the behavior that replaced it.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { Capability } from '@ekoa/shared';
@@ -13,6 +13,7 @@ import { can } from '../../src/auth/capabilities.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <root>/api/tests/auth
 const API_SRC = resolve(HERE, '../../src'); // <root>/api/src
+const TESTS_ROOT = resolve(HERE, '..'); // <root>/api/tests
 const readSrc = (rel: string) => readFileSync(resolve(API_SRC, rel), 'utf8');
 
 // The authoritative grid. Every (role x capability) cell is asserted below - both the grants and
@@ -88,16 +89,20 @@ describe('can() capability matrix (H1)', () => {
  */
 describe('capability gate wiring (H5) - the matrix is enforced at the routes', () => {
   // capability -> the source file that must carry an enforcing `can(actor, '<capability>')` gate,
-  // with the vector it guards. A capability may be enforced in more than one file (e.g. canEditApps
-  // gates both the follow-up build and every in-place app-edit vector); each row is checked.
-  const WIRING: Array<{ capability: Capability; file: string; vector: string }> = [
-    { capability: 'canBuildApps', file: 'routes/jobs.ts', vector: 'first build (POST /jobs, no artifactId)' },
-    { capability: 'canEditApps', file: 'routes/jobs.ts', vector: 'follow-up build (POST /jobs, artifactId)' },
-    { capability: 'canUseChat', file: 'routes/chat.ts', vector: 'chat run (POST /chat/runs)' },
-    { capability: 'canCreateArtifacts', file: 'routes/artifacts.ts', vector: 'artifact create (POST /artifacts)' },
-    { capability: 'canEditApps', file: 'routes/artifacts.ts', vector: 'in-place app-edit vectors (denyAppEdit)' },
-    { capability: 'canBuildApps', file: 'routes/artifacts.ts', vector: 'import + fork-of-app' },
-    { capability: 'canEditApps', file: 'apps/app-assistant-route.ts', vector: 'served-app admin detection (whoami / isAppEditor)' },
+  // with the vector it guards, AND the BEHAVIORAL suite that would fail if the gate stopped being
+  // reached at runtime. This structural inventory is a SMOKE (a route file that still contains the
+  // can() literal keeps this green even if a handler stopped CALLING it - codex-h5 Medium); the
+  // named behavioral suites are the AUTHORITATIVE proof: they drive the real route end to end, so a
+  // handler that returned a constant / dropped its gate FAILS there. Each row lists both so a broken
+  // gate is caught behaviorally, not merely asserted structurally.
+  const WIRING: Array<{ capability: Capability; file: string; vector: string; behavioral: string }> = [
+    { capability: 'canBuildApps', file: 'routes/jobs.ts', vector: 'first build (POST /jobs, no artifactId)', behavioral: 'tests/contract/jobs-capability.test.ts (user 403, admin 202)' },
+    { capability: 'canEditApps', file: 'routes/jobs.ts', vector: 'follow-up build (POST /jobs, artifactId)', behavioral: 'tests/contract/jobs-capability.test.ts (follow-up 403/404)' },
+    { capability: 'canUseChat', file: 'routes/chat.ts', vector: 'chat run (POST /chat/runs)', behavioral: 'tests/contract/jobs-capability.test.ts + chat suites' },
+    { capability: 'canCreateArtifacts', file: 'routes/artifacts.ts', vector: 'artifact create (POST /artifacts)', behavioral: 'tests/contract/artifacts-capability.test.ts' },
+    { capability: 'canEditApps', file: 'routes/artifacts.ts', vector: 'in-place app-edit vectors (denyAppEdit)', behavioral: 'tests/contract/artifacts-capability.test.ts (bundle-update/file/restore/backend 403)' },
+    { capability: 'canBuildApps', file: 'routes/artifacts.ts', vector: 'import + fork-of-app', behavioral: 'tests/contract/artifacts-capability.test.ts (import/fork 403)' },
+    { capability: 'canEditApps', file: 'apps/app-assistant-route.ts', vector: 'served-app admin detection (whoami)', behavioral: 'tests/apps/app-assistant.test.ts (whoami fail-closed matrix over the real route)' },
   ];
 
   it.each(WIRING)('$capability is wired at $file - $vector', ({ capability, file }) => {
@@ -113,6 +118,26 @@ describe('capability gate wiring (H5) - the matrix is enforced at the routes', (
     const wiredViaForkCap =
       file === 'routes/artifacts.ts' && /forkCap\s*=\s*isAppArtifact[^;]*'canBuildApps'[^;]*'canCreateArtifacts'/.test(src) && /can\([^;]*forkCap/.test(src);
     expect(wiredDirectly || wiredViaForkCap, `${file}: no can(actor, '${capability}') gate found`).toBe(true);
+    // The whoami row's structural check is the WEAKEST (the can() literal lives in the isAppEditor
+    // helper, so the file stays green even if the handler stopped calling it - codex-h5 Medium).
+    // Tighten it: the whoami HANDLER must actually invoke detectAppEditor (the code path that reaches
+    // the gate); a handler returning a constant would drop this token. The behavioral whoami matrix
+    // (tests/apps/app-assistant.test.ts) is the authoritative catch either way.
+    if (file === 'apps/app-assistant-route.ts') {
+      expect(/detectAppEditor\(/.test(src), 'whoami must call detectAppEditor (the gate path), not return a constant').toBe(true);
+      expect(/admin:\s*await\s+detectAppEditor\(/.test(src), 'the whoami response `admin` must be the detectAppEditor result').toBe(true);
+    }
+  });
+
+  it('every wired capability has a named AUTHORITATIVE behavioral suite (structural inventory is only a smoke)', () => {
+    // codex-h5 Medium: the structural inventory can go stale-green; each row must point at a suite
+    // that drives the real route and would fail on a broken gate. Assert the referenced suite files
+    // exist so the pointer never rots.
+    for (const w of WIRING) {
+      expect(w.behavioral, `${w.capability}@${w.file} must name a behavioral suite`).toBeTruthy();
+      const suiteFile = w.behavioral.split(' ')[0]!; // the leading path token (api/tests-relative, e.g. tests/contract/...)
+      expect(existsSync(resolve(TESTS_ROOT, '..', suiteFile)), `behavioral suite ${suiteFile} must exist`).toBe(true);
+    }
   });
 
   it('the two admin-only capabilities (a user is denied) are each enforced by a wired gate', () => {

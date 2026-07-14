@@ -151,3 +151,40 @@ NO `api/src`/`shared/src`/`web` production file touched. No commits, no stack op
   (non-tautology - and also self-proved in-suite)
 - repo-root `npm run gate:chokepoint` -> clean
 - `node --check` on both new `.e2e.mjs` drivers -> OK; `SUITE_LEDGER.json` re-validated as JSON
+
+## Codex-fix round (2026-07-14) - lead-applied
+
+Codex H5 review returned NEEDS-WORK (1 High + 1 Medium + 1 Low). The fresh review APPROVED. All three
+addressed:
+
+- **HIGH - the destructive-action-authz assertion documented-away a REAL gap.** Codex is right: the
+  general `/api/app-data` mutation plane authenticates NO caller (`scopeFor()` = X-Ekoa-App-Id +
+  owner-activation only), so anyone knowing an app id can write/delete that app's data cross-tenant;
+  app-id scoping alone is NOT authorization. The worker framed this as "documented boundary, not a
+  hole" - that framing was WRONG. RE-DISPOSED HONESTLY (not silently fixed, not falsely dismissed):
+  (1) docs/security.md now states it plainly as a KNOWN HIGH GAP with the precise threat + the two
+  compounding facts (collection write-mode unenforced; app-sso cookie not even sent to /api/app-data);
+  (2) a HIGH `served-app-data-unauthenticated-writes` entry in docs/findings.md; (3) a TRIPWIRE in
+  destructive-action-authz.test.ts pinning the current unauthenticated-write state (a future fix flips
+  it), with served-app.test.ts as the behavioral proof it currently 201s. RATIONALE for flag-not-fix:
+  this is PRE-EXISTING (C3/D-era served-app data plane) on a DIFFERENT axis from the platform
+  role/capability layer H1-H4 close (which IS complete); the proper fix (enforce the declared write
+  mode + make an app-sso session verifiable at the data path - cookie-path widening / session token)
+  is an architecture change across the ~200-app estate and an operator decision, not a bolt-on to the
+  assertion slice. It is now the TOP landing item, honestly surfaced - exactly what the assertion
+  layer is FOR (H5 finds gaps; the lead flags them for the operator).
+- **MEDIUM - weak wiring inventory.** The file-level `can(` + literal check stayed green if a route
+  silently lost its live gate (codex's example: whoami returning a constant while isAppEditor still
+  carries the literal). Fixed: (a) the whoami row now REQUIRES the route to actually call
+  `detectAppEditor(` and that `admin: await detectAppEditor(...)` is the response (a constant drops
+  those tokens); (b) each inventory row now names its AUTHORITATIVE behavioral suite and a new test
+  asserts those suites EXIST - the inventory is explicitly a structural smoke, the behavioral suites
+  (jobs-capability / artifacts-capability / the whoami matrix) are the real proof that would fail on
+  a broken gate.
+- **LOW - grep gate web coverage.** The orphan-`builder` scan covered only web/{app,components,stores};
+  web/lib, web/hooks, web/types, web/locales were unscanned (no live miss today - verified - but a
+  future orphan would evade). Fixed: the scan now covers ALL live web source roots.
+
+30/30 in tests/security + tests/auth/capabilities after the fix (grep gate re-proven non-tautological
+- it even caught a literal PERMISSIVE-STUB token in a doc comment I wrote, forcing a reword). No
+production auth code touched (the High is flagged, not fixed - an operator decision).

@@ -114,9 +114,12 @@ describe('grep gate: no permissive stub survives (H5)', () => {
 });
 
 describe('grep gate: no orphan `builder` role ref survives (H5)', () => {
-  it('every quoted `builder` role literal in api/src + shared/src + web{app,components,stores} is in the sanctioned allowlist', () => {
+  it('every quoted `builder` role literal in api/src + shared/src + ALL live web source roots is in the sanctioned allowlist', () => {
     const hits = scanTree(
-      ['api/src', 'shared/src', 'web/app', 'web/components', 'web/stores'],
+      // ALL live web source roots (codex-h5 Low: web/lib + web/hooks + web/types + web/locales were
+      // previously unscanned, so an orphan role literal there would have evaded the gate). web/e2e is
+      // test code (excluded); node_modules/.next never appear under these source roots.
+      ['api/src', 'shared/src', 'web/app', 'web/components', 'web/hooks', 'web/lib', 'web/locales', 'web/stores', 'web/types'],
       BUILDER_RE,
     );
     const orphans = hits.filter((h) => !BUILDER_ALLOWLIST.has(h.file));

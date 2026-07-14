@@ -25,6 +25,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
 import bcrypt from 'bcryptjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
@@ -122,6 +125,36 @@ describe('set-password (a mutating app op) is authorized server-side by the app-
     // The server-side mutation took effect: the new password now logs in. There was no client
     // confirmation in the request - the app-sso session identity is the whole boundary.
     expect((await loginApp('app1', 'ana@app1.pt', 'novapass01')).status).toBe(200);
+  });
+});
+
+describe('KNOWN GAP (codex-h5 High): the GENERAL /api/app-data mutation plane authenticates NO caller', () => {
+  // This is a TRIPWIRE, not a proof of safety. The served-app data plane (served-data.ts) lets ANY
+  // caller who knows an app id POST/PUT/DELETE that app's data - `scopeFor()` checks only the
+  // X-Ekoa-App-Id header + the app OWNER's activation (admitOwner), never the CALLER. Phase 10's
+  // "destructive-action authorization asserted server-side" is therefore NOT met for this surface.
+  // It is PRE-EXISTING and an architecture-level operator decision (see docs/security.md + findings).
+  // We PIN the current state so a future fix (a caller/session check on the data-plane writes) FLIPS
+  // this test and forces docs/findings/this-assertion to be updated - the gap can never be quietly
+  // "fixed" or quietly regress unnoticed. served-app.test.ts additionally proves BEHAVIORALLY that an
+  // unauthenticated /api/app-data POST currently returns 201.
+  const servedDataSrc = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../src/apps/served-data.ts'),
+    'utf8',
+  );
+
+  it('the data-plane write routes exist and are scoped ONLY by scopeFor (no caller auth) - CLOSING THIS FLIPS THE TRIPWIRE', () => {
+    expect(/r\.post\(`\$\{prefix\}\/:collection`/.test(servedDataSrc)).toBe(true);
+    expect(/r\.put\(`\$\{prefix\}\/:collection\/:id`/.test(servedDataSrc)).toBe(true);
+    expect(/r\.delete\(`\$\{prefix\}\/:collection\/:id`/.test(servedDataSrc)).toBe(true);
+    // The writes gate ONLY through scopeFor, which today performs NO caller-session / app-sso check.
+    // If session/caller auth is ever added to the data-plane writes (the fix), one of these tokens
+    // appears and this fails ON PURPOSE - update the KNOWN GAP (docs/security.md + findings.md) and
+    // rewrite this suite to assert the new server-side authorization.
+    expect(
+      /findValidAppSession|requireAppSession|ekoa_app_sso/i.test(servedDataSrc),
+      'served-data.ts now references an app-sso session on the data plane - the KNOWN GAP may be closed; update docs/findings + this tripwire',
+    ).toBe(false);
   });
 });
 

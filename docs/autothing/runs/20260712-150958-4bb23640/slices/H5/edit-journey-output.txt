@@ -1,0 +1,11 @@
+PASS admin login
+PASS setup build completed -> app 81ff6dd3-c39b-4955-aeae-78ddd9612ce9
+PASS DETECT: admin whoami -> { admin: true }
+  opt-in: explicit client-side editMode switch (detect-then-ask; no server call)
+PASS PATCH RUN: follow-up build completed; HEAD advanced 4ffba5a7 -> 1ddbdf04
+PASS PREVIEW + APPROVE: new head is live (approve is a no-op - the build already activated it)
+PASS ROLLBACK: forward-restore to pre-run head created a new head c5ca3c11 (revert is live + auditable)
+PASS created + logged in a role:'user' account (edit-user-mrjvxts63s6)
+PASS USER CANNOT EDIT: user whoami -> { admin: false }
+PASS USER CANNOT EDIT: POST /jobs follow-up refused 403 (capability gate, before any ownership probe)
+EDIT-MODE JOURNEY LIVE GATE: PASS
