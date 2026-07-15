@@ -1,0 +1,34 @@
+# Caddy edge for ekoa-code staging. Automatic HTTPS (Let's Encrypt) for the public hostname,
+# and a SAME-ORIGIN reverse proxy so the browser calls the API on the very origin it was
+# served from - this is the topology web/lib/api/base-url.ts calls "same-origin (Caddy proxy)".
+# The API ships no CORS on purpose (same-origin behind this proxy), and the dashboard CSP is
+# connect-src 'self', so no cross-origin handling is needed.
+#
+# Path split (the api surface is /api/*, /health, /hooks; Next serves everything else):
+#   /api/*  /health  /hooks[/**]  -> api:4111
+#   *                              -> web:3000
+# WebSocket upgrades (streaming/CDP live-view) are proxied transparently by reverse_proxy.
+{
+	email {$ACME_EMAIL:goncalo@ekoa.io}
+}
+
+{$PUBLIC_HOSTNAME:staging.ekoa.io} {
+	encode zstd gzip
+
+	# API surface -> api container.
+	@api path /api/* /health /hooks /hooks/*
+	handle @api {
+		reverse_proxy api:4111
+	}
+
+	# Everything else -> the Next.js web client.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# Basic access log to stdout (visible via `docker compose logs caddy`).
+	log {
+		output stdout
+		format console
+	}
+}

@@ -97,6 +97,32 @@ cutover is the founder-gated cutover procedure, outside this run - archived with
   images with `push: false`, then runs `validate-topology.sh` and `cutover.sh --dry-run`. No registry
   push, no deploy.
 
+### Staging (live) - `deploy/staging/`
+
+The one runnable environment: a single GCP VM (`ekoa-staging`, e2-standard-2, europe-west4-a) that
+actually serves the ekoa-code stack for one user at `https://staging.ekoa.io`. It does NOT change the
+dry-run cutover shape above (that remains the founder-gated production path); it is a parallel, disposable
+box built from the same two images. See `deploy/staging/README.md` for the full runbook.
+
+- **Topology.** `docker-compose.yml` runs four services on the VM: **Caddy** (auto-HTTPS +
+  same-origin reverse proxy), **web** (`Dockerfile.web`), **api** (`Dockerfile.api`), and a self-hosted
+  **Mongo** (standalone - the api uses no transactions). Caddy path-routes `/api/*`, `/health`, `/hooks`
+  to the api and everything else to web, so the browser calls the API on the same origin it was served
+  from - the `web/lib/api/base-url.ts` "same-origin (Caddy proxy)" contract. The web image is built with
+  `NEXT_PUBLIC_API_URL=https://staging.ekoa.io`.
+- **Secrets.** Injected at runtime from `deploy/staging/.env` (gitignored, VM-only, mode 600); only
+  `.env.example` is committed. Staging uses **freshly generated** `JWT_SECRET` / `ENCRYPTION_KEY` /
+  `MONGO_PASSWORD` - never production's. The prod secrets are preserved separately in GCP Secret Manager.
+- **Chromium.** `Dockerfile.api` now installs `playwright ... chromium --with-deps` in the runtime stage
+  (with `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` so the non-root `node` user finds it). Without it the
+  automation/streaming/screenshot planes fail at runtime even though `playwright` is a prod dependency.
+- **Bring-up.** `deploy/staging/provision.sh` on the VM: installs Docker, adds swap, `compose up -d
+  --build`, health-gates `api:/health` + `https://staging.ekoa.io/health`, and (if a key is exported)
+  arms the model credential.
+- **Model credential.** Provisioned ONCE via `POST /api/v1/credentials` (the setCredential seam) with a
+  goncalo@ekoa.io Anthropic key - staging Mongo is persistent, so unlike dev it survives restarts and does
+  not need re-arming each boot.
+
 ## Secrets and env
 
 **Model credential posture (read this before wondering why chat/build errors on a fresh boot).** The

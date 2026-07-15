@@ -156,6 +156,37 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-15 api runtime image defects (staging bring-up)
+
+Two defects in the shipped api image, both of the same class - **the image builds fine but the
+process crashes at boot** - and both invisible to the dry-run deploy CI because that lane only
+*builds* the images, never *runs* them. Caught by a local full-stack smoke (the exact staging
+compose: Caddy + api + web + mongo) before any VM spend.
+
+- **`api-phantom-dep-js-yaml`** (medium, packaging). The api imports `js-yaml` in three runtime paths
+  (`automation/manifest-parser.ts`, `apps/action-manifest.ts`, `apps/tour-writer.ts`) but it was
+  declared **nowhere** in `api/package.json` / root `package.json`. It only resolved because ESLint (a
+  devDep) transitively hoists `js-yaml@4.3.0` to the root `node_modules`; the runtime image
+  (`npm ci --omit=dev`) drops it, so `node api/dist/server.js` crashed with
+  `ERR_MODULE_NOT_FOUND: Cannot find package 'js-yaml'`. **Fix:** added `js-yaml@^4.3.0` to api deps +
+  `@types/js-yaml@^4.0.9` to api devDeps, and deleted the ambient shim `api/src/automation/vendor.d.ts`
+  (whose own comment prescribed exactly this). A scan of the built `api/dist` against the prod-only
+  dependency closure confirmed js-yaml was the **only** phantom dep.
+- **`api-image-native-build-skipped`** (medium, packaging). With js-yaml fixed the api then crashed in
+  `bootState` -> `backfillKnowledgeIndex` with `Could not locate the bindings file ... better_sqlite3.node`.
+  `Dockerfile.api` ran `npm ci --omit=dev --ignore-scripts`, and `--ignore-scripts` skips native
+  addons' install step; `better-sqlite3@12.11.1` ships **no prebuilt** for node 20 (so it must compile
+  via node-gyp, which the slim image has no toolchain for). **Fix:** restructured `Dockerfile.api` with
+  a dedicated `proddeps` stage that has `python3/make/g++`, installs prod deps `--ignore-scripts`, then
+  `npm rebuild better-sqlite3` (compiles it); the slim runtime `COPY --from=proddeps node_modules`, so
+  the toolchain never ships. Other native modules (`sharp`, `onnxruntime-node`, `@next/swc`) use
+  prebuilt platform packages and were unaffected. Verified: api boots, `/health` 200, real admin login
+  through the same-origin Caddy proxy, and `chromium.launch()` succeeds inside the container.
+
+Follow-up (recommended, not done here): add a container **boot smoke** to `deploy.yml` (run the api
+image against a throwaway mongo, assert `/health` 200) so this whole class - a runtime import or native
+binary absent from the shipped image - fails CI instead of first appearing on a server.
+
 ## Recently fixed - 2026-07-13 preview probe CORS duplicate header (operator)
 
 - **`F-2026-07-13-proxy-duplicate-acao`** (operator-reported, 2026-07-13) - in dev, the preview
