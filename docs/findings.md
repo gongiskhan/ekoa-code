@@ -158,10 +158,11 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## Recently fixed - 2026-07-15 api runtime image defects (staging bring-up)
 
-Two defects in the shipped api image, both of the same class - **the image builds fine but the
-process crashes at boot** - and both invisible to the dry-run deploy CI because that lane only
-*builds* the images, never *runs* them. Caught by a local full-stack smoke (the exact staging
-compose: Caddy + api + web + mongo) before any VM spend.
+Three defects in the shipped api image, all of the same class - **the image builds fine but the
+process fails at runtime** - all invisible to the dry-run deploy CI because that lane only *builds*
+the images, never *runs* them. The first two crash at boot and were caught by a local full-stack
+smoke (Caddy + api + web + mongo) before any VM spend; the third only surfaces on the first real
+model turn (needs a live credential) and was caught on staging.
 
 - **`api-phantom-dep-js-yaml`** (medium, packaging). The api imports `js-yaml` in three runtime paths
   (`automation/manifest-parser.ts`, `apps/action-manifest.ts`, `apps/tour-writer.ts`) but it was
@@ -182,6 +183,17 @@ compose: Caddy + api + web + mongo) before any VM spend.
   the toolchain never ships. Other native modules (`sharp`, `onnxruntime-node`, `@next/swc`) use
   prebuilt platform packages and were unaffected. Verified: api boots, `/health` 200, real admin login
   through the same-origin Caddy proxy, and `chromium.launch()` succeeds inside the container.
+- **`api-sdk-musl-binary-picked`** (medium, packaging; surfaced by the first live model turn on
+  staging). With the model credential armed, chat/build died with
+  `ADAPTER_ERROR: Claude Code native binary not found at .../claude-agent-sdk-linux-x64-musl/claude`.
+  `@anthropic-ai/claude-agent-sdk` ships its native `claude` binary as per-platform optional deps; npm
+  installs BOTH `linux-x64` (glibc) and `linux-x64-musl` on any linux-x64 host (it filters optionals by
+  os+cpu, not libc), and the SDK's resolver tries the **-musl variant first** - which cannot exec on the
+  glibc bookworm image. **Fix:** `Dockerfile.api` proddeps stage now `rm -rf`s the `*-musl` variant
+  packages so the resolver falls through to the working glibc binary. Verified on staging: a real chat
+  turn returns `status:complete` (`"OK."`, ~4.7s) through the OAuth subscription credential + egress
+  chokepoint. Note this class is invisible even to a boot smoke - a full check needs a live credential
+  and one model turn.
 
 Follow-up (recommended, not done here): add a container **boot smoke** to `deploy.yml` (run the api
 image against a throwaway mongo, assert `/health` 200) so this whole class - a runtime import or native

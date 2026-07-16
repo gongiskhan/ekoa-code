@@ -41,6 +41,14 @@ COPY web/package.json web/
 RUN npm ci --omit=dev --ignore-scripts \
  && npm rebuild better-sqlite3 \
  && npm cache clean --force
+# @anthropic-ai/claude-agent-sdk ships per-platform native `claude` binaries as
+# optionalDependencies. npm installs BOTH linux-x64 (glibc) AND linux-x64-musl on any linux-x64
+# host (it filters optionals by os+cpu, not libc), and the SDK's resolver tries the -musl variant
+# FIRST. On this glibc (bookworm) image the musl binary cannot exec, so every model turn dies with
+# "Claude Code native binary not found". Drop the musl variants so the resolver falls through to the
+# working glibc binary. (Verified: without this, chat/build error ADAPTER_ERROR; with it, turns run.)
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl \
+           node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl
 
 # ---- runtime stage ---------------------------------------------------------
 FROM node:20-bookworm-slim AS runtime
