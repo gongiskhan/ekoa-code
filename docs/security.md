@@ -189,9 +189,18 @@ re-runnable gates so they cannot silently regress:
   `served-app-data-unauthenticated-writes`.
 
 **Frame headers (current state).** The api plane sets `X-Frame-Options: DENY` / `frame-ancestors
-'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`. The `/apps` embed
-allowlist (so the cross-origin dashboard can iframe a served artifact) is **PENDING** - tracked as an
-open security task in `docs/findings.md`.
+'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`, except `/apps/*`, which
+answers `frame-ancestors 'self' <dashboard origins>` (the embed allowlist: `EKOA_DASHBOARD_ORIGINS`
+csv -> `EKOA_APP_ORIGIN` -> dev localhost:3000; invalid entries dropped) with no `X-Frame-Options`,
+so the cross-origin dashboard can iframe a served artifact (landed commit 55d9294; recorded in
+`docs/findings.md` `apps-embed-frame-headers` - this paragraph previously said PENDING, stale).
+The dashboard's preview iframes carry NO `sandbox` attribute (decision 2026-07-14): with both
+`allow-scripts` and `allow-same-origin` a sandbox is escapable by design (Chrome warns on every
+document load), while dropping `allow-same-origin` breaks the injected `__ekoa` runtime
+(same-origin data fetches, the CHIPS SSO cookie, storage) across the byte-compat app estate.
+Isolation between arbitrary served-app code and the authenticated dashboard is therefore the
+ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api origin
+(`api.<domain>`, `:4111` in dev), never on the dashboard origin.
 
 ## Incident response
 

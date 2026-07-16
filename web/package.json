@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-monaco.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-monaco.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint .",
@@ -41,6 +43,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "jsdom": "^29.1.1",
+    "monaco-editor": "0.55.1",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.7"

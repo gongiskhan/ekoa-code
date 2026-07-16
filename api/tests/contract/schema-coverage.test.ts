@@ -63,12 +63,13 @@ const COVERED = new Set<string>([
   // G6 — served-app files/sso/cloud/m365 (app-files.test.ts, app-sso.test.ts)
   'servedApp.appFileUpload', 'servedApp.appFileGet', 'servedApp.appFileDelete',
   'servedApp.appSsoLogin', 'servedApp.appSsoSetPassword', 'servedApp.appSsoLogout', 'servedApp.appSsoMe',
+  'servedApp.appSsoSession',
   'servedApp.appSsoMicrosoftStart', 'servedApp.appSsoM365', 'servedApp.appCloudFilesStatus', 'servedApp.m365Proxy',
   // G6 — legal vertical services + e-sign (legal-plane.test.ts)
   'servedApp.legalCalculos', 'servedApp.legalTranscricao', 'servedApp.legalResearch', 'servedApp.trackingConsulta',
   'servedApp.citiusConsulta', 'servedApp.signatureSend', 'servedApp.adobeSignWebhookGet', 'servedApp.adobeSignWebhookPost',
   // G6 — serving plane + health + demos (served-app.test.ts)
-  'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge',
+  'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge', 'servedApp.demoAvailability',
   // G6 — integration definitions registry (integration-definitions.test.ts)
   'integrations.list', 'integrations.listActive', 'integrations.refresh',
   // G7B — agent execution: chat runs + build jobs (chat.test.ts, jobs.test.ts)

@@ -86,6 +86,16 @@ describe('buildPrompt', () => {
     expect(p).toContain('Scale effort to the app');
   });
 
+  it('demands per-action ">> " PT narration lines for the live progress surface (operator ask 2026-07-14)', () => {
+    // build.ts re-emits these lines as same-status plan_steps the client shows beside the
+    // spinner; if the prefix contract drifts out of the prompt the verify stage goes silent
+    // again (the 2026-07-11 "silent multi-minute void" class).
+    const p = buildPrompt(input);
+    expect(p).toContain('Narrate as you go');
+    expect(p).toContain('">> "');
+    expect(p).toContain('European Portuguese');
+  });
+
   it('keeps the request-fulfilment contract (F28): scaffold check + acceptance check + verdict line', () => {
     const p = buildPrompt(input);
     expect(p).toContain('<request>um flyer institucional</request>');

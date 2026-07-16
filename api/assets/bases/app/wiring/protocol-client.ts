@@ -107,12 +107,23 @@ function requireRuntime(feature: string): EkoaRuntime {
 /**
  * The signed-in visitor, or null when logged out or the runtime is absent.
  * NON-THROWING - safe to call unconditionally on mount.
+ *
+ * Calls GET /api/app-sso/session (200 in BOTH states) instead of the runtime's
+ * whoami() (GET /me, which 401s when signed out): the browser logs every non-2xx
+ * to the console, so the on-load probe must never produce one. Same identity
+ * payload and same cookie - the per-app session cookie is Path=/api/app-sso,
+ * which covers the sibling route.
  */
 export async function whoami(): Promise<WhoAmI | null> {
-  const rt = getRuntime();
-  if (!rt) return null;
+  const appId = typeof window !== 'undefined' ? window.__EKOA_APP_ID : undefined;
+  if (!appId || !getRuntime()) return null;
   try {
-    return await rt.whoami();
+    const res = await fetch('/api/app-sso/session', {
+      headers: { 'Content-Type': 'application/json', 'X-Ekoa-App-Id': appId },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: WhoAmI | null };
+    return json && json.data ? json.data : null;
   } catch {
     return null;
   }

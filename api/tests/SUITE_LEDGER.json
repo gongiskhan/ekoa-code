@@ -135,9 +135,10 @@
    "lib/preview-probe",
    "use-bridge-presence",
    "device-code",
-   "bridge-local"
+   "bridge-local",
+   "refusal-file-request"
   ],
-  "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation.",
+  "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list \u2014 the census was red again).",
   "mock_update_needed": [
    "orchestration-hydrate-reconcile",
    "components/data-backups-panel",

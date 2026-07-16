@@ -497,21 +497,15 @@ export function servingRouter(deps: ServingDeps): Router {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ demos: listDemoCards() });
   });
-  r.get('/api/demos/:appId', async (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    const appIdParam = String(req.params.appId || '');
-    // Platform catalog first (the 28 shipped legal-*.json tours) — shape unchanged.
+  // Resolve the servable demo spec for an app: platform catalog first (the 28 shipped
+  // legal-*.json tours, shape unchanged), then the artifact's stored OVERVIEW tour
+  // (operator-run E1: per-app tours generated at build time live on artifact.data.tours;
+  // the full overview+journey set stays on the artifact for the in-app panel player, E2).
+  // Revalidated through the registry's parser so the served shape is one source of truth.
+  // Shared by the spec route and the availability probe.
+  const resolveServableDemoSpec = async (appIdParam: string) => {
     const spec = getDemoSpec(appIdParam);
-    if (spec) {
-      res.json(spec);
-      return;
-    }
-    // operator-run E1: per-app tours generated at build time are stored WITH the
-    // artifact (artifact.data.tours). Resolve the artifact (slug or raw id, the
-    // same order /apps/* uses) and return its OVERVIEW tour as the single-spec
-    // body — backward-compatible shape. The full overview+journey set stays on
-    // the artifact for the in-app panel player (E2). Revalidated through the
-    // registry's parser so the served shape is one source of truth.
+    if (spec) return spec;
     try {
       const artifactId = getAppIdBySlug(appIdParam) ?? appIdParam;
       const art = (await artifacts.get(artifactId)) as Doc | null;
@@ -521,13 +515,28 @@ export function servingRouter(deps: ServingDeps): Router {
       // a tour can only ever be served under the artifact it belongs to — provenance, not just shape.
       const tours = parseStoredTours((art?.data as { tours?: unknown } | undefined)?.tours)
         .filter((t) => t.appId === artifactId);
-      const overview = tours.find((t) => t.kind === 'overview') ?? tours[0];
-      if (overview) {
-        res.json(overview);
-        return;
-      }
+      return tours.find((t) => t.kind === 'overview') ?? tours[0] ?? null;
     } catch (err) {
       console.warn('[serving] generated-tour resolution failed (non-fatal):', err instanceof Error ? err.message : err);
+      return null;
+    }
+  };
+  // Availability probe (shared/src/served-app.ts demoAvailability): 200 in BOTH states.
+  // The panel's teach launcher asks "is there a tour?" once per mount; a tourless app is
+  // a by-design state, not an error, so the probe must never 404 into the console (the
+  // browser logs every non-2xx; operator ask 2026-07-14). The spec route below keeps its
+  // loud 404 for a genuinely absent tour (the loud-and-recoverable house rule).
+  r.get('/api/demos/:appId/availability', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const available = (await resolveServableDemoSpec(String(req.params.appId || ''))) != null;
+    res.json({ available });
+  });
+  r.get('/api/demos/:appId', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const spec = await resolveServableDemoSpec(String(req.params.appId || ''));
+    if (spec) {
+      res.json(spec);
+      return;
     }
     res.status(404).json({ error: 'Demonstração não encontrada' });
   });

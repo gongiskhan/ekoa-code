@@ -367,7 +367,9 @@ describe('content loader', () => {
       // Chars, not tokens (CI-stable): ~4 chars/token. Chat is the TTFT-relevant kind — its
       // eager budget guards the "agent feels quick" trait; the others guard drift. Raising a
       // budget is a deliberate decision, not a side effect of a content edit.
-      const BUDGET_CHARS = { chat: 8_000, coding: 14_000, automation: 3_500 } as const;
+      // 2026-07-14: chat 8_000 -> 8_500 for the business-scope + pre-build scoping-round
+      // sections (docs/decisions.md entry of the same date).
+      const BUDGET_CHARS = { chat: 8_500, coding: 14_000, automation: 3_500 } as const;
       const l = loader();
       for (const kind of ['chat', 'coding', 'automation'] as const) {
         const ctx = await l.assembleAgentContext({ agentKind: kind, userId: 'u1' });
@@ -386,6 +388,19 @@ describe('content loader', () => {
       expect(body).toContain('[[EKOA_INTEGRATION_BUILD]]');
       expect(body).toContain('<ekoa-context>');
       expect(body).toContain('knowledge_search');
+    });
+
+    it('the chat + coding content carry the business-scope steer and the scoping round (drift guard)', async () => {
+      // Operator ask 2026-07-14: ambiguous build requests read in a BUSINESS context ("app para
+      // férias" = staff vacation management, not trip planning) and get ONE scoping round before
+      // the build marker. If either section drifts out of the packs, builds regress to guessing
+      // a consumer-app interpretation with zero questions.
+      const l = loader();
+      const chat = (await l.assembleAgentContext({ agentKind: 'chat', userId: 'u1' })).promptSections.join('\n');
+      expect(chat).toContain('Âmbito de negócio');
+      expect(chat).toContain('ronda de âmbito');
+      const coding = (await l.assembleAgentContext({ agentKind: 'coding', userId: 'u1' })).promptSections.join('\n');
+      expect(coding).toContain('leitura de negócio');
     });
   });
 });

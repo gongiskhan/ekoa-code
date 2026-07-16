@@ -15,7 +15,7 @@ import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { indexSlug, __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
 import { __resetAppHealthDedupeForTests } from '../../src/apps/serving.js';
-import { AppDataListEnvelope } from '@ekoa/shared';
+import { AppDataListEnvelope, DemoAvailabilityResponse } from '@ekoa/shared';
 import { getArtifactScreenshotDir } from '../../src/services/artifact-screenshot.js';
 
 /**
@@ -396,6 +396,17 @@ describe('context injection (ch07 §7.6) - every member of the injected table, s
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('javascript');
     expect(await res.text()).toContain('Ekoa Tutorial Bridge');
+  });
+
+  it('demo availability probe answers 200 {available:false} for a tourless app and validates the shared schema (demoAvailability)', async () => {
+    // Always-200 by design (operator ask 2026-07-14): the assistant panel probes availability
+    // on every mount, so the tourless state must never surface as console-visible 404 noise.
+    // The true case (stored tour → available:true) is pinned in apps/serving-tours.test.ts.
+    const res = await api('/api/demos/definitely-no-tour-here/availability');
+    expect(res.status).toBe(200);
+    const parsed = DemoAvailabilityResponse.safeParse(await res.json());
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.available).toBe(false);
   });
 });
 

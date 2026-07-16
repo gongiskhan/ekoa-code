@@ -72,6 +72,14 @@ redesigned route is `POST /api/app-assistant` (`AssistantChatRequest -> Assistan
 synchronous, billed to the artifact owner). This plane consults the artifact owner's activation, so a
 deactivated owner's apps refuse service with the CONV-2 envelope.
 
+Two additive quiet-probe routes (2026-07-14) exist because mount-time probes must never log non-2xx
+console noise (the browser logs every non-2xx regardless of JS handling): `GET /api/app-sso/session`
+answers 200 in BOTH states (`AppSsoSessionResponse` - the `/me` identity payload, or `data: null`
+signed out; `/me` itself keeps its byte-compat 401) and `GET /api/demos/:appId/availability` answers
+200 `{ available }` (`DemoAvailabilityResponse`; the spec route `/api/demos/:appId` keeps its loud
+404 for a genuinely absent tour). Both are carried in `shared/src/served-app.ts` and covered by
+contract tests.
+
 ## Contract-change discipline and CI gates
 
 Three gates walk `shared/` against the code. Know exactly what each guarantees:

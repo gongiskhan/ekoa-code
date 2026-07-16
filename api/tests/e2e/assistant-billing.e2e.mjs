@@ -248,11 +248,6 @@ function benign(entry) {
   //    through the boot-b dev CORS proxy this returns 5xx (a proxy artifact — same-origin prod does
   //    not proxy the beacon). Pre-existing dev-harness noise on every served app, not G1 code.
   if (url.endsWith('/api/app-health') && /\b5\d\d\b/.test(text)) return true;
-  // 4. Tour-availability probe (panel fix d172c2a): the panel GETs /api/demos/:appId once on mount
-  //    to decide whether to offer the teach launcher; on an app with NO stored tour this is an
-  //    EXPECTED 404 (the by-design "no tour" state, same class as the app-sso/me 401) that the
-  //    browser logs as a failed resource. Not an app error.
-  if (/\/api\/demos\//.test(url) && /\b404\b/.test(text)) return true;
   return false;
 }
 
@@ -381,10 +376,14 @@ async function main() {
     if (req.method() === 'POST' && req.url().includes('/api/app-assistant')) assistantPosts += 1;
   });
 
-  // Deterministic served tour: fulfil GET /api/demos/:appId with the schema-valid overview fixture.
-  await page.route('**/api/demos/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) }),
-  );
+  // Deterministic served tour: fulfil GET /api/demos/:appId with the schema-valid overview
+  // fixture; the panel's mount probe (/:appId/availability) gets its always-200 shape.
+  await page.route('**/api/demos/**', (route) => {
+    if (route.request().url().endsWith('/availability')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true }) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) });
+  });
 
   const appUrl = `${BASE}/apps/${artifactId}/`;
   await page.goto(appUrl, { waitUntil: 'domcontentloaded' });

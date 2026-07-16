@@ -1252,6 +1252,7 @@ export interface Translations {
       fixing: string;
       reviewing: string;
       deploying: string;
+      verifying: string;
       complete: string;
     };
     phaseDefault: (phase: string) => string;

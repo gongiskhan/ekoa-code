@@ -156,6 +156,56 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-14 operator UX round (scope steering, verify narration, console noise)
+
+- **`build-ambiguous-request-no-scoping`** (UX, operator 2026-07-14, live) - "faz uma app para
+  ferias" built a personal vacation-itinerary planner with zero questions: the chat agent had no
+  business-context steer and no scoping step, so ambiguous one-liners went straight to the wrong
+  interpretation. Fixed in the content packs (business-scope section + ONE pre-marker scoping
+  round; see decisions 2026-07-14) and pinned by a loader.test.ts canary.
+- **`scaffold-copy-dev-facing`** (UX, operator 2026-07-14, live) - the app-base HomePage the end
+  user watches DURING a build showed developer instructions ("Adicione páginas ao registo PAGES...
+  frontend/src/pages/"). Now a user-facing PT building state ("A construir algo fantástico..." +
+  pulse). data-demo-target="home-empty" and the mustEdit gate are untouched.
+- **`verify-phase-silent-progress`** (UX, operator 2026-07-14, live) - the verify stage showed one
+  status line then generic fillers for minutes (narration existed but landed in the COLLAPSED
+  thinking block). Fixed: per-action ">> " narration contract in the verify prompt, re-emitted as
+  same-status plan_steps -> live spinner label + Output tab (pinned by build.test.ts +
+  verify-runner.test.ts). Two adjacent defects fixed with it: the verify scrub chain's hold-back
+  tail was never flushed (final narration characters silently dropped), and the FC-505
+  VerificationBanner was dead code (gated on a phase the store never received - plan_step phases
+  now mirror into the store and the gate keys on 'verifying').
+- **`monaco-cdn-csp-block`** (broken feature, operator 2026-07-14, live) - the file-editor dialog
+  never initialized under the dashboard CSP: @monaco-editor/react's default loader pulls from
+  cdn.jsdelivr.net, blocked by script-src 'self' ("Monaco initialization: error" + uncaught
+  promise rejections in the console). Fixed by self-hosting the AMD tree from web/public/monaco
+  (copy-monaco.mjs, predev/prebuild); the CSP was not widened.
+- **`expected-absent-probe-console-noise`** (console hygiene, operator 2026-07-14, live) - every
+  served-app load logged `GET /api/app-sso/me 401` (scaffold whoami) and, on tourless apps,
+  `GET /api/demos/:appId 404` (panel teach probe) - "expected-absent" by design but console-visible
+  on every load. Fixed with two additive always-200 probe routes (appSsoSession,
+  demoAvailability - contract-tested) + repointed scaffold wiring and panel probe. Residual
+  ACCEPTED: apps built BEFORE this change baked the old wiring and keep logging the /me 401, so
+  the e2e benign-console allowlists for the 401 stay; the demos-404 allowlist entries were removed
+  (the probe no longer 404s on any panel version served by a rebuilt api).
+- **`preview-iframe-sandbox-warning`** (console hygiene, operator 2026-07-14, live) - Chrome
+  warned "An iframe which has both allow-scripts and allow-same-origin... can escape its
+  sandboxing" on every side-panel preview load (incl. each about:blank hot-reload hop). The
+  sandbox attribute was removed (escapable as configured; see decisions 2026-07-14 for the
+  isolation model + accepted top-navigation residual). Out of scope, not ours: the
+  ObjectMultiplex "orphaned data" and MaxListenersExceededWarning lines in the same console
+  capture come from the MetaMask extension's content script, not the product.
+- **`suite-ledger-gate-crash-operator-run-gates`** (QA infra, found 2026-07-14 while running the
+  gate) - `scripts/suite-ledger-run.mjs` threw `Unknown gate: operator-run C5` on the slice-named
+  targetGates the operator run registered (commit ac1f3d3), so `npm run gate:ledger` AND
+  `npm run e2e` crashed outright. Fixed: `gateIndex` maps any `operator-run*` gate to one shared
+  post-G13 `OPERATOR-RUN` milestone (those drivers need the credentialed live stack and report
+  as awaiting in the CI lane; they were live-verified during the operator run itself).
+- **`suite-ledger-census-refusal-file-request`** (QA infra, found 2026-07-14 by the same gate
+  run) - the unit census was red (disk 31 != ledger 30): commit 8996048 (BRIEF-9a) said
+  "ledgered" but never added `refusal-file-request` to `frontend_unit.surviving`. Registered,
+  with a census_note breadcrumb.
+
 ## Recently fixed - 2026-07-14 walkthrough-prep sweep (operator evidence pass)
 
 - **`api-js-yaml-undeclared-dependency`** (dev-mode boot, 2026-07-14) - `api/` imports `js-yaml`

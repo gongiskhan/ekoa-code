@@ -163,11 +163,6 @@ function benign(entry) {
   //    through the boot-b dev CORS proxy this returns 5xx (a proxy artifact — same-origin prod does
   //    not proxy the beacon). Pre-existing dev-harness noise on every served app, not G2 code.
   if (url.endsWith('/api/app-health') && /\b5\d\d\b/.test(text)) return true;
-  // 4. Tour-availability probe (panel fix d172c2a): the panel GETs /api/demos/:appId once on mount
-  //    to decide whether to offer the teach launcher; on an app with NO stored tour this is an
-  //    EXPECTED 404 (the by-design "no tour" state, same class as the app-sso/me 401) that the
-  //    browser logs as a failed resource. Not an app error.
-  if (/\/api\/demos\//.test(url) && /\b404\b/.test(text)) return true;
   return false;
 }
 
@@ -238,6 +233,11 @@ async function main() {
   // PROVES the lazy-mounted panel actually fetched the route.
   let demosFetches = 0;
   await page.route('**/api/demos/**', (route) => {
+    // Availability probe (always-200 {available}) vs the spec fetch: count only SPEC
+    // fetches so the fulfil-count gate keeps proving the panel fetched the tour itself.
+    if (route.request().url().endsWith('/availability')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true }) });
+    }
     demosFetches += 1;
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) });
   });

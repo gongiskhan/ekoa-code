@@ -21,23 +21,21 @@ import { useState, useEffect } from 'react';
 import { getCurrentUser } from './lib/auth';
 import { ErrorBoundary } from './lib/ErrorBoundary';
 
-// The default starting page. Replace this with the first real screen of the
-// product, or add more pages and register them in PAGES below. It uses no mock
+// The default starting page, shown LIVE to the end user while the agent is
+// still building (the scaffold is compiled and served before the agent runs).
+// Its visible copy is end-user facing (PT) - never developer instructions.
+// AGENT: replace this with the first real screen of the product - write pages
+// under frontend/src/pages/ and register them in PAGES below. It uses no mock
 // data - real pages read/write through ./lib/jsonStore and ./lib/protocol-client.
 function HomePage() {
   return (
     <section className="page">
-      <header className="page-header">
-        <h1 className="page-title">Início</h1>
-        <p className="page-subtitle">
-          Esta é a página inicial da aplicação. Substitua este conteúdo pelo primeiro ecrã do produto.
-        </p>
-      </header>
       <div className="empty-state" data-demo-target="home-empty">
-        <h2 className="empty-state-title">Comece por aqui</h2>
+        <span className="empty-state-dots" aria-hidden="true"><span /><span /><span /></span>
+        <h2 className="empty-state-title">A construir algo fantástico...</h2>
         <p className="empty-state-subtitle">
-          Adicione páginas ao registo <code>PAGES</code> e construa os componentes correspondentes
-          em <code>frontend/src/pages/</code>.
+          A sua aplicação está a ganhar forma. Este ecrã dá lugar ao produto assim que a
+          construção terminar.
         </p>
       </div>
     </section>

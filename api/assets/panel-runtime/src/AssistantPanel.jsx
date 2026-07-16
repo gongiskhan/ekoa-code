@@ -48,10 +48,13 @@ const ENDPOINT = '/api/app-assistant';
 // invariant holds) and its result NEVER auto-enables anything - it only lights a discreet
 // indicator. The edit-mode switch + its opt-in UX are H3; this panel does not build them.
 const WHOAMI_ENDPOINT = '/api/app-assistant/whoami';
-// Tour AVAILABILITY probe target (E1/E2) - the same route the player fetches. Probed
-// ONCE per mounted panel (cheap, non-LLM, zero-token) so the teach-mode launcher is
-// only offered when this app actually stores a tour: "an app with no tours simply has
-// no teach path" (authoring-tours skill). A dead launcher that can only error is a bug.
+// Tour AVAILABILITY probe base (E1/E2) - the probe hits /:appId/availability, an
+// always-200 { available } endpoint (a tourless app is a by-design state, and the
+// browser logs every non-2xx to the console); the PLAYER still fetches /:appId for
+// the spec itself. Probed ONCE per mounted panel (cheap, non-LLM, zero-token) so
+// the teach-mode launcher is only offered when this app actually stores a tour:
+// "an app with no tours simply has no teach path" (authoring-tours skill). A dead
+// launcher that can only error is a bug.
 const DEMOS_PROBE_ENDPOINT = '/api/demos/';
 // The platform session token key web/lib/api/token.ts uses. Read best-effort for detection only:
 // a served app on the SAME origin as the dashboard can read it; a CROSS-origin / sandboxed iframe
@@ -405,11 +408,16 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     void (async () => {
       try {
-        const res = await fetch(`${DEMOS_PROBE_ENDPOINT}${encodeURIComponent(id)}`, {
+        const res = await fetch(`${DEMOS_PROBE_ENDPOINT}${encodeURIComponent(id)}/availability`, {
           method: 'GET',
           ...(controller ? { signal: controller.signal } : {}),
         });
-        setTourAvailable(res.ok);
+        if (!res.ok) {
+          setTourAvailable(false); // unexpected (the probe is always-200) - no launcher
+          return;
+        }
+        const body = await res.json().catch(() => null);
+        setTourAvailable(!!(body && body.available === true));
       } catch {
         // network error / aborted unmount -> stay null (no launcher; best-effort).
       }

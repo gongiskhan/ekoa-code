@@ -203,6 +203,38 @@ describe('build execution (§5.4, §5.6.2)', () => {
     expect(calls.activate).toBe(0); // a verify-failed build is not activated
   });
 
+  it('verify per-action narration: ">> " lines re-emit as same-status plan_steps, other narration stays off the step channel, and the hold-back tail is flushed (operator ask 2026-07-14)', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    const { events } = startEvents();
+    setVerifyRunner(async (i): Promise<VerifyRunResult> => {
+      // Chunks deliberately split MID-LINE: the assembler in build.ts must reassemble.
+      i.onProgress?.('>> A abrir a apli');
+      i.onProgress?.('cação\nvou analisar a página primeiro\n>> A clicar em "Adicionar"\n');
+      // Marker GLUED to the previous sentence (observed live 2026-07-14: the model skips
+      // the newline) - the scan is marker-anchored, so this must still emit.
+      i.onProgress?.('Vou registar o pedido.>> A ir para Aprovações\n');
+      // Final action WITHOUT a trailing newline: only reachable through the end-of-run flush
+      // (MarkerProcessor holds back a tail to catch split markers).
+      i.onProgress?.('>> A confirmar que a lista atualiza');
+      return { ran: true, passed: true };
+    });
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a crm', language: 'pt', deps: deps() });
+
+    const steps = events.filter((e) => e.type === 'plan_step' && (e.data as { status?: string }).status === 'verifying');
+    const descs = steps.map((e) => (e.data as { description?: string }).description);
+    expect(descs).toContain('A testar a aplicação...'); // the stage banner step
+    expect(descs).toContain('A abrir a aplicação'); // reassembled across chunk split
+    expect(descs).toContain('A clicar em "Adicionar"');
+    expect(descs).toContain('A ir para Aprovações'); // marker glued to the previous sentence
+    expect(descs).toContain('A confirmar que a lista atualiza'); // flushed tail, no trailing newline
+    // Plain narration lines ride the thinking channel only, never the step channel.
+    expect(descs.some((d) => d?.includes('vou analisar'))).toBe(false);
+    const thinking = events.filter((e) => e.type === 'thinking_chunk').map((e) => (e.data as { text?: string }).text).join('');
+    expect(thinking).toContain('vou analisar a página primeiro');
+    expect(thinking).toContain('A confirmar que a lista atualiza'); // tail also flushed to thinking
+  });
+
   it('F28 alone catches a scaffold build: honest-completion gate clean, verify ran+failed still gates completion', async () => {
     const t = resetAgentState({ finalText: 'built' });
     startEvents();

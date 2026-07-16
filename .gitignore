@@ -34,3 +34,7 @@ api/tests/evidence/
 # Compiled operator assistant panel runtime (operator-run G2): built at api build time
 # from api/assets/panel-runtime/src, served by serving.ts. Build artifact - never committed.
 api/assets/panel-runtime.js
+
+# Self-hosted Monaco AMD tree (~10 MB), copied from node_modules by
+# web/scripts/copy-monaco.mjs (predev/prebuild). Vendored asset - never committed.
+web/public/monaco/

@@ -25,7 +25,7 @@ The wiring libraries under `frontend/src/lib/` are shipped and ready - import th
 
 ## What you edit
 
-- **Pages.** Write a component under `frontend/src/pages/{PascalCase}.jsx` and register it in the `PAGES` array in `App.jsx` (`{ id, label, component }`). The first entry is the default page - replace the shipped starter with the product's real first screen.
+- **Pages.** Write a component under `frontend/src/pages/{PascalCase}.jsx` and register it in the `PAGES` array in `App.jsx` (`{ id, label, component }`). The first entry is the default page - the shipped starter is a user-facing "a construir..." placeholder the end user watches while you work; ALWAYS replace it with the product's real first screen before finishing.
 - **Page content and data.** Read/write through `lib/jsonStore`. An app never calls an external service directly - cross-service work is declared as `integration.call` capabilities in `MANIFEST.md` and executed by the platform; the only in-app integration call is the visitor's own Microsoft 365 via `lib/protocol-client`'s `graphFetch`.
 - **Shell chrome only for user-requested extras** (a user menu, a global search box). Keep the top bar, the nav mechanism, the root error boundary, and the assistant mount intact.
 

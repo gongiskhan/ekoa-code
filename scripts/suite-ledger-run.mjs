@@ -35,9 +35,16 @@ const LEDGER = join(ROOT, 'api/tests/SUITE_LEDGER.json');
 // and report "skipped (awaiting CUTOVER)" — used for the erp-* drivers that exercise the
 // brasilsalomão customer TENANT FORK, which is not in the ported reference catalog (§14.1) and is
 // reconstituted only at cutover. See the RUN_LOG DEVIATION (2026-07-08, Phase 12).
-const GATE_ORDER = ['G-P', 'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G7A', 'G7B', 'G8', 'G8A', 'G9', 'G10', 'G11', 'G12', 'G13', 'CUTOVER'];
+const GATE_ORDER = ['G-P', 'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G7A', 'G7B', 'G8', 'G8A', 'G9', 'G10', 'G11', 'G12', 'G13', 'OPERATOR-RUN', 'CUTOVER'];
 const gateIndex = (g) => {
-  const i = GATE_ORDER.indexOf(g);
+  // The 2026-07 operator feature run registered its live drivers with slice-named gates
+  // ("operator-run C5", "operator-run G2", ...). They are one shared post-G13 milestone:
+  // those drivers need the credentialed live boot-b stack the operator drives by hand
+  // (they were live-verified during the operator run itself), so at every in-run gate they
+  // report as awaiting instead of crashing the census (fix 2026-07-14 - gateIndex threw
+  // `Unknown gate: operator-run C5`, breaking gate:ledger and npm run e2e outright).
+  const name = g.startsWith('operator-run') ? 'OPERATOR-RUN' : g;
+  const i = GATE_ORDER.indexOf(name);
   if (i < 0) throw new Error(`Unknown gate: ${g}`);
   return i;
 };
