@@ -117,6 +117,22 @@ failures answer in the ANTHROPIC error shape (`{type:'error', error:{type:'inval
 413/400), never the CONV-2 envelope - the one declared exception to the CONV-2 rule, scoped to this
 Anthropic-wire surface. Every other route keeps the 1 MB limit + CONV-2 envelope.
 
+**Ancillary-surface inventory (stock Claude Code, live-observed 2026-07-17, S6).** A stock `claude`
+CLI pointed at the gateway with a per-user key calls exactly two endpoints: `POST /v1/messages`
+(streamed and non-streamed) and `POST /v1/messages/count_tokens` (continuously, for context
+management). It does NOT consume `GET /models` and does NOT call `/classify` (that is the local
+loop's own surface). No header-gated beta feature was needed - the body-level `betas` field
+sufficed, so client HTTP-header pass-through was NOT built (brief §3 criterion resolved: not
+needed). In-stream error rendering (brief §3, verified live): a stock `@anthropic-ai/sdk` client
+surfaces a post-commitment in-stream `error` event as a TERMINAL `APIError` with `status: undefined`
+- it is NOT retried the way a pre-commitment HTTP 429 is (documented as the accepted cost of
+heartbeat-and-replay in `docs/decisions.md`). Session vaults: Claude Code sends no conversation id,
+so its anonymisation vault is keyed by the gateway key id (S7) for stable tokens across its agentic
+tool loop. KNOWN LIMITATION (`findings.md gateway-anon-tooluse-fidelity`): a deny-list literal in a
+filesystem PATH does not yet reliably detokenize in `tool_use` args across the loop - deny-list orgs
+doing filesystem work through Claude Code are affected; the empty-ruleset default posture is a
+proven true no-op.
+
 ## Contract-change discipline and CI gates
 
 Three gates walk `shared/` against the code. Know exactly what each guarantees:

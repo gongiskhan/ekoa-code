@@ -8,7 +8,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Cortex gateway (run 20260717-071930-d1244839)
 
-- **`gateway-vault-per-request-instability`** (found by S6 live proof; being fixed by S7). On the
+- **`gateway-anon-tooluse-fidelity`** (OPEN, HIGH - found by S6 live proof; a top follow-up item).
+  With a NON-empty deny-list, a stock Claude Code session cannot reliably navigate a filesystem
+  whose paths contain a deny-listed literal: the tokenized directory name that reaches the model in
+  a `tool_result` (an `ls`/`find` output) does not reliably detokenize back in the model's next
+  `tool_use` argument, so the CLI tries to open the FAKE path and reports "directory not found", or
+  the literal comes back mangled across calls (observed: `ZarkovH90305` -> `ZarkovH9305`, a dropped
+  digit). This survives the S7 stable-vault fix (tokens are now consistent turn-to-turn), so the
+  residual is DETOKENIZATION FIDELITY of `tool_use` argument blocks under the tool_use/tool_result
+  density that coding traffic exercises and bridge traffic never did - exactly the brief's §3
+  anticipated risk ("coding traffic exercises tool_use/tool_result density the bridge traffic never
+  did"). The EMPTY-ruleset case is a true no-op and lands byte-identical (proven live), so ONLY
+  deny-list orgs doing filesystem work through Claude Code are affected. Fix is a deeper
+  anonymisation-plane change (reliable whole-token detokenization of tool_use args when the model
+  reformats/splits a format-preserving fake, plus overlapping deny-list x structured-ID x NER span
+  resolution) - a dedicated follow-up run, NOT bolted onto the S6 proof driver. The S6 driver
+  records this as an honest KNOWN LIMITATION (never green-washed).
+
+- **`gateway-vault-per-request-instability`** (FIXED by S7, commit bdbc472/d783f7d/31309d9). On the
   gateway path a stock Anthropic client (Claude Code) sends no `metadata.session_id`, so
   `proxyGatewayMessages` opens a FRESH ephemeral vault per request (`sess_${correlationId}`). Vault
   tokens are minted per-class by sequence and are deterministic only WITHIN one vault, so across
