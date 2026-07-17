@@ -117,11 +117,13 @@ failures answer in the ANTHROPIC error shape (`{type:'error', error:{type:'inval
 413/400), never the CONV-2 envelope - the one declared exception to the CONV-2 rule, scoped to this
 Anthropic-wire surface. Every other route keeps the 1 MB limit + CONV-2 envelope.
 
-**Ancillary-surface inventory (stock Claude Code, live-observed 2026-07-17, S6).** A stock `claude`
-CLI pointed at the gateway with a per-user key calls exactly two endpoints: `POST /v1/messages`
-(streamed and non-streamed) and `POST /v1/messages/count_tokens` (continuously, for context
-management). It does NOT consume `GET /models` and does NOT call `/classify` (that is the local
-loop's own surface). No header-gated beta feature was needed - the body-level `betas` field
+**Ancillary-surface inventory (stock Claude Code, live-observed 2026-07-17, S6, by inspecting the
+api request log during a real `claude -p` run).** A stock `claude` CLI pointed at the gateway with a
+per-user key calls exactly two endpoints: `POST /v1/messages` (streamed and non-streamed) and
+`POST /v1/messages/count_tokens` (continuously, for context management). It does NOT consume
+`GET /models` and does NOT call `/classify` (that is the local loop's own surface). This is a live
+observation (the S6 driver exercises count_tokens itself over HTTP; it does not commit the CLI's
+own request set), re-derivable by capturing the api request log across a `claude` run. No header-gated beta feature was needed - the body-level `betas` field
 sufficed, so client HTTP-header pass-through was NOT built (brief §3 criterion resolved: not
 needed). In-stream error rendering (brief §3, verified live): a stock `@anthropic-ai/sdk` client
 surfaces a post-commitment in-stream `error` event as a TERMINAL `APIError` with `status: undefined`

@@ -69,17 +69,21 @@ try { execSync('command -v claude', { stdio: 'ignore', shell: '/bin/bash' }); } 
 const login = await j('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'tmp12345' }) });
 if (login.status !== 200) skip(`seeded admin login failed (HTTP ${login.status}) - is this the dev stack?`);
 const TOKEN = login.body.token;
+const OWNER = 'admin'; // the seeded admin mints the key, so the key OWNER == this user
 const authed = (path, init = {}) => j(path, { ...init, headers: { authorization: `Bearer ${TOKEN}`, ...(init.headers ?? {}) } });
 
-// The breakdown endpoint must be readable for this proof driver (the seeded admin is super-admin);
-// if it is not, the billing attribution cannot be proven, which is a FAILURE, not a skip.
-const breakdown = async () => {
-  const r = await authed('/api/v1/billing/breakdown');
+// The billee-metered proof reads the OWNER'S OWN per-user usage row (S6 fresh-review F3: the
+// /billing/breakdown endpoint groups by agentType only and carries NO owner field, so it could
+// only prove "gateway-client billing grew platform-wide", never "on the key owner"). admin/usage
+// returns per-USER rows behind the same super-admin gate; a growth in the OWNER'S tokensUsed is
+// direct proof the key's usage billed the owner. Unreadable => FAILURE, not a skip.
+const ownerTokensUsed = async () => {
+  const r = await authed('/api/v1/billing/admin/usage');
   if (r.status !== 200) return null;
-  const row = (r.body.items ?? []).find((it) => it.agentType === 'gateway-client');
-  return row ? Object.values(row).filter((v) => typeof v === 'number').reduce((a, b) => a + b, 0) : 0;
+  const row = (r.body.items ?? []).find((it) => it.username === OWNER);
+  return row ? row.tokensUsed : null;
 };
-const billedBefore = await breakdown();
+const ownerBefore = await ownerTokensUsed();
 
 const mint = await authed('/api/v1/gateway-keys', { method: 'POST', body: JSON.stringify({ label: `s6-live-${RUNSTAMP}` }) });
 assert(mint.status === 201 && mint.body.key?.startsWith('ekoa_gk_'), 'key minted over HTTP (201, ekoa_gk_ prefix)');
@@ -119,6 +123,16 @@ let workB;
 let denyId;
 try {
   // --- 2. empty-ruleset no-op round trip (tolerate an explicit rate-limit only) -----------
+  // Assert the org ruleset is actually EMPTY before the no-op beat (S6 fresh-review F6: the beat's
+  // meaning is the default no-op posture; a leftover deny-list literal from a crashed run would
+  // silently invalidate it). Purge any leftovers so the precondition holds.
+  const denyList = await authed('/api/v1/org/deny-list');
+  for (const it of denyList.body?.items ?? []) {
+    if (it.id) await authed(`/api/v1/org/deny-list/${it.id}`, { method: 'DELETE' }).catch(() => {});
+  }
+  const denyAfterPurge = await authed('/api/v1/org/deny-list');
+  assert((denyAfterPurge.body?.items ?? []).length === 0, 'org deny-list is EMPTY (the no-op beat\'s precondition)');
+
   workA = mkdtempSync(join(tmpdir(), 's6-gateway-a-'));
   const CONTENT_A = `REF-${RUNSTAMP}-A codigo interno 40273`;
   writeFileSync(join(workA, 'nota-interna.txt'), CONTENT_A);
@@ -196,7 +210,7 @@ try {
     const pingIdx = raw.indexOf('event: ping');
     const firstUpstream = [raw.indexOf('event: message_start'), raw.indexOf('event: error')].filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? -1;
     assert(pingIdx >= 0, 'a ping frame is written at SSE commitment');
-    assert(firstUpstream > pingIdx, 'the ping precedes the replayed upstream body (message_start OR an in-stream error)');
+    assert(pingIdx >= 0 && firstUpstream > pingIdx, 'the ping precedes the replayed upstream body (message_start OR an in-stream error)');
     if (raw.includes('event: message_stop')) ok('the replay is a complete SSE stream (message_stop present)');
     else if (raw.includes('"type":"rate_limit_error"')) tol('upstream replayed an in-stream rate_limit_error (shared credential throttled) - S1 error-path proven live');
     else fail('the replay is neither a complete stream nor an in-stream rate-limit error');
@@ -213,14 +227,16 @@ try {
   });
   assert(count.status === 200 && typeof count.body?.input_tokens === 'number' && count.body.input_tokens > 0, `count_tokens answers real counts (input_tokens=${count.body?.input_tokens})`);
 
-  // --- 6. billing landed on the key owner -------------------------------------------------
-  console.log('\n[6] billing breakdown grew a gateway-client row on the key owner...');
-  const billedAfter = await breakdown();
-  // The breakdown must be readable (super-admin) AND must have grown - a proof driver that cannot
-  // read billing cannot prove attribution, so an unreadable breakdown is a FAILURE (S6 codex High).
-  assert(billedBefore !== null && billedAfter !== null, 'billing breakdown is readable with the admin role');
-  if (billedBefore !== null && billedAfter !== null) {
-    assert(billedAfter > billedBefore, `gateway-client billing grew (${billedBefore} -> ${billedAfter})`);
+  // --- 6. billing landed on the KEY OWNER -------------------------------------------------
+  console.log('\n[6] the key OWNER\'s own usage grew (owner attribution)...');
+  const ownerAfter = await ownerTokensUsed();
+  // Readable (super-admin) AND the owner's own row grew - a proof driver that cannot read the
+  // owner's usage cannot prove attribution, so unreadable is a FAILURE (S6 codex High); reading
+  // the OWNER'S row (not a platform-wide agentType sum) is what actually proves owner attribution
+  // (S6 fresh-review F3).
+  assert(ownerBefore !== null && ownerAfter !== null, "the owner's per-user usage row is readable with the admin role");
+  if (ownerBefore !== null && ownerAfter !== null) {
+    assert(ownerAfter > ownerBefore, `the key owner's tokensUsed grew (${ownerBefore} -> ${ownerAfter}) - usage billed the owner`);
   }
 } finally {
   if (KEY_ID) await authed(`/api/v1/gateway-keys/${KEY_ID}/revoke`, { method: 'POST' }).catch(() => {});
