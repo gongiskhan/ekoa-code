@@ -142,11 +142,28 @@ describe('gateway vault keying', () => {
     const hosted: LlmAttribution = { kind: 'user_work', agentType: 'chat', billeeUserId: 'userA', sessionId: 'conv-1' };
     await completeFast({ messages: [{ role: 'user', content: `dossier de ${PARTY}` }] }, hosted);
     // Delegated turn (gateway path): the bridge delegates the SAME conversation billed to a
-    // DIFFERENT same-org user B (pairing owner).
+    // DIFFERENT same-org user B (pairing owner). The bridge passes a server-side correlationId
+    // (the daemon join id) - the UNFORGEABLE trust signal that ownership was pre-validated.
     const delegated = { ...body(), metadata: { session_id: 'conv-1' } };
-    await proxyGatewayMessages(delegated, 'userB', undefined);
+    await proxyGatewayMessages(delegated, 'userB', 'daemon-corr-1');
     // ONE shared vault (csid:orgShared:conv-1) - a token minted hosted detokenizes delegated.
     expect(__vaultCount()).toBe(1);
+  });
+
+  it('F6 (S7 fresh-review High): a DIRECT client naming another user\'s conversation id CANNOT open its vault (no server correlationId => untrusted => billee-isolated)', async () => {
+    __resetAttributionCountersForTests();
+    setOrgResolver(async () => 'orgShared');
+    const { transport } = captureTransport();
+    __setTransportForTests(transport);
+    // Victim A's hosted conversation vault (csid:orgShared:conv-A).
+    const hosted: LlmAttribution = { kind: 'user_work', agentType: 'chat', billeeUserId: 'userA', sessionId: 'conv-A' };
+    await completeFast({ messages: [{ role: 'user', content: `dossier de ${PARTY}` }] }, hosted);
+    // Attacker B (same org) hits the gateway DIRECTLY (no correlationId - stock client) naming A's
+    // conversation id. Untrusted => billee-isolated key csid:orgShared:usr:userB:conv-A, NOT A's.
+    const attack = { ...body(), metadata: { session_id: 'conv-A' } };
+    await proxyGatewayMessages(attack, 'userB', undefined);
+    // TWO vaults - B never touched A's conversation vault.
+    expect(__vaultCount()).toBe(2);
   });
 
   it('a crafted session_id cannot HIJACK another key\'s vault (codex S7 High: namespace isolation)', async () => {
@@ -158,7 +175,7 @@ describe('gateway vault keying', () => {
     const crafted = { ...body(), metadata: { session_id: 'gwkey:kid_victim' } };
     await proxyGatewayMessages(crafted, 'ownerA', undefined);
     // TWO distinct vaults: the attacker's client-supplied id is billee-scoped
-    // (csid:ownerA:gwkey:kid_victim), never the victim's gwkey:kid_victim - no shared vault.
+    // (csid:<org>:usr:ownerA:gwkey:kid_victim), never the victim's gwkey:kid_victim - no share.
     expect(__vaultCount()).toBe(2);
   });
 });

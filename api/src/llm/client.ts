@@ -1123,14 +1123,29 @@ function stripEmptyTextBlocks(messages: unknown): { value: unknown; removed: num
  *  - `eph:<correlationId>` - truly session-less + key-less, a fresh per-request vault.
  * `ephemeral` is true only for the last case (the finally clears exactly those).
  */
-function deriveVaultSession(args: { metaSessionId: unknown; orgId: string; keyId?: string; correlationId: string }): { sessionId: string; ephemeral: boolean } {
-  const explicitSession = typeof args.metaSessionId === 'string';
-  const keyVaultId = args.keyId ? `gwkey:${args.keyId}` : undefined;
-  // A client-supplied session id is ORG-scoped (§18.4.3 {org, session}) so it (a) shares a vault
-  // with the hosted turn of the same conversation regardless of which same-org user delegates it,
-  // and (b) can never equal the reserved `gwkey:<keyId>` per-key space.
-  if (explicitSession) return { sessionId: `csid:${args.orgId}:${args.metaSessionId as string}`, ephemeral: false };
-  if (keyVaultId) return { sessionId: keyVaultId, ephemeral: false };
+/**
+ * Derive the anonymisation vault session key for a gateway call (S7). Who may open the SHARED
+ * `csid:<org>:<conv>` conversation vault is the crux (S7 fresh-review F6): a stock client can put
+ * ANY string in metadata.session_id, and the platform's conversation ownership is USER-scoped
+ * (`ownedSession` -> 404 for a non-owner), so an org-scoped conversation vault opened from an
+ * untrusted client-supplied id is a re-identification side channel around that check. Rules, most
+ * specific first:
+ *  - a gateway-KEY principal (Claude Code): `gwkey:<keyId>` (its OWN unforgeable namespace; a
+ *    client session_id, if any, is subscoped UNDER the key - never a conversation vault);
+ *  - the BRIDGE/daemon path (`trustedSession`, i.e. a server-passed correlationId, ownership
+ *    pre-validated by bridge/provider): the shared `csid:<org>:<conv>` vault (§18.4.3), matching
+ *    the hosted SDK turn's sessionKeyFor;
+ *  - a direct client with an UNTRUSTED session_id (no key, no correlationId - e.g. a JWT gateway
+ *    user): `csid:<org>:usr:<billee>:<id>` - billee-ISOLATED, so it can never name another user's
+ *    conversation vault;
+ *  - otherwise ephemeral `eph:<correlationId>`.
+ * `ephemeral` is true only for the last case (the finally clears exactly those).
+ */
+function deriveVaultSession(args: { metaSessionId: unknown; orgId: string; billeeUserId: string; keyId?: string; correlationId: string; trustedSession: boolean }): { sessionId: string; ephemeral: boolean } {
+  const sid = typeof args.metaSessionId === 'string' ? args.metaSessionId : undefined;
+  if (args.keyId) return { sessionId: sid ? `gwkey:${args.keyId}:${sid}` : `gwkey:${args.keyId}`, ephemeral: false };
+  if (sid && args.trustedSession) return { sessionId: `csid:${args.orgId}:${sid}`, ephemeral: false };
+  if (sid) return { sessionId: `csid:${args.orgId}:usr:${args.billeeUserId}:${sid}`, ephemeral: false };
   return { sessionId: `eph:${args.correlationId}`, ephemeral: true };
 }
 
@@ -1179,7 +1194,7 @@ export async function proxyGatewayMessages(
   // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
   // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
   // (no-session, no-key) vault is cleared in the finally.
-  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, keyId: opts?.keyId, correlationId });
+  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, keyId: opts?.keyId, correlationId, trustedSession: correlationIdIn !== undefined });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1343,7 +1358,7 @@ export async function proxyGatewayCountTokens(
   // count_tokens threads no keyId, so a client session_id is billee-scoped and everything else is
   // ephemeral - the SAME disjoint namespacing as messages (S7 codex High: this sibling path must
   // not let a crafted session_id open a reserved gwkey vault either).
-  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, correlationId });
+  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, correlationId, trustedSession: false });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
