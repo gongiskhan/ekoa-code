@@ -7,6 +7,9 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { resolveUrl } from '@/lib/api';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useGatewayKeysStore } from '@/stores/gateway-keys';
@@ -14,17 +17,17 @@ import { useTranslation } from '@/stores/i18n';
 
 /**
  * Per-user gateway API keys page (S4b, run 20260717). Self-service mint (the secret is shown
- * EXACTLY ONCE, with the client env config), list (label + tail hint + created/last-used +
- * status), and revoke with an inline confirm. No AdminGate: keys are per-user and bill their
+ * EXACTLY ONCE, with the client env config), list (platform Table + Badge primitives), and
+ * revoke through the platform confirm dialog. No AdminGate: keys are per-user and bill their
  * owner (the server scopes everything to the caller).
  */
 export default function ApiKeysSettingsPage() {
-  const t = useTranslation().pages_gatewayKeys;
+  const { language, pages_gatewayKeys: t } = useTranslation();
   const { keys, isLoading, error, mintedKey, fetchKeys, mint, revoke, clearMinted } = useGatewayKeysStore();
+  const confirm = useConfirm();
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,13 +57,15 @@ export default function ApiKeysSettingsPage() {
 
   async function submitRevoke(id: string) {
     if (revokingId) return; // in-flight guard: never double-fire a revoke
-    setConfirmingId(null);
+    const ok = await confirm({ title: t.revoke, description: t.revokeConfirm, confirmLabel: t.revoke, tone: 'danger' });
+    if (!ok) return;
     setRevokingId(id);
     await revoke(id);
     setRevokingId(null);
   }
 
-  const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : t.neverUsed);
+  const fmt = (iso?: string) =>
+    iso ? new Date(iso).toLocaleDateString(language === 'pt' ? 'pt-PT' : undefined) : t.neverUsed;
 
   return (
     <PageShell testId="settings-api-keys-page">
@@ -74,10 +79,12 @@ export default function ApiKeysSettingsPage() {
             value={label}
             maxLength={64}
             onChange={(e) => setLabel(e.target.value)}
+            wrapperClassName="flex-1"
             data-testid="gateway-key-label-input"
           />
           <Button
             variant="primary"
+            className="whitespace-nowrap"
             loading={busy}
             disabled={busy || !label.trim()}
             onClick={() => void submitMint()}
@@ -125,75 +132,60 @@ export default function ApiKeysSettingsPage() {
         </Card>
       )}
 
-      <Card className="mt-4 max-w-2xl" data-testid="gateway-key-list">
-        <h3 className="text-base font-semibold">{t.listTitle}</h3>
+      <div className="mt-4 max-w-2xl" data-testid="gateway-key-list">
+        <h3 className="mb-3 text-base font-semibold">{t.listTitle}</h3>
         {isLoading && keys.length === 0 ? null : keys.length === 0 ? (
-          <p className="mt-2 text-sm text-neutral-600" data-testid="gateway-key-empty">
-            {t.listEmpty}
-          </p>
+          <Card>
+            <p className="text-sm text-neutral-600" data-testid="gateway-key-empty">
+              {t.listEmpty}
+            </p>
+          </Card>
         ) : (
-          <table className="mt-3 w-full text-sm">
-            <thead>
-              <tr className="text-left text-neutral-500">
-                <th className="py-1 pr-3 font-medium">{t.colLabel}</th>
-                <th className="py-1 pr-3 font-medium">{t.colKey}</th>
-                <th className="py-1 pr-3 font-medium">{t.colCreated}</th>
-                <th className="py-1 pr-3 font-medium">{t.colLastUsed}</th>
-                <th className="py-1 pr-3 font-medium">{t.colStatus}</th>
-                <th className="py-1" />
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <THead>
+              <TR>
+                <TH>{t.colLabel}</TH>
+                <TH>{t.colKey}</TH>
+                <TH className="hidden sm:table-cell">{t.colCreated}</TH>
+                <TH className="hidden sm:table-cell">{t.colLastUsed}</TH>
+                <TH>{t.colStatus}</TH>
+                <TH />
+              </TR>
+            </THead>
+            <TBody>
               {keys.map((k) => (
-                <tr key={k.id} className="border-t border-neutral-200" data-testid={`gateway-key-row-${k.id}`}>
-                  <td className="py-2 pr-3">{k.label}</td>
-                  <td className="py-2 pr-3 font-mono text-xs">ekoa_gk_...{k.secretHint}</td>
-                  <td className="py-2 pr-3">{fmt(k.createdAt)}</td>
-                  <td className="py-2 pr-3">{fmt(k.lastUsedAt)}</td>
-                  <td className="py-2 pr-3">
+                <TR key={k.id} hover data-testid={`gateway-key-row-${k.id}`}>
+                  <TD>{k.label}</TD>
+                  <TD className="font-mono text-xs">ekoa_gk_...{k.secretHint}</TD>
+                  <TD className="hidden sm:table-cell">{fmt(k.createdAt)}</TD>
+                  <TD className="hidden sm:table-cell">{fmt(k.lastUsedAt)}</TD>
+                  <TD>
                     {k.revokedAt ? (
-                      <span className="text-red-600" data-testid="gateway-key-status-revoked">{t.statusRevoked}</span>
+                      <Badge tone="neutral" data-testid="gateway-key-status-revoked">{t.statusRevoked}</Badge>
                     ) : (
-                      <span className="text-teal-700" data-testid="gateway-key-status-active">{t.statusActive}</span>
+                      <Badge tone="brand" dot data-testid="gateway-key-status-active">{t.statusActive}</Badge>
                     )}
-                  </td>
-                  <td className="py-2 text-right">
-                    {!k.revokedAt &&
-                      (confirmingId === k.id ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="text-xs text-neutral-600">{t.revokeConfirm}</span>
-                          <Button
-                            variant="danger-ghost"
-                            icon={ShieldOff}
-                            loading={revokingId === k.id}
-                            disabled={revokingId !== null}
-                            onClick={() => void submitRevoke(k.id)}
-                            data-testid="gateway-key-revoke-confirm"
-                          >
-                            {t.revoke}
-                          </Button>
-                          <Button variant="secondary" onClick={() => setConfirmingId(null)} data-testid="gateway-key-revoke-cancel">
-                            {t.cancel}
-                          </Button>
-                        </span>
-                      ) : (
-                        <Button
-                          variant="danger-ghost"
-                          icon={ShieldOff}
-                          disabled={revokingId !== null}
-                          onClick={() => setConfirmingId(k.id)}
-                          data-testid="gateway-key-revoke"
-                        >
-                          {t.revoke}
-                        </Button>
-                      ))}
-                  </td>
-                </tr>
+                  </TD>
+                  <TD className="text-right">
+                    {!k.revokedAt && (
+                      <Button
+                        variant="danger-ghost"
+                        icon={ShieldOff}
+                        loading={revokingId === k.id}
+                        disabled={revokingId !== null}
+                        onClick={() => void submitRevoke(k.id)}
+                        data-testid="gateway-key-revoke"
+                      >
+                        {t.revoke}
+                      </Button>
+                    )}
+                  </TD>
+                </TR>
               ))}
-            </tbody>
-          </table>
+            </TBody>
+          </Table>
         )}
-      </Card>
+      </div>
     </PageShell>
   );
 }

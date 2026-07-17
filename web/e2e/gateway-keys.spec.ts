@@ -57,9 +57,11 @@ test('mint shows the secret once, reload hides it, revoke flips the badge', asyn
   await expect(row).toHaveCount(1);
   await expect(row.getByTestId('gateway-key-status-active')).toBeVisible();
 
-  // Revoke through the inline confirm; the badge flips.
+  // Revoke through the platform confirm dialog; the badge flips.
   await row.getByTestId('gateway-key-revoke').click();
-  await row.getByTestId('gateway-key-revoke-confirm').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: /revogar|revoke/i }).click();
   await expect(row.getByTestId('gateway-key-status-revoked')).toBeVisible({ timeout: 15_000 });
 
   expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
