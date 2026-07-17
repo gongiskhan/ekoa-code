@@ -109,6 +109,27 @@ export const integrationConfigs = new Store<Doc>('integration_configs');
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */
 export const integrationBuilderSessions = new Store<Doc>('integration_builder_sessions');
 export const activityLogs = new Store<ActivityLogDoc>('activity_logs');
+
+/** Per-user LLM-gateway API key (S4a, run 20260717). `_id` IS the sha256 hex of the secret:
+ *  O(1) verification via `get`, duplicate-insert safety from `insert`, and the hash of a
+ *  256-bit random secret is safe to expose as the public key id. The plaintext secret is
+ *  NEVER stored (returned once at mint). */
+export interface GatewayKeyDoc extends Doc {
+  ownerUserId: string;
+  /** Stamped at mint so key verification never needs a users lookup for the Registo actor. */
+  ownerUsername: string;
+  orgId: string;
+  label: string;
+  /** Last 4 chars of the secret - the UI renders 'ekoa_gk_...abcd'. */
+  secretHint: string;
+  createdAt: string;
+  revokedAt?: string;
+  /** Throttled anomaly surface (at most one write per key per minute). */
+  lastUsedAt?: string;
+  /** Optional per-key cap overrides; absent => the EKOA_RATECAP_*_PER_KEY defaults. */
+  caps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number };
+}
+export const gatewayKeys = new Store<GatewayKeyDoc>('gateway_keys');
 export const changeRequests = new Store<ChangeRequestDoc>('change_requests');
 export const jobs = new Store<Doc>('jobs');
 export const settings = new Store<SettingsDoc>('settings');

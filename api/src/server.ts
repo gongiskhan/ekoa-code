@@ -72,6 +72,8 @@ import { appPdfRouter, getArtifactPdfDir } from './apps/pdf.js';
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
+import { verifyGatewayKey } from './auth/gateway-keys-service.js';
+import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -588,9 +590,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/chat', chatRouter(deps));
   app.use('/api/v1/jobs', jobsRouter(deps));
   // G7 — the ekoa-local LLM gateway sub-app (ch03 §3.10; metering inside the chokepoint,
-  // §6.5.4). Mounted at /api/v1/llm; the owner-bypass token verifier is injected (llm/ needs
-  // no auth/ import — the gateway takes it as a dep). Bills wire-tier FAST per proxied call.
-  registerGateway(app, { verifyToken });
+  // §6.5.4). Mounted at /api/v1/llm; the token verifier AND the per-user key verifier (S4a)
+  // are injected (llm/ needs no auth/ import — the gateway takes them as deps). A user-key
+  // principal bills its OWNER; the static key stays platform overhead.
+  registerGateway(app, { verifyToken, verifyGatewayKey });
+  // S4a — per-user gateway API keys: mint (show-once) / list / revoke, self-service.
+  app.use('/api/v1/gateway-keys', gatewayKeysRouter(deps));
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).

@@ -29,6 +29,7 @@ import { changeRequestsEndpoints } from './change-request.js';
 import { appAssistantEndpoints } from './app-assistant.js';
 import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
+import { gatewayKeysEndpoints } from './gateway-keys.js';
 import { notificationsEndpoints } from './notifications.js';
 
 export * from './descriptor.js';
@@ -63,6 +64,7 @@ export * from './artifact-type.js';
 export * from './app-assistant.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';
+export * from './gateway-keys.js';
 export * from './notifications.js';
 
 /** Every domain's descriptor map, keyed by domain. The route census + protocol-parity
@@ -93,6 +95,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   appAssistant: appAssistantEndpoints,
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,
+  gatewayKeys: gatewayKeysEndpoints,
   notifications: notificationsEndpoints,
 };
 

@@ -89,6 +89,9 @@ const COVERED = new Set<string>([
   // (llm-count-tokens.test.ts contract, real buildApp + stub transport). Additive endpoints:
   // covering both keeps EXPECTED_PENDING_COUNT unchanged.
   'ekoaLocal.llmCountTokens', 'ekoaLocal.llmCountTokensAlias',
+  // cortex-gateway S4a (run 20260717) — per-user gateway keys, a NEW domain
+  // (gateway-keys.test.ts contract: mint show-once / list no-secret / revoke + cross-user 404).
+  'gatewayKeys.gatewayKeysMint', 'gatewayKeys.gatewayKeysList', 'gatewayKeys.gatewayKeysRevoke',
   // Local-bridge consumer run s5 — FC-408 masking summary (masking-summary.test.ts)
   'registo.maskingSummary',
   // operator-run H2 — served-app assistant admin detection (app-assistant.contract.test.ts +

@@ -202,6 +202,22 @@ Isolation between arbitrary served-app code and the authenticated dashboard is t
 ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api origin
 (`api.<domain>`, `:4111` in dev), never on the dashboard origin.
 
+**Per-user gateway API keys (S4a, 2026-07-17).** Stock Anthropic clients (Claude Code) authenticate
+to the LLM gateway with self-service, long-lived, revocable keys: secret `ekoa_gk_` + 32 random
+bytes base64url, stored ONLY as its sha256 (the hash is the store id - O(1) verify, nothing to
+leak at rest), shown exactly once at mint. Verification is an injected seam
+(`auth/gateway-keys-service.ts` -> `GatewayDeps.verifyGatewayKey`; `llm/` never imports `auth/`)
+and fails CLOSED through the activation cache: unknown/revoked keys and inactive/deleted owners
+are 401, a billing-locked owner is a distinct 402, revocation is durable and effective on the
+next call. The billee is always the key OWNER (`agentType: 'gateway-client'` in the billing
+ledger - its own breakdown line), the allowance gate applies, and a third per-KEY rate-cap
+window (`EKOA_RATECAP_CALLS_PER_KEY`/`EKOA_RATECAP_SPEND_PER_KEY`, per-key doc overrides)
+composes with the user/org windows - the abuse answer for a metered Anthropic-compatible
+endpoint (token-farming target). Ownership is the authorization: keys are minted/listed/revoked
+only by their owner (`/api/v1/gateway-keys`, uniform 404 cross-user), `lastUsedAt` is a throttled
+anomaly surface, and every metered key turn lands a metadata-only `gateway_turn` row in the
+owner's Registo (who/when/tier/model/metered - never content).
+
 **LLM gateway count_tokens is uncapped (accepted residual, 2026-07-17).** The gateway's
 `count_tokens` forward is auth-gated but exempt from the rate caps, the allowance gate, and
 metering: it is free upstream, produces no billable usage, and stock Claude Code polls it

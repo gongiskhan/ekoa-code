@@ -73,3 +73,37 @@ describe('anomalous-burn alert', () => {
     expect(alerts.filter((a) => a.scope === 'user' && a.kind === 'spend')).toHaveLength(1);
   });
 });
+
+describe('per-KEY caps (S4a gateway keys, run 20260717)', () => {
+  const keyed = (u: string, o: string, keyId: string, now: number, keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number }) =>
+    ({ billeeUserId: u, orgId: o, keyId, now, ...(keyCaps ? { keyCaps } : {}) });
+
+  it('trips the key window independently of the (untouched) user/org windows', () => {
+    const rl = new RateLimiter(cfg({ maxCallsPerUser: 100, maxCallsPerOrg: 100, maxCallsPerKey: 2 }));
+    rl.recordSpend({ ...keyed('u1', 'orgA', 'k1', T0), metered: 1 });
+    rl.recordSpend({ ...keyed('u1', 'orgA', 'k1', T0 + 1), metered: 1 });
+    expect(rl.check(keyed('u1', 'orgA', 'k1', T0 + 2))).toMatchObject({ ok: false, scope: 'key', kind: 'rate' });
+    // A DIFFERENT key of the same user is free; a keyless call is free.
+    expect(rl.check(keyed('u1', 'orgA', 'k2', T0 + 3)).ok).toBe(true);
+    expect(rl.check(key('u1', 'orgA', T0 + 4)).ok).toBe(true);
+  });
+
+  it('per-key spend cap trips; doc-level keyCaps overrides beat the config defaults', () => {
+    const rl = new RateLimiter(cfg({ maxCallsPerKey: 100, maxSpendPerKey: 500 }));
+    rl.recordSpend({ ...keyed('u1', 'orgA', 'k1', T0), metered: 500 });
+    expect(rl.check(keyed('u1', 'orgA', 'k1', T0 + 1))).toMatchObject({ ok: false, scope: 'key', kind: 'spend' });
+
+    // Override: this key allows only 1 call/window although the config default is 100.
+    const rl2 = new RateLimiter(cfg({ maxCallsPerKey: 100 }));
+    rl2.recordSpend({ ...keyed('u1', 'orgA', 'k1', T0), metered: 1 });
+    expect(rl2.check(keyed('u1', 'orgA', 'k1', T0 + 1, { maxCallsPerWindow: 1 }))).toMatchObject({ ok: false, scope: 'key', kind: 'rate' });
+    expect(rl2.check(keyed('u1', 'orgA', 'k1', T0 + 2)).ok).toBe(true); // default cap: still fine
+  });
+
+  it('the key window slides like the others', () => {
+    const rl = new RateLimiter(cfg({ maxCallsPerKey: 1 }));
+    rl.recordSpend({ ...keyed('u1', 'orgA', 'k1', T0), metered: 1 });
+    expect(rl.check(keyed('u1', 'orgA', 'k1', T0 + 1)).ok).toBe(false);
+    expect(rl.check(keyed('u1', 'orgA', 'k1', T0 + 1001)).ok).toBe(true);
+  });
+});

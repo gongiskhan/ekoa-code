@@ -23,6 +23,7 @@ import { checkRateCaps, recordSpend, type RateCapKey, type RateCapVerdict } from
 import { users } from '../data/stores.js';
 import {
   type LlmAttribution,
+  type UserWorkAgentType,
   requireAttribution,
   assertNotPlatformCall,
   billeeOf,
@@ -130,8 +131,11 @@ async function capKeyFor(billeeUserId: string): Promise<RateCapKey> {
 /** Pre-admission gate (§6.6.4): resolve the cap key, check the sliding window, and throw a typed
  *  LlmRateCapError WITHOUT recording when a cap is tripped. Returns the key so the caller records
  *  spend against the same identity AFTER metering succeeds. */
-async function admitOrThrow(billeeUserId: string): Promise<RateCapKey> {
-  const key = await capKeyFor(billeeUserId);
+async function admitOrThrow(
+  billeeUserId: string,
+  keyScope?: { keyId: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } },
+): Promise<RateCapKey> {
+  const key: RateCapKey = { ...(await capKeyFor(billeeUserId)), ...(keyScope ?? {}) };
   const verdict = checkRateCaps(key);
   if (!verdict.ok) throw new LlmRateCapError(verdict);
   return key;
@@ -1046,6 +1050,18 @@ export interface GatewayForwardResult {
   metered: number;
   /** The correlation id the hosted anon-audit was recorded under (ch18 §18.5 S6 join key). */
   correlationId: string;
+  /** The tier/model that actually ran (S4a: the gateway's Registo row records them). */
+  wireTier: Tier;
+  wireModel: string;
+}
+
+/** Per-call options for gateway forwards (S4a). Every field optional so existing callers are
+ *  untouched: agentType defaults to the historical 'pi-fast-loop'; keyId/keyCaps add the
+ *  per-key rate-cap window for user-key principals. */
+export interface GatewayForwardOpts {
+  agentType?: UserWorkAgentType;
+  keyId?: string;
+  keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number };
 }
 
 /** A content block is an empty text block when it is `{type:'text', text: ''|whitespace}`. The
@@ -1091,8 +1107,10 @@ export async function proxyGatewayMessages(
    *  ledger row share ONE correlation id — the join key (§18.4.5, §18.8 criterion 5). Absent for a
    *  non-bridge caller: mint a fresh one as before. */
   correlationIdIn?: string,
+  opts?: GatewayForwardOpts,
 ): Promise<GatewayForwardResult> {
-  const capKey = await admitOrThrow(billeeUserId); // §6.6.4 pre-admission cap (empty => platform admin)
+  // §6.6.4 pre-admission cap (empty => platform admin); a key principal adds its per-key window.
+  const capKey = await admitOrThrow(billeeUserId, opts?.keyId ? { keyId: opts.keyId, keyCaps: opts.keyCaps } : undefined);
   // Tier resolution (rc-1 amendment to §6.5.4, decision logged 2026-07-11): a requested model
   // that IS one of the three configured tier models runs at THAT tier — the chokepoint no longer
   // silently degrades its own subprocess traffic (the Agent-SDK spawns ride this gateway via
@@ -1218,7 +1236,7 @@ export async function proxyGatewayMessages(
       // principal (empty billee) is platform overhead — attributed `platform`, which the tracker
       // ledgers against the platform admin (§6.3 rule 3), never user_work with an empty billee.
       const attribution: LlmAttribution = billeeUserId
-        ? { kind: 'user_work', agentType: 'pi-fast-loop', billeeUserId }
+        ? { kind: 'user_work', agentType: opts?.agentType ?? 'pi-fast-loop', billeeUserId }
         : { kind: 'platform', agentType: 'pi-fast-loop', justification: 'ekoa-local gateway API-key principal — platform overhead billed to the platform admin (§6.5.4)' };
       // Metered at the tier that actually ran (§6.3): a matched EXPERT call bills EXPERT weight.
       metered = await meter(attribution, wireTier, decision.model, usage);
@@ -1227,7 +1245,7 @@ export async function proxyGatewayMessages(
       unmetered = true; // parse-or-skip (§6.5.4); the caller bumps gateway_unmetered_call
     }
   }
-  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId };
+  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId, wireTier, wireModel: decision.model };
 }
 
 // --- count_tokens forwarding (S3, run 20260717) --------------------------------------------

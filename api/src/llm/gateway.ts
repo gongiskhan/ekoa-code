@@ -8,7 +8,8 @@
  * router would classify — via client.proxyGatewayMessages. Usage is parsed from streamed +
  * non-streamed bodies; an unparseable body SKIPS billing and increments the observable
  * `gateway_unmetered_call` counter surfaced on /health (§6.5.4). The billee is the JWT
- * principal; gateway-key principals bill the platform admin.
+ * principal or the per-user key OWNER (S4a, agentType 'gateway-client'); the STATIC gateway
+ * key bills the platform admin.
  *
  * Streaming (S1, run 20260717): the upstream transport stays BUFFERED (anonymisation operates
  * on the complete body — it outranks streaming). A stream:true client instead gets
@@ -22,6 +23,7 @@
 import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
 import { loadConfig } from '../config.js';
 import { checkAllowance } from '../billing/allowance.js';
+import { logActivity } from '../data/activity.js';
 import { classify, type Tier } from './router.js';
 import { completeFast, proxyGatewayCountTokens, proxyGatewayMessages } from './client.js';
 import { LlmAbortedError, LlmRateCapError } from './client.js';
@@ -30,11 +32,25 @@ import { CredentialError } from './credentials.js';
 /** The injected JWT verifier (returns at least the subject + org). */
 export type VerifyToken = (token: string) => { sub: string; orgId?: string };
 
+/** The injected per-user gateway-key verifier (S4a) — implemented in auth/ and injected by the
+ *  composition root exactly like verifyToken (llm/ may not import auth/, ch02 §2.7). */
+export type VerifyGatewayKeySeam = (secret: string) => Promise<
+  | { ok: true; userId: string; orgId: string; keyId: string; username: string; caps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } }
+  | { ok: false; reason: 'unknown' | 'revoked' | 'inactive' | 'billing_locked' }
+>;
+
+/** The prefix that routes a presented credential to the key verifier (mirrors the service). */
+const GATEWAY_KEY_PREFIX = 'ekoa_gk_';
+
 export interface GatewayDeps {
   verifyToken: VerifyToken;
+  /** Absent => per-user key auth always fails (the bridge topologies inject only verifyToken). */
+  verifyGatewayKey?: VerifyGatewayKeySeam;
   /** Heartbeat cadence for stream:true responses (ms). Tests inject a small value; the
    *  composition root omits it and gets the 15 s default. */
   pingIntervalMs?: number;
+  /** Clock for the Registo rows (tests inject; default Date.now). */
+  now?: () => number;
 }
 
 // --- /health counter (§6.5.4) ------------------------------------------------------------
@@ -52,19 +68,40 @@ export function __resetGatewayCountersForTests(): void {
 
 // --- Auth --------------------------------------------------------------------------------
 
-/** A gateway principal: a JWT user (bill that user), the static gateway key (bill the platform
- *  admin — resolved by the tracker from the empty billee), or unauthenticated. */
-type GatewayPrincipal = { kind: 'jwt'; userId: string; orgId?: string } | { kind: 'apikey' } | null;
+/** A gateway principal: a JWT user (bill that user), a per-user gateway key (bill the OWNER,
+ *  S4a), the static gateway key (bill the platform admin — resolved by the tracker from the
+ *  empty billee), a billing-locked key owner (402), or unauthenticated. */
+type GatewayPrincipal =
+  | { kind: 'jwt'; userId: string; orgId?: string }
+  | { kind: 'userkey'; userId: string; orgId: string; keyId: string; username: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } }
+  | { kind: 'apikey' }
+  | { kind: 'billing-locked' }
+  | null;
 
-function authenticate(req: Request, deps: GatewayDeps): GatewayPrincipal {
+async function authenticate(req: Request, deps: GatewayDeps): Promise<GatewayPrincipal> {
   const apiKey = req.headers['x-api-key'];
   const configuredKey = loadConfig().llm.gatewayApiKey;
   if (typeof apiKey === 'string' && configuredKey && apiKey === configuredKey) return { kind: 'apikey' };
 
   const auth = req.headers.authorization;
-  if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
+  const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : undefined;
+
+  // Per-user gateway keys (S4a): accepted on BOTH channels — stock Claude Code sends
+  // ANTHROPIC_AUTH_TOKEN as Bearer and ANTHROPIC_API_KEY as x-api-key. The prefix routes to
+  // the injected verifier; a locked owner is a distinct principal the handlers map to 402.
+  const keyCandidate = [apiKey, bearer].find((v): v is string => typeof v === 'string' && v.startsWith(GATEWAY_KEY_PREFIX));
+  if (keyCandidate) {
+    if (!deps.verifyGatewayKey) return null;
+    const verdict = await deps.verifyGatewayKey(keyCandidate);
+    if (verdict.ok) {
+      return { kind: 'userkey', userId: verdict.userId, orgId: verdict.orgId, keyId: verdict.keyId, username: verdict.username, ...(verdict.caps ? { keyCaps: verdict.caps } : {}) };
+    }
+    return verdict.reason === 'billing_locked' ? { kind: 'billing-locked' } : null;
+  }
+
+  if (bearer) {
     try {
-      const claims = deps.verifyToken(auth.slice(7));
+      const claims = deps.verifyToken(bearer);
       return { kind: 'jwt', userId: claims.sub, orgId: claims.orgId };
     } catch {
       return null;
@@ -73,9 +110,15 @@ function authenticate(req: Request, deps: GatewayDeps): GatewayPrincipal {
   return null;
 }
 
-/** The user id to bill for a principal: the JWT subject, or '' (platform admin) for the key. */
-function billeeOf(principal: NonNullable<GatewayPrincipal>): string {
-  return principal.kind === 'jwt' ? principal.userId : '';
+/** The user id to bill for a principal: the JWT subject or the key OWNER (S4a); '' (platform
+ *  admin) for the static key. */
+function billeeOf(principal: NonNullable<Exclude<GatewayPrincipal, { kind: 'billing-locked' }>>): string {
+  return principal.kind === 'jwt' || principal.kind === 'userkey' ? principal.userId : '';
+}
+
+/** 402 for a billing-locked key owner — same durable-lock posture as the platform middleware. */
+function billingLocked402(res: Response): void {
+  res.status(402).json({ error: { code: 'BILLING_LOCKED', message: 'A conta do titular da chave está bloqueada por faturação.' } });
 }
 
 function gatewayError(res: Response, status: number, message: string, type = 'authentication_error'): void {
@@ -126,15 +169,20 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   const largeJson = express.json({ limit: '50mb' });
 
   const handleMessages = async (req: Request, res: Response): Promise<void> => {
-    const principal = authenticate(req, deps);
+    const principal = await authenticate(req, deps);
     if (!principal) {
       gatewayError(res, 401, 'Invalid or missing API key / JWT');
       return;
     }
+    if (principal.kind === 'billing-locked') {
+      billingLocked402(res);
+      return;
+    }
     const billeeUserId = billeeOf(principal);
 
-    // Allowance gate for JWT principals (§6.6.3 gateway row). Key principals (platform) skip.
-    if (principal.kind === 'jwt') {
+    // Allowance gate for JWT AND user-key principals (§6.6.3 gateway row; the key's billee is
+    // its owner). The static platform key skips (platform overhead).
+    if (principal.kind === 'jwt' || principal.kind === 'userkey') {
       const verdict = await checkAllowance(billeeUserId);
       if (!verdict.ok) {
         res.status(402).json({
@@ -171,8 +219,28 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     }
 
     try {
-      const result = await proxyGatewayMessages((req.body ?? {}) as Record<string, unknown>, billeeUserId);
+      const result = await proxyGatewayMessages(
+        (req.body ?? {}) as Record<string, unknown>,
+        billeeUserId,
+        undefined,
+        principal.kind === 'userkey'
+          ? { agentType: 'gateway-client', keyId: principal.keyId, ...(principal.keyCaps ? { keyCaps: principal.keyCaps } : {}) }
+          : undefined,
+      );
       if (result.unmetered) gatewayUnmeteredCalls++;
+      // Registo visibility (S4a): a metered user-key turn appears in the owner's Registo like
+      // any other agent action — METADATA ONLY (who/when/tier/model/metered), never content.
+      // Best-effort: an audit write failure never fails the turn. JWT fast-loop + static-key
+      // subprocess traffic stays out (plumbing; the anonymisation audit already rows it).
+      if (principal.kind === 'userkey' && result.metered > 0) {
+        void logActivity(
+          { userId: principal.userId, username: principal.username, orgId: principal.orgId },
+          'llm-gateway',
+          'gateway_turn',
+          { now: deps.now ?? Date.now },
+          { keyId: principal.keyId, tier: result.wireTier, model: result.wireModel, metered: result.metered, correlationId: result.correlationId, stream: wantsStream },
+        ).catch(() => {});
+      }
       if (wantsStream) {
         stopPing();
         if (result.status >= 200 && result.status < 300) {
@@ -238,9 +306,13 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   // real turns out of the shared per-user call window), and the allowance gate is skipped (a
   // billing-blocked user's REAL turns still 402; counting costs nothing).
   const handleCountTokens = async (req: Request, res: Response): Promise<void> => {
-    const principal = authenticate(req, deps);
+    const principal = await authenticate(req, deps);
     if (!principal) {
       gatewayError(res, 401, 'Invalid or missing API key / JWT');
+      return;
+    }
+    if (principal.kind === 'billing-locked') {
+      billingLocked402(res);
       return;
     }
     try {
@@ -266,8 +338,13 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   router.post('/messages/count_tokens', largeJson, handleCountTokens);
   router.post('/v1/messages/count_tokens', largeJson, handleCountTokens);
 
-  router.get('/models', (req: Request, res: Response) => {
-    if (!authenticate(req, deps)) {
+  router.get('/models', async (req: Request, res: Response) => {
+    const principal = await authenticate(req, deps);
+    if (!principal || principal.kind === 'billing-locked') {
+      if (principal?.kind === 'billing-locked') {
+        billingLocked402(res);
+        return;
+      }
       gatewayError(res, 401, 'Invalid or missing API key / JWT');
       return;
     }
@@ -292,8 +369,12 @@ export function gatewayRouter(deps: GatewayDeps): Router {
    * endpoint NEVER 500s — any failure degrades to the keyword decision (§6.4.2 site 19).
    */
   router.post('/classify', largeJson, async (req: Request, res: Response) => {
-    const principal = authenticate(req, deps);
-    if (!principal) {
+    const principal = await authenticate(req, deps);
+    if (!principal || principal.kind === 'billing-locked') {
+      if (principal?.kind === 'billing-locked') {
+        billingLocked402(res);
+        return;
+      }
       gatewayError(res, 401, 'Invalid or missing API key / JWT');
       return;
     }
