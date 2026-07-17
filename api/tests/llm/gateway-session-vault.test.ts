@@ -105,6 +105,18 @@ describe('gateway vault keying', () => {
     expect(__vaultCount()).toBe(1);
   });
 
+  it('count_tokens for a KEY principal keys the SAME gwkey vault as messages (codex-checkpoint consistency)', async () => {
+    const { calls, transport } = captureTransport();
+    __setTransportForTests(transport);
+    const { proxyGatewayCountTokens } = await import('../../src/llm/client.js');
+    // A messages call under key kid_ct builds gwkey:kid_ct.
+    await proxyGatewayMessages(body(), 'owner1', undefined, { agentType: 'gateway-client', keyId: 'kid_ct' });
+    // A count_tokens call under the SAME key must reuse that ONE vault, not open a new csid/eph one.
+    await proxyGatewayCountTokens({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: `abre ${PARTY}` }] }, 'owner1', 'kid_ct');
+    expect(__vaultCount()).toBe(1);
+    void calls;
+  });
+
   it('two DIFFERENT keys get DIFFERENT vaults (no cross-key token bleed)', async () => {
     const { transport } = captureTransport();
     __setTransportForTests(transport);

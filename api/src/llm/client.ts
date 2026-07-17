@@ -1343,6 +1343,10 @@ export interface GatewayCountTokensResult {
 export async function proxyGatewayCountTokens(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
+  /** The verified gateway key id for a key principal (S7 consistency, codex checkpoint): a key
+   *  principal keys the vault by gwkey:<keyId> on count_tokens exactly as on messages, so invariant
+   *  2 holds uniformly. Absent for non-key callers. */
+  keyId?: string,
 ): Promise<GatewayCountTokensResult> {
   const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
   const matchedTier = matchConfiguredTier(requestedModel);
@@ -1358,7 +1362,7 @@ export async function proxyGatewayCountTokens(
   // count_tokens threads no keyId, so a client session_id is billee-scoped and everything else is
   // ephemeral - the SAME disjoint namespacing as messages (S7 codex High: this sibling path must
   // not let a crafted session_id open a reserved gwkey vault either).
-  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, correlationId, trustedSession: false });
+  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, keyId, correlationId, trustedSession: false });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,

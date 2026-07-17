@@ -310,7 +310,7 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       return;
     }
     try {
-      const result = await proxyGatewayCountTokens((req.body ?? {}) as Record<string, unknown>, billeeOf(principal));
+      const result = await proxyGatewayCountTokens((req.body ?? {}) as Record<string, unknown>, billeeOf(principal), principal.kind === 'userkey' ? principal.keyId : undefined);
       for (const [k, v] of Object.entries(result.headers)) {
         const lower = k.toLowerCase();
         if (['connection', 'transfer-encoding', 'keep-alive', 'content-length', 'content-encoding'].includes(lower)) continue;
