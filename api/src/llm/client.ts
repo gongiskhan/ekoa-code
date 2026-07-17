@@ -154,9 +154,14 @@ async function admitOrThrow(
  *  session vault is left to live for the conversation + its TTL, §17.5). */
 function sessionKeyFor(attribution: LlmAttribution): { sessionId: string; ephemeral: boolean } {
   if (attribution.kind === 'user_work' && attribution.sessionId) {
-    return { sessionId: attribution.sessionId, ephemeral: false };
+    // Same disjoint namespacing as the gateway path (S7): a conversation id is BILLEE-scoped
+    // (`csid:<billee>:<conv>`) so the hosted SDK turn and the delegated gateway turn - which the
+    // bridge deliberately shares a vault between (§18.4.3, §17.5: bridge/provider sets
+    // meta.session_id = the conversation id) - derive the SAME vault key, while no conversation
+    // id can collide with the reserved `gwkey:<keyId>` per-key vault space.
+    return { sessionId: `csid:${billeeOf(attribution)}:${attribution.sessionId}`, ephemeral: false };
   }
-  return { sessionId: `sess_${newCorrelationId()}`, ephemeral: true };
+  return { sessionId: `eph:${newCorrelationId()}`, ephemeral: true };
 }
 
 /** Build the anonymisation context: resolve the billee's org, load its ruleset, and stamp the

@@ -4,6 +4,7 @@ import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
 import {
   proxyGatewayMessages,
+  completeFast,
   __setTransportForTests,
   __resetTransportForTests,
   setOrgResolver,
@@ -11,6 +12,7 @@ import {
   type ChokepointTransport,
   type RestCallParams,
 } from '../../src/llm/client.js';
+import { __resetAttributionCountersForTests, type LlmAttribution } from '../../src/llm/attribution.js';
 import { setCredential, __resetCredentialsForTests, __setNowForTests } from '../../src/llm/credentials.js';
 import { setRulesetResolver, __resetRulesetResolverForTests, __resetVaultForTests, type OrgRuleset } from '../../src/llm/anonymise/index.js';
 import { __vaultCount } from '../../src/llm/anonymise/vault.js';
@@ -126,6 +128,20 @@ describe('gateway vault keying', () => {
     const withSession = { ...body(), metadata: { session_id: 'conv-42' } };
     await proxyGatewayMessages(withSession, 'owner1', undefined, { agentType: 'gateway-client', keyId: 'kid_X' });
     // The explicit conversation id is the vault key (not the gwkey), and it persists.
+    expect(__vaultCount()).toBe(1);
+  });
+
+  it('BRIDGE contract (S7 fresh-review High): a hosted SDK turn and the delegated gateway turn for the SAME conversation SHARE ONE vault', async () => {
+    __resetAttributionCountersForTests();
+    const { transport } = captureTransport();
+    __setTransportForTests(transport);
+    // Hosted turn (SDK path) for conversation conv-1, owner u1.
+    const attribution: LlmAttribution = { kind: 'user_work', agentType: 'chat', billeeUserId: 'u1', sessionId: 'conv-1' };
+    await completeFast({ messages: [{ role: 'user', content: `dossier de ${PARTY}` }] }, attribution);
+    // Delegated turn (gateway path) - the bridge propagates the same conversation id as session_id.
+    const delegated = { ...body(), metadata: { session_id: 'conv-1' } };
+    await proxyGatewayMessages(delegated, 'u1', undefined);
+    // ONE shared vault (csid:u1:conv-1), not two - a token minted hosted detokenizes delegated.
     expect(__vaultCount()).toBe(1);
   });
 
