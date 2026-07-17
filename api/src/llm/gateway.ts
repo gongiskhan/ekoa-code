@@ -10,6 +10,12 @@
  * `gateway_unmetered_call` counter surfaced on /health (§6.5.4). The billee is the JWT
  * principal; gateway-key principals bill the platform admin.
  *
+ * Streaming (S1, run 20260717): the upstream transport stays BUFFERED (anonymisation operates
+ * on the complete body — it outranks streaming). A stream:true client instead gets
+ * heartbeat-and-replay: the SSE 200 commits after auth + allowance, protocol-legal ping frames
+ * keep the connection alive while the buffered call runs, then the verbatim detokenized SSE
+ * body replays in one write. Post-commitment failures arrive as in-stream `error` events.
+ *
  * Boundary: llm/ may not import auth/ (ch02 §2.7), so `verifyToken` is injected by the
  * composition root (the same seam servingRouter uses).
  */
@@ -26,6 +32,9 @@ export type VerifyToken = (token: string) => { sub: string; orgId?: string };
 
 export interface GatewayDeps {
   verifyToken: VerifyToken;
+  /** Heartbeat cadence for stream:true responses (ms). Tests inject a small value; the
+   *  composition root omits it and gets the 15 s default. */
+  pingIntervalMs?: number;
 }
 
 // --- /health counter (§6.5.4) ------------------------------------------------------------
@@ -75,6 +84,37 @@ function gatewayError(res: Response, status: number, message: string, type = 'au
   }
 }
 
+// --- SSE heartbeat-and-replay (S1, run 20260717) -------------------------------------------
+
+/** Heartbeat cadence for stream:true responses — comfortably under common 60 s proxy/client
+ *  idle timeouts while the buffered upstream call runs. */
+const GATEWAY_PING_INTERVAL_MS = 15_000;
+
+/** A protocol-legal SSE ping frame (the provider's own ping shape; stock clients ignore it).
+ *  Liveness is carried ENTIRELY by SSE framing — never by status text in message content,
+ *  which would enter the client's transcript and pollute its context + cache. */
+const SSE_PING_FRAME = 'event: ping\ndata: {"type": "ping"}\n\n';
+
+/** A terminal SSE error event in the provider's error shape. */
+function sseErrorFrameOf(type: string, message: string): string {
+  return `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type, message } })}\n\n`;
+}
+
+/** Wrap an upstream non-2xx JSON error body as a terminal SSE error event. The payload is
+ *  re-serialized (never raw-embedded) so the data line is guaranteed single-line; an
+ *  unparseable body is replaced by a generic api_error, never leaked into the frame. */
+function sseErrorFrame(errorBody: string): string {
+  try {
+    const parsed: unknown = JSON.parse(errorBody);
+    if (parsed && typeof parsed === 'object' && (parsed as { type?: unknown }).type === 'error') {
+      return `event: error\ndata: ${JSON.stringify(parsed)}\n\n`;
+    }
+  } catch {
+    // fall through to the synthesized frame
+  }
+  return sseErrorFrameOf('api_error', 'Provider request failed');
+}
+
 // --- Routes ------------------------------------------------------------------------------
 
 const TIER_ORDER: Record<Tier, number> = { FAST: 1, WORKHORSE: 2, EXPERT: 3 };
@@ -104,9 +144,49 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       }
     }
 
+    // Heartbeat-and-replay (S1): a stream:true client gets its SSE 200 committed NOW — after
+    // auth + allowance, so those keep clean HTTP statuses — with protocol-legal pings while the
+    // buffered upstream call runs, then the verbatim detokenized SSE body replayed in one write.
+    // The transport stays fully buffered (anonymisation outranks streaming). Provider response
+    // headers cannot be forwarded on this path: they arrive only after the 200 commitment.
+    const wantsStream = (req.body as { stream?: unknown } | undefined)?.stream === true;
+    const canWrite = (): boolean => !res.writableEnded && !res.destroyed;
+    let ping: NodeJS.Timeout | undefined;
+    const stopPing = (): void => {
+      if (ping) {
+        clearInterval(ping);
+        ping = undefined;
+      }
+    };
+    if (wantsStream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.flushHeaders?.();
+      if (canWrite()) res.write(SSE_PING_FRAME);
+      ping = setInterval(() => {
+        if (canWrite()) res.write(SSE_PING_FRAME);
+      }, deps.pingIntervalMs ?? GATEWAY_PING_INTERVAL_MS);
+      // A client disconnect stops the heartbeat but never aborts the upstream call: the
+      // provider tokens are consumed either way, so metering inside the proxy must land.
+      res.on('close', stopPing);
+    }
+
     try {
       const result = await proxyGatewayMessages((req.body ?? {}) as Record<string, unknown>, billeeUserId);
       if (result.unmetered) gatewayUnmeteredCalls++;
+      if (wantsStream) {
+        stopPing();
+        if (result.status >= 200 && result.status < 300) {
+          // The buffered body IS the provider's verbatim (post-detokenization) SSE text —
+          // replay it raw; never re-parse/re-serialize events.
+          if (canWrite()) res.write(result.body);
+        } else if (canWrite()) {
+          // Post-commitment upstream failure: 200 + SSE framing are already on the wire, so
+          // the provider's JSON error body is delivered as a terminal SSE error event.
+          res.write(sseErrorFrame(result.body));
+        }
+        if (canWrite()) res.end();
+        return;
+      }
       // Pass the provider response through, minus hop-by-hop headers. `content-encoding`
       // must also drop: the upstream fetch already DECODED the body (result.body is
       // plaintext), so forwarding the gzip label makes the SDK client fail with ZlibError
@@ -123,6 +203,21 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       // 502. Callers (the daemon's C5 surfacing, the TUI) can now tell "fix the credential"
       // from "try again". Messages stay generic — no bodies, no secrets on the wire.
       console.error('[llm-gateway] forward failed:', err instanceof Error ? err.message : err);
+      if (wantsStream) {
+        // Same classing, delivered in-stream: the SSE framing is committed, so a status change
+        // is impossible. A rate-cap trip refused the call BEFORE any upstream spend/metering —
+        // only the delivery vehicle differs from the non-stream 429 (decision 2026-07-17).
+        stopPing();
+        const frame =
+          err instanceof CredentialError
+            ? sseErrorFrameOf('api_error', 'Provider credential unavailable (terminal). See /health claudeAuth.')
+            : err instanceof LlmRateCapError
+              ? sseErrorFrameOf('rate_limit_error', 'Rate cap exceeded. Retry later.')
+              : sseErrorFrameOf('api_error', 'Provider request failed');
+        if (canWrite()) res.write(frame);
+        if (canWrite()) res.end();
+        return;
+      }
       if (err instanceof CredentialError) {
         // Terminal: the central credential is missing/rejected/unrefreshable. Non-retryable
         // until an operator acts; /health.claudeAuth carries the class + latched alert.

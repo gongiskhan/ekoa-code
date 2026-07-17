@@ -56,7 +56,9 @@ each stream opens with `ready`, and the client re-syncs via `GET /:id` after rec
 SSE stream never stops a run - cancel is always the explicit `POST /:id/cancel`. The chat stream
 carries a `thinking_chunk` channel (working commentary, white-label-redacted server-side); it is
 still one of the four streams. A separate TUI-only compatibility channel `GET /api/v1/events` serves
-agent-face traffic and does not count against the four (it is not a web-client stream).
+agent-face traffic and does not count against the four (it is not a web-client stream). The LLM
+gateway's `stream: true` Messages responses (see "LLM gateway" below) are Anthropic-wire SSE for
+external clients, header-authenticated, and likewise do not count.
 
 ## Served-app byte-compat plane (§3.9)
 
@@ -79,6 +81,28 @@ signed out; `/me` itself keeps its byte-compat 401) and `GET /api/demos/:appId/a
 200 `{ available }` (`DemoAvailabilityResponse`; the spec route `/api/demos/:appId` keeps its loud
 404 for a genuinely absent tour). Both are carried in `shared/src/served-app.ts` and covered by
 contract tests.
+
+## LLM gateway (Claude-Code-compatible clients)
+
+`/api/v1/llm` is the Anthropic-Messages-compatible gateway sub-app (descriptors in
+`shared/src/ekoa-local.ts`). `POST /messages` and `POST /v1/messages` accept a stock Anthropic
+client (`ANTHROPIC_BASE_URL=<host>/api/v1/llm`); auth is the injected JWT verifier or the static
+platform key. The upstream transport is BUFFERED - anonymisation operates on the complete body and
+outranks streaming.
+
+**Streamed requests (heartbeat-and-replay, 2026-07-17).** A `stream: true` request gets its SSE
+`200` committed immediately AFTER auth and the allowance gate - a bad credential stays a clean HTTP
+401 and a billing block a clean 402, never SSE. From commitment: `event: ping` frames
+(`{"type": "ping"}`, the provider's own shape, ignored by stock clients) every 15 s while the
+buffered upstream call runs, then the verbatim detokenized upstream SSE body replayed in one raw
+write. Failures after commitment arrive as ONE in-stream `event: error` frame in the provider error
+shape: an upstream non-2xx JSON body is re-emitted as-is, a gateway rate-cap trip is
+`rate_limit_error`, a terminal credential failure is `api_error`. Caveat: provider response headers
+(e.g. `request-id`) are NOT forwarded on the streamed path - they arrive only after the 200 is
+committed; the non-streamed path forwards them unchanged (hop-by-hop + `content-encoding`
+stripped). This is deliberately NOT one of the four CONV-4 web-client SSE streams: no `?token=`
+auth, no `Last-Event-ID` ring, no `ready` frame - it is the Anthropic wire shape for external
+clients.
 
 ## Contract-change discipline and CI gates
 
