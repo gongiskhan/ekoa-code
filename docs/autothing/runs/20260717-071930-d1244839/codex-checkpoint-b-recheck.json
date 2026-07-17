@@ -1,0 +1,1 @@
+{"verdict":"clean","summary":"Invariant 2 holds uniformly in the inspected scope: gateway-key principals use gwkey keying for both messages and count_tokens, untrusted client session_ids are billee-scoped, and shared csid:<org>:<conv> remains gated by trustedSession only.","findings":[]}

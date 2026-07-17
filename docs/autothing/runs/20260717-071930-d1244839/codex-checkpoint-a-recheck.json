@@ -1,0 +1,1 @@
+{"verdict":"clean","summary":"Scoped check found no material invariant violations in the two named files: all five POST body routes auth before largeJson and reuse res.locals.gatewayPrincipal; key service keeps plaintext out of storage/logs/list/revoke, owner-scopes operations, and fails closed.","findings":[]}
