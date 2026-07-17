@@ -1,0 +1,144 @@
+{
+  "project": "ekoa-code",
+  "runId": "20260717-071930-d1244839",
+  "runDir": "docs/autothing/runs/20260717-071930-d1244839",
+  "host": "Goncalos-MacBook-Pro",
+  "profile": "build",
+  "updatedAt": "2026-07-17T09:33:00Z",
+  "runLog": "RUN_LOG.md",
+  "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
+  "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
+  "gatesConfig": {
+    "test": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "codexSliceReview": true,
+    "design": true,
+    "walkthrough": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true,
+    "deliberateRed": true,
+    "mutation": true,
+    "askQuestions": false,
+    "profile": "build"
+  },
+  "slices": [
+    {
+      "slice": "S1",
+      "title": "Heartbeat-and-replay SSE liveness",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/evidence.cast",
+      "videoBytes": 2252,
+      "videoSha256": "3629f628eb7dcced2f924d3188b33909c14856e7f0034deb06f022bb3bf37715",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T09:26:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S2",
+      "title": "Model family mapping",
+      "kind": "api",
+      "status": "pending",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S2/gate-status.json"
+    },
+    {
+      "slice": "S3",
+      "title": "count_tokens forwarding",
+      "kind": "api",
+      "status": "pending",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/gate-status.json"
+    },
+    {
+      "slice": "S4a",
+      "title": "Per-user gateway keys (api)",
+      "kind": "api",
+      "status": "pending",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/gate-status.json"
+    },
+    {
+      "slice": "S4b",
+      "title": "Gateway keys settings UI",
+      "kind": "ui",
+      "status": "pending",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/gate-status.json"
+    },
+    {
+      "slice": "S6",
+      "title": "Live stock-Claude-Code proof driver",
+      "kind": "api",
+      "status": "pending",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/gate-status.json"
+    }
+  ],
+  "globalGate": {
+    "status": "in_progress",
+    "e2eAll": {
+      "cmd": "npm run e2e",
+      "exit": null
+    },
+    "verifyApp": {
+      "via": "/verify",
+      "verdict": null
+    },
+    "build": {
+      "cmd": "npm run build --workspaces --if-present",
+      "exit": null
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": null
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": null
+    },
+    "securityWall": {
+      "gitleaks": null,
+      "semgrep": null,
+      "depAudit": null
+    },
+    "decorrelatedVerification": {
+      "reviewAllApproved": false,
+      "pwTestAllPassed": false
+    },
+    "codexSliceReview": {
+      "ran": 0,
+      "approved": 0,
+      "degraded": 0,
+      "status": null
+    },
+    "designAudit": {
+      "verdict": null
+    },
+    "mutation": {
+      "status": null,
+      "score": null,
+      "baseline": null,
+      "changedModulesOnly": true
+    },
+    "deliberateRed": {
+      "status": "proven",
+      "gatesProven": [
+        "gate:chokepoint (exit 1 on planted api.anthropic.com ref outside llm/, exit 0 after revert)",
+        "gitleaks (exit 1, 1 leak on planted AWS key pair, exit 0 after revert)"
+      ],
+      "at": "2026-07-17T07:48:00Z"
+    },
+    "everySliceVideoVerified": false,
+    "builtinSecurityReview": {
+      "status": null,
+      "findings": [],
+      "at": null
+    },
+    "codexCheckpoint": {
+      "status": null,
+      "scopes": [],
+      "overrides": [],
+      "at": null
+    },
+    "modelFallbacks": 0
+  }
+}

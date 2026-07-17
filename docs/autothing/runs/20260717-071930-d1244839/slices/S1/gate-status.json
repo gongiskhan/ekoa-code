@@ -1,0 +1,28 @@
+{
+  "slice": "S1",
+  "title": "Heartbeat-and-replay SSE liveness",
+  "updatedAt": "2026-07-17T09:32:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "profile": "build",
+  "commits": ["257a115", "eaa4fbd"],
+  "retries": { "limit": 5, "used": 2 },
+  "gates": {
+    "tests": { "cmd": "npm test --workspace api", "exit": 0, "at": "2026-07-17T09:03:00Z", "durationMs": 401680, "summary": "181 files / 1643 passed (incl. new gateway-stream.test.ts 7/7); web 172 passed" },
+    "typecheck": { "cmd": "npm run typecheck", "exit": 0, "at": "2026-07-17T08:55:00Z", "durationMs": 20000, "summary": "shared+api+web clean" },
+    "lint": { "cmd": "npm run lint", "exit": 0, "at": "2026-07-17T08:55:20Z", "durationMs": 15000, "summary": "clean (217 pre-existing warnings)" },
+    "securityWall": { "gitleaks": { "exit": 0 }, "semgrep": { "exit": 0, "findings": 0 }, "depAudit": { "exit": 0, "high": 0, "critical": 0 }, "chokepointGrep": { "exit": 0 }, "at": "2026-07-17T08:55:40Z", "durationMs": 40000, "summary": "no secrets, 0 SAST findings, deps clean, egress chokepoint intact" },
+    "build": { "cmd": "npm run build --workspaces --if-present", "exit": 0, "at": "2026-07-17T09:06:00Z", "durationMs": 180000, "summary": "shared+api tsc, web next build ok" },
+    "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "evidence": ["reviewer re-ran typecheck/lint/gateway suites/chokepoint grep itself", "live probe vs vendored @anthropic-ai/sdk 0.81.0: pings ignored by stock stream parser", "verdict history: needs-work on 257a115 (2 artifact findings) -> approve on eaa4fbd (both re-verified closed)"], "at": "2026-07-17T09:31:00Z", "durationMs": 780000, "findings": ["[Medium] decisions.md false in-stream-429-equivalence claim - FIXED (honest asymmetry recorded)", "[Low] diagram s1 note stale rawText - FIXED + determinism-ratchet guard api/tests/docs/diagram-integrity.test.ts (also caught 4 pre-existing diagram-04 metadata defects)"], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/agent-adversarial-review-report.md" },
+    "codexSliceReview": { "verdict": "approve", "by": "gpt-5.5", "actualModel": "gpt-5.5", "effort": "high", "at": "2026-07-17T09:11:00Z", "durationMs": 240000, "findings": [], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/codex-slice-review.json", "note": "ChatGPT auth (no API key available) - DECISION logged in RUN_LOG" },
+    "adversarialTest": { "status": "skipped", "reason": "kind-conditional", "note": "api slice - batched run-level independent pass covers it" },
+    "designAudit": { "status": "skipped", "reason": "kind-conditional" },
+    "video": { "status": "verified", "mode": "evidence", "verifiedAt": "2026-07-17T09:26:00Z", "flagged": false, "link": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/evidence.cast", "evidence": "asciinema of the live wire demo (demo.mjs vs real gatewayRouter + delayed stub upstream): 9 ping frames at 1s cadence, verbatim replay, metering row tier=EXPERT metered=96, clean 401, in-stream error frame - content-verified by grep assertions on the cast", "videoBytes": 2252, "videoSha256": "3629f628eb7dcced2f924d3188b33909c14856e7f0034deb06f022bb3bf37715" }
+  },
+  "notes": [
+    "Out-of-scope reviewer catch carried to S3: the gateway's largeJson 50MB limit is dead code - server.ts mounts a global express.json 1mb parser first, so stock Claude Code bodies >1MB get 413 before reaching the gateway. Pre-existing; folded into S3's scope.",
+    "S5 model-field honesty decision bullet rides this slice (pass-through in v1)."
+  ],
+  "blockers": []
+}
