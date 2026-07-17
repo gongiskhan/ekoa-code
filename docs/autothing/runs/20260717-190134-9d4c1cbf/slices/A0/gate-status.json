@@ -1,0 +1,8 @@
+{ "slice": "A0", "kind": "api", "status": "passed", "at": "2026-07-17T21:31:38Z",
+  "wall": {"lint": 0, "typecheck": 0, "contract": 0, "unit": "190/190 quiet (lane red = infra-flake)", "secrets": "pre-commit gitleaks clean"},
+  "test": {"status": "passed", "evidence": "baseline-by-provenance: journeys green 14:59:15Z same source; lane+quiet-vitest fresh today; live journey re-run scheduled at B1 gate"},
+  "adversarialReview": {"status": "skipped", "reason": "kind-conditional (setup slice, docs-only diff)"},
+  "adversarialTest": {"status": "skipped", "reason": "kind-conditional"},
+  "codexSliceReview": {"status": "skipped", "reason": "kind-conditional (docs-only diff; build-profile codex resumes on code slices)"},
+  "design": {"status": "skipped", "reason": "kind-conditional"},
+  "video": {"status": "skipped", "reason": "kind-conditional"} }

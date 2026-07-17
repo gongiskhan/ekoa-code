@@ -14,3 +14,9 @@ test mongods loaded the machine. Re-ran the file in ISOLATION immediately after:
 NOT a code defect (S7 touches only the llm vault-key derivation). Class: connection-level flake when a
 listen(0) test server races other listeners under heavy concurrent load. Remedy if recurrent: quiet the
 machine (stop the dev stack) before the full lane, or bump the file's boot wait.
+
+## Lane-concurrency vitest connection flakes recurred (2026-07-17, run 20260717-190134 A0)
+Full ci:lane (api+web vitest concurrent, session under load): 9 tests / 1 file failed with the
+connection-class signature; same file estate re-run in isolation on a quiet machine: 190/190 green.
+File identity not captured (lane output truncated by a tail pipe - avoid piping the lane; capture to
+a log file). Remedy stands: quiet machine for full-lane runs, or re-run the failing file in isolation.

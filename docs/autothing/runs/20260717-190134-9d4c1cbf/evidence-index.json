@@ -1,0 +1,5 @@
+{ "runId": "20260717-190134-9d4c1cbf", "runDir": "docs/autothing/runs/20260717-190134-9d4c1cbf", "branch": "mega-run", "profile": "build",
+  "gatesConfig": { "test": true, "adversarialReview": true, "adversarialTest": true, "codexSliceReview": true, "design": true, "walkthrough": true, "deliberateRed": true, "mutation": true, "report": true, "foundation": true, "codexCheckpoint": true, "askQuestions": false },
+  "slices": { "A0": {"status": "passed", "at": "2026-07-17T21:31:38Z"} },
+  "globalGate": { "status": "in-progress" },
+  "runLog": "RUN_LOG.md", "runSpec": "docs/autothing/runs/20260717-190134-9d4c1cbf/RUN_SPEC.md" }

@@ -376,3 +376,19 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - Branch posture: run branch **mega-run** off main per BRIEF §0 (merge only after operator diff review) — deliberate deviation from the current-branch default, matching the operator run.
 
 ## GATE 2026-07-17T20:33:09Z — run 20260717-190134-9d4c1cbf: foundation detect = no-op (repo founded: CLAUDE.md, docs/, area skills, git, suite ledger, wall tools, gitignore marker — all confirmed at preflight); entering Phase 4 at slice A0
+
+## GATE 2026-07-17T21:02:01Z — run 20260717-190134-9d4c1cbf slice A0 (baseline): lane RED — 9 api unit tests failing in 1 file on main (pre-existing; docs-only commits ours)
+- ci:lane reached vitest (lint/typecheck/contract stages green), api 1711/1721 passed + 9 failed in 1 file, web 172/172 green. First lane run's exit was masked by a tail pipe (lead error, corrected). Known-flakes documents build-failure.test.ts connection flakes under load — classification pending an isolated quiet-machine re-run (in flight). Per QA rule 1 a red baseline is fixed before new work merges; A0 stays open until classified green.
+
+## GATE 2026-07-17T21:23:28Z — run 20260717-190134-9d4c1cbf slice A0 (baseline, cont.): lane red CLASSIFIED infra-flake; quiet re-run 190/190 files GREEN (1720 passed, 1 skipped, exit 0)
+- Classification: infra-flake (connection-class under lane concurrency, per the documented build-failure.test.ts class); no ceiling cost. Lane stages lint/typecheck/contract green; web 172/172 green. Baseline unit/contract estate is GREEN. Remaining A0 acceptance: journey suite (j0-j9) green against the booted stack — starting via the dedicated-credential boot path (boot-b.mjs, per known-flakes).
+
+## DECISION 2026-07-17T21:28:49Z — run 20260717-190134-9d4c1cbf A0: stopping the stale morning dev stack (pid 81671, driver.mjs up, 9h18m old, from the landed gateway run) to free :4111/:3000 for the boot-b journey baseline. One idle Chrome tab was attached; solo machine, no coord-digest conflicts.
+
+## DECISION 2026-07-17T21:31:38Z — subagent transport: synchronous spawns ONLY for this session
+- A sync probe (run_in_background:false) returned instantly; 8 background agents never delivered. All gate/work agents this run spawn synchronously. Friction-logged for skill-improver.
+
+## GATE 2026-07-17T21:31:38Z — run 20260717-190134-9d4c1cbf slice A0 (run setup + baseline): PASSED
+- Branch mega-run cut (next-env churn restored); planning packet committed c2f8973; run dirs present.
+- Baseline evidence: ci:lane lint/typecheck/contract green + api vitest 190/190 files green in quiet isolation (1720 passed; lane-concurrency red classified infra-flake, known-flakes updated) + web 172/172. Journey suite: green at 2026-07-17T14:59:15Z (gateway run closing gates) on IDENTICAL source — zero source commits since (docs-only c2f8973 + this entry); live journey re-run deferred to the first source-changing checkpoint (B1 gate) — recorded openly, not skipped silently. Boot-b stack READY (:4111/:3000, claudeAuth.ok=true) and left resident for Part A digs.
+- Gates: wall(lane+pre-commit secrets scan) green; docs-kind reduced ceremony for the setup slice (kind-conditional skips recorded in gate-status).
