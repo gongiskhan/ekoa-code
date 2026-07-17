@@ -152,14 +152,16 @@ async function admitOrThrow(
  *  per-call key so a session-less call still gets a consistent, isolated vault. `ephemeral` is
  *  true for the per-call fallback so the entry can clear that vault as soon as it is done (a
  *  session vault is left to live for the conversation + its TTL, §17.5). */
-function sessionKeyFor(attribution: LlmAttribution): { sessionId: string; ephemeral: boolean } {
+async function sessionKeyFor(attribution: LlmAttribution): Promise<{ sessionId: string; ephemeral: boolean }> {
   if (attribution.kind === 'user_work' && attribution.sessionId) {
-    // Same disjoint namespacing as the gateway path (S7): a conversation id is BILLEE-scoped
-    // (`csid:<billee>:<conv>`) so the hosted SDK turn and the delegated gateway turn - which the
-    // bridge deliberately shares a vault between (§18.4.3, §17.5: bridge/provider sets
-    // meta.session_id = the conversation id) - derive the SAME vault key, while no conversation
-    // id can collide with the reserved `gwkey:<keyId>` per-key vault space.
-    return { sessionId: `csid:${billeeOf(attribution)}:${attribution.sessionId}`, ephemeral: false };
+    // Same disjoint namespacing as the gateway path (S7): a conversation id is ORG-scoped
+    // (`csid:<org>:<conv>`, §18.4.3 "keys by {org, session}") so the hosted SDK turn and the
+    // delegated gateway turn - which the bridge deliberately shares a vault between (§17.5:
+    // bridge/provider sets meta.session_id = the conversation id) - derive the SAME vault key
+    // even for a same-org cross-user delegation, while no conversation id can collide with the
+    // reserved `gwkey:<keyId>` per-key vault space.
+    const orgId = (await orgResolver(billeeOf(attribution))) ?? '';
+    return { sessionId: `csid:${orgId}:${attribution.sessionId}`, ephemeral: false };
   }
   return { sessionId: `eph:${newCorrelationId()}`, ephemeral: true };
 }
@@ -744,7 +746,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     // Anonymise the model-bound text BEFORE the transport (§17.3): prompt + system prompt
     // tokenize into one session vault; the streamed response is de-tokenized on the way back.
     const correlationId = newCorrelationId();
-    const sk = sessionKeyFor(attribution);
+    const sk = await sessionKeyFor(attribution);
     const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
     const promptAnon = anonymize(opts.prompt, ctx);
     const handle: VaultHandle = promptAnon.handle;
@@ -880,7 +882,7 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
   // Anonymise prompt + system BEFORE the transport; de-tokenize the returned text (§17.3).
   const correlationId = newCorrelationId();
-  const sk = sessionKeyFor(attribution);
+  const sk = await sessionKeyFor(attribution);
   const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
   const promptAnon = anonymize(opts.prompt, ctx);
   const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
@@ -955,7 +957,7 @@ export async function completeFast(
   // Anonymise the model-bound request body BEFORE the transport (§17.3); the response body is
   // de-tokenized before the text is parsed.
   const correlationId = newCorrelationId();
-  const sk = sessionKeyFor(attribution);
+  const sk = await sessionKeyFor(attribution);
   const anonCtx = await anonContextFor(attribution, sk.sessionId, correlationId);
   const anon = anonymizeRequestBody(
     { messages: opts.messages, ...(opts.system ? { system: opts.system } : {}) },
@@ -1121,10 +1123,13 @@ function stripEmptyTextBlocks(messages: unknown): { value: unknown; removed: num
  *  - `eph:<correlationId>` - truly session-less + key-less, a fresh per-request vault.
  * `ephemeral` is true only for the last case (the finally clears exactly those).
  */
-function deriveVaultSession(args: { metaSessionId: unknown; billeeUserId: string; keyId?: string; correlationId: string }): { sessionId: string; ephemeral: boolean } {
+function deriveVaultSession(args: { metaSessionId: unknown; orgId: string; keyId?: string; correlationId: string }): { sessionId: string; ephemeral: boolean } {
   const explicitSession = typeof args.metaSessionId === 'string';
   const keyVaultId = args.keyId ? `gwkey:${args.keyId}` : undefined;
-  if (explicitSession) return { sessionId: `csid:${args.billeeUserId}:${args.metaSessionId as string}`, ephemeral: false };
+  // A client-supplied session id is ORG-scoped (§18.4.3 {org, session}) so it (a) shares a vault
+  // with the hosted turn of the same conversation regardless of which same-org user delegates it,
+  // and (b) can never equal the reserved `gwkey:<keyId>` per-key space.
+  if (explicitSession) return { sessionId: `csid:${args.orgId}:${args.metaSessionId as string}`, ephemeral: false };
   if (keyVaultId) return { sessionId: keyVaultId, ephemeral: false };
   return { sessionId: `eph:${args.correlationId}`, ephemeral: true };
 }
@@ -1174,7 +1179,7 @@ export async function proxyGatewayMessages(
   // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
   // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
   // (no-session, no-key) vault is cleared in the finally.
-  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, billeeUserId, keyId: opts?.keyId, correlationId });
+  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, keyId: opts?.keyId, correlationId });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1338,7 +1343,7 @@ export async function proxyGatewayCountTokens(
   // count_tokens threads no keyId, so a client session_id is billee-scoped and everything else is
   // ephemeral - the SAME disjoint namespacing as messages (S7 codex High: this sibling path must
   // not let a crafted session_id open a reserved gwkey vault either).
-  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, billeeUserId, correlationId });
+  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, correlationId });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,

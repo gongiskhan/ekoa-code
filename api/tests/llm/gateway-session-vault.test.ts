@@ -131,17 +131,21 @@ describe('gateway vault keying', () => {
     expect(__vaultCount()).toBe(1);
   });
 
-  it('BRIDGE contract (S7 fresh-review High): a hosted SDK turn and the delegated gateway turn for the SAME conversation SHARE ONE vault', async () => {
+  it('BRIDGE contract (S7 fresh-review + codex High): hosted turn (user A) and a delegated turn by a DIFFERENT same-org user (B) SHARE ONE vault (org-scoped, §18.4.3)', async () => {
     __resetAttributionCountersForTests();
+    // Same org for the two users; the vault is keyed by {org, session}, NOT by user - so a
+    // same-org cross-user bridge delegation still shares the conversation's vault.
+    setOrgResolver(async () => 'orgShared');
     const { transport } = captureTransport();
     __setTransportForTests(transport);
-    // Hosted turn (SDK path) for conversation conv-1, owner u1.
-    const attribution: LlmAttribution = { kind: 'user_work', agentType: 'chat', billeeUserId: 'u1', sessionId: 'conv-1' };
-    await completeFast({ messages: [{ role: 'user', content: `dossier de ${PARTY}` }] }, attribution);
-    // Delegated turn (gateway path) - the bridge propagates the same conversation id as session_id.
+    // Hosted turn (SDK path): conversation conv-1 owned by user A.
+    const hosted: LlmAttribution = { kind: 'user_work', agentType: 'chat', billeeUserId: 'userA', sessionId: 'conv-1' };
+    await completeFast({ messages: [{ role: 'user', content: `dossier de ${PARTY}` }] }, hosted);
+    // Delegated turn (gateway path): the bridge delegates the SAME conversation billed to a
+    // DIFFERENT same-org user B (pairing owner).
     const delegated = { ...body(), metadata: { session_id: 'conv-1' } };
-    await proxyGatewayMessages(delegated, 'u1', undefined);
-    // ONE shared vault (csid:u1:conv-1), not two - a token minted hosted detokenizes delegated.
+    await proxyGatewayMessages(delegated, 'userB', undefined);
+    // ONE shared vault (csid:orgShared:conv-1) - a token minted hosted detokenizes delegated.
     expect(__vaultCount()).toBe(1);
   });
 
