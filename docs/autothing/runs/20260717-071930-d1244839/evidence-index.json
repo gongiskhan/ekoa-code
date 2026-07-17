@@ -4,7 +4,7 @@
   "runDir": "docs/autothing/runs/20260717-071930-d1244839",
   "host": "Goncalos-MacBook-Pro",
   "profile": "build",
-  "updatedAt": "2026-07-17T12:36:00Z",
+  "updatedAt": "2026-07-17T12:52:42Z",
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
   "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
@@ -89,6 +89,19 @@
       "verifiedAt": "2026-07-17T12:33:00Z",
       "flagged": false,
       "evidence": "/Users/ggomes/.walkthrough/runs/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/evidence.json"
+    },
+    {
+      "slice": "S7",
+      "title": "Stable gateway-session vault",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/evidence.cast",
+      "videoBytes": 1865,
+      "videoSha256": "ae332d935e7135129431d2261561c4430803f3d084a533b0524a3609ade04ad8",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T13:54:00Z",
+      "flagged": false
     },
     {
       "slice": "S6",

@@ -1,0 +1,25 @@
+{
+  "slice": "S7",
+  "title": "Stable gateway-session vault (deny-list token stability across the tool loop)",
+  "updatedAt": "2026-07-17T13:55:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "profile": "build",
+  "commits": ["bdbc472", "d783f7d", "31309d9", "4eacf1d", "7f2179e", "94cf9ee"],
+  "retries": { "limit": 5, "used": 6, "note": "review/codex fix rounds on a security-critical slice; each round closed a distinct, independently-verified HIGH - not repeated failure on the same defect" },
+  "gates": {
+    "tests": { "cmd": "npm test --workspace api", "exit": 0, "at": "2026-07-17T13:40:00Z", "durationMs": 700000, "summary": "full lane 190 files / 1716 passed at 7f2179e; F6 delta 94cf9ee verified by the 96-test vault+bridge+daemon+parity+client suites + typecheck; builds 0" },
+    "typecheck": { "cmd": "npm run typecheck", "exit": 0, "at": "2026-07-17T13:43:00Z", "durationMs": 25000, "summary": "clean" },
+    "lint": { "cmd": "npm run lint", "exit": 0, "at": "2026-07-17T13:20:00Z", "durationMs": 15000, "summary": "clean" },
+    "securityWall": { "gitleaks": { "exit": 0 }, "semgrep": { "exit": 0, "findings": 0 }, "depAudit": { "exit": 0, "high": 0, "critical": 0 }, "chokepointGrep": { "exit": 0 }, "at": "2026-07-17T13:20:00Z", "durationMs": 32000, "summary": "clean" },
+    "build": { "cmd": "npm run build --workspaces --if-present", "exit": 0, "at": "2026-07-17T13:44:00Z", "durationMs": 180000, "summary": "green; api dist rebuilt for the S6 live re-run" },
+    "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "evidence": ["reviewer ran typecheck + 6 llm suites + chokepoint + diagram gate + its own live probes against each fix commit", "verdict trail: needs-work(bdbc472 F1+F2) -> approve(4eacf1d) -> needs-work(7f2179e F6) -> approve(94cf9ee); all three HIGHs independently re-verified closed"], "at": "2026-07-17T13:52:00Z", "durationMs": 3000000, "findings": ["[High F2, FIXED 4eacf1d/7f2179e] csid scoping split the bridge hosted<->delegated shared vault - restored via org-scoped sessionKeyFor", "[High F6, FIXED 94cf9ee] org-scoped conv vault was readable by a same-org non-owner (side channel around user-scoped ownedSession) - now the shared csid:<org>:<conv> vault is gated on the unforgeable server-side bridge trust signal; direct clients are principal-isolated"], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/agent-adversarial-review-report.md" },
+    "codexSliceReview": { "verdict": "approve", "by": "gpt-5.5", "actualModel": "gpt-5.5", "effort": "high", "at": "2026-07-17T13:48:00Z", "durationMs": 1500000, "findings": ["[High, FIXED d783f7d] crafted session_id gwkey:<victim> hijacked another key's vault - disjoint csid/gwkey/eph namespaces", "[High, FIXED 31309d9] the count_tokens sibling path had the same hole - one shared deriveVaultSession", "[High cross-user, FIXED 7f2179e] billee-scoping split same-org cross-user delegation - org-scoped per spec", "[approve at 94cf9ee: F6 trust-gate closed]"], "rechecks": 5, "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/codex-slice-review.json" },
+    "adversarialTest": { "status": "skipped", "reason": "kind-conditional" },
+    "designAudit": { "status": "skipped", "reason": "kind-conditional" },
+    "video": { "status": "verified", "mode": "evidence", "verifiedAt": "2026-07-17T13:54:00Z", "flagged": false, "link": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/evidence.cast", "evidence": "asciinema of the deterministic vault security suite (7 tests green): cross-request token stability, different-keys-different-vaults, ephemeral-when-keyless, explicit-session-persists, the BRIDGE same-org cross-user shared-vault contract, the F6 direct-client-isolation attack, and the gwkey namespace-hijack attack - all model-independent.", "videoBytes": 1865, "videoSha256": "ae332d935e7135129431d2261561c4430803f3d084a533b0524a3609ade04ad8" }
+  },
+  "notes": ["Security-critical slice: 3 fresh-review HIGHs + 3 codex HIGHs, ALL distinct, all closed + independently re-verified. The deterministic committed test proves every invariant without the live model. The vault-key derivation is now: gwkey:<keyId> (stock client) | csid:<org>:<conv> (trusted bridge only) | csid:<org>:usr:<billee>:<id> (direct client, isolated) | eph:<corr>."],
+  "blockers": []
+}

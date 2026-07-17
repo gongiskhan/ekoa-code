@@ -1,0 +1,1 @@
+{"verdict":"approve","summary":"Ship: same-org cross-user SDK/gateway turns now converge on `csid:<orgId>:<sessionId>`, crafted client session ids remain trapped in the `csid:` namespace away from `gwkey:`, and distinct org ids produce distinct conversation vault keys. API typecheck passed.","findings":[]}
