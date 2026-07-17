@@ -4,7 +4,7 @@
   "runDir": "docs/autothing/runs/20260717-071930-d1244839",
   "host": "Goncalos-MacBook-Pro",
   "profile": "build",
-  "updatedAt": "2026-07-17T10:20:00Z",
+  "updatedAt": "2026-07-17T10:55:00Z",
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
   "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
@@ -54,8 +54,14 @@
       "slice": "S3",
       "title": "count_tokens forwarding",
       "kind": "api",
-      "status": "pending",
-      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/gate-status.json"
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/evidence.cast",
+      "videoBytes": 1170,
+      "videoSha256": "e414592fcac47fc5e43a7961ac2c6e87444eb0bb79b0bc5e285fb1ca78e72c5d",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T10:54:00Z",
+      "flagged": false
     },
     {
       "slice": "S4a",
