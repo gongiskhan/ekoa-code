@@ -404,3 +404,7 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 
 ## GATE 2026-07-17T22:06:55Z — run 20260717-190134-9d4c1cbf slice A1 (tracks 1-5 refresh + topology): PASSED (docs-kind reduced gates)
 - analysis/05-refresh-and-topology.md + fresh review APPROVE (topology + drift + routing spot-checks all confirmed). Standing analyses hold with landed-since drift documented; registry + tour-format memos still bind; base-set executed. Topology: daemon resolver never bound; only live browser path = in-process Chromium via services/browser-pool (dev-gated); prod has NO browser plane. Reviewer caveat carried into D1 acceptance: re-measure the instruction token-tax baseline (stale: SKILL.md now 10,546 B) before any D shrink claim.
+
+## GATE 2026-07-17T22:14:07Z — run 20260717-190134-9d4c1cbf slice A5 (decision memos): PASSED — PART A COMPLETE (6/6)
+- Four net-new memos (b-structural, c-voice-deviations, audit-event-vocabulary, meter-forecast) + fresh review APPROVE (consistency with FLOW_PLAN/RUN_SPEC verified; slice-point arithmetic checked: B33+C33+D5+E22=93 remaining; spot-checks confirmed). Registry/tour-format/base-set memos stand from 20260712 per analysis/05. Meter recommendation: proceed full A-E, no further split; E stays the drop-whole absorber; Part F = its own follow-up run (input file missing). Reviewer cosmetic notes carried (WS-placement trace lives in FLOW_PLAN; PortalEvent payload field elided in one quote).
+- Part A landing inputs ready: portal verdict table (analysis/08), memos, human-action list.
