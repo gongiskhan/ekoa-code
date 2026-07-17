@@ -4,7 +4,7 @@
   "runDir": "docs/autothing/runs/20260717-071930-d1244839",
   "host": "Goncalos-MacBook-Pro",
   "profile": "build",
-  "updatedAt": "2026-07-17T12:52:42Z",
+  "updatedAt": "2026-07-17T13:24:20Z",
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
   "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
@@ -107,8 +107,14 @@
       "slice": "S6",
       "title": "Live stock-Claude-Code proof driver",
       "kind": "api",
-      "status": "pending",
-      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/gate-status.json"
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/evidence.cast",
+      "videoBytes": 1919,
+      "videoSha256": "f393367b050e457aeefd0fb2b7c357bd94c05b79f9009ef39be94cb21e37eec8",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T14:33:00Z",
+      "flagged": false
     }
   ],
   "globalGate": {

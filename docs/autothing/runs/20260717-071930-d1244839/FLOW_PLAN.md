@@ -12,7 +12,7 @@ Derived from `RUN_SPEC.md` (same dir); brief at `BRIEF.md`. Profile: **build** (
 | 4 | S4a | Per-user gateway keys (api: store, seam, caps, billing, Registo) | api | ekoa-architecture | G4 (after G3) | passed |
 | 5 | S4b | Gateway keys settings UI (/settings/api-keys) | ui | ekoa-architecture | G5 (after G4) | passed |
 | 6 | S7 | Stable gateway-session vault (deny-list token stability across the tool loop) | api | ekoa-architecture | G6 (after G5) | passed |
-| 7 | S6 | Live stock-Claude-Code proof driver + ancillary inventory | api | ekoa-testing | G6 (after S7) | pending |
+| 7 | S6 | Live stock-Claude-Code proof driver + ancillary inventory | api | ekoa-testing | G6 (after S7) | passed |
 
 - **S7**: for a gateway principal without an explicit session_id, key the vault by a stable id (the gateway keyId for a userkey principal; a stable per-billee key otherwise) so one Claude Code session shares one vault across its agentic tool loop - deny-list literals then tokenize consistently and detokenize reliably. Deterministic committed test proves cross-request token stability + detokenization via the injected transport (independent of the live model). Files: api/src/llm/client.ts (session-key derivation in proxyGatewayMessages + proxyGatewayCountTokens), test api/tests/llm/gateway-session-vault.test.ts, diagram 06 + 10 (privacy-boundaries), security.md anonymisation note.
 
