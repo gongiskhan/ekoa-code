@@ -270,8 +270,8 @@
       },
       {
         "name": "gateway-claude-code",
-        "targetGate": "G12",
-        "note": "S6 (run 20260717): stock Claude Code end-to-end over the LLM gateway; health-gated SKIP (needs a real credential + claude CLI); throttle-tolerant; deny-list tool-loop recorded as a known limitation"
+        "targetGate": "OPERATOR-RUN",
+        "note": "S6 (run 20260717): stock Claude Code end-to-end over the LLM gateway. Needs a credentialed live stack + the claude CLI (verified by hand during the run), so it reports awaiting OPERATOR-RUN like the operator-run drivers - never books a skip as a false green."
       }
     ]
   },
