@@ -242,9 +242,12 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     }
     const tiers = loadConfig().llm.tiers;
     // Anthropic-style envelope per the shared LlmModelsResponse contract: { data: [...] }.
+    // All three tiers are listed (S2 honesty fix: WORKHORSE was missing) — family mapping makes
+    // every tier reachable through this gateway, not only the FAST wire tier.
     res.json({
       data: [
         { id: tiers.FAST.model, route: 'gateway', note: 'wire tier (OAuth-compatible)' },
+        { id: tiers.WORKHORSE.model, route: 'gateway', note: 'workhorse tier' },
         { id: tiers.EXPERT.model, route: 'sdk', note: 'SDK-only strong tier' },
       ],
     });

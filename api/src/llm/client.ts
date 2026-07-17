@@ -1017,6 +1017,20 @@ function matchConfiguredTier(requestedModel: string): Tier | null {
   return null;
 }
 
+/** The tier a stock model-id FAMILY maps to (S2, run 20260717): opus -> EXPERT,
+ *  sonnet -> WORKHORSE, haiku -> FAST. Case-insensitive substring match, tolerant of `claude-`
+ *  prefixes, generation infixes, dated suffixes, and the `[1m]` marker — so a stock Claude Code
+ *  session lands on the configured tier models instead of exact-missing into the FAST clamp with
+ *  its reasoning params stripped. Exact configured-tier match always wins first; an id matching
+ *  no family keeps the historical clamp. Checked opus -> sonnet -> haiku for determinism. */
+export function matchFamilyTier(requestedModel: string): Tier | null {
+  const m = requestedModel.replace(/\[1m\]$/, '').toLowerCase();
+  if (m.includes('opus')) return 'EXPERT';
+  if (m.includes('sonnet')) return 'WORKHORSE';
+  if (m.includes('haiku')) return 'FAST';
+  return null;
+}
+
 export interface GatewayForwardResult {
   status: number;
   headers: Record<string, string | string[]>;
@@ -1080,8 +1094,12 @@ export async function proxyGatewayMessages(
   // regardless of the configured tier, and the strict-JSON planner starved). Any OTHER model
   // string keeps the historical behavior: clamp to FAST and strip model-tuned reasoning params.
   const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
+  // Resolution order (S2, run 20260717): exact configured-tier match -> model-FAMILY match
+  // (opus/sonnet/haiku -> EXPERT/WORKHORSE/FAST, so stock Claude Code ids land on real tiers)
+  // -> the historical FAST clamp for anything else.
   const matchedTier = matchConfiguredTier(requestedModel);
-  const wireTier: Tier = matchedTier ?? 'FAST';
+  const resolvedTier = matchedTier ?? matchFamilyTier(requestedModel);
+  const wireTier: Tier = resolvedTier ?? 'FAST';
   const decision = decideForTier(wireTier);
   const mode = (await currentMode()) ?? 'oauth';
   const isStream = reqBody.stream === true;
@@ -1111,11 +1129,12 @@ export async function proxyGatewayMessages(
     if (GATEWAY_FORWARD_FIELDS.has(key)) forwarded[key] = value;
     else droppedFields.push(key);
   }
-  // Reasoning params travel ONLY with a matched tier model: when the wire model is the one the
-  // client targeted, its thinking/output_config are valid for it. On a clamp the client's
-  // model-tuned params target THEIR model, not the FAST wire model - which can reject them
-  // outright (observed live: 400 "adaptive thinking is not supported on <model>").
-  if (matchedTier === null) {
+  // Reasoning params travel with a matched OR family-matched tier model: the wire model is the
+  // tier the client targeted (exactly or by family), so its thinking/output_config are valid for
+  // it. Only on the unknown-model clamp do the client's model-tuned params target THEIR model,
+  // not the FAST wire model - which can reject them outright (observed live: 400 "adaptive
+  // thinking is not supported on <model>").
+  if (resolvedTier === null) {
     for (const key of ['thinking', 'output_config']) {
       if (key in forwarded) {
         delete forwarded[key];

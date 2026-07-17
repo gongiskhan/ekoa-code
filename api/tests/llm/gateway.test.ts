@@ -101,6 +101,32 @@ describe('POST /messages — forward + tier-matched metering (§6.5.4, rc-1 amen
     expect(rows[0]).toMatchObject({ tier: 'FAST', model: 'claude-haiku-4-5-20251001', billeeUserId: '', metered: 5 }); // round(0.02*240)
   });
 
+  it('family-matched dated sonnet id: runs on the configured WORKHORSE model with thinking FORWARDED, metered at WORKHORSE (S2)', async () => {
+    let captured: Record<string, unknown> | undefined;
+    __setTransportForTests(stubTransport({
+      async messages(p) {
+        captured = p.payload as Record<string, unknown>;
+        return { status: 200, headers: { 'content-type': 'application/json' }, body: providerBody(200, 40) };
+      },
+    }));
+    const res = await api('/api/v1/llm/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': GATEWAY_KEY },
+      body: JSON.stringify({
+        model: 'claude-3-7-sonnet-20250219',
+        thinking: { type: 'enabled', budget_tokens: 2048 },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    // Wire model is the CONFIGURED tier model for the family, params travel (no clamp strip).
+    expect(captured?.model).toBe('claude-sonnet-5');
+    expect(captured?.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    const rows = await tokenEvents.find({ agentType: 'pi-fast-loop' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ tier: 'WORKHORSE', model: 'claude-sonnet-5', metered: 24 }); // round(0.1*240)
+  });
+
   it('JWT principal: bills that user', async () => {
     __setTransportForTests(stubTransport({ async messages() { return { status: 200, headers: {}, body: providerBody(100, 0) }; } }));
     const res = await api('/api/v1/llm/messages', { method: 'POST', headers: { authorization: 'Bearer good:userX:orgA' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }) });
@@ -162,5 +188,9 @@ describe('POST /classify — deterministic keyword mode, never 500s', () => {
     expect(LlmModelsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
     const ids = body.data.map((m: { id: string }) => m.id);
     expect(ids).toContain('claude-haiku-4-5-20251001');
+    // S2 honesty fix: all three tiers are listed (WORKHORSE was missing).
+    expect(ids).toContain('claude-sonnet-5');
+    expect(ids).toContain('claude-opus-4-8[1m]');
+    expect(ids).toHaveLength(3);
   });
 });
