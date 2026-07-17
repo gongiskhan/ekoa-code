@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { resolveUrl } from '@/lib/api';
+import { copyToClipboard } from '@/lib/clipboard';
 import { useGatewayKeysStore } from '@/stores/gateway-keys';
 import { useTranslation } from '@/stores/i18n';
 
@@ -22,8 +23,9 @@ export default function ApiKeysSettingsPage() {
   const { keys, isLoading, error, mintedKey, fetchKeys, mint, revoke, clearMinted } = useGatewayKeysStore();
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchKeys();
@@ -39,11 +41,23 @@ export default function ApiKeysSettingsPage() {
     if (res.success) setLabel('');
   }
 
+  // The show-once secret is the ONE irreversible moment of the flow: a silent copy failure
+  // (http over LAN/Tailscale has no Clipboard API; NotAllowedError on an unfocused document)
+  // must be VISIBLE while the secret is still on screen - hence the guarded helper, never a
+  // bare navigator.clipboard call (S4b fresh-review finding 1).
   async function copyKey() {
     if (!mintedKey) return;
-    await navigator.clipboard.writeText(mintedKey.key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(mintedKey.key);
+    setCopyState(ok ? 'copied' : 'failed');
+    if (ok) setTimeout(() => setCopyState('idle'), 2000);
+  }
+
+  async function submitRevoke(id: string) {
+    if (revokingId) return; // in-flight guard: never double-fire a revoke
+    setConfirmingId(null);
+    setRevokingId(id);
+    await revoke(id);
+    setRevokingId(null);
   }
 
   const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : t.neverUsed);
@@ -80,7 +94,7 @@ export default function ApiKeysSettingsPage() {
       </Card>
 
       {mintedKey && (
-        <Card className="mt-4 max-w-2xl border-teal-600" data-testid="gateway-key-show-once">
+        <Card className="mt-4 max-w-2xl border-teal-600" role="status" data-testid="gateway-key-show-once">
           <h3 className="text-base font-semibold">{t.showOnceTitle}</h3>
           <p className="mt-1 text-sm text-amber-700" data-testid="gateway-key-show-once-warning">
             {t.showOnceWarning}
@@ -89,10 +103,15 @@ export default function ApiKeysSettingsPage() {
             <code className="flex-1 overflow-x-auto rounded bg-neutral-100 px-3 py-2 font-mono text-sm" data-testid="gateway-key-secret">
               {mintedKey.key}
             </code>
-            <Button variant="secondary" icon={copied ? Check : Copy} onClick={() => void copyKey()} data-testid="gateway-key-copy">
-              {copied ? t.copied : t.copyKey}
+            <Button variant="secondary" icon={copyState === 'copied' ? Check : Copy} onClick={() => void copyKey()} data-testid="gateway-key-copy">
+              {copyState === 'copied' ? t.copied : t.copyKey}
             </Button>
           </div>
+          {copyState === 'failed' && (
+            <p className="mt-2 text-sm text-red-600" role="alert" data-testid="gateway-key-copy-failed">
+              {t.copyFailed}
+            </p>
+          )}
           <h4 className="mt-4 text-sm font-semibold">{t.configTitle}</h4>
           <p className="mt-1 text-sm text-neutral-600">{t.configHint}</p>
           <pre className="mt-2 overflow-x-auto rounded bg-neutral-900 px-3 py-2 font-mono text-xs text-neutral-100" data-testid="gateway-key-config">
@@ -146,10 +165,9 @@ export default function ApiKeysSettingsPage() {
                           <Button
                             variant="danger-ghost"
                             icon={ShieldOff}
-                            onClick={() => {
-                              setConfirmingId(null);
-                              void revoke(k.id);
-                            }}
+                            loading={revokingId === k.id}
+                            disabled={revokingId !== null}
+                            onClick={() => void submitRevoke(k.id)}
                             data-testid="gateway-key-revoke-confirm"
                           >
                             {t.revoke}
@@ -159,7 +177,13 @@ export default function ApiKeysSettingsPage() {
                           </Button>
                         </span>
                       ) : (
-                        <Button variant="danger-ghost" icon={ShieldOff} onClick={() => setConfirmingId(k.id)} data-testid="gateway-key-revoke">
+                        <Button
+                          variant="danger-ghost"
+                          icon={ShieldOff}
+                          disabled={revokingId !== null}
+                          onClick={() => setConfirmingId(k.id)}
+                          data-testid="gateway-key-revoke"
+                        >
                           {t.revoke}
                         </Button>
                       ))}

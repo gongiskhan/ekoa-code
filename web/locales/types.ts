@@ -789,6 +789,7 @@ export interface Translations {
     showOnceWarning: string;
     copyKey: string;
     copied: string;
+    copyFailed: string;
     dismiss: string;
     configTitle: string;
     configHint: string;

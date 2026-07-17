@@ -703,6 +703,7 @@ export const en: Translations = {
     showOnceWarning: "This key will not be shown again. Copy it and store it somewhere safe.",
     copyKey: "Copy key",
     copied: "Copied",
+    copyFailed: "Automatic copy failed. Select the key above and copy it manually.",
     dismiss: "I saved the key",
     configTitle: "Client configuration",
     configHint: "Set these environment variables on the machine running the tool:",

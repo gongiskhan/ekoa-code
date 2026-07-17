@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /**
- * Per-user gateway API keys page (S4b, run 20260717-071930-d1244839) — REAL end-to-end, no
+ * Per-user gateway API keys page (S4b, run 20260717-071930-d1244839) - REAL end-to-end, no
  * protocol stubs: real UI login, mint a key through the page (the secret shows EXACTLY once,
  * with the client env config), reload proves the secret is gone while the row remains, revoke
  * flips the status badge through the real API. Zero console errors.

@@ -704,6 +704,7 @@ export const pt: Translations = {
     showOnceWarning: "Esta chave não volta a ser mostrada. Copie-a e guarde-a num local seguro.",
     copyKey: "Copiar chave",
     copied: "Copiada",
+    copyFailed: "Não foi possível copiar automaticamente. Selecione a chave acima e copie-a manualmente.",
     dismiss: "Já guardei a chave",
     configTitle: "Configuração do cliente",
     configHint: "Defina estas variáveis de ambiente na máquina onde corre a ferramenta:",
