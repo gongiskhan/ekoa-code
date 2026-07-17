@@ -169,11 +169,9 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   const largeJson = express.json({ limit: '50mb' });
 
   const handleMessages = async (req: Request, res: Response): Promise<void> => {
-    const principal = await authenticate(req, deps);
-    if (!principal) {
-      gatewayError(res, 401, 'Invalid or missing API key / JWT');
-      return;
-    }
+    // The authGate middleware already resolved + stashed the principal from the headers BEFORE the
+    // body was buffered; reuse it (never re-authenticate, never buffer for an unauthenticated call).
+    const principal = res.locals.gatewayPrincipal as NonNullable<GatewayPrincipal>;
     if (principal.kind === 'billing-locked') {
       billingLocked402(res);
       return;
@@ -306,11 +304,7 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   // real turns out of the shared per-user call window), and the allowance gate is skipped (a
   // billing-blocked user's REAL turns still 402; counting costs nothing).
   const handleCountTokens = async (req: Request, res: Response): Promise<void> => {
-    const principal = await authenticate(req, deps);
-    if (!principal) {
-      gatewayError(res, 401, 'Invalid or missing API key / JWT');
-      return;
-    }
+    const principal = res.locals.gatewayPrincipal as NonNullable<GatewayPrincipal>;
     if (principal.kind === 'billing-locked') {
       billingLocked402(res);
       return;
@@ -333,10 +327,27 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     }
   };
 
-  router.post('/messages', largeJson, handleMessages);
-  router.post('/v1/messages', largeJson, handleMessages);
-  router.post('/messages/count_tokens', largeJson, handleCountTokens);
-  router.post('/v1/messages/count_tokens', largeJson, handleCountTokens);
+  // Authenticate from HEADERS BEFORE the 50 MB body parser runs (security review MEDIUM): once the
+  // global 1 MB parser stopped pre-empting largeJson (S3), an UNAUTHENTICATED client could make the
+  // process buffer + JSON.parse up to 50 MB before auth ran - a pre-auth memory DoS on the one
+  // process that serves the whole platform. authenticate() needs only headers, so run it first: a
+  // request with no valid principal is refused with zero buffering. A resolved principal is stashed
+  // for the handler to reuse (no double verify). A billing-locked principal is authenticated (its
+  // body is bounded like any real user's) and is 402'd downstream.
+  const authGate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const principal = await authenticate(req, deps);
+    if (!principal) {
+      gatewayError(res, 401, 'Invalid or missing API key / JWT');
+      return;
+    }
+    res.locals.gatewayPrincipal = principal;
+    next();
+  };
+
+  router.post('/messages', authGate, largeJson, handleMessages);
+  router.post('/v1/messages', authGate, largeJson, handleMessages);
+  router.post('/messages/count_tokens', authGate, largeJson, handleCountTokens);
+  router.post('/v1/messages/count_tokens', authGate, largeJson, handleCountTokens);
 
   router.get('/models', async (req: Request, res: Response) => {
     const principal = await authenticate(req, deps);

@@ -8,7 +8,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Cortex gateway (run 20260717-071930-d1244839)
 
-- **`gateway-anon-tooluse-fidelity`** (OPEN, HIGH - found by S6 live proof; a top follow-up item).
+- **`gateway-anon-tooluse-fidelity`** (OPEN, HIGH - found by S6 live proof; a top follow-up item;
+  CONFIDENTIALITY dimension added by the run-level security review 2026-07-17). The EXACT deny-listed
+  literal never leaks - egress tokenization deep-walks tool_result/tool_use string leaves and is
+  fail-closed, so a deny-listed literal in an `ls` output is tokenized before it crosses the wire.
+  BUT the run's own live evidence shows the literal comes back to the client MANGLED across turns
+  (`ZarkovH90305` -> `ZarkovH9305`, a dropped digit); the deny-list is matched LITERALLY, so the
+  corrupted variant is NOT re-tokenized when the CLI feeds it back as a tool_result (e.g. a
+  "no such file: ZarkovH9305" error) - a near-miss of the secret literal can then egress to the
+  PROVIDER in cleartext (partial, not full, disclosure - to the very party §17.4(b) withholds it
+  from; NOT a cross-tenant leak). The re-egress step is inferred from the code path, not yet
+  reproduced live - a targeted repro is owed before sizing. Deny-list orgs only; empty-ruleset is a
+  proven no-op. The deeper anonymisation-plane fix direction is unchanged; this note re-classes it
+  so it is not deprioritised as merely cosmetic.
   With a NON-empty deny-list, a stock Claude Code session cannot reliably navigate a filesystem
   whose paths contain a deny-listed literal: the tokenized directory name that reaches the model in
   a `tool_result` (an `ls`/`find` output) does not reliably detokenize back in the model's next

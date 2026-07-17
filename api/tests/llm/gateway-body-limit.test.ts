@@ -108,6 +108,22 @@ describe('gateway bodies larger than the old global 1 MB limit', () => {
     expect(res.status).toBe(200);
   });
 
+  it('an UNAUTHENTICATED large body is refused 401 BEFORE the 50 MB parser buffers it (security-review MEDIUM: pre-auth DoS)', async () => {
+    // A 2 MB body with NO credential: the authGate rejects from the headers before largeJson runs,
+    // so nothing is buffered. (Sending the full 50 MB here would prove it too but is slow; the
+    // point is the 401 comes from auth, not from the body parser - a parse-first path would 413 a
+    // >50MB body and 200-attempt a <50MB one, never 401 an unauthenticated one.)
+    const big = 'x'.repeat(2 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/llm/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' }, // no x-api-key, no Authorization
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: big }] }),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.error.type).toBe('authentication_error');
+  });
+
   it('non-gateway routes KEEP the global 1 MB limit and the CONV-2 envelope (regression pin)', async () => {
     const big = 'x'.repeat(2 * 1024 * 1024);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/auth/login`, {
