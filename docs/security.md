@@ -204,8 +204,10 @@ ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api 
 
 **Per-user gateway API keys (S4a, 2026-07-17).** Stock Anthropic clients (Claude Code) authenticate
 to the LLM gateway with self-service, long-lived, revocable keys: secret `ekoa_gk_` + 32 random
-bytes base64url, stored ONLY as its sha256 (the hash is the store id - O(1) verify, nothing to
-leak at rest), shown exactly once at mint. Verification is an injected seam
+bytes base64url; at rest the sha256 (the store id - O(1) verify) plus a 4-char display TAIL of
+the secret (the industry-standard recognition hint, a deliberate 24-of-256-bit trade -
+decisions.md 2026-07-17; the full plaintext is shown exactly once at mint and never stored or
+logged). Verification is an injected seam
 (`auth/gateway-keys-service.ts` -> `GatewayDeps.verifyGatewayKey`; `llm/` never imports `auth/`)
 and fails CLOSED through the activation cache: unknown/revoked keys and inactive/deleted owners
 are 401, a billing-locked owner is a distinct 402, revocation is durable and effective on the

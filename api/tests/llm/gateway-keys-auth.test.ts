@@ -157,6 +157,35 @@ describe('user-key principal', () => {
     expect(await tokenEvents.find({})).toHaveLength(1); // only the admitted call billed
   });
 
+  it('/classify for a user-key principal: allowance-blocked owner degrades to the FREE keyword path (never bills)', async () => {
+    await billingAccounts.insert({ _id: 'owner1', monthlyBaseTokensUsed: 0, creditBalanceUsd: 0, overageEnabled: false, currentPeriodStart: T0, tokenLimit: 0 } as never);
+    const res = await api('/api/v1/llm/classify', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${USER_KEY}` },
+      body: JSON.stringify({ prompt: 'build a complex dashboard application' }),
+    });
+    expect(res.status).toBe(200); // classify never 500s and never hard-blocks
+    const body = (await res.json()) as { classifier: string };
+    expect(body.classifier).toBe('keyword-fallback');
+    expect(await tokenEvents.find({})).toHaveLength(0); // nothing billed to the blocked owner
+  });
+
+  it('/classify for a user-key principal composes the per-key cap window: second call degrades to keyword, only one metered', async () => {
+    keyVerdict = { ok: true, userId: 'owner1', orgId: 'orgK', keyId: 'kid_cls', username: 'owner-one', caps: { maxCallsPerWindow: 1 } };
+    __setTransportForTests(stubTransport({
+      async messages() {
+        return { status: 200, headers: {}, body: JSON.stringify({ content: [{ type: 'text', text: 'FAST' }], usage: { input_tokens: 20, output_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }) };
+      },
+    }));
+    const first = await api('/api/v1/llm/classify', { method: 'POST', headers: { authorization: `Bearer ${USER_KEY}` }, body: JSON.stringify({ prompt: 'ola' }) });
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { classifier: string }).classifier).toBe('llm');
+    const second = await api('/api/v1/llm/classify', { method: 'POST', headers: { authorization: `Bearer ${USER_KEY}` }, body: JSON.stringify({ prompt: 'ola' }) });
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { classifier: string }).classifier).toBe('keyword-fallback'); // key window tripped
+    expect(await tokenEvents.find({})).toHaveLength(1); // exactly the admitted call metered
+  });
+
   it('static key and JWT principals are regression-pinned (unchanged behavior)', async () => {
     const platform = await api('/api/v1/llm/messages', { method: 'POST', headers: { 'x-api-key': GATEWAY_KEY }, body: msgBody });
     expect(platform.status).toBe(200);

@@ -387,12 +387,26 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     let classifier: 'keyword' | 'llm' | 'keyword-fallback' = 'keyword';
     const t0 = Date.now();
 
-    if (mode === 'keyword') {
+    // S4a review fix: /classify meters REAL spend against the owner, so a user-key principal
+    // gets the SAME admission as messages - the owner's allowance gate here, and the per-key
+    // cap window inside completeFast (a trip throws LlmRateCapError and degrades to the free
+    // keyword path; this endpoint never 500s and never burns blocked spend).
+    let admitLlm = mode !== 'keyword';
+    if (admitLlm && principal.kind === 'userkey') {
+      const verdict = await checkAllowance(principal.userId);
+      if (!verdict.ok) admitLlm = false;
+    }
+
+    if (!admitLlm) {
       tier = classify(prompt);
-      classifier = 'keyword';
+      classifier = mode === 'keyword' ? 'keyword' : 'keyword-fallback';
     } else {
       try {
-        tier = await classifyViaModel(prompt, billeeOf(principal));
+        tier = await classifyViaModel(
+          prompt,
+          billeeOf(principal),
+          principal.kind === 'userkey' ? { keyId: principal.keyId, ...(principal.keyCaps ? { keyCaps: principal.keyCaps } : {}) } : undefined,
+        );
         classifier = 'llm';
       } catch {
         tier = classify(prompt);
@@ -440,7 +454,11 @@ export function gatewayRouter(deps: GatewayDeps): Router {
 /** Hard-budget FAST classification of a turn via the chokepoint. Returns a valid tier or
  *  throws (the caller falls back to the keyword scorer). Budget: 3.5 s. */
 const CLASSIFY_BUDGET_MS = 3500;
-async function classifyViaModel(prompt: string, billeeUserId: string): Promise<Tier> {
+async function classifyViaModel(
+  prompt: string,
+  billeeUserId: string,
+  capScope?: { keyId: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } },
+): Promise<Tier> {
   if (!billeeUserId) throw new Error('no billee for classifier');
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), CLASSIFY_BUDGET_MS);
@@ -454,6 +472,7 @@ async function classifyViaModel(prompt: string, billeeUserId: string): Promise<T
         signal: ac.signal,
       },
       { kind: 'classifier', agentType: 'classify-tui-turn', billeeUserId },
+      capScope,
     );
     const word = text.trim().toUpperCase();
     if (word.includes('EXPERT')) return 'EXPERT';

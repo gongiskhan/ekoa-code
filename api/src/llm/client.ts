@@ -934,10 +934,17 @@ export interface MessagesResult {
  * type cannot express a higher tier, §6.2.2). One forced-token-refresh retry on 401 (carried).
  * Rejects with LlmAbortedError on abort.
  */
-export async function completeFast(opts: MessagesOptions, attribution: LlmAttribution): Promise<MessagesResult> {
+export async function completeFast(
+  opts: MessagesOptions,
+  attribution: LlmAttribution,
+  /** Per-key cap scope (S4a): present when the caller acts for a gateway-key principal, so the
+   *  key window composes here exactly as on the messages path. Optional - existing callers
+   *  are untouched. */
+  capScope?: { keyId: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } },
+): Promise<MessagesResult> {
   requireAttribution(attribution);
   assertNotPlatformCall(attribution);
-  const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
+  const capKey = await admitOrThrow(billeeOf(attribution), capScope); // §6.6.4 pre-admission cap (+ key window)
   const decision = decideForTier('FAST'); // FAST by construction
   const mode = (await currentMode()) ?? 'oauth';
   // Anonymise the model-bound request body BEFORE the transport (§17.3); the response body is

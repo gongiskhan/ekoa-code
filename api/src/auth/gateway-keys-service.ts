@@ -1,9 +1,11 @@
 /**
  * Per-user LLM-gateway API keys (S4a, run 20260717). Long-lived, revocable, self-service
  * credentials for stock Anthropic clients (Claude Code) pointed at the gateway; the billee is
- * always the key OWNER. Secrets are `ekoa_gk_` + 32 random bytes base64url, stored ONLY as
- * their sha256 (the hash is the store `_id`, so verification is one O(1) `get` - no index
- * machinery, and `Store.insert`'s duplicate-key refusal covers the 2^-256 collision).
+ * always the key OWNER. Secrets are `ekoa_gk_` + 32 random bytes base64url; at rest: the
+ * sha256 (the store `_id`, so verification is one O(1) `get` - no index machinery, and
+ * `Store.insert`'s duplicate-key refusal covers the 2^-256 collision) PLUS a 4-char display
+ * tail of the secret (`secretHint`) - a deliberate, industry-standard recognition hint costing
+ * 24 of 256 entropy bits (decision 2026-07-17; the full plaintext is never stored or logged).
  *
  * Admission on key use fails CLOSED through the activation cache exactly like the platform
  * middleware: unknown owner / inactive -> refused; billingLocked -> a distinct verdict the
