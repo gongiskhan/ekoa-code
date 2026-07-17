@@ -1106,6 +1106,24 @@ function stripEmptyTextBlocks(messages: unknown): { value: unknown; removed: num
   return removed > 0 ? { value, removed } : { value: messages, removed: 0 };
 }
 
+/**
+ * Derive the anonymisation vault session key for a gateway call (S7). The three namespaces are
+ * DISJOINT so no client-supplied value can reach another principal's vault (codex S7 High):
+ *  - `csid:<billee>:<session_id>` - a client-supplied metadata.session_id, BILLEE-scoped so a
+ *    crafted "gwkey:<victim>" can never equal the reserved per-key vault name;
+ *  - `gwkey:<keyId>` - a gateway-KEY principal (keyId from the verified seam, unforgeable), so
+ *    one stock-client session shares one vault across its agentic tool loop;
+ *  - `eph:<correlationId>` - truly session-less + key-less, a fresh per-request vault.
+ * `ephemeral` is true only for the last case (the finally clears exactly those).
+ */
+function deriveVaultSession(args: { metaSessionId: unknown; billeeUserId: string; keyId?: string; correlationId: string }): { sessionId: string; ephemeral: boolean } {
+  const explicitSession = typeof args.metaSessionId === 'string';
+  const keyVaultId = args.keyId ? `gwkey:${args.keyId}` : undefined;
+  if (explicitSession) return { sessionId: `csid:${args.billeeUserId}:${args.metaSessionId as string}`, ephemeral: false };
+  if (keyVaultId) return { sessionId: keyVaultId, ephemeral: false };
+  return { sessionId: `eph:${args.correlationId}`, ephemeral: true };
+}
+
 export async function proxyGatewayMessages(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
@@ -1151,18 +1169,7 @@ export async function proxyGatewayMessages(
   // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
   // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
   // (no-session, no-key) vault is cleared in the finally.
-  // Vault-key NAMESPACING (S7 codex High): a client-supplied session_id is scoped by the BILLEE
-  // (`csid:<billee>:<id>`) so it can NEVER collide with the reserved `gwkey:<keyId>` space - a
-  // crafted metadata.session_id of "gwkey:<victimKeyId>" would otherwise open another key's vault
-  // and detokenize the victim's literals cross-tenant. keyId comes only from the verified
-  // verifyGatewayKey seam (never the body), so it is unforgeable. The three namespaces are
-  // disjoint: csid: (client), gwkey: (per-key), eph: (ephemeral).
-  const explicitSession = typeof meta.session_id === 'string';
-  const keyVaultId = opts?.keyId ? `gwkey:${opts.keyId}` : undefined;
-  const sessionId = explicitSession
-    ? `csid:${billeeUserId}:${meta.session_id as string}`
-    : (keyVaultId ?? `eph:${correlationId}`);
-  const ephemeralVault = !explicitSession && !keyVaultId;
+  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, billeeUserId, keyId: opts?.keyId, correlationId });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1323,8 +1330,10 @@ export async function proxyGatewayCountTokens(
   const correlationId = newCorrelationId();
   const orgId = (await orgResolver(billeeUserId)) ?? '';
   const ruleset = await resolveRuleset(orgId);
-  const hasSession = typeof meta.session_id === 'string';
-  const sessionId = hasSession ? (meta.session_id as string) : `sess_${correlationId}`;
+  // count_tokens threads no keyId, so a client session_id is billee-scoped and everything else is
+  // ephemeral - the SAME disjoint namespacing as messages (S7 codex High: this sibling path must
+  // not let a crafted session_id open a reserved gwkey vault either).
+  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, billeeUserId, correlationId });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1369,8 +1378,8 @@ export async function proxyGatewayCountTokens(
     resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
   } finally {
     // Same vault hygiene as proxyGatewayMessages: never let an ephemeral re-identification key
-    // linger to TTL after the call.
-    if (!hasSession) endSession(anon.handle);
+    // linger to TTL after the call (a client-scoped csid: vault persists, like messages).
+    if (hasEphemeralVault) endSession(anon.handle);
   }
   const errClass = providerErrorClassOf(resp.status);
   if (errClass && errClass !== 'transient' && errClass !== 'rate_limit') noteProviderError(errClass);

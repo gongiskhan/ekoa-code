@@ -189,6 +189,26 @@ describe('POST /v1/messages/count_tokens (+ alias) — forwarded, never billed, 
     expect(__vaultCount()).toBe(0);
   });
 
+  it('a crafted session_id cannot open a reserved gwkey vault on the count_tokens path either (S7 codex High sibling)', async () => {
+    __setTransportForTests(stubTransport({}));
+    // A messages call under a real key builds the victim's gwkey:kid_v vault.
+    const { proxyGatewayMessages } = await import('../../src/llm/client.js');
+    await proxyGatewayMessages({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: `abre ${PARTY}` }] }, 'ownerV', undefined, { agentType: 'gateway-client', keyId: 'kid_v' });
+    setOrgResolver(async () => 'org1');
+    setRulesetResolver((orgId) => ({ orgId, denyList: [PARTY] }));
+    const before = __vaultCount();
+    // count_tokens by a DIFFERENT owner crafting session_id = the victim's gwkey vault name.
+    const res = await api('/api/v1/llm/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { authorization: 'Bearer good:ownerA:org1' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', metadata: { session_id: 'gwkey:kid_v' }, messages: [{ role: 'user', content: `algo com ${PARTY}` }] }),
+    });
+    expect(res.status).toBe(200);
+    // The crafted call got its OWN billee-scoped vault (csid:ownerA:gwkey:kid_v), not the
+    // victim's - a NEW vault appeared, the victim's is untouched.
+    expect(__vaultCount()).toBe(before + 1);
+  });
+
   it('is NOT rate-capped (cap 0 trips real messages but count_tokens still answers) and skips the allowance gate (billing-blocked owner still counts)', async () => {
     process.env.EKOA_RATECAP_CALLS_PER_USER = '0';
     __resetRateCapsForTests();
