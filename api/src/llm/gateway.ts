@@ -379,14 +379,12 @@ export function gatewayRouter(deps: GatewayDeps): Router {
    * fallback; EKOA_TUI_CLASSIFY_MODE=keyword restores the pure deterministic path. This
    * endpoint NEVER 500s — any failure degrades to the keyword decision (§6.4.2 site 19).
    */
-  router.post('/classify', largeJson, async (req: Request, res: Response) => {
-    const principal = await authenticate(req, deps);
-    if (!principal || principal.kind === 'billing-locked') {
-      if (principal?.kind === 'billing-locked') {
-        billingLocked402(res);
-        return;
-      }
-      gatewayError(res, 401, 'Invalid or missing API key / JWT');
+  router.post('/classify', authGate, largeJson, async (req: Request, res: Response) => {
+    // authGate already resolved the principal from the headers before largeJson buffered the body
+    // (codex checkpoint: /classify carries the same 50MB parser, so it needs the same pre-auth gate).
+    const principal = res.locals.gatewayPrincipal as NonNullable<GatewayPrincipal>;
+    if (principal.kind === 'billing-locked') {
+      billingLocked402(res);
       return;
     }
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : '';

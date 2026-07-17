@@ -124,6 +124,17 @@ describe('gateway bodies larger than the old global 1 MB limit', () => {
     expect(body.error.type).toBe('authentication_error');
   });
 
+  it('/classify also authenticates BEFORE the 50 MB parser (codex checkpoint: same pre-auth gate)', async () => {
+    const big = 'x'.repeat(2 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/llm/classify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: big }),
+    });
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { type: string } }).error.type).toBe('authentication_error');
+  });
+
   it('non-gateway routes KEEP the global 1 MB limit and the CONV-2 envelope (regression pin)', async () => {
     const big = 'x'.repeat(2 * 1024 * 1024);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/auth/login`, {
