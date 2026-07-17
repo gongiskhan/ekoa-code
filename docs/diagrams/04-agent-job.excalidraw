@@ -1747,7 +1747,7 @@
       "width": 360,
       "height": 18,
       "text": "completion gates (build jobs)",
-      "originalText": "post-build verify (build jobs, default ON)",
+      "originalText": "completion gates (build jobs)",
       "fontSize": 14,
       "fontFamily": 3,
       "textAlign": "left",
@@ -1803,7 +1803,7 @@
       "locked": false,
       "containerId": null,
       "lineHeight": 1.25,
-      "rawText": "after the version snapshot, before complete:\n1. honest-completion gate (F16, deterministic):\n   entrypoint untouched / dist = scaffold -> FAIL\n2. post-build verify (F28, default ON): playwright-cli\n   asserts REQUEST-FULFILMENT (scaffold DOM = FAIL);\n   ran+failed -> FAIL terminal; not-run -> honest note\n   gets an ABSOLUTE loopback URL + a purpose-scoped\n   preview token (pv1 capability, never a user JWT)\n   + hard wall clock (VERIFY_WALL_CLOCK_MS 5min;\n   turn caps = backstops) + streams narration on\n   thinking_chunk (2026-07-11)"
+      "rawText": "after the version snapshot, before complete:\n1. honest-completion gate (F16, deterministic):\n   entrypoint untouched / dist = scaffold -> FAIL\n2. post-build verify (F28, default ON): playwright-cli\n   asserts REQUEST-FULFILMENT (scaffold DOM = FAIL);\n   ran+failed -> FAIL terminal; not-run -> honest note\n   gets an ABSOLUTE loopback URL + a purpose-scoped\n   preview token (pv1 capability, never a user JWT)\n   + hard wall clock (VERIFY_WALL_CLOCK_MS 5min;\n   turn caps = backstops) + streams narration on\n   thinking_chunk (2026-07-11); per-action \">> \" lines\n   re-emit as plan_step 'verifying' -> live spinner\n   label + Output tab (2026-07-14)"
     },
     {
       "type": "arrow",
@@ -2016,7 +2016,7 @@
       "height": 18,
       "text": "subprocess isolation (F25, ch05 \u00a75.4.1) - no host/operator context in a tenant run",
       "rawText": "subprocess isolation (F25, ch05 \u00a75.4.1) - no host/operator context in a tenant run",
-      "originalText": "x",
+      "originalText": "subprocess isolation (F25, ch05 \u00a75.4.1) - no host/operator context in a tenant run",
       "fontSize": 13,
       "fontFamily": 1,
       "textAlign": "left",
@@ -2053,7 +2053,7 @@
       "height": 78,
       "text": "every runAgent/runOneShot spawn that does NOT pin cwd/homeDir (chat, brand-research,\nclassifier one-shots) gets an EMPTY per-run sandbox dir; cwd=sandbox, HOME=sandbox,\nremoved at run end. build/verify keep their explicit project dir (never overridden).\nbuildSubprocessEnv scrubs the inherited server path from PWD/OLDPWD/INIT_CWD, npm_*,\nand PATH segments under the CHECKOUT root only (never HOME - node lives under HOME on nvm/user hosts; its bin dir is preserved so the bare-node spawn resolves). settingSources:[] + the\nper-agent tool allow-list remain the primary gates; this removes the inherited-path vector.",
       "rawText": "every runAgent/runOneShot spawn that does NOT pin cwd/homeDir (chat, brand-research,\nclassifier one-shots) gets an EMPTY per-run sandbox dir; cwd=sandbox, HOME=sandbox,\nremoved at run end. build/verify keep their explicit project dir (never overridden).\nbuildSubprocessEnv scrubs the inherited server path from PWD/OLDPWD/INIT_CWD, npm_*,\nand PATH segments under the CHECKOUT root only (never HOME - node lives under HOME on nvm/user hosts; its bin dir is preserved so the bare-node spawn resolves). settingSources:[] + the\nper-agent tool allow-list remain the primary gates; this removes the inherited-path vector.",
-      "originalText": "x",
+      "originalText": "every runAgent/runOneShot spawn that does NOT pin cwd/homeDir (chat, brand-research,\nclassifier one-shots) gets an EMPTY per-run sandbox dir; cwd=sandbox, HOME=sandbox,\nremoved at run end. build/verify keep their explicit project dir (never overridden).\nbuildSubprocessEnv scrubs the inherited server path from PWD/OLDPWD/INIT_CWD, npm_*,\nand PATH segments under the CHECKOUT root only (never HOME - node lives under HOME on nvm/user hosts; its bin dir is preserved so the bare-node spawn resolves). settingSources:[] + the\nper-agent tool allow-list remain the primary gates; this removes the inherited-path vector.",
       "fontSize": 11,
       "fontFamily": 1,
       "textAlign": "left",
