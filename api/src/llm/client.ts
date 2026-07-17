@@ -1018,16 +1018,17 @@ function matchConfiguredTier(requestedModel: string): Tier | null {
 }
 
 /** The tier a stock model-id FAMILY maps to (S2, run 20260717): opus -> EXPERT,
- *  sonnet -> WORKHORSE, haiku -> FAST. Case-insensitive substring match, tolerant of `claude-`
- *  prefixes, generation infixes, dated suffixes, and the `[1m]` marker — so a stock Claude Code
- *  session lands on the configured tier models instead of exact-missing into the FAST clamp with
- *  its reasoning params stripped. Exact configured-tier match always wins first; an id matching
- *  no family keeps the historical clamp. Checked opus -> sonnet -> haiku for determinism. */
+ *  sonnet -> WORKHORSE, haiku -> FAST. The family name must appear as a whole TOKEN of the id
+ *  (segments split on non-alphanumerics) — never as a within-word substring, so an unrelated id
+ *  like `opusculum-1` keeps the historical FAST clamp (codex S2 finding: raw `includes` let any
+ *  substring bypass the clamp and carry reasoning params). Case-insensitive, tolerant of
+ *  `claude-` prefixes, generation infixes, dated suffixes, and the `[1m]` marker. Exact
+ *  configured-tier match always wins first. Checked opus -> sonnet -> haiku for determinism. */
 export function matchFamilyTier(requestedModel: string): Tier | null {
-  const m = requestedModel.replace(/\[1m\]$/, '').toLowerCase();
-  if (m.includes('opus')) return 'EXPERT';
-  if (m.includes('sonnet')) return 'WORKHORSE';
-  if (m.includes('haiku')) return 'FAST';
+  const tokens = requestedModel.replace(/\[1m\]$/, '').toLowerCase().split(/[^a-z0-9]+/);
+  if (tokens.includes('opus')) return 'EXPERT';
+  if (tokens.includes('sonnet')) return 'WORKHORSE';
+  if (tokens.includes('haiku')) return 'FAST';
   return null;
 }
 

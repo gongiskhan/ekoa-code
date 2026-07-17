@@ -18,6 +18,14 @@ describe('matchFamilyTier', () => {
     ['claude-haiku-4-5-20251001', 'FAST'],
     ['claude-3-5-haiku-20241022', 'FAST'],
     ['CLAUDE-OPUS-X', 'EXPERT'],
+    // Token-boundary regression pins (codex S2 finding): a family name INSIDE another word is
+    // NOT a family match - unknown ids keep the FAST clamp. A standalone token still matches
+    // wherever it sits ('magnum-opus-v1' carries an opus token; accepted family reading).
+    ['opusculum-1', null],
+    ['sonnets-galore', null],
+    ['shaiku-2', null],
+    ['workhorse-sonnetizer', null],
+    ['magnum-opus-v1', 'EXPERT'],
     ['gpt-5', null],
     ['some-alien-model', null],
     ['', null],
