@@ -94,6 +94,7 @@
     "integration-builder",
     "bridge-presence",
     "device-approval",
+    "gateway-keys",
     "privacy-grants-ledger",
     "trust-chip",
     "reference-attach",

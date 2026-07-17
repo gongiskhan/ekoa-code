@@ -11,6 +11,7 @@ import {
   Inbox,
   Building2,
   ShieldCheck,
+  KeyRound,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -69,6 +70,14 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Privacidade e ponte local",
     bottom: true,
     activePrefix: "/settings/privacy",
+  },
+  // S4b (run 20260717): per-user gateway API keys for Anthropic-compatible clients.
+  {
+    href: "/settings/api-keys",
+    icon: KeyRound,
+    label: "Chaves de API",
+    bottom: true,
+    activePrefix: "/settings/api-keys",
   },
   {
     href: "/settings/platform",
