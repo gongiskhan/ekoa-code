@@ -340,3 +340,39 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - All run-level gates green/issues-fixed: typecheck 0, lint 0, chokepoint/encryption/garrison clean, api lane 190/1720, web 172, build 0, securityWall clean (changed source), deliberate-red proven, mutation ran-scoped (67.5% rate-caps), decorrelated verification (every slice fresh-review approve + codex approve; S4b independent Playwright pass + design clean), every slice video verified, built-in security review issues-fixed, codex checkpoint issues-fixed.
 - ONE open HIGH finding flagged as the top LANDING item (gateway-anon-tooluse-fidelity, deny-list tool-loop detokenization fidelity + a mangled-literal egress confidentiality dimension) - a documented follow-up, deeper anonymisation-plane fix out of this run's scope; NOT a blocked slice and NOT a security-gate that came back issues-open, so it does not force completed-with-blockers, but it is named loudly in LANDING + findings.md rather than buried.
 - LANDING packet: docs/autothing/runs/20260717-071930-d1244839/LANDING.md.
+
+## RUN-START 2026-07-17T19:02:22Z
+- runId: 20260717-190134-9d4c1cbf
+- brief: Ekoa Mega Run (unified brief v1) — Part A exploration + decision memos; Part B unified chat layout (summary cards + sheet panel); Part C voice modality; Part D app operator; Part E open-data portal connectors; final block per its own file, opened only when reached (two-file rule). Synthetic data only.
+- model: claude-fable-5 (session); run policy: every subagent spawn pins the model explicitly
+- effort: session-inherited
+- profile: pending-sizing
+- gatesConfig: all-true (no operator flags)
+- host: Goncalos-MacBook-Pro
+- preflight: docs/autothing/runs/20260717-190134-9d4c1cbf/preflight-tools.txt
+
+## GATE 2026-07-17T19:09:55Z — run 20260717-190134-9d4c1cbf preflight doctor + brief §1 preconditions
+- Tools all present: asciinema 3.2.0, agg 1.9.0, codex-cli 0.142.5, gitleaks 8.30.1, semgrep 1.61-era, ffmpeg 8.1.1, node 20.19.4, jq 1.7.1, playwright 1.61.1. known-flakes.md present; .gitignore autothing marker present.
+- Journey suite: PRESENT (web/e2e/legal-suite-journey.spec.ts, api/tests/e2e/*-journey.e2e.mjs, operator suite files). Greenness check deferred to the pre-implementation baseline boot (Part A is read-only; nothing merges before the baseline runs green).
+- Voice reuse assets: fittings/seed/deepgram-voice EXISTS in ~/dev/garrison (brief says agent-garrison — actual home is the garrison repo); origin/feat/local-voice-jarvis branch EXISTS there; web-channel-default/ui on main has legacy-voice.tsx (voice-machine.ts expected on the jarvis branch; Part A track 7 verifies shape).
+- Vendor access (brief §1): NOT FOUND on this machine — no Deepgram key, no ElevenLabs key (optional; absence recorded per brief), no OpenRouter key, no gcloud ADC, and the named GCP project is not among the visible projects (spatial-tempo-488909-s5, gen-lang-client-0723394520 only).
+- Part F input file (ekoa-mega-run-security-block.md): NOT FOUND anywhere under ~/dev (existence check only; file not opened per the two-file rule).
+- HUMAN-ACTION LIST (operator, flagged at minute zero; the multi-day window allows mid-run provisioning):
+  1. Provision a Deepgram key reachable by the dev stack before Part C live STT/TTS slices.
+  2. Provide Google Cloud TTS access (ADC or service-account) on the brief-named project, or name the replacement project.
+  3. Optional: ElevenLabs key for the bake-off fallback candidate.
+  4. OpenRouter key (brief §1 lists it; no usage found in the repo today — confirm whether still needed).
+  5. Drop ekoa-mega-run-security-block.md where the run can read it, before Part F opens.
+
+## DECISION 2026-07-17T19:09:55Z — posture for missing §1 items (no full-stop; gated proceed)
+- Brief §1 says preflight fails with a human-action list and never improvises provisioning. Parts A/B/D/E have zero dependency on the missing vendor items, and the brief's own meter strategy prizes coherent partial landings. DECISION: the human-action list is recorded above and goes to the operator notification; the run proceeds A -> B now; Part C slices needing live vendor calls re-check key presence when C opens and, if still absent, land as blocked with the exact missing item named (never improvised). The Part F file check re-runs when (if) F opens.
+
+## DECISION 2026-07-17T19:48:03Z — run 20260717-190134-9d4c1cbf: Phase 2 proceeds without the Explore fan-out reports
+- 5 Fable-pinned Explore subagents spawned 19:11Z produced no reports after 46 min and did not answer a status ping. Rather than stall planning, Phase 2 Plan subagents (which explore themselves by design) start now with the lead's own gathered context (planning-notes.md). Explorer reports, if they surface later, fold into Phase 3 review. No scope change.
+
+## DECISION 2026-07-17T20:32:15Z — run 20260717-190134-9d4c1cbf: planning completed by LEAD-CONTEXT SYNTHESIS; profile=build; turn cap 2160
+- 8 spawned subagents (5 Explore 19:11Z, 3 Plan 19:48Z) produced zero reports and ignored status pings for 80+ min — a session-level subagent-return failure, logged to the friction log. The BRIEF is prescriptive (10 locked B decisions, C decided items, D delta established, E shapes given), so the lead wrote FLOW_PLAN.md + RUN_SPEC.md directly from its own verified reads. Late agent reports, if any surface, fold into review at the next gate.
+- Sizing: 27 slices (~107 pts). Profile **build** (replaces pending-sizing). deliberateRed+mutation ON; codexSliceReview every slice; sentinel turnCap 250 → **2160** (= max(300, 80×27)).
+- Branch posture: run branch **mega-run** off main per BRIEF §0 (merge only after operator diff review) — deliberate deviation from the current-branch default, matching the operator run.
+
+## GATE 2026-07-17T20:33:09Z — run 20260717-190134-9d4c1cbf: foundation detect = no-op (repo founded: CLAUDE.md, docs/, area skills, git, suite ledger, wall tools, gitignore marker — all confirmed at preflight); entering Phase 4 at slice A0
