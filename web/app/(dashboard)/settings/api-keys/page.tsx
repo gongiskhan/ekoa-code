@@ -6,7 +6,7 @@ import { PageShell } from '@/components/ui/page-shell';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import { Button, IconButton } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -55,9 +55,10 @@ export default function ApiKeysSettingsPage() {
     if (ok) setTimeout(() => setCopyState('idle'), 2000);
   }
 
-  async function submitRevoke(id: string) {
+  async function submitRevoke(id: string, keyLabel: string) {
     if (revokingId) return; // in-flight guard: never double-fire a revoke
-    const ok = await confirm({ title: t.revoke, description: t.revokeConfirm, confirmLabel: t.revoke, tone: 'danger' });
+    // The dialog NAMES the key being revoked - an irreversible action must say which one.
+    const ok = await confirm({ title: t.revoke, description: `${keyLabel}: ${t.revokeConfirm}`, confirmLabel: t.revoke, tone: 'danger' });
     if (!ok) return;
     setRevokingId(id);
     await revoke(id);
@@ -145,9 +146,9 @@ export default function ApiKeysSettingsPage() {
             <THead>
               <TR>
                 <TH>{t.colLabel}</TH>
-                <TH>{t.colKey}</TH>
-                <TH className="hidden sm:table-cell">{t.colCreated}</TH>
-                <TH className="hidden sm:table-cell">{t.colLastUsed}</TH>
+                <TH className="hidden sm:table-cell">{t.colKey}</TH>
+                <TH className="hidden md:table-cell">{t.colCreated}</TH>
+                <TH className="hidden md:table-cell">{t.colLastUsed}</TH>
                 <TH>{t.colStatus}</TH>
                 <TH />
               </TR>
@@ -156,9 +157,9 @@ export default function ApiKeysSettingsPage() {
               {keys.map((k) => (
                 <TR key={k.id} hover data-testid={`gateway-key-row-${k.id}`}>
                   <TD>{k.label}</TD>
-                  <TD className="font-mono text-xs">ekoa_gk_...{k.secretHint}</TD>
-                  <TD className="hidden sm:table-cell">{fmt(k.createdAt)}</TD>
-                  <TD className="hidden sm:table-cell">{fmt(k.lastUsedAt)}</TD>
+                  <TD className="hidden font-mono text-xs sm:table-cell">ekoa_gk_...{k.secretHint}</TD>
+                  <TD className="hidden md:table-cell">{fmt(k.createdAt)}</TD>
+                  <TD className="hidden md:table-cell">{fmt(k.lastUsedAt)}</TD>
                   <TD>
                     {k.revokedAt ? (
                       <Badge tone="neutral" data-testid="gateway-key-status-revoked">{t.statusRevoked}</Badge>
@@ -168,16 +169,14 @@ export default function ApiKeysSettingsPage() {
                   </TD>
                   <TD className="text-right">
                     {!k.revokedAt && (
-                      <Button
-                        variant="danger-ghost"
+                      <IconButton
                         icon={ShieldOff}
-                        loading={revokingId === k.id}
+                        label={`${t.revoke} ${k.label}`}
+                        variant="danger-ghost"
                         disabled={revokingId !== null}
-                        onClick={() => void submitRevoke(k.id)}
+                        onClick={() => void submitRevoke(k.id, k.label)}
                         data-testid="gateway-key-revoke"
-                      >
-                        {t.revoke}
-                      </Button>
+                      />
                     )}
                   </TD>
                 </TR>
