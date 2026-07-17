@@ -7,9 +7,10 @@
  * inlined-and-clipped: full history, no truncation of pasted material — §5.5.2 item 5).
  */
 import type { Actor } from '@ekoa/shared';
-import { messages as messagesStore, sessions as sessionsStore } from '../data/stores.js';
+import { messages as messagesStore, sessions as sessionsStore, type SessionSheetDoc } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
-import { resolveMemoryInjection } from '../memory/resolver.js';
+import { listSessionSheets } from '../data/session-sheets.js';
+import { resolveMemoryInjectionDetailed } from '../memory/resolver.js';
 import { assembleAgentContext, knowledgeGrounding, integrationPrefetch, catalog } from './seams.js';
 import { looksLikeProviderError } from './markers.js';
 
@@ -19,6 +20,8 @@ export interface AssembledContext {
   contentVersion: string;
   /** Ordered structured history turns (provider-error turns filtered, tail-window deduped). */
   history: Array<{ role: string; content: string }>;
+  /** How many memories layer 1 injected - persisted as assistant-message provenance (B1). */
+  memoriesUsed: number;
 }
 
 interface AssembleInput {
@@ -38,17 +41,53 @@ interface AssembleInput {
 const TAIL_DEDUP_WINDOW = 3;
 
 /**
- * Load the last session transcript as structured history: provider-error turns are filtered out
- * (§5.3.7 — a raw provider error must never be re-injected into a future prompt) and the last
- * `TAIL_DEDUP_WINDOW` turns are deduped so a resent tail is not doubled (§5.5.2 item 5).
+ * The latest-revision-canonical rule (Part B decision B.B / locked decision 7): in model-bound
+ * history, a turn that spawned a sheet is represented by that sheet's LATEST revision. The
+ * substitution happens IN PLACE - earlier revisions and the original text are superseded, never
+ * appended as extra turns, so an original is never duplicated. Rows without a sheet (and rows
+ * whose sheet has only its original revision - every derived legacy sheet) pass through
+ * unchanged. Pure and order-preserving; unit-tested in tests/agents/context-sheets.test.ts.
+ */
+export function applyLatestSheetRevisions(
+  rows: ReadonlyArray<{ id?: string; role: string; content: string }>,
+  sheets: ReadonlyArray<Pick<SessionSheetDoc, 'createdFromMessageId' | 'revisions'>>,
+): Array<{ role: string; content: string }> {
+  const latestByMessageId = new Map<string, string>();
+  for (const s of sheets) {
+    const latest = s.revisions[s.revisions.length - 1];
+    if (latest) latestByMessageId.set(s.createdFromMessageId, latest.content);
+  }
+  return rows.map((r) => ({
+    role: r.role,
+    content: (r.id !== undefined ? latestByMessageId.get(r.id) : undefined) ?? r.content,
+  }));
+}
+
+/**
+ * Load the last session transcript as structured history: each sheet-spawning turn is collapsed
+ * to its sheet's latest revision (`applyLatestSheetRevisions`, decision B.B), provider-error
+ * turns are filtered out (§5.3.7 - a raw provider error must never be re-injected into a future
+ * prompt) and the last `TAIL_DEDUP_WINDOW` turns are deduped so a resent tail is not doubled
+ * (§5.5.2 item 5).
  */
 export async function loadHistory(sessionId: string): Promise<Array<{ role: string; content: string }>> {
   const rows = (await messagesStore.find({ sessionId }, { timestamp: 1 })) as Array<Doc & { role?: string; content?: unknown; metadata?: { providerError?: boolean } }>;
+  const session = await sessionsStore.get(sessionId);
+  // Legacy sessions derive identity sheets (one revision == the message), so the substitution
+  // is a no-op there; only user/agent-edited sheets actually rewrite their source turn.
+  const sheets = session ? await listSessionSheets(session, rows) : [];
+  const flagged = rows.map((m) => ({
+    id: m._id,
+    role: m.role ?? 'user',
+    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+    providerError: m.metadata?.providerError === true,
+  }));
+  const canonical = applyLatestSheetRevisions(flagged, sheets);
   const turns: Array<{ role: string; content: string }> = [];
-  for (const m of rows) {
-    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
-    if (m.metadata?.providerError || looksLikeProviderError(content)) continue; // filtered (§5.3.7)
-    turns.push({ role: m.role ?? 'user', content });
+  for (let i = 0; i < canonical.length; i++) {
+    const cur = canonical[i]!;
+    if (flagged[i]!.providerError || looksLikeProviderError(cur.content)) continue; // filtered (§5.3.7)
+    turns.push(cur);
   }
   // Tail-window dedup: drop a duplicate that repeats the immediately-preceding turn within the
   // last window (a resend/retry artifact).
@@ -80,10 +119,13 @@ export async function assembleRunContext(input: AssembleInput): Promise<Assemble
   // The EKOA brand identity leads the chat system prompt (before content/memory/knowledge layers).
   const sections: string[] = input.isChat ? [EKOA_CHAT_IDENTITY, ...loaded.promptSections] : [...loaded.promptSections];
 
-  // Layer 1 — memory injection (deterministic, no model call).
+  // Layer 1 - memory injection (deterministic, no model call). The count rides the returned
+  // context as provenance: the chat pipeline persists it as `metadata.memoriesUsed` (B1).
+  let memoriesUsed = 0;
   if (!input.optOutMemory) {
-    const mem = await resolveMemoryInjection(input.actor, input.query, { now: input.now, genId: () => '' });
-    if (mem) sections.push(`# Memória\n${mem}`);
+    const mem = await resolveMemoryInjectionDetailed(input.actor, input.query, { now: input.now, genId: () => '' });
+    if (mem.text) sections.push(`# Memória\n${mem.text}`);
+    memoriesUsed = mem.memoriesUsed;
   }
 
   // Layer 2 — knowledge grounding (always for chat; for builds only when legal context matches).
@@ -122,6 +164,7 @@ export async function assembleRunContext(input: AssembleInput): Promise<Assemble
     contextDir: loaded.contextDir,
     contentVersion: loaded.contentVersion,
     history,
+    memoriesUsed,
   };
 }
 

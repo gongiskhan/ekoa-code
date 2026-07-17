@@ -14,6 +14,8 @@ export {
   memoryWriteGuard,
   resolveMemoryBlock,
   resolveMemoryInjection,
+  resolveMemoryInjectionDetailed,
+  type ResolvedMemoryInjection,
   createMemory,
   updateMemory,
   deleteMemory,

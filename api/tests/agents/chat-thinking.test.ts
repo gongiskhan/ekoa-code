@@ -72,19 +72,26 @@ describe('chat thinking channel (§5.7 + ch12 white-label)', () => {
     // (c) persisted: content is the answer; metadata replays the REDACTED thinking + duration
     const assistant = await messages.find({ sessionId: 's1', role: 'assistant' });
     expect(assistant).toHaveLength(1);
-    const doc = assistant[0] as unknown as { content: string; metadata?: { thinking?: string; thinkingDurationMs?: number } };
+    const doc = assistant[0] as unknown as { content: string; metadata?: { thinking?: string; thinkingDurationMs?: number; traceId?: string } };
     expect(doc.content).toBe(answer);
+    expect(doc.metadata?.traceId).toBe(runId); // B1 provenance rides beside the thinking replay
     expect(doc.metadata?.thinking).toBeTruthy();
     expect(doc.metadata!.thinking!).not.toMatch(LEAK);
     expect(doc.metadata!.thinkingDurationMs).toBeTypeOf('number');
     expect(doc.metadata!.thinkingDurationMs!).toBeGreaterThan(0);
   });
 
-  it('a run with no commentary emits no thinking_chunk and persists no thinking metadata', async () => {
+  it('a run with no commentary emits no thinking_chunk and persists no thinking metadata (provenance only)', async () => {
     const runId = await runChat({ stream: [{ kind: 'text', text: 'Resposta directa.' }], finalText: 'Resposta directa.' });
     expect(chatEventsFor(runId).some((e) => e.type === 'thinking_chunk')).toBe(false);
     const assistant = await messages.find({ sessionId: 's1', role: 'assistant' });
-    expect((assistant[0] as unknown as { metadata?: unknown }).metadata).toBeUndefined();
+    const meta = (assistant[0] as unknown as { metadata?: { thinking?: string; thinkingDurationMs?: number; traceId?: string; memoriesUsed?: number } }).metadata;
+    expect(meta?.thinking).toBeUndefined();
+    expect(meta?.thinkingDurationMs).toBeUndefined();
+    // Provenance (B1): traceId + memoriesUsed are stamped on EVERY persisted assistant turn -
+    // the web renders feedback buttons off traceId and the memories line off memoriesUsed.
+    expect(meta?.traceId).toBe(runId);
+    expect(meta?.memoriesUsed).toBe(0);
   });
 
   it('no marker — whole or split across chunks — ever reaches a thinking_chunk; delegation is NOT triggered from thinking; a context block in thinking still persists (§5.7.2)', async () => {

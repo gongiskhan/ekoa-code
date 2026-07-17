@@ -9,6 +9,7 @@ import { usersEndpoints } from './users.js';
 import { orgEndpoints } from './org.js';
 import { settingsEndpoints } from './settings.js';
 import { sessionsEndpoints } from './sessions.js';
+import { sheetsEndpoints } from './sheets.js';
 import { chatEndpoints } from './chat.js';
 import { jobsEndpoints } from './jobs.js';
 import { artifactsEndpoints } from './artifacts.js';
@@ -41,6 +42,7 @@ export * from './users.js';
 export * from './org.js';
 export * from './settings.js';
 export * from './sessions.js';
+export * from './sheets.js';
 export * from './chat.js';
 export * from './jobs.js';
 export * from './artifacts.js';
@@ -75,6 +77,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   org: orgEndpoints,
   settings: settingsEndpoints,
   sessions: sessionsEndpoints,
+  sheets: sheetsEndpoints,
   chat: chatEndpoints,
   jobs: jobsEndpoints,
   artifacts: artifactsEndpoints,

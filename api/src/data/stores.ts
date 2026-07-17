@@ -47,6 +47,27 @@ export interface RevokedTokenDoc extends Doc {
   revokedAt: string;
   expiresAt: number; // epoch seconds
 }
+/** One revision of a session sheet (Part B decision B.B). Subdocument - carries no _id;
+ *  the stored shape IS the wire shape (shared/src/sheets.ts SheetRevision). */
+export interface SheetRevisionDoc {
+  revisionId: string;
+  /** Markdown body of the sheet at this revision. */
+  content: string;
+  createdAt: string;
+  /** Username of the editor (user edits only). */
+  editedBy?: string;
+  editSource: 'agent' | 'user';
+  /** The edit instruction that produced this revision (user edits). */
+  instruction?: string;
+}
+/** A sheet persisted as a SUBDOCUMENT on the session record (Part B decision B.B - no new
+ *  collection). Ordered revisions, oldest first; the last is canonical. */
+export interface SessionSheetDoc {
+  sheetId: string;
+  title: string;
+  createdFromMessageId: string;
+  revisions: SheetRevisionDoc[];
+}
 export interface SessionDoc extends Doc {
   userId: string;
   /** Store-side name (ch04 §4.3.1 carries `title`); the wire field is `name` (ch03 §3.8.6). */
@@ -55,6 +76,10 @@ export interface SessionDoc extends Doc {
   artifactId?: string;
   status?: string;
   messageCount?: number;
+  /** Sheets as subdocuments (Part B decision B.B). ABSENT on legacy sessions - readers derive
+   *  a one-sheet-per-assistant-message view at read time instead (data/session-sheets.ts);
+   *  a write against a derived sheet materialises it here first. No backfill. */
+  sheets?: SessionSheetDoc[];
   createdAt: string;
   updatedAt: string;
 }

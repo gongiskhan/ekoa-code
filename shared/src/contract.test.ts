@@ -13,9 +13,11 @@ import {
  * validation lands with the contract suite from G2 onward.
  */
 describe('shared contract', () => {
-  it('loads all 26 domain descriptor maps', () => {
-    // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4).
-    expect(Object.keys(ALL_ENDPOINTS).length).toBe(26);
+  it('loads all 28 domain descriptor maps', () => {
+    // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4)
+    // + gatewayKeys (cortex-gateway S4a - landed without bumping this count; reconciled here)
+    // + sheets (mega-run B1, decision B.B).
+    expect(Object.keys(ALL_ENDPOINTS).length).toBe(28);
   });
 
   it('every endpoint descriptor is well-formed', () => {

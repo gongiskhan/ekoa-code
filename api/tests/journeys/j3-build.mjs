@@ -109,7 +109,8 @@ async function phaseSetup(results) {
     FAIL(`J3.user.${username}`, `create failed ${r.status} ${JSON.stringify(r.body)}`, results);
     return null;
   };
-  const u1Id = await mkUser('bc-u1', 'builder');
+  // Role 'builder' was retired by the roles migration (builder -> user); the probe drifted.
+  const u1Id = await mkUser('bc-u1', 'user');
   const admId = await mkUser('bc-adm', 'org-admin');
 
   // Confirm both can log in.

@@ -405,6 +405,12 @@
         "count": 17,
         "targetGate": "operator-run",
         "note": "vitest+contract suites landed by feature run 20260712-150958 (merged to main 2026-07-13): base-loader, build+domain-scoping, artifact-type(+contract), action-manifest(+contract), action-runtime, app-assistant(+contract), assistant-tools, assistant-panel, serving-tours, tour-writer, tour-player(+behavior), build-knowledge-ingest, capabilities-stub, jobs contract ext. All green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
+        "group": "chat-sheets B1 (sheets contract + canonical-context unit)",
+        "count": 2,
+        "targetGate": "G12",
+        "note": "mega-run 20260717-190134 slice B1: tests/contract/sheets.test.ts (GET/PATCH/POST /sessions/:id/sheets* - derived list, rename, user revision; 2xx bodies vs the shared Sheet schemas + error envelopes + cross-user 404) and tests/agents/context-sheets.test.ts (applyLatestSheetRevisions + listSessionSheets derivation/materialisation + loadHistory canonicalisation; the traceId/memoriesUsed provenance writer is pinned in chat-thinking.test.ts). Green in the per-PR vitest lane from landing; ratchet applies."
       }
     ]
   },

@@ -261,7 +261,10 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
 
     // Normal completion: persist the assistant message (unless a provider-error, already handled).
     // Thinking rides in metadata (already marker-free + redacted) so a reloaded session can still
-    // offer the collapsed thinking section the live stream showed.
+    // offer the collapsed thinking section the live stream showed. Provenance (B1): `traceId`
+    // (the run id - the web's feedback buttons post it back as runId) and `memoriesUsed` (layer-1
+    // injection count) were typed on the web ChatMessage.metadata since the port but never
+    // written; they are stamped here on every persisted assistant turn.
     const thinkingMeta = thinkingClean.trim()
       ? {
           thinking: thinkingClean,
@@ -270,7 +273,13 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
             : {}),
         }
       : undefined;
-    if (cleanText.trim()) await persistAssistantMessage(input.sessionId, cleanText, input.deps, thinkingMeta);
+    if (cleanText.trim()) {
+      await persistAssistantMessage(input.sessionId, cleanText, input.deps, {
+        traceId: runId,
+        memoriesUsed: assembled.memoriesUsed,
+        ...(thinkingMeta ?? {}),
+      });
+    }
     finishComplete(cleanText);
 
     // Post-run memory extraction scheduled OFF the terminal event (§5.8): the terminal already

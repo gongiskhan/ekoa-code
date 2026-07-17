@@ -103,16 +103,23 @@ function terms(text: string): Set<string> {
 
 const MAX_ACTIVE_INJECTED = 8;
 
+/** The resolver's detailed result: the prompt block plus the number of memories it carries -
+ *  the provenance count the chat pipeline persists as `metadata.memoriesUsed` (Part B B1). */
+export interface ResolvedMemoryInjection {
+  text: string;
+  memoriesUsed: number;
+}
+
 /**
  * Deterministic term-overlap memory injection (ch05 §5.5.2 layer 1). No model call: guardrail
  * memories render first as non-negotiable RULE lines; core-tier memories are always injected;
  * active-tier memories are scored by term overlap with the query and the top ones injected. The
  * resolver's write-on-read side effect (a usage-count bump per resolved memory) is carried as a
- * conscious decision — applied here through the store. Returns '' when nothing resolves.
+ * conscious decision - applied here through the store. Returns text '' when nothing resolves.
  */
-export async function resolveMemoryInjection(actor: Actor, query: string, deps: MemoryDeps): Promise<string> {
+export async function resolveMemoryInjectionDetailed(actor: Actor, query: string, deps: MemoryDeps): Promise<ResolvedMemoryInjection> {
   const visible = await listVisibleMemories(actor);
-  if (visible.length === 0) return '';
+  if (visible.length === 0) return { text: '', memoriesUsed: 0 };
   const q = terms(query);
 
   // A guardrail is anything the product calls a guardrail. The dashboard writes them as
@@ -138,7 +145,7 @@ export async function resolveMemoryInjection(actor: Actor, query: string, deps: 
     .map((s) => s.m);
 
   const resolved = [...guardrails, ...core, ...scored];
-  if (resolved.length === 0) return '';
+  if (resolved.length === 0) return { text: '', memoriesUsed: 0 };
 
   // Write-on-read: bump usage count per resolved memory (carried side effect, §5.5.2). Failures
   // are swallowed — injection must never fail a run on a bookkeeping write.
@@ -151,7 +158,12 @@ export async function resolveMemoryInjection(actor: Actor, query: string, deps: 
   const lines: string[] = [];
   for (const m of guardrails) lines.push(`RULE: ${m.content ?? m.title ?? ''}`);
   for (const m of [...core, ...scored]) lines.push(`- ${m.title ?? ''}: ${m.content ?? ''}`);
-  return lines.join('\n');
+  return { text: lines.join('\n'), memoriesUsed: resolved.length };
+}
+
+/** String form kept for existing callers/tests - same taxonomy, ONE implementation. */
+export async function resolveMemoryInjection(actor: Actor, query: string, deps: MemoryDeps): Promise<string> {
+  return (await resolveMemoryInjectionDetailed(actor, query, deps)).text;
 }
 
 // ---- Write operations (the memory router goes through the module, not data/ — ch02 §2.7) ----

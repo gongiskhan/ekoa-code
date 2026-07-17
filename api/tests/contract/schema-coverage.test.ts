@@ -102,6 +102,10 @@ const COVERED = new Set<string>([
   // tests/routes/change-requests.test.ts integration). A NEW domain: covering all four keeps
   // EXPECTED_PENDING_COUNT unchanged.
   'changeRequests.file', 'changeRequests.list', 'changeRequests.convert', 'changeRequests.dismiss',
+  // mega-run B1 (decision B.B) - session sheets, a NEW domain (sheets.test.ts contract:
+  // derived list / rename / user revision + envelope + cross-user 404). Covering all three
+  // keeps EXPECTED_PENDING_COUNT unchanged.
+  'sheets.list', 'sheets.rename', 'sheets.createRevision',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

@@ -1,0 +1,8 @@
+{ "slice": "B1", "kind": "api", "status": "passed", "at": "2026-07-17T23:39:47Z",
+  "wall": {"tscApi": 0, "tscWeb": 0, "eslint": 0, "chokepoint": 0, "unit": "15/15 + 6/6 sheets-contract", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "committed vitest suites + SUITE_LEDGER B1 group; journeys j1/j2/j4/j5/j6/j8/j8b green post-rebuild; j3 setup drift fixed"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "deferred-batch", "reason": "api-kind batched run-level pass (Part 8.2)"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "1 fixed (forged-stamps test), 2 rebutted"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (api; B7 carries the Part B walkthrough)"} }

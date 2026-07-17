@@ -4,8 +4,9 @@
  * touches data/ directly (ch02 §2.7; `services/` may import `data/`).
  */
 import type { Actor } from '@ekoa/shared';
-import { orgs, settings, userSettings, sessions, messages, activityLogs, type OrgDoc, type SettingsDoc, type UserSettingsDoc, type SessionDoc, type ActivityLogDoc } from '../data/stores.js';
+import { orgs, settings, userSettings, sessions, messages, activityLogs, type OrgDoc, type SettingsDoc, type UserSettingsDoc, type SessionDoc, type SessionSheetDoc, type SheetRevisionDoc, type ActivityLogDoc } from '../data/stores.js';
 import { logActivity, type ActivityActor } from '../data/activity.js';
+import { listSessionSheets, appendSheetRevision, renameSheet } from '../data/session-sheets.js';
 import type { Doc } from '../data/store.js';
 
 export interface Deps { now: () => number; genId: () => string }
@@ -150,6 +151,53 @@ export async function addMessage(session: SessionDoc, body: { role: unknown; con
   // A new turn touches the session: the web sorts the session list by `updatedAt`.
   await sessions.update(session._id, (x) => ({ ...x, messageCount: (x.messageCount ?? 0) + 1, updatedAt: now }));
   return doc;
+}
+
+// ---- Session sheets (Part B decision B.B: subdocuments on the session record; legacy
+// sessions read as derived one-sheet-per-assistant-message views - data/session-sheets.ts).
+// The views below are the ONLY place sheet wire bodies are produced; they must satisfy the
+// shared Sheet / SheetRevision schemas exactly (the web validates every response). Built
+// field-by-field so no store internal added later can leak onto the wire. ----
+const sheetRevisionView = (r: SheetRevisionDoc) => ({
+  revisionId: r.revisionId,
+  content: r.content,
+  createdAt: r.createdAt,
+  editSource: r.editSource,
+  ...(r.editedBy != null ? { editedBy: r.editedBy } : {}),
+  ...(r.instruction != null ? { instruction: r.instruction } : {}),
+});
+export const sheetView = (s: SessionSheetDoc) => ({
+  sheetId: s.sheetId,
+  title: s.title,
+  createdFromMessageId: s.createdFromMessageId,
+  revisions: s.revisions.map(sheetRevisionView),
+});
+export async function listSessionSheetViews(session: SessionDoc) {
+  return (await listSessionSheets(session)).map(sheetView);
+}
+/** A USER edit: server stamps editSource/editedBy/createdAt - never taken from the body. */
+export async function addSessionSheetRevision(
+  session: SessionDoc,
+  sheetId: string,
+  input: { content: string; instruction?: string },
+  editedBy: string,
+  deps: Deps,
+  actor?: ActivityActor,
+) {
+  const sheet = await appendSheetRevision(session._id, sheetId, { ...input, editedBy, editSource: 'user' }, deps);
+  if (!sheet) return null;
+  audit(actor, 'session', 'sheet_revision', deps, {
+    sessionId: session._id,
+    sheetId,
+    revisionId: sheet.revisions[sheet.revisions.length - 1]!.revisionId,
+  });
+  return sheetView(sheet);
+}
+export async function renameSessionSheet(session: SessionDoc, sheetId: string, title: string, deps: Deps, actor?: ActivityActor) {
+  const sheet = await renameSheet(session._id, sheetId, title, deps);
+  if (!sheet) return null;
+  audit(actor, 'session', 'sheet_rename', deps, { sessionId: session._id, sheetId });
+  return sheetView(sheet);
 }
 
 // ---- Registo (org-scoped activity read; metadata only) ----
