@@ -1151,9 +1151,17 @@ export async function proxyGatewayMessages(
   // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
   // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
   // (no-session, no-key) vault is cleared in the finally.
+  // Vault-key NAMESPACING (S7 codex High): a client-supplied session_id is scoped by the BILLEE
+  // (`csid:<billee>:<id>`) so it can NEVER collide with the reserved `gwkey:<keyId>` space - a
+  // crafted metadata.session_id of "gwkey:<victimKeyId>" would otherwise open another key's vault
+  // and detokenize the victim's literals cross-tenant. keyId comes only from the verified
+  // verifyGatewayKey seam (never the body), so it is unforgeable. The three namespaces are
+  // disjoint: csid: (client), gwkey: (per-key), eph: (ephemeral).
   const explicitSession = typeof meta.session_id === 'string';
-  const keyVaultId = opts?.keyId ? `gwkey_${opts.keyId}` : undefined;
-  const sessionId = explicitSession ? (meta.session_id as string) : (keyVaultId ?? `sess_${correlationId}`);
+  const keyVaultId = opts?.keyId ? `gwkey:${opts.keyId}` : undefined;
+  const sessionId = explicitSession
+    ? `csid:${billeeUserId}:${meta.session_id as string}`
+    : (keyVaultId ?? `eph:${correlationId}`);
   const ephemeralVault = !explicitSession && !keyVaultId;
   const anonCtx: AnonymiseContext = {
     sessionId,

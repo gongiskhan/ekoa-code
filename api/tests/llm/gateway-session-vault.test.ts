@@ -128,4 +128,17 @@ describe('gateway vault keying', () => {
     // The explicit conversation id is the vault key (not the gwkey), and it persists.
     expect(__vaultCount()).toBe(1);
   });
+
+  it('a crafted session_id cannot HIJACK another key\'s vault (codex S7 High: namespace isolation)', async () => {
+    const { transport } = captureTransport();
+    __setTransportForTests(transport);
+    // Victim: key kid_victim mints a vault with its tokens.
+    await proxyGatewayMessages(body(), 'ownerV', undefined, { agentType: 'gateway-client', keyId: 'kid_victim' });
+    // Attacker (a DIFFERENT owner) crafts session_id = the victim's reserved key-vault name.
+    const crafted = { ...body(), metadata: { session_id: 'gwkey:kid_victim' } };
+    await proxyGatewayMessages(crafted, 'ownerA', undefined);
+    // TWO distinct vaults: the attacker's client-supplied id is billee-scoped
+    // (csid:ownerA:gwkey:kid_victim), never the victim's gwkey:kid_victim - no shared vault.
+    expect(__vaultCount()).toBe(2);
+  });
 });
