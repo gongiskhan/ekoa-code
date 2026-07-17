@@ -36,8 +36,9 @@
     },
     "band3_served_app": {
       "targetGate": "G6",
-      "note": "37 specs run UNMODIFIED against api/ alone; a failure is a byte-compat defect in the served-app plane, never a reason to edit the spec. legal-dossie also stubs /api/app-sso/me + /api/app-sso/m365/**",
+      "note": "37 ported specs run UNMODIFIED against api/ alone; a failure is a byte-compat defect in the served-app plane, never a reason to edit the spec. legal-dossie also stubs /api/app-sso/me + /api/app-sso/m365/**. legal-apps-smoke (run 20260717-202309) is new-authored, same served-app plane: all 29 legal apps load clean.",
       "specs": [
+        "legal-apps-smoke",
         "legal-nucleo",
         "legal-dossie",
         "legal-prazos",
@@ -86,8 +87,9 @@
     },
     "band4_gap_plan": {
       "targetGate": "G9",
-      "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",
+      "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists. artifact-cards-dates (run 20260717-202309) pins the Invalid-Date fix on /artifacts.",
       "specs": [
+        "artifact-cards-dates",
         "automation-deterministic",
         "chat-thinking",
         "regressions-dashboard",

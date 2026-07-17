@@ -1,0 +1,103 @@
+{
+  "slice": "S0-smoke-foundation",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "passed",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": { "tests": 0, "typecheck": 0, "lint": 0, "build": 0 },
+      "evidence": [
+        "npx playwright test legal-apps-smoke artifact-cards-dates legal-shared-drift: 31 passed (29 smoke + cards + drift)",
+        "node scripts/sync-legal-shared.mjs --check: OK - 29 scaffolds x 7 files in sync",
+        "npm run typecheck: 0",
+        "npm run lint: 0",
+        "npm run build: 0 (stack stopped for the build, restarted after)"
+      ],
+      "at": "2026-07-17T20:10:00Z"
+    },
+    "review": {
+      "status": "clean",
+      "engine": "inline-fallback (code-review Workflow failed: external API billing constraint '1M context usage credits')",
+      "findings": [],
+      "nits": [
+        "artifactSortTime: updatedAt present-but-unparseable sorts 0 instead of falling back to createdAt (matches prior semantics)",
+        "sync-legal-shared.mjs --check also refreshes the gitignored ekoa-data mirror (documented write side effect)",
+        "artifact-cards-dates.spec.ts:35 detail re-assert is conditional on locator match; primary grid assert unconditional"
+      ],
+      "at": "2026-07-17T20:28:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "approve",
+      "by": "claude-opus-4-8 (fresh-context agent adv-review-S0; no implementer rationale shared)",
+      "evidence": [
+        "npx playwright test drift+smoke+dates against live stack: 31 passed (28.4s)",
+        "npm run typecheck: pass (3 workspaces); npm run lint: 0 errors",
+        "node scripts/sync-legal-shared.mjs --check: exit 0 (29 scaffolds x 7 files in sync)",
+        "gate:ledger census green 69/69 specs incl. both new; exit-1 '110 due, no --run' reproduced on stashed baseline (108 due) - pre-existing by design",
+        "regression bite proven: page.tsx stashed -> dates spec FAILS on 'Invalid Date'; restored -> passes",
+        "legal-shared-drift.spec.ts + all 37 ported specs byte-unmodified; LEGAL_APPS array matches 29 scaffolds on disk exactly",
+        "all date render sites (page.tsx 500/507/1187/1194/1407/1415) inside isValidDateString guards; sorts NaN-proofed"
+      ],
+      "findings": [
+        "docs/findings.md:68 em dash in added line (one character, non-blocking) - FIXED by lead before commit (replaced with plain dash)"
+      ],
+      "notes": [
+        "--check mirror-refresh side effect (documented, gitignored target); frozen drift-spec header prose stale vs reality; dates-spec detail assert conditional (primary assert unconditional, bite proven)"
+      ],
+      "at": "2026-07-17T20:36:33Z"
+    },
+    "adversarialTest": {
+      "verdict": "pass",
+      "by": "claude-opus-4-8 (fresh-context agent adv-test-S0; independent probes, no implementer rationale)",
+      "evidence": [
+        "committed specs re-run against live stack: dates+drift 2 passed, smoke 29 passed",
+        "corrupt-byte probe: 1 bit flipped in legal-citius shared.js -> --check exits 1 naming the file; restored byte-identical to HEAD (sha match), --check back to 0, zero residue",
+        "independent UI drive beyond the spec: grid full-text scan + 6 distinct card details, 0 'Invalid Date', 0 NaN, 0 console/page errors",
+        "API root-cause confirmation: GET /api/v1/artifacts -> 41/41 featured artifacts have null createdAt+updatedAt, zero present-but-invalid",
+        "smoke-spec honesty spot-check on 4 apps incl. the agenda-reservas no-Layout exception: assertions match reality",
+        "ledger census balances 69==69 once concurrent-S1 disk noise and the pre-existing chat-fixes/chat-preview-resolution HEAD deficit are attributed",
+        "typecheck 0 across workspaces; eslint on S0 files 0 errors"
+      ],
+      "findings": [],
+      "notes": [
+        "legal-citius cold-start: one non-reproducing console 404 on first-ever load (0/4 repro) - watch for smoke flake",
+        "stale 'six scaffolds' prose in sync script docstring + frozen drift spec header (cosmetic)",
+        "raw gate:ledger exit-1 fully attributed: pre-authorized due-artifacts condition + concurrent S1 specs + pre-existing 2-entry HEAD deficit - none S0"
+      ],
+      "at": "2026-07-17T21:15:00Z"
+    },
+    "design": {
+      "status": "clean",
+      "by": "claude-fable-5 (playwright-cli visual audit, session=audit)",
+      "issues": [],
+      "evidence": [
+        "grid + instance cards + ArtifactDetail screenshots: no 'Invalid Date' anywhere (innerText probe on each view)",
+        "card footer: divider + action row, no orphaned spacing where date row hides",
+        "detail meta + DETALHES dl: Criado/Atualizado rows hidden for timestamp-less seeds, layout intact",
+        "PT-PT copy, no emojis; blank thumbnails are EKOA_SCREENSHOTS_DISABLED=1 (env, pre-existing, not slice scope)"
+      ],
+      "at": "2026-07-17T20:36:00Z"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S0-smoke-foundation/video/s0-smoke-foundation-walkthrough.webm",
+      "durationSeconds": 23.2,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine: ~/.claude/skills/walkthrough is a broken symlink to a repo that does not exist here) — honest substitute, self-verified by frame extraction",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames read back by vision)",
+        "checks": [
+          "login flow (admin) reaches /chat",
+          "/artifacts grid: 'Os Meus Artefactos', 41 artefactos, zero 'Invalid Date' (live innerText probe: 0)",
+          "instance detail view: DETALHES dl without Criado/Atualizado rows, zero 'Invalid Date' (probe: 0)",
+          "legal-nucleo Painel do escritório loads rich and clean",
+          "legal-prazos Radar de prazos loads rich and clean",
+          "legal-agenda-reservas public booking page loads clean"
+        ]
+      },
+      "at": "2026-07-17T20:48:00Z"
+    }
+  },
+  "note": "Smoke sweep of all 29 legal apps + Invalid-Date fix on /artifacts + legal-shared sync gate (script + canonical dir) + ledger registration."
+}

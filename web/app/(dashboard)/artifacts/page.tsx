@@ -195,10 +195,22 @@ function getArtifactAppUrl(artifact: ArtifactInstance): string | null {
   return null;
 }
 
+/** Seeded/featured artifacts may lack ISO timestamps; date rows hide instead of rendering "Invalid Date". */
+function isValidDateString(dateStr?: string | null): dateStr is string {
+  return !!dateStr && !Number.isNaN(new Date(dateStr).getTime());
+}
+
+/** Epoch millis for sorting; artifacts without a valid timestamp sort last (0). */
+function artifactSortTime(x: { updatedAt?: string; createdAt?: string }): number {
+  const t = new Date(x.updatedAt || x.createdAt || "").getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
 function formatDate(
   dateStr: string,
   labels?: { yesterday: string; daysAgo: (n: number) => string },
 ): string {
+  if (!isValidDateString(dateStr)) return "";
   const date = new Date(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -478,19 +490,25 @@ function ArtifactCard({
 
       {/* Footer with date and actions */}
       <div className="pt-3 mt-2 border-t border-line">
-        {/* Created date */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-neutral-400 flex items-center gap-1">
-            <Calendar size={11} />
-            {formatDate(artifact.createdAt, a)}
-          </span>
-          {artifact.updatedAt && artifact.updatedAt !== artifact.createdAt && (
-            <span className="text-xs text-neutral-400 flex items-center gap-1">
-              <Clock size={11} />
-              {formatDate(artifact.updatedAt, a)}
-            </span>
-          )}
-        </div>
+        {/* Created date (hidden when the seed carries no valid timestamps) */}
+        {(isValidDateString(artifact.createdAt) ||
+          isValidDateString(artifact.updatedAt)) && (
+          <div className="flex items-center justify-between mb-2">
+            {isValidDateString(artifact.createdAt) && (
+              <span className="text-xs text-neutral-400 flex items-center gap-1">
+                <Calendar size={11} />
+                {formatDate(artifact.createdAt, a)}
+              </span>
+            )}
+            {isValidDateString(artifact.updatedAt) &&
+              artifact.updatedAt !== artifact.createdAt && (
+                <span className="text-xs text-neutral-400 flex items-center gap-1">
+                  <Clock size={11} />
+                  {formatDate(artifact.updatedAt, a)}
+                </span>
+              )}
+          </div>
+        )}
 
         {/* Action buttons row */}
         <div className="flex items-center gap-0.5">
@@ -1159,18 +1177,25 @@ function ArtifactDetail({
               </div>
             )}
 
-            <div className="flex items-center gap-4 text-[11px] text-neutral-400 mb-3">
-              <span className="flex items-center gap-1">
-                <Calendar size={11} />
-                {a.createdOn} {new Date(artifact.createdAt).toLocaleDateString()}
-              </span>
-              {artifact.updatedAt && (
-                <span className="flex items-center gap-1">
-                  <Clock size={11} />
-                  {a.updatedOn} {new Date(artifact.updatedAt).toLocaleDateString()}
-                </span>
-              )}
-            </div>
+            {(isValidDateString(artifact.createdAt) ||
+              isValidDateString(artifact.updatedAt)) && (
+              <div className="flex items-center gap-4 text-[11px] text-neutral-400 mb-3">
+                {isValidDateString(artifact.createdAt) && (
+                  <span className="flex items-center gap-1">
+                    <Calendar size={11} />
+                    {a.createdOn}{" "}
+                    {new Date(artifact.createdAt).toLocaleDateString()}
+                  </span>
+                )}
+                {isValidDateString(artifact.updatedAt) && (
+                  <span className="flex items-center gap-1">
+                    <Clock size={11} />
+                    {a.updatedOn}{" "}
+                    {new Date(artifact.updatedAt).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Action buttons in detail view */}
             <div className="flex items-center gap-2 flex-wrap">
@@ -1375,13 +1400,15 @@ function ArtifactDetail({
                   {artifact.shareable ? a.yes : a.no}
                 </dd>
               </div>
-              <div className="flex items-center justify-between text-sm">
-                <dt className="text-neutral-500">{a.detailCreated}</dt>
-                <dd className="text-neutral-700">
-                  {new Date(artifact.createdAt).toLocaleString()}
-                </dd>
-              </div>
-              {artifact.updatedAt && (
+              {isValidDateString(artifact.createdAt) && (
+                <div className="flex items-center justify-between text-sm">
+                  <dt className="text-neutral-500">{a.detailCreated}</dt>
+                  <dd className="text-neutral-700">
+                    {new Date(artifact.createdAt).toLocaleString()}
+                  </dd>
+                </div>
+              )}
+              {isValidDateString(artifact.updatedAt) && (
                 <div className="flex items-center justify-between text-sm">
                   <dt className="text-neutral-500">{a.detailUpdated}</dt>
                   <dd className="text-neutral-700">
@@ -1706,10 +1733,7 @@ export default function ArtifactsPage() {
         if (sort === "name")
           return getArtifactTitle(x).localeCompare(getArtifactTitle(y));
         if (sort === "status") return x.status.localeCompare(y.status);
-        return (
-          new Date(y.updatedAt || y.createdAt).getTime() -
-          new Date(x.updatedAt || x.createdAt).getTime()
-        );
+        return artifactSortTime(y) - artifactSortTime(x);
       });
   }, [instances, filter, sort, search]);
 
@@ -1811,11 +1835,7 @@ export default function ArtifactsPage() {
                 i.id === manifestId ||
                 (i.data as Record<string, unknown> | undefined)?.importedFrom === manifestId,
             )
-            .sort(
-              (x, y) =>
-                new Date(y.updatedAt || y.createdAt).getTime() -
-                new Date(x.updatedAt || x.createdAt).getTime(),
-            )[0]
+            .sort((x, y) => artifactSortTime(y) - artifactSortTime(x))[0]
         : undefined;
       if (match) {
         setPendingImport({ bundle, match });

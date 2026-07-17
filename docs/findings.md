@@ -65,12 +65,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   (optional-drop).
 - **F14** (harness-gap, minor). The served-app owner bypass accepts both `Authorization: Bearer` and
   `?token=`; the committed suite asserts only `?token=`. Untested accepted-auth surface.
-- **`artifact-cards-invalid-date`** (minor, UX). The expanded "Os Meus Artefactos" cards render
-  "Invalid Date" in the date row for every featured artifact (observed live 2026-07-12 on a fresh
-  dev stack, all 41 cards). Likely the card formats a missing/differently-shaped timestamp on
-  seeded featured artifacts (`createdAt`/`updatedAt` absent or non-ISO) straight through
-  `new Date(...)`. Fix: tolerate absent timestamps (hide the row) and add a regression assertion
-  that no card ever renders the literal "Invalid Date".
+- **`artifact-cards-invalid-date`** (minor, UX - CLOSED 2026-07-17, run 20260717-202309). The
+  expanded "Os Meus Artefactos" cards rendered "Invalid Date" in the date row for every featured
+  artifact (seeded artifacts carry no ISO `createdAt`/`updatedAt`, formatted straight through
+  `new Date(...)`). Fixed in `web/app/(dashboard)/artifacts/page.tsx`: `isValidDateString` guards
+  all three date render sites (card footer, detail meta, detail dl) and hides the row when the
+  timestamp is absent/unparseable; sort comparators NaN-proofed (`artifactSortTime`). Regression:
+  `web/e2e/artifact-cards-dates.spec.ts` asserts the literal "Invalid Date" never renders.
 - **`ai-integration-lands-under-platform-tab`** (minor, UX). An AI-built integration saved via the
   chat builder (e.g. open-library, e2e-proof-weather, openweathermap) renders under
   `/integrations?tab=plataforma` ("Integrações da Plataforma"), while "Minhas Integrações"

@@ -1,0 +1,114 @@
+{
+  "project": "ekoa-code legal artifacts",
+  "runId": "20260717-202309-d797918a",
+  "updatedAt": "2026-07-17T20:40:00Z",
+  "galleryUrl": null,
+  "gatesConfig": {
+    "test": true,
+    "review": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "design": true,
+    "walkthrough": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true
+  },
+  "slices": [
+    {
+      "slice": "S0-smoke-foundation",
+      "title": "Smoke sweep + shared-layer sync gate + Invalid-Date fix",
+      "kind": "mixed",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S0-smoke-foundation/gate-status.json",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S0-smoke-foundation/video/s0-smoke-foundation-walkthrough.webm",
+      "videoVerified": true
+    },
+    {
+      "slice": "S1-spine-productivity",
+      "title": "nucleo, kanban, tempos, agenda, agenda-reservas",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S1-spine-productivity/gate-status.json"
+    },
+    {
+      "slice": "S2-court-deadlines",
+      "title": "prazos, citius, apoio, insolvencias",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S2-court-deadlines/gate-status.json"
+    },
+    {
+      "slice": "S3-money",
+      "title": "calculos, honorarios, financas, cobrancas, injuncoes",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S3-money/gate-status.json"
+    },
+    {
+      "slice": "S4-drafting",
+      "title": "contratos, pecas, modelos, forms",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S4-drafting/gate-status.json"
+    },
+    {
+      "slice": "S5-records",
+      "title": "dossie, assinatura, transcricao, correio",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/gate-status.json"
+    },
+    {
+      "slice": "S6-compliance",
+      "title": "kyc, rcbe, conflitos, recursos",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/gate-status.json"
+    },
+    {
+      "slice": "S7-knowledge-portal",
+      "title": "pesquisa, jurimetria, portal",
+      "kind": "ui",
+      "status": "in_progress",
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/gate-status.json"
+    }
+  ],
+  "globalGate": {
+    "status": "in_progress",
+    "e2eAll": {
+      "cmd": "npm run e2e:server",
+      "exit": null
+    },
+    "verifyApp": {
+      "via": "/verify",
+      "verdict": null
+    },
+    "build": {
+      "cmd": "npm run build",
+      "exit": null
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": null
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": null
+    },
+    "decorrelatedVerification": {
+      "reviewAllApproved": false,
+      "pwTestAllPassed": false
+    },
+    "designAudit": {
+      "verdict": null
+    },
+    "everySliceVideoVerified": false,
+    "codexCheckpoint": {
+      "status": null,
+      "scopes": [],
+      "overrides": [],
+      "at": null
+    }
+  }
+}
