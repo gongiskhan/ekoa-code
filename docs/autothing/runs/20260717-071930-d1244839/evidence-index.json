@@ -4,7 +4,7 @@
   "runDir": "docs/autothing/runs/20260717-071930-d1244839",
   "host": "Goncalos-MacBook-Pro",
   "profile": "build",
-  "updatedAt": "2026-07-17T11:55:00Z",
+  "updatedAt": "2026-07-17T12:36:00Z",
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
   "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
@@ -80,8 +80,15 @@
       "slice": "S4b",
       "title": "Gateway keys settings UI",
       "kind": "ui",
-      "status": "pending",
-      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/gate-status.json"
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/gate-status.json",
+      "video": "http://100.108.210.116:8099/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/final.mp4",
+      "videoBytes": 1207843,
+      "videoSha256": "c23a4db045aeae7006b140fadac387e73bdbdee6b22a97d292a3802b86fbdd83",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T12:33:00Z",
+      "flagged": false,
+      "evidence": "/Users/ggomes/.walkthrough/runs/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/evidence.json"
     },
     {
       "slice": "S6",

@@ -10,7 +10,7 @@ Derived from `RUN_SPEC.md` (same dir); brief at `BRIEF.md`. Profile: **build** (
 | 2 | S2 | Model family mapping (opus/sonnet/haiku -> tiers) | api | ekoa-architecture | G2 (after G1) | passed |
 | 3 | S3 | count_tokens forwarding | api | ekoa-architecture | G3 (after G2) | passed |
 | 4 | S4a | Per-user gateway keys (api: store, seam, caps, billing, Registo) | api | ekoa-architecture | G4 (after G3) | passed |
-| 5 | S4b | Gateway keys settings UI (/settings/api-keys) | ui | ekoa-architecture | G5 (after G4) | pending |
+| 5 | S4b | Gateway keys settings UI (/settings/api-keys) | ui | ekoa-architecture | G5 (after G4) | passed |
 | 6 | S6 | Live stock-Claude-Code proof driver + ancillary inventory | api | ekoa-testing | G5 (after G4) | pending |
 
 S5 (model-field honesty) is NOT a slice: it ships as pass-through; its decision bullet rides S1 (ledger A1).

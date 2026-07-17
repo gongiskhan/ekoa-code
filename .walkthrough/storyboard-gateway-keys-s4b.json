@@ -1,0 +1,133 @@
+{
+  "title": "Evidence: gateway API keys (S4b)",
+  "project": "ekoa",
+  "folder": "gateway-keys-s4b",
+  "video": {
+    "width": 1280,
+    "height": 800,
+    "fps": 30
+  },
+  "segments": [
+    {
+      "type": "browser",
+      "id": "keys-flow",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/settings/api-keys",
+      "authState": "/Users/ggomes/dev/ekoa-code/.walkthrough/auth.json",
+      "runTimeoutMs": 240000,
+      "beats": [
+        {
+          "id": "ac1-page",
+          "caption": "AC-1 - pagina Chaves de API + formulario de criacao",
+          "expectedScreen": "the api-keys settings page: PageHeader with a key icon and the title Chaves de API, a card with a key-name input filling the card width and a Criar chave button",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "testid:settings-api-keys-page"
+            }
+          ],
+          "assert": {
+            "selector": "testid:gateway-key-mint",
+            "highlight": true
+          },
+          "hold": 2000
+        },
+        {
+          "id": "ac2-show-once",
+          "caption": "AC-2 - segredo mostrado UMA vez + config do cliente",
+          "expectedScreen": "a teal-bordered show-once card: full ekoa_gk_ secret in a mono block, Copiar chave button, amber warning that the key will not be shown again, and a dark config snippet with ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN",
+          "actions": [
+            {
+              "type": "fill",
+              "selector": "testid:gateway-key-label-input",
+              "text": "portatil-final"
+            },
+            {
+              "type": "click",
+              "selector": "testid:gateway-key-mint"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:gateway-key-show-once"
+            }
+          ],
+          "assert": {
+            "selector": "testid:gateway-key-config",
+            "text": "ANTHROPIC_AUTH_TOKEN=ekoa_gk_",
+            "highlight": true
+          },
+          "hold": 2600
+        },
+        {
+          "id": "ac3-row",
+          "caption": "AC-3 - linha na lista com etiqueta + badge Ativa",
+          "expectedScreen": "the keys table with a row portatil-final, a mono ekoa_gk_... tail hint, and a teal Ativa pill badge",
+          "assert": {
+            "selector": "tr:has-text(\"portatil-final\") [data-testid=\"gateway-key-status-active\"]",
+            "text": "Ativa",
+            "highlight": true
+          },
+          "hold": 2000
+        },
+        {
+          "id": "ac4-reload",
+          "caption": "AC-4 - apos recarregar o segredo desaparece, a linha fica",
+          "expectedScreen": "the api-keys page after a reload: NO show-once panel or full secret, the portatil-final row still in the list",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "testid:gateway-key-dismiss"
+            },
+            {
+              "type": "goto",
+              "path": "/settings/api-keys"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:gateway-key-list"
+            }
+          ],
+          "assert": {
+            "selector": "testid:gateway-key-list",
+            "text": "portatil-final",
+            "highlight": true
+          },
+          "hold": 2000
+        },
+        {
+          "id": "ac5-revoke",
+          "caption": "AC-5 - revogar via dialogo (nomeia a chave) - badge Revogada",
+          "expectedScreen": "the keys table after revocation: the portatil-final row shows a neutral grey Revogada pill and no revoke icon",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "tr:has-text(\"portatil-final\") [data-testid=\"gateway-key-revoke\"]"
+            },
+            {
+              "type": "waitFor",
+              "selector": "text:portatil-final: Revogar esta chave?"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 900
+            },
+            {
+              "type": "click",
+              "selector": "[role=\"dialog\"] button:has-text(\"Revogar\")"
+            },
+            {
+              "type": "waitFor",
+              "selector": "tr:has-text(\"portatil-final\") [data-testid=\"gateway-key-status-revoked\"]"
+            }
+          ],
+          "assert": {
+            "selector": "tr:has-text(\"portatil-final\") [data-testid=\"gateway-key-status-revoked\"]",
+            "text": "Revogada",
+            "highlight": true
+          },
+          "hold": 2400
+        }
+      ]
+    }
+  ]
+}
