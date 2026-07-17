@@ -4,7 +4,7 @@
   "runDir": "docs/autothing/runs/20260717-071930-d1244839",
   "host": "Goncalos-MacBook-Pro",
   "profile": "build",
-  "updatedAt": "2026-07-17T10:55:00Z",
+  "updatedAt": "2026-07-17T11:55:00Z",
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
   "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
@@ -67,8 +67,14 @@
       "slice": "S4a",
       "title": "Per-user gateway keys (api)",
       "kind": "api",
-      "status": "pending",
-      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/gate-status.json"
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/evidence.cast",
+      "videoBytes": 1447,
+      "videoSha256": "bc13e3cedbc7c8d8cdac4e4f750591201cb2d0b13cd89e4f7c5eb22ff1f70f48",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T11:53:00Z",
+      "flagged": false
     },
     {
       "slice": "S4b",
