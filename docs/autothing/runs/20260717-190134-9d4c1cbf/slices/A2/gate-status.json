@@ -1,0 +1,7 @@
+{ "slice": "A2", "kind": "docs", "status": "passed", "at": "2026-07-17T21:40:14Z",
+  "test": {"status": "passed", "evidence": "deliverable committed; review spot-checks 4/4"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "skipped", "reason": "kind-conditional"},
+  "codexSliceReview": {"status": "skipped", "reason": "kind-conditional (docs)"},
+  "design": {"status": "skipped", "reason": "kind-conditional"},
+  "video": {"status": "skipped", "reason": "kind-conditional"} }
