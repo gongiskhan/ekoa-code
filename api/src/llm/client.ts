@@ -196,6 +196,10 @@ export interface RestCallParams {
   /** The Messages API request body (already carrying the FAST model). */
   payload: Record<string, unknown>;
   stream: boolean;
+  /** Provider REST path under /v1/messages (S3, run 20260717): 'count_tokens' selects
+   *  /v1/messages/count_tokens; absent (or 'messages') keeps the Messages endpoint. An optional
+   *  field so every existing full-object test fake stays compilable and behavior-identical. */
+  endpoint?: 'messages' | 'count_tokens';
   signal?: AbortSignal;
 }
 
@@ -460,7 +464,8 @@ const defaultTransport: ChokepointTransport = {
 
   async messages(p) {
     const isOauth = p.mode === 'oauth';
-    const url = `${p.providerBaseUrl}/v1/messages${isOauth ? '?beta=true' : ''}`;
+    const suffix = p.endpoint === 'count_tokens' ? '/count_tokens' : '';
+    const url = `${p.providerBaseUrl}/v1/messages${suffix}${isOauth ? '?beta=true' : ''}`;
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'anthropic-version': '2023-06-01',
@@ -1223,4 +1228,105 @@ export async function proxyGatewayMessages(
     }
   }
   return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId };
+}
+
+// --- count_tokens forwarding (S3, run 20260717) --------------------------------------------
+
+/** count_tokens forward allowlist — the documented count_tokens request surface ONLY (the
+ *  strict endpoint 400s on extras): no stream, no max_tokens, no sampling params, no metadata. */
+const COUNT_TOKENS_FORWARD_FIELDS: ReadonlySet<string> = new Set([
+  'model', 'messages', 'system', 'tools', 'tool_choice', 'thinking', 'output_config',
+  'mcp_servers', 'betas',
+]);
+
+/** Fields a stock Messages client (Claude Code) sends on EVERY call that count_tokens simply
+ *  does not accept — dropping them is routine, so they are excluded from the unexpected-key
+ *  warning (same honesty rule as the metadata session_id exclusion above). */
+const COUNT_TOKENS_ROUTINE_DROPS: ReadonlySet<string> = new Set([
+  'stream', 'max_tokens', 'metadata', 'temperature', 'top_k', 'top_p', 'stop_sequences',
+  'service_tier', 'cache_control', 'container',
+]);
+
+export interface GatewayCountTokensResult {
+  status: number;
+  headers: Record<string, string | string[]>;
+  body: string;
+  correlationId: string;
+}
+
+/**
+ * Forward a count_tokens request through the chokepoint (S3, run 20260717). Same credential
+ * injection and FULL anonymisation posture as proxyGatewayMessages (request tokenized before
+ * transport, response detokenized, ephemeral vault cleared), and the same tier resolution so
+ * the count is honest for the model that will actually run. Deliberately NO admitOrThrow, NO
+ * allowance gate, NO metering: count_tokens is free upstream and produces no usage, and Claude
+ * Code polls it continuously for context management — counting it against the shared per-user
+ * call window would starve real turns (decision 2026-07-17; abuse residual in docs/security.md).
+ */
+export async function proxyGatewayCountTokens(
+  reqBody: Record<string, unknown>,
+  billeeUserId: string,
+): Promise<GatewayCountTokensResult> {
+  const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
+  const matchedTier = matchConfiguredTier(requestedModel);
+  const resolvedTier = matchedTier ?? matchFamilyTier(requestedModel);
+  const wireTier: Tier = resolvedTier ?? 'FAST';
+  const decision = decideForTier(wireTier);
+  const mode = (await currentMode()) ?? 'oauth';
+  const meta = (reqBody.metadata as Record<string, unknown> | undefined) ?? {};
+
+  const correlationId = newCorrelationId();
+  const orgId = (await orgResolver(billeeUserId)) ?? '';
+  const ruleset = await resolveRuleset(orgId);
+  const hasSession = typeof meta.session_id === 'string';
+  const sessionId = hasSession ? (meta.session_id as string) : `sess_${correlationId}`;
+  const anonCtx: AnonymiseContext = {
+    sessionId,
+    ruleset,
+    correlationId,
+    actor: { userId: billeeUserId, orgId, username: billeeUserId },
+  };
+  const anon = anonymizeRequestBody(reqBody, anonCtx);
+  const forwarded: Record<string, unknown> = {};
+  const droppedFields: string[] = [];
+  for (const [key, value] of Object.entries(anon.body)) {
+    if (COUNT_TOKENS_FORWARD_FIELDS.has(key)) forwarded[key] = value;
+    else droppedFields.push(key);
+  }
+  if (resolvedTier === null) {
+    for (const key of ['thinking', 'output_config']) {
+      if (key in forwarded) {
+        delete forwarded[key];
+        droppedFields.push(`${key} (fast-clamp)`);
+      }
+    }
+  }
+  const scrubbed = stripEmptyTextBlocks(forwarded.messages);
+  if (scrubbed.removed > 0) forwarded.messages = scrubbed.value;
+  const scrubbedSystem = stripEmptyTextBlocksFromContent(forwarded.system);
+  if (scrubbedSystem.removed > 0) forwarded.system = scrubbedSystem.value;
+  const noisyDrops = droppedFields.filter((k) => !COUNT_TOKENS_ROUTINE_DROPS.has(k));
+  if (noisyDrops.length > 0) {
+    console.warn(`[llm] gateway count_tokens: dropped unexpected top-level fields: ${noisyDrops.join(', ')}`);
+  }
+  const payload: Record<string, unknown> = {
+    ...forwarded,
+    model: decision.model.replace(/\[1m\]$/, ''),
+  };
+
+  let resp: RawRestResponse;
+  try {
+    resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await getSecret(), payload, stream: false, endpoint: 'count_tokens' });
+    if (resp.status === 401) {
+      resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await forceRefresh(), payload, stream: false, endpoint: 'count_tokens' });
+    }
+    resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
+  } finally {
+    // Same vault hygiene as proxyGatewayMessages: never let an ephemeral re-identification key
+    // linger to TTL after the call.
+    if (!hasSession) endSession(anon.handle);
+  }
+  const errClass = providerErrorClassOf(resp.status);
+  if (errClass && errClass !== 'transient' && errClass !== 'rate_limit') noteProviderError(errClass);
+  return { status: resp.status, headers: resp.headers, body: resp.body, correlationId };
 }

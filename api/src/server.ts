@@ -522,7 +522,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/app-files', appFilesRouter());
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 
-  app.use(express.json({ limit: '1mb' }));
+  // The LLM gateway sub-app carries its own 50 MB body limit (stock Claude Code clients
+  // routinely send >1 MB bodies - long transcripts, base64 screenshots). The global 1 MB parser
+  // must not pre-parse its routes, or the router-level limit is dead code and every large
+  // gateway body 413s before reaching it (S3, run 20260717; surfaced by the S1 fresh review).
+  // The gateway router carries its own Anthropic-shaped body-parser error handler.
+  const globalJson = express.json({ limit: '1mb' });
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    req.path.startsWith('/api/v1/llm') ? next() : globalJson(req, res, next));
   // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
   // without this, Express's default handler returns an HTML page with the full stack trace and
   // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;

@@ -19,11 +19,11 @@
  * Boundary: llm/ may not import auth/ (ch02 §2.7), so `verifyToken` is injected by the
  * composition root (the same seam servingRouter uses).
  */
-import express, { type Express, type Request, type Response, type Router } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
 import { loadConfig } from '../config.js';
 import { checkAllowance } from '../billing/allowance.js';
 import { classify, type Tier } from './router.js';
-import { completeFast, proxyGatewayMessages } from './client.js';
+import { completeFast, proxyGatewayCountTokens, proxyGatewayMessages } from './client.js';
 import { LlmAbortedError, LlmRateCapError } from './client.js';
 import { CredentialError } from './credentials.js';
 
@@ -232,8 +232,39 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     }
   };
 
+  // count_tokens (S3, run 20260717): Claude Code calls it continuously for context management.
+  // Auth-gated, then forwarded through the chokepoint with the full anonymisation posture -
+  // but NEVER billed and NEVER rate-capped (free upstream, no usage; capping it would starve
+  // real turns out of the shared per-user call window), and the allowance gate is skipped (a
+  // billing-blocked user's REAL turns still 402; counting costs nothing).
+  const handleCountTokens = async (req: Request, res: Response): Promise<void> => {
+    const principal = authenticate(req, deps);
+    if (!principal) {
+      gatewayError(res, 401, 'Invalid or missing API key / JWT');
+      return;
+    }
+    try {
+      const result = await proxyGatewayCountTokens((req.body ?? {}) as Record<string, unknown>, billeeOf(principal));
+      for (const [k, v] of Object.entries(result.headers)) {
+        const lower = k.toLowerCase();
+        if (['connection', 'transfer-encoding', 'keep-alive', 'content-length', 'content-encoding'].includes(lower)) continue;
+        res.setHeader(k, v);
+      }
+      res.status(result.status).send(result.body);
+    } catch (err) {
+      console.error('[llm-gateway] count_tokens forward failed:', err instanceof Error ? err.message : err);
+      if (err instanceof CredentialError) {
+        gatewayError(res, 503, 'Provider credential unavailable (terminal). See /health claudeAuth.', 'credential_error');
+        return;
+      }
+      gatewayError(res, 502, 'Provider request failed', 'api_error');
+    }
+  };
+
   router.post('/messages', largeJson, handleMessages);
   router.post('/v1/messages', largeJson, handleMessages);
+  router.post('/messages/count_tokens', largeJson, handleCountTokens);
+  router.post('/v1/messages/count_tokens', largeJson, handleCountTokens);
 
   router.get('/models', (req: Request, res: Response) => {
     if (!authenticate(req, deps)) {
@@ -297,6 +328,24 @@ export function gatewayRouter(deps: GatewayDeps): Router {
       classifier,
       elapsedMs: Date.now() - t0,
     });
+  });
+
+  // Body-parser failures on this Anthropic-compatible surface answer in the PROVIDER error
+  // shape, never the CONV-2 envelope (stock clients parse {type:'error'}). Needed because the
+  // composition root's CONV-2 body-parser handler is mounted BEFORE this router and cannot see
+  // errors raised here (S3: the global 1 MB parser no longer pre-parses /api/v1/llm, so this
+  // router's own largeJson is the live parser and its errors surface here).
+  router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    const e = err as { type?: string; status?: number } | null;
+    if (e?.type === 'entity.too.large') {
+      gatewayError(res, 413, 'Request body too large', 'invalid_request_error');
+      return;
+    }
+    if (e && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
+      gatewayError(res, 400, 'Invalid request body', 'invalid_request_error');
+      return;
+    }
+    next(err);
   });
 
   return router;

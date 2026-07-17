@@ -85,6 +85,10 @@ const COVERED = new Set<string>([
   'integrationBuilder.chat', 'integrationBuilder.load', 'integrationBuilder.save', 'integrationBuilder.test',
   // Local-bridge consumer run s1 — hosted presence (bridge-status.test.ts)
   'ekoaLocal.bridgeStatus',
+  // cortex-gateway S3 (run 20260717) — count_tokens forwarding, both paths
+  // (llm-count-tokens.test.ts contract, real buildApp + stub transport). Additive endpoints:
+  // covering both keeps EXPECTED_PENDING_COUNT unchanged.
+  'ekoaLocal.llmCountTokens', 'ekoaLocal.llmCountTokensAlias',
   // Local-bridge consumer run s5 — FC-408 masking summary (masking-summary.test.ts)
   'registo.maskingSummary',
   // operator-run H2 — served-app assistant admin detection (app-assistant.contract.test.ts +

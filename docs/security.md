@@ -202,6 +202,14 @@ Isolation between arbitrary served-app code and the authenticated dashboard is t
 ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api origin
 (`api.<domain>`, `:4111` in dev), never on the dashboard origin.
 
+**LLM gateway count_tokens is uncapped (accepted residual, 2026-07-17).** The gateway's
+`count_tokens` forward is auth-gated but exempt from the rate caps, the allowance gate, and
+metering: it is free upstream, produces no billable usage, and stock Claude Code polls it
+continuously - counting it against the shared per-user window would starve real turns. Residual:
+an authenticated caller can hammer it, bounded only by upstream provider limits on the central
+credential. Revisit with a dedicated cap bucket if abuse is observed; the anonymisation posture
+applies to it in full, so no content risk is added.
+
 ## Incident response
 
 Solo-operator posture: the founder is incident commander. Detection sources, in order: **Registo**

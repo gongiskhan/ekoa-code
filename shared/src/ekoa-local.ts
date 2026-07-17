@@ -15,6 +15,9 @@ export type LlmModel = z.infer<typeof LlmModel>;
 export const LlmModelsResponse = z.object({ data: z.array(LlmModel) }).passthrough();
 export type LlmModelsResponse = z.infer<typeof LlmModelsResponse>;
 
+export const LlmCountTokensResponse = z.object({ input_tokens: z.number() }).passthrough();
+export type LlmCountTokensResponse = z.infer<typeof LlmCountTokensResponse>;
+
 export const LlmClassifyRequest = z.object({
   input: z.string(),
   categories: z.array(z.string()).optional(),
@@ -76,6 +79,20 @@ export const ekoaLocalEndpoints = {
     auth: 'user',
     request: LlmMessagesRequest,
     response: LlmMessagesResponse,
+  },
+  llmCountTokens: {
+    method: 'POST',
+    path: '/api/v1/llm/v1/messages/count_tokens',
+    auth: 'user',
+    request: LlmMessagesRequest,
+    response: LlmCountTokensResponse,
+  },
+  llmCountTokensAlias: {
+    method: 'POST',
+    path: '/api/v1/llm/messages/count_tokens',
+    auth: 'user',
+    request: LlmMessagesRequest,
+    response: LlmCountTokensResponse,
   },
   llmModels: {
     method: 'GET',

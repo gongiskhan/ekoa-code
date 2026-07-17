@@ -104,6 +104,19 @@ stripped). This is deliberately NOT one of the four CONV-4 web-client SSE stream
 auth, no `Last-Event-ID` ring, no `ready` frame - it is the Anthropic wire shape for external
 clients.
 
+**count_tokens (2026-07-17).** `POST /v1/messages/count_tokens` (and the `/messages/count_tokens`
+alias) forwards through the chokepoint with the full anonymisation posture and the same tier
+resolution as messages (the count is honest for the model that will actually run). Auth-gated like
+messages, but NEVER billed, NEVER rate-capped, and the allowance gate is skipped - it is free
+upstream, produces no usage, and Claude Code polls it continuously for context management
+(descriptors `ekoaLocal.llmCountTokens` / `llmCountTokensAlias`, schema `LlmCountTokensResponse`).
+
+**Body limits and parse errors.** `/api/v1/llm` bodies are parsed by the gateway's OWN 50 MB
+parser, not the global 1 MB one (stock clients routinely send >1 MB bodies); gateway body-parse
+failures answer in the ANTHROPIC error shape (`{type:'error', error:{type:'invalid_request_error'}}`,
+413/400), never the CONV-2 envelope - the one declared exception to the CONV-2 rule, scoped to this
+Anthropic-wire surface. Every other route keeps the 1 MB limit + CONV-2 envelope.
+
 ## Contract-change discipline and CI gates
 
 Three gates walk `shared/` against the code. Know exactly what each guarantees:
