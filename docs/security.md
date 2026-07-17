@@ -83,7 +83,15 @@ minted with a **deliberately invalid checksum** so a fake can never collide with
 
 The vault (value->token map) is per-session, **in-memory, TTL, never persisted, cleared on session
 end** - a re-identification key that does not exist cannot be produced. It is keyed by the hosted
-conversation id so tokens stay consistent across delegated local turns. Audit is **metadata only**
+conversation id so tokens stay consistent across delegated local turns. On the LLM gateway path a
+stock Anthropic client (Claude Code) sends no conversation id, so the vault key is derived (S7,
+2026-07-17): an explicit `session_id` wins; else a gateway-KEY principal keys the vault by its key
+id (`gwkey_<keyId>`) so one client session shares one vault across its agentic tool loop and
+deny-list literals tokenize consistently turn-to-turn (a fresh per-request vault broke Claude
+Code's tool loop - findings `gateway-vault-per-request-instability`); a truly session-less,
+key-less call keeps a per-request ephemeral vault cleared on exit. The stable per-key vault
+persists only to its 30-min TTL, maps the OWNER's own literals to stable fakes for that key alone,
+and the fakes never leave the chokepoint. Audit is **metadata only**
 (entity classes, counts, correlation id, payload hash - never bodies, never the vault), async, hash-
 chained and tamper-evident, folded into the single Registo write path. The payload-capture harness
 asserts every planted synthetic value appears tokenized (never cleartext) in every captured outbound

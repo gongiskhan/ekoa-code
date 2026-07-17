@@ -1143,8 +1143,18 @@ export async function proxyGatewayMessages(
   const correlationId = correlationIdIn ?? newCorrelationId();
   const orgId = (await orgResolver(billeeUserId)) ?? '';
   const ruleset = await resolveRuleset(orgId);
-  const hasSession = typeof meta.session_id === 'string';
-  const sessionId = hasSession ? (meta.session_id as string) : `sess_${correlationId}`;
+  // Vault session key (S7, run 20260717). Order: an explicit conversation id wins; else, for a
+  // gateway-KEY principal (a stock Anthropic client like Claude Code, which sends no session_id)
+  // key the vault by the KEY id so ALL of that key's requests share ONE vault across the agentic
+  // tool loop - a deny-list literal then tokenizes consistently turn-to-turn and prior-turn tokens
+  // detokenize reliably (without this, each request opened a fresh vault and the CLI saw a
+  // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
+  // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
+  // (no-session, no-key) vault is cleared in the finally.
+  const explicitSession = typeof meta.session_id === 'string';
+  const keyVaultId = opts?.keyId ? `gwkey_${opts.keyId}` : undefined;
+  const sessionId = explicitSession ? (meta.session_id as string) : (keyVaultId ?? `sess_${correlationId}`);
+  const ephemeralVault = !explicitSession && !keyVaultId;
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1221,9 +1231,11 @@ export async function proxyGatewayMessages(
     // loop acts on the REAL value, not a placeholder that does not exist on disk.
     resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
   } finally {
-    // Clear the no-session vault on EVERY exit incl. a transport error (§17.5, Codex checkpoint M1):
-    // the re-identification key must not linger to TTL after a failed gateway call.
-    if (!hasSession) endSession(anon.handle);
+    // Clear a truly EPHEMERAL (no-session, no-key) vault on EVERY exit incl. a transport error
+    // (§17.5, Codex checkpoint M1): the re-identification key must not linger to TTL after a
+    // failed gateway call. A stable per-key vault (S7) is deliberately kept - it must persist
+    // across the Claude Code session's requests; it TTL-sweeps on its own (30 min).
+    if (ephemeralVault) endSession(anon.handle);
   }
 
   // Diagnostics honesty (run s7, D6): a terminal provider status is CLASSED onto /health's

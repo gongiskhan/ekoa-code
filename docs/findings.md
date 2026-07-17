@@ -6,6 +6,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+### Cortex gateway (run 20260717-071930-d1244839)
+
+- **`gateway-vault-per-request-instability`** (found by S6 live proof; being fixed by S7). On the
+  gateway path a stock Anthropic client (Claude Code) sends no `metadata.session_id`, so
+  `proxyGatewayMessages` opens a FRESH ephemeral vault per request (`sess_${correlationId}`). Vault
+  tokens are minted per-class by sequence and are deterministic only WITHIN one vault, so across
+  Claude Code's agentic tool loop (each tool step is a separate gateway request) a deny-list literal
+  in a filesystem path tokenizes inconsistently and a prior turn's token fails to detokenize - the
+  CLI then sees a directory that "does not exist" and the tool loop fails in confusing ways (exactly
+  the brief's §3 anticipated failure). The EMPTY-ruleset round trip is a true no-op and lands
+  byte-identical (proven live), so only deny-list orgs are affected. Fix (S7): derive a STABLE
+  session key for a gateway principal without an explicit session_id (the gateway keyId), so one
+  Claude Code session shares one vault (30-min TTL) and tokens stay stable across the loop.
+
 ### Contract / schema drift (the schema-coverage honor-system class)
 
 - **`schema-coverage-honor-system`** (structural). The schema-coverage gate is a hand-maintained
