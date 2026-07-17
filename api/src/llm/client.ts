@@ -1305,7 +1305,8 @@ export async function proxyGatewayCountTokens(
   if (scrubbed.removed > 0) forwarded.messages = scrubbed.value;
   const scrubbedSystem = stripEmptyTextBlocksFromContent(forwarded.system);
   if (scrubbedSystem.removed > 0) forwarded.system = scrubbedSystem.value;
-  const noisyDrops = droppedFields.filter((k) => !COUNT_TOKENS_ROUTINE_DROPS.has(k));
+  // A '(fast-clamp)'-suffixed drop is routine on every unknown-model call (S3 fresh review F3).
+  const noisyDrops = droppedFields.filter((k) => !COUNT_TOKENS_ROUTINE_DROPS.has(k.replace(/ \(fast-clamp\)$/, '')));
   if (noisyDrops.length > 0) {
     console.warn(`[llm] gateway count_tokens: dropped unexpected top-level fields: ${noisyDrops.join(', ')}`);
   }

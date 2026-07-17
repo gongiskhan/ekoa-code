@@ -336,16 +336,21 @@ export function gatewayRouter(deps: GatewayDeps): Router {
   // errors raised here (S3: the global 1 MB parser no longer pre-parses /api/v1/llm, so this
   // router's own largeJson is the live parser and its errors surface here).
   router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    const e = err as { type?: string; status?: number } | null;
-    if (e?.type === 'entity.too.large') {
+    const e = err as { type?: unknown; status?: unknown } | null;
+    // Shape ONLY body-parser errors (they always carry a string `type` like 'entity.too.large'
+    // or 'entity.parse.failed' plus a 4xx status - codex S3 Low: a bare status check would
+    // swallow and reclassify any future same-router 4xx error). Everything else propagates.
+    const isBodyParserError =
+      e !== null && typeof e.type === 'string' && typeof e.status === 'number' && e.status >= 400 && e.status < 500;
+    if (!isBodyParserError) {
+      next(err);
+      return;
+    }
+    if (e.type === 'entity.too.large') {
       gatewayError(res, 413, 'Request body too large', 'invalid_request_error');
       return;
     }
-    if (e && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
-      gatewayError(res, 400, 'Invalid request body', 'invalid_request_error');
-      return;
-    }
-    next(err);
+    gatewayError(res, 400, 'Invalid request body', 'invalid_request_error');
   });
 
   return router;

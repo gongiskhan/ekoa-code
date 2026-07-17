@@ -85,6 +85,29 @@ describe('gateway bodies larger than the old global 1 MB limit', () => {
     expect(body.error.type).toBe('invalid_request_error');
   });
 
+  it('a body over the gateway 50 MB limit answers 413 in the ANTHROPIC shape (the too-large branch)', async () => {
+    const huge = 'x'.repeat(51 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/llm/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': GATEWAY_KEY },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: huge }] }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe('error');
+    expect(body.error.type).toBe('invalid_request_error');
+  }, 60_000);
+
+  it('a CASE-VARIANT gateway path is also exempt from the global parser (Express matches routes case-insensitively)', async () => {
+    const big = 'x'.repeat(2 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${port}/API/v1/llm/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': GATEWAY_KEY },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: big }] }),
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('non-gateway routes KEEP the global 1 MB limit and the CONV-2 envelope (regression pin)', async () => {
     const big = 'x'.repeat(2 * 1024 * 1024);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/auth/login`, {

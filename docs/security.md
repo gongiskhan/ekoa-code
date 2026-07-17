@@ -207,7 +207,9 @@ ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api 
 metering: it is free upstream, produces no billable usage, and stock Claude Code polls it
 continuously - counting it against the shared per-user window would starve real turns. Residual:
 an authenticated caller can hammer it, bounded only by upstream provider limits on the central
-credential. Revisit with a dedicated cap bucket if abuse is observed; the anonymisation posture
+credential - and, with client-chosen metadata.session_id values, can allocate short-lived
+server-side vault entries without a call cap (tiny, TTL-swept at 30 min; the capped messages
+path shares the same session_id behavior). Revisit with a dedicated cap bucket if abuse is observed; the anonymisation posture
 applies to it in full, so no content risk is added.
 
 ## Incident response

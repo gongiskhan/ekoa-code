@@ -527,9 +527,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // must not pre-parse its routes, or the router-level limit is dead code and every large
   // gateway body 413s before reaching it (S3, run 20260717; surfaced by the S1 fresh review).
   // The gateway router carries its own Anthropic-shaped body-parser error handler.
+  // Exact-subtree + case-insensitive match (codex S3 Medium: bare startsWith also exempted
+  // /api/v1/llmfoo; S3 fresh review F1: Express route matching is case-insensitive by default,
+  // so /API/v1/llm was a live gateway route the case-sensitive predicate did not exempt).
   const globalJson = express.json({ limit: '1mb' });
+  const isGatewayPath = (path: string): boolean => {
+    const p = path.toLowerCase();
+    return p === '/api/v1/llm' || p.startsWith('/api/v1/llm/');
+  };
   app.use((req: Request, res: Response, next: NextFunction) =>
-    req.path.startsWith('/api/v1/llm') ? next() : globalJson(req, res, next));
+    isGatewayPath(req.path) ? next() : globalJson(req, res, next));
   // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
   // without this, Express's default handler returns an HTML page with the full stack trace and
   // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;

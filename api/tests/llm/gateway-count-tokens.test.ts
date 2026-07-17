@@ -16,6 +16,7 @@ import {
 } from '../../src/llm/client.js';
 import { setCredential, __resetCredentialsForTests, __setNowForTests, __setRefreshFnForTests } from '../../src/llm/credentials.js';
 import { setRulesetResolver, __resetRulesetResolverForTests, __resetVaultForTests, type OrgRuleset } from '../../src/llm/anonymise/index.js';
+import { __vaultCount } from '../../src/llm/anonymise/vault.js';
 import { __resetRateCapsForTests } from '../../src/billing/rate-caps.js';
 
 /**
@@ -184,6 +185,8 @@ describe('POST /v1/messages/count_tokens (+ alias) — forwarded, never billed, 
     });
     expect(res.status).toBe(200);
     expect(captured).not.toContain(PARTY);
+    // The ephemeral (no session_id) vault is cleared in the finally - never lingers to TTL.
+    expect(__vaultCount()).toBe(0);
   });
 
   it('is NOT rate-capped (cap 0 trips real messages but count_tokens still answers) and skips the allowance gate (billing-blocked owner still counts)', async () => {
