@@ -7,6 +7,13 @@
     "band1_zero_change": {
       "targetGate": "G9",
       "source": "ekoa-dev/ekoa/e2e/",
+      "needsWeb": true,
+      "webExempt": ["legal-shared-drift"],
+      "portfileBound": ["demos"],
+      "deferred": {
+        "simuladores-trabalho": "external APP_DIR app source is not in the repo (docs/findings.md) - director decision on in-repo authorship pending; due in no lane until this entry is removed"
+      },
+      "note": "needsWeb: these dashboard specs drive the Next.js web app (relative page.goto) and run in the web lane (npm run e2e:full, EKOA_E2E_WEB=1); api-only lanes print them as a reasoned skip. webExempt: legal-shared-drift is a pure file-drift census (no browser nav) and keeps running per-PR in the api-only lane. portfileBound: FROZEN specs that read the committed backend.port file in their bodies; the web lane skips them (printed) when the portfile disagrees with EKOA_E2E_API_ORIGIN, because running them beside a live dev stack would mutate the live database. deferred: reasoned per-spec deferral (name -> why); censused on disk, due in no lane.",
       "specs": [
         "ui-foundation",
         "shell-nav",
@@ -25,7 +32,8 @@
     },
     "band2_fixture_swap": {
       "targetGate": "G9",
-      "note": "assertions unchanged; seeding-helper bodies rewritten to ch03 REST; onboarding also swaps one POST /api/v1/chat/runs stub",
+      "needsWeb": true,
+      "note": "assertions unchanged; seeding-helper bodies rewritten to ch03 REST; onboarding also swaps one POST /api/v1/chat/runs stub. needsWeb: all five drive the dashboard - web lane (npm run e2e:full).",
       "specs": [
         "onboarding",
         "vertical-profile",
@@ -116,7 +124,8 @@
     },
     "band4_gap_plan": {
       "targetGate": "G9",
-      "note": "New specs from the ch13 §13.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists. artifact-cards-dates (run 20260717-202309) pins the Invalid-Date fix on /artifacts.",
+      "needsWeb": true,
+      "note": "New specs from the ch13 §13.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists. artifact-cards-dates (run 20260717-202309) pins the Invalid-Date fix on /artifacts. needsWeb: all gap-plan specs drive the dashboard - web lane (npm run e2e:full).",
       "specs": [
         "artifact-cards-dates",
         "automation-deterministic",
@@ -131,6 +140,36 @@
         "reference-attach",
         "live-bridge",
         "branding-colors"
+      ]
+    }
+  },
+  "journeys": {
+    "$comment": "Journey probes (api/tests/journeys/) - layer-2/3 evidence lanes, run via scripts/journeys-run.mjs (npm run journeys:credless / journeys:credentialed), NEVER via suite-ledger-run.mjs and never ratcheted (they are evidence probes, not byte-compat ports). journeys-run.mjs enforces the two-way census (probe files on disk == helpers + both lanes' probes) on every invocation. Lane gate: a probe emitting a FAIL line or exiting nonzero fails the lane; PASS/INFO pass (_lib.mjs semantics unchanged).",
+    "helpers": ["_lib", "_chat", "boot-b"],
+    "credless": {
+      "perPr": true,
+      "script": "journeys:credless",
+      "note": "LLM-free + credential-free + deterministic: boots the api alone (dev-api.mjs --built on EKOA_JOURNEYS_PORT, default 4123) and probes it server-side; no web, no proxy.",
+      "probes": [
+        "j1-auth",
+        "j5-isolation",
+        "j8-webhooks",
+        "j0-honest-degradation",
+        "j9-baseline",
+        "contract-sweep"
+      ]
+    },
+    "credentialed": {
+      "perPr": false,
+      "script": "journeys:credentialed",
+      "note": "Opt-in only, NEVER a per-PR gate: needs the operator credential (boot-b.mjs keychain read), real model egress (cost + nondeterminism), and free ports 4211/4111/3000 (boot-b fixed ports).",
+      "probes": [
+        "j2-grounding",
+        "j3-build",
+        "j3b-followup",
+        "j4-memory",
+        "j6-anonymisation",
+        "j8b-automation"
       ]
     }
   },

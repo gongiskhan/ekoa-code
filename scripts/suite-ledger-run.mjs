@@ -14,6 +14,11 @@
  *    not-yet-runnable artifact must not fail — its stack does not exist yet).
  *  - With --run, DUE Playwright specs are executed via `playwright test` and DUE drivers
  *    via node; without --run (the census/skip lane, e.g. at G1) nothing is executed.
+ *  - Web lane: specs whose ledger band carries `needsWeb: true` (minus the band's
+ *    `webExempt` names) drive the Next.js dashboard, which only `npm run e2e:full`
+ *    boots. When EKOA_E2E_WEB is not '1' (the api-only lanes: e2e / e2e:server) they
+ *    are printed as `skipped (web lane - run npm run e2e:full)` — reasoned + censused,
+ *    never silent, never red. Under e2e:full (EKOA_E2E_WEB=1) they run and a red fails.
  *  - Ratchet: an artifact once green at its gate may never regress to skip/red. The ratchet
  *    state is the committed ledger's target gates plus this run's results; a DUE artifact
  *    that is red fails the run.
@@ -102,7 +107,25 @@ function ledgerArtifacts(ledger) {
   for (const band of ['band1_zero_change', 'band2_fixture_swap', 'band3_served_app', 'band4_gap_plan']) {
     const b = pw[band];
     if (!b) continue;
-    for (const spec of b.specs) out.push({ kind: 'spec', name: spec, file: `web/e2e/${spec}.spec.ts`, targetGate: b.targetGate });
+    const webExempt = new Set(b.webExempt ?? []);
+    const portfileBound = new Set(b.portfileBound ?? []);
+    const deferred = b.deferred ?? {};
+    for (const spec of b.specs) {
+      out.push({
+        kind: 'spec',
+        name: spec,
+        file: `web/e2e/${spec}.spec.ts`,
+        targetGate: b.targetGate,
+        needsWeb: Boolean(b.needsWeb) && !webExempt.has(spec),
+        // FROZEN specs that read the committed backend.port file inside their bodies;
+        // when the harness api origin disagrees with the portfile (running beside a
+        // live dev stack) they would cross-target — and mutate — the live database.
+        portfileBound: portfileBound.has(spec),
+        // Explicit, reasoned deferral (director-decision territory): censused on disk
+        // but never due in any lane until the entry is removed from the ledger.
+        deferredReason: deferred[spec] ?? null,
+      });
+    }
   }
   for (const d of ledger.node_drivers.drivers) {
     out.push({ kind: 'driver', name: d.name, file: `api/tests/e2e/${d.name}.e2e.mjs`, targetGate: d.targetGate });
@@ -114,8 +137,14 @@ function ledgerArtifacts(ledger) {
   return out;
 }
 
-/** The dev-server base the node drivers target (committed `backend.port` file, else 4111). */
+/**
+ * The dev-server base the node drivers target. The committed harnesses run on
+ * parameterized ports beside a live dev stack and export the api(proxy) origin as
+ * EKOA_E2E_API_ORIGIN — honored first; otherwise the committed `backend.port` file,
+ * else 4111.
+ */
 function driverServerBase() {
+  if (process.env.EKOA_E2E_API_ORIGIN) return process.env.EKOA_E2E_API_ORIGIN;
   try { return `http://127.0.0.1:${readFileSync(join(ROOT, 'backend.port'), 'utf8').trim()}`; }
   catch { return 'http://127.0.0.1:4111'; }
 }
@@ -205,21 +234,54 @@ async function main() {
     }
   }
 
-  const due = artifacts.filter((a) => gateIndex(a.targetGate) <= currentIdx);
+  const dueAll = artifacts.filter((a) => gateIndex(a.targetGate) <= currentIdx);
   const awaiting = artifacts.filter((a) => gateIndex(a.targetGate) > currentIdx);
 
-  for (const a of awaiting) log(`  skipped (awaiting ${a.targetGate}) — ${a.kind} ${a.name}`);
-  log(`[summary] due-at-${gate}: ${due.length}, awaiting: ${awaiting.length}`);
+  // Explicitly deferred specs (ledger `deferred`: name -> reason): censused on disk,
+  // never due in any lane. A reasoned, printed skip — removing the ledger entry is the
+  // only way to make them due again, so the deferral can never be silent.
+  const deferred = dueAll.filter((a) => a.deferredReason);
+  const due = dueAll.filter((a) => !a.deferredReason);
 
-  if (due.length > 0) {
+  // Web-lane partition (see header): needsWeb specs only run when the full-stack
+  // harness set EKOA_E2E_WEB=1; in api-only lanes they are a reasoned, printed skip
+  // (§14.2.5: censused, never silent, never a false red against a stack not booted).
+  const webLane = process.env.EKOA_E2E_WEB === '1';
+  const webDeferred = webLane ? [] : due.filter((a) => a.kind === 'spec' && a.needsWeb);
+  let dueNow = webLane ? due : due.filter((a) => !(a.kind === 'spec' && a.needsWeb));
+
+  // Portfile-conflict partition: FROZEN specs that read the committed backend.port
+  // file (ledger `portfileBound`) cannot be re-pointed at the harness origin. When
+  // the harness runs BESIDE a live dev stack (EKOA_E2E_API_ORIGIN set, portfile
+  // disagreeing), running them would drive — and mutate — the live database, so they
+  // are a reasoned, printed skip. Stop the live stack (portfile absent or matching)
+  // and they run normally.
+  let portfileConflicted = [];
+  if (webLane && process.env.EKOA_E2E_API_ORIGIN) {
+    let portfilePort = null;
+    try { portfilePort = readFileSync(join(ROOT, 'backend.port'), 'utf8').trim(); } catch { /* no live stack */ }
+    const originPort = (() => { try { return new URL(process.env.EKOA_E2E_API_ORIGIN).port; } catch { return null; } })();
+    if (portfilePort && originPort && portfilePort !== originPort) {
+      portfileConflicted = dueNow.filter((a) => a.portfileBound);
+      dueNow = dueNow.filter((a) => !a.portfileBound);
+    }
+  }
+
+  for (const a of awaiting) log(`  skipped (awaiting ${a.targetGate}) — ${a.kind} ${a.name}`);
+  for (const a of deferred) log(`  skipped (deferred: ${a.deferredReason}) — ${a.kind} ${a.name}`);
+  for (const a of webDeferred) log(`  skipped (web lane - run npm run e2e:full) — spec ${a.name}`);
+  for (const a of portfileConflicted) log(`  skipped (portfile-conflict: frozen spec reads backend.port, which points at a live dev stack — stop it for full coverage) — spec ${a.name}`);
+  log(`[summary] due-at-${gate}: ${dueNow.length}, web-lane deferred: ${webDeferred.length}, deferred: ${deferred.length}, portfile-conflicted: ${portfileConflicted.length}, awaiting: ${awaiting.length}`);
+
+  if (dueNow.length > 0) {
     if (!run) {
       // A due artifact with no execution requested is a ledger error: it should have run.
-      log(`[FAIL] ${due.length} artifact(s) are due at ${gate} but --run was not passed — cannot report them green.`);
-      for (const a of due) log(`  due (unrun) — ${a.kind} ${a.name} @ ${a.targetGate}`);
+      log(`[FAIL] ${dueNow.length} artifact(s) are due at ${gate} but --run was not passed — cannot report them green.`);
+      for (const a of dueNow) log(`  due (unrun) — ${a.kind} ${a.name} @ ${a.targetGate}`);
       failed = true;
     } else {
-      const dueSpecs = due.filter((a) => a.kind === 'spec').map((a) => a.file);
-      const dueDrivers = due.filter((a) => a.kind === 'driver');
+      const dueSpecs = dueNow.filter((a) => a.kind === 'spec').map((a) => a.file);
+      const dueDrivers = dueNow.filter((a) => a.kind === 'driver');
       if (dueSpecs.length > 0) {
         try {
           execSync(`npx playwright test ${dueSpecs.join(' ')}`, { cwd: ROOT, stdio: 'inherit' });
@@ -247,7 +309,7 @@ async function main() {
       }
       // Due frontend unit files run via the web workspace vitest (they become runnable at G9,
       // when the web migration lands their imports). A red due-unit fails the run.
-      const dueUnits = due.filter((a) => a.kind === 'unit');
+      const dueUnits = dueNow.filter((a) => a.kind === 'unit');
       if (dueUnits.length > 0) {
         const patterns = dueUnits.map((a) => `__tests__/${a.name}`);
         try {
