@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code legal artifacts",
   "runId": "20260717-202309-d797918a",
-  "updatedAt": "2026-07-18T01:55:00Z",
+  "updatedAt": "2026-07-18T02:55:00Z",
   "galleryUrl": null,
   "gatesConfig": {
     "test": true,
@@ -37,7 +37,7 @@
       "slice": "S2-court-deadlines",
       "title": "prazos, citius, apoio, insolvencias",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S2-court-deadlines/gate-status.json",
       "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S2-court-deadlines/video/s2-court-deadlines-walkthrough.webm",
       "videoVerified": true

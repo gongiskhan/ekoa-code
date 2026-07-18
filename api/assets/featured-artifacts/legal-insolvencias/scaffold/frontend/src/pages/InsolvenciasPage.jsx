@@ -72,6 +72,22 @@ export default function InsolvenciasPage() {
     [citiusNotifs],
   );
 
+  // Comparativo de contagem para a data escolhida: o prazo REAL (CIRE, 30 dias
+  // contínuos) lado a lado com o que seria nas regras gerais do CPC (30 dias
+  // úteis, com suspensão em férias) - que aqui NÃO se aplicam. Determinístico;
+  // data inválida devolve null (não se mostra um comparativo errado).
+  const comparativo = useMemo(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dataDespacho || ''))) return null;
+    try {
+      return {
+        cire: computePrazo({ dataNotificacao: dataDespacho, dias: 30, regime: 'cire' }),
+        cpc: computePrazo({ dataNotificacao: dataDespacho, dias: 30, contagem: 'uteis', suspendeFerias: true }),
+      };
+    } catch {
+      return null;
+    }
+  }, [dataDespacho]);
+
   async function registar() {
     const cobranca = creditosDisponiveis.find((c) => c.id === cobrancaId);
     if (!cobranca) return;
@@ -90,15 +106,17 @@ export default function InsolvenciasPage() {
       });
       if (!row || !row.id) throw new Error('falhou');
       await createShared('prazos', {
-        descricao: `Reclamação de créditos - ${row.devedor} (30 dias contínuos, CIRE art. 9.º)`,
-        dataLimite: prazo.dataLimite, estado: 'pendente', regime: 'cire', insolvenciaId: row.id,
+        descricao: `Reclamação de créditos - ${row.devedor} (30 dias contínuos, CIRE art. 128.º)`,
+        dataLimite: prazo.dataLimite, estado: 'pendente', regime: 'cire', tipoContagem: 'corridos', insolvenciaId: row.id,
+        regraAplicada: 'CIRE art. 128.º n.º 1 - reclamação no prazo fixado na sentença (até 30 dias); contagem contínua, sem suspensão em férias: CIRE art. 9.º n.º 1',
+        showWork: { passos: prazo.passos },
         ...(ehDemo ? { demo: true, demoSet: cobranca.demoSet } : {}),
       });
       // Escalada: o crédito fica marcado - cobranças/injunções propõem a reclamação.
       await updateShared('cobrancas', cobranca.id, { devedorInsolvente: true, insolvenciaId: row.id });
       await registarEvento({
         app: 'legal-insolvencias', acao: 'registar-insolvencia',
-        fundamentacao: `Prazo de reclamação: ${prazo.dataLimite} (30 dias contínuos, sem suspensão em férias - CIRE art. 9.º n.º 1).`,
+        fundamentacao: `Prazo de reclamação: ${prazo.dataLimite} (30 dias contínuos - CIRE art. 128.º n.º 1; sem suspensão em férias - CIRE art. 9.º n.º 1).`,
         proveniencia: ehDemo ? 'simulada' : 'manual', demo: ehDemo, extra: ehDemo ? { demoSet: cobranca.demoSet } : {},
       });
       toast('Insolvência registada; prazo de reclamação no radar.');
@@ -117,8 +135,8 @@ export default function InsolvenciasPage() {
         <div>
           <h1 className="page-title">Insolvências - lado do credor</h1>
           <p className="card-subtitle">
-            Registe a insolvência do devedor ligada ao crédito. O prazo de reclamação corre em 30 dias contínuos,
-            sem suspensão nas férias judiciais (CIRE art. 9.º).
+            Registe a insolvência do devedor ligada ao crédito. O prazo de reclamação (CIRE art. 128.º n.º 1)
+            corre em 30 dias contínuos, sem suspensão nas férias judiciais (CIRE art. 9.º n.º 1).
           </p>
         </div>
       </div>
@@ -157,6 +175,44 @@ export default function InsolvenciasPage() {
             <IconTrendingDown /> Registar
           </Button>
         </div>
+
+        {comparativo ? (
+          <div className="stack stack-2" data-testid="insolv-contagem" style={{ marginTop: 'var(--sp-4, 1rem)' }}>
+            <div
+              style={{ padding: 'var(--sp-3, 0.75rem)', border: '2px solid var(--accent, #2563EB)', borderRadius: 'var(--r-2, 0.5rem)' }}
+            >
+              <span className="text-xs text-subtle" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Prazo real - CIRE (30 dias contínuos)
+              </span>
+              <p className="text-strong" style={{ margin: '2px 0 4px', fontSize: 'var(--text-lg, 1.125rem)' }}>
+                <span data-testid="insolv-cire-limite">{comparativo.cire.dataLimite}</span>
+                <span className="text-xs text-subtle" style={{ marginLeft: 8, fontWeight: 400 }}>{formatDate(comparativo.cire.dataLimite)}</span>
+              </p>
+              <p className="text-xs text-subtle" data-testid="insolv-cire-citacao" style={{ margin: 0 }}>
+                CIRE art. 128.º n.º 1 - reclamação no prazo fixado na sentença (até 30 dias). Contagem contínua,
+                sem suspensão em férias judiciais: o processo é urgente e corre em férias (CIRE art. 9.º n.º 1).
+                Termo em dia não útil transfere para o dia útil seguinte (CC art. 279.º al. e)).
+              </p>
+            </div>
+            <div
+              style={{ padding: 'var(--sp-3, 0.75rem)', border: '1px dashed var(--color-border, #CBD5E1)', borderRadius: 'var(--r-2, 0.5rem)', opacity: 0.85 }}
+            >
+              <span className="text-xs text-subtle" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Comparação - regras gerais do CPC (30 dias úteis): NÃO se aplicam aqui
+              </span>
+              <p className="text-xs text-subtle" style={{ margin: '4px 0 0' }}>
+                Se este prazo seguisse o CPC (dias úteis, com suspensão em férias judiciais - CPC art. 138.º),
+                o termo cairia em <strong data-testid="insolv-cpc-limite">{comparativo.cpc.dataLimite}</strong>
+                {' '}({formatDate(comparativo.cpc.dataLimite)}). Na insolvência não há esse fôlego - a diferença é
+                exactamente o risco de contar mal.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="field-hint" data-testid="insolv-contagem-invalida" style={{ marginTop: 'var(--sp-3, 0.75rem)' }}>
+            Indique uma data de despacho válida para ver a contagem do prazo.
+          </p>
+        )}
       </section>
 
       <section className="card">

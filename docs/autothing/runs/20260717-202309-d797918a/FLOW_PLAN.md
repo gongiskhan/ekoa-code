@@ -7,8 +7,8 @@ Brief: test all 29 legal apps (featured artifacts) thoroughly; fix defects; add 
 | # | Slice ID | Title | Kind | Routes (area skill: ekoa-architecture + ekoa-testing) | Parallel group | Status |
 |---|----------|-------|------|-------------------------------------------------------|----------------|--------|
 | 0 | S0-smoke-foundation | Smoke sweep + shared-layer sync gate + Invalid-Date fix | mixed | all 29 /apps/legal-*/ + /artifacts | serial-first | passed |
-| 1 | S1-spine-productivity | nucleo, kanban, tempos, agenda, agenda-reservas | ui | /apps/legal-{nucleo,kanban,tempos,agenda,agenda-reservas}/ | A (after S0) | in_progress |
-| 2 | S2-court-deadlines | prazos, citius, apoio, insolvencias (+ prazo/citius engines) | ui | /apps/legal-{prazos,citius,apoio,insolvencias}/ | A (after S0) | in_progress |
+| 1 | S1-spine-productivity | nucleo, kanban, tempos, agenda, agenda-reservas | ui | /apps/legal-{nucleo,kanban,tempos,agenda,agenda-reservas}/ | A (after S0) | passed |
+| 2 | S2-court-deadlines | prazos, citius, apoio, insolvencias (+ prazo/citius engines) | ui | /apps/legal-{prazos,citius,apoio,insolvencias}/ | A (after S0) | passed |
 | 3 | S3-money | calculos, honorarios, financas, cobrancas, injuncoes (+ money engines) | ui | /apps/legal-{calculos,honorarios,financas,cobrancas,injuncoes}/ | A (after S0) | in_progress |
 | 4 | S4-drafting | contratos, pecas, modelos, forms | ui | /apps/legal-{contratos,pecas,modelos,forms}/ | B (after A) | in_progress |
 | 5 | S5-records | dossie, assinatura, transcricao, correio | ui | /apps/legal-{dossie,assinatura,transcricao,correio}/ | B (after A) | in_progress |

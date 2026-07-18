@@ -85,6 +85,57 @@ export function gerarPrazosSinOA(dataNotificacao) {
 }
 
 /*
+ * Prazos ADICIONAIS por tipo de pedido, para além das duas balizas SinOA -
+ * SEMPRE acrescentados DEPOIS delas (as posições 0/1 dos painéis são contrato
+ * de teste). Cada um cita a norma da Lei n.º 34/2004, de 29 de julho:
+ *  - nomeação: o patrono nomeado deve intentar a ação nos 30 dias seguintes à
+ *    notificação da nomeação (art. 33.º; prorrogável a pedido fundamentado).
+ *  - escusa: a Ordem dos Advogados decide o pedido de escusa no prazo de 15
+ *    dias (art. 34.º; o pedido interrompe o prazo que estiver em curso).
+ * Contagem em dias corridos - a leitura conservadora: o lembrete dispara mais
+ * cedo, nunca mais tarde do que o prazo real.
+ */
+export const PRAZOS_TIPO_PEDIDO = {
+  nomeacao: [
+    {
+      descricao: 'Nomeação: propositura da ação pelo patrono (30 dias)',
+      dias: 30,
+      contagem: 'corridos',
+      fonte: 'Lei n.º 34/2004, art. 33.º - 30 dias seguintes à notificação da nomeação (prorrogável a pedido fundamentado)',
+    },
+  ],
+  escusa: [
+    {
+      descricao: 'Escusa: decisão da Ordem dos Advogados (15 dias)',
+      dias: 15,
+      contagem: 'corridos',
+      fonte: 'Lei n.º 34/2004, art. 34.º - a OA aprecia e decide a escusa em 15 dias; o pedido interrompe o prazo em curso',
+    },
+  ],
+};
+
+/*
+ * Todos os prazos que uma notificação de decisão desencadeia para um pedido:
+ * as duas balizas SinOA e, DEPOIS delas, os prazos específicos do tipo
+ * (nomeação/escusa). Para protecção jurídica devolve exactamente o mesmo que
+ * gerarPrazosSinOA - comportamento histórico intacto.
+ */
+export function gerarPrazosPedido(tipoPedido, dataNotificacao) {
+  const extras = PRAZOS_TIPO_PEDIDO[tipoPedido] || [];
+  const data = String(dataNotificacao || '').trim();
+  return [
+    ...gerarPrazosSinOA(data),
+    ...extras.map((spec) => ({
+      descricao: spec.descricao,
+      dias: spec.dias,
+      contagem: spec.contagem,
+      fonte: spec.fonte,
+      resultado: computePrazo({ dataNotificacao: data, dias: spec.dias, contagem: spec.contagem }),
+    })),
+  ];
+}
+
+/*
  * Condensa a lista de passos do motor para leitura. Cada passo é um dia: úteis
  * com `dia` (número contado), não úteis com `motivo`, notas avulsas. Mantém os
  * dias úteis um a um (o que o advogado valida) mas agrupa corridas consecutivas

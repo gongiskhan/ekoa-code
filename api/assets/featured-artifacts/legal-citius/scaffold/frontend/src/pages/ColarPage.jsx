@@ -4,6 +4,7 @@ import { processarNotificacao } from '../engine/citius-process.mjs';
 import { spineApi, formatDate } from '../shared.js';
 import { Button } from '../components/ui.jsx';
 import { IconInbox, IconCalendar, IconChevronRight } from '../components/Icons.jsx';
+import { splitNotificacoes } from './colar-split.js';
 
 // Notificação de exemplo - emparelha o processo 1234/26.0T8LSB semeado pelo
 // Núcleo e, por isso, produz um prazo (Contestação, 30 dias úteis).
@@ -25,11 +26,13 @@ export default function ColarPage() {
   const navigate = useNavigate();
   const [texto, setTexto] = useState('');
   const [resultado, setResultado] = useState(null);
+  const [resultados, setResultados] = useState(null); // vários segmentos colados
   const [erro, setErro] = useState(null);
   const [processando, setProcessando] = useState(false);
 
   function onExemplo() {
     setResultado(null);
+    setResultados(null);
     setErro(null);
     setTexto(EXEMPLO);
   }
@@ -38,6 +41,7 @@ export default function ColarPage() {
     // Editar o texto invalida o resultado anterior - nunca se mostra um
     // resultado calculado a partir de texto que entretanto mudou.
     setResultado(null);
+    setResultados(null);
     setErro(null);
     setTexto(value);
   }
@@ -47,12 +51,26 @@ export default function ColarPage() {
     if (!raw) { setErro('Cole o texto de uma notificação Citius para processar.'); return; }
     setErro(null);
     setResultado(null);
+    setResultados(null);
     setProcessando(true);
     try {
       // Não passamos sourceRef - o motor deriva-o do conteúdo, pelo que
       // reprocessar o mesmo texto deduplica (não cria um prazo repetido).
-      const r = await processarNotificacao(raw, spineApi);
-      setResultado(r);
+      // Um texto com VÁRIAS notificações (separadores explícitos, ou blocos
+      // que são inequivocamente notificações completas) é dividido de forma
+      // conservadora e cada segmento corre o motor por si - com o seu próprio
+      // resultado honesto. Um segmento único segue o caminho histórico intacto.
+      const segmentos = splitNotificacoes(raw);
+      if (segmentos.length <= 1) {
+        const r = await processarNotificacao(raw, spineApi);
+        setResultado(r);
+      } else {
+        const rs = [];
+        for (const seg of segmentos) {
+          rs.push(await processarNotificacao(seg, spineApi));
+        }
+        setResultados(rs);
+      }
     } catch (e) {
       setErro(e && e.message ? e.message : 'Não foi possível processar a notificação.');
     } finally {
@@ -119,20 +137,37 @@ export default function ColarPage() {
           </div>
         ) : resultado ? (
           <ResultadoLinha resultado={resultado} navigate={navigate} />
+        ) : resultados ? (
+          <div className="stack stack-3" style={{ marginTop: 'var(--space-4, 1rem)' }}>
+            <p className="text-small text-strong" data-testid="citius-multi-resumo">
+              {resultados.length} notificações separadas: {resultados.filter((r) => r.status === 'matched').length} com
+              prazo · {resultados.filter((r) => r.status !== 'matched').length} para revisão
+            </p>
+            {resultados.map((r, i) => (
+              <ResultadoLinha key={i} resultado={r} navigate={navigate} testid={`citius-resultado-seg-${i}`} />
+            ))}
+          </div>
         ) : null}
 
         <p className="text-muted text-small" style={{ marginTop: 'var(--space-4, 1rem)' }}>
           As notificações que chegam por email são triadas automaticamente e aparecem na caixa de entrada - colar à
-          mão é apenas o caminho alternativo.
+          mão é apenas o caminho alternativo. Pode colar várias notificações de uma vez, separadas por uma linha de
+          "---": cada uma é processada por si, com o seu próprio resultado.
         </p>
       </section>
     </div>
   );
 }
 
-/* Linha de resultado do processamento - verde (prazo criado) ou âmbar (revisão). */
-function ResultadoLinha({ resultado, navigate }) {
+/*
+ * Linha de resultado do processamento - verde (prazo criado) ou âmbar (revisão).
+ * `testid` por omissão mantém o caminho de segmento único byte-idêntico; a vista
+ * multi-notificação passa `citius-resultado-seg-<i>` (o alvo de demo fica só no
+ * caminho único, que é o que a demonstração guiada usa).
+ */
+function ResultadoLinha({ resultado, navigate, testid = 'citius-resultado' }) {
   const dup = resultado.duplicate ? ' (já processada)' : '';
+  const demoProps = testid === 'citius-resultado' ? { 'data-demo-target': 'citius-resultado' } : {};
 
   if (resultado.status === 'matched') {
     // Uma re-entrega já processada devolve 'matched' SEM dataLimite (o prazo já
@@ -141,7 +176,7 @@ function ResultadoLinha({ resultado, navigate }) {
       ? `Prazo criado - data-limite ${resultado.dataLimite}`
       : 'Prazo já criado';
     return (
-      <div className="citius-resultado is-matched" data-testid="citius-resultado" data-demo-target="citius-resultado">
+      <div className="citius-resultado is-matched" data-testid={testid} {...demoProps}>
         <span className="citius-resultado-icon" aria-hidden="true"><IconCalendar /></span>
         <span className="citius-resultado-text">
           <span className="citius-resultado-strong">{principal}{dup}</span>
@@ -157,7 +192,7 @@ function ResultadoLinha({ resultado, navigate }) {
   }
 
   return (
-    <div className="citius-resultado is-review" data-testid="citius-resultado">
+    <div className="citius-resultado is-review" data-testid={testid}>
       <span className="citius-resultado-icon" aria-hidden="true"><IconInbox /></span>
       <span className="citius-resultado-text">
         <span className="citius-resultado-strong">Precisa de revisão - {resultado.motivo}{dup}</span>

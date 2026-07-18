@@ -2,17 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getShared,
-  createShared,
   updateShared,
   useSharedCollection,
-  notify,
   appHref,
   formatDate,
 } from '../shared.js';
 import { computePrazo } from '../engine/prazo.mjs';
 import { Button, Badge, Select, ConfirmDialog, EmptyState, toast } from '../components/ui.jsx';
-import { IconInbox, IconCalendar, IconCheck, IconAlertTriangle, IconChevronRight, IconExternalLink } from '../components/Icons.jsx';
+import { IconInbox, IconCalendar, IconCheck, IconAlertTriangle, IconChevronRight, IconExternalLink, IconFolder } from '../components/Icons.jsx';
 import { estadoMeta, isNeedsReview, regraForAto, isValidDateStr, ATO_OPTIONS } from './triage.js';
+import { confirmarTriagem, origemNotif } from './triage-commit.js';
 
 /*
  * Triagem de uma notificação Citius. Mostra o texto recebido e o que o parser
@@ -102,66 +101,22 @@ export default function NotificacaoPage() {
     if (!canConfirm || !selectedProcesso) return;
     setSaving(true);
     try {
-      // Idempotência entre abas/sessões: relê a linha ANTES de escrever. Se já
-      // não está em revisão, outra sessão tratou-a - aborta sem duplicar o
-      // prazo/evento, e reflecte o estado actual no ecrã.
-      const current = await getShared('citius_notificacoes', notif.id);
-      if (!current || current.estado !== 'needs-review') {
-        setNotif(current || notif);
+      // A sequência de escritas (prazo + evento + 'matched' + sino) e a guarda
+      // de idempotência vivem em confirmarTriagem - partilhadas com a
+      // confirmação em lote da caixa de entrada, uma só fonte de verdade.
+      const r = await confirmarTriagem({
+        notifId: notif.id,
+        processoId,
+        ato: atoKey,
+        dataActo,
+        numeroProcesso: selectedProcesso.numeroProcesso,
+      });
+      if (r.status === 'ja-tratada') {
+        setNotif(r.notif || notif);
         toast('Esta notificação já foi tratada noutra sessão.', { tone: 'info' });
         return;
       }
-      const r = computePrazo({ dataNotificacao: dataActo, dias: regra.dias, contagem: regra.contagem });
-      const ato = atoKey;
-      const prazo = await createShared('prazos', {
-        processoId,
-        titulo: ato,
-        descricao: ato,
-        dataNotificacao: dataActo,
-        regraAplicada: `${ato} - ${regra.dias} dias ${regra.contagem}`,
-        dataLimite: r.dataLimite,
-        multaAte: r.multaAte,
-        tipoContagem: regra.contagem,
-        estado: 'pendente',
-        origem: 'citius',
-        showWork: { passos: r.passos, multaDias: r.multaDias },
-        metadata: { notificacaoId: notif.id },
-      });
-      await createShared('eventos', {
-        processoId,
-        tipo: 'citius-notificacao',
-        titulo: `Notificação Citius: ${ato}`,
-        descricao: `Prazo confirmado na triagem (data-limite ${r.dataLimite}).`,
-        data: dataActo,
-        origem: 'citius',
-        metadata: { prazoId: prazo.id, notificacaoId: notif.id },
-      });
-      await updateShared('citius_notificacoes', notif.id, {
-        // 'matched' + prazoId é o CONTRATO do motor (citius-process.mjs): só
-        // esse par bloqueia a reentrega do mesmo email no intake automático.
-        // Um estado próprio ('processada') deixaria o motor recriar a
-        // notificação - e potencialmente duplicar o prazo - numa reentrega.
-        estado: 'matched',
-        processoId,
-        // Reconcilia o número com o processo efectivamente associado (o parser
-        // pode ter lido um número que não constava da espinha).
-        numeroProcesso: selectedProcesso.numeroProcesso || notif.numeroProcesso,
-        ato,
-        dataActo,
-        prazoId: prazo.id,
-        prazoIds: [prazo.id],
-        dataLimite: r.dataLimite,
-        motivo: null,
-      });
-      await notify({
-        tipo: 'citius',
-        titulo: 'Prazo confirmado a partir do Citius',
-        corpo: `${ato} - data-limite ${r.dataLimite} (${selectedProcesso.numeroProcesso}).`,
-        processoId,
-        href: appHref('legal-citius', `notificacao/${notif.id}`),
-      });
-      const fresh = await getShared('citius_notificacoes', notif.id);
-      setNotif(fresh || { ...notif, estado: 'matched', prazoId: prazo.id, prazoIds: [prazo.id], dataLimite: r.dataLimite });
+      setNotif(r.notif);
       toast('Prazo criado e notificação processada.', { tone: 'ok' });
     } catch (e) {
       toast(e && e.message ? e.message : 'Não foi possível confirmar o prazo.', { tone: 'error' });
@@ -269,6 +224,12 @@ export default function NotificacaoPage() {
               label="Data do acto"
               value={notif.dataActo ? `${notif.dataActo} · ${formatDate(notif.dataActo)}` : null}
             />
+            {origemNotif(notif) ? (
+              <ParsedRow
+                label="Origem"
+                value={origemNotif(notif) === 'email' ? 'Email (intake automática)' : 'Colada à mão'}
+              />
+            ) : null}
             {notif.motivo ? <ParsedRow label="Motivo da revisão" value={notif.motivo} warn /> : null}
           </div>
         </section>
@@ -483,6 +444,19 @@ function ResultadoTriada({ notif, navigate }) {
         >
           <IconCalendar />
           <span>Ver no Prazos</span>
+          <span className="nav-launcher-mark" aria-hidden="true"><IconExternalLink /></span>
+        </a>
+      ) : null}
+
+      {!rejeitada && notif.processoId ? (
+        <a
+          href={appHref('legal-dossie', `processo/${notif.processoId}`)}
+          className="nav-link nav-launcher"
+          data-testid="abrir-dossie"
+          style={{ marginTop: 'var(--space-2, 0.5rem)' }}
+        >
+          <IconFolder />
+          <span>Abrir no Dossiê do processo</span>
           <span className="nav-launcher-mark" aria-hidden="true"><IconExternalLink /></span>
         </a>
       ) : null}

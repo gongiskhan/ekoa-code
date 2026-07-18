@@ -18,7 +18,7 @@ import {
   Skeleton,
   toast,
 } from '../components/ui.jsx';
-import { IconCheck, IconChevronDown } from '../components/Icons.jsx';
+import { IconCheck, IconChevronDown, IconDownload } from '../components/Icons.jsx';
 import {
   prazoDescricao,
   prazoOrigem,
@@ -26,6 +26,7 @@ import {
   diasLabel,
   diasTone,
 } from './prazo-view.js';
+import { construirIcsPrazos, descarregarIcs } from './ics.js';
 
 const ESTADO_META = {
   pendente: { tone: 'info', label: 'Pendente' },
@@ -151,6 +152,24 @@ export default function PrazosListPage() {
     },
   ], [processoNumero, sortDir]);
 
+  // Exporta TODOS os prazos não cumpridos (pendentes e vencidos - ambos ainda
+  // exigem acção) como .ics determinístico: mesmo conjunto => mesmos bytes.
+  function onExportarIcs() {
+    const pendentes = prazos.filter((pr) => estadoDerivado(pr) !== 'cumprido');
+    const r = construirIcsPrazos(pendentes, { processoNumero });
+    if (r.incluidos === 0) {
+      toast('Sem prazos pendentes com data-limite para exportar.', { tone: 'info' });
+      return;
+    }
+    descarregarIcs(r.conteudo);
+    toast(
+      r.ignorados > 0
+        ? `${r.incluidos} prazos exportados; ${r.ignorados} sem data-limite válida ficaram de fora.`
+        : `${r.incluidos} prazos exportados para o calendário (alarme D-2 incluído).`,
+      { tone: 'ok' },
+    );
+  }
+
   async function doCumprir() {
     const pr = confirming;
     if (!pr) return;
@@ -170,6 +189,11 @@ export default function PrazosListPage() {
         <div>
           <h1 className="page-title">Todos os prazos</h1>
           <p className="page-subtitle">O registo completo de prazos da espinha partilhada, com filtros e ordenação.</p>
+        </div>
+        <div className="page-actions">
+          <Button variant="secondary" data-testid="exportar-ics" onClick={onExportarIcs} disabled={loading}>
+            <IconDownload /> Exportar .ics (pendentes)
+          </Button>
         </div>
       </div>
 

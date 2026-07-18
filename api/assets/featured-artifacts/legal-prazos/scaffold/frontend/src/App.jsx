@@ -1,10 +1,11 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
 import { ToastHost } from './components/ui.jsx';
-import { IconClock, IconCalendar, IconCheckSquare } from './components/Icons.jsx';
+import { IconClock, IconCalendar, IconCheckSquare, IconCalendarClock } from './components/Icons.jsx';
 import RadarPage from './pages/RadarPage.jsx';
 import CalculadoraPage from './pages/CalculadoraPage.jsx';
 import PrazosListPage from './pages/PrazosListPage.jsx';
+import FeriasPage from './pages/FeriasPage.jsx';
 
 // Prazos é agora o centro de comando de prazos: RADAR (por urgência),
 // CALCULADORA (motor CPC determinístico) e a LISTA completa. NÃO semeia a
@@ -14,12 +15,14 @@ const NAV = [
   { to: '/', label: 'Radar', icon: IconClock, end: true, testid: 'nav-radar' },
   { to: '/calculadora', label: 'Calculadora', icon: IconCalendar, testid: 'nav-calculadora' },
   { to: '/prazos', label: 'Todos os prazos', icon: IconCheckSquare, testid: 'nav-prazos' },
+  { to: '/ferias', label: 'Férias judiciais', icon: IconCalendarClock, testid: 'nav-ferias' },
 ];
 
 const TITLES = {
   '/': 'Radar de prazos',
   '/calculadora': 'Calculadora',
   '/prazos': 'Todos os prazos',
+  '/ferias': 'Férias judiciais',
 };
 
 export default function App() {
@@ -35,6 +38,7 @@ export default function App() {
         <Route path="/" element={<RadarPage />} />
         <Route path="/calculadora" element={<CalculadoraPage />} />
         <Route path="/prazos" element={<PrazosListPage />} />
+        <Route path="/ferias" element={<FeriasPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <ToastHost />

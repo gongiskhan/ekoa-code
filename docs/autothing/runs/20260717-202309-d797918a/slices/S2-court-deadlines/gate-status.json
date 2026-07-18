@@ -1,0 +1,99 @@
+{
+  "slice": "S2-court-deadlines",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "passed",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": {
+        "tests": 0,
+        "typecheck": 0,
+        "lint": 0,
+        "build": 0
+      },
+      "evidence": [
+        "npx playwright test legal-x-prazos legal-x-insolvencias legal-x-citius (+ S1 specs, same serialized lane): 24 passed after the insolvencias controlled-checkbox fix (optimistic update + rollback in InsolvenciaDetailPage.onToggleChecklist)",
+        "frozen ported suites + full 29-app smoke: 60 passed (43.9s)",
+        "npm run typecheck: 0; npm run lint: 0 errors; api build: 0",
+        "served bundles refreshed via out-of-process rebuild (scratchpad/rebuild-featured.mjs); insolvencias spec re-run green post-fix (1.0s)"
+      ],
+      "at": "2026-07-17T21:30:00Z"
+    },
+    "review": {
+      "status": "clean",
+      "engine": "inline-fallback (code-review Workflow unavailable this run: external API billing constraint)",
+      "findings": [
+        "FIXED during review: InsolvenciaDetailPage checklist was a controlled checkbox with async-only state update - native click flipped, React reverted, Playwright .check() failed; fixed with optimistic setIns + carregar() rollback on error"
+      ],
+      "nits": [
+        "triage-commit.js confirmarTriagem: read-before-write idempotency narrows but does not eliminate the two-tab TOCTOU window - pre-existing semantics preserved verbatim from NotificacaoPage, honest comment in place; the engine 'matched'+prazoId contract remains the real redelivery guard",
+        "colar-split.js returns [''] for empty input - ColarPage guards empty raw before calling",
+        "prazos ics.js deliberately duplicates descricaoDe/origemDe from prazo-view.js to stay pure/node-runnable - documented in-file",
+        "InboxPage bulk confirm re-derives propostaAutomatica per row at commit time (does not trust the memoized prontasIds) and reports an honest per-outcome summary - verified correct"
+      ],
+      "at": "2026-07-17T22:05:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "approve",
+      "by": "claude-fable-5 (fresh-context agent adv-review-S2; spawned with acceptance+file-list+diff only, no implementer rationale)",
+      "evidence": [
+        "npm run typecheck: 0 (shared/api/web); npm run lint: 0 errors (247 pre-existing warnings); direct eslint on the 4 new specs: clean",
+        "golden dates re-derived via node against legal-engines/prazo.mjs: nomeacao +30 corridos, escusa +15, CIRE 30 corridos, CPC 30 uteis c/ suspensao, calculadora 5 uteis - all match spec assertions",
+        "rebuilt 4 bundles then npx playwright test legal-x-{prazos,citius,apoio,insolvencias} --workers=1: 9 passed (6.3s)",
+        "frozen ported legal-{prazos,citius,apoio,insolvencias}: 14 passed (5.8s) - apoio origem-apoio golden + insolvencias CIRE golden intact",
+        "emoji/em-dash scan over all added S2 lines: zero hits; no touch of api/assets/bases/, legal-shared, or any frozen spec",
+        "spec-honesty probe: all 4 specs assert real behavior (byte-identical .ics determinism, spine truth incl. FK mirrors, checklist persistence across hard reload, real PDF downloads) and self-clean by nonce+FK",
+        "citations verified in UI: LOSJ (Lei 62/2013) art. 28.o; CIRE art. 128.o n.o 1 + art. 9.o n.o 1 vs CPC uteis; Lei 34/2004 arts. 33.o/34.o",
+        "standalone gate:ledger FAILED is NOT an S2 defect: census gap = other concurrent slices' unregistered specs on disk; the 4 S2 rows are correctly registered in band3"
+      ],
+      "findings": [],
+      "at": "2026-07-18T01:57:00Z"
+    },
+    "adversarialTest": {
+      "verdict": "pass",
+      "by": "adv-test-S2 fresh-context independent prober (claude-opus-4-8), 37 probes on the live stack",
+      "probes": "date-math edges (7: CC art. 279.o al. e rollover verified 2026-08-09 dom -> 2026-08-10, ferias-judiciais boundaries 16 jul/31 ago/22 dez-3 jan, CPC art. 139.o n.o 5 multa 3 uteis, impossible-date rejected, CIRE corridos vs CPC uteis golden byte-green); hostile input (9: RFC-5545 injection escaped per §3.3.11, 74-octet folding counts real UTF-8 bytes, XSS-as-text HTML-escaped in memoria/pack PDFs, citius paste-split garbage held conservative no-split); determinism (5: double .ics export byte-identical, DTSTAMP from createdAt never now(), PDFs start %PDF, VALUE=DATE + VALARM -P2D); idempotency/races (7: citius double-confirm ja-tratada guard, apoio jaGerou, insolvencias checklist toggle-spam persisted); honesty (5). No real-user-reachable defect.",
+      "notes": [
+        "Pre-existing shared-layer SSO 401 console error observed - out of S2 scope, platform-wide, already known.",
+        "Fixture cleanup verified complete (FK-children-first deletes). One honest caveat: probe left devedorInsolvente:false + insolvenciaId:null (functionally inert keys) on seeded cobranca f8d7163b - the spine update is merge-only, delete+recreate would break 3 FK refs. Counts unaffected."
+      ],
+      "at": "2026-07-18T02:55:00Z"
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-cli screenshots of the 6 S2 surfaces (audit session)",
+      "issues": [],
+      "notes": [
+        "prazos calculadora: contagem/regra selects, memoria (PDF) action beside the result, showWork passos table readable - clean",
+        "prazos ferias judiciais page: LOSJ art. 28.º citation block, Pascoa movel dates derived from domingoPascoa, 'Hoje: em ferias judiciais' correct for 17/07/2026 (verao 16/07-31/08) - clean",
+        "prazos lista: Exportar .ics (pendentes) button top-right beside title, search + processo/estado/origem filters, urgency chips (ha 32 dias / hoje / em 3 dias), Estado + Origem badges, per-row Marcar cumprido, cumprido row action column empty-placeholder - clean",
+        "insolvencias list: comparativo CIRE vs CPC card (17/08/2026 vs 13/10/2026 verified by hand: 16/08 domingo -> CC 279.º e) -> 17/08), citations art. 128.º n.º 1 - clean",
+        "insolvencia detail: 6-item checklist, contraste CPC badge 'Dias continuos - CIRE art. 128.º', ligacoes section - clean",
+        "citius inbox: honest empty-state when fila vazia, bulk bar only when aRever > 0, origem badge per row, email-intake info card - clean",
+        "DEFERRED (pre-existing, fleet-wide, not S2): em-dash placeholder glyph in the canonical shared layer (api/assets/legal-shared/) - same post-wave sweep item recorded on S1; also pre-existing: gerarReclamacao template uses an en-dash and cites CIRE art. 9.º - queued with the sweep"
+      ],
+      "at": "2026-07-17T22:20:00Z"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S2-court-deadlines/video/s2-court-deadlines-walkthrough.webm",
+      "durationSeconds": 34.0,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine) - near-read-only flows alongside the serialized e2e lane (only mutation: one checklist toggle, toggled back; probe proves restore); self-verified by frame extraction + the recorder's own probe report",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames read back by vision)",
+        "checks": [
+          "calculadora golden: 1234/26.0T8LSB + 2026-06-05 + 5 dias uteis -> resultado 2026-06-15 (probe), memoria PDF real download: memoria-prazo-2026-06-05-5uteis.pdf (deterministic filename matches the committed spec)",
+          "ferias judiciais 2026: Pascoa 29/03-06/04, verao 16/07-31/08, Natal 22/12-03/01/2027, LOSJ art. 28.º citation (probe text), 'Hoje: em ferias judiciais' chip correct for 17/07/2026",
+          "prazos lista Exportar .ics (pendentes) real download: prazos-pendentes.ics",
+          "insolvencias comparativo card: CIRE 2026-08-17 vs CPC 2026-10-13 (probe matches the hand-verified CC art. 279.º e) math)",
+          "insolvencia detail: 'Dias continuos - CIRE art. 128.º' badge + Reclamacao entregue block + checklist toggle 0 de 6 -> 1 de 6 -> 0 de 6 (probe; live-proves the optimistic-update review fix AND the demo-row restore)",
+          "colar notificacao page with typed sample text + Processar / Notificacao de exemplo actions (nothing processed)",
+          "recorder error list: empty"
+        ]
+      },
+      "at": "2026-07-17T23:35:00Z"
+    }
+  }
+}

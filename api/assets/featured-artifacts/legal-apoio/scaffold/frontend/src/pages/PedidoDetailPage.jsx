@@ -30,6 +30,7 @@ import {
   IconClipboardForm,
   IconMailbox,
   IconTrash,
+  IconFilePdf,
 } from '../components/Icons.jsx';
 import { SinoaDisclaimer } from './PedidosPage.jsx';
 import {
@@ -38,10 +39,12 @@ import {
   ESTADO_LABEL,
   ESTADO_TONE,
   FASE_OPTIONS,
-  gerarPrazosSinOA,
+  PRAZOS_TIPO_PEDIDO,
+  gerarPrazosPedido,
   condensarPassos,
   somaDespesas,
 } from './apoio-logic.js';
+import { packPedidoHtml } from './pack-pdf.js';
 
 /* 'YYYY-MM-DD' local de hoje - carimbo da decisão. */
 function hojeStr() {
@@ -68,6 +71,11 @@ function PrazoResultado({ idx, prazo }) {
           <span className="text-xs text-subtle">{formatDate(prazo.resultado.dataLimite)}</span>
         </span>
       </div>
+      {prazo.fonte ? (
+        <p className="text-xs text-subtle" data-testid={`apoio-prazo-fonte-${idx}`} style={{ margin: 'var(--sp-2, 0.5rem) 0 0' }}>
+          Fonte: {prazo.fonte}
+        </p>
+      ) : null}
       <div className="stack stack-2" style={{ marginTop: 'var(--sp-3, 0.75rem)' }}>
         <span className="nav-section-label" style={{ padding: 0 }}>Mostra o seu trabalho</span>
         <ul className="passos-list" data-testid={`apoio-prazo-passos-${idx}`}>
@@ -116,6 +124,7 @@ export default function PedidoDetailPage() {
   const [notifData, setNotifData] = useState('');
   const [gerando, setGerando] = useState(false);
   const [acting, setActing] = useState(false);
+  const [exportandoPack, setExportandoPack] = useState(false);
   // Nova despesa (linha em edição).
   const [despDescricao, setDespDescricao] = useState('');
   const [despValor, setDespValor] = useState('');
@@ -143,16 +152,17 @@ export default function PedidoDetailPage() {
   const jaGerou = prazosGerados.length > 0;
   const notifStamp = pedido && pedido.datas ? pedido.datas.notificacao : null;
 
-  // Painel dos prazos SinOA: recomputa o motor a partir da notificação registada
-  // (determinístico - a mesma data-limite que foi persistida em `prazos`).
+  // Painel dos prazos gerados: recomputa o motor a partir da notificação
+  // registada, com o MESMO gerador usado na persistência (determinístico - os
+  // painéis por índice correspondem um a um aos prazos escritos em `prazos`).
   const prazosPreview = useMemo(() => {
-    if (!notifStamp) return [];
+    if (!pedido || !notifStamp) return [];
     try {
-      return gerarPrazosSinOA(notifStamp);
+      return gerarPrazosPedido(pedido.tipoPedido, notifStamp);
     } catch {
       return [];
     }
-  }, [notifStamp]);
+  }, [pedido, notifStamp]);
 
   const despesas = Array.isArray(pedido && pedido.honorarios && pedido.honorarios.despesas)
     ? pedido.honorarios.despesas
@@ -164,13 +174,15 @@ export default function PedidoDetailPage() {
     if (!notifData.trim()) { toast('Indique a data da notificação da decisão.', { tone: 'error' }); return; }
     // Idempotência: se já há prazos gerados, não duplica (guarda dura).
     if (jaGerou) {
-      toast('Os prazos SinOA já foram gerados para este pedido.', { tone: 'info' });
+      toast('Os prazos deste pedido já foram gerados.', { tone: 'info' });
       return;
     }
     setGerando(true);
     try {
       // Lança se a data for impossível - preferimos falhar a gerar prazos errados.
-      const gerados = gerarPrazosSinOA(notifData.trim());
+      // As duas balizas SinOA vêm sempre primeiro; nomeação/escusa acrescentam
+      // o seu prazo legal (Lei n.º 34/2004, arts. 33.º/34.º) DEPOIS delas.
+      const gerados = gerarPrazosPedido(pedido.tipoPedido, notifData.trim());
       const ids = [];
       for (const g of gerados) {
         const row = await createShared('prazos', {
@@ -180,6 +192,7 @@ export default function PedidoDetailPage() {
           estado: 'pendente',
           origem: 'apoio',
           tipoContagem: g.contagem,
+          ...(g.fonte ? { regraAplicada: g.fonte } : {}),
           showWork: { passos: g.resultado.passos, multaDias: g.resultado.multaDias },
         });
         if (row && row.id) ids.push(row.id);
@@ -197,11 +210,30 @@ export default function PedidoDetailPage() {
       });
       await refresh();
       await refreshPrazos();
-      toast('Prazos SinOA gerados.', { tone: 'ok' });
+      toast(`${gerados.length} prazos gerados.`, { tone: 'ok' });
     } catch (e) {
       toast((e && e.message) || 'Não foi possível gerar os prazos.', { tone: 'error' });
     } finally {
       setGerando(false);
+    }
+  }
+
+  async function onPackPdf() {
+    if (!pedido || exportandoPack) return;
+    setExportandoPack(true);
+    try {
+      const ekoa = typeof window !== 'undefined' ? window.__ekoa : null;
+      if (!ekoa || typeof ekoa.exportPdf !== 'function') {
+        // Honesto: sem o anfitrião não há PDF - não fingimos um download.
+        throw new Error('A exportação PDF não está disponível neste ambiente.');
+      }
+      const { html, filename } = packPedidoHtml({ pedido, cliente, processo, prazos: prazosPreview, despesas, fase });
+      await ekoa.exportPdf({ html, filename });
+      toast('Pack do pedido exportado em PDF.', { tone: 'ok' });
+    } catch (e) {
+      toast((e && e.message) || 'Não foi possível exportar o pack.', { tone: 'error' });
+    } finally {
+      setExportandoPack(false);
     }
   }
 
@@ -310,6 +342,9 @@ export default function PedidoDetailPage() {
           </p>
         </div>
         <div className="row row-2">
+          <Button variant="secondary" data-testid="apoio-pack-pdf" onClick={onPackPdf} disabled={exportandoPack}>
+            <IconFilePdf size={14} /> {exportandoPack ? 'A exportar.' : 'Pack do pedido (PDF)'}
+          </Button>
           {estado === 'preparacao' ? (
             <Button data-testid="apoio-submeter" onClick={() => onTransicao('submetido_manual')} disabled={acting}>
               <IconCheck size={14} /> Marcar submetido (manual)
@@ -338,6 +373,9 @@ export default function PedidoDetailPage() {
             <p className="card-subtitle">
               Ao registar a notificação da decisão, o motor de prazos gera as duas balizas do SinOA -
               o registo do pedido (5 dias úteis) e a documentação (30 dias) - e mostra a contagem.
+              {(PRAZOS_TIPO_PEDIDO[pedido.tipoPedido] || []).length > 0
+                ? ' Este tipo de pedido acrescenta ainda o prazo legal próprio (Lei n.º 34/2004), calculado da mesma forma e enviado para o radar de prazos.'
+                : ''}
             </p>
 
             {/* A acção fica SEMPRE presente; o handler é idempotente (não duplica

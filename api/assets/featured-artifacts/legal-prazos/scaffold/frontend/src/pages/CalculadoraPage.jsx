@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import { computePrazo } from '../engine/prazo.mjs';
 import { useSharedCollection, createShared, formatDate } from '../shared.js';
 import { useDemoResult } from '../demo.js';
-import { Badge } from '../components/ui.jsx';
-import { IconCalendar, IconFolder, IconPlus, IconChevronRight } from '../components/Icons.jsx';
+import { Badge, toast } from '../components/ui.jsx';
+import { IconCalendar, IconFolder, IconPlus, IconChevronRight, IconFilePdf } from '../components/Icons.jsx';
 import { prazoDescricao, estadoDerivado } from './prazo-view.js';
+import { memoriaCalculoHtml } from './memoria-pdf.js';
 
 const CONTAGENS = [
   { value: 'uteis', label: 'Dias úteis' },
@@ -84,6 +85,7 @@ export default function CalculadoraPage() {
   const [resultado, setResultado] = useState(null);
   const [erro, setErro] = useState(null);
   const [guardando, setGuardando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
 
   // Tutorial Bridge: sinaliza ao anfitrião que o resultado do cálculo está
   // visível (passo annotate-result). No-op fora de uma demonstração activa.
@@ -185,6 +187,29 @@ export default function CalculadoraPage() {
       setErro(e && e.message ? e.message : 'Não foi possível guardar o prazo.');
     } finally {
       setGuardando(false);
+    }
+  }
+
+  // Memória de cálculo: o mesmo snapshot que o "Guardar" usa, em PDF, com todos
+  // os passos SEM condensar e as citações legais - a prova documental da contagem.
+  async function onMemoriaPdf() {
+    if (!resultado) return;
+    setExportandoPdf(true);
+    try {
+      const ekoa = typeof window !== 'undefined' ? window.__ekoa : null;
+      if (!ekoa || typeof ekoa.exportPdf !== 'function') {
+        throw new Error('Exportação PDF indisponível neste ambiente.');
+      }
+      const { html, filename } = memoriaCalculoHtml({
+        resultado,
+        processoLabel: processoLabel(resultado.processoId),
+      });
+      await ekoa.exportPdf({ html, filename });
+      toast('Memória de cálculo exportada em PDF.', { tone: 'ok' });
+    } catch (e) {
+      toast(e && e.message ? e.message : 'Não foi possível exportar a memória de cálculo.', { tone: 'error' });
+    } finally {
+      setExportandoPdf(false);
     }
   }
 
@@ -388,6 +413,15 @@ export default function CalculadoraPage() {
                   disabled={guardando}
                 >
                   <IconPlus /> {guardando ? 'A guardar.' : 'Guardar prazo'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="exportar-memoria"
+                  onClick={onMemoriaPdf}
+                  disabled={exportandoPdf}
+                >
+                  <IconFilePdf /> {exportandoPdf ? 'A exportar.' : 'Memória de cálculo (PDF)'}
                 </button>
               </div>
             </div>
