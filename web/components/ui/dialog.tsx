@@ -102,7 +102,7 @@ export function Dialog({
           transition={{ duration: 0.15, ease: 'easeOut' }}
         >
           <div
-            className="absolute inset-0 bg-neutral-950/40 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-neutral-950/50 backdrop-blur-sm"
             onClick={onClose}
             aria-hidden
           />
@@ -115,11 +115,11 @@ export function Dialog({
             aria-describedby={description ? descriptionId : undefined}
             tabIndex={-1}
             onKeyDown={onPanelKeyDown}
-            className={`relative z-10 mx-4 w-full rounded-2xl bg-surface shadow-overlay outline-none ${sizeClasses[size]}`}
-            initial={{ opacity: 0, scale: 0.97, y: 8 }}
+            className={`relative z-10 mx-4 w-full rounded-2xl bg-surface shadow-overlay ring-1 ring-neutral-950/5 outline-none ${sizeClasses[size]}`}
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
+            transition={{ type: 'spring', stiffness: 420, damping: 34 }}
           >
             {(title || description) && (
               <div className="px-6 pt-5">

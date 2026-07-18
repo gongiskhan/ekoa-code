@@ -64,6 +64,7 @@ export function useTranslation() {
     messages: t('messages'),
     sidePanel: t('sidePanel'),
     chatPanel: t('chatPanel'),
+    chatDock: t('chatDock'),
     attachments: t('attachments'),
     status: t('status'),
     placeholder: t('placeholder'),

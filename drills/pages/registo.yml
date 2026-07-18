@@ -1,0 +1,196 @@
+id: registo
+title: Registo
+path: /registo
+mode: steps
+areas: []
+steps:
+  - id: header-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The page renders inside PageShell/PageHeader with the ScrollText icon, an
+      h1 reading exactly "Registo" in the Lora serif font, and the description
+      paragraph "Quem construiu, executou ou registou o quê, quando, e o consumo
+      por utilizador. Apenas metadados e artefactos - nunca conversas." beneath
+      it.
+    tags: []
+    judgment: false
+  - id: org-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A select with data-testid="registo-filter-org", labelled "Escritório", is
+      visible (the logged-in dev account is super-admin) with a default option
+      "Todos os escritórios" followed by one option per organisation.
+    tags:
+      - role-gating
+    judgment: false
+  - id: user-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A select with data-testid="registo-filter-user", labelled "Utilizador",
+      shows a default option "Todos os utilizadores" followed by one option per
+      user (option text equals each user's username).
+    tags: []
+    judgment: false
+  - id: type-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A free-text input with data-testid="registo-filter-type", labelled "Tipo
+      de ação", shows placeholder text "ex.: build" and accepts typed text.
+    tags: []
+    judgment: false
+  - id: date-range-filters
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Two date inputs are present: data-testid="registo-filter-from" labelled
+      "De" and data-testid="registo-filter-to" labelled "Até", both of input
+      type date.
+    tags: []
+    judgment: false
+  - id: apply-and-clear-filters
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      An "Aplicar" primary button is always visible and re-fetches the registo
+      list on click; a "Limpar filtros" secondary button (with an X icon)
+      appears only once at least one filter has a non-empty value, and clicking
+      it resets every filter control back to its default/empty value and
+      re-fetches.
+    tags: []
+    judgment: false
+  - id: table-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      With no filters applied, a table with data-testid="registo-table" is
+      rendered under an "ATIVIDADE" section label, showing one row per registo
+      entry with columns Utilizador, Ação (as a neutral-tone Badge), Escritório
+      (present because the account is super-admin), Data e hora (a localized
+      pt-PT timestamp), Artefactos (a comma-joined list of target ids, or "-"
+      when none), and Consumo (usage counts or "-" when absent); a "<N>
+      entradas" count sits to the right of the ATIVIDADE label matching the
+      number of rows.
+    tags: []
+    judgment: true
+  - id: table-empty-state
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: empty
+    description: >-
+      When the applied filters match zero entries, the table is replaced by an
+      EmptyState with the ScrollText icon and the exact title text "Sem entradas
+      no registo.", and no stray table markup or column headers remain on
+      screen.
+    tags: []
+    judgment: false
+    spec: tests/drills/registo.spec.ts#table-empty-state
+    assertion:
+      kind: text-contains
+      text: Sem entradas no registo.
+  - id: loading-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Immediately after navigating to /registo (or right after clicking Aplicar
+      while the previous result set is empty), a LoadingState with the label "A
+      carregar registo..." is visible before the table or empty state appears,
+      using the shared spinner primitive rather than a custom loader.
+    tags: []
+    judgment: false
+  - id: mobile-filters-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width the filter row (Escritório, Utilizador, Tipo de ação, De,
+      Até, Aplicar, Limpar filtros) wraps onto multiple lines via flex-wrap
+      without any control being clipped, overlapping, or overflowing the
+      viewport horizontally, and the registo-table scrolls horizontally within
+      its own container instead of forcing the whole page to overflow.
+    tags:
+      - responsive
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /registo, applying a filter, and clearing filters produces zero
+      browser console errors (favicon and React DevTools messages excepted).
+    tags:
+      - a11y
+    judgment: false
+states:
+  - id: empty
+    label: Filtered to zero results
+    reachPath:
+      - id: type-nonsense-filter
+        description: >-
+          Type an action type that matches no entries (e.g. "zzz-no-match") into
+          the Tipo de ação input (registo-filter-type) and click Aplicar.
+    matcher:
+      assertion:
+        kind: text-contains
+        text: Sem entradas no registo.
+    screenshotPath: >-
+      /home/ggomes/.garrison-codex/automations/runs/01KXRXBD4WFMAC3H1SDHQ25Y8M/evidence/step-003.jpg
+    referenceSource:
+      runId: 01KXRXBD326DSHBR2D85ANWK7A
+      stepId: table-empty-state
+      viewportId: desktop
+      at: '2026-07-17T20:49:04.040Z'

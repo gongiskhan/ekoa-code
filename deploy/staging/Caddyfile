@@ -1,0 +1,48 @@
+# Caddy edge for ekoa-code staging. Automatic HTTPS (Let's Encrypt) for the public hostname,
+# and a SAME-ORIGIN reverse proxy so the browser calls the API on the very origin it was
+# served from - this is the topology web/lib/api/base-url.ts calls "same-origin (Caddy proxy)".
+# The API ships no CORS on purpose (same-origin behind this proxy), and the dashboard CSP is
+# connect-src 'self', so no cross-origin handling is needed.
+#
+# Path split: the API owns a FIXED, structural set of non-Next prefixes; Next serves the rest.
+# The @api allowlist below is the authoritative same-origin map and MUST stay in lockstep with
+# every non-/api browser-facing mount in api/src/server.ts (buildApp). Anything the API serves
+# that is NOT in this list silently falls through to Next -> a Next 404 (this exact gap once
+# broke /apps/* app previews + /artifact-screenshots thumbnails on staging). Current API surface:
+#   /api/*                     -> all REST + served-app data planes (app-data, app-sso, m365,
+#                                 demos, app-health, legal, adobe-sign, app-pdf, dev, design-tokens)
+#   /health                    -> watchdog health surface
+#   /hooks[/**]                -> webhook ingress (raw-body HMAC)
+#   /apps[/**]                 -> the served-app pipeline (live build previews; the iframe src)
+#   /__ekoa/**                 -> runtime scripts injected into served apps (panel/action/demo-bridge)
+#   /artifact-screenshots/**   -> post-build thumbnail PNGs (home + artifacts cards)
+#   /artifact-pdfs/**          -> in-app "Descarregar PDF" output
+#   /automation-screenshots/** -> per-step automation run screenshots
+#   /brand-assets/**           -> brand-research logos rendered in the dashboard
+#   /build[/**]                -> fork-per-click build share links
+# Everything else (dashboard pages, /_next/*, login/activate) -> web:3000.
+# WebSocket upgrades (streaming/CDP live-view, bridge) are proxied transparently by reverse_proxy.
+{
+	email {$ACME_EMAIL:goncalo@ekoa.io}
+}
+
+{$PUBLIC_HOSTNAME:staging.ekoa.io} {
+	encode zstd gzip
+
+	# API surface -> api container. Keep in lockstep with api/src/server.ts non-/api mounts.
+	@api path /api/* /health /hooks /hooks/* /apps /apps/* /__ekoa/* /artifact-screenshots/* /artifact-pdfs/* /automation-screenshots/* /brand-assets/* /build /build/*
+	handle @api {
+		reverse_proxy api:4111
+	}
+
+	# Everything else -> the Next.js web client.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# Basic access log to stdout (visible via `docker compose logs caddy`).
+	log {
+		output stdout
+		format console
+	}
+}

@@ -7,13 +7,15 @@ import React from 'react';
  */
 
 export const labelClasses = 'mb-1.5 block text-xs font-medium text-neutral-600';
-export const hintClasses = 'mt-1 text-xs text-neutral-400';
-export const errorTextClasses = 'mt-1 text-xs text-red-600';
+export const hintClasses = 'mt-1.5 text-xs text-neutral-500';
+export const errorTextClasses = 'mt-1.5 text-xs text-red-600';
 
 /** Base control classes; pass the field's error state to switch the border tone. */
 export function fieldClasses(error?: boolean): string {
-  return `w-full rounded-lg border bg-surface px-3 py-2 text-sm text-neutral-900 placeholder-neutral-400 focus-ring focus:border-teal-500 ${
-    error ? 'border-red-300' : 'border-line'
+  return `w-full rounded-lg border bg-surface px-3 py-2 text-sm text-neutral-900 placeholder-neutral-400 shadow-card outline-none focus:ring-[3px] ${
+    error
+      ? 'border-red-300 focus:border-red-400 focus:ring-red-500/10'
+      : 'border-line hover:border-line-strong focus:border-teal-500 focus:ring-teal-600/10'
   }`;
 }
 

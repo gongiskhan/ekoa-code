@@ -97,7 +97,7 @@ export function BackendTriggerCard({ artifactId, handlers }: { artifactId: strin
   if (!handlers || handlers.length === 0) return null;
 
   return (
-    <section data-testid="backend-trigger-card" className="rounded-xl border border-neutral-200 bg-white p-5">
+    <section data-testid="backend-trigger-card" className="rounded-2xl border border-line bg-surface p-5 shadow-card">
       <header className="mb-3 flex items-center gap-2">
         <Link2 className="h-5 w-5 text-teal-600" aria-hidden />
         <h3 className="text-base font-semibold text-neutral-900">Ligações</h3>

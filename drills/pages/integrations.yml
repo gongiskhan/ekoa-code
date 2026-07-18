@@ -1,0 +1,254 @@
+id: integrations
+title: Integrations
+path: /integrations
+mode: steps
+areas: []
+steps:
+  - id: page-header-and-refresh
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The PageShell renders a PageHeader with the Plug icon and an h1 in the Lora serif font reading exactly \"Integrações\"; its description line reads either \"Ligar serviços e ferramentas externas\" (no integrations yet) or \"<N> integrações\" optionally followed by \" · <N> ativo\" when at least one is enabled; a ghost RefreshCw icon button (aria-label \"Atualizar\") sits in the header actions and is disabled while a refetch is in flight."
+    tags: [header]
+    judgment: false
+
+  - id: three-tabs-plataforma-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Exactly three top-level tabs render below the header via [data-testid^=\"integrations-tab-\"], reading \"Integrações da Plataforma\" (data-testid integrations-tab-plataforma), \"Minhas Integrações\" (integrations-tab-minhas) and \"Webhooks\" (integrations-tab-webhooks); on a fresh navigation to /integrations (no ?tab= param) the Plataforma tab is the active one and its panel (data-testid platform-integrations-section, role=tabpanel) is the only one visible."
+    tags: [tabs]
+    judgment: false
+
+  - id: platform-subtitle-and-oauth-cards
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The Plataforma panel opens with the subtitle \"Contas e serviços mantidos pela plataforma: Google, Microsoft e as integrações incluídas.\", then a grid whose first two cards are the Google Workspace card (\"Google Workspace\", description \"Liga Gmail, Drive, Calendar, Sheets e Docs\") and the Microsoft 365 card (\"Microsoft 365\", description \"Liga Outlook, OneDrive, SharePoint, Teams, Excel e Word\"); each shows a status dot + badge (\"Ligado\"/\"Não ligado\") and a primary \"Ligar\" button when disconnected or a danger-ghost \"Desligar\" button plus the connected account email when connected."
+    tags: [oauth]
+    judgment: false
+
+  - id: pipedream-teaser-card
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A third card, data-testid pipedream-section, sits in the same Plataforma grid, collapsed by default: it shows the title \"Ligar a milhares de aplicações\", the badge \"Rede Pipedream\", a teaser sentence containing \"rede Pipedream\", six app monogram chips plus a \"+1000\" chip, and a data-testid pipedream-expand \"Explorar\" button; the catalog title (app-network-title), search box (app-network-search) and master toggle (pipedream-toggle) are NOT present while collapsed."
+    tags: [pipedream]
+    judgment: false
+
+  - id: status-filter-pills-and-search
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Below the OAuth/Pipedream row, a pills tab bar filters the versioned-skill cards by status - \"Todas\", \"Ativadas\", \"Configuradas\", \"Disponíveis\" - each with a live count, alongside a search input placeholder \"Pesquisar integrações...\"; typing a query that matches no skill's name/description/category/provider empties the skill grid (the OAuth and Pipedream cards stay visible) and shows an EmptyState with a Search icon, the text \"Nenhuma integração corresponde à sua pesquisa ou filtro.\" and a \"Limpar filtros\" button that resets both the query and the filter back to \"Todas\"."
+    tags: [filter, search]
+    judgment: false
+
+  - id: skill-card-anatomy
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A versioned integration-skill card (e.g. Stripe, WhatsApp Business or Slack) in the Plataforma grid shows a Plug icon avatar, the integration's display name and category, a truncated two-line description, badges for the auth-type label (e.g. \"Chave API\"), the provider, an actions-count badge (\"N ações\") when it has actions and a config-fields-count badge (\"N config\") when it has config fields, a colored status dot (teal when enabled, amber when configured-but-disabled, grey when unconfigured), and a footer row with a status Badge (\"Ativado\"/\"Configuradas\"/\"Disponíveis\") plus icon buttons for the credential guide/how-to-connect, \"Usar no Chat\" and edit (pencil)."
+    tags: []
+    judgment: false
+
+  - id: citius-session-panel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The card titled \"CITIUS / eTribunal\" in the Plataforma grid renders a SessionConnectPanel (data-testid session-connect-panel-citius) that starts in \"A verificar a sessão...\" and settles, within 15s, into either a primary \"Abrir janela de início de sessão\" button (local dev, capture available) or a \"Tentar novamente\" retry button (capture unavailable) - never click either, since both would open a real window to the external CITIUS/eTribunal portal; there is no \"Sessão ativa desde\" row since no session is captured in this environment."
+    tags: [session-connect, regression]
+    judgment: false
+
+  - id: session-status-missing-fields-no-crash
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Regression guard: navigating to /integrations triggers a GET .../integrations/citius/session request (the SessionConnectPanel's mount-time status poll); regardless of whether that response's body omits the actions array or the sessionConnect object, the CITIUS card must still render fully (heading visible, expandable via \"Mostrar mais\") and the page must NOT crash to the error boundary - zero browser console errors and zero pageerror events are produced while this status poll resolves (this exact TypeError - dereferencing actions/sessionConnect.available on an incomplete response - previously crashed the whole page)."
+    tags: [regression, crash-guard]
+    judgment: false
+
+  - id: credential-form-states
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On an unconfigured skill card, the credential area is a single amber banner reading \"Configure as credenciais para ativar\" with a Key icon; clicking it expands an inline form with one input per config field (required fields marked with a red asterisk, secret fields with a small lock icon and a show/hide eye toggle), the security notice \"As credenciais são encriptadas em repouso (AES-256-GCM)...\", and \"Guardar credenciais\"/\"Cancelar\" buttons. On an already-configured skill card, the same area instead shows a \"Credenciais configuradas\" panel with one masked bullet value (••••••••••••) per field and an \"Editar credenciais\" link that reopens the same form."
+    tags: [credentials]
+    judgment: false
+
+  - id: toggle-enabled-switch
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On a configured skill card, a Switch appears next to the status badge in the footer; clicking it flips its checked state and the adjacent Badge text/tone updates between \"Ativado\" (teal, enabled) and \"Configuradas\" (amber, configured but disabled) accordingly, with no page reload."
+    tags: []
+    judgment: false
+
+  - id: use-in-chat-navigation
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking the \"Usar no Chat\" (MessageSquare) icon button on any skill card navigates to /chat?mode=integrate."
+    tags: [navigation]
+    judgment: false
+
+  - id: edit-dialog-opens-on-card-click
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking anywhere on a skill card's body outside its interactive controls (e.g. on the description text) opens the IntegrationDialog in edit mode, titled \"Editar Integração\" and pre-populated with that integration's identity fields; closing it (the dialog's close control) returns to the grid with no changes persisted."
+    tags: []
+    judgment: false
+
+  - id: delete-confirm-dialog-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Hovering a skill card reveals a danger-ghost Trash2 icon button in its header; clicking it opens a confirm dialog titled \"Eliminar Integração\" whose body reads \"Tem a certeza que pretende eliminar \"<name>\"? Esta ação não pode ser desfeita.\" with a danger-toned \"Eliminar\" confirm button and a \"Cancelar\" button; click \"Cancelar\" so the integration is NOT actually deleted."
+    tags: [destructive-action]
+    judgment: false
+
+  - id: mobile-375-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width, the skill/platform grid collapses to a single column, the tab bar and the status-filter pills + search row wrap without overlapping or clipping text, every card's badges/buttons stay within the card border (no horizontal overflow or cut-off labels), and the header's title/description/refresh button remain fully legible."
+    tags: [responsive]
+    judgment: false
+
+  - id: citius-actions-and-automation-provisioning
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: citius-expanded
+    description: "With the CITIUS card's actions block expanded, five actions are listed by name - consultar_notificacoes, consultar_processo, fetch_documentos_processo, submeter_peca and consulta_publica_distribuicao - and exactly four of them carry a small \"Automação\" tag (Workflow icon) while consulta_publica_distribuicao carries none; if a \"Criar automações\" button is present, clicking it provisions the automations and, within 20s, all four tagged rows show the automation's name plus a \"Refinar passos\" link pointing to /automations/citius-<template>-<owner> (if provisioning already happened in this environment, those four links and names are already present and no row still reads \"Automação por criar\")."
+    tags: [session-connect, automations, regression]
+    judgment: false
+
+  - id: pipedream-catalog-and-search
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: pipedream-expanded
+    description: "With the Pipedream card expanded (col-span-full), it shows the catalog title \"Milhares de aplicações\" (data-testid app-network-title), a search input placeholder \"Procurar entre milhares de aplicações...\" (app-network-search), more than 10 app tiles (app-network-tile, each with a colored monogram, app name and category) and a \"Recolher\" collapse button that returns the card to its collapsed teaser form; typing a query with no matches (e.g. \"zzz-no-match\") replaces the tile grid with the text \"Sem resultados. A pesquisa completa abre quando a rede estiver configurada.\" (app-network-empty); the master toggle (pipedream-toggle) and its explainer text are visible below the catalog."
+    tags: [pipedream]
+    judgment: false
+
+  - id: pipedream-configure-project-flow
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: pipedream-expanded
+    description: "With the Pipedream card expanded, if the master toggle (pipedream-toggle, aria-checked) is off, clicking it turns it on and the panel switches from the \"disabled\" explainer to a \"Configuração pendente\" section with a \"Configurar projeto\" button (pipedream-config-open); clicking it reveals a form (pipedream-config-form) with Client ID, Client Secret (password, with a show/hide eye toggle), Project ID and an Ambiente select (producao/desenvolvimento); filling all three text fields and clicking \"Guardar configuração\" (pipedream-config-save) replaces the form with a \"Configuração do projeto ativa\" summary row (pipedream-config-summary) offering \"Alterar configuração\" and a red \"Remover\" (pipedream-config-remove) button; clicking Remover then confirming \"Remover\" in the resulting dialog deletes the config and returns to the \"Configurar projeto\" pending state."
+    tags: [pipedream]
+    judgment: false
+
+  - id: my-integrations-empty-and-header-actions
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: my-integrations
+    description: "The Minhas Integrações panel (data-testid my-integrations-section) shows the heading \"As minhas integrações\" and subtitle \"Integrações que criou para este espaço de trabalho.\", a header action row with \"Importar\" (Upload icon, opens a hidden file input accepting .json), \"Exportar Tudo\" (Download icon, disabled only when there are zero total integrations), \"Construir no Chat\" (MessageSquare icon) and a primary \"Adicionar Integração\" button (data-testid my-integrations-add); when no user-created skills exist yet, a dashed-border EmptyState (data-testid my-integrations-empty) shows a Plug icon, the text \"Ainda não há integrações. Crie a primeira ou importe de um ficheiro.\" and a primary \"Adicionar Primeira Integração\" button."
+    tags: [empty-state]
+    judgment: false
+
+  - id: create-dialog-renders-sections
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: create-dialog
+    description: "Clicking \"Adicionar Integração\" (or \"Adicionar Primeira Integração\") opens the IntegrationDialog titled \"Nova Integração\", laid out as sequential sections each with an icon + title + subtitle: \"Identidade\" (base metadata), \"Campos de Configuração\" (credentials/config needed to connect), \"Ficheiro de Skill\" (the SKILL.md agent-instructions file), \"Ações\" (API endpoints the integration can call) and \"Testes\" (test the integration with your credentials); the dialog closes without creating anything when dismissed."
+    tags: []
+    judgment: false
+
+  - id: webhooks-section-render-and-crud
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: webhooks
+    description: "The Webhooks panel (data-testid webhooks-section) shows a Webhook-icon heading \"Webhooks\", the subtitle \"Receba eventos de serviços externos e encaminhe-os para o backend de um artefacto.\" and a primary \"Criar webhook\" button (webhook-create-btn); with zero rows it shows an EmptyState reading \"Ainda não existem webhooks. Crie um para receber eventos de um serviço externo.\", otherwise a table/list of webhook-row items each with integration name, event label, target artifact, a monospace callback-URL code chip (webhook-url, containing \"/hooks/\") with a copy button, and a status Badge (\"Ativo\"/\"Desativado\") plus a delete icon (webhook-delete); creating one for integration \"WhatsApp Business\" targeting artifact \"legal-nucleo\" (the entrypoint field pre-fills \"onMessage\") adds a new row showing that integration name and a /hooks/ URL, and deleting it (via the confirm dialog's \"Eliminar\" button) returns the row count to its prior value."
+    tags: [webhooks]
+    judgment: false
+
+  - id: credential-guide-dialog-content
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: credential-guide
+    description: "Clicking the help-circle credential-guide affordance on a skill card that declares one (amber \"Como ligar\" button when unconfigured, plain help icon labeled \"Guia de configuração\" when configured) opens a dialog titled \"Como ligar <integration name>\" whose body renders that integration's credential guide as clean, legible Markdown (headings/paragraphs, numbered or bulleted steps, bold emphasis, inline code and links all styled distinctly, no raw ** or stray markdown syntax visible) and closes via a \"Fechar\" button."
+    tags: [markdown]
+    judgment: true
+
+states:
+  - id: citius-expanded
+    label: CITIUS card actions expanded
+    reachPath:
+      - id: expand-citius-actions
+        description: On the Plataforma tab, locate the card titled "CITIUS / eTribunal" and click its "Mostrar mais" toggle to expand the actions block.
+
+  - id: pipedream-expanded
+    label: Pipedream card expanded (catalog + network config)
+    reachPath:
+      - id: expand-pipedream-card
+        description: On the Plataforma tab, click the "Explorar" button on the Pipedream card ("Ligar a milhares de aplicações").
+
+  - id: my-integrations
+    label: Minhas Integrações tab
+    reachPath:
+      - id: click-minhas-tab
+        description: Click the "Minhas Integrações" tab in the top tab bar.
+
+  - id: create-dialog
+    label: Create-integration dialog open
+    reachPath:
+      - id: goto-minhas-tab
+        description: Click the "Minhas Integrações" tab in the top tab bar.
+      - id: click-add-integration
+        description: Click the "Adicionar Integração" (or "Adicionar Primeira Integração") button to open the create dialog.
+
+  - id: webhooks
+    label: Webhooks tab
+    reachPath:
+      - id: click-webhooks-tab
+        description: Click the "Webhooks" tab in the top tab bar.
+
+  - id: credential-guide
+    label: Credential guide dialog open
+    reachPath:
+      - id: click-credential-guide-affordance
+        description: On the Plataforma tab, find a skill card whose footer shows a "Como ligar" button or a help-circle "Guia de configuração" icon and click it.

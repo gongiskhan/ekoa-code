@@ -147,4 +147,24 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
 
     expect(errors, `console errors on /integrations:\n${errors.join('\n')}`).toEqual([]);
   });
+
+  test('/<unknown route> renders the 404 heading in the shared Space Grotesk page-title font', async ({ page }) => {
+    // Dogfood finding: the not-found page's h1 was styled off the shared PageHeader
+    // (font-display -> Space Grotesk), the only user-visible page off the design system.
+    await login(page);
+
+    const target = '/this-page-does-not-exist-xyz';
+    const errors = trackConsoleErrors(page);
+    await page.goto(target);
+    const heading = page.locator('h1').first();
+    await expect(heading).toBeVisible({ timeout: 15_000 });
+    const fontFamily = await heading.evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(fontFamily, `h1 font-family: ${fontFamily}`).toMatch(/Space Grotesk/i);
+
+    // The navigation's OWN 404 (an unknown route legitimately answers 404) is
+    // the one expected, intentional entry here - every other response error
+    // still fails the test.
+    const unexpected = errors.filter((e) => !e.endsWith(target));
+    expect(unexpected, `console errors on the 404 page:\n${unexpected.join('\n')}`).toEqual([]);
+  });
 });

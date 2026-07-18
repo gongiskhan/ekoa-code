@@ -268,10 +268,10 @@ function ChatSection({
                 onClick={() => onUpdate({ chat: { guidance: opt.key } })}
                 data-testid={`guidance-${opt.key}`}
                 aria-pressed={selected}
-                className={`rounded-xl border p-4 text-left transition-colors focus-ring ${
+                className={`rounded-2xl border p-4 text-left transition-colors focus-ring ${
                   selected
                     ? "border-teal-500 bg-teal-50 ring-1 ring-teal-200"
-                    : "border-line bg-surface hover:border-line-strong"
+                    : "border-line bg-surface shadow-card hover:border-line-strong"
                 }`}
               >
                 <div

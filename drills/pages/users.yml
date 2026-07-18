@@ -1,0 +1,187 @@
+id: users
+title: Users
+path: /users
+mode: steps
+areas: []
+steps:
+  - id: page-shell-lora-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'The page root has data-testid="users-page" (PageShell) and its PageHeader renders an h1 in the Lora serif font reading "Utilizadores e Equipas" with subtitle "Gerir utilizadores e equipas" and a Users2 icon, matching the shared PageHeader pattern.'
+    tags: [visual, i18n]
+    judgment: false
+
+  - id: header-bar-no-title-duplication
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The persistent dashboard Header bar above the PageHeader does not repeat or duplicate the "Utilizadores e Equipas" page title text.
+    tags: [visual]
+    judgment: false
+
+  - id: users-table-renders
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'A table with data-testid="users-table" is visible listing users, and a row with data-testid="user-row-admin" (the seeded super-admin dev account) is present, using the shared Table/THead/TBody/TR/TH/TD primitives (not an ad-hoc list).'
+    tags: []
+    judgment: false
+
+  - id: table-columns-super-admin
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'As the logged-in super-admin, the users table header shows the columns "Nome de utilizador", "Escritório", "Função", "Ativo", "Tokens utilizados", "Criado", "Ultimo login", and "Ação" (the last two super-admin-only columns are present because the dev login is super-admin).'
+    tags: [role-gating]
+    judgment: false
+
+  - id: summary-overview-card
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'A Card above the table titled "Visão geral" (with a Shield icon) shows three inline counts - total users, admins, and active users - each as "<number> <label>" text, and the numbers are internally consistent with the rows rendered in the table below.'
+    tags: []
+    judgment: true
+
+  - id: role-toggle-per-row
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Each non-super-admin user row shows a two-option role toggle group with data-testid="role-toggle-<username>" (role="group") with "Utilizador" and "Administrador" segmented buttons; the currently active role is visually highlighted (teal background) and is not clickable, the other option is clickable and calls the role-update action. The seeded super-admin row instead shows a read-only "Super Administrador" badge with no toggle.'
+    tags: []
+    judgment: false
+
+  - id: active-switch-per-row
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Each row has an element with data-testid="user-active-<username>" containing a Switch toggle plus "Ativo"/"Inativo" text reflecting the user''s active state; the super-admin row''s switch is disabled (cannot deactivate the super-admin account).'
+    tags: []
+    judgment: false
+
+  - id: org-column-resolves-name
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Each row''s "Escritório" cell (data-testid="user-org-<username>") shows a resolved organization display name (not a raw UUID/orgId string), since the logged-in super-admin has the full orgs list to resolve names from.'
+    tags: []
+    judgment: false
+
+  - id: token-usage-badge-no-crash
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'The "Tokens utilizados" column renders a Badge with text matching the pattern "<used> / <base> (<percentage>%)" for every user row (e.g. the admin row), never throwing - this guards the known fmtTokens(undefined) crash class where admin usage rows previously arrived without tokensBase/tokensRemaining/percentage; zero browser console errors occur while this column renders.'
+    tags: [regression]
+    judgment: false
+
+  - id: add-user-button-super-admin
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'A primary "Adicionar Utilizador" button (Plus icon) is visible in the PageHeader actions slot for the super-admin login, and clicking it opens a modal dialog titled "Adicionar Utilizador" with fields for username, password (optional, with hint "Se vazio, usa o nome de utilizador preenchido até 6 caracteres."), a role picker (Utilizador / Administrador buttons), and - since orgs exist - an "Escritório" select with data-testid="add-user-org" defaulting to "Por omissão (o seu escritório)".'
+    tags: []
+    judgment: false
+
+  - id: add-user-dialog-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'In the open "Adicionar Utilizador" dialog, clicking the "Cancelar" button closes the dialog without creating a row, and the users table row count is unchanged.'
+    tags: []
+    judgment: false
+
+  - id: row-action-menu-icons
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Each non-super-admin row''s "Ação" cell shows four icon buttons (from left to right: set token limit "Gauge" icon, reset usage "RotateCcw" icon, reset password "KeyRound" icon, and a delete "Trash2" icon with data-testid="delete-user-button"); the super-admin row omits the delete icon (its own account cannot be deleted).'
+    tags: []
+    judgment: false
+
+  - id: reset-password-dialog
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Clicking the KeyRound "Repor Palavra-passe" icon button on a user row opens a dialog titled "Repor Palavra-passe" showing "Redefinir palavra-passe para <username>" and a required new-password input (min length 4); "Cancelar" closes it without side effects.'
+    tags: []
+    judgment: false
+
+  - id: set-token-limit-dialog
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Clicking the Gauge "Definir limite de tokens" icon on a user row opens a dialog titled "Definir limite de tokens" pre-filled with the user''s current limit in millions, quick-pick buttons for 1/5/10/25/50/100 M, and a "Repor predefinição" button that is disabled unless the user currently has a custom limit set.'
+    tags: []
+    judgment: false
+
+  - id: delete-user-confirm-dialog
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Clicking the Trash2 delete icon (data-testid="delete-user-button") on a non-super-admin row opens a confirmation dialog titled "Eliminar Utilizador" with body text "Tem certeza que deseja eliminar? Esta ação não pode ser revertida." and a red/danger-toned confirm button plus a "Cancelar" button; clicking Cancelar closes the dialog and leaves the row in place.'
+    tags: []
+    judgment: false
+
+  - id: search-filters-table
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'Typing into the search input (placeholder "Procurar utilizadores..." or similar, above the table) filters the visible rows to usernames containing the typed substring (case-insensitive); typing a string matching no username replaces the table with an EmptyState showing the "Nenhum utilizador corresponde a sua pesquisa." message.'
+    tags: []
+    judgment: false
+
+  - id: zero-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: Loading /users as the super-admin produces zero browser console errors (excluding known-benign favicon/React DevTools messages) - this includes no crash from the token-usage badge column rendering admin usage rows.
+    tags: [regression]
+    judgment: false
+
+  - id: mobile-375-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: At 375px width the users table scrolls horizontally within its own overflow-x container (the table does not force the whole page to overflow horizontally or clip/cut off the PageHeader, summary card, or search input), and the "Adicionar Utilizador" button and search input remain fully visible and usable.
+    tags: [responsive]
+    judgment: true
+
+states: []

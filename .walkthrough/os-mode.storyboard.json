@@ -1,0 +1,455 @@
+{
+  "title": "Ekoa: Modo OS (beta) — janelas, ecrãs de trabalho e o assistente sempre presente",
+  "project": "ekoa",
+  "folder": "os-mode",
+  "segments": [
+    {
+      "type": "title",
+      "id": "intro",
+      "text": "Modo OS (beta)",
+      "subtitle": "O mesmo Ekoa, num ambiente de trabalho com janelas",
+      "reflectFlag": true
+    },
+    {
+      "type": "browser",
+      "id": "classic",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/artifacts",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        {
+          "id": "classic-page",
+          "caption": "O modo clássico continua igual: a página de artefactos",
+          "expectedScreen": "the classic artifacts page with the page title Os Meus Artefactos, filter pills and artifact cards",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "[data-testid^=artifact-use-]"
+            }
+          ],
+          "assert": {
+            "selector": "role:heading:Os Meus Artefactos",
+            "highlight": true
+          },
+          "hold": 3600
+        },
+        {
+          "id": "dock-tab",
+          "caption": "Novidade: o assistente acompanha todas as páginas, numa aba discreta",
+          "expectedScreen": "the artifacts page with a small collapsed chat tab on the right edge, highlighted",
+          "assert": {
+            "selector": "testid:global-chat-dock-tab",
+            "highlight": true
+          },
+          "hold": 3600
+        },
+        {
+          "id": "dock-open",
+          "caption": "Um clique abre o painel de conversa ao lado do conteúdo",
+          "expectedScreen": "the chat panel docked on the right side of the artifacts page, with a composer at the bottom",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "testid:global-chat-dock-tab"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:global-chat-dock"
+            }
+          ],
+          "assert": {
+            "selector": "testid:global-chat-dock",
+            "highlight": true
+          },
+          "hold": 4000
+        },
+        {
+          "id": "dock-resize",
+          "caption": "E redimensiona-se à medida do que estiver a fazer",
+          "expectedScreen": "the docked chat panel visibly wider after dragging its left edge",
+          "actions": [
+            {
+              "type": "drag",
+              "selector": "[data-testid=global-chat-dock] [role=separator]",
+              "target": "role:heading:Os Meus Artefactos",
+              "steps": 12,
+              "overClass": "font-display"
+            }
+          ],
+          "assert": {
+            "selector": "testid:global-chat-dock",
+            "highlight": true
+          },
+          "hold": 3600
+        },
+        {
+          "id": "dock-collapse",
+          "caption": "Quando não é preciso, recolhe para a margem",
+          "expectedScreen": "the artifacts page full width again with the collapsed chat tab on the right edge",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "button:Ocultar o painel de conversa"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:global-chat-dock-tab"
+            }
+          ],
+          "assert": {
+            "selector": "testid:global-chat-dock-tab",
+            "highlight": true
+          },
+          "hold": 3200
+        },
+        {
+          "id": "card-menu",
+          "caption": "Cada artefacto tem agora um menu de ações sempre visível",
+          "expectedScreen": "an open context menu over an artifact card with the items Abrir, Continuar a trabalhar, Mudar o nome, Duplicar and Eliminar Artefacto",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ":nth-match([aria-label=\"Mais ações\"], 1)"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[role=menu]"
+            }
+          ],
+          "assert": {
+            "selector": "[role=menu]",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "duplicate",
+          "caption": "Duplicar cria uma cópia real do artefacto",
+          "expectedScreen": "the artifacts page with a success toast saying Cópia criada and a new copy card in the grid",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "[role=menuitem]:has-text(\"Duplicar\")"
+            },
+            {
+              "type": "waitFor",
+              "selector": "text:Cópia criada."
+            }
+          ],
+          "assert": {
+            "selector": "text:Cópia criada.",
+            "highlight": true
+          },
+          "hold": 3600
+        },
+        {
+          "id": "rename",
+          "caption": "Mudar o nome, pelo mesmo menu, fica logo guardado",
+          "expectedScreen": "the artifacts grid showing a card renamed to Montra do Modo OS",
+          "actions": [
+            {
+              "type": "waitTimeout",
+              "ms": 1200
+            },
+            {
+              "type": "click",
+              "selector": "div.group:has(h3:has-text(\"(cópia)\")) [aria-label=\"Mais ações\"]"
+            },
+            {
+              "type": "click",
+              "selector": "[role=menuitem]:has-text(\"Mudar o nome\")"
+            },
+            {
+              "type": "waitFor",
+              "selector": "role:heading:Mudar o nome"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 400
+            },
+            {
+              "type": "fill",
+              "selector": "input:focus",
+              "text": "Montra do Modo OS"
+            },
+            {
+              "type": "click",
+              "selector": "button:Guardar"
+            },
+            {
+              "type": "waitFor",
+              "selector": "text:Montra do Modo OS"
+            }
+          ],
+          "assert": {
+            "selector": ":nth-match(h3:has-text(\"Montra do Modo OS\"), 1)",
+            "highlight": true
+          },
+          "hold": 4000
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "doorway",
+      "continue": true,
+      "beats": [
+        {
+          "id": "enter-os",
+          "caption": "A porta de entrada: Modo OS, na barra lateral",
+          "expectedScreen": "the OS mode shell: a desktop with app and artifact icons, a workspace pill Ecrã 1 at the top and the chat panel docked on the right (the dock strip itself sits beneath the caption bar)",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "testid:os-mode-doorway"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-shell"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-icon-surface-artifacts"
+            }
+          ],
+          "assert": {
+            "selector": "testid:os-dock",
+            "highlight": true
+          },
+          "hold": 4800
+        },
+        {
+          "id": "os-chat-dock",
+          "caption": "O assistente está sempre presente, com os ficheiros e o resultado à mão",
+          "expectedScreen": "the docked chat panel on the right of the OS desktop, with Ficheiros and Resultado section headers at the bottom",
+          "assert": {
+            "selector": "testid:os-dock-sections",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "pin-app",
+          "caption": "O artefacto que acabámos de criar, afixado à Dock",
+          "expectedScreen": "the OS desktop with the icon menu action applied; the pinned-item highlight is clamped over the caption bar (the dock sits beneath it)",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ":nth-match([data-testid^=os-icon-artifact-]:has-text(\"Montra do Modo OS\") button, 2)"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[role=menu]"
+            },
+            {
+              "type": "click",
+              "selector": "[role=menuitem]:has-text(\"Afixar na Dock\")"
+            },
+            {
+              "type": "waitFor",
+              "selector": ":nth-match([data-testid^=os-dock-pin-], 2)"
+            }
+          ],
+          "assert": {
+            "selector": ":nth-match([data-testid^=os-dock-pin-], 2)",
+            "highlight": true
+          },
+          "hold": 3600
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "windows",
+      "continue": true,
+      "beats": [
+        {
+          "id": "open-artifacts-window",
+          "caption": "As páginas abrem em janelas: o mesmo ecrã de artefactos, adaptado ao espaço",
+          "expectedScreen": "a window titled Artefactos floating over the desktop, showing the artifacts page laid out in fewer columns than full screen",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ":nth-match([data-testid=os-icon-surface-artifacts] button, 1)"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-window-artifacts"
+            }
+          ],
+          "assert": {
+            "selector": "testid:os-window-artifacts",
+            "highlight": true
+          },
+          "hold": 5000
+        },
+        {
+          "id": "snap-left",
+          "caption": "Arraste até à margem para a janela ocupar metade do ecrã",
+          "expectedScreen": "the Artefactos window snapped to the left half of the desktop",
+          "actions": [
+            {
+              "type": "drag",
+              "selector": "[data-testid=os-window-artifacts] [data-window-titlebar]",
+              "target": "testid:os-snap-left",
+              "steps": 16
+            }
+          ],
+          "assert": {
+            "selector": "testid:os-window-artifacts",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "open-app-window",
+          "caption": "A partir da Dock, uma aplicação abre na sua própria janela",
+          "expectedScreen": "a second window titled Montra do Modo OS with the app rendering inside, floating over the desktop",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ":nth-match([data-testid^=os-dock-pin-], 2)"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-window-artifact-app"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 1500
+            }
+          ],
+          "assert": {
+            "selector": "testid:os-window-artifact-app",
+            "highlight": true
+          },
+          "hold": 4600
+        },
+        {
+          "id": "snap-right",
+          "caption": "Metade e metade: duas janelas lado a lado",
+          "expectedScreen": "the Artefactos window on the left half and the Portfólio Agência app window on the right half, with a divider between them",
+          "actions": [
+            {
+              "type": "drag",
+              "selector": "[data-testid=os-window-artifact-app] [data-window-titlebar]",
+              "target": "testid:os-snap-right",
+              "steps": 16
+            }
+          ],
+          "assert": {
+            "selector": "[data-testid^=os-divider-]",
+            "highlight": true
+          },
+          "hold": 4600
+        },
+        {
+          "id": "divider",
+          "caption": "O divisor ajusta a divisão ao seu gosto",
+          "expectedScreen": "the left Artefactos window now visibly wider than the right app window after dragging the divider",
+          "actions": [
+            {
+              "type": "drag",
+              "selector": ":nth-match([data-testid^=os-divider-], 1)",
+              "target": "testid:os-snap-right",
+              "steps": 14,
+              "overClass": "absolute"
+            }
+          ],
+          "assert": {
+            "selector": "testid:os-window-artifacts",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "workspaces",
+      "continue": true,
+      "beats": [
+        {
+          "id": "new-workspace",
+          "caption": "Um novo ecrã de trabalho começa limpo: as janelas ficam no anterior",
+          "expectedScreen": "an empty OS desktop with only icons, no windows, and a second workspace pill Ecrã 2 active at the top",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "button:Novo ecrã"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 800
+            }
+          ],
+          "assert": {
+            "selector": "[data-testid^=os-workspace-]:not([data-testid=os-workspace-switcher]):has-text(\"Ecrã 2\")",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "back-to-ws1",
+          "caption": "Ao voltar, as janelas estão exatamente onde ficaram",
+          "expectedScreen": "workspace Ecrã 1 again with the two windows side by side and the divider restored",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "[data-testid^=os-workspace-]:not([data-testid=os-workspace-switcher]):has-text(\"Ecrã 1\")"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-window-artifacts"
+            }
+          ],
+          "assert": {
+            "selector": "[data-testid^=os-divider-]",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "reload",
+      "continue": true,
+      "beats": [
+        {
+          "id": "reload-restored",
+          "caption": "Mesmo depois de recarregar, a disposição mantém-se",
+          "expectedScreen": "after a full page reload, the same two windows side by side in Ecrã 1 with the divider",
+          "actions": [
+            {
+              "type": "goto",
+              "path": "http://localhost:3000/os"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-window-artifacts",
+              "timeout": 30000
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:os-window-artifact-app",
+              "timeout": 30000
+            }
+          ],
+          "assert": {
+            "selector": "[data-testid^=os-divider-]",
+            "highlight": true
+          },
+          "hold": 5000
+        }
+      ]
+    },
+    {
+      "type": "title",
+      "id": "outro",
+      "text": "Modo OS (beta)",
+      "subtitle": "Janelas, ecrãs de trabalho e o assistente sempre presente, no mesmo Ekoa",
+      "duration": 2.5
+    }
+  ]
+}

@@ -18,7 +18,7 @@ interface PageShellProps {
 export function PageShell({ width = 'default', testId, children }: PageShellProps) {
   return (
     <div className="flex-1 overflow-y-auto scrollbar-light" data-testid={testId}>
-      <div className={`mx-auto ${widthClasses[width]} px-6 py-8 md:px-8 space-y-8`}>{children}</div>
+      <div className={`mx-auto ${widthClasses[width]} px-6 py-10 md:px-8 space-y-8`}>{children}</div>
     </div>
   );
 }

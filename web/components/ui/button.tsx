@@ -7,13 +7,13 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dang
 export type ButtonSize = 'sm' | 'md';
 
 const base =
-  'inline-flex items-center gap-2 rounded-lg font-medium transition-colors focus-ring disabled:opacity-50 disabled:cursor-not-allowed';
+  'inline-flex items-center gap-2 rounded-lg font-medium pressable focus-ring disabled:opacity-50 disabled:cursor-not-allowed disabled:active:transform-none';
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-teal-600 hover:bg-teal-700 text-white',
-  secondary: 'bg-surface border border-line hover:bg-neutral-50 text-neutral-700',
+  primary: 'bg-teal-600 hover:bg-teal-700 text-white shadow-card',
+  secondary: 'bg-surface border border-line hover:border-line-strong hover:bg-neutral-50 text-neutral-700 shadow-card',
   ghost: 'hover:bg-neutral-100 text-neutral-600',
-  danger: 'bg-red-600 hover:bg-red-700 text-white',
+  danger: 'bg-red-600 hover:bg-red-700 text-white shadow-card',
   'danger-ghost': 'text-red-600 hover:bg-red-50',
 };
 

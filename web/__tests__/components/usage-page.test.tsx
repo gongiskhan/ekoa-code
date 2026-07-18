@@ -123,11 +123,14 @@ describe('UsagePage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('maria')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Repor' }));
 
     // Confirm dialog with the PT-PT prompt, then take the destructive action.
+    // Two "Repor" buttons exist now (row + dialog confirm); the portaled dialog
+    // is appended to body, so its confirm button is the last match.
     expect(await screen.findByText('Repor consumo de maria?')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Repor' }));
+    const reporButtons = screen.getAllByRole('button', { name: 'Repor' });
+    await userEvent.click(reporButtons[reporButtons.length - 1]);
 
     await waitFor(() => expect(mocked.billing.adminResetUsage).toHaveBeenCalledWith({ userId: 'u-maria' }));
   });

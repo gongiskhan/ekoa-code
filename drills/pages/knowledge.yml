@@ -1,0 +1,217 @@
+id: knowledge
+title: Knowledge
+path: /knowledge
+mode: steps
+areas: []
+steps:
+  - id: page-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page container (testid knowledge-page) is visible and its PageHeader renders an h1 in the Lora serif font reading 'O que a Ekoa sabe', with a Library icon to its left and the subtitle 'A base de conhecimento que fornece à Ekoa: documentos com fonte e data, prontos a citar.' beneath it."
+    tags: [layout]
+    judgment: false
+
+  - id: agents-banner
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A teal-tinted banner card (testid kn-agents-banner) with a Bot icon is visible below the tab bar's row and reads 'Os agentes da Ekoa usam esta base primeiro.' followed by body text containing the phrase 'antes da web', explaining the base is consulted by agents before the web and cites sources or stays silent."
+    tags: []
+    judgment: false
+
+  - id: agents-banner-mobile-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At a 375px viewport width, testid kn-agents-banner is still visible on screen (not clipped, hidden, or pushed off-canvas by the collapsed layout) exactly as pages-core.spec.ts asserts."
+    tags: [responsive]
+    judgment: false
+
+  - id: aprendido-link
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The header action button (testid kn-aprendido-link) reads 'O que a Ekoa aprendeu' with a Brain icon; clicking it navigates the app to /memory."
+    tags: []
+    judgment: false
+
+  - id: tab-bar-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A tab bar shows exactly three tabs in order -- 'Fornecido' (testid kn-tab-fornecido, BookOpen icon), 'Fontes' (testid kn-tab-fontes, Globe icon), 'Documentos' (testid kn-tab-documentos, Upload icon) -- with 'Fornecido' visually active/selected on first load."
+    tags: []
+    judgment: false
+
+  - id: no-human-search-box
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "There is no human search box anywhere on the page: no element with testid kn-query, kn-browse-search, or kn-tab-perguntar exists in the DOM on any of the three tabs -- the base is searched only by Ekoa's agents (via ripgrep), never by a human query box here."
+    tags: []
+    judgment: false
+
+  - id: collection-filter-chips
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the Fornecido tab, a row of pill-shaped filter chips is visible starting with 'Todas' (testid kn-filter-all, active/filled teal by default, aria-pressed true) followed by one chip per existing collection name (testid kn-filter-<collection>); clicking a collection chip marks it active (aria-pressed true) and un-marks 'Todas', re-filtering the document list below to that collection only."
+    tags: []
+    judgment: false
+
+  - id: fornecido-doc-list-or-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the Fornecido tab with the 'Todas' filter active, exactly one of these two renders below the filter chips: if the base has zero documents, testid kn-empty shows a FileText icon with the title 'Ainda não há documentos nesta base.' and description 'Adicione em «Documentos» ou em «Fontes».'; otherwise testid kn-doc-list renders a vertical stack of document cards (testid kn-doc)."
+    tags: []
+    judgment: false
+
+  - id: fornecido-doc-card-detail
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If at least one document exists in the Fornecido list, its first kn-doc card shows a document title, a collection Badge with the collection name, a 2-line-clamped snippet of the document body, and -- when present -- a pt-PT formatted date and/or an external source link (ExternalLink icon + truncated URL) that opens in a new tab; the card also has a trash-icon delete button (testid kn-doc-delete, aria-label 'Eliminar documento') on its right edge."
+    tags: []
+    judgment: true
+
+  - id: fornecido-pagination
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If the Fornecido list has at least one document, a small header line above the list reads '<from>–<to> de <total> documentos' and 'Página <n> de <totalPages>' (pt-PT thousands formatting); if there is more than one page, 'Anterior' (testid kn-prev) and 'Próximo' (testid kn-next) buttons appear below the list, kn-prev is disabled on page 1, and clicking kn-next advances the page indicator and swaps the visible documents."
+    tags: []
+    judgment: false
+
+  - id: fontes-tab-form
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: fontes
+    description: "After switching to the Fontes tab, a container (testid kn-sources) shows an 'Adicionar fonte' form (testid kn-source-form) with a Plus icon and fields Nome (src-label), Coleção (src-collection), URL (src-url), a Níveis de links select (src-levels) defaulting to '1 — links da página', an Âmbito select (src-scope) defaulting to 'Mesmo domínio', a Máx. páginas number input (src-maxpages) defaulting to 2000, a 'Renderizar com navegador (JS/SPA)' checkbox (src-render, unchecked by default), and an 'Adicionar fonte' submit button (testid src-save)."
+    tags: []
+    judgment: false
+
+  - id: fontes-advanced-seeds-disclosure
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: fontes
+    description: "In the Fontes tab's source form, clicking the collapsed 'Sementes adicionais (avançado)' disclosure expands it to reveal a User-Agent text input (src-useragent), a multi-line 'URLs de partida adicionais' textarea (src-seeds), and a URL-template row with a template URL input (src-template-url) plus 'de' (src-template-from), 'até' (src-template-to), and 'passo' (src-template-step) numeric inputs."
+    tags: []
+    judgment: false
+
+  - id: fontes-sources-list-or-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: fontes
+    description: "Below the source form, exactly one of these renders: if no crawl sources exist, testid kn-sources-empty shows a Globe icon and 'Ainda não há fontes. Adicione a primeira acima.'; otherwise a list of testid kn-source-card entries render, each showing the source's label, a teal collection-name badge, its URL as a clickable external link, level/scope/max-pages stats, and four action buttons (Atualizar refresh, an enable/disable power toggle, a Pencil edit, and a Trash2 delete)."
+    tags: []
+    judgment: false
+
+  - id: fontes-edit-source
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: fontes
+    description: "If at least one source card exists, clicking its Pencil edit button (testid src-edit) scrolls to the top of the form, switches the form heading from 'Adicionar fonte' to 'Editar fonte' with a Pencil icon, pre-fills all fields (Nome/Coleção/URL/Níveis/Âmbito/Máx. páginas/Renderizar) from that source, changes the submit button label to 'Guardar alterações', and shows a 'Cancelar' link that resets the form back to 'Adicionar fonte' when clicked."
+    tags: []
+    judgment: false
+
+  - id: fontes-schedule-banner
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: fontes
+    description: "If a nightly-refresh schedule is configured, a small banner (testid kn-schedule) with a CalendarClock icon is visible above the source form reading either 'Atualização automática diária às HH:00 — próxima: ...' (enabled) or 'Atualização automática desativada.' (disabled); if the schedule fetch returns nothing the banner is simply absent, which is not a defect."
+    tags: []
+    judgment: false
+
+  - id: documentos-upload-zone
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: documentos
+    description: "After switching to the Documentos tab, a container (testid kn-documents) shows a 'Carregar documentos' panel with a 'Coleção de destino' text input (testid doc-collection, defaulting to 'documentos') above a dashed dropzone (testid doc-dropzone) reading 'Arraste ficheiros para aqui ou clique para escolher' and 'PDF, Word, PowerPoint, Excel, texto, imagens', backed by a hidden multi-file input (testid doc-input)."
+    tags: []
+    judgment: false
+
+  - id: documentos-add-text-form-and-validation
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: documentos
+    description: "Below the upload panel, an 'Adicionar por texto' form (testid kn-form) has a Coleção input (kn-collection, defaulting to 'documentos'), a Título input (kn-titulo), a Texto textarea (kn-texto), an optional Fonte URL input (kn-fonte), and a 'Guardar' submit button (testid kn-guardar); clicking Guardar while Título and Texto are empty shows the inline validation message 'Indique a coleção, o título e o texto.' and does not submit."
+    tags: []
+    judgment: false
+
+  - id: documentos-uploads-list-or-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: documentos
+    description: "Below the add-by-text form, exactly one of these renders: if no files were uploaded, testid kn-documents-empty shows a FileText icon and 'Ainda não carregou documentos. Adicione o primeiro acima.'; otherwise a list of testid kn-upload-card entries render, each showing the filename, a collection badge, a status pill ('indexado' in teal or 'guardado (sem texto)' in amber), the file size, chunk/character counts when indexed, an upload date, and a remove button (testid doc-remove, aria-label 'Remover documento (retirar do índice)')."
+    tags: []
+    judgment: false
+
+  - id: documentos-add-text-roundtrip
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: documentos
+    description: "Filling the 'Adicionar por texto' form (kn-collection='jurisprudencia', a unique kn-titulo, a unique kn-texto body, kn-fonte='https://dgsi.pt/teste') and clicking kn-guardar succeeds without an error message; switching to the Fornecido tab (kn-tab-fornecido) afterward shows a kn-doc card whose title matches the one just entered, confirming the new document was ingested and is browsable."
+    tags: []
+    judgment: false
+
+  - id: mobile-tab-bar-and-chips-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At a 375px viewport width, the Fornecido/Fontes/Documentos tab bar and the collection filter chip row both remain fully readable -- tabs do not overlap the header actions, and chips wrap onto additional lines rather than being clipped or causing horizontal page scroll."
+    tags: [responsive]
+    judgment: false
+
+states:
+  - id: fontes
+    label: Fontes tab
+    reachPath:
+      - id: click-fontes-tab
+        description: "Click the 'Fontes' tab (testid kn-tab-fontes) in the tab bar."
+  - id: documentos
+    label: Documentos tab
+    reachPath:
+      - id: click-documentos-tab
+        description: "Click the 'Documentos' tab (testid kn-tab-documentos) in the tab bar."

@@ -1,0 +1,142 @@
+id: pedidos
+title: Pedidos
+path: /pedidos
+mode: steps
+areas: []
+steps:
+  - id: header-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page renders inside PageShell (data-testid=\"pedidos-page\", wide width) and PageHeader, showing the Inbox icon, an h1 reading exactly \"Pedidos\" in the Lora serif font, and the description paragraph \"Pedidos de alteração enviados pelos utilizadores a partir das aplicações. Converta um pedido numa revisão ou dispense-o.\" beneath it."
+    tags: []
+    judgment: false
+  - id: status-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A select with data-testid=\"pedidos-filter-status\", labelled \"Estado\", defaults to the option \"Abertos\" and lists exactly four options in this order: Abertos, Convertidos, Dispensados, Todos; changing the selection re-fetches the queue."
+    tags: []
+    judgment: false
+  - id: org-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A select with data-testid=\"pedidos-filter-org\", labelled \"Escritório\", is visible because the logged-in dev account is super-admin, with a default option \"Todos os escritórios\" followed by one option per organisation; this control is the super-admin-only cross-org scope and would not appear for a plain org-admin."
+    tags: [role-gating]
+    judgment: false
+  - id: filter-combo-refetch
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Selecting a specific escritório in pedidos-filter-org together with a status in pedidos-filter-status narrows the pedidos-table (or the empty-state) to only the matching organisation and status, with no full page reload and no stale rows left over from the previous filter combination."
+    tags: []
+    judgment: false
+  - id: empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "When the current filter combination matches zero change requests (the default \"Abertos\" filter shows this in a fresh dev environment where none have been filed yet), the table is replaced by an EmptyState with the Inbox icon and the exact title text \"Sem pedidos de alteração.\", with no stray table headers or the \"PEDIDOS\" section heading visible."
+    tags: []
+    judgment: false
+  - id: table-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If at least one change request matches the filters, a table with data-testid=\"pedidos-table\" renders with column headers Utilizador, Pedido, Aplicação, Escritório (present because the account is super-admin), Data e hora, Estado, Ações; the Pedido cell shows the request text clamped to 3 lines with the originating route (if any) beneath it in smaller muted text, the Aplicação cell shows the appId or \"-\" when absent, and Data e hora shows a pt-PT localized timestamp - none of this overflows the row or breaks the table layout regardless of how long the request text is."
+    tags: []
+    judgment: true
+  - id: table-count-heading
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Above a populated pedidos-table, a small uppercase section label \"PEDIDOS\" sits to the left of a \"<N> pedidos\" count on the same line, where N equals the number of rows currently rendered in the table."
+    tags: []
+    judgment: false
+  - id: row-status-badge
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Each row's Estado column shows a Badge: \"Aberto\" in a warning/amber tone for open requests, \"Convertido\" in a success/green tone for converted ones, and \"Dispensado\" in a neutral/grey tone for dismissed ones."
+    tags: []
+    judgment: false
+  - id: row-actions
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "For any row whose Estado is \"Aberto\", the Ações column shows two side-by-side buttons, \"Converter\" (filled primary) and \"Dispensar\" (danger-ghost outline); for any row already \"Convertido\" or \"Dispensado\", Ações shows only a muted dash \"-\" and no buttons."
+    tags: []
+    judgment: false
+  - id: convert-action
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking \"Converter\" on an open (\"Aberto\") row disables both of that row's action buttons while the request converts, starts an H1-gated patch-run job behind the scenes, and on success updates that row's Estado badge to \"Convertido\" and collapses Ações to \"-\" - this is the queue's core admin action, turning a filed change request into a patch run, per the page's own code comment."
+    tags: []
+    judgment: false
+  - id: dismiss-action
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking \"Dispensar\" on an open (\"Aberto\") row disables both of that row's action buttons while it processes, and on success updates that row's Estado badge to \"Dispensado\" and collapses Ações to \"-\"."
+    tags: []
+    judgment: false
+  - id: error-banner
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If a queue action fails (e.g. converting a request that names an app the admin cannot edit), a red-bordered Card appears above the filters row with an AlertTriangle icon, an explanatory message in red text, and a \"Tentar novamente\" button that clears the error and re-fetches the queue when clicked."
+    tags: []
+    judgment: false
+  - id: loading-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Immediately after navigating to /pedidos, a LoadingState with the label \"A carregar pedidos...\" is visible before the table or empty state appears, using the shared spinner primitive rather than a custom loader."
+    tags: []
+    judgment: false
+  - id: mobile-filters-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width the filters row (Estado and, for this super-admin account, Escritório) wraps onto multiple lines via flex-wrap without any control being clipped or overlapping, and the pedidos-table scrolls horizontally within its own overflow-x-auto container instead of forcing the whole page to overflow or squeezing columns illegibly."
+    tags: [responsive]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /pedidos and changing both the Estado and Escritório filters produces zero browser console errors (favicon and React DevTools messages excepted)."
+    tags: [a11y]
+    judgment: false
+states: []

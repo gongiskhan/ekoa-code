@@ -22,14 +22,14 @@ export function Checkbox({ checked, onChange, label, disabled, className, ...res
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
         className={`
-          relative flex items-center justify-center w-5 h-5 rounded-md border transition-all duration-150 focus-ring
+          relative flex h-5 w-5 items-center justify-center rounded-md border pressable focus-ring
           ${checked
-            ? 'bg-teal-600 border-teal-600 shadow-sm'
-            : 'bg-surface border-neutral-300 hover:border-teal-400'
+            ? 'border-teal-600 bg-teal-600 shadow-card'
+            : 'border-neutral-300 bg-surface shadow-card hover:border-teal-400'
           }
         `}
       >
-        {checked && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
+        {checked && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
       </button>
       {label && <span className="text-sm text-neutral-700">{label}</span>}
     </label>

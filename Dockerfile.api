@@ -22,16 +22,46 @@ COPY shared/ shared/
 COPY api/ api/
 RUN npm run build --workspace shared && npm run build --workspace api
 
-# ---- runtime stage ---------------------------------------------------------
-FROM node:20-bookworm-slim AS runtime
-ENV NODE_ENV=production
+# ---- prod-deps stage -------------------------------------------------------
+# Production node_modules with native addons compiled. Kept SEPARATE from the runtime image so the
+# C/C++ toolchain (needed for better-sqlite3 12.x, which ships NO prebuilt for node 20 - the knowledge
+# FTS5 index opens it at boot, so a missing .node crashes bootState) never lands in the shipped image.
+# Everything installs with --ignore-scripts (fast, no surprise third-party postinstalls); only
+# better-sqlite3 is then rebuilt against the toolchain. Node 20/glibc-bookworm here == the runtime,
+# so the compiled .node is ABI-compatible.
+FROM node:20-bookworm-slim AS proddeps
 WORKDIR /app
-# Production-only dependencies (no dev/test toolchain in the shipped image).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY api/package.json api/
 COPY web/package.json web/
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts \
+ && npm rebuild better-sqlite3 \
+ && npm cache clean --force
+# @anthropic-ai/claude-agent-sdk ships per-platform native `claude` binaries as
+# optionalDependencies. npm installs BOTH linux-x64 (glibc) AND linux-x64-musl on any linux-x64
+# host (it filters optionals by os+cpu, not libc), and the SDK's resolver tries the -musl variant
+# FIRST. On this glibc (bookworm) image the musl binary cannot exec, so every model turn dies with
+# "Claude Code native binary not found". Drop the musl variants so the resolver falls through to the
+# working glibc binary. (Verified: without this, chat/build error ADAPTER_ERROR; with it, turns run.)
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl \
+           node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl
+
+# ---- runtime stage ---------------------------------------------------------
+FROM node:20-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+# Prod node_modules (native addons already compiled) from the deps stage - NO toolchain in runtime.
+COPY --from=proddeps /app/node_modules ./node_modules
+# Workspace manifests + lockfile so the node_modules/@ekoa/* workspace symlinks resolve to
+# /app/{shared,api,web} (populated with dist below).
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY api/package.json api/
+COPY web/package.json web/
 # Compiled output: shared/dist (api imports @ekoa/shared) + api/dist + api runtime assets.
 # Assets come FROM THE BUILD STAGE, not the host context: since G2 the api build also
 # produces api/assets/panel-runtime.js (gitignored build artifact - absent from a CI
@@ -40,6 +70,22 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/shared/dist shared/dist
 COPY --from=build /app/api/dist api/dist
 COPY --from=build /app/api/assets api/assets
+# The api uses Playwright/Chromium at RUNTIME (automation, streaming/CDP live-view, artifact
+# screenshots, branding site-builder). `playwright` is a PROD dependency so its npm package ships
+# in the runtime deps above - but the browser BINARY plus the GTK/NSS system libraries it dlopens
+# are not installed by npm. Install them here (still root, before the USER drop). Pin
+# PLAYWRIGHT_BROWSERS_PATH to a fixed, world-readable path so the non-root `node` user finds the
+# browser at runtime (the default cache dir is per-user = root's, unreadable after the drop).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Invoke the installed playwright's cli.js by PATH (WORKDIR /app; deps hoist to /app/node_modules).
+# Not `npx playwright`: under `npm ci --omit=dev` only the `playwright-core` bin is linked in
+# node_modules/.bin, so a bare `playwright` bin does not resolve. Calling cli.js directly uses the
+# exact installed version and downloads chromium into PLAYWRIGHT_BROWSERS_PATH.
+RUN node node_modules/playwright/cli.js install --with-deps chromium \
+ && chmod -R a+rX /ms-playwright
+# Runtime data root (EKOA_DATA_DIR / SANDBOX_ROOT default under ~/.ekoa). Create it node-owned so
+# a mounted data volume initialises with the right ownership for the non-root process.
+RUN mkdir -p /home/node/.ekoa && chown -R node:node /home/node/.ekoa
 # Drop privileges: run as the built-in non-root `node` user.
 USER node
 EXPOSE 4111

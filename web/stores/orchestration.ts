@@ -1313,9 +1313,28 @@ export const useOrchestrationStore = create<OrchestrationState>()(
           const freshSession = emptySessions.find((s) => s.id === prevActiveId) || emptySessions[0];
           const toDelete = emptySessions.filter((s) => s.id !== freshSession.id);
 
-          // Delete surplus empties (fire-and-forget)
+          // Delete surplus empties (fire-and-forget). Guard against the
+          // cross-page race: the runtime now initializes on EVERY shell mount,
+          // and a fast navigation can re-list a session whose delete from the
+          // previous mount is still in flight - re-deleting it 404s in the
+          // browser console (the zero-console-error QA bar catches it). Track
+          // swept ids per tab so each id is only ever deleted once.
+          const SWEPT_KEY = 'ekoa_swept_sessions';
+          let swept = new Set<string>();
+          try {
+            swept = new Set(JSON.parse(sessionStorage.getItem(SWEPT_KEY) || '[]') as string[]);
+          } catch {
+            // Corrupt/absent entry - start clean.
+          }
           for (const s of toDelete) {
+            if (swept.has(s.id)) continue;
+            swept.add(s.id);
             api.sessions.delete({ id: s.id }).catch(() => {});
+          }
+          try {
+            sessionStorage.setItem(SWEPT_KEY, JSON.stringify([...swept]));
+          } catch {
+            // Storage full/unavailable - the guard degrades to the old behavior.
           }
 
           // Remove deleted session state

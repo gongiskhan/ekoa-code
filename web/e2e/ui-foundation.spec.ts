@@ -39,21 +39,21 @@ test.describe('ui-foundation (S1)', () => {
     ).toHaveLength(0);
   });
 
-  test('login (S7) renders the white document card with a Lora display headline', async ({ page }) => {
+  test('login (S7) renders the white document card with a Space Grotesk display headline', async ({ page }) => {
     await page.goto('/login');
 
     // The white document card carries the light UI on the petrol backdrop.
     const card = page.getByTestId('login-card');
     await expect(card).toBeVisible();
 
-    // Header title is present (PT-PT copy) and uses the Lora display serif.
+    // Header title is present (PT-PT copy) and uses the Space Grotesk display face.
     const heading = card.locator('h1').first();
     await expect(heading).toBeVisible();
     await expect(heading).toHaveText(/Iniciar sessão|Sign in/);
     const fontFamily = await heading.evaluate(
       (el) => getComputedStyle(el).fontFamily,
     );
-    expect(fontFamily.toLowerCase()).toContain('lora');
+    expect(fontFamily.toLowerCase()).toContain('space grotesk');
   });
 
   test('dead layers stay dead: no dark-mode class, no legacy semantic classes in the DOM', async ({ page }) => {

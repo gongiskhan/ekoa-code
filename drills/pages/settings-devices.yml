@@ -1,0 +1,124 @@
+id: settings-devices
+title: Settings - Devices
+path: /settings/devices
+mode: steps
+areas: []
+steps:
+  - id: page-shell-and-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page root has data-testid=\"settings-devices-page\", and the PageHeader renders an h1 reading \"Aprovação de dispositivos\" in the Lora serif font alongside a MonitorSmartphone icon, with the description text \"Autorize a ligação de um novo dispositivo, por exemplo a ponte local, introduzindo o código apresentado nesse dispositivo.\" directly below it."
+    tags: []
+    judgment: false
+  - id: card-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The device-code form is presented inside a single Card capped at max-w-lg, containing the code input, a hint line, and an Approve/Deny button row - the card is visually centered/left-aligned under the header with no overlapping or cut-off content at either viewport width."
+    tags: [visual]
+    judgment: true
+  - id: code-input-label-and-hint
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The code input (data-testid=\"device-code-input\") has the visible label \"Código do dispositivo\", placeholder \"XXXX-XXXX\", a hint reading \"O código tem o formato XXXX-XXXX e é válido durante 10 minutos.\", and renders in a monospace, letter-spaced font."
+    tags: []
+    judgment: false
+  - id: code-input-normalizes-on-type
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Typing lowercase characters without a hyphen into device-code-input (e.g. \"ab12cd34\") is normalized live to uppercase with an automatic hyphen after the 4th character, producing exactly \"AB12-CD34\" in the field."
+    tags: []
+    judgment: false
+  - id: buttons-disabled-until-code-complete
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "With device-code-input empty or containing fewer than 8 alphanumeric characters, both the device-approve (\"Aprovar\") and device-deny (\"Recusar\") buttons are disabled; typing a full 8-character code (e.g. \"AB12-CD34\") enables both buttons."
+    tags: []
+    judgment: false
+  - id: incomplete-code-submit-shows-error
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If an incomplete code is somehow submitted, an outcome message with data-testid=\"device-outcome-error\" and text \"Introduza o código completo (8 caracteres).\" appears in red below the buttons; in practice this is reachable only via disabled-button bypass so treat this as best-effort verification against the button-disabled state in the prior step."
+    tags: []
+    judgment: false
+  - id: approve-flow-outcome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Entering a valid, currently-pending 8-character device user code and clicking device-approve shows a loading label \"A aprovar...\" on the button while the request is in flight, then renders data-testid=\"device-outcome-approved\" with the teal-colored text \"Dispositivo aprovado. Pode regressar ao dispositivo para continuar.\" and role=\"status\", and the code input is cleared back to empty afterward."
+    tags: []
+    judgment: false
+  - id: deny-flow-outcome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Entering a valid, currently-pending 8-character device user code and clicking device-deny shows a loading label \"A recusar...\" on the button while the request is in flight, then renders data-testid=\"device-outcome-denied\" with the teal-colored text \"Pedido recusado. O dispositivo não recebeu qualquer acesso.\" and role=\"status\", and the code input is cleared back to empty afterward."
+    tags: []
+    judgment: false
+  - id: invalid-code-outcome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Entering an invalid or expired code (e.g. \"XXXX-XXXX\") and clicking device-approve renders data-testid=\"device-outcome-error\" with the red-colored text \"Código de dispositivo inválido ou expirado.\"; this is the one page flow where a 404 console error on /api/v1/auth/device/approve is expected and not a defect."
+    tags: []
+    judgment: false
+  - id: retyping-code-clears-prior-outcome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "After an outcome message (approved, denied, or error) is showing, typing any character into device-code-input immediately clears/hides the previous outcome message before a new submit is made."
+    tags: []
+    judgment: false
+  - id: both-buttons-disabled-while-busy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "While one of device-approve or device-deny is mid-request (loading state showing \"A aprovar...\" or \"A recusar...\"), the other button is also disabled, preventing a second submit from firing concurrently."
+    tags: []
+    judgment: false
+  - id: mobile-layout-no-overflow
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width, the Card, code input, hint text, and the Approve/Deny button row all remain within the viewport with no horizontal scrollbar, no text truncation/overlap, and the two buttons stay legible and tappable (not squeezed or wrapped illegibly) side by side or stacked."
+    tags: [responsive]
+    judgment: true
+  - id: zero-console-errors-normal-flow
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /settings/devices and performing a valid approve or deny produces zero browser console errors (favicon/React DevTools messages excepted); only the invalid-code path is allowed its documented 404 network-error log."
+    tags: []
+    judgment: false
+states: []

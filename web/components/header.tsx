@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Menu, Globe, ChevronDown, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "@/stores/i18n";
@@ -14,6 +15,9 @@ import { useApi } from "@/components/providers/api-provider";
 interface HeaderProps {
   onToggleSidebar: () => void;
 }
+
+// Spring shared by the header's floating layers (dropdown + tooltip).
+const popSpring = { type: "spring", stiffness: 520, damping: 38 } as const;
 
 function resolveLogoUrl(url: string | null): string | undefined {
   if (!url) return undefined;
@@ -121,12 +125,12 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     : 0;
 
   return (
-    <header className="relative z-30 h-14 bg-surface border-b border-line flex items-center justify-between px-3 md:px-6 flex-shrink-0">
+    <header className="relative z-30 h-14 bg-surface/90 backdrop-blur-md border-b border-line flex items-center justify-between px-3 md:px-6 flex-shrink-0">
       {/* Left side */}
       <div className="flex items-center">
         <button
           onClick={onToggleSidebar}
-          className="mr-4 text-neutral-500 hover:text-teal-700 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 rounded-lg p-1 md:hidden"
+          className="mr-4 text-neutral-500 hover:text-teal-700 transition-colors cursor-pointer focus-ring rounded-lg p-1 md:hidden"
           aria-label={header.toggleSidebar}
         >
           <Menu size={20} />
@@ -141,7 +145,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           ) : (
             <span
               data-testid="header-org-name"
-              className="text-xs font-semibold text-neutral-400 tracking-wide"
+              className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500"
             >
               {orgName}
             </span>
@@ -158,36 +162,44 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
             onMouseEnter={() => setTooltipVisible(true)}
             onMouseLeave={() => setTooltipVisible(false)}
           >
-            <div className="flex justify-between mb-0.5">
+            <div className="flex justify-between mb-1">
               <span>{header.tokens}</span>
-              <span className={gaugeTextColor(pct)}>
+              <span className={`tabular-nums ${gaugeTextColor(pct)}`}>
                 {formatTokens(tokensUsedDisplayed)}/{formatTokens(usage.tokensBase)}
               </span>
             </div>
-            <div className="h-1.5 w-full bg-neutral-100 rounded-full overflow-hidden">
+            <div className="h-1.5 w-full bg-neutral-100 rounded-full overflow-hidden ring-1 ring-inset ring-neutral-950/5">
               <div
-                className={`h-full rounded-full transition-all ${gaugeColor(pct)}`}
+                className={`h-full rounded-full transition-all duration-500 ease-[var(--ease-out-quart)] ${gaugeColor(pct)}`}
                 style={{ width: `${Math.min(pct, 100)}%` }}
               />
             </div>
 
             {/* Tooltip */}
-            {tooltipVisible && (
-              <div className="absolute top-full mt-2 right-0 z-50 bg-surface rounded-xl shadow-raised border border-line p-3 w-56 text-xs">
-                <div className="flex justify-between mb-1">
-                  <span className="text-neutral-500">{header.tokensUsed}</span>
-                  <span className="text-neutral-800 font-medium">
-                    {formatTokens(tokensUsedDisplayed)} / {formatTokens(usage.tokensBase)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-500">{header.tokensRemaining}</span>
-                  <span className="text-neutral-800 font-medium">
-                    {formatTokens(Math.max(0, usage.tokensBase - tokensUsedDisplayed))}
-                  </span>
-                </div>
-              </div>
-            )}
+            <AnimatePresence>
+              {tooltipVisible && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                  transition={popSpring}
+                  className="absolute top-full mt-2 right-0 z-50 origin-top-right bg-surface rounded-xl shadow-overlay ring-1 ring-neutral-950/5 border border-line p-3 w-56 text-xs"
+                >
+                  <div className="flex justify-between mb-1">
+                    <span className="text-neutral-500">{header.tokensUsed}</span>
+                    <span className="text-neutral-800 font-medium tabular-nums">
+                      {formatTokens(tokensUsedDisplayed)} / {formatTokens(usage.tokensBase)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">{header.tokensRemaining}</span>
+                    <span className="text-neutral-800 font-medium tabular-nums">
+                      {formatTokens(Math.max(0, usage.tokensBase - tokensUsedDisplayed))}
+                    </span>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         ) : (
           <div className="w-40 h-5 bg-neutral-100 rounded animate-pulse hidden md:block" />
@@ -198,7 +210,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           {/* Language selector */}
           <button
             onClick={toggleLanguage}
-            className="flex items-center space-x-1 cursor-pointer hover:text-teal-700 text-neutral-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 rounded-lg p-1"
+            className="flex items-center space-x-1 cursor-pointer hover:text-teal-700 text-neutral-600 transition-colors focus-ring rounded-lg p-1"
             aria-label={header.changeLanguage}
             title={header.changeLanguage}
           >
@@ -211,35 +223,46 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           <div className="relative" ref={userMenuRef}>
             <button
               onClick={() => setShowUserMenu((prev) => !prev)}
-              className="flex items-center space-x-2 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 rounded-lg p-1"
+              className="flex items-center space-x-2 cursor-pointer pressable focus-ring rounded-lg p-1"
               aria-label={header.userMenu}
             >
-              <div className="w-8 h-8 rounded-full border-2 border-line flex items-center justify-center text-neutral-700 font-semibold text-sm">
+              <div className="w-8 h-8 rounded-full bg-accent-soft border border-teal-600/15 flex items-center justify-center text-teal-700 font-semibold text-sm">
                 {user ? getInitials(user.username) : '??'}
               </div>
-              <ChevronDown size={14} className="text-neutral-500 hidden md:block" />
+              <ChevronDown
+                size={14}
+                className={`text-neutral-500 hidden md:block transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`}
+              />
             </button>
 
             {/* User dropdown menu */}
-            {showUserMenu && (
-              <div className="absolute top-full mt-2 right-0 z-50 bg-surface rounded-xl shadow-raised border border-line w-56 overflow-hidden">
-                <div className="px-4 py-3 border-b border-line">
-                  <p className="text-sm font-medium text-neutral-900 truncate">
-                    {user?.username ?? '---'}
-                  </p>
-                  <p className="text-xs text-neutral-500 truncate">
-                    {user?.role ?? ''}
-                  </p>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center space-x-2 px-4 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50 hover:text-red-600 transition-colors cursor-pointer"
+            <AnimatePresence>
+              {showUserMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                  transition={popSpring}
+                  className="absolute top-full mt-2 right-0 z-50 origin-top-right bg-surface rounded-xl shadow-overlay ring-1 ring-neutral-950/5 border border-line w-56 overflow-hidden"
                 >
-                  <LogOut size={16} />
-                  <span>{header.logout}</span>
-                </button>
-              </div>
-            )}
+                  <div className="px-4 py-3 border-b border-line">
+                    <p className="text-sm font-medium text-neutral-900 truncate">
+                      {user?.username ?? '---'}
+                    </p>
+                    <p className="text-xs text-neutral-500 truncate">
+                      {user?.role ?? ''}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center space-x-2 px-4 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50 hover:text-red-600 transition-colors cursor-pointer"
+                  >
+                    <LogOut size={16} />
+                    <span>{header.logout}</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>

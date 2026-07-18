@@ -1,0 +1,276 @@
+id: memory
+title: Memory
+path: /memory
+mode: steps
+areas: []
+steps:
+  - id: header-shell
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'The page is wrapped in the shared PageShell (data-testid="memory-page") and PageHeader, showing a Brain icon, an h1 reading "Memória" in the Lora serif font, the subtitle "Conhecimento aprendido a partir das interacoes dos agentes", and a primary "Adicionar Memória" button with a Plus icon in the header actions area; the header bar chrome does not duplicate this title.'
+    tags: [design-system]
+    judgment: false
+  - id: explainer-panel
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'The teal "Como funciona a Memória" explainer bar below the header is collapsed by default (a chevron icon); clicking it expands a 2x2 grid of four items each with an icon and one sentence of PT-PT copy (core memories always considered, active memories selected by relevance, archived memories kept for reference only, memories auto-extracted from agent interactions), and clicking again collapses it back.'
+    tags: []
+    judgment: false
+  - id: tabs-bar
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Below the explainer, a Tabs primitive (role="tab" elements) shows exactly 5 tabs in order: "Visão geral", "Sempre ativa", "Guardrails", "Padroes recentes", "Configurações", with "Visão geral" active by default on page load.'
+    tags: [tabs]
+    judgment: false
+  - id: stats-bar
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'On the "Visão geral" tab, a stats Card renders a Brain icon with the label "Total" plus a row of counts for total memories, verified memories, and memories from the last 7 days, and (when tags exist) a "top tags" summary listing up to 3 tag names - all values are non-negative and consistent with the number of memory cards rendered below.'
+    tags: []
+    judgment: false
+  - id: filter-and-tags
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'The filter bar Card has a Type select (default "Todos os tipos"), a Scope select (default "Todos os ambitos"), a Visibility select (default "Toda a visibilidade"), and a search input placeholder "Pesquisar memórias..."; choosing a specific Type reduces the visible memory cards to that type and reveals a "Limpar filtros" button that, when clicked, resets all filters and hides itself again. If any tag chips render below the filter row, clicking one highlights it (teal background, white text) and further narrows the visible cards to memories carrying that tag.'
+    tags: []
+    judgment: false
+  - id: memory-card-anatomy
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Each memory card in the results grid shows, at minimum: a selection checkbox, a bold title (with a teal checkmark icon next to it only when verified), a type badge, a scope badge, a tier badge (Sempre ativa/Utilizada quando relevante/Arquivada with a matching Star/Zap/Archive icon), a lock or globe icon for private vs shared visibility, a truncated 2-line content preview, up to 4 tag pills (with a "+N" pill if more), and a footer showing either "Agente: <type>" or "Manual" plus a last-used relative time (or the creation date when never used).'
+    tags: []
+    judgment: false
+  - id: auto-affordance
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Any memory card whose source is automatic extraction additionally shows a distinct amber pill with data-testid="memory-auto-affordance", a Sparkles icon, and the text "Memória automática" next to its origin badge; if the current data has no auto-extracted memory this check is trivially satisfied (nothing to show).'
+    tags: []
+    judgment: false
+  - id: tier-dropdown
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Hovering a memory card reveals a row of icon-only action buttons; clicking the tier icon button opens a small dropdown listing the three tiers ("Sempre ativa", "Utilizada quando relevante", "Arquivada") with the current tier highlighted teal, and clicking a different option immediately updates that card''s tier badge and icon to match, without a page reload or console error.'
+    tags: []
+    judgment: false
+  - id: verify-toggle
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Clicking the checkmark (verify/unverify) icon button revealed on card hover toggles the small teal verified checkmark shown next to the card title, flipping it on if it was off or off if it was on, with the button''s own tooltip label switching between "Verificar" and "Desverificar".'
+    tags: []
+    judgment: false
+  - id: delete-confirm-cancel
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Clicking the trash icon revealed on card hover opens a confirm dialog titled "Eliminar Memória" with body text "Tem a certeza que pretende eliminar esta memória? Esta ação não pode ser revertida." and a danger-toned confirm button alongside a cancel button; clicking cancel (not the danger confirm) closes the dialog and leaves the memory card in place.'
+    tags: []
+    judgment: false
+  - id: empty-state-via-search
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'Typing a nonsense string (e.g. "zzzzznomatch9999") into the search input that matches no memory replaces the card grid with the shared EmptyState component: a Brain icon, the title "Sem memórias", a description sentence about automatic capture, and an "Adicionar Memória" action button; clearing the search restores the previous grid.'
+    tags: []
+    judgment: false
+  - id: pagination
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: 'If the total memory count spans more than one page, a pagination row appears below the grid with a total-count label, a disabled "Anterior" (previous) icon button on page 1, up to 5 numbered page buttons with the current page highlighted teal, and a "Seguinte" (next) icon button that advances the page and loads a different set of cards when clicked; if all memories fit on one page, no pagination row renders at all.'
+    tags: []
+    judgment: false
+  - id: mobile-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: 'At 375px width the memory card grid collapses to a single column, the filter bar controls wrap onto multiple lines without horizontal overflow or clipped text, the 5-tab bar remains fully reachable (scrolling horizontally if needed) and the Lora h1 and subtitle remain fully visible without being cut off.'
+    tags: [responsive]
+    judgment: false
+  - id: core-slots-indicator
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: core
+    description: 'On the "Sempre ativa" tab, a Card shows a Star icon with the label "Sempre ativa" and a "<used> / 5 posicoes ocupadas" counter, backed by a horizontal progress bar whose filled portion matches the ratio; the bar and count are teal when fewer than 5 slots are used, and when all 5 are used the bar turns amber and an amber warning box reading "Memória central cheia" / "Remova uma memória existente antes de adicionar novas." appears beneath it.'
+    tags: [tabs]
+    judgment: false
+  - id: core-list
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: core
+    description: 'Below the slot indicator, memories currently in the core tier are listed as cards with a Star icon, title, type badge, visibility icon, and a 2-line content preview, each revealing a "Remover do nucleo" button on hover that demotes it back to the active tier and frees a slot; if there are zero core memories, the shared EmptyState (Star icon) renders instead of the list.'
+    tags: [tabs]
+    judgment: false
+  - id: core-promote-candidates
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: core
+    description: 'Unless the core tier is already full, a "Promover uma memória ativa" section lists up to 8 active-tier memories, each showing a Brain icon, title, and type badge, with an "Adicionar ao nucleo" button (Star icon) revealed on hover that moves the memory into the core list above and increments the slot counter; this section is hidden entirely once the core tier holds 5 memories.'
+    tags: [tabs]
+    judgment: false
+  - id: guardrails-flow
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: guardrails
+    description: 'On the "Guardrails" tab, a ShieldCheck-icon header reads "Guardrails" / "Regras que os agentes devem seguir sempre. Sao aplicadas em todas as interacoes.", above a text input (placeholder "ex. Nunca eliminar dados de producao sem confirmacao") and an "Adicionar" button that stays disabled while the input is empty; typing a short guardrail sentence and pressing Enter (or clicking "Adicionar") adds a new card showing that exact text with a delete (X) affordance revealed on hover - click that X afterwards to remove the just-added guardrail and leave the list unchanged.'
+    tags: [tabs]
+    judgment: false
+  - id: guardrails-empty-conditional
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: guardrails
+    description: 'If no guardrail entries exist for the account, the guardrails list area shows the shared EmptyState (ShieldCheck icon) with title "Sem guardrails definidas" and description "Adicione regras que os agentes devem respeitar durante as interacoes." instead of any cards.'
+    tags: [tabs]
+    judgment: false
+  - id: recent-time-filter
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: recent
+    description: 'On the "Padroes recentes" tab, three toggle buttons read "Ultimos 7 dias", "Ultimos 30 dias", "Todo o periodo" with "Todo o periodo" active (solid/primary style) by default; clicking "Ultimos 7 dias" or "Ultimos 30 dias" re-filters the list below to only memories used or created within that window (or shows the Clock-icon "Sem memórias" empty state if none qualify), and clicking "Todo o periodo" restores the full list.'
+    tags: [tabs]
+    judgment: false
+  - id: recent-list-rows
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: recent
+    description: 'Each row in the recent-patterns list shows a small tier icon (colored teal for core, blue for active, grey for archive), the memory title, a type badge, a "Utilizada N vezes" usage count when it has been used at least once, and either "Ultima utilizacao: <relative time>" or "Nunca utilizada", with a one-line content preview beneath; rows are ordered most-recently-used first.'
+    tags: [tabs]
+    judgment: false
+  - id: settings-auto-extract-toggle
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: settings
+    description: 'On the "Configurações" tab, a Card with a Sparkles icon shows "Extrair memórias automaticamente" and the description "Aprender automaticamente a partir das interacoes com os agentes" next to a Switch (data-testid="memory-auto-extract-toggle"); clicking it flips its on/off state and produces no console error.'
+    tags: [tabs]
+    judgment: false
+  - id: settings-max-core
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: settings
+    description: 'A second Card on the "Configurações" tab shows a Star icon, the label "Maximo de memórias centrais" with its description, and a read-only numeric input fixed to "5" that cannot be edited (no cursor/typing changes its value); an explanatory paragraph combining the core and active tier descriptions sits below both cards.'
+    tags: [tabs]
+    judgment: false
+  - id: add-dialog-fields
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: add-dialog
+    description: 'The "Adicionar Memória" dialog contains, in order: a required "Titulo" text input, a "Tipo" select (Licao/Fluxo de trabalho/Facto/Preferencia/Contexto/Padrao), a required "Conteudo" textarea, an "Etiquetas" input with hint "Valores separados por virgula", a "Visibilidade" select (data-testid="memory-visibility-select", options "Privado" and "Partilhado com o escritório"), an "Ambito" select (6 scope options), and a footer with "Cancelar" and "Guardar" buttons.'
+    tags: []
+    judgment: false
+  - id: add-dialog-create-flow
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: add-dialog
+    description: 'Clicking "Guardar" while Titulo or Conteudo is empty does nothing (the dialog stays open and no card is created); filling both fields with a short test title and content and clicking "Guardar" closes the dialog and adds a new matching card to the Overview grid - immediately delete that test card via its trash icon and confirm the deletion to leave the seeded data set unchanged.'
+    tags: []
+    judgment: false
+  - id: edit-dialog-prefill
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: edit-dialog
+    description: 'The "Editar Memória" dialog opens pre-filled with the selected card''s existing title, type, content, tags, visibility, and scope; editing the "Titulo" field and clicking "Guardar" updates that same card''s title in the grid without creating a duplicate, while clicking "Cancelar" instead discards the edit and leaves the card unchanged.'
+    tags: []
+    judgment: false
+  - id: bulk-action-bar
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: selected
+    description: 'With one or more memory cards checked, a dark teal bar animates in above the grid reading "<N> selecionadas", with "Selecionar" and "Limpar" text links plus a red "Eliminar selecionadas" button (trash icon); clicking "Eliminar selecionadas" opens the same danger-toned confirm dialog pattern used for single deletes - click its cancel button (not confirm) to avoid deleting seed data - and clicking "Limpar" deselects everything and collapses the bar.'
+    tags: []
+    judgment: false
+states:
+  - id: core
+    label: Core (Sempre ativa) tier tab
+    reachPath:
+      - id: open-core-tab
+        description: 'Click the "Sempre ativa" tab in the Memory page''s tab bar.'
+  - id: guardrails
+    label: Guardrails tab
+    reachPath:
+      - id: open-guardrails-tab
+        description: 'Click the "Guardrails" tab in the Memory page''s tab bar.'
+  - id: recent
+    label: Recent patterns tab
+    reachPath:
+      - id: open-recent-tab
+        description: 'Click the "Padroes recentes" tab in the Memory page''s tab bar.'
+  - id: settings
+    label: Memory settings tab
+    reachPath:
+      - id: open-settings-tab
+        description: 'Click the "Configurações" tab in the Memory page''s tab bar (the in-page tab, not the sidebar nav item).'
+  - id: add-dialog
+    label: Add memory dialog open
+    reachPath:
+      - id: open-add-dialog
+        description: 'Click the "Adicionar Memória" button in the page header.'
+  - id: edit-dialog
+    label: Edit memory dialog open
+    reachPath:
+      - id: open-edit-dialog
+        description: 'On the Overview tab, hover any memory card and click its pencil (Editar) icon.'
+  - id: selected
+    label: One or more memory cards selected
+    reachPath:
+      - id: select-a-card
+        description: 'On the Overview tab, click the selection checkbox on at least one memory card.'

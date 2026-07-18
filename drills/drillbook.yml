@@ -1,0 +1,115 @@
+app:
+  name: ekoa
+  url: http://localhost:3000
+fullDrill: false
+autonomy: gated
+viewports:
+  - desktop
+  - mobile
+globalRules: >-
+  Default to PT-PT visible copy. Every page must produce zero browser console
+  errors. Preserve the shared dashboard chrome and S1 design system across
+  authenticated surfaces, respect role-gated behavior, and never fake a state
+  that cannot be reached through the real UI.
+dispatch: manual
+pages:
+  - id: login
+    title: Login
+    path: /login
+    mode: steps
+    selected: true
+  - id: activate
+    title: Activate - authorize a CLI/TUI device login
+    path: /activate
+    mode: steps
+    selected: true
+  - id: change-password
+    title: Change password
+    path: /change-password
+    mode: steps
+    selected: true
+  - id: chat
+    title: Chat
+    path: /chat
+    mode: steps
+    selected: true
+  - id: automations
+    title: Automations
+    path: /automations
+    mode: steps
+    selected: true
+  - id: automations-new
+    title: New automation
+    path: /automations/new
+    mode: steps
+    selected: true
+  - id: artifacts
+    title: Artifacts
+    path: /artifacts
+    mode: steps
+    selected: true
+  - id: integrations
+    title: Integrations
+    path: /integrations
+    mode: steps
+    selected: true
+  - id: knowledge
+    title: Knowledge
+    path: /knowledge
+    mode: steps
+    selected: true
+  - id: memory
+    title: Memory
+    path: /memory
+    mode: steps
+    selected: true
+  - id: orgs
+    title: Organizations
+    path: /orgs
+    mode: steps
+    selected: true
+  - id: pedidos
+    title: Pedidos
+    path: /pedidos
+    mode: steps
+    selected: true
+  - id: registo
+    title: Registo
+    path: /registo
+    mode: steps
+    selected: true
+  - id: settings-branding
+    title: Settings - Branding
+    path: /settings/branding
+    mode: steps
+    selected: true
+  - id: settings-devices
+    title: Settings - Devices
+    path: /settings/devices
+    mode: steps
+    selected: true
+  - id: settings-platform
+    title: Settings - Platform
+    path: /settings/platform
+    mode: steps
+    selected: true
+  - id: settings-privacy
+    title: Settings - Privacy and local bridge
+    path: /settings/privacy
+    mode: steps
+    selected: true
+  - id: usage
+    title: Usage
+    path: /usage
+    mode: steps
+    selected: true
+  - id: users
+    title: Users
+    path: /users
+    mode: steps
+    selected: true
+  - id: not-found
+    title: Not found (404)
+    path: /this-page-does-not-exist-xyz
+    mode: steps
+    selected: true

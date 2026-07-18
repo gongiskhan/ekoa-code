@@ -1,0 +1,239 @@
+id: automations-new
+title: New automation
+path: /automations/new
+mode: steps
+areas:
+  - 'n': 1
+    id: automations-new#1
+    label: Iniciar sessãoInicie ses
+    anchors:
+      testId: null
+      role: null
+      ariaLabel: null
+      text: >-
+        Iniciar sessãoInicie sessão para aceder ao painelNome de
+        utilizadorPalavra-passeManter sessão iniciadaEsqueceu-se da pal
+      tag: div
+      css: .overflow-hidden
+      cssMethod: finder
+      xpath: /html/body/div[2]
+    pct:
+      leftPct: 0
+      topPct: 0
+      widthPct: 100
+      heightPct: 104.36046511627907
+steps:
+  - id: header-and-shell
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The page root has data-testid="automations-new-page" (PageShell) and
+      renders a PageHeader with a Play icon, an h1 in Lora serif reading "Nova
+      automatização" (PT-PT), and a subtitle below it starting "Descreva o
+      objetivo em linguagem simples..." describing that Ekoa drafts steps and
+      rehearses them in a real browser.
+    tags:
+      - visual-polish
+    judgment: false
+  - id: goal-field
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A labeled multi-line Textarea with label "Objetivo (obrigatório)" and
+      placeholder "ex.: Abrir o meu Google Doc mais recente e exportá-lo como
+      PDF, guardando-o na minha pasta de transferências." is present, at least
+      ~120px tall, and accepts typed text.
+    tags: []
+    judgment: false
+  - id: name-field
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A labeled single-line Input with label "Nome (opcional)" and placeholder
+      "Deixe em branco para o planeador escolher um" is present below the Goal
+      field and accepts typed text.
+    tags: []
+    judgment: false
+  - id: draft-disabled-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      With the Goal textarea empty, the primary "Esboçar passos" (Draft steps)
+      button at the bottom-right of the form renders visibly disabled (dimmed,
+      cursor-not-allowed) and does not trigger navigation or a loading state
+      when clicked.
+    tags:
+      - validation
+    judgment: false
+  - id: draft-disabled-whitespace-only
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Typing only whitespace (e.g. four spaces) into the Goal textarea leaves
+      the "Esboçar passos" button disabled, because the trimmed goal length must
+      be at least 5 characters.
+    tags:
+      - validation
+    judgment: false
+  - id: draft-enabled-valid-goal
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Typing a goal of 5 or more trimmed characters (e.g. "Abrir o Gmail e
+      listar emails novos") into the Goal textarea enables the "Esboçar passos"
+      button (no longer dimmed, clickable).
+    tags:
+      - validation
+    judgment: false
+  - id: cancel-navigates-to-list
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Clicking the secondary "Cancelar" button next to "Esboçar passos"
+      navigates away from /automations/new to the /automations list page,
+      discarding any typed Goal/Name text.
+    tags: []
+    judgment: false
+  - id: submit-loading-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      After typing a valid goal (5+ trimmed characters) and clicking "Esboçar
+      passos", the button switches to a spinner plus "A esboçar..." label and
+      becomes disabled, and a teal-tinted Card appears above the action row
+      showing a small Spinner, the text "A esboçar a sua automatização...", a
+      monospaced elapsed-time counter on the right formatted m:ss (starting near
+      "0:00" and counting up), a hint sentence below, and an animated pulsing
+      progress bar at the bottom of the card.
+    tags:
+      - loading-state
+    judgment: false
+  - id: hint-text-updates
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      While the drafting Card is visible, the hint sentence beneath the
+      elapsed-time counter starts as "A ler o seu objetivo e as integrações
+      disponíveis..." (under 8s elapsed) and, if drafting continues past 8s,
+      changes to "A esboçar passos e a escolher ferramentas em que o planeador
+      possa confiar..."; the hint text must always match the elapsed-time bucket
+      and never stay blank.
+    tags:
+      - dynamic
+    judgment: false
+  - id: success-navigates-to-run-viewer
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      When the planner call for a submitted goal succeeds, the app navigates
+      away from /automations/new to /automations/{id} (the new automation's
+      run-viewer page, whose contents are covered in the automations page drill
+      file), without the drafting card or an error card remaining visible on
+      this route.
+    tags:
+      - navigation
+    judgment: false
+  - id: awaiting-integration-card
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: awaiting-integration
+    description: >-
+      In the awaiting-integration state, an amber-tinted Card appears above the
+      action row with bold text "Ligue {service} primeiro." (Connect {service}
+      first) naming the missing integration, a shorter reason sentence beneath
+      it, and a secondary "Abrir Integrações" button with a plug icon that, when
+      clicked, navigates to /integrations.
+    tags:
+      - empty-state
+    judgment: false
+  - id: mobile-layout-375
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width the Goal textarea, Name input, and Cancelar/Esboçar passos
+      buttons stack in a single column filling the available width with no
+      horizontal overflow, no clipped labels, and no overlapping text between
+      the PageHeader and the form.
+    tags:
+      - responsive
+    judgment: false
+  - id: zero-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /automations/new, filling in a valid goal, and interacting with
+      the form (without submitting) produces zero browser console errors, aside
+      from known-benign favicon or React DevTools messages.
+    tags:
+      - a11y
+    judgment: false
+states:
+  - id: awaiting-integration
+    label: Awaiting integration connection
+    reachPath:
+      - id: type-goal-needing-unconnected-integration
+        description: >-
+          Type a goal that explicitly names a specific third-party service that
+          is not yet connected in Integrations (e.g. "Enviar uma fatura através
+          do QuickBooks e enviar por email ao cliente"), then click "Esboçar
+          passos" and wait for the planner response.

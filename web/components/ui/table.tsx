@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 
 export function Table({ className, children, ...rest }: React.TableHTMLAttributes<HTMLTableElement>) {
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-surface">
+    <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-card">
       <table className={`w-full text-sm ${className ?? ''}`} {...rest}>
         {children}
       </table>
@@ -43,7 +43,7 @@ export function TR({ hover = false, className, children, ...rest }: TRProps) {
 export function TH({ className, children, ...rest }: React.ThHTMLAttributes<HTMLTableCellElement>) {
   return (
     <th
-      className={`px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-400 ${className ?? ''}`}
+      className={`px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500 ${className ?? ''}`}
       {...rest}
     >
       {children}
@@ -53,7 +53,7 @@ export function TH({ className, children, ...rest }: React.ThHTMLAttributes<HTML
 
 export function TD({ className, children, ...rest }: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={`px-4 py-3 ${className ?? ''}`} {...rest}>
+    <td className={`px-4 py-3 tabular-nums ${className ?? ''}`} {...rest}>
       {children}
     </td>
   );
