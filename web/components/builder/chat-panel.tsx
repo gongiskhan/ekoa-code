@@ -34,6 +34,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { ComposerAttachMenu } from "@/components/privacy/composer-attach-menu";
 import { TrustChip } from "@/components/privacy/trust-chip";
 import { ThinkingBlock } from "@/components/chat/thinking-block";
+import { MicButton, VoiceBar } from "@/components/voice/voice-controls";
+import { useVoiceSession } from "@/components/voice/use-voice-session";
 import { redactProviderIdentity } from "@/lib/sanitize-error";
 import { classifyEditIntent } from "@/lib/edit-intent";
 import {
@@ -200,6 +202,9 @@ interface ChatPanelProps {
   onFirstMessage: (message: string) => void;
   onResend?: () => void;
   onEdit?: () => void;
+  /** C4 fix 6: fires when the voice bar appears/disappears so the page can move fixed
+   *  overlays (the mobile FAB stack) clear of the bar's stop button. */
+  onVoiceBarActiveChange?: (active: boolean) => void;
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -248,6 +253,7 @@ export default function ChatPanel({
   onFirstMessage,
   onResend,
   onEdit,
+  onVoiceBarActiveChange,
 }: ChatPanelProps) {
   const { quickActions: quickActionsTranslations, chatPanel: chatPanelT, pages, sheetFeed } = useTranslation();
   const language = useI18nStore((s) => s.language);
@@ -323,6 +329,43 @@ export default function ChatPanel({
     if (!msg.metadata) return true;
     return msg.metadata.isEssential === true;
   });
+
+  // C4: the voice modality on the unified chat page (BRIEF §5). The mic is an INPUT PATH
+  // into the same send pipeline (first message -> wizard, later ones -> send/queue): a
+  // talking-mode auto-send and the manual "send now" both land in sendVoicePathRef.
+  // Pending notes (confirmed speech while the agent works) ride the same path, which the
+  // executing parent QUEUES (queue-while-building). DOCUMENTED v1 DEVIATION from BRIEF §5
+  // "appended to the running turn": agent runs are not mid-run injectable, so the note is
+  // NOT appended to the running turn - it is queued, visibly, and flushed FIFO as the next
+  // turn when the run settles (run memo c-voice-deviations.md §v; C7 accepts this
+  // behavior, not the BRIEF's wording). Manual tap-stop instead hands the transcript to
+  // the composer for an explicit send.
+  const sendVoicePathRef = useRef<(text: string) => void>(() => undefined);
+  useEffect(() => {
+    sendVoicePathRef.current = (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (essentialMessages.length === 0) onFirstMessage(trimmed);
+      else onSendMessage(trimmed);
+    };
+  });
+  const voice = useVoiceSession({
+    sessionId,
+    isExecuting,
+    onSendTranscript: (text) => sendVoicePathRef.current(text),
+    onPendingNote: (text) => sendVoicePathRef.current(text),
+    onManualTranscript: (text) => {
+      setInputText((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+  });
+
+  // C4 fix 6: report voice-bar presence (same predicate VoiceBar renders on) so the page
+  // lifts its fixed mobile FABs clear of the bar's stop button.
+  const voiceBarActive = voice.status !== "idle" || voice.suspended || voice.error !== null;
+  useEffect(() => {
+    onVoiceBarActiveChange?.(voiceBarActive);
+  }, [voiceBarActive, onVoiceBarActiveChange]);
 
   // Auto-scroll
   useEffect(() => {
@@ -585,6 +628,10 @@ export default function ChatPanel({
           </div>
         )}
 
+        {/* C4 voice status bar: live machine status, level meter, interim transcript,
+            the "send now" escape hatch, and the one-tap resume after backgrounding. */}
+        <VoiceBar voice={voice} />
+
         {/* B5 composer chip (locked 6): the editing target is VISIBLE, never inferred
             silently. Sent messages default to revising this sheet; the X forces a new
             sheet for the next send. PT-PT: "A editar: <título da sheet>". */}
@@ -677,21 +724,26 @@ export default function ChatPanel({
             className="w-full max-h-32 min-h-[60px] py-2 px-3 bg-transparent resize-none outline-none text-xs text-neutral-800 placeholder-neutral-400 disabled:opacity-50"
           />
           <div className="flex justify-between items-center p-1.5 border-t border-neutral-100 bg-neutral-50/50">
-            <div className="relative" ref={attachMenuRef}>
-              <button
-                onClick={() => setShowAttachMenu(!showAttachMenu)}
-                disabled={isExecuting}
-                className="p-1.5 text-neutral-400 hover:text-neutral-700 rounded transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
-                title={chatPanelT.attachFile}
-              >
-                <Paperclip size={16} />
-              </button>
-              <ComposerAttachMenu
-                open={showAttachMenu}
-                onClose={() => setShowAttachMenu(false)}
-                onUploadFile={handleAttachFile}
-                onUploadFolder={handleAttachFolder}
-              />
+            <div className="flex items-center gap-0.5">
+              <div className="relative" ref={attachMenuRef}>
+                <button
+                  onClick={() => setShowAttachMenu(!showAttachMenu)}
+                  disabled={isExecuting}
+                  className="p-1.5 text-neutral-400 hover:text-neutral-700 rounded transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+                  title={chatPanelT.attachFile}
+                >
+                  <Paperclip size={16} />
+                </button>
+                <ComposerAttachMenu
+                  open={showAttachMenu}
+                  onClose={() => setShowAttachMenu(false)}
+                  onUploadFile={handleAttachFile}
+                  onUploadFolder={handleAttachFolder}
+                />
+              </div>
+              {/* C4 mic affordance: tap = manual dictation start/stop; press-and-hold =
+                  the hands-free talking loop (BRIEF §5 two-modes table). */}
+              <MicButton voice={voice} />
             </div>
             {isExecuting ? (
               <div className="flex items-center gap-1">

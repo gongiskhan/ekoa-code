@@ -37,6 +37,8 @@ export interface AudioContextLike {
   sampleRate: number;
   destination: unknown;
   resume(): Promise<void>;
+  /** Present on the real AudioContext; owners close their context on unmount teardown. */
+  close?(): Promise<void>;
   createBuffer(channels: number, length: number, sampleRate: number): AudioBufferLike;
   createBufferSource(): AudioSourceLike;
   decodeAudioData(data: ArrayBuffer): Promise<AudioBufferLike>;

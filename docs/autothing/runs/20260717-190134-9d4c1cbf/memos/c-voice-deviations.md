@@ -1,11 +1,12 @@
 # Decision memo - Part C voice: deviations from BRIEF §5 defaults
 
-Run `20260717-190134-9d4c1cbf`, slice A5. BRIEF §3 pre-loads Part C's decisions in §5 and allows
-deviation only with evidence. Four deviations, all evidence-forced; **everything else in §5 stands
-as written** (adaptive grace window with the given params, layered noise handling, TTS candidate
-table with the Google prior + escalation rule, ungated v1 streaming behind full metering with
-separate `voice_stt_ms`/`voice_tts_chars` counters, locale-only pt-PT/pt-BR resolution, barge-in
-shipped in v1 talking mode, the full mobile/iOS checklist, standby + pending note).
+Run `20260717-190134-9d4c1cbf`, slice A5 (§v added in C4 review). BRIEF §3 pre-loads Part C's
+decisions in §5 and allows deviation only with evidence. Five deviations, all evidence-forced;
+**everything else in §5 stands as written** (adaptive grace window with the given params, layered
+noise handling, TTS candidate table with the Google prior + escalation rule, ungated v1 streaming
+behind full metering with separate `voice_stt_ms`/`voice_tts_chars` counters, locale-only
+pt-PT/pt-BR resolution, barge-in shipped in v1 talking mode, the full mobile/iOS checklist,
+standby + pending note - with §v's delivery caveat).
 
 ## (i) The named jarvis artifacts DO NOT EXIST - C3/C4/C5 are new writes, seeded not ported
 
@@ -49,6 +50,24 @@ physical backend). The dictionary lands as an ordinary platform store - same ten
 `Store<T>` plumbing, no second persistence plane or SDK. The BRIEF's intent (per-user, stateless
 per-request injection, nothing crosses users) is unchanged; the deviation is API-level only. Bound
 in FLOW_PLAN ("C keyterm dictionary in Mongo not Firestore"); RUN_SPEC assumption 6.
+
+## (v) Pending note is QUEUED as the next turn, not appended mid-run (C4)
+
+BRIEF §5 mobile checklist: barge-in during processing captures a pending note "**appended to the
+running turn**". Assessed in C4: the agent run pipeline is **not mid-run injectable** - once a
+turn is executing there is no API to append user content to it (the orchestration streams a
+reply for the already-sent message; the queue-while-building mechanism is the only sanctioned
+input path during a run, and it delivers AFTER the run settles). Faking an "append" client-side
+(mutating the sent message locally) would lie about what the agent actually saw.
+
+**v1 behavior (bound):** a confirmed pending note rides the same voice send path; the executing
+parent QUEUES it (visible in the composer's queued-messages list, removable) and it is flushed
+FIFO as the **next turn's opening message** when the run settles. The driver-level contract is
+unchanged (a pending note never triggers a new auto-send mid-run; the mic returns to standby).
+Code comments at the seam say exactly this (`web/components/builder/chat-panel.tsx` voice
+wiring; `session-driver.ts` `onPendingNote` hook doc). **C7's acceptance must test this queued
+behavior, not the BRIEF's "appended" wording.** True mid-run append becomes feasible only if the
+agent pipeline ever gains in-run message injection - a platform capability, out of Part C scope.
 
 ## (iv) Vendor keys absent at run start - C6 gated, never improvised
 

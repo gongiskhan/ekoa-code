@@ -211,6 +211,9 @@ export default function UnifiedChatPage() {
   // Mobile drawer states
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [mobileSidePanelOpen, setMobileSidePanelOpen] = useState(false);
+  // C4 fix 6: while the voice bar is visible its stop button sits where the mobile FAB
+  // stack floats (bottom-36 at 390x844), so the stack lifts clear of the composer area.
+  const [voiceBarActive, setVoiceBarActive] = useState(false);
 
   // Desktop side-panel override. null = follow the default (panel present whenever
   // the conversation has content, Part B locked decision 2); true/false = force
@@ -1866,6 +1869,7 @@ export default function UnifiedChatPage() {
                 onFirstMessage={handleSendMessage}
                 onResend={isBuildSession ? retryBuild : retryChat}
                 onEdit={handleEditLastUserMessage}
+                onVoiceBarActiveChange={setVoiceBarActive}
               />
 
               {/* Desktop side-panel OPEN button — only shown when the panel is
@@ -1912,9 +1916,15 @@ export default function UnifiedChatPage() {
         )}
       </div>
 
-      {/* Mobile floating action buttons */}
+      {/* Mobile floating action buttons. While the voice bar is up, the stack lifts
+          (bottom-56) so it never covers the bar's stop button (C4 fix 6). */}
       {isMobile && (
-        <div className="fixed bottom-36 right-4 z-40 flex flex-col gap-2">
+        <div
+          data-testid="mobile-fab-stack"
+          className={`fixed right-4 z-40 flex flex-col gap-2 transition-[bottom] duration-200 ${
+            voiceBarActive ? "bottom-56" : "bottom-36"
+          }`}
+        >
           {/* Side panel button — available whenever there's a conversation, not
               just build sessions. In a chat-only session it opens an empty panel,
               which is acceptable and mitigates the panel-not-showing race. */}

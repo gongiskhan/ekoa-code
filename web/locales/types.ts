@@ -635,6 +635,43 @@ export interface Translations {
   };
 
   // ============================================
+  // VOICE (mic capture + read-aloud, Part C)
+  // ============================================
+
+  voice: {
+    micStart: string;
+    micStop: string;
+    micResume: string;
+    micUnavailableInsecure: string;
+    micUnavailableUnsupported: string;
+    statusListening: string;
+    statusConfirming: string;
+    statusCapturing: string;
+    statusSending: string;
+    statusAwaiting: string;
+    statusSpeaking: string;
+    statusStandby: string;
+    sendNowAction: string;
+    exitTalking: string;
+    talkingModeLabel: string;
+    manualModeLabel: string;
+    switchToTalking: string;
+    suspendedNotice: string;
+    levelMeterLabel: string;
+    dismiss: string;
+    errorMicDenied: string;
+    errorCapture: string;
+    errorVad: string;
+    errorProvider: string;
+    errorDisconnected: string;
+    errorTts: string;
+    ouvirAction: string;
+    ouvirStop: string;
+    ouvirTitle: string;
+    ouvirStopTitle: string;
+  };
+
+  // ============================================
   // CHAT PANEL
   // ============================================
 

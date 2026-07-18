@@ -85,6 +85,10 @@
     "C5": {
       "status": "passed",
       "at": "2026-07-18T10:51:32Z"
+    },
+    "C4": {
+      "status": "passed",
+      "at": "2026-07-18T12:27:53Z"
     }
   },
   "globalGate": {

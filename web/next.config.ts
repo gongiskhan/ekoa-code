@@ -79,7 +79,14 @@ const nextConfig: NextConfig = {
     // in sync with web/lib/bridge-local.ts (this config cannot import app code here).
     const bridgeLocalOrigin =
       process.env.NEXT_PUBLIC_BRIDGE_LOCAL_ORIGIN || "http://127.0.0.1:8791";
-    const connectSrc = ["'self'", apiOrigin, bridgeLocalOrigin].filter(Boolean).join(" ");
+    // Voice (mega-run C4): the two voice WebSockets (/api/voice/stream, /api/voice/tts-stream)
+    // dial the API origin over ws(s). Some browsers do not treat an http(s) host-source as
+    // covering its ws(s) scheme, so the API origin is allowed in BOTH scheme families (dev
+    // additionally keeps the blanket ws:/wss: for HMR below).
+    const apiWsOrigin = apiOrigin.replace(/^http/, "ws");
+    const connectSrc = ["'self'", apiOrigin, apiWsOrigin, bridgeLocalOrigin]
+      .filter(Boolean)
+      .join(" ");
     // Artifact thumbnails are served by the API (/artifact-screenshots, ch07 §7.11); in dev
     // that origin is http so the blanket `https:` does not cover it — allow it explicitly.
     const imgSrc = ["'self'", "data:", "blob:", "https:", apiOrigin].filter(Boolean).join(" ");

@@ -1,0 +1,8 @@
+{ "slice": "C4", "kind": "ui", "status": "passed", "at": "2026-07-18T12:27:53Z",
+  "wall": {"tscWeb": 0, "eslint": 0, "unit": "web estate 330/330 (voice 143)", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "voice unit suites (capture/vad/driver/sockets, fakes) + voice-modality.spec.ts 4/4 vs boot-b; SUITE_LEDGER C4 group + fix regressions"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent", "actualModel": "claude-fable-5", "findings": "5 real, fixed"},
+  "adversarialTest": {"status": "deferred", "reason": "part-level at C7"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "4 real lifecycle bugs, fixed + re-verified"},
+  "design": {"status": "issues-fixed", "by": "fresh-context audit both viewports", "findings": "1 real (mobile FAB overlap), fixed"},
+  "video": {"status": "deferred", "reason": "C7 carries the voice walkthrough"} }

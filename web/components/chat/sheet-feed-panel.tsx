@@ -40,6 +40,8 @@ import {
   Copy,
   FileText,
   Pencil,
+  Square,
+  Volume2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Sheet } from "@ekoa/shared";
@@ -48,6 +50,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { useApi } from "@/components/providers/api-provider";
 import { useOrchestrationStore } from "@/stores/orchestration";
 import { useTranslation } from "@/stores/i18n";
+import { useOuvir } from "@/components/voice/use-ouvir";
 
 interface SheetFeedPanelProps {
   sessionId: string | null;
@@ -160,6 +163,8 @@ interface SheetAction {
   label: string;
   icon: LucideIcon;
   onSelect?: () => void;
+  /** Optional tooltip for an active action. */
+  title?: string;
   /** A not-yet-available stub: rendered disabled-style with this tooltip. */
   soonTitle?: string;
 }
@@ -190,8 +195,11 @@ interface EditingState {
 }
 
 export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelProps) {
-  const { sheetFeed, common } = useTranslation();
+  const { sheetFeed, common, voice } = useTranslation();
   const { notifications } = useApi();
+  // C4: the `ouvir` footer action - read the sheet's LATEST revision aloud through the
+  // voice tts path (the Part B locked-10 delta: the action list is extensible).
+  const ouvir = useOuvir();
   const isExecuting = useOrchestrationStore((s) => s.isExecuting);
   const setComposerDraft = useOrchestrationStore((s) => s.setComposerDraft);
   const setEditTarget = useOrchestrationStore((s) => s.setEditTarget);
@@ -517,13 +525,30 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
               icon: copied ? Check : Copy,
               onSelect: () => void copySheet(sheet),
             },
-            {
-              id: "promote",
-              label: sheetFeed.actionPromote,
-              icon: ArrowUpRight,
-              soonTitle: sheetFeed.promoteSoon,
-            },
           ];
+          // C4 `ouvir`: reads the sheet's LATEST revision aloud (the canonical content -
+          // locked 7), regardless of which revision is being viewed. Toggling the sheet
+          // already speaking stops it. Present only where the tts path can run (WebSocket
+          // + Web Audio; always true in the product browsers).
+          if (ouvir.available) {
+            const reading = ouvir.speakingSheetId === sheet.sheetId;
+            const latest = sheet.revisions[lastIdx];
+            actions.push({
+              id: "ouvir",
+              label: reading ? voice.ouvirStop : voice.ouvirAction,
+              icon: reading ? Square : Volume2,
+              title: reading ? voice.ouvirStopTitle : voice.ouvirTitle,
+              onSelect: () => {
+                if (latest) ouvir.toggle(sheet.sheetId, latest.content);
+              },
+            });
+          }
+          actions.push({
+            id: "promote",
+            label: sheetFeed.actionPromote,
+            icon: ArrowUpRight,
+            soonTitle: sheetFeed.promoteSoon,
+          });
 
           return (
             <article
@@ -606,6 +631,7 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
                         key={action.id}
                         data-testid={`sheet-action-${action.id}`}
                         onClick={action.onSelect}
+                        title={action.title}
                         disabled={!!action.soonTitle}
                         className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
                           action.soonTitle
