@@ -148,6 +148,14 @@ describe('shared contract', () => {
     ).toBe(false);
   });
 
+  it('ChatRunEvent and JobEvent can represent the B7 text_reset retraction (payload-free)', async () => {
+    const { ChatRunEvent, JobEvent } = await import('./events.js');
+    // The retraction is the ONLY authorized deletion signal for already-streamed answer text:
+    // both live-answer streams (chat run + build job) must be able to carry it.
+    expect(ChatRunEvent.safeParse({ type: 'text_reset' }).success).toBe(true);
+    expect(JobEvent.safeParse({ type: 'text_reset' }).success).toBe(true);
+  });
+
   it('ChatRunCreateRequest accepts the B5 reviseSheetId (optional; empty string rejected)', async () => {
     const { ChatRunCreateRequest } = await import('./chat.js');
     expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'torna mais curto', reviseSheetId: 'sheet-m1' }).success).toBe(true);

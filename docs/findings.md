@@ -6,6 +6,21 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+### Part B live proof + walkthrough (run 20260717-190134-9d4c1cbf)
+
+- **`answer-channel-preamble-leak`** (OPEN, MEDIUM, quality). A live chat turn's sheet revision 1
+  contained model-internal English preamble ("This is taking too much effort... grep approach...")
+  as part of the ANSWER text (no tool boundary separated it, so the transport classification is
+  correct - the model narrated inside its answer turn). PT-facing product shows English internals.
+  Candidate fixes: answer-shaping instruction in the chat agent context, or a narration-shaped
+  head heuristic feeding the thinking channel. Found by the B7 walkthrough vision pass.
+- **`knowledge-tool-sync-io-stall`** (OPEN, MEDIUM, perf). Knowledge tool calls block the api
+  event loop for multi-second stretches (observed ~3s+ per call during B7 debugging; it stalled
+  SSE keep-alives long enough to 502 the old dev proxy). Async/offload candidate.
+- **`chip-title-raw-first-line`** (OPEN, LOW, polish). The composer chip renders the sheet's raw
+  first line when no model title exists yet; once reply_summary lands the sheet has a title the
+  chip could prefer.
+
 ### Cortex gateway (run 20260717-071930-d1244839)
 
 - **`gateway-anon-tooluse-fidelity`** (OPEN, HIGH - found by S6 live proof; a top follow-up item;

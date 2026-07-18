@@ -232,6 +232,14 @@ export type AgentStreamMsg =
    *  turns (a turn that also carries tool_use is commentary — the SDK only continues past a
    *  turn through tool use, so the answer is exactly the toolless final turn's text). */
   | { kind: 'thinking'; text: string }
+  /** Retraction of optimistically-streamed answer deltas (B7 live streaming): text deltas are
+   *  emitted live as `text` BEFORE the turn's tool_use blocks can be known; when a tool_use
+   *  block starts in the same message, the streamed deltas were narration, not the answer —
+   *  this event tells the consumer to drop everything on the answer channel since the last
+   *  reset. The narration still arrives on the `thinking` channel at whole-message time
+   *  (classification unchanged), so post-last-reset `text` accumulation is exactly the
+   *  toolless final turn's text — the F20 answer contract. */
+  | { kind: 'text_reset'; text?: undefined }
   | { kind: 'tool_use'; tool: string; toolId?: string; args?: Record<string, unknown> }
   | { kind: 'tool_result'; tool: string; toolId?: string; result?: unknown; isError?: boolean }
   | { kind: 'session'; sessionId: string }
@@ -402,23 +410,73 @@ const defaultTransport: ChokepointTransport = {
     let text = '';
     let usage: RawUsage = { ...ZERO_USAGE };
     let sessionEmitted = false;
+    // B7 live streaming (`includePartialMessages`): per-top-level-message optimistic delta state.
+    // `partialAnswer`/`partialThinking` track what already streamed for the in-flight message so
+    // the whole-message classification below emits only the unstreamed remainder (never doubling
+    // the channel); `partialRetracted` marks that a tool_use block revealed the streamed text as
+    // narration and a `text_reset` was issued.
+    let partialAnswer = '';
+    let partialThinking = '';
+    let partialRetracted = false;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const q = query({ prompt: p.prompt, options: sdkOptions(p) as any });
+      const q = query({ prompt: p.prompt, options: { ...sdkOptions(p), includePartialMessages: true } as any });
       for await (const msg of q) {
         // sdkSessionId is reported once on the first message carrying one (§5.4.5).
         if (!sessionEmitted) {
           const sid = sessionIdOf(msg);
           if (sid) { sessionEmitted = true; yield { kind: 'session', sessionId: sid }; }
         }
+        if (msg.type === 'stream_event') {
+          // Live partial deltas (B7): the SDK only yields whole assistant messages otherwise, so
+          // a long single-turn answer would reach the wire as ONE chunk right before `complete`
+          // and the client's streaming affordances would never render. Top-level only — subagent
+          // internals (parent_tool_use_id) never reach any channel.
+          if (msg.parent_tool_use_id) continue;
+          const ev = msg.event;
+          if (ev.type === 'message_start') {
+            partialAnswer = ''; partialThinking = ''; partialRetracted = false;
+          } else if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') {
+            // The in-flight message is a tool turn: its streamed text was narration. Retract it
+            // from the answer channel; classification re-emits it as thinking at message end.
+            if (partialAnswer && !partialRetracted) yield { kind: 'text_reset' };
+            partialRetracted = true;
+          } else if (ev.type === 'content_block_delta') {
+            if (ev.delta.type === 'text_delta' && ev.delta.text && !partialRetracted) {
+              partialAnswer += ev.delta.text;
+              yield { kind: 'text', text: ev.delta.text };
+            } else if (ev.delta.type === 'thinking_delta' && ev.delta.thinking) {
+              partialThinking += ev.delta.thinking;
+              yield { kind: 'thinking', text: ev.delta.thinking };
+            }
+          }
+          continue;
+        }
         if (msg.type === 'assistant') {
           const { answer, thinking } = classifyAssistantContent(msg);
           // Thinking precedes the turn's answer/tool blocks in content order — emit it first.
-          if (thinking) yield { kind: 'thinking', text: thinking };
+          // Deltas already streamed for this message are deduped by prefix; a non-prefix shape
+          // (interleaved thinking/text on a tool turn) degrades to a re-emit, never a loss.
+          if (thinking) {
+            const rest = thinking.startsWith(partialThinking) ? thinking.slice(partialThinking.length) : thinking;
+            if (rest) yield { kind: 'thinking', text: rest };
+          }
           if (answer) {
             text += answer;
-            yield { kind: 'text', text: answer };
+            if (partialAnswer && answer.startsWith(partialAnswer)) {
+              const rest = answer.slice(partialAnswer.length);
+              if (rest) yield { kind: 'text', text: rest };
+            } else if (partialAnswer) {
+              // Divergence between deltas and the assembled message (unexpected): retract the
+              // optimistic stream and re-emit the authoritative whole, keeping the F20 contract
+              // (post-last-reset accumulation == the classified answer).
+              yield { kind: 'text_reset' };
+              yield { kind: 'text', text: answer };
+            } else {
+              yield { kind: 'text', text: answer };
+            }
           }
+          partialAnswer = ''; partialThinking = ''; partialRetracted = false;
           for (const tu of toolUsesOf(msg)) yield { kind: 'tool_use', ...tu };
           const u = rawFromSdkUsage((msg.message as { usage?: unknown }).usage);
           if (u.input || u.output || u.cacheRead || u.cacheCreate) yield { kind: 'usage', usage: u };
@@ -504,6 +562,12 @@ export function __setTransportForTests(t: ChokepointTransport): void {
 }
 export function __resetTransportForTests(): void {
   transport = defaultTransport;
+}
+
+/** Test-only: the real SDK transport, so its streaming behavior (partial deltas, retraction,
+ *  whole-message dedupe — B7) is unit-testable against a mocked `query`. */
+export function __defaultTransportForTests(): ChokepointTransport {
+  return defaultTransport;
 }
 
 // --- Usage parsing for the REST + gateway bodies (ported from the old gateway) ------------
@@ -672,11 +736,18 @@ export interface AgentRunResult {
   aborted: boolean;
 }
 
+/** One streamed run event: answer/commentary text, or a `text_reset` retraction — everything
+ *  on the answer channel since the last reset was narration (a tool turn's preamble), never
+ *  the answer; consumers drop their answer-channel state and start fresh (B7). */
+export type AgentRunEvent =
+  | { type: 'text' | 'thinking'; text: string }
+  | { type: 'text_reset'; text?: undefined };
+
 export interface AgentRunHandle {
-  /** The streamed run: yields answer (`text`) and working-commentary (`thinking`) events, then
-   *  RETURNS the final result. Metering fires once when the stream finishes (or aborts with
-   *  reported usage). */
-  events: AsyncGenerator<{ type: 'text' | 'thinking'; text: string }, AgentRunResult, void>;
+  /** The streamed run: yields answer (`text`), working-commentary (`thinking`) and
+   *  `text_reset` retraction events, then RETURNS the final result. Metering fires once when
+   *  the stream finishes (or aborts with reported usage). */
+  events: AsyncGenerator<AgentRunEvent, AgentRunResult, void>;
   /** Resolves with the final result when the stream completes; rejects on a hard failure. */
   result: Promise<AgentRunResult>;
   /** Cancel the run. */
@@ -730,7 +801,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
   // a derived promise; the original is unchanged), but the process no longer reports it as unhandled.
   void result.catch(() => {});
 
-  async function* run(): AsyncGenerator<{ type: 'text' | 'thinking'; text: string }, AgentRunResult, void> {
+  async function* run(): AsyncGenerator<AgentRunEvent, AgentRunResult, void> {
     let text = '';
     let usage: RawUsage = { ...ZERO_USAGE };
     let aborted = false;
@@ -751,7 +822,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     const promptAnon = anonymize(opts.prompt, ctx);
     const handle: VaultHandle = promptAnon.handle;
     const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
-    const detok = createDetokenizer(handle);
+    let detok = createDetokenizer(handle); // replaced on `text_reset` (retracted content dies with it)
     // The thinking channel gets its own straddle buffer: interleaving both channels through
     // one detokenizer would mis-stitch a token split across a thinking/text boundary.
     const detokThinking = createDetokenizer(handle);
@@ -800,6 +871,15 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
             rawThinking += msg.text;
             const clear = detokThinking.push(msg.text);
             if (clear) yield { type: 'thinking', text: clear };
+            break;
+          }
+          case 'text_reset': {
+            // Optimistic-narration retraction (B7): drop the accumulated answer-channel raw text
+            // and its straddle buffer — post-last-reset accumulation stays exactly the classified
+            // answer (the F20 contract). Forwarded so consumers reset their own channel state.
+            rawText = '';
+            detok = createDetokenizer(handle);
+            yield { type: 'text_reset' };
             break;
           }
           case 'tool_use':

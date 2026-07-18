@@ -15,11 +15,18 @@
  * surfaces only as a debug log. The run itself never observes the hook: callers fire it AFTER
  * the terminal event and void the promise. Never touches the main agent prompt.
  *
+ * Durability (B7 accepted finding 1): after a successful emit the summary is ALSO persisted
+ * onto the assistant turn's message metadata (summaryTitle/summarySummary/summaryRevision), so
+ * a reloaded transcript rebuilds the upgraded card instead of reverting to the first-line
+ * placeholder forever. The degradation path persists nothing - the placeholder stays the
+ * durable shape exactly when no summary ever existed.
+ *
  * Attribution mirrors post-run memory extraction exactly (ch06 §6.4.1 pattern): `user_work`
  * `reply-summary`, billed to the run's user, FAST tier, sessionId/runId stamped.
  */
 import { runOneShot, decideForTier } from '../llm/index.js';
 import { emitReplySummary } from './streaming.js';
+import { persistReplySummary } from './persistence.js';
 
 export type ReplySummaryTurn =
   | { kind: 'fresh'; replyText: string }
@@ -30,6 +37,10 @@ export interface ReplySummaryInput {
   userId: string;
   sessionId: string;
   runId: string;
+  /** The persisted assistant turn's _id (threaded from the persistence path for BOTH fresh and
+   *  revision turns): after a successful emit the summary is persisted onto THIS message's
+   *  metadata so the card survives a reload (B7 finding 1). */
+  messageId: string;
   /** The sheet/revision the assistant turn produced - threaded from the persistence path,
    *  never re-derived from content. */
   sheetId: string;
@@ -88,7 +99,11 @@ export function compactDiffBasis(base: string, revised: string): string {
 
 function buildCall(turn: ReplySummaryTurn): { prompt: string; system: string } {
   // Defensive cap: a summary needs the head of the reply, not an unbounded transcript.
-  if (turn.kind === 'fresh') return { prompt: turn.replyText.slice(0, 24000), system: FRESH_SYSTEM };
+  // The explicit label frames the content as data (a bare reply can start with markdown
+  // list/heading markers; the live FAST model treated an unframed reply as absent).
+  if (turn.kind === 'fresh') {
+    return { prompt: `Assistant reply to summarise:\n\n${turn.replyText.slice(0, 24000)}`, system: FRESH_SYSTEM };
+  }
   const diff = compactDiffBasis(turn.baseContent, turn.revisedContent);
   return {
     prompt: `Edit instruction: ${turn.instruction}\n\nChanged lines:\n${diff}`,
@@ -144,6 +159,8 @@ export async function runReplySummary(input: ReplySummaryInput): Promise<{ emitt
       console.debug('[reply-summary] unparseable model output, no event (placeholder stands)', {
         runId: input.runId,
         sheetId: input.sheetId,
+        // Clip, never the full text: enough to diagnose WHY the parse rejected it.
+        outputClip: text.slice(0, 200),
       });
       return { emitted: false };
     }
@@ -155,6 +172,23 @@ export async function runReplySummary(input: ReplySummaryInput): Promise<{ emitt
       summary: parsed.summary,
       ...(input.revision !== undefined ? { revision: input.revision } : {}),
     });
+    // Durability (B7 finding 1): the emit succeeded, so the summary also lands on the turn's
+    // persisted metadata - a reload rebuilds the upgraded card from the transcript read. A
+    // failed write degrades to the live-event-only behavior (this page life keeps the title;
+    // the next reload shows the placeholder) and never un-emits the event.
+    try {
+      await persistReplySummary(input.messageId, {
+        title: parsed.title,
+        summary: parsed.summary,
+        ...(input.revision !== undefined ? { revision: input.revision } : {}),
+      });
+    } catch (err) {
+      console.debug('[reply-summary] metadata persistence failed (live card only this page life)', {
+        runId: input.runId,
+        messageId: input.messageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return { emitted: true };
   } catch (err) {
     // Model failure, timeout abort, or emit failure: best-effort, never surfaces (B.E).

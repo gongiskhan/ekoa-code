@@ -109,8 +109,11 @@ async function phaseSetup(results) {
     FAIL(`J3.user.${username}`, `create failed ${r.status} ${JSON.stringify(r.body)}`, results);
     return null;
   };
-  // Role 'builder' was retired by the roles migration (builder -> user); the probe drifted.
-  const u1Id = await mkUser('bc-u1', 'user');
+  // Role 'builder' was retired by the roles migration; post-H the capability matrix makes
+  // canBuildApps admin-only, so the probe's build actor maps to org-admin (drift fixed in
+  // two steps: run 20260717-190134 A0 found the retired role, B7's J3 leg found the
+  // capability gate).
+  const u1Id = await mkUser('bc-u1', 'org-admin');
   const admId = await mkUser('bc-adm', 'org-admin');
 
   // Confirm both can log in.

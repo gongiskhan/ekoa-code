@@ -895,8 +895,10 @@ export default function UnifiedChatPage() {
   // B5 — reply_summary subscription (locked decisions 3 + 8). The B2 post-run hook delivers
   // {sessionId, sheetId, revisionId, title, summary, revision?} on the per-user notifications
   // channel after the run stream is torn down. Attaching it upgrades the newest assistant
-  // turn's placeholder card to title + summary; when it never arrives (summary failure,
-  // reload) the card keeps its first-line placeholder - decision B.E's degradation.
+  // turn's placeholder card to title + summary; when it never arrives (summary failure) the
+  // card keeps its first-line placeholder - decision B.E's degradation. Reload is NOT a
+  // degradation path (B7 finding 1): the server persists the summary onto the turn's
+  // metadata and loadSessionMessages rehydrates the upgraded card.
   useEffect(() => {
     if (!notifications) return;
     return notifications.on("reply_summary", (event) => {
@@ -1218,6 +1220,17 @@ export default function UnifiedChatPage() {
           ...(event.maskedCounts !== undefined ? { maskedCounts: event.maskedCounts } : {}),
           ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
         };
+      });
+
+      // B7 retraction (authorized deletion): the server forwards the transport's text_reset
+      // when the answer deltas streamed so far were retracted from the final answer (a tool
+      // turn's narration, or a diverged optimistic stream). Drop the live buffer on THIS
+      // signal only — a tool_event is not a deletion authorization (a tool call with no
+      // pre-tool text must not wipe legitimate streamed text, and a divergence reset has no
+      // tool_event at all). Thinking is untouched (flushStreamingChat clears only the chat
+      // buffer); the streaming placeholder card only ever shows the actual reply's first line.
+      stream.on("text_reset", () => {
+        flushStreamingChat(sessionId!);
       });
 
       stream.on("tool_event", (event) => {

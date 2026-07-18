@@ -40,3 +40,26 @@ export function persistAssistantMessage(sessionId: string, content: string, deps
 export async function persistSessionContext(sessionId: string, contextBlock: string): Promise<void> {
   await sessionsStore.update(sessionId, (s) => ({ ...s, lastContext: contextBlock }));
 }
+
+/**
+ * Stamp the post-run reply summary onto the persisted assistant turn's metadata (B7 accepted
+ * finding 1: the live `reply_summary` event upgraded the card but nothing persisted it, so a
+ * reload reverted every card to the first-line placeholder forever). Narrow update-by-messageId
+ * seam over the messages store's CAS update: touches ONLY the summary fields, preserving
+ * whatever metadata the persist path wrote. A missing message (row deleted between persist and
+ * the post-run hook) is a silent no-op — `update` returns null, never throws.
+ */
+export async function persistReplySummary(
+  messageId: string,
+  summary: { title: string; summary: string; revision?: number },
+): Promise<void> {
+  await messagesStore.update(messageId, (m) => ({
+    ...m,
+    metadata: {
+      ...((m.metadata as Record<string, unknown> | undefined) ?? {}),
+      summaryTitle: summary.title,
+      summarySummary: summary.summary,
+      ...(summary.revision !== undefined ? { summaryRevision: summary.revision } : {}),
+    },
+  }));
+}

@@ -155,14 +155,34 @@ function stripCodeBlocks(content: string): string {
   return stripped.replace(/\n{3,}/g, '\n\n');
 }
 
-/** First non-empty line of a reply, markdown markers stripped - the summary card's
+/** Tiny markdown-syntax strip for one placeholder line (B7 finding 2: the card showed raw
+ *  "1. **Sê transparente..." syntax). Heading/blockquote/list markers, bold/italic pairs
+ *  (plus unterminated `**` remnants - a truncated first line), inline code and link syntax.
+ *  Display-only and dependency-free; the full markdown still renders in the sheet panel. */
+function stripMarkdownLine(line: string): string {
+  return line
+    .replace(/^\s*(?:#+|>+)\s*/, "") // heading / blockquote markers
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "") // list markers (bulleted / numbered)
+    .replace(/^\s*(?:[-*_]\s*){3,}$/, "") // horizontal rule -> empty (never a placeholder)
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // [text](url) -> text
+    .replace(/\*\*([^*]+)\*\*/g, "$1") // bold
+    .replace(/\*([^*]+)\*/g, "$1") // italic
+    .replace(/\*\*/g, "") // unterminated bold remnant
+    .replace(/(^|\s)__([^_]+)__(?=\s|$)/g, "$1$2") // underscore bold (delimited only -
+    .replace(/(^|\s)_([^_]+)_(?=\s|$)/g, "$1$2") //  snake_case words stay intact)
+    .replace(/`([^`]+)`/g, "$1") // inline code
+    .trim();
+}
+
+/** First non-empty line of a reply, markdown syntax stripped (finding 2) - the summary card's
  *  PLACEHOLDER text (locked decision 8: shown while streaming and whenever the post-run
- *  summary never arrives; mirrors the sheet feed's title derivation). */
+ *  summary never arrives; mirrors the sheet feed's title derivation). Used by BOTH the live
+ *  streaming mirror and the reloaded/settled card - the placeholder derives here only. */
 function firstLineOf(content: string): string {
   const line =
     stripCodeBlocks(content)
       .split("\n")
-      .map((l) => l.replace(/^#+\s*/, "").trim())
+      .map((l) => stripMarkdownLine(l))
       .find((l) => l.length > 0) ?? "";
   return line.length > 180 ? `${line.slice(0, 180)}...` : line;
 }
@@ -719,8 +739,10 @@ export default function ChatPanel({
 /**
  * The compact transcript representation of an assistant reply (locked 3: card left, full
  * sheet right - no inline-vs-panel threshold). Placeholder shape = the reply's first line
- * (while streaming, after reload, and whenever the post-run summary never arrived - B.E
- * degradation); the B2 `reply_summary` upgrades it to title + summary. Revision turns carry
+ * (while streaming and whenever the post-run summary never arrived - B.E degradation); the
+ * B2 `reply_summary` upgrades it to title + summary, and that summary is persisted onto the
+ * turn's metadata server-side (B7 finding 1), so a reload rehydrates the SAME upgraded card
+ * instead of reverting to the placeholder. Revision turns carry
  * the "Revisão N" framing and clicking ANY card focuses ITS sheet in the panel (locked 5:
  * several cards, one sheet) through the store's focus seam - never the feed's DOM.
  */

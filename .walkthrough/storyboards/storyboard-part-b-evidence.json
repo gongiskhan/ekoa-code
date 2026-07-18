@@ -1,0 +1,140 @@
+{
+  "title": "Parte B — chat unificado (evidência)",
+  "project": "ekoa",
+  "folder": "part-b-unified-chat",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    {
+      "type": "browser",
+      "id": "blank",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        {
+          "id": "ac1",
+          "caption": "AC-1 — vazio a toda a largura, sem painel",
+          "expectedScreen": "the blank /chat welcome centered across the full width: date strip, the 'O que vamos ...' tagline, an onboarding card, a compose box with Anexar/Captura/Cola URL controls; NO right-hand sheet panel anywhere",
+          "actions": [ { "type": "waitFor", "selector": "h1", "timeout": 30000 } ],
+          "assert": { "selector": "h1", "highlight": true },
+          "hold": 2000
+        },
+        {
+          "id": "ac2-send",
+          "caption": "AC-2 — primeira mensagem enviada",
+          "expectedScreen": "the layout after the first send: chat transcript rail on the left with the user's IVA question, a side panel entering on the right with a sheet skeleton, the run executing (stop button visible)",
+          "actions": [
+            { "type": "fill", "selector": "placeholder:Descreva o que precisa...", "text": "O que é o IVA em Portugal?" },
+            { "type": "click", "selector": "[title=\"Enviar mensagem\"]" }
+          ],
+          "assert": { "selector": "[title=\"Cancelar build\"]", "timeout": 30000, "highlight": false },
+          "hold": 2000
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "settled",
+      "continue": true,
+      "waitBefore": { "selector": "[title=\"Enviar mensagem\"]", "timeout": 300000 },
+      "beats": [
+        {
+          "id": "ac2",
+          "caption": "AC-2 — painel entra: cartão e folha",
+          "expectedScreen": "split layout: transcript on the left with the user question and a compact summary card; the sheet feed panel on the right showing one white sheet with the answer about IVA",
+          "actions": [ { "type": "waitFor", "selector": "testid:sheet-card", "timeout": 60000 } ],
+          "assert": { "selector": "testid:sheet-card", "highlight": true },
+          "hold": 2000
+        },
+        {
+          "id": "ac3",
+          "caption": "AC-3 — cartão com título do modelo",
+          "expectedScreen": "the summary card in the left transcript upgraded with a bold model-written title plus a one-line summary underneath (no longer a raw first-line placeholder)",
+          "actions": [ { "type": "waitFor", "selector": "testid:summary-card-title", "timeout": 120000 } ],
+          "assert": { "selector": "testid:summary-card-title", "highlight": true },
+          "hold": 2000
+        },
+        {
+          "id": "ac4-chip",
+          "caption": "AC-4 — chip 'A editar' armado",
+          "expectedScreen": "the composer with 'torna o tom mais formal' typed and a teal chip above it reading 'A editar: <title>' with a small X dismiss button",
+          "actions": [
+            { "type": "fill", "selector": "placeholder:Escreva a sua mensagem...", "text": "torna o tom mais formal" }
+          ],
+          "assert": { "selector": "testid:composer-chip", "timeout": 15000, "highlight": true },
+          "hold": 2000
+        },
+        {
+          "id": "ac4-send",
+          "caption": "AC-4 — revisão enviada",
+          "expectedScreen": "the revision instruction sent as a user message; the run executing again (stop button visible), the existing sheet still in the right panel",
+          "actions": [ { "type": "click", "selector": "[title=\"Enviar mensagem\"]" } ],
+          "assert": { "selector": "[title=\"Cancelar build\"]", "timeout": 30000, "highlight": false },
+          "hold": 1600
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "revised",
+      "continue": true,
+      "waitBefore": { "selector": "[title=\"Enviar mensagem\"]", "timeout": 300000 },
+      "beats": [
+        {
+          "id": "ac4-rev",
+          "caption": "AC-4 — Revisão 2 de 2 na mesma folha",
+          "expectedScreen": "still ONE sheet in the right panel, its footer now showing revision navigation: left/right chevrons around the label 'Revisão 2 de 2'",
+          "actions": [ { "type": "waitFor", "selector": "testid:sheet-rev-label", "timeout": 60000 } ],
+          "assert": { "selector": "testid:sheet-rev-label", "text": "Revisão 2 de 2", "highlight": true },
+          "hold": 2000
+        },
+        {
+          "id": "ac5-dismiss",
+          "caption": "AC-5 — chip removido; envio sem destino",
+          "expectedScreen": "the composer WITHOUT any 'A editar' chip (it was dismissed via its X) and a new run executing (stop button visible)",
+          "actions": [
+            { "type": "fill", "selector": "placeholder:Escreva a sua mensagem...", "text": "torna a resposta mais concisa" },
+            { "type": "waitFor", "selector": "testid:composer-chip", "timeout": 15000 },
+            { "type": "click", "selector": "testid:composer-chip-dismiss" },
+            { "type": "click", "selector": "[title=\"Enviar mensagem\"]" }
+          ],
+          "assert": { "selector": "[title=\"Cancelar build\"]", "timeout": 30000, "highlight": false },
+          "hold": 1600
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "newsheet",
+      "continue": true,
+      "waitBefore": { "selector": "[title=\"Enviar mensagem\"]", "timeout": 300000 },
+      "beats": [
+        {
+          "id": "ac5-two",
+          "caption": "AC-5 — nova folha criada (2 folhas)",
+          "expectedScreen": "the sheet feed on the right now holds TWO separate white sheets (the second, newer one highlighted); the left transcript shows the additional turn",
+          "actions": [ { "type": "waitFor", "selector": "article[data-testid=\"sheet-card\"]:nth-of-type(2)", "timeout": 60000 } ],
+          "assert": { "selector": "article[data-testid=\"sheet-card\"]:nth-of-type(2)", "highlight": true },
+          "hold": 2000
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "reload",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat/78c9e77d-bc8a-4138-948c-e76ddfdb029b",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        {
+          "id": "ac6",
+          "caption": "AC-6 — restaurado após recarregar",
+          "expectedScreen": "after a fresh page load the session is fully restored: summary cards with their model titles in the left transcript, both sheets in the right panel",
+          "actions": [ { "type": "waitFor", "selector": "article[data-testid=\"sheet-card\"]:nth-of-type(2)", "timeout": 90000 } ],
+          "assert": { "selector": ":nth-match([data-testid=\"summary-card-title\"], 1)", "timeout": 30000, "highlight": true },
+          "hold": 2000
+        }
+      ]
+    }
+  ]
+}

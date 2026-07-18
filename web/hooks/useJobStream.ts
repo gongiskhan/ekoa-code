@@ -316,6 +316,33 @@ export function useJobStream(
           break;
         }
 
+        case 'text_reset': {
+          // B7 retraction (authorized deletion): the server retracted the answer deltas
+          // streamed so far (pre-tool narration, or a diverged optimistic stream) from the
+          // final answer and forwarded this payload-free signal. Drop them from the live build
+          // surfaces too - the outputs feed's accumulated text entry, the store mirror, and
+          // the streaming chat bubble. The thinking channel re-emits narration redacted;
+          // nothing is lost. This event is the ONLY deletion signal: a tool_event no longer
+          // wipes streamed text (a tool call with no pre-tool text deleted legitimate text).
+          chatStreamBufferRef.current = '';
+          if (chatStreamRafRef.current) {
+            cancelAnimationFrame(chatStreamRafRef.current);
+            chatStreamRafRef.current = null;
+          }
+          if (sessionId) {
+            const store = useOrchestrationStore.getState();
+            store.clearStreamingChat(sessionId);
+            store.dropLastTextOutput(sessionId);
+          }
+          setState(prev => {
+            const outputs = [...prev.outputs];
+            const last = outputs[outputs.length - 1];
+            if (last && last.type === 'text') outputs.pop();
+            return { ...prev, outputs };
+          });
+          break;
+        }
+
         case 'tool_event': {
           // WHITE-LABEL (ch12, operator report 2026-07-11): the end user NEVER sees raw tool
           // traffic — no tool names as-is, no commands, no absolute sandbox paths, no raw
@@ -628,6 +655,7 @@ export function useJobStream(
         'routing',
         'text_chunk',
         'thinking_chunk',
+        'text_reset',
         'tool_event',
         'context_event',
         'plan_step',

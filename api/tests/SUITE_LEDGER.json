@@ -84,6 +84,13 @@
         "chat-preview-resolution"
       ]
     },
+    "band5_live_proof": {
+      "targetGate": "OPERATOR-RUN",
+      "note": "LIVE-MODEL proof specs: no run stubs - real agent turns against the credentialed boot-b stack (api/tests/journeys/boot-b.mjs; claudeAuth preflight fails loudly on an uncredentialed stack). Burn real model tokens (~8 turns, 8-15 min): run deliberately (npx playwright test web/e2e/part-b-proof.spec.ts), never in the per-PR lane - same posture as the operator-run drivers. part-b-proof (mega-run 20260717-190134 slice B7): the BRIEF \u00a74 Part B proof session - short/long Q&A scale tiers, live reply_summary card upgrade, 3-edit drafting flow with revisions 1->4 on ONE sheet (live sheets read) + auto-follow flash, revision card focuses the same sheet, chip dismiss -> new sheet, reload restore INCLUDING the persisted summary title (B7 finding 1: reply_summary is stamped onto the turn metadata at emit time and rehydrated by the transcript read), provenance best-effort branch (memoriesUsed / traceId), notifications-blocked summary degradation (B.E). Build-mode coexistence + mobile FAB are proven by the band4 stub specs (chat-layout-unified, mobile-sheet-feed), deliberately not redone live. Live-verified green at landing (slice B7); ratchet applies at its gate.",
+      "specs": [
+        "part-b-proof"
+      ]
+    },
     "band4_gap_plan": {
       "targetGate": "G9",
       "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",

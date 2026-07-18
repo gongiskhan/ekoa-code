@@ -65,11 +65,23 @@
     "B6": {
       "status": "passed",
       "at": "2026-07-18T03:53:56Z"
+    },
+    "B7": {
+      "status": "passed",
+      "at": "2026-07-18T07:29:06Z"
     }
   },
   "globalGate": {
     "status": "in-progress"
   },
   "runLog": "RUN_LOG.md",
-  "runSpec": "docs/autothing/runs/20260717-190134-9d4c1cbf/RUN_SPEC.md"
+  "runSpec": "docs/autothing/runs/20260717-190134-9d4c1cbf/RUN_SPEC.md",
+  "videos": [
+    {
+      "slice": "B7",
+      "sha256": "b420d7be927c927cfa7e528775c60930803035faa0210c77e3712bce533cf900",
+      "bytes": 2167642,
+      "status": "verified"
+    }
+  ]
 }

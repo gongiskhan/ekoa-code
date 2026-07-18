@@ -402,7 +402,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     }
 
     const policy = toolPolicyFor('build');
-    const liveMarkers = new MarkerProcessor();
+    let liveMarkers = new MarkerProcessor(); // replaced on `text_reset` (B7 retraction)
     let capturedSessionId: string | undefined;
 
     // The coding kind's content sections lead the build system prompt (before this run's F16
@@ -464,6 +464,17 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       resetInactivity();
       if (ev.type === 'thinking') {
         emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
+        continue;
+      }
+      if (ev.type === 'text_reset') {
+        // B7 retraction: deltas streamed so far this turn were narration, not the answer.
+        // Fresh marker state; streamedAny returns to false so the §5.3.7 error-as-result
+        // scan still applies when only retracted narration streamed. FORWARDED to the client
+        // (codex B7 finding): the wire event is the ONLY signal on which the client drops its
+        // buffered stream — never inferred from a tool_event.
+        streamedAny = false;
+        liveMarkers = new MarkerProcessor();
+        sink.textReset();
         continue;
       }
       streamedAny = true;

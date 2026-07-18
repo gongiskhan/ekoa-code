@@ -160,7 +160,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const refLine = hasAttachments ? '' : referencesContextLine(input.references);
     const systemPrompt = [assembled.systemPrompt, refLine].filter(Boolean).join('\n\n');
 
-    const liveMarkers = new MarkerProcessor();
+    let liveMarkers = new MarkerProcessor(); // replaced on `text_reset` (B7 retraction)
     const handle = runAgent(
       {
         prompt: renderPrompt(assembled.history, input.message),
@@ -199,6 +199,19 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       if (ev.type === 'thinking') {
         thinkingStartedAt ??= input.deps.now();
         emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
+        continue;
+      }
+      if (ev.type === 'text_reset') {
+        // B7 retraction: the deltas streamed so far this turn were narration (a tool turn's
+        // preamble) or a diverged optimistic stream, not the answer. Fresh marker state for
+        // the real answer; `streamedAny` returns to false so the §5.3.7 error-as-result scan
+        // still applies to a run whose only streamed content was retracted. FORWARDED to the
+        // client (codex B7 finding): the wire event is the ONLY signal on which the client
+        // drops its buffered stream — a divergence reset has no tool_event following it, and
+        // a tool call with no pre-tool text must not delete legitimate text.
+        streamedAny = false;
+        liveMarkers = new MarkerProcessor();
+        sink.textReset();
         continue;
       }
       streamedAny = true;
@@ -314,6 +327,12 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     // revision card framing + focus the SAME sheet.
     const persisted = cleanText.trim()
       ? await persistAssistantMessage(input.sessionId, cleanText, input.deps, {
+          // Mirror the client's local turn shape (ch05 §5.6.1 step 7): the web's transcript
+          // filter renders an assistant row that HAS metadata only when isEssential is true.
+          // B1's traceId stamping gave every persisted reply a metadata bag WITHOUT the flag,
+          // so a reloaded transcript dropped every assistant turn (B7 live proof, step 5).
+          isEssential: true,
+          type: 'text',
           traceId: runId,
           memoriesUsed: assembled.memoriesUsed,
           ...(thinkingMeta ?? {}),
@@ -340,6 +359,9 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
         userId: input.actor.userId,
         sessionId: input.sessionId,
         runId,
+        // B7 finding 1: the hook persists the summary onto THIS turn's metadata after the
+        // emit, so a reloaded transcript keeps the upgraded card (both turn shapes).
+        messageId: persisted._id,
         ...(revisionInfo
           ? {
               sheetId: revisionInfo.sheetId,

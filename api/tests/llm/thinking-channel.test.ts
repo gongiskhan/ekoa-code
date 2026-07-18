@@ -76,7 +76,7 @@ describe('runAgent carries the two channels separately', () => {
       { prompt: 'que modelo és?', decision: decideForTier('WORKHORSE') },
       { kind: 'user_work', agentType: 'chat', billeeUserId: 'u1' },
     );
-    const seen: Array<{ type: string; text: string }> = [];
+    const seen: Array<{ type: string; text?: string }> = [];
     for await (const ev of handle.events) seen.push(ev);
     const result = await handle.result;
 

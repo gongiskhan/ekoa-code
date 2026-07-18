@@ -2,16 +2,35 @@
  * Unit coverage for the B5 reply_summary ID ROUTING (codex fix 1): a summary attaches ONLY
  * to the turn whose sheet/revision ids match - never "the newest assistant turn" - and an
  * event whose turn has not landed yet is buffered (capped) and consumed when the matching
- * turn arrives via addMessage / stampTurnSheetLink / loadSessionMessages. The UI wiring is
- * covered by web/e2e/summary-cards-chip.spec.ts.
+ * turn arrives via addMessage / stampTurnSheetLink / loadSessionMessages. Plus the B7
+ * finding-1 reload path: loadSessionMessages rehydrates summary entries from the persisted
+ * turn metadata (summaryTitle/summarySummary/summaryRevision). The UI wiring is covered by
+ * web/e2e/summary-cards-chip.spec.ts.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Any named import from the client resolves to a no-op async fn returning a
-// success envelope. Keeps the store importable without a backend.
-vi.mock('@/lib/api/client', () => {
+// Controllable transcript read for the hydration tests; every other endpoint resolves to a
+// no-op success envelope so the store stays importable without a backend.
+const getMessages = vi.fn<() => Promise<{ items: unknown[] }>>(async () => ({ items: [] }));
+vi.mock('@/lib/api', () => {
   const noop = () => Promise.resolve({ success: true, data: null });
-  return new Proxy({}, { get: () => noop });
+  const api = new Proxy(
+    {},
+    {
+      get: (_t, domain) =>
+        new Proxy({}, { get: (_t2, fn) => (domain === 'sessions' && fn === 'getMessages' ? getMessages : noop) }),
+    },
+  );
+  return {
+    api,
+    tryCall: async (fn: () => Promise<unknown>) => {
+      try {
+        return { ok: true, data: await fn() };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    },
+  };
 });
 
 import { useOrchestrationStore, type ChatMessage, type ReplySummaryEntry } from '@/stores/orchestration';
@@ -27,6 +46,8 @@ function entry(sheetId: string, revisionId: string, extra?: Partial<ReplySummary
 }
 
 beforeEach(() => {
+  getMessages.mockReset();
+  getMessages.mockResolvedValue({ items: [] });
   useOrchestrationStore.setState({
     messages: {},
     sessions: [],
@@ -35,6 +56,11 @@ beforeEach(() => {
     sheetLinks: {},
   });
 });
+
+/** A server transcript row as GET /sessions/:id/messages serves it. */
+function serverRow(id: string, role: string, metadata?: Record<string, unknown>): Record<string, unknown> {
+  return { id, role, content: `conteudo ${id}`, createdAt: new Date(0).toISOString(), ...(metadata ? { metadata } : {}) };
+}
 
 describe('attachReplySummary - ID routing, never recency', () => {
   it('attaches to the turn whose derived id matches, NOT the newest turn', () => {
@@ -127,5 +153,84 @@ describe('attachReplySummary - ID routing, never recency', () => {
     expect(pending).toHaveLength(8);
     expect(pending[0]!.sheetId).toBe('sheet-p2');
     expect(pending[7]!.sheetId).toBe('sheet-p9');
+  });
+});
+
+describe('loadSessionMessages - persisted-summary hydration (B7 finding 1)', () => {
+  it('rebuilds summary entries from persisted metadata: derived ids for a FRESH turn, back-referenced ids + ordinal for a REVISION turn', async () => {
+    getMessages.mockResolvedValue({
+      items: [
+        serverRow('u1', 'user'),
+        // Fresh turn: summary persisted, no sheet back-reference -> derived id vocabulary.
+        serverRow('m1', 'assistant', {
+          isEssential: true,
+          summaryTitle: 'Titulo persistido',
+          summarySummary: 'Resumo persistido da resposta.',
+        }),
+        // Revision turn: back-reference + ordinal persisted alongside the summary.
+        serverRow('m2', 'assistant', {
+          isEssential: true,
+          sheetId: 'sheet-m1',
+          revisionId: 'r2',
+          revisionNumber: 2,
+          summaryTitle: 'Tom mais formal',
+          summarySummary: 'A despedida ficou formal.',
+          summaryRevision: 2,
+        }),
+        // No persisted summary (the B.E degradation) -> stays placeholder, no entry.
+        serverRow('m3', 'assistant', { isEssential: true }),
+      ],
+    });
+    await useOrchestrationStore.getState().loadSessionMessages(SID);
+
+    const summaries = useOrchestrationStore.getState().replySummaries[SID]!;
+    expect(summaries['m1']).toEqual({
+      sheetId: 'sheet-m1',
+      revisionId: 'rev-m1',
+      title: 'Titulo persistido',
+      summary: 'Resumo persistido da resposta.',
+    });
+    expect(summaries['m2']).toEqual({
+      sheetId: 'sheet-m1',
+      revisionId: 'r2',
+      title: 'Tom mais formal',
+      summary: 'A despedida ficou formal.',
+      revision: 2,
+    });
+    expect(summaries['m3']).toBeUndefined();
+  });
+
+  it('a live-attached entry wins over the hydrated copy, and hydration still drains an unrelated buffered event', async () => {
+    // The live event attached to m1 first (this page life); the persisted copy must not
+    // clobber it. A buffered event for m9 waits for its turn to land via the same load.
+    useOrchestrationStore.setState({
+      messages: { [SID]: [turn('m1', 'assistant')] },
+      replySummaries: { [SID]: { m1: entry('sheet-m1', 'rev-m1', { title: 'titulo LIVE' }) } },
+      pendingReplySummaries: { [SID]: [entry('sheet-m9', 'rev-m9')] },
+    });
+    getMessages.mockResolvedValue({
+      items: [
+        serverRow('m1', 'assistant', {
+          isEssential: true,
+          summaryTitle: 'titulo persistido mais antigo',
+          summarySummary: 'resumo persistido',
+        }),
+        serverRow('m9', 'assistant', { isEssential: true }),
+      ],
+    });
+    await useOrchestrationStore.getState().loadSessionMessages(SID);
+
+    const state = useOrchestrationStore.getState();
+    expect(state.replySummaries[SID]!['m1']!.title).toBe('titulo LIVE');
+    expect(state.replySummaries[SID]!['m9']).toMatchObject({ sheetId: 'sheet-m9' });
+    expect(state.pendingReplySummaries[SID]).toEqual([]);
+  });
+
+  it('rows with a summaryTitle but no summarySummary hydrate nothing (never a half-card)', async () => {
+    getMessages.mockResolvedValue({
+      items: [serverRow('m1', 'assistant', { isEssential: true, summaryTitle: 'so titulo' })],
+    });
+    await useOrchestrationStore.getState().loadSessionMessages(SID);
+    expect(useOrchestrationStore.getState().replySummaries[SID]).toBeUndefined();
   });
 });

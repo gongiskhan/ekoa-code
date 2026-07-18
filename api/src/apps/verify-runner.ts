@@ -98,11 +98,29 @@ export async function verifyRunner(input: VerifyRunInput): Promise<VerifyRunResu
       { kind: 'user_work', agentType: 'build-verify', billeeUserId: input.userId, artifactId: input.artifactId },
     );
 
-    // Stream the run: narration chunks feed the live progress hook (the verify stage used to be
-    // a silent void); draining is also what lets the chokepoint's single metering point fire.
+    // Stream the run: narration feeds the live progress hook (the verify stage used to be a
+    // silent void); draining is also what lets the chokepoint's single metering point fire.
+    // With partial deltas (B7): buffer answer-channel deltas and flush at message boundaries
+    // only - a text_reset drops the buffer, so retracted narration never reaches onProgress
+    // (this consumer keeps its pre-partial whole-message semantics).
+    let pendingText = '';
+    const flushPending = () => {
+      if (pendingText) {
+        input.onProgress?.(pendingText);
+        pendingText = '';
+      }
+    };
     for await (const ev of handle.events) {
-      if (ev.text) input.onProgress?.(ev.text);
+      if (ev.type === 'text') pendingText += ev.text;
+      else if (ev.type === 'text_reset') pendingText = '';
+      else if (ev.type === 'thinking' && ev.text) {
+        // A thinking block is a message boundary: whatever answer deltas survived
+        // to this point are real narration - flush, then forward the commentary.
+        flushPending();
+        input.onProgress?.(ev.text);
+      }
     }
+    flushPending();
     const result = await handle.result;
     if (result.aborted) {
       return { ran: false, passed: false, note: 'a verificação excedeu o tempo limite e não foi concluída' };

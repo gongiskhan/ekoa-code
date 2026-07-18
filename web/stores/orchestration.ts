@@ -53,12 +53,20 @@ export interface ChatMessage {
     revisionId?: string;
     /** 1-based ordinal of the appended revision (revision turns only). */
     revisionNumber?: number;
+    /** B7 finding 1: the post-run reply summary, persisted server-side onto the turn after a
+     *  successful `reply_summary` emit. loadSessionMessages hydrates these back into
+     *  `replySummaries` so the upgraded card survives a reload; absent exactly when the
+     *  summary never emitted (decision B.E's degradation keeps the placeholder). */
+    summaryTitle?: string;
+    summarySummary?: string;
+    summaryRevision?: number;
   };
 }
 
 /** The B2 `reply_summary` payload attached to a transcript assistant turn (B5 summary cards).
- *  Transient by design (decision B.E): summaries are never persisted, so a reload degrades
- *  every card to its first-line placeholder - exactly the summary-failure path. */
+ *  Delivered live on the notifications channel AND persisted server-side onto the turn's
+ *  metadata (B7 finding 1), so a reload rebuilds the same entry via loadSessionMessages;
+ *  only a turn whose summary never emitted degrades to the first-line placeholder (B.E). */
 export interface ReplySummaryEntry {
   sheetId: string;
   revisionId: string;
@@ -312,8 +320,9 @@ interface OrchestrationState {
   // is mounted. Not persisted.
   composerDraft: Record<string, string | undefined>;
 
-  // B5 summary cards: reply_summary payloads keyed session -> transcript message id.
-  // Transient (never persisted) - a reload keeps the first-line placeholders (B.E).
+  // B5 summary cards: reply_summary payloads keyed session -> transcript message id. Fed by
+  // the live event AND rehydrated from the persisted turn metadata on loadSessionMessages
+  // (B7 finding 1) - only never-summarised turns keep the first-line placeholder (B.E).
   replySummaries: Record<string, Record<string, ReplySummaryEntry>>;
 
   // B5 (codex fix 1): reply_summary events whose ID-matching turn has not landed yet, per
@@ -366,6 +375,8 @@ interface OrchestrationState {
   setSessionJob: (sessionId: string, job: Partial<SessionJobState>) => void;
   addSessionJobOutput: (sessionId: string, entry: OutputEntry) => void;
   appendToLastOutput: (sessionId: string, content: string) => void;
+  /** Retraction mirror (B7): drop the last accumulated live text entry (server text_reset). */
+  dropLastTextOutput: (sessionId: string) => void;
   clearSessionJobOutput: (sessionId: string) => void;
 
   // Preview state
@@ -507,6 +518,37 @@ function summaryTurnFor(
     if (matches) return m.id;
   }
   return null;
+}
+
+/**
+ * B7 finding 1 (reload restores everything): rebuild ReplySummaryEntry values from the summary
+ * metadata the server persists on each assistant turn after a successful emit (summaryTitle /
+ * summarySummary / summaryRevision) - the same shape the live event attached, so the card
+ * renders identically. Fresh turns carry no sheet back-reference; their ids are the server's
+ * deterministic derived vocabulary (`sheet-<id>` / `rev-<id>`, data/session-sheets.ts) - true
+ * only for server-id rows, which is exactly what loadSessionMessages maps. Entries already
+ * attached (live event) win. Returns null when nothing new hydrated.
+ */
+function hydratePersistedSummaries(
+  msgs: ChatMessage[],
+  existing: Record<string, ReplySummaryEntry> | undefined,
+): Record<string, ReplySummaryEntry> | null {
+  let out: Record<string, ReplySummaryEntry> | null = null;
+  for (const m of msgs) {
+    if (m.role !== 'assistant' || existing?.[m.id]) continue;
+    const meta = m.metadata;
+    if (!meta?.summaryTitle || !meta.summarySummary) continue;
+    const revision = meta.summaryRevision ?? meta.revisionNumber;
+    out = out ?? { ...(existing ?? {}) };
+    out[m.id] = {
+      sheetId: meta.sheetId ?? `sheet-${m.id}`,
+      revisionId: meta.revisionId ?? `rev-${m.id}`,
+      title: meta.summaryTitle,
+      summary: meta.summarySummary,
+      ...(revision !== undefined ? { revision } : {}),
+    };
+  }
+  return out;
 }
 
 /** Attach every buffered reply_summary whose matching turn now exists in `msgs`. Returns the
@@ -1008,12 +1050,21 @@ export const useOrchestrationStore = create<OrchestrationState>()(
               timestamp: m.createdAt,
               metadata: m.metadata as ChatMessage['metadata'],
             }));
-            set((state) => ({
-              messages: { ...state.messages, [sessionId]: messages },
-              // B5 (codex fix 1): server rows carry server ids + persisted back-references -
-              // a buffered summary can now find its turn (derived `sheet-<id>` included).
-              ...(drainPendingSummaries(state, sessionId, messages) ?? {}),
-            }));
+            set((state) => {
+              // B7 finding 1: persisted summary metadata rebuilds the upgraded cards on
+              // reload; live-attached entries win (same content when both exist).
+              const hydrated = hydratePersistedSummaries(messages, state.replySummaries[sessionId]);
+              const withHydrated = hydrated
+                ? { ...state, replySummaries: { ...state.replySummaries, [sessionId]: hydrated } }
+                : state;
+              return {
+                messages: { ...state.messages, [sessionId]: messages },
+                ...(hydrated ? { replySummaries: withHydrated.replySummaries } : {}),
+                // B5 (codex fix 1): server rows carry server ids + persisted back-references -
+                // a buffered summary can now find its turn (derived `sheet-<id>` included).
+                ...(drainPendingSummaries(withHydrated, sessionId, messages) ?? {}),
+              };
+            });
           } else {
             // API returned an error or no data -- mark as loaded-but-empty so
             // the loading guard in the UI doesn't spin forever.
@@ -1061,6 +1112,19 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         });
       },
 
+      dropLastTextOutput: (sessionId: string) => {
+        set((state) => {
+          const current = state.sessionJobs[sessionId];
+          if (!current) return state;
+          const output = [...current.output];
+          const last = output[output.length - 1];
+          if (!last || last.type !== 'text') return state;
+          output.pop();
+          return {
+            sessionJobs: { ...state.sessionJobs, [sessionId]: { ...current, output } },
+          };
+        });
+      },
       appendToLastOutput: (sessionId: string, content: string) => {
         set((state) => {
           const current = state.sessionJobs[sessionId] || getDefaultSessionJob();

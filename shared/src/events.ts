@@ -17,6 +17,11 @@ export const ChatRunEvent = z.discriminatedUnion('type', [
   // server-side (ch12 white-label): the persona governs answers, not thinking, so the run
   // pipeline redacts this channel before it reaches the wire. Chat stream only.
   z.object({ type: z.literal('thinking_chunk'), text: z.string() }),
+  // B7 retraction (authorized deletion): the answer-channel deltas streamed so far this turn
+  // were narration (a tool turn's preamble) or a diverged optimistic stream — the server
+  // retracted them from the final answer, so the client drops its live buffer too. This event
+  // is the ONLY signal on which a client may delete already-streamed answer text. Payload-free.
+  z.object({ type: z.literal('text_reset') }),
   z.object({
     type: z.literal('tool_event'),
     phase: z.enum(['started', 'finished', 'failed']),
@@ -62,6 +67,9 @@ export const JobEvent = z.discriminatedUnion('type', [
   // narration, marker-filtered and engine-identity-redacted server-side. Renders in the
   // collapsible thinking UI, never as regular transcript messages.
   z.object({ type: z.literal('thinking_chunk'), text: z.string() }),
+  // B7 retraction (mirrors ChatRunEvent.text_reset): the streamed answer deltas were retracted
+  // server-side — drop the live buffer. The ONLY authorized deletion signal. Payload-free.
+  z.object({ type: z.literal('text_reset') }),
   z.object({
     type: z.literal('tool_event'),
     phase: z.enum(['started', 'finished', 'failed']),

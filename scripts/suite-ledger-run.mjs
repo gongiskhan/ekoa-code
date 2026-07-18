@@ -99,7 +99,10 @@ function loadLedger() {
 function ledgerArtifacts(ledger) {
   const out = [];
   const pw = ledger.playwright;
-  for (const band of ['band1_zero_change', 'band2_fixture_swap', 'band3_served_app', 'band4_gap_plan']) {
+  // band5_live_proof: live-model proof specs (no run stubs; credentialed boot-b + real agent
+  // turns). Target gate OPERATOR-RUN, so at every in-run gate they census + report
+  // "skipped (awaiting OPERATOR-RUN)" - run deliberately, never in the per-PR lane.
+  for (const band of ['band1_zero_change', 'band2_fixture_swap', 'band3_served_app', 'band4_gap_plan', 'band5_live_proof']) {
     const b = pw[band];
     if (!b) continue;
     for (const spec of b.specs) out.push({ kind: 'spec', name: spec, file: `web/e2e/${spec}.spec.ts`, targetGate: b.targetGate });

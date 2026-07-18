@@ -73,6 +73,12 @@ describe('chat run pipeline + streaming contract', () => {
     const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
     expect(assistant).toHaveLength(1);
     expect((assistant[0] as unknown as { content: string }).content).toBe(full);
+    // (c) the persisted turn mirrors the client's essential-turn shape (B7 fix): the web's
+    // transcript filter drops any metadata-bearing assistant row without isEssential, so a
+    // reloaded transcript rendered ZERO assistant turns once B1 started stamping traceId.
+    const meta = (assistant[0] as unknown as { metadata?: { isEssential?: boolean; type?: string } }).metadata;
+    expect(meta?.isEssential).toBe(true);
+    expect(meta?.type).toBe('text');
     expect(getRun(runId)?.status).toBe('complete');
   });
 
@@ -82,6 +88,47 @@ describe('chat run pipeline + streaming contract', () => {
     expect((evs.find((e) => e.type === 'complete')!.data as { result: string }).result).toBe('Resposta directa.');
     const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
     expect((assistant[0] as unknown as { content: string }).content).toBe('Resposta directa.');
+  });
+
+  it('B7 retraction: pre-tool narration forwards a client-visible text_reset BEFORE the real answer\'s next text_chunk (authorized deletion signal)', async () => {
+    // Narration longer than the marker filter's split-marker hold-back window, so a clean
+    // prefix actually reaches the wire as a text_chunk before the reset does.
+    const narration = 'Vou verificar os documentos relevantes na base de conhecimento da organização. ';
+    const runId = await runChat({
+      stream: [
+        { kind: 'text', text: narration }, // narration streamed before the tool call
+        { kind: 'text_reset' }, // the transport retracts it (tool_use revealed a tool turn)
+        { kind: 'thinking', text: narration }, // classification re-routes it to thinking
+        { kind: 'text', text: 'A resposta.' }, // the real answer streams after the reset
+      ],
+      finalText: 'A resposta.',
+    });
+    const evs = chatEventsFor(runId);
+    for (const e of evs) expect(ChatRunEvent.safeParse(e.data).success, `event ${e.type} validates`).toBe(true);
+    // The reset reaches the CLIENT stream, after the narration chunk and before the answer's
+    // first chunk - the client's drop of its live buffer keys on THIS event, never tool_event.
+    const flow = evs.filter((e) => e.type === 'text_chunk' || e.type === 'text_reset');
+    expect(flow.map((e) => e.type)).toEqual(['text_chunk', 'text_reset', 'text_chunk']);
+    expect(narration.startsWith((flow[0]!.data as { text: string }).text)).toBe(true);
+    expect((flow[2]!.data as { text: string }).text).toBe('A resposta.');
+    // Post-reset accumulation is the answer: complete.result + the persisted turn carry it.
+    expect((evs.find((e) => e.type === 'complete')!.data as { result: string }).result).toBe('A resposta.');
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }));
+    expect((assistant[0] as unknown as { content: string }).content).toBe('A resposta.');
+  });
+
+  it('B7 retraction: a run WITHOUT a transport reset (e.g. a tool call with no pre-tool text) emits NO text_reset - no unauthorized deletions', async () => {
+    const runId = await runChat({
+      stream: [
+        { kind: 'thinking', text: 'a pensar. ' },
+        { kind: 'tool_use', tool: 'knowledge_search', args: {} },
+        { kind: 'text', text: 'A resposta.' },
+      ],
+      finalText: 'A resposta.',
+    });
+    const evs = chatEventsFor(runId);
+    expect(evs.some((e) => e.type === 'text_reset')).toBe(false);
+    expect((evs.find((e) => e.type === 'complete')!.data as { result: string }).result).toBe('A resposta.');
   });
 
   it('provider-error-as-result → terminal ERROR, never complete, and the assistant message is NOT persisted (§5.3.7)', async () => {
@@ -132,6 +179,19 @@ describe('chat run pipeline + streaming contract', () => {
       revisionId: `rev-${assistant[0]!._id}`,
       title: 'Titulo da folha',
       summary: 'Resumo curto da resposta.',
+    });
+
+    // B7 finding 1: the pipeline threaded the persisted _id into the hook, which stamped the
+    // summary onto the SAME turn's metadata (after the emit) - the reload-restore source. The
+    // fresh shape carries no revision ordinal.
+    await vi.waitFor(async () => {
+      const doc = (await messages.get(assistant[0]!._id)) as unknown as { metadata?: Record<string, unknown> };
+      expect(doc.metadata).toMatchObject({
+        isEssential: true,
+        summaryTitle: 'Titulo da folha',
+        summarySummary: 'Resumo curto da resposta.',
+      });
+      expect(doc.metadata!.summaryRevision).toBeUndefined();
     });
   });
 
@@ -287,6 +347,20 @@ describe('chat run pipeline + streaming contract', () => {
     expect(call!.prompt).toContain('- Cumprimentos informais.');
     expect(call!.prompt).toContain('+ Com os melhores cumprimentos.');
     expect(call!.prompt).not.toContain('Paragrafo comum que nao muda.');
+
+    // 5. B7 finding 1, REVISION shape: the summary + its ordinal persisted onto the revision
+    //    turn's metadata (the messageId threading covers both shapes), alongside the B.B
+    //    back-reference the persist path wrote.
+    await vi.waitFor(async () => {
+      const doc = (await messages.get(assistant[1]!._id)) as unknown as { metadata?: Record<string, unknown> };
+      expect(doc.metadata).toMatchObject({
+        sheetId: 'sheet-m-origin',
+        revisionId: revs[1]!.revisionId,
+        summaryTitle: 'Despedida mais formal',
+        summarySummary: 'A despedida da minuta ficou formal.',
+        summaryRevision: 2,
+      });
+    });
   });
 
   it('an UNKNOWN reviseSheetId falls back to fresh-sheet behavior (the chip is a default, never a hard failure)', async () => {

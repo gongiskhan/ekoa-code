@@ -1,0 +1,8 @@
+{ "slice": "B7", "kind": "mixed", "status": "passed", "at": "2026-07-18T07:29:06Z",
+  "wall": {"tscApi": 0, "tscWeb": 0, "chokepoint": 0, "estates": "api 481 + web 187 green", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "part-b-proof.spec.ts live 1 passed (3.4m); J3 setup+build1 green; SUITE_LEDGER registered"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "pass-after-fix", "by": "independent fresh-context probes", "actualModel": "claude-fable-5", "findings": "C5 reload-title loss -> fixed + re-verified"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "retraction protocol completed across 3 rounds"},
+  "design": {"status": "passed", "reason": "finished-surface audit done at B6 (issues-fixed)"},
+  "video": {"status": "verified", "mode": "evidence", "url": "http://100.108.210.116:8099/ekoa/part-b-unified-chat/2026-07-18_08-22-56/final.mp4", "videoSha256": "b420d7be927c927cfa7e528775c60930803035faa0210c77e3712bce533cf900", "videoBytes": 2167642, "evidence": "evidence.json in runDir" } }

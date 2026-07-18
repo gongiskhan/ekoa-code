@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/react';
 import SidePanel from '@/components/builder/side-panel';
 import { useOrchestrationStore } from '@/stores/orchestration';
+import { useI18nStore } from '@/stores/i18n';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -60,8 +61,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// The iframe title and the loading-overlay copy come from the i18n store (the B6
+// i18n sweep replaced the hard-coded "App Preview" title with sp.preview), so
+// derive the expected strings from the store instead of pinning one language.
+const SP = useI18nStore.getState().t('sidePanel');
+
 function previewIframe(container: HTMLElement): HTMLIFrameElement | null {
-  return container.querySelector('iframe[title="App Preview"]');
+  const iframe = container.querySelector('iframe');
+  if (iframe && iframe.getAttribute('title') !== SP.preview) return null;
+  return iframe;
 }
 
 describe('SidePanel preview recovery', () => {
@@ -121,7 +129,7 @@ describe('SidePanel preview recovery', () => {
     fireEvent.load(iframe);
     await waitFor(() => {
       const overlayText = container.textContent || '';
-      expect(overlayText).not.toMatch(/A carregar|Loading preview/i);
+      expect(overlayText).not.toContain(SP.loadingPreview);
     }, { timeout: 4000 });
   }, 15_000);
 });

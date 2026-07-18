@@ -58,6 +58,12 @@ export class ChatStreamSink {
   thinking(text: string): void {
     if (text) this.emit({ type: 'thinking_chunk', text });
   }
+  /** B7 retraction (authorized deletion): the answer deltas streamed so far this turn were
+   *  retracted server-side — the client drops its live buffer on this signal and ONLY this
+   *  signal (a tool_event is not a deletion authorization). Payload-free. */
+  textReset(): void {
+    this.emit({ type: 'text_reset' });
+  }
   toolEvent(e: ToolEventInput): void {
     this.emit(toolEventPayload(e) as ChatRunEvent);
   }
@@ -99,6 +105,10 @@ export class JobStreamSink {
    *  marker-filtered AND engine-identity-redacted (branding.ts) — never raw model output. */
   thinking(text: string): void {
     if (text) this.emit({ type: 'thinking_chunk', text });
+  }
+  /** B7 retraction (mirrors ChatStreamSink.textReset): the ONLY authorized deletion signal. */
+  textReset(): void {
+    this.emit({ type: 'text_reset' });
   }
   toolEvent(e: ToolEventInput): void {
     this.emit(toolEventPayload(e) as JobEvent);
