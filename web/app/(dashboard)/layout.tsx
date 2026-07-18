@@ -11,6 +11,7 @@ import PauseForUserOverlay from "@/components/automations/pause-for-user-overlay
 import { BlockedAccountGuard } from "@/components/blocked-account-guard";
 import { FirstBuildDialog } from "@/components/verification/first-build-dialog";
 import { DemoTourProvider } from "@/components/demos/DemoTourProvider";
+import { ChatRuntimeProvider } from "@/components/chat/chat-runtime";
 import { LoadingState } from "@/components/ui/spinner";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
@@ -106,6 +107,7 @@ export default function DashboardLayout({
   }
 
   return (
+    <ChatRuntimeProvider>
     <div className="flex h-dvh w-full bg-canvas text-neutral-900 font-sans overflow-hidden">
       {/* Desktop sidebar */}
       {!isMobile && (
@@ -161,5 +163,6 @@ export default function DashboardLayout({
       {/* FC-508: blocking overlay when the account is disabled / billing-locked. */}
       <BlockedAccountGuard />
     </div>
+    </ChatRuntimeProvider>
   );
 }
