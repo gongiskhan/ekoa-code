@@ -38,7 +38,7 @@ export function declaracaoRcbeHtml({ entidade = {}, beneficiarios = [], obrigaco
         <td>${esc(b.natureza || 'capital')}</td>
         <td class="num">${esc(b.percentagem)}%</td>
       </tr>`).join('\n')
-    : '<tr><td colspan="4" class="vazio">Sem beneficiários a 25% ou mais: declara-se a direção de topo (art. 30.º, Lei n.º 89/2017).</td></tr>';
+    : '<tr><td colspan="4" class="vazio">Sem beneficiários a 25% ou mais: declara-se a direção de topo (art. 30.º da Lei n.º 83/2017).</td></tr>';
 
   const obrRows = obr.length > 0
     ? obr.map((o) => `<tr>

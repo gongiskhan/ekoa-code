@@ -772,3 +772,11 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
   strict console gate, 2026-07-13). `injected-context.ts:244` POSTs `/api/app-health`; through the
   dev proxy (:4111) it 502s and logs a console error on load. Likely a dev-proxy forwarding gap
   (relates to d55bd02). Prod path unverified. Allowlisted (documented) in the D2 e2e only.
+- **legal-calculos custas Tabela I columns I-B/I-C not authoritative** (accepted limitation; disclosed
+  in-product. Surfaced by the S3 adversarial test of run 20260717-202309-d797918a, 2026-07-18). The
+  custas engine's I-B/I-C columns and the +275.000 EUR acrescimo use a flat 3 UC step for all columns;
+  the real RCP steps I-B by 1,5 UC and I-C by 4,5 UC per 25.000 EUR. The UI hedges honestly
+  (`nota:'confirmar'`, "Escaloes por confirmar" disclaimer) and no committed spec pins I-B/I-C as
+  authoritative - the only pinned golden (I-A, 30.000 EUR = 5 UC = 510,00 EUR) was independently
+  re-verified against the RCP. Heal the I-B/I-C steps if those columns are ever promised as
+  authoritative; until then the disclosure is the honest surface.

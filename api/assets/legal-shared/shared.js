@@ -745,14 +745,14 @@ export function parseValidDate(value) {
 /* Formatação de datas em PT-PT - "03/07/2026". */
 export function formatDate(value) {
   const d = parseValidDate(value);
-  if (!d) return '—';
+  if (!d) return '-';
   return d.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 /* Data + hora em PT-PT - "03/07/2026, 14:32". */
 export function formatDateTime(value) {
   const d = parseValidDate(value);
-  if (!d) return '—';
+  if (!d) return '-';
   return d.toLocaleString('pt-PT', {
     day: '2-digit',
     month: '2-digit',
@@ -764,7 +764,7 @@ export function formatDateTime(value) {
 
 /* Formatação de valores monetários (EUR) em PT-PT - "1 234,56 €". */
 export function formatEur(value) {
-  if (value == null || Number.isNaN(Number(value))) return '—';
+  if (value == null || Number.isNaN(Number(value))) return '-';
   try {
     return Number(value).toLocaleString('pt-PT', {
       style: 'currency',

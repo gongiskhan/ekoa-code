@@ -94,7 +94,7 @@ function TrackingDrawer({ row, onClose }) {
           <div>
             <h2 className="page-title" style={{ fontSize: 'var(--text-lg, 1.125rem)' }}>Rastreio do objeto</h2>
             <p className="page-subtitle" style={{ margin: 0 }}>
-              <span style={MONO}>{row.registoRef || '—'}</span>
+              <span style={MONO}>{row.registoRef || '-'}</span>
             </p>
           </div>
           <Button variant="ghost" size="sm" aria-label="Fechar" onClick={onClose}>
@@ -113,9 +113,9 @@ function TrackingDrawer({ row, onClose }) {
               <ul className="dossie-timeline" data-testid="correio-tracking-timeline">
                 {events.map((ev, i) => (
                   <li className="dossie-timeline-item" key={`${ev.date}-${i}`}>
-                    <span className="dossie-timeline-date">{ev.date ? formatDate(ev.date) : '—'}</span>
+                    <span className="dossie-timeline-date">{ev.date ? formatDate(ev.date) : '-'}</span>
                     <div className="dossie-timeline-body">
-                      <span className="dossie-timeline-titulo">{ev.statusPt || '—'}</span>
+                      <span className="dossie-timeline-titulo">{ev.statusPt || '-'}</span>
                       {ev.location ? <span className="dossie-timeline-desc">{ev.location}</span> : null}
                     </div>
                   </li>
@@ -320,7 +320,7 @@ export default function ExpedientePage() {
       key: 'processo',
       label: 'Processo',
       render: (r) => {
-        if (!r.processoId) return <span className="text-subtle">—</span>;
+        if (!r.processoId) return <span className="text-subtle">-</span>;
         const p = processoById.get(r.processoId);
         const label = (p && p.numeroProcesso) || 'Processo';
         return (
@@ -347,7 +347,7 @@ export default function ExpedientePage() {
             data-testid={emFoco ? `correio-foco-${r.id}` : undefined}
             ref={emFoco ? (el) => { if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } : undefined}
           >
-            <span className="text-xs" style={MONO} data-testid={`correio-ref-${r.id}`}>{r.registoRef || '—'}</span>
+            <span className="text-xs" style={MONO} data-testid={`correio-ref-${r.id}`}>{r.registoRef || '-'}</span>
             {emFoco ? <Badge tone="info" data-testid="correio-foco-badge">Em foco</Badge> : null}
           </span>
         );
@@ -372,7 +372,7 @@ export default function ExpedientePage() {
             {d.expedido ? <span>Expedido: {formatDate(d.expedido)}</span> : null}
             {d.entregue ? <span>Entregue: {formatDate(d.entregue)}</span> : null}
             {d.devolvido ? <span>Devolvido: {formatDate(d.devolvido)}</span> : null}
-            {!d.expedido && !d.entregue && !d.devolvido ? <span>—</span> : null}
+            {!d.expedido && !d.entregue && !d.devolvido ? <span>-</span> : null}
           </div>
         );
       },

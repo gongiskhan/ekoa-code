@@ -6,7 +6,7 @@
  * as regras de IVA/retenção; apenas separa honorários de despesas, alimenta o
  * motor com os honorários (a base tributável) e junta as despesas como
  * reembolso de passagem (sem IVA, sem retenção na fonte). Assim as regras de ouro
- * do motor mantêm-se EXACTAS: IVA 23% sobre a base, retenção 25% sobre a base
+ * do motor mantêm-se EXACTAS: IVA 23% sobre a base, retenção 23% sobre a base
  * quando aplicável, total = base + IVA, a receber = total − retenção.
  *
  * PRÉ-FATURAS de conferência - nunca substituem uma fatura certificada.

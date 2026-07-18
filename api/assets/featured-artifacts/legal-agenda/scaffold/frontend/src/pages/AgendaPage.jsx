@@ -261,7 +261,7 @@ export default function AgendaPage() {
                     </button>
                   </span>
                   {vazio ? (
-                    <span className="text-xs text-subtle">—</span>
+                    <span className="text-xs text-subtle">-</span>
                   ) : (
                     <div className="stack" style={{ gap: 'var(--sp-1, 0.25rem)' }}>
                       {cell.eventos.map((e) => (

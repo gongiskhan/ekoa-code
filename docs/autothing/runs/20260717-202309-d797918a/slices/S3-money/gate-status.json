@@ -40,8 +40,22 @@
       "at": "2026-07-18T03:45:00Z"
     },
     "adversarialTest": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "pass",
+      "by": "adv-test-S3 fresh-context adversarial tester (claude-opus-4-8), hermetic - acceptance + committed diff (5ca41db, ea734ce) only; no gate-status/evidence-index/implementer-rationale read. Survived one mid-run API disconnect (resumed via nudge).",
+      "evidence": [
+        "committed specs re-run exactly as committed on the live stack: vitest 4 files/32 tests exit 0; playwright 5 legal-x specs + amended legal-calculos.spec.ts, --workers=2, 11 passed exit 0",
+        "independent golden recompute (own day-count + integer-cent actual/365, not the engine's code): G1 10k 2025-01-01->2026-07-17 = 4 trocos [55292,51167,50333,4559]c total 161351c; G2 183d@10,4% = 52142c - exact match",
+        "boundary sweep: negatives, >MAX_CENTS, 3-decimal, fim<venc, 2023-02-30, bad tipo, missing tabela all throw; pre-2013/post-2026-S2 -> incompleto:true + troco 'confirmar', never invents a rate",
+        "legal facts decorrelated via WebSearch: 2026-S1 10,15% Aviso 822/2026/2 ETF confirmed; DL 269/98 15.000 EUR limit + no-limit-commercial (consumer excluded) confirmed; custas I-A 30.000 EUR = 5 UC = 510,00 EUR confirmed against the real RCP",
+        "live-UI honesty: own 2023-span calc shows corrected Avisos 1672/2023 + 14922/2023, old wrong 1261/2023 / 20214/2023 appear nowhere, displayed total 562,81 EUR matches independent recompute, 0 console/pageerrors",
+        "ledger census balanced both directions (specs 98/98, units 31/31); 5 new e2e specs registered in band3_served_app; backend unit tests correctly out of census scope",
+        "no committed file modified; no spine rows left (probes read-only or calc-without-save)"
+      ],
+      "findings": [],
+      "notes": [
+        "Non-blocking disclosed limitation (not a finding): custas Tabela I columns I-B/I-C + the +275.000 EUR acrescimo diverge from the real RCP (real: I-B +1,5 UC / I-C +4,5 UC per 25k; engine: flat 3 UC all columns). Openly hedged in-product (nota:'confirmar', 'Escaloes por confirmar' disclaimer) and no spec pins I-B/I-C as authoritative; the only pinned golden (I-A 30k=510 EUR) is correct. Logged in docs/findings.md as an accepted limitation; heal if I-B/I-C are ever promised as authoritative."
+      ],
+      "at": "2026-07-18T05:32:26Z"
     },
     "design": {
       "verdict": "clean",

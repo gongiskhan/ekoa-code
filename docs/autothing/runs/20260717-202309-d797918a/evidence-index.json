@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code legal artifacts",
   "runId": "20260717-202309-d797918a",
-  "updatedAt": "2026-07-18T02:55:00Z",
+  "updatedAt": "2026-07-18T05:05:00Z",
   "galleryUrl": null,
   "gatesConfig": {
     "test": true,
@@ -47,35 +47,56 @@
       "title": "calculos, honorarios, financas, cobrancas, injuncoes",
       "kind": "ui",
       "status": "in_progress",
-      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S3-money/gate-status.json"
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S3-money/gate-status.json",
+      "commits": [
+        "5ca41db",
+        "ea734ce"
+      ],
+      "landed": true
     },
     {
       "slice": "S4-drafting",
       "title": "contratos, pecas, modelos, forms",
       "kind": "ui",
       "status": "in_progress",
-      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S4-drafting/gate-status.json"
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S4-drafting/gate-status.json",
+      "commits": [
+        "5a0c643"
+      ],
+      "landed": true
     },
     {
       "slice": "S5-records",
       "title": "dossie, assinatura, transcricao, correio",
       "kind": "ui",
       "status": "in_progress",
-      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/gate-status.json"
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/gate-status.json",
+      "commits": [
+        "59be909"
+      ],
+      "landed": true
     },
     {
       "slice": "S6-compliance",
       "title": "kyc, rcbe, conflitos, recursos",
       "kind": "ui",
       "status": "in_progress",
-      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/gate-status.json"
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/gate-status.json",
+      "commits": [
+        "79e6d25"
+      ],
+      "landed": true
     },
     {
       "slice": "S7-knowledge-portal",
       "title": "pesquisa, jurimetria, portal",
       "kind": "ui",
       "status": "in_progress",
-      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/gate-status.json"
+      "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/gate-status.json",
+      "commits": [
+        "fae2b9e"
+      ],
+      "landed": true
     }
   ],
   "globalGate": {

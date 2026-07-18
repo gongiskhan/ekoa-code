@@ -33,8 +33,25 @@
       "at": "2026-07-18T03:45:00Z"
     },
     "adversarialTest": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "pass",
+      "by": "adv-test-S7 fresh-context adversarial tester (claude-opus-4-8), hermetic - acceptance + committed diff (fae2b9e) only; no gate-status/evidence-index/implementer-rationale read",
+      "evidence": [
+        "committed specs re-run exactly as committed on the live stack (workers=2): legal-x-pesquisa + legal-x-jurimetria + legal-x-portal = 7 passed, exit 0, both pre- and post-probe",
+        "jurimetria internal means recomputed from the LIVE spine independent of app code (30.44 d/mo, round 1dp, min n=3): match every rendered row exactly - Civel 22.3, Laboral 13.5, Comercial 26.9, Familia 16.6, Execucao 27.9, Administrativo 30.4",
+        "jurimetria public figures on screen == committed jurimetria-referencias.json byte-for-byte (32/40/65/14/16/48/12), each citing DGPJ + period '2024 (valor anual)'; no fabricated number",
+        "jurimetria-stats.js unit probes (15): low-sample honesty fires below n=3, internal mean never borrows a public figure, no-ref areas say 'sem referencia', invalid/negative/ativo durations excluded",
+        "pesquisa /api/legal-research probed live over HTTP: empty index -> honest {ok:true,hits:[],note}, never a fabricated hit or 'verificada'; app scoping enforced server-side (legal-portal=403, missing header=400); route drops any URL that does not resolve 2xx (cited-or-silent)",
+        "citacao-pt.js unit probes (19): golden 'Ac. TRL de 12-03-2024, proc. 123/20.0T8LSB' exact; never fabricates proc/date/tribunal absent from input; honest degradation; DRE->diploma form",
+        "historico integrity live: null-processo search shows under Todos but never leaks into any processo filter; per-processo counts exact; pergunta verbatim (accents)",
+        "portal: sharing an ESTADO only never leaks a sibling non-shared document name (structural probe beyond the committed doc-share case); cronologia + extrato draw solely from resolved vis",
+        "em-dash/emoji scan of all S7-touched app files clean; ledger census reconciles both ways (specs 98=98, drivers 24=24, unit 31=31); all probes self-cleaned - 0 orphans in spine; stack never restarted"
+      ],
+      "findings": [],
+      "notes": [
+        "Scope boundary recorded (NOT a finding, matches acceptance 'server authz H-block out of scope'): the client bridge exposes the whole documentos collection after sign-in - explicit-share is a UI-plane-only guarantee, confirmed via probe.",
+        "gate:ledger prints FAILED only when invoked without --run (run-mode guard over 139 due artifacts), not an S7 census defect."
+      ],
+      "at": "2026-07-18T07:52:00Z"
     },
     "design": {
       "verdict": "clean",

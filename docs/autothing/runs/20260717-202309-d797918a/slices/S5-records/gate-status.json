@@ -36,8 +36,22 @@
       "at": "2026-07-18T03:45:00Z"
     },
     "adversarialTest": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "findings(1) - fixed forward, see resolution",
+      "by": "adv-test-S5 fresh-context adversarial tester (claude-opus-4-8), hermetic - acceptance + committed diff (59be909) only; no gate-status/evidence-index/implementer-rationale read",
+      "evidence": [
+        "committed specs re-run exactly as committed on the live stack: legal-x-{assinatura,correio,dossie,transcricao}.spec.ts --workers=2, 8 passed exit 0 (2.5s)",
+        "manifesto determinism/content-sensitivity: app-rendered hash matched an independent Node recompute of the canonical serialization (bdbfe2a3...), identical across reload; a mutated document hash produced a different manifesto hash; exemplo doc hash is a genuine SHA-256 over the procuracao text",
+        "correio filter correctness: ?processo= seeds the exact numeroProcesso and shows exactly that processo's cartas (UI matched an independent manual filter of the spine); ?ref= focuses exactly the matching carta (1 foco badge); nonexistent ?ref= -> no foco, no crash",
+        "empty dossie boundary: zero-row processo exports without crashing; all four sections render honest 'Sem ... registados/associadas' empty states; cover counts all 0",
+        "transcricao keyboard-first: onKeyEditor guards INPUT/TEXTAREA/SELECT/contentEditable before firing 'i' (source-verified + committed spec green)",
+        "PT-PT copy honest; no emoji; no em-dashes added on any code/prose line by this commit",
+        "all probes ephemeral and self-cleaned via finally blocks (seeded spine rows deleted)"
+      ],
+      "findings": [
+        "F1 (APP BUG / ACCEPTANCE GAP, dossie): the one-click 'Dossie completo (PDF)' (data-testid=dossie-pdf) was a STRICT SUBSET of the on-screen/print dossie - it dropped the entire Honorarios (lancamentos) section. Evidence: on-screen ds-honorarios rendered 'Honorarios (resumo) - Lancamentos 1, Total 250,00 EUR, Por faturar 250,00 EUR' while the exported HTML from the same click contained only [Cronologia | Indice de documentos | Prazos | Comunicacoes]. Root cause: DossieTab.jsx onDossiePdf called dossiePdfHtml() WITHOUT lancamentos, and dossie-pdf.js had no honorarios section - lancamentos is genuine spine data the app shows in two places (DossieTab + VisaoGeralTab KPI) but the 'full-dossier' PDF omitted. The committed spec passed because it only asserts the acceptance parenthetical (cover/cronologia/doc index)."
+      ],
+      "resolution": "F1 FIXED FORWARD by lead: lancamentos passed into dossiePdfHtml, Honorarios (resumo) section added to dossie-pdf.js mirroring the on-screen block, spec assertion added that the exported HTML contains the honorarios section; bundle rebuilt out-of-process; committed S5 dossie spec re-run green.",
+      "at": "2026-07-18T07:24:02Z"
     },
     "design": {
       "verdict": "clean",

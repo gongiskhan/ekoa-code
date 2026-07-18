@@ -84,7 +84,7 @@ export default function InsolvenciaDetailPage() {
         `Natureza: ${natureza}`,
         `Garantias: ${garantias || 'sem garantias'}`,
         'Documentos: fatura e correspondência de interpelação em anexo (dossiê).',
-        `Prazo: até ${formatDate(ins.prazoReclamacao)} (30 dias contínuos do despacho - CIRE art. 9.º).`,
+        `Prazo: até ${formatDate(ins.prazoReclamacao)} (prazo fixado na sentença, até 30 dias - CIRE art. 36.º, n.º 1, al. j)).`,
       ].join('\n');
       await createShared('reclamacoes_creditos', {
         insolvenciaId: id, montante: ins.credito, natureza, garantias: garantias || null,

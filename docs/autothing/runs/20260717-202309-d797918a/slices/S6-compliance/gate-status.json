@@ -40,8 +40,23 @@
       "resolution": "F1 RESOLVED at S6 landing: the 4 band3 rows (legal-x-{kyc,rcbe,conflitos,recursos}) registered in SUITE_LEDGER.json in the S6 commit (band3 legal-x rows now 26; census 95/98, remaining gap = exactly S7's 3 specs, closed at S7 landing). Unit-suite note: the ledger census counts only playwright specs + drivers + frontend-unit files (api vitest has no census section); module_tests_146.groups are coarse port-era counts left untouched - the 2 new api vitest suites are dispositioned here, not census-tracked."
     },
     "adversarialTest": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "findings(1) - fixed forward, see resolution",
+      "by": "adv-test-S6 fresh-context adversarial tester (claude-opus-4-8), hermetic - acceptance + committed diff (79e6d25) only; no gate-status/evidence-index/implementer-rationale read",
+      "evidence": [
+        "committed specs re-run exactly as committed on the live stack: unit kyc-checksum + ferias-engine 29 passed; e2e legal-x-{kyc,conflitos,recursos,rcbe} 12 passed + legal-rcbe.spec.ts 13 passed, stable across 3 runs, exit 0",
+        "rcbe idempotency: journey run 3x back-to-back from a consumed 'cumprida' spine state - the amended preamble genuinely reopens the obligation and deletes derived artefacts (load-bearing and correct)",
+        "KYC mod-11 reimplemented from scratch: 42/42 checksum verdicts match the engine; remainder 0 AND 1 both -> check digit 0; NIF/NIPC nature gating correct; synthetic invalids 123456780/509876543 rejected; all 4 fixtures verified as labelled",
+        "ferias (CT 238/239) reimplemented: 392/392 diasUteisEntre + 48/48 direitoFerias agree; goldens + boundaries (Jan-1 cap 20, Jul-1 12, Jun-30 12) correct; cross-year clip honest; admission-year cap 20 per art. 239",
+        "conflitos (art. 99 EOA): reordered-name multi-token match flagged parcial=true honestly; accent-insensitive; typo returns empty (no edit-distance promised) = honest; token-subset does not over-reach; NIF exact-only; dedup 1/field - no false-positive/false-negative defect",
+        "RCBE dedup: NIF-first then normalized-name, keeps max %, preserves order; same-name-but-one-has-NIF does NOT collapse; percentages are real row values; screen + PDF derive from the same meusBos snapshot",
+        "KYC radar (7 anos, Lei 83/2017): band boundaries verified LIVE with synthetic fichas at exact offsets - 0/5 misclassified; arquivarAte stamped via engine prazoArquivo(+7y); all probe rows deleted (0 orphans)",
+        "no em-dash / no emoji in any S6 file"
+      ],
+      "findings": [
+        "F1 (APP BUG, legal-cite accuracy - violates the FLOW_PLAN content rule 'every legal cite accurate'): legal-rcbe declaracao-pdf.js:41 empty-state row cited '(art. 30.º, Lei n.º 89/2017)' for the direcao-de-topo fallback, but art. 30.º of Lei 89/2017 is data-protection (acesso/tratamento/interconexao); the senior-management fallback + 25% BO definition live in art. 30.º da Lei n.º 83/2017 (verified via pgdlisboa + DR summaries). Reachable: exportarDeclaracaoPdf() renders this row in the lawyer-facing PDF whenever the entity has no BO >= 25%; the committed PDF test uses the 2-BO demo entity so it never hits the row. Every other cite in the app is correct."
+      ],
+      "resolution": "F1 FIXED FORWARD by lead: cite corrected to '(art. 30.º da Lei n.º 83/2017)' in declaracao-pdf.js, bundle rebuilt out-of-process, and a deterministic spec assertion added covering the empty-BO declaracao PDF path so the corrected cite is pinned.",
+      "at": "2026-07-18T07:39:38Z"
     },
     "design": {
       "verdict": "clean",

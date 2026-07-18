@@ -74,7 +74,7 @@ export default function LancamentosPage() {
 
   const processoLabel = (id) => {
     const p = processoById.get(id);
-    if (!p) return '—';
+    if (!p) return '-';
     const nome = clienteNome(p.clienteId);
     return `${p.numeroProcesso || '(sem número)'}${nome ? ` - ${nome}` : ''}`;
   };
@@ -247,7 +247,7 @@ export default function LancamentosPage() {
             { key: 'data', label: 'Data', render: (l) => formatDate(l.data) },
             { key: 'processo', label: 'Processo', render: (l) => (
               <div className="stack stack-1">
-                <span className="text-strong">{processoById.get(l.processoId)?.numeroProcesso || '—'}</span>
+                <span className="text-strong">{processoById.get(l.processoId)?.numeroProcesso || '-'}</span>
                 <span className="text-subtle text-xs">{clienteNome(l.clienteId) || clienteNome(processoById.get(l.processoId)?.clienteId)}</span>
               </div>
             ) },
@@ -259,7 +259,7 @@ export default function LancamentosPage() {
             ) },
             { key: 'modo', label: 'Modo', render: (l) => (
               <span className="stack stack-1" style={{ display: 'inline-flex', gap: '0.25rem' }}>
-                <span>{MODO_LABEL[l.modo] || l.modo || '—'}</span>
+                <span>{MODO_LABEL[l.modo] || l.modo || '-'}</span>
                 {/* Lançamentos transferidos do Tempos trazem registoTempoId (a
                     chave de idempotência do contrato tempos->honorários). */}
                 {l.registoTempoId ? <Badge tone="ok" data-testid="lanc-origem-tempos">Do Tempos</Badge> : null}

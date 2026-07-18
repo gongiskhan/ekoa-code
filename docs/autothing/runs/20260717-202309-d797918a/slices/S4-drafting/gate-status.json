@@ -45,8 +45,22 @@
       "resolution": "F1 RESOLVED at landing: the 4 rows registered (band3 now 18 legal-x rows; census gap 11 = exactly S5+S6+S7). Independently, the first LIVE run of the S4 specs surfaced 3 defects the hermetic reviews could not see - recorded under the test gate."
     },
     "adversarialTest": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "pass",
+      "by": "adv-test-S4 fresh-context adversarial tester (claude-opus-4-8), hermetic - acceptance + committed diff (5a0c643) only; no gate-status/evidence-index/implementer-rationale read. Survived two mid-run API disconnects (resumed via nudge).",
+      "evidence": [
+        "committed specs re-run exactly as committed on the live stack: legal-x-{contratos,pecas,modelos,forms}.spec.ts --workers=2, 11 passed exit 0 - ran twice (start + final), green both times",
+        "P1 docx XML-injection: client/processo values containing & < > \" -> every XML part (document.xml, .rels, numbering.xml) well-formed under strict DOMParser, specials escaped, no raw tag leaks, literals round-trip",
+        "P2/P5 placeholder resolved-or-flagged: obligatory manual variable left blank BLOCKS step-3 with a visible flag naming the field; {{chave}} with no defined variable blocks generation (placeholdersEmFalta, button disabled) - no silent-blank leak",
+        "P3 pecas court-header honesty: peca from processo B cites B's tribunal + numero, never a sibling's; P4 empty/whitespace modelo body -> still well-formed docx",
+        "P6 modelos: accent-insensitive name search (peticao -> Peticao), preview cites STORED fonteOriginal verbatim (no fabrication; search indexes nome/categoria/fonte/licenca/descricao, not fonteOriginal - by design)",
+        "P7 forms cross-client isolation: auto-mapped values strictly follow the selected client; A->B switch flips NIF/email with zero residue",
+        "P8 archived-PDF bytes: real archived PDF truly flattened (0 AcroForm fields remain); drawn text (all streams incl. flattened appearance streams, FlateDecode inflated, hex+literal Tj decoded) carries exactly client A's email/morada/grouped-NIF and none of sibling B's - one en-route 'failure' was a probe extraction gap (appearance streams outside primary /Contents), app confirmed correct",
+        "P9 procuracao forense one-click: generated .docx well-formed, cites artigo 44.o/45.o + Codigo de Processo Civil, mandante name/NIF/processo numero resolved into the document",
+        "no em-dash glyphs in any S4-changed UI file (the PreencherPage diff removes the prior em-dash placeholder for 'sem valor' text)",
+        "cleanup verified: all probe artifacts removed from web/e2e and repo root; spine restored to baseline (clientes 10, processos 48); procuracao modelo left (persistent by design, reused on second click per committed spec)"
+      ],
+      "findings": [],
+      "at": "2026-07-18T07:15:06Z"
     },
     "design": {
       "verdict": "clean",

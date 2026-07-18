@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useSharedCollection,
   updateShared,
@@ -19,13 +19,87 @@ import {
   EmptyState,
   toast,
 } from '../components/ui.jsx';
-import { IconFileText, IconPlus, IconTrash, IconExternalLink } from '../components/Icons.jsx';
+import { IconFileText, IconPlus, IconTrash, IconExternalLink, IconChevronDown } from '../components/Icons.jsx';
 import { ORIGENS, fonteMeta, categoriaDe, versaoDe, foldText } from './modelos-util.js';
 
 const CATEGORIAS_SUGERIDAS = ['Procurações', 'Requerimentos', 'Declarações', 'Contratos', 'Apoio judiciário'];
 
 function novaVariavel() {
   return { chave: '', rotulo: '', origem: 'manual', obrigatoria: false };
+}
+
+/*
+ * Menu "Mais" da linha: compacta as ações secundárias num só botão para a linha
+ * não crescer em altura. O painel fica SEMPRE no DOM (escondido quando fechado)
+ * - os deep-links da linha mantêm o contrato app-local verificável; e usa
+ * position:fixed porque o .table-wrap corta overflow.
+ */
+function RowActionsMenu({ menuTestId, label = 'Mais', children }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const fechar = () => setOpen(false);
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('click', fechar);
+    window.addEventListener('scroll', fechar, true);
+    window.addEventListener('resize', fechar);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('click', fechar);
+      window.removeEventListener('scroll', fechar, true);
+      window.removeEventListener('resize', fechar);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  function alternar(e) {
+    e.stopPropagation();
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    setOpen((prev) => !prev);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        ref={btnRef}
+        data-testid={menuTestId}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={alternar}
+      >
+        {label} <IconChevronDown size={14} />
+      </button>
+      <div
+        role="menu"
+        style={{
+          display: open ? 'flex' : 'none',
+          position: 'fixed',
+          top: pos ? `${pos.top}px` : 0,
+          right: pos ? `${pos.right}px` : 0,
+          zIndex: 60,
+          flexDirection: 'column',
+          alignItems: 'stretch',
+          minWidth: '220px',
+          padding: 'var(--space-2, 0.5rem)',
+          background: 'var(--color-bg, #FFFFFF)',
+          border: '1px solid var(--color-border, #E2E8F0)',
+          borderRadius: 'var(--radius-md, 0.5rem)',
+          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.12)',
+          gap: '2px',
+        }}
+      >
+        {children}
+      </div>
+    </>
+  );
 }
 
 /*
@@ -195,13 +269,13 @@ export default function ModelosPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: '26%' }}>Nome</th>
-                <th style={{ width: '14%' }}>Categoria</th>
-                <th style={{ width: '12%' }}>Fonte</th>
-                <th style={{ width: '20%' }}>Licença</th>
-                <th style={{ width: '8%' }}>Versão</th>
-                <th style={{ width: '6%' }}>Variáveis</th>
-                <th style={{ width: '14%' }} aria-label="Ações" />
+                <th style={{ width: '23%' }}>Nome</th>
+                <th style={{ width: '13%' }}>Categoria</th>
+                <th style={{ width: '11%' }}>Fonte</th>
+                <th style={{ width: '14%' }}>Licença</th>
+                <th style={{ width: '7%' }}>Versão</th>
+                <th style={{ width: '7%' }}>Variáveis</th>
+                <th style={{ width: '25%' }} aria-label="Ações" />
               </tr>
             </thead>
             <tbody>
@@ -238,45 +312,55 @@ export default function ModelosPage() {
                         >
                           Editar
                         </Button>
-                        <a
-                          className="btn btn-ghost btn-sm"
-                          href={appHref('legal-contratos', `gerar/${m.id}`)}
-                          data-testid={`modelo-usar-${m.id}`}
-                        >
-                          Usar em Contratos <IconExternalLink size={14} />
-                        </a>
-                        <a
-                          className="btn btn-ghost btn-sm"
-                          href={appHref('legal-pecas', `?modelo=${m.id}`)}
-                          data-testid={`modelo-usar-pecas-${m.id}`}
-                        >
-                          Usar em Peças <IconExternalLink size={14} />
-                        </a>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          data-testid={`modelo-assinatura-${m.id}`}
-                          onClick={async () => {
-                            try {
-                              const env = await criarEnvelope({
-                                titulo: `${m.nome || 'Minuta'} - assinatura`,
-                                documentos: [{ nome: m.nome || 'Minuta' }],
-                                signatarios: [{ nome: 'Mandatário responsável', papel: 'advogado', metodo: 'cmd-orquestrado' }],
-                              });
-                              window.location.assign(env.href);
-                            } catch { /* envelope indisponível fora da plataforma - sem efeito */ }
-                          }}
-                        >
-                          Preparar assinatura
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          data-testid={`modelo-eliminar-${m.id}`}
-                          onClick={() => setAEliminar(m)}
-                        >
-                          <IconTrash /> Eliminar
-                        </Button>
+                        <RowActionsMenu menuTestId={`modelo-mais-${m.id}`}>
+                          <a
+                            className="btn btn-ghost btn-sm"
+                            role="menuitem"
+                            style={{ justifyContent: 'flex-start' }}
+                            href={appHref('legal-contratos', `gerar/${m.id}`)}
+                            data-testid={`modelo-usar-${m.id}`}
+                          >
+                            Usar em Contratos <IconExternalLink size={14} />
+                          </a>
+                          <a
+                            className="btn btn-ghost btn-sm"
+                            role="menuitem"
+                            style={{ justifyContent: 'flex-start' }}
+                            href={appHref('legal-pecas', `?modelo=${m.id}`)}
+                            data-testid={`modelo-usar-pecas-${m.id}`}
+                          >
+                            Usar em Peças <IconExternalLink size={14} />
+                          </a>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            role="menuitem"
+                            style={{ justifyContent: 'flex-start' }}
+                            data-testid={`modelo-assinatura-${m.id}`}
+                            onClick={async () => {
+                              try {
+                                const env = await criarEnvelope({
+                                  titulo: `${m.nome || 'Minuta'} - assinatura`,
+                                  documentos: [{ nome: m.nome || 'Minuta' }],
+                                  signatarios: [{ nome: 'Mandatário responsável', papel: 'advogado', metodo: 'cmd-orquestrado' }],
+                                });
+                                window.location.assign(env.href);
+                              } catch { /* envelope indisponível fora da plataforma - sem efeito */ }
+                            }}
+                          >
+                            Preparar assinatura
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            role="menuitem"
+                            style={{ justifyContent: 'flex-start' }}
+                            data-testid={`modelo-eliminar-${m.id}`}
+                            onClick={() => setAEliminar(m)}
+                          >
+                            <IconTrash /> Eliminar
+                          </Button>
+                        </RowActionsMenu>
                       </div>
                     </td>
                   </tr>

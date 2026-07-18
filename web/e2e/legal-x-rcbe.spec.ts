@@ -37,6 +37,7 @@ interface SharedApi {
 type SharedWindow = { __ekoa?: { shared?: SharedApi } };
 
 let injectedBoIds: string[] = [];
+let createdEntIds: string[] = [];
 
 async function waitForSpine(page: Page) {
   await page.waitForFunction(
@@ -78,17 +79,21 @@ async function ensureDemoEntity(page: Page): Promise<string> {
 }
 
 test.afterEach(async ({ page }) => {
-  if (injectedBoIds.length === 0) return;
+  if (injectedBoIds.length === 0 && createdEntIds.length === 0) return;
   try {
-    await page.evaluate(async (ids) => {
+    await page.evaluate(async ({ boIds, entIds }) => {
       const s = (window as unknown as SharedWindow).__ekoa?.shared;
       if (!s) return;
-      for (const id of ids) {
+      for (const id of boIds) {
         try { await s.delete('beneficiarios_efetivos', id); } catch { /* ignore */ }
       }
-    }, injectedBoIds);
+      for (const id of entIds) {
+        try { await s.delete('rcbe_entidades', id); } catch { /* ignore */ }
+      }
+    }, { boIds: injectedBoIds, entIds: createdEntIds });
   } catch { /* page may be gone */ }
   injectedBoIds = [];
+  createdEntIds = [];
 });
 
 test('RCBE: beneficiarios duplicados sobre a espinha sao unificados', async ({ page }) => {
@@ -153,5 +158,58 @@ test('RCBE: a declaracao exporta PDF (checklist) via exportPdf', async ({ page }
 
   await page.screenshot({ path: `${SHOTS}/declaracao-pdf.png`, fullPage: true });
 
+  expect(errors, `page errors: ${errors.join(' | ')}`).toHaveLength(0);
+});
+
+test('RCBE: declaracao PDF sem beneficiarios cita a direcao de topo com o artigo correto', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const nonce = `XRC3-${Date.now()}`;
+
+  await page.goto(legalAppUrl('legal-rcbe'), { waitUntil: 'domcontentloaded' });
+  await waitForSpine(page);
+
+  // Entity with NO beneficiaries >= 25%: the exported declaracao must render the
+  // senior-management fallback row citing art. 30.º da Lei n.º 83/2017 (the AML
+  // law that defines the 25% threshold and the direcao-de-topo fallback), never
+  // Lei 89/2017, whose art. 30.º is data protection - a real cite bug once.
+  const entId = await page.evaluate(async (n) => {
+    const s = (window as unknown as SharedWindow).__ekoa!.shared!;
+    const ent = await s.create('rcbe_entidades', {
+      nome: `Entidade Sem BOs ${n}`, nipc: '501234569', formaJuridica: 'sociedade', notas: n,
+    });
+    return String(ent.id);
+  }, nonce);
+  createdEntIds = [entId];
+
+  await page.goto(legalAppUrl('legal-rcbe', `entidade/${entId}`), { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('rcbe-detalhe')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('rcbe-preparar').click();
+  await expect(page.getByTestId('rcbe-declaracao')).toBeVisible({ timeout: 10_000 });
+
+  // Stub the platform bridge to capture the compiled HTML instead of downloading.
+  await page.evaluate(() => {
+    const w = window as unknown as { __ekoa: Record<string, unknown>; __exported: unknown[] };
+    w.__exported = [];
+    w.__ekoa.exportPdf = async (payload: unknown) => {
+      w.__exported.push(payload);
+      return { ok: true };
+    };
+  });
+  await page.getByTestId('rcbe-exportar-pdf').click();
+  await page.waitForFunction(
+    () => ((window as unknown as { __exported?: unknown[] }).__exported || []).length > 0,
+    undefined,
+    { timeout: 15_000 },
+  );
+  const html = await page.evaluate(() => {
+    const arr = (window as unknown as { __exported: Array<{ html?: string }> }).__exported;
+    return String(arr[arr.length - 1].html || '');
+  });
+  expect(html).toContain('Sem beneficiários a 25% ou mais');
+  expect(html, 'direcao-de-topo fallback cites the AML law').toContain('art. 30.º da Lei n.º 83/2017');
+  expect(html).not.toContain('art. 30.º, Lei n.º 89/2017');
+
+  await page.screenshot({ path: `${SHOTS}/declaracao-sem-bos.png`, fullPage: true });
   expect(errors, `page errors: ${errors.join(' | ')}`).toHaveLength(0);
 });

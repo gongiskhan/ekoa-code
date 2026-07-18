@@ -1,13 +1,16 @@
 // Dossiê completo do processo em HTML autónomo para window.__ekoa.exportPdf.
 // Determinístico: gerado exclusivamente das fatias da espinha já filtradas pelo
 // processo (cliente, processo, cronologia ordenada, prazos, documentos,
-// comunicações). Sem recursos externos - tudo inline, XSS-seguro via esc().
+// comunicações, lançamentos). Sem recursos externos - tudo inline, XSS-seguro via esc().
 //
 // Estrutura do documento (a "impressão de um clique"):
 //   1. CAPA - número do processo, tribunal, cliente, data de compilação, contagens.
 //   2. CRONOLOGIA - eventos por ordem ASCENDENTE (a mesma do separador Dossiê).
 //   3. ÍNDICE DE DOCUMENTOS - tabela numerada (nome, tipo, origem, data).
-// Prazos e comunicações entram como secções de apoio depois do índice.
+// Prazos, comunicações e honorários (resumo) entram como secções de apoio
+// depois do índice - o PDF cobre TODAS as secções do separador Dossiê.
+
+import { formatEur } from '../shared.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -64,10 +67,10 @@ function cronologiaAscendente(eventos) {
 /**
  * @param {object} opts
  *  - processo, cliente: linhas da espinha (cliente pode ser null)
- *  - eventos, prazos, documentos, comunicacoes: fatias já filtradas pelo processo
+ *  - eventos, prazos, documentos, comunicacoes, lancamentos: fatias já filtradas pelo processo
  * @returns {{ html: string, filename: string }}
  */
-export function dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, comunicacoes }) {
+export function dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, comunicacoes, lancamentos }) {
   const numero = (processo && processo.numeroProcesso) || '(sem número)';
   const hoje = fmtData(new Date().toISOString());
 
@@ -77,6 +80,21 @@ export function dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, 
   const coms = (Array.isArray(comunicacoes) ? comunicacoes.slice() : []).sort(
     (a, b) => String((b && (b.receivedAt || b.createdAt)) || '').localeCompare(String((a && (a.receivedAt || a.createdAt)) || '')),
   );
+
+  // Resumo de honorários - a mesma agregação do separador Dossiê (DossieTab):
+  // total de todos os lançamentos do processo, repartido por faturado/por faturar.
+  const lans = Array.isArray(lancamentos) ? lancamentos : [];
+  let honTotal = 0;
+  let honFaturado = 0;
+  let honPorFaturar = 0;
+  for (const l of lans) {
+    const v = Number(l && l.valor);
+    const valor = Number.isFinite(v) ? v : 0;
+    honTotal += valor;
+    if (l && l.faturado === true) honFaturado += valor;
+    else honPorFaturar += valor;
+  }
+  const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
   const cronologiaRows = evs.length === 0
     ? '<tr><td colspan="3" class="vazio">Sem eventos registados neste processo.</td></tr>'
@@ -163,6 +181,7 @@ export function dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, 
     <div class="tile"><span class="n">${docs.length}</span><span class="l">Documentos</span></div>
     <div class="tile"><span class="n">${prz.length}</span><span class="l">Prazos</span></div>
     <div class="tile"><span class="n">${coms.length}</span><span class="l">Comunicações</span></div>
+    <div class="tile"><span class="n">${lans.length}</span><span class="l">Lançamentos</span></div>
   </div>
 </div>
 
@@ -203,6 +222,21 @@ ${prazoRows}
       <thead><tr><th>Canal</th><th>Remetente</th><th>Assunto</th><th>Data</th></tr></thead>
       <tbody>
 ${comunicacaoRows}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Honorários (resumo)</h2>
+    <table>
+      <thead><tr><th>Lançamentos</th><th>Total</th><th>Faturado</th><th>Por faturar</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="num" style="width:auto;text-align:left">${lans.length}</td>
+          <td>${esc(formatEur(round2(honTotal)))}</td>
+          <td>${esc(formatEur(round2(honFaturado)))}</td>
+          <td>${esc(formatEur(round2(honPorFaturar)))}</td>
+        </tr>
       </tbody>
     </table>
   </section>

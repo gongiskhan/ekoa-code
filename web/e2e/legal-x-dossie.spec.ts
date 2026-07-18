@@ -92,6 +92,11 @@ async function seedProcesso(page: Page, nonce: string): Promise<SeedIds> {
     await s.create('prazos', {
       processoId: prc.id, titulo: `Contestacao ${n}`, dataLimite: '2026-02-10', estado: 'pendente', origem: 'manual', xnonce: n,
     });
+    // One honorarios lancamento so the export can prove the Honorarios section
+    // reaches the PDF (the full dossier is never a subset of the on-screen tab).
+    await s.create('lancamentos', {
+      processoId: prc.id, descricao: `Reuniao ${n}`, valor: 250, faturado: false, xnonce: n,
+    });
     return { clienteId: String(cli.id), processoId: String(prc.id), numero, nonce: n };
   }, nonce);
 }
@@ -104,7 +109,7 @@ async function cleanup(page: Page, ids: SeedIds | null) {
       const s = w.__ekoa?.shared;
       if (!s) return;
       const safeDel = async (col: string, id: unknown) => { try { await s.delete(col, String(id)); } catch { /* ignore */ } };
-      for (const col of ['eventos', 'prazos', 'comunicacoes']) {
+      for (const col of ['eventos', 'prazos', 'comunicacoes', 'lancamentos']) {
         for (const r of await s.list(col)) if (r.processoId === ids.processoId) await safeDel(col, r.id);
       }
       for (const d of await s.list('documentos')) {
@@ -176,6 +181,12 @@ test('Dossie: exportacao de um clique produz capa + cronologia ascendente + indi
   expect(html).toContain(`Cliente Dossie X ${nonce}`);
   expect(html).toMatch(/Cronologia do processo/i);
   expect(html).toMatch(/Indice de documentos|Índice de documentos/i);
+
+  // The export mirrors EVERY on-screen dossier section - honorarios included
+  // (a strict-subset export was a real bug: the section silently dropped).
+  expect(html).toMatch(/Honorários \(resumo\)|Honorarios \(resumo\)/);
+  expect(html, 'seeded lancamento total reaches the PDF').toMatch(/250,00/);
+  expect(html).toContain('Por faturar');
 
   // Ascending order: the older "Citacao" event must appear BEFORE the newer
   // "Sentenca" event in the compiled HTML (oldest first).

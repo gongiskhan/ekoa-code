@@ -151,7 +151,7 @@ export default function CobrancaDetailPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">{cobranca.descricao || '(sem descrição)'}</h1>
-          <p className="page-subtitle">{cliente?.nome || '—'}</p>
+          <p className="page-subtitle">{cliente?.nome || '-'}</p>
         </div>
         <Badge tone={ESTADO_TONE[cobranca.estado] || 'neutral'}>{ESTADO_LABEL[cobranca.estado] || cobranca.estado}</Badge>
       </div>
@@ -170,7 +170,7 @@ export default function CobrancaDetailPage() {
         </div>
         <div className="kpi-card">
           <span className="kpi-label">Método</span>
-          <span className="kpi-value" style={{ fontSize: 'var(--fs-4, 1.125rem)' }}>{METODO_LABEL[cobranca.metodo] || cobranca.metodo || '—'}</span>
+          <span className="kpi-value" style={{ fontSize: 'var(--fs-4, 1.125rem)' }}>{METODO_LABEL[cobranca.metodo] || cobranca.metodo || '-'}</span>
         </div>
         <JurosAteHoje cobranca={cobranca} />
       </div>
@@ -203,7 +203,7 @@ export default function CobrancaDetailPage() {
                         Passo {Number(l.passoIndex) + 1} · {CANAL_LABEL[l.canal] || l.canal}
                       </span>
                       <span className="text-subtle text-xs">
-                        {formatDateTime(l.enviadoEm)} · {l.destinatario || '—'}
+                        {formatDateTime(l.enviadoEm)} · {l.destinatario || '-'}
                       </span>
                     </span>
                     <Badge tone="ok">{l.estado === 'enviado' ? 'Enviado' : l.estado || 'Enviado'}</Badge>
@@ -234,7 +234,7 @@ export default function CobrancaDetailPage() {
                   </span>
                 </>
               ) : (
-                <span className="citius-resultado-strong">Sequência concluída — não há passos por agendar.</span>
+                <span className="citius-resultado-strong">Sequência concluída - não há passos por agendar.</span>
               )}
             </span>
           </div>
@@ -285,7 +285,7 @@ export default function CobrancaDetailPage() {
                 <span>Valor <span className="rz-ref">{formatEur(cobranca.valor)}</span></span>
               </div>
               <p className="field-hint" style={{ marginTop: 'var(--sp-2, 0.5rem)' }}>
-                Referência de demonstração — a geração real ativa com as credenciais Ifthenpay.
+                Referência de demonstração - a geração real ativa com as credenciais Ifthenpay.
               </p>
             </div>
           )}

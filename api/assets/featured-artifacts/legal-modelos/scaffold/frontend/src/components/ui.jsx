@@ -42,7 +42,7 @@ const URGENCIA_LABEL = { alta: 'Alta', media: 'Média', baixa: 'Baixa' };
 
 export function UrgencyBadge({ urgencia, ...rest }) {
   const tone = URGENCIA_TONE[urgencia] || 'neutral';
-  const label = URGENCIA_LABEL[urgencia] || urgencia || '—';
+  const label = URGENCIA_LABEL[urgencia] || urgencia || '-';
   return <Badge tone={tone} {...rest}>{label}</Badge>;
 }
 

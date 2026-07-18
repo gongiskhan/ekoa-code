@@ -134,7 +134,7 @@ export default function AcessosPage() {
             ? formatDateTime(row.acesso.ultimoLogin)
             : row.acesso && row.acesso.criadoEm
               ? `convidado a ${formatDate(row.acesso.criadoEm)}`
-              : '—'}
+              : '-'}
         </span>
       ),
     },

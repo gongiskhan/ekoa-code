@@ -38,7 +38,7 @@ import { exportarPdf, pdfDisponivel, escapeHtml } from './exportar-pdf.js';
 /* Corpo HTML do PDF da pré-fatura: identificação, cálculo linha a linha e o
  * aviso legal obrigatório - o mesmo conteúdo da vista de impressão. */
 function corpoHtmlPrefatura({ numeroProcesso, clienteNome, periodo, pf }) {
-  const cab = `<p>Processo: ${escapeHtml(numeroProcesso || '—')}<br>Cliente: ${escapeHtml(clienteNome || '—')}<br>Período: ${escapeHtml(periodoLabel(periodo))}</p>`;
+  const cab = `<p>Processo: ${escapeHtml(numeroProcesso || '-')}<br>Cliente: ${escapeHtml(clienteNome || '-')}<br>Período: ${escapeHtml(periodoLabel(periodo))}</p>`;
   const linhas = pf.linhas.map((l) => {
     const valor = l.nota ? escapeHtml(l.nota) : `${l.negativo ? '−' : ''}${escapeHtml(formatEur(l.valor))}`;
     return `<tr${l.destaque ? ' class="destaque"' : ''}><td>${escapeHtml(l.rotulo)}</td><td class="numeric">${valor}</td></tr>`;
@@ -488,7 +488,7 @@ export default function PreFaturasPage() {
       {pf ? (
         <div className="print-only" data-testid="pf-print" aria-hidden="true">
           <h1>Pré-fatura de honorários (rascunho de conferência)</h1>
-          <p>Processo: {numeroProcesso || '—'}<br />Cliente: {clienteNome || '—'}<br />Período: {periodoLabel(periodo)}</p>
+          <p>Processo: {numeroProcesso || '-'}<br />Cliente: {clienteNome || '-'}<br />Período: {periodoLabel(periodo)}</p>
           <table className="data-table">
             <tbody>
               {pf.linhas.map((l) => (

@@ -72,7 +72,8 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
 
   /*
    * Dossiê completo num clique: compila capa + cronologia + índice de documentos
-   * (mais prazos e comunicações) num PDF autónomo via exportPdf da plataforma.
+   * (mais prazos, comunicações e honorários) num PDF autónomo via exportPdf da
+   * plataforma - as mesmas secções do separador impresso, sem subconjuntos.
    * Sem a capacidade, falha com honestidade (aviso, nunca sucesso fingido) - e o
    * separador impresso continua disponível pelo botão "Guardar PDF" (window.print).
    */
@@ -84,7 +85,7 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
     }
     setAGerarPdf(true);
     try {
-      const { html, filename } = dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, comunicacoes });
+      const { html, filename } = dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, comunicacoes, lancamentos });
       await api.exportPdf({ html, format: 'A4', landscape: false, filename });
       toast('Dossiê exportado em PDF.', { tone: 'ok' });
     } catch {
@@ -128,23 +129,23 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
             <div className="dossie-id-grid">
               <div className="dossie-id-row">
                 <span className="dossie-id-label">Nome</span>
-                <span className="dossie-id-value">{cliente.nome || '—'}</span>
+                <span className="dossie-id-value">{cliente.nome || '-'}</span>
               </div>
               <div className="dossie-id-row">
                 <span className="dossie-id-label">NIF</span>
-                <span className="dossie-id-value">{cliente.nif || '—'}</span>
+                <span className="dossie-id-value">{cliente.nif || '-'}</span>
               </div>
               <div className="dossie-id-row">
                 <span className="dossie-id-label">Email</span>
-                <span className="dossie-id-value">{cliente.email || '—'}</span>
+                <span className="dossie-id-value">{cliente.email || '-'}</span>
               </div>
               <div className="dossie-id-row">
                 <span className="dossie-id-label">Telefone</span>
-                <span className="dossie-id-value">{cliente.telefone || '—'}</span>
+                <span className="dossie-id-value">{cliente.telefone || '-'}</span>
               </div>
               <div className="dossie-id-row">
                 <span className="dossie-id-label">Morada</span>
-                <span className="dossie-id-value">{cliente.morada || '—'}</span>
+                <span className="dossie-id-value">{cliente.morada || '-'}</span>
               </div>
             </div>
           ) : (
@@ -158,27 +159,27 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
           <div className="dossie-id-grid">
             <div className="dossie-id-row">
               <span className="dossie-id-label">Número</span>
-              <span className="dossie-id-value">{processo.numeroProcesso || '—'}</span>
+              <span className="dossie-id-value">{processo.numeroProcesso || '-'}</span>
             </div>
             <div className="dossie-id-row">
               <span className="dossie-id-label">Tribunal</span>
-              <span className="dossie-id-value">{processo.tribunal || '—'}</span>
+              <span className="dossie-id-value">{processo.tribunal || '-'}</span>
             </div>
             <div className="dossie-id-row">
               <span className="dossie-id-label">Comarca</span>
-              <span className="dossie-id-value">{processo.comarca || '—'}</span>
+              <span className="dossie-id-value">{processo.comarca || '-'}</span>
             </div>
             <div className="dossie-id-row">
               <span className="dossie-id-label">Área</span>
-              <span className="dossie-id-value">{processo.area || '—'}</span>
+              <span className="dossie-id-value">{processo.area || '-'}</span>
             </div>
             <div className="dossie-id-row">
               <span className="dossie-id-label">Estado</span>
-              <span className="dossie-id-value">{processo.estado || '—'}</span>
+              <span className="dossie-id-value">{processo.estado || '-'}</span>
             </div>
             <div className="dossie-id-row">
               <span className="dossie-id-label">Advogado responsável</span>
-              <span className="dossie-id-value">{processo.advogadoResponsavel || '—'}</span>
+              <span className="dossie-id-value">{processo.advogadoResponsavel || '-'}</span>
             </div>
           </div>
           {processo.descricao ? <p className="dossie-descricao">{processo.descricao}</p> : null}
@@ -227,9 +228,9 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
                       <td className="text-strong">{p.titulo || p.descricao || '(sem título)'}</td>
                       <td className="numeric">{formatDate(p.dataLimite)}</td>
                       <td>
-                        <span className="badge">{p.estado || '—'}</span>
+                        <span className="badge">{p.estado || '-'}</span>
                       </td>
-                      <td className="text-muted">{p.regraAplicada || '—'}</td>
+                      <td className="text-muted">{p.regraAplicada || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -258,7 +259,7 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
                   {documentos.map((d) => (
                     <tr key={d.id} data-testid="ds-documento">
                       <td className="text-strong">{d.nome || '(sem nome)'}</td>
-                      <td>{d.tipo || '—'}</td>
+                      <td>{d.tipo || '-'}</td>
                       <td>{origemLabel(d.origem)}</td>
                       <td className="numeric">{formatDate(d.data || d.createdAt)}</td>
                     </tr>
@@ -289,8 +290,8 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
                   {comunicacoesOrdenadas.map((c) => (
                     <tr key={c.id} data-testid="ds-comunicacao">
                       <td>{c.canal === 'whatsapp' ? 'WhatsApp' : 'Email'}</td>
-                      <td className="text-strong">{c.fromName || c.fromAddr || '—'}</td>
-                      <td className="text-muted">{c.subject || (c.body ? `${c.body.slice(0, 60)}…` : '—')}</td>
+                      <td className="text-strong">{c.fromName || c.fromAddr || '-'}</td>
+                      <td className="text-muted">{c.subject || (c.body ? `${c.body.slice(0, 60)}…` : '-')}</td>
                       <td className="numeric">{formatDateTime(c.receivedAt || c.createdAt)}</td>
                     </tr>
                   ))}
