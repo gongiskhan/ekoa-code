@@ -1,0 +1,8 @@
+{ "slice": "C1", "kind": "api", "status": "passed", "at": "2026-07-18T08:06:40Z",
+  "wall": {"tscApi": 0, "eslint": 0, "chokepoint": 0, "unit": "voice 14/14 + streaming 32/32", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "api/tests/voice WS integration vs stub providers; SUITE_LEDGER 'voice relay C1'; shared contract representability"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent (boundary)", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "deferred-batch", "reason": "api-kind; C7 runs the voice functional pass"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "3 real hardening gaps fixed + re-verified"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (api; C7 carries the voice walkthrough)"} }

@@ -68,6 +68,9 @@ export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';
 export * from './notifications.js';
+// Voice WS message contract (mega-run C1) - a WS carve-out like streaming/, so it has
+// schemas + path constants here but NO descriptor-map entry (not a REST endpoint).
+export * from './voice.js';
 
 /** Every domain's descriptor map, keyed by domain. The route census + protocol-parity
  *  gate (ch13 §13.5) walk this against the mounted routes. */

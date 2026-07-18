@@ -264,4 +264,41 @@ describe('shared contract - security ratchet (G12)', () => {
     const b = canonicalTaskBinding({ ...base, budget: { egressBytes: 2000, modelSpend: { userId: 'u' } } });
     expect(a).not.toBe(b);
   });
+
+  it('voice WS unions represent every relay message both directions (mega-run C1) and stay off the REST surface', async () => {
+    const {
+      VoiceSttClientMessage, VoiceSttServerMessage, VoiceTtsClientMessage, VoiceTtsServerMessage,
+      VOICE_STT_WS_PATH, VOICE_TTS_WS_PATH,
+    } = await import('./voice.js');
+    // A WS carve-out like streaming/: schemas + path constants, NO descriptor-map domain.
+    expect(VOICE_STT_WS_PATH).toBe('/api/voice/stream');
+    expect(VOICE_TTS_WS_PATH).toBe('/api/voice/tts-stream');
+    expect(allEndpointsFlat().some((e) => e.path.startsWith('/api/voice'))).toBe(false);
+
+    // STT: every relay-emitted shape parses; audio is binary and deliberately NOT in the union.
+    for (const msg of [
+      { type: 'ready', sessionId: 's1', sampleRate: 16000, utteranceEndMs: 1200, sttProvider: 'stub' },
+      { type: 'speech_started' },
+      { type: 'transcript', text: 'Olá', isFinal: false, speechFinal: false },
+      { type: 'transcript', text: 'Olá, bom dia.', isFinal: true, speechFinal: true },
+      { type: 'utterance_end', transcript: 'Olá, bom dia.' },
+      { type: 'error', code: 'VOICE_TIMEOUT', message: 'Sessão de voz terminada por inatividade.' },
+    ]) expect(VoiceSttServerMessage.safeParse(msg).success, JSON.stringify(msg)).toBe(true);
+    expect(VoiceSttClientMessage.safeParse({ type: 'close_stream' }).success).toBe(true);
+    expect(VoiceSttServerMessage.safeParse({ type: 'audio', data: 'AAAA' }).success).toBe(false);
+
+    // TTS: say/clear up; ready/speaking/audio_end/cleared/error down. Barge-in is {clear}.
+    expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: 'Olá.', lang: 'pt-PT', turnId: 't1' }).success).toBe(true);
+    expect(VoiceTtsClientMessage.safeParse({ type: 'clear' }).success).toBe(true);
+    expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: '', lang: 'pt-PT' }).success).toBe(false);
+    expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: 'Hi', lang: 'fr' }).success).toBe(false);
+    for (const msg of [
+      { type: 'ready', sessionId: 's1' },
+      { type: 'speaking', turnId: 't1', lang: 'en', ttsProvider: 'stub' },
+      { type: 'audio_end', turnId: 't1' },
+      { type: 'cleared', turnId: 't1' },
+      { type: 'cleared' },
+      { type: 'error', code: 'VOICE_PROVIDER_ERROR', message: 'Erro no serviço de voz. Tente novamente.' },
+    ]) expect(VoiceTtsServerMessage.safeParse(msg).success, JSON.stringify(msg)).toBe(true);
+  });
 });

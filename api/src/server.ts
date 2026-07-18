@@ -45,6 +45,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
+import { attachVoiceServer } from './voice/index.js';
 import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
@@ -757,6 +758,10 @@ export function boot(): void {
       // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
       // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
       attachCanvasServer(httpServer);
+      // The voice relay (mega-run C1, BRIEF §5): streaming/'s sibling WS carve-out -
+      // /api/voice/stream (STT relay) + /api/voice/tts-stream ({clear} barge-in), session-JWT
+      // ?token= auth (CONV-1), stub providers until C6 lands vendor keys.
+      attachVoiceServer(httpServer);
       // The daemon-to-Cortex bridge (ch18 §18.3, outside FIXED-2's frontend rule): the WS server
       // the ekoa-local daemon dials into. Org resolution reads the users store; a ledger row is
       // display metadata only (§18.6, never persisted hosted by default).

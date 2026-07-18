@@ -57,6 +57,7 @@ exhaustive; the lint rules of `docs/governance.md` enforce the load-bearing edge
 | `integrations/` | OAuth flows, encrypted credentials, action runner, Pipedream, e-signature. |
 | `bridge/` | Daemon-facing WS server the ekoa-local daemon dials into; delegation dispatch; the provider endpoint routes back through `llm/`. |
 | `streaming/` | Live browser-canvas media relay (the one FIXED-2 WebSocket carve-out). |
+| `voice/` | Voice relay (Part C), `streaming/`'s sibling WS carve-out: WS `/api/voice/stream` (16 kHz PCM up, interim/final transcripts + `utterance_end` down) + `/api/voice/tts-stream` (audio frames down, `{clear}` barge-in). Session-JWT `?token=` auth (CONV-1), org+user attribution on every provider call record, 10-min inactivity timeout, per-stage latency JSON logging. Vendor-neutral `SttProvider`/`TtsProvider` registry, config-selected per language; v1 ships stub providers only (live vendors land at C6). NOT model egress - never imports `llm/`. |
 | `events/` | SSE manager (four streams), durable event queue, webhook ingress, trigger delivery. |
 | `agents/` | Agent SDK execution of user work: job lifecycle, context assembly, typed streaming, marker parsing. |
 | `apps/` | User-app pipeline: esbuild, registry, static serving + context injection, slugs, artifact backends, backups. |
@@ -72,7 +73,7 @@ Tier table (imports point strictly down; the graph is acyclic by construction):
 | 6 | `routes/` (domain modules, `auth/`, `events/`, `billing/`, `shared/`) |
 | 5 | `agents/`, `automation/`, `apps/`, `legal/` |
 | 4 | `events/` |
-| 3 | `integrations/`, `memory/`, `knowledge/`, `bridge/`, `streaming/` |
+| 3 | `integrations/`, `memory/`, `knowledge/`, `bridge/`, `streaming/`, `voice/` |
 | 2 | `llm/`, `services/` |
 | 1 | `auth/`, `billing/`, `content/` |
 | 0 | `data/`, `config.ts`, `shared/` |

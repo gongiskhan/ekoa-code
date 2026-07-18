@@ -154,6 +154,58 @@ export function __resetAgentsConfigForTests(): void {
   cachedAgents = undefined;
 }
 
+/** Voice relay tunables (mega-run C1, BRIEF §5 Part C). Standalone memoized loader like
+ *  `loadAgentsConfig` (keeps the many bare-`Config` test literals valid); `voice/` reads it
+ *  via `loadVoiceConfig()`. Vendor keys live HERE and nowhere else - `voice/` never touches
+ *  process.env (the DEEPGRAM_API_KEY custody rule from the C deviations memo). */
+export interface VoiceConfig {
+  /** STT provider registry key. v1 registers only 'stub'; C6 registers 'deepgram'.
+   *  An unregistered key resolves to the stub with a structured fallback log. */
+  sttProvider: string;
+  /** Per-language TTS provider registry keys (BRIEF §5 TTS table: en=deepgram-aura2,
+   *  pt-PT/pt-BR=google, fallback=elevenlabs). v1 registers only 'stub'; C6 the live ones. */
+  ttsProviderEn: string;
+  ttsProviderPtPt: string;
+  ttsProviderPtBr: string;
+  ttsProviderFallback: string;
+  /** Deepgram vendor key (STT + Aura-2 en TTS). Absent => live providers refuse to open. */
+  deepgramApiKey: string | undefined;
+  /** Idle-socket ceiling: no client message for this long closes the session (BRIEF §5
+   *  validation matrix - 10 min default). Env knob so tests can shorten it. */
+  inactivityTimeoutMs: number;
+  /** Default utterance_end_ms when the client query omits it (clamped 1000..20000). */
+  utteranceEndMsDefault: number;
+  /** Opt-in Origin allowlist for the voice WS upgrades (empty = no origin check, same
+   *  posture as the streaming/ carve-out's EKOA_STREAMING_ALLOWED_ORIGINS). */
+  allowedOrigins: string[];
+}
+
+export function defaultVoiceConfig(): VoiceConfig {
+  return {
+    sttProvider: process.env.VOICE_STT_PROVIDER ?? 'stub',
+    ttsProviderEn: process.env.VOICE_TTS_PROVIDER_EN ?? 'deepgram-aura2',
+    ttsProviderPtPt: process.env.VOICE_TTS_PROVIDER_PT_PT ?? 'google',
+    ttsProviderPtBr: process.env.VOICE_TTS_PROVIDER_PT_BR ?? 'google',
+    ttsProviderFallback: process.env.VOICE_TTS_PROVIDER_FALLBACK ?? 'elevenlabs',
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY || undefined,
+    inactivityTimeoutMs: envInt('VOICE_INACTIVITY_TIMEOUT_MS', 600_000),
+    utteranceEndMsDefault: envInt('VOICE_UTTERANCE_END_MS_DEFAULT', 5_000),
+    allowedOrigins: (process.env.VOICE_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  };
+}
+
+let cachedVoice: VoiceConfig | undefined;
+export function loadVoiceConfig(): VoiceConfig {
+  if (!cachedVoice) cachedVoice = defaultVoiceConfig();
+  return cachedVoice;
+}
+export function __resetVoiceConfigForTests(): void {
+  cachedVoice = undefined;
+}
+
 class ConfigError extends Error {}
 
 function required(name: string): string {

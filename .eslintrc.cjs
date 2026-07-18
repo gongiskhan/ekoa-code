@@ -83,6 +83,7 @@ module.exports = {
                   './api/src/knowledge',
                   './api/src/bridge',
                   './api/src/streaming',
+                  './api/src/voice',
                   './api/src/events',
                   './api/src/agents',
                   './api/src/apps',
