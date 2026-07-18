@@ -53,4 +53,9 @@ export const OS_STRINGS = {
     openSurfaces: 'Superfícies abertas',
     noOpenSurfaces: 'Sem superfícies abertas',
   },
+  artifactApp: {
+    notReady: 'Esta aplicação ainda não está pronta para abrir.',
+    loadFailed: 'Não foi possível carregar a aplicação.',
+    retry: 'Tentar novamente',
+  },
 } as const;

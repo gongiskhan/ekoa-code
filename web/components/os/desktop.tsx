@@ -99,6 +99,7 @@ export function Desktop({ artifacts, host, onStartRename, onRequestDelete, onRef
               artifactId: artifact.id,
               title: artifact.title || artifact.name,
               appUrl: (artifact as OsArtifact).appUrl,
+              shareable: (artifact as OsArtifact).shareable,
             }),
           continueInChat: (artifact) => router.push(`/chat?continue=${artifact.id}`),
           startRename: (artifact) => onStartRename(artifact as OsArtifact),
@@ -125,6 +126,7 @@ export function Desktop({ artifacts, host, onStartRename, onRequestDelete, onRef
         artifactId: artifact.id,
         title: artifact.title || artifact.name,
         appUrl: artifact.appUrl,
+        shareable: artifact.shareable,
       });
     }
   };

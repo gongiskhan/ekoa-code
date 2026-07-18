@@ -30,6 +30,7 @@ import { WindowLayer } from './window-layer';
 /** Artifact enriched with what the shell needs to render/open it. */
 export interface OsArtifact extends ArtifactLike {
   appUrl: string | null;
+  shareable?: boolean;
   templateId?: string;
 }
 
@@ -65,6 +66,7 @@ export function OsShell() {
         name: (raw.name as string) || (raw.title as string) || 'Artefacto',
         title: (raw.title as string) || (raw.name as string) || 'Artefacto',
         templateId: (raw.templateId as string) || (raw.typeId as string),
+        shareable: raw.shareable === true,
         appUrl: isRunnable(status) ? api.appUrl(slug || id) : null,
       } satisfies OsArtifact;
     });

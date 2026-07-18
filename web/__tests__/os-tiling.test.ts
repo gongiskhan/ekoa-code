@@ -18,13 +18,26 @@ const BOUNDS: Rect = { x: 0, y: 0, w: 1206, h: 800 };
 const DIVIDER = 6;
 
 describe('lib/os/tiling', () => {
-  it('insertEdge into an empty region takes the whole region', () => {
+  it('edge-snapping the FIRST window takes exactly half; the other half stays empty', () => {
     const root = insertEdge(null, 'w1', 'left');
-    expect(isLeaf(root)).toBe(true);
+    expect(isLeaf(root)).toBe(false);
     expect(leaves(root)).toEqual(['w1']);
     const layout = computeLayout(root, BOUNDS, DIVIDER);
-    expect(layout.rects.w1).toEqual(BOUNDS);
+    // (1206 - 6) / 2 = 600: the brief's "drag to an edge to take half the screen".
+    expect(layout.rects.w1).toEqual({ x: 0, y: 0, w: 600, h: 800 });
+    // No divider against empty space.
     expect(layout.dividers).toHaveLength(0);
+  });
+
+  it('snapping right into the empty half fills it (no extra nesting)', () => {
+    let root = insertEdge(null, 'w1', 'left');
+    root = insertEdge(root, 'w2', 'right');
+    expect(root).toEqual({
+      dir: 'row',
+      ratio: 0.5,
+      a: { leaf: 'w1' },
+      b: { leaf: 'w2' },
+    });
   });
 
   it('edge-snapping a second window makes a half/half row (scenario 2 geometry)', () => {
@@ -83,6 +96,12 @@ describe('lib/os/tiling', () => {
     // Removing the last window empties the tree.
     root = removeLeaf(root, 'w1');
     root = removeLeaf(root, 'w3');
+    expect(root).toBeNull();
+  });
+
+  it('removing the only window of a half-empty tree empties it', () => {
+    let root: TileNode | null = insertEdge(null, 'w1', 'right');
+    root = removeLeaf(root, 'w1');
     expect(root).toBeNull();
   });
 

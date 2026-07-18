@@ -41,6 +41,7 @@ export function Dock({ host, artifacts }: { host: SurfaceHost; artifacts: OsArti
         artifactId: artifact.id,
         title: artifact.title || artifact.name,
         appUrl: artifact.appUrl,
+        shareable: artifact.shareable,
       });
     }
   };

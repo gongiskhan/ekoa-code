@@ -1,5 +1,6 @@
 import type { SurfaceManifest } from './types';
 import { artifactsSurface } from '@/components/artifacts/artifacts.surface';
+import { artifactAppSurface } from '@/components/artifacts/artifact-app.surface';
 
 /**
  * The surface registry (contract 2.4): the one place that lists every surface,
@@ -9,6 +10,7 @@ import { artifactsSurface } from '@/components/artifacts/artifacts.surface';
  */
 export const SURFACES: SurfaceManifest[] = [
   artifactsSurface,
+  artifactAppSurface,
 ];
 
 export function getSurface(id: string): SurfaceManifest | undefined {

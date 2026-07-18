@@ -87,8 +87,13 @@ export interface WindowState {
   minimized: boolean;
 }
 
-/** Binary split tree for the tiled region (contract 4.1/4.2). */
-export type TileNode = { leaf: string } | TileSplit;
+/**
+ * Binary split tree for the tiled region (contract 4.1/4.2). An `empty` leaf
+ * is an unoccupied half: edge-snapping the FIRST window yields
+ * [window | empty] so it takes half the region (the brief's gesture), and the
+ * next opposite-edge snap fills the empty slot.
+ */
+export type TileNode = { leaf: string } | { empty: true } | TileSplit;
 
 export interface TileSplit {
   dir: 'row' | 'col';
