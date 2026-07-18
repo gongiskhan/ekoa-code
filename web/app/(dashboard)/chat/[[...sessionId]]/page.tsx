@@ -256,7 +256,7 @@ export default function UnifiedChatPage() {
   const isLegalOrg = useSettingsStore((s) =>
     s.isLoaded ? s.settings.general.vertical === "legal" : false,
   );
-  const { common, chatPanel, emptyState, onboarding, sheetFeed, language: uiLanguage } = useTranslation();
+  const { common, chatPanel, emptyState, onboarding, sheetFeed, sessionsPanel, language: uiLanguage } = useTranslation();
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
 
@@ -1901,7 +1901,7 @@ export default function UnifiedChatPage() {
 
       {/* Mobile floating action buttons */}
       {isMobile && (
-        <div className="fixed bottom-20 right-4 z-40 flex flex-col gap-2">
+        <div className="fixed bottom-36 right-4 z-40 flex flex-col gap-2">
           {/* Side panel button — available whenever there's a conversation, not
               just build sessions. In a chat-only session it opens an empty panel,
               which is acceptable and mitigates the panel-not-showing race. */}
@@ -1909,8 +1909,8 @@ export default function UnifiedChatPage() {
             <button
               onClick={() => setMobileSidePanelOpen(true)}
               className="w-12 h-12 bg-teal-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-teal-700 transition-colors"
-              title="View Files & Preview"
-              aria-label="Open side panel"
+              title={sheetFeed.openPanel}
+              aria-label={sheetFeed.openPanel}
             >
               <PanelRight size={20} />
             </button>
@@ -1920,8 +1920,8 @@ export default function UnifiedChatPage() {
           <button
             onClick={() => setMobileSessionsOpen(true)}
             className="w-12 h-12 bg-neutral-800 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-neutral-900 transition-colors"
-            title="Session History"
-            aria-label="Session history"
+            title={sessionsPanel.sessionHistory}
+            aria-label={sessionsPanel.sessionHistory}
           >
             <History size={20} />
           </button>

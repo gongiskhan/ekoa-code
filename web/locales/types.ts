@@ -566,6 +566,7 @@ export interface Translations {
   // ============================================
 
   sidePanel: {
+    integrationBuilder: string;
     files: string;
     output: string;
     preview: string;
@@ -657,6 +658,15 @@ export interface Translations {
     thoughtForSeconds: (n: number) => string;
     showThinking: string;
     hideThinking: string;
+    // B6: queue affordances + per-message feedback/copy (previously hardcoded)
+    queuePlaceholder: string;
+    queueMessage: string;
+    removeFromQueue: string;
+    queuedNotice: string;
+    feedbackHelpful: string;
+    feedbackNotHelpful: string;
+    copyMessage: string;
+    copiedMessage: string;
   };
 
   // ============================================
@@ -798,6 +808,8 @@ export interface Translations {
     newSession: string;
     expandSessions: string;
     searchSessions: string;
+    // B6: the mobile session-history FAB (previously hardcoded English)
+    sessionHistory: string;
     noSessionsYet: string;
     noMatchingSessions: string;
     rename: string;

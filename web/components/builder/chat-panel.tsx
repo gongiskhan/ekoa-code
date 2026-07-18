@@ -632,17 +632,15 @@ export default function ChatPanel({
                 <button
                   onClick={() => sessionId && removeQueuedMessage(sessionId, i)}
                   className="ml-2 flex-shrink-0 text-amber-500 hover:text-amber-700"
-                  title="Remove from queue"
-                  aria-label="Remove queued message"
+                  title={chatPanelT.removeFromQueue}
+                  aria-label={chatPanelT.removeFromQueue}
                 >
                   <X size={12} />
                 </button>
               </div>
             ))}
             <span className="pl-0.5 text-[10px] text-neutral-400">
-              {language === "pt"
-                ? "Em fila — enviado quando a execução atual terminar"
-                : "Queued — sends when the current run finishes"}
+              {chatPanelT.queuedNotice}
             </span>
           </div>
         )}
@@ -654,13 +652,7 @@ export default function ChatPanel({
             value={inputText}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isExecuting
-                ? language === "pt"
-                  ? "Escreva para pôr em fila…"
-                  : "Type to queue a message…"
-                : chatPanelT.describeYourApp
-            }
+            placeholder={isExecuting ? chatPanelT.queuePlaceholder : chatPanelT.describeYourApp}
             rows={2}
             className="w-full max-h-32 min-h-[60px] py-2 px-3 bg-transparent resize-none outline-none text-xs text-neutral-800 placeholder-neutral-400 disabled:opacity-50"
           />
@@ -688,8 +680,8 @@ export default function ChatPanel({
                   <button
                     onClick={handleSendMessage}
                     className="p-1.5 rounded transition-colors text-teal-700 hover:text-teal-900 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                    title={language === "pt" ? "Pôr mensagem em fila" : "Queue message"}
-                    aria-label="Queue message"
+                    title={chatPanelT.queueMessage}
+                    aria-label={chatPanelT.queueMessage}
                   >
                     <Send size={16} />
                   </button>
@@ -1070,6 +1062,7 @@ function MessageBubble({
 // ============================================
 
 function FeedbackButtons({ traceId }: { traceId: string }) {
+  const { chatPanel: chatPanelT } = useTranslation();
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1097,7 +1090,7 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
             ? 'text-neutral-200'
             : 'text-neutral-300 hover:text-teal-600'
         }`}
-        title="Helpful response"
+        title={chatPanelT.feedbackHelpful}
       >
         <ThumbsUp size={12} />
       </button>
@@ -1111,7 +1104,7 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
             ? 'text-neutral-200'
             : 'text-neutral-300 hover:text-red-500'
         }`}
-        title="Not helpful"
+        title={chatPanelT.feedbackNotHelpful}
       >
         <ThumbsDown size={12} />
       </button>
@@ -1124,6 +1117,7 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
 // ============================================
 
 function CopyButton({ content }: { content: string }) {
+  const { chatPanel: chatPanelT } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -1139,7 +1133,7 @@ function CopyButton({ content }: { content: string }) {
   return (
     <button
       onClick={handleCopy}
-      title={copied ? "Copied" : "Copy"}
+      title={copied ? chatPanelT.copiedMessage : chatPanelT.copyMessage}
       className="p-1 rounded text-neutral-300 hover:text-neutral-600 transition-colors"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}

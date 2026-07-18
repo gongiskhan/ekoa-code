@@ -81,7 +81,7 @@ const BUILD_PHASE_DURATION_MS = 4000;
 // ============================================
 
 export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
-  const { sidePanel: sp, versions: vt } = useTranslation();
+  const { sidePanel: sp, versions: vt, sheetFeed } = useTranslation();
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [isRestarting, setIsRestarting] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -438,8 +438,8 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
           <button
             onClick={onClose}
             className="hidden md:flex items-center justify-center w-8 h-8 mr-1 mb-1 rounded-md text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 transition-colors"
-            title="Hide files & preview"
-            aria-label="Close side panel"
+            title={sheetFeed.hidePanel}
+            aria-label={sheetFeed.hidePanel}
           >
             <ChevronRight size={18} />
           </button>
@@ -560,7 +560,7 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
                     ref={iframeRef}
                     src={previewReady ? (previewUrlWithToken || previewUrl) : undefined}
                     className="w-full h-full border-0"
-                    title="App Preview"
+                    title={sp.preview}
                     onLoad={handleIframeLoad}
                     onError={handleIframeError}
                   />

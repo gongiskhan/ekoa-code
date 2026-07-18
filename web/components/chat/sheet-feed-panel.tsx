@@ -455,8 +455,14 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
 
   return (
     <div className="flex-1 bg-neutral-50 flex flex-col min-w-0" data-testid="sheet-feed">
-      {/* Header - mirrors the build variant's tab bar height + close affordance. */}
-      <div className="flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-2.5">
+      {/* Header - mirrors the build variant's tab bar height + close affordance.
+          Hidden below md: on mobile the ONLY host is the FAB overlay drawer, whose
+          own header already names the sheet feed (B6) - two stacked title rows
+          would waste overlay height. */}
+      <div
+        data-testid="sheet-feed-header"
+        className="hidden md:flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-2.5"
+      >
         <div className="flex items-center gap-2 text-sm font-medium text-neutral-800">
           <FileText size={15} className="text-teal-600" />
           {sheetFeed.title}
@@ -639,7 +645,7 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
                       >
                         <ChevronLeft size={13} />
                       </button>
-                      <span data-testid="sheet-rev-label" className="tabular-nums">
+                      <span data-testid="sheet-rev-label" className="tabular-nums whitespace-nowrap shrink-0">
                         {sheetFeed.revisionOf(shownIdx + 1, sheet.revisions.length)}
                       </span>
                       <button

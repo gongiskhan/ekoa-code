@@ -528,6 +528,7 @@ export const pt: Translations = {
   },
 
   sidePanel: {
+    integrationBuilder: 'Construtor de Integrações',
     files: 'Ficheiros',
     output: 'Output',
     preview: 'Pré-visualização',
@@ -591,7 +592,7 @@ export const pt: Translations = {
   },
 
   chatPanel: {
-    describeYourApp: 'Descreva a sua app...',
+    describeYourApp: 'Escreva a sua mensagem...',
     attachFile: 'Anexar ficheiro',
     cancelBuild: 'Cancelar build',
     sendMessage: 'Enviar mensagem',
@@ -610,6 +611,14 @@ export const pt: Translations = {
     thoughtForSeconds: (n: number) => `Pensou durante ${n}s`,
     showThinking: 'Mostrar raciocínio',
     hideThinking: 'Ocultar raciocínio',
+    queuePlaceholder: 'Escreva para pôr em fila...',
+    queueMessage: 'Pôr mensagem em fila',
+    removeFromQueue: 'Remover da fila',
+    queuedNotice: 'Em fila: enviada quando a execução atual terminar',
+    feedbackHelpful: 'Resposta útil',
+    feedbackNotHelpful: 'Não foi útil',
+    copyMessage: 'Copiar',
+    copiedMessage: 'Copiado',
   },
 
   attachments: {
@@ -712,6 +721,7 @@ export const pt: Translations = {
     newSession: 'Nova Sessão',
     expandSessions: 'Expandir Sessões',
     searchSessions: 'Pesquisar sessões...',
+    sessionHistory: 'Histórico de sessões',
     noSessionsYet: 'Sem sessões ainda. Clique + para começar.',
     noMatchingSessions: 'Nenhuma sessão encontrada',
     rename: 'Renomear',

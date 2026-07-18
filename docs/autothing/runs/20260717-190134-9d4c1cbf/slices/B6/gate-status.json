@@ -1,0 +1,8 @@
+{ "slice": "B6", "kind": "mixed", "status": "passed", "at": "2026-07-18T03:53:56Z",
+  "wall": {"tscWeb": 0, "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "mobile-sheet-feed.spec.ts + 3 part B specs 4/4 on finished diff; ledger 71/71"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "deferred", "reason": "part-level at B7"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "1 real, fixed"},
+  "design": {"status": "issues-fixed", "by": "fresh-context audit at finished surface", "findings": "3 real, all fixed"},
+  "video": {"status": "deferred", "reason": "B7 carries the Part B walkthrough"} }

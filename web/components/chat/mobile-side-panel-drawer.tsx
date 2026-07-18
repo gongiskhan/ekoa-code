@@ -3,6 +3,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 import SidePanel from "@/components/builder/side-panel";
+import { useOrchestrationStore, panelContentFor } from "@/stores/orchestration";
 import { useTranslation } from "@/stores/i18n";
 
 interface MobileSidePanelDrawerProps {
@@ -16,7 +17,11 @@ export default function MobileSidePanelDrawer({
   onClose,
   sessionId,
 }: MobileSidePanelDrawerProps) {
-  const { sidePanel: sp } = useTranslation();
+  const { sidePanel: sp, sheetFeed } = useTranslation();
+  // B6: the drawer header names WHAT the overlay hosts (the B.A panel union) - the
+  // sheet feed for chat sessions, the build preview otherwise. The hosted SidePanel
+  // decides its own content the same way; this only keeps the label honest.
+  const panelKind = useOrchestrationStore((s) => panelContentFor(s, sessionId).kind);
 
   return (
     <AnimatePresence>
@@ -37,6 +42,7 @@ export default function MobileSidePanelDrawer({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            data-testid="mobile-side-panel-drawer"
             className="fixed left-0 right-0 bottom-0 z-50 bg-white rounded-t-2xl shadow-xl flex flex-col"
             style={{ height: "85vh", maxHeight: "85vh" }}
           >
@@ -47,11 +53,17 @@ export default function MobileSidePanelDrawer({
 
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-100">
-              <span className="text-sm font-bold text-neutral-700">
-                {sp.preview}
+              <span data-testid="mobile-drawer-title" className="text-sm font-bold text-neutral-700">
+                {panelKind === "sheet-feed"
+                  ? sheetFeed.title
+                  : panelKind === "integrate"
+                    ? sp.integrationBuilder
+                    : sp.preview}
               </span>
               <button
                 onClick={onClose}
+                title={sheetFeed.hidePanel}
+                aria-label={sheetFeed.hidePanel}
                 className="p-2 text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 rounded-lg transition-colors"
               >
                 <X size={18} />

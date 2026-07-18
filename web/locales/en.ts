@@ -527,6 +527,7 @@ export const en: Translations = {
   },
 
   sidePanel: {
+    integrationBuilder: 'Integration Builder',
     files: 'Files',
     output: 'Output',
     preview: 'Preview',
@@ -590,7 +591,7 @@ export const en: Translations = {
   },
 
   chatPanel: {
-    describeYourApp: 'Describe your app...',
+    describeYourApp: 'Write your message...',
     attachFile: 'Attach file',
     cancelBuild: 'Cancel build',
     sendMessage: 'Send message',
@@ -609,6 +610,14 @@ export const en: Translations = {
     thoughtForSeconds: (n: number) => `Thought for ${n}s`,
     showThinking: 'Show reasoning',
     hideThinking: 'Hide reasoning',
+    queuePlaceholder: 'Type to queue a message...',
+    queueMessage: 'Queue message',
+    removeFromQueue: 'Remove from queue',
+    queuedNotice: 'Queued: sends when the current run finishes',
+    feedbackHelpful: 'Helpful response',
+    feedbackNotHelpful: 'Not helpful',
+    copyMessage: 'Copy',
+    copiedMessage: 'Copied',
   },
 
   attachments: {
@@ -711,6 +720,7 @@ export const en: Translations = {
     newSession: 'New Session',
     expandSessions: 'Expand Sessions',
     searchSessions: 'Search sessions...',
+    sessionHistory: 'Session history',
     noSessionsYet: 'No sessions yet. Click + to start.',
     noMatchingSessions: 'No matching sessions',
     rename: 'Rename',
