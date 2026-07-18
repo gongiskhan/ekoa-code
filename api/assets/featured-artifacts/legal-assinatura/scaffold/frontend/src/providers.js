@@ -7,7 +7,7 @@
  * está disponível, o tipo de assinatura que produz, e o fluxo a apresentar - e
  * NÃO detém credenciais nem lógica de assinatura (essa é o motor + as rotas).
  *
- * Enquadramento jurídico (Portaria n.º 350-A/2025, de 09 de Outubro):
+ * Enquadramento jurídico (Portaria n.º 350-A/2025, de 9 de outubro):
  *  - Até 31-12-2026 admite-se, para advogados, advogados estagiários e
  *    solicitadores, a assinatura eletrónica AVANÇADA em peças processuais.
  *  - A partir de 01-01-2027 é obrigatória a assinatura eletrónica QUALIFICADA

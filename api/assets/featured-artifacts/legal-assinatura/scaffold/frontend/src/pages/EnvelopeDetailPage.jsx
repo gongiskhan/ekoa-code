@@ -10,10 +10,10 @@ import {
 } from '../components/Icons.jsx';
 import {
   normalizarEnvelope, transitar, registarAssinatura, registarRecusa, anular,
-  proximoSignatario, gerarCertificado,
+  proximoSignatario, gerarCertificado, gerarManifesto, serializarManifesto,
 } from '../engine/assinatura.mjs';
 import { providerDe, TIPO_LABEL } from '../providers.js';
-import { ESTADO_LABEL, ESTADO_TONE, SIG_ESTADO_LABEL, SIG_ESTADO_TONE, agoraISO } from '../model.js';
+import { ESTADO_LABEL, ESTADO_TONE, SIG_ESTADO_LABEL, SIG_ESTADO_TONE, agoraISO, sha256Hex } from '../model.js';
 
 /* Passos do fluxo CMD orquestrado - a Ekoa prepara e arquiva; o advogado assina na app oficial. */
 const CMD_PASSOS = [
@@ -23,20 +23,53 @@ const CMD_PASSOS = [
   { n: 4, titulo: 'Verificação e arquivo', texto: 'A Ekoa verifica a presença da assinatura e prepara o certificado de auditoria para o dossiê.' },
 ];
 
-/* Linha do tempo da proveniência a partir do trilho do envelope. */
+/* Rótulo humano PT-PT de uma ação do trilho. As ações de estado chegam como
+ * `estado:<novo>`; as restantes são chaves conhecidas. */
+const ACAO_LABEL = {
+  criado: 'Envelope criado',
+  assinatura: 'Assinatura registada',
+  recusa: 'Assinatura recusada',
+  'estado:pronto': 'Marcado como pronto',
+  'estado:em_assinatura': 'Assinatura iniciada',
+  'estado:rascunho': 'Reaberto para edição',
+  'estado:concluido': 'Envelope concluído',
+  'estado:recusado': 'Envelope recusado',
+  'estado:anulado': 'Envelope anulado',
+};
+
+function acaoLabel(acao) {
+  if (ACAO_LABEL[acao]) return ACAO_LABEL[acao];
+  if (typeof acao === 'string' && acao.startsWith('estado:')) return `Estado: ${acao.slice(7).replace(/_/g, ' ')}`;
+  return acao || 'Evento';
+}
+
+/* Tom do distintivo de proveniência: a simulada destaca-se (não tem valor
+ * jurídico), a qualificada/manual é neutra-informativa. */
+const PROV_TONE = { simulada: 'alta', 'adobe-sign': 'media', 'manual-assistido': 'info', manual: 'neutral', sistema: 'neutral' };
+
+/* Linha do tempo da proveniência a partir do trilho do envelope - rótulos
+ * humanos, distintivo de proveniência e carimbo por evento. */
 function ProvenanceTimeline({ trilho }) {
   const eventos = Array.isArray(trilho) ? trilho : [];
-  if (eventos.length === 0) return null;
+  if (eventos.length === 0) {
+    return <p className="text-subtle text-xs" style={{ margin: 0 }}>Sem eventos de proveniência ainda.</p>;
+  }
   return (
     <ul className="dossie-timeline" data-testid="assinatura-trilho" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
       {eventos.map((t, i) => (
         <li key={i} className="dossie-timeline-item">
           <div className="dossie-timeline-body">
-            <span className="dossie-timeline-tipo">{t.acao}</span>
-            <span className="dossie-timeline-titulo">
-              {t.signatario ? `${t.signatario}${t.metodo ? ` · ${t.metodo}` : ''}` : (t.detalhe || t.para || '')}
-            </span>
-            {t.proveniencia ? <span className="dossie-timeline-desc">Proveniência: {t.proveniencia}</span> : null}
+            <div className="row row-2" style={{ alignItems: 'center', gap: 'var(--sp-2, 0.5rem)', flexWrap: 'wrap' }}>
+              <span className="dossie-timeline-titulo" style={{ margin: 0 }}>{acaoLabel(t.acao)}</span>
+              {t.proveniencia ? (
+                <Badge tone={PROV_TONE[t.proveniencia] || 'neutral'}>{t.proveniencia}</Badge>
+              ) : null}
+            </div>
+            {t.signatario ? (
+              <span className="dossie-timeline-desc">
+                {t.signatario}{t.papel ? ` · ${t.papel}` : ''}{t.metodo ? ` · ${providerDe(t.metodo).nome}` : ''}
+              </span>
+            ) : (t.detalhe ? <span className="dossie-timeline-desc">{t.detalhe}</span> : null)}
             {t.motivo ? <span className="dossie-timeline-desc">Motivo: {t.motivo}</span> : null}
             <span className="dossie-timeline-date">{formatDateTime(t.quando)}</span>
           </div>
@@ -83,6 +116,24 @@ export default function EnvelopeDetailPage() {
 
   const proximo = useMemo(() => (env && env.estado === 'em_assinatura' ? proximoSignatario(env) : null), [env]);
   const certificado = useMemo(() => (env ? gerarCertificado(env, { emitidoEm: env.atualizadoEm || agoraISO() }) : null), [env]);
+
+  // Manifesto de impressões digitais determinístico do envelope. A estrutura
+  // canónica (ordem estável, sem carimbos) vem do motor; o SHA-256 da serialização
+  // canónica calcula-se aqui (Web Crypto) e alimenta `manifestoHash`. O mesmo
+  // envelope produz sempre o mesmo manifesto e o mesmo hash.
+  const [manifestoHash, setManifestoHash] = useState(null);
+  const manifestoBase = useMemo(() => (env ? gerarManifesto(env) : null), [env]);
+  const manifestoCanonico = useMemo(() => (manifestoBase ? serializarManifesto(manifestoBase) : ''), [manifestoBase]);
+  useEffect(() => {
+    let vivo = true;
+    if (!manifestoCanonico) { setManifestoHash(null); return undefined; }
+    sha256Hex(manifestoCanonico).then((h) => { if (vivo) setManifestoHash(h); }).catch(() => { if (vivo) setManifestoHash(null); });
+    return () => { vivo = false; };
+  }, [manifestoCanonico]);
+  const manifesto = useMemo(
+    () => (manifestoBase ? gerarManifesto(env, manifestoHash ? { manifestoHash } : {}) : null),
+    [manifestoBase, env, manifestoHash],
+  );
 
   // Sinaliza a ponte de demos quando o certificado de um envelope concluído está visível.
   useDemoResult('assinatura-explicacao', !!env && env.estado === 'concluido');
@@ -199,6 +250,12 @@ export default function EnvelopeDetailPage() {
     setErro(null);
     try {
       const cert = gerarCertificado(env, { emitidoEm: agoraISO() });
+      // Manifesto determinístico arquivado com o certificado (recalculado da
+      // serialização canónica no momento do arquivo, para não depender do estado
+      // assíncrono da UI).
+      const canonico = serializarManifesto(gerarManifesto(env));
+      const hashManifesto = await sha256Hex(canonico);
+      const manifestoArquivo = gerarManifesto(env, { manifestoHash: hashManifesto });
       const docPrincipal = (env.documentos && env.documentos[0]) || null;
       const ass = await createShared('assinaturas', {
         envelopeId: id,
@@ -208,6 +265,7 @@ export default function EnvelopeDetailPage() {
         metodoPadrao: env.metodoPadrao,
         signatarios: env.signatarios,
         certificado: cert,
+        manifesto: manifestoArquivo,
         origem: 'legal-assinatura',
         data: agoraISO(),
       });
@@ -220,6 +278,7 @@ export default function EnvelopeDetailPage() {
         data: agoraISO(),
         envelopeId: id,
         certificado: cert,
+        manifesto: manifestoArquivo,
         ficheiro: temFicheiro ? { fileId: docPrincipal.fileId, url: docPrincipal.url, mime: docPrincipal.mime || 'application/pdf' } : undefined,
         versao: 1,
       });
@@ -248,6 +307,20 @@ export default function EnvelopeDetailPage() {
       const a = document.createElement('a');
       a.href = url;
       a.download = `certificado-${id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { /* não fatal */ }
+  }
+
+  function descarregarManifesto() {
+    try {
+      const blob = new Blob([JSON.stringify(manifesto, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `manifesto-${id}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -485,6 +558,25 @@ export default function EnvelopeDetailPage() {
               </li>
             ))}
           </ul>
+
+          {/* Manifesto de impressões digitais determinístico do envelope */}
+          {manifesto ? (
+            <div className="stack stack-2" data-testid="assinatura-manifesto" style={{ marginTop: 'var(--sp-3, 0.75rem)', padding: 'var(--sp-3, 0.75rem)', border: '1px solid var(--line-1, #e2e8f0)', borderRadius: 'var(--r-2, 0.5rem)', background: 'var(--surface-2, #f8fafc)' }}>
+              <div className="row-space-between" style={{ alignItems: 'center', gap: 'var(--sp-2, 0.5rem)' }}>
+                <span className="text-strong">Manifesto de impressões digitais</span>
+                <Button variant="ghost" size="sm" data-testid="assinatura-descarregar-manifesto" onClick={descarregarManifesto}>
+                  <IconDownload /> Descarregar (JSON)
+                </Button>
+              </div>
+              <span className="text-subtle text-xs">
+                {manifesto.documentosComHash} de {manifesto.totalDocumentos} documento(s) com impressão digital SHA-256, por ordem canónica.
+                O hash abaixo cobre o conteúdo do manifesto - o mesmo envelope produz sempre o mesmo hash.
+              </span>
+              <span className="text-xs" style={{ wordBreak: 'break-all', fontFamily: 'var(--font-mono, ui-monospace, Menlo, Consolas, monospace)' }} data-testid="assinatura-manifesto-hash">
+                {manifesto.manifestoHash ? `sha-256: ${manifesto.manifestoHash}` : 'a calcular…'}
+              </span>
+            </div>
+          ) : null}
 
           {/* Signatários do certificado */}
           <h3 className="text-strong" style={{ margin: 'var(--sp-3, 0.75rem) 0 var(--sp-2, 0.5rem)' }}>Signatários</h3>

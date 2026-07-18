@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { formatDate, formatDateTime, formatEur } from '../../shared.js';
-import { Button } from '../../components/ui.jsx';
-import { IconPrinter } from '../../components/Icons.jsx';
+import { Button, useToast } from '../../components/ui.jsx';
+import { IconPrinter, IconFileText } from '../../components/Icons.jsx';
 import { origemLabel } from '../doc-helpers.jsx';
+import { dossiePdfHtml } from '../dossie-pdf.js';
 
 function hojeFormatado() {
   return new Date().toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -20,6 +21,8 @@ function round2(n) {
  */
 export default function DossieTab({ processo, cliente, eventos, prazos, documentos, comunicacoes, lancamentos }) {
   const numero = processo.numeroProcesso || '(sem número)';
+  const toast = useToast();
+  const [aGerarPdf, setAGerarPdf] = useState(false);
 
   const eventosOrdenados = useMemo(() => {
     return eventos
@@ -67,15 +70,43 @@ export default function DossieTab({ processo, cliente, eventos, prazos, document
     }
   }
 
+  /*
+   * Dossiê completo num clique: compila capa + cronologia + índice de documentos
+   * (mais prazos e comunicações) num PDF autónomo via exportPdf da plataforma.
+   * Sem a capacidade, falha com honestidade (aviso, nunca sucesso fingido) - e o
+   * separador impresso continua disponível pelo botão "Guardar PDF" (window.print).
+   */
+  async function onDossiePdf() {
+    const api = typeof window !== 'undefined' ? window.__ekoa : null;
+    if (!api || typeof api.exportPdf !== 'function') {
+      toast('Exportação PDF indisponível neste ambiente - use "Guardar PDF" para imprimir o dossiê.', { tone: 'error' });
+      return;
+    }
+    setAGerarPdf(true);
+    try {
+      const { html, filename } = dossiePdfHtml({ processo, cliente, eventos, prazos, documentos, comunicacoes });
+      await api.exportPdf({ html, format: 'A4', landscape: false, filename });
+      toast('Dossiê exportado em PDF.', { tone: 'ok' });
+    } catch {
+      toast('Não foi possível gerar o PDF do dossiê.', { tone: 'error' });
+    } finally {
+      setAGerarPdf(false);
+    }
+  }
+
   return (
     <div data-testid="dossie-tab">
       <div className="dossie-toolbar no-print">
         <p className="text-muted text-small" style={{ margin: 0, maxWidth: 560 }}>
-          Esta é a versão compilada e pronta a imprimir do dossiê. Abre o diálogo de impressão do browser -
+          Esta é a versão compilada e pronta a imprimir do dossiê. Exporte o dossiê completo (capa,
+          cronologia e índice de documentos) num clique, ou abra o diálogo de impressão do browser e
           escolha "Guardar como PDF".
         </p>
         <div className="dossie-toolbar-actions">
-          <Button variant="primary" data-testid="guardar-pdf" onClick={onImprimir}>
+          <Button variant="primary" data-testid="dossie-pdf" onClick={onDossiePdf} disabled={aGerarPdf}>
+            <IconFileText /> {aGerarPdf ? 'A gerar…' : 'Dossiê completo (PDF)'}
+          </Button>
+          <Button variant="secondary" data-testid="guardar-pdf" onClick={onImprimir}>
             <IconPrinter /> Guardar PDF
           </Button>
         </div>

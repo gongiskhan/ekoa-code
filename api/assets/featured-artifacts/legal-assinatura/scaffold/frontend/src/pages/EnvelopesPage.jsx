@@ -58,7 +58,7 @@ export default function EnvelopesPage() {
               <span className="text-strong">Assinatura qualificada obrigatória a partir de 1 de janeiro de 2027</span>
               <span className="text-muted">
                 Até 31 de dezembro de 2026 admite-se a assinatura avançada para advogados, advogados
-                estagiários e solicitadores. Fonte: Portaria n.º 350-A/2025, de 09 de Outubro.
+                estagiários e solicitadores. Fonte: Portaria n.º 350-A/2025, de 9 de outubro.
               </span>
             </div>
           </div>

@@ -1,0 +1,65 @@
+{
+  "slice": "S5-records",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "in_progress",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": {
+        "specs": 0,
+        "typecheck": 0
+      },
+      "note": "Batch 1 (17 tests: 4 new legal-x specs + ported legal-dossie.spec.ts): 16/17 - one REAL APP BUG surfaced on first live run: the correio ?processo= deep-link seeds the text filter with the processo numero, but the row matcher only searched destinatario/registoRef/descricao, so the deep-link always showed an empty list. FIXED: matcher now also matches the linked processo numeroProcesso (ExpedientePage.jsx), bundle rebuilt. Batch 2: 17/17 passed in 5.4s, exit 0 - ported legal-dossie.spec.ts green unmodified.",
+      "at": "2026-07-18T04:05:00Z"
+    },
+    "review": {
+      "verdict": "clean",
+      "by": "review-S5 fresh-context same-model agent (claude-opus-4-8), hermetic (typecheck exit 0, eslint --no-ignore on the 4 specs + dossie-pdf.js exit 0; assinatura manifest determinism verified by running the engine in node: order-independent canonical serialization, hash fields excluded, re-serialize stable, rejects non-64hex; no e2e)",
+      "findings": [],
+      "notes": [
+        "0 correctness findings. dossie export pure/XSS-safe/honest-fail, cronologia genuinely ascending, frozen guardar-pdf path preserved; transcricao keyboard transport ignores shortcuts in text fields, fmtTs golden matches; correio deep-links + comprovativo round-trip honest and spine-backed; archive writes exactly one assinaturas + one documentos row, double-archive guarded. 3 non-blocking nits: em-dash placeholder on an added ExpedientePage line is a pre-existing glyph re-added verbatim (queued post-wave sweep), correio-foco-badge tone=info CSS cosmetic, ledger registration = the planned S5 landing step."
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "approve",
+      "by": "fresh-context adversarial reviewer (claude-opus-4-8), hermetic - no implementer rationale, no gate-status/evidence-index read",
+      "evidence": [
+        "manifest engine determinism re-verified in node",
+        "no fake-success path in assinatura flow",
+        "frozen layers byte-untouched",
+        "all spec-referenced selectors resolve",
+        "typecheck clean both runs"
+      ],
+      "findings": [],
+      "at": "2026-07-18T03:45:00Z"
+    },
+    "adversarialTest": {
+      "verdict": "pending",
+      "at": null
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-core screenshot sweep (design-s5.mjs): 12 pages across the 4 S5 apps at 1440x900, zero console errors + zero pageerrors on every page; 8 key screenshots read back by vision",
+      "issues": [
+        "FIXED during audit: assinatura cited 'Portaria n.o 350-A/2025, de 09 de Outubro' with a capitalized month + zero-padded day, inconsistent with sibling AO90 copy ('de 1 de setembro' on cobrancas) - patched to 'de 9 de outubro' in providers.js, EnvelopesPage.jsx, CalendarioPage.jsx; bundle rebuilt out-of-process and re-probed live (fixed=true, old string gone, zero pageerrors). No spec pinned the old string (only unrelated ferias-engine test-name hit). Included in the S5 commit."
+      ],
+      "notes": [
+        "dossie: 48-processo card grid with area/estado badges and 'NN de 48 processos' counter, consistent layout at scale - clean",
+        "assinatura envelopes: regulatory banner (assinatura qualificada obrigatoria a partir de 1 de janeiro de 2027, transicao para advogados/estagiarios/solicitadores ate 31/12/2026, fonte Portaria n.o 350-A/2025), honest empty state, search + estado filter - clean",
+        "assinatura novo envelope: documento do dossie OU upload PDF, metodo por omissao honestly described (CMD qualificada via Autenticacao.Gov oficial - 'a Ekoa prepara, arquiva e verifica em redor', exige inscricao na Ordem), signatarios com ordem explicita, Usar exemplo helper - clean",
+        "assinatura verificar: honest scope disclaimer 'verificacao de presenca, nao de validade juridica - a validacao qualificada faz-se no validador oficial' + 'o ficheiro e analisado no browser e nao sai da pagina' - clean",
+        "assinatura calendario: transition timeline (ate 31/12/2026 avancada admitida, a partir de 1/1/2027 qualificada obrigatoria) + vias de assinatura comparison (CMD orquestrada, Cartao de Cidadao, Adobe/DigitalSign/MULTICERT, modo simulado) each with qualificada/independente badges and honest footnotes - clean",
+        "correio expediente: tipo badges (Registado / Registado com A/R), estado badges (Expedido/Entregue) with datas, honest copy 'transicoes de estado sao manuais e honestas; o rastreio consulta os CTT quando disponivel', Marcar entregue/Devolvido/Consultar tracking/Anexar comprovativo actions, processo link out to dossie - clean",
+        "correio nova carta: custo estimado 3,05 pre-filled with 'Sugestao editavel; o valor real e o do balcao', cliente optional with destinatario prefill, processo optional linking ao dossie, Registar disabled until required fields - clean; honest 'a referencia real dos CTT e a que consta do comprovativo do balcao'",
+        "transcricao: upload card with RGPD notice (voz e dado pessoal de terceiros; retencao por omissao 24 meses), segredo de justica checkbox, trabalho row with Por transcrever badge - clean",
+        "PT-PT copy, no emojis, no em dashes; shared layout/sidebar consistent across the 4 apps"
+      ],
+      "at": "2026-07-18T02:50:00Z"
+    },
+    "walkthrough": {
+      "status": "pending"
+    }
+  }
+}

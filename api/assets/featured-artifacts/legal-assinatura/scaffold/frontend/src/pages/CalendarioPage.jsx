@@ -5,7 +5,7 @@ import { PROVIDER_ORDER, PROVIDERS, TIPO_LABEL } from '../providers.js';
 
 /*
  * Calendário da assinatura qualificada - painel informativo estático, fundado na
- * Portaria n.º 350-A/2025, de 09 de Outubro (Tramitação Eletrónica dos Processos
+ * Portaria n.º 350-A/2025, de 9 de outubro (Tramitação Eletrónica dos Processos
  * nos Tribunais e Serviços do Ministério Público). É o diferenciador do app: dá
  * ao escritório o calendário e as vias disponíveis, com a fonte citada.
  *
@@ -23,7 +23,7 @@ import { PROVIDER_ORDER, PROVIDERS, TIPO_LABEL } from '../providers.js';
  *    digitalmente através de certificado de assinatura eletrónica AVANÇADA.
  */
 
-const FONTE = 'Portaria n.º 350-A/2025, de 09 de Outubro';
+const FONTE = 'Portaria n.º 350-A/2025, de 9 de outubro';
 
 const FASES = [
   {

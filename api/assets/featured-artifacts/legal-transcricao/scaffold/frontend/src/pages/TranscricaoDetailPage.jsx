@@ -33,7 +33,9 @@ export default function TranscricaoDetailPage() {
   const [oradores, setOradores] = useState({}); // ORADOR_1 -> {papel, nome}
   const [selecionados, setSelecionados] = useState({}); // segIndex -> bool
   const [excertoGerado, setExcertoGerado] = useState('');
+  const [marcadores, setMarcadores] = useState([]); // { ts, rotulo } inseridos com o playhead
   const audioRef = useRef(null);
+  const editorRef = useRef(null);
   const { items: excertos, refresh: refreshExcertos } = useSharedCollection('excertos');
 
   const carregar = async () => {
@@ -79,6 +81,52 @@ export default function TranscricaoDetailPage() {
     if (!a) return;
     a.currentTime = Math.max(0, sec - 0.2);
     a.play().catch(() => {});
+  }
+
+  /* Revisão keyboard-first: alterna reprodução/pausa sem depender do rato. */
+  function alternarReproducao() {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) a.play().catch(() => {}); else a.pause();
+  }
+
+  /* Salta relativo ao instante atual (revisão auditiva, sem tirar as mãos do teclado). */
+  function saltar(deltaSec) {
+    const a = audioRef.current;
+    if (!a) return;
+    const dur = Number.isFinite(a.duration) ? a.duration : Infinity;
+    a.currentTime = Math.min(dur, Math.max(0, (Number(a.currentTime) || 0) + deltaSec));
+  }
+
+  /* Insere uma marca de tempo no instante atual do áudio - para anotar uma
+   * passagem sem interromper a audição. Determinística: usa o playhead corrente. */
+  function inserirMarcaTempo() {
+    const a = audioRef.current;
+    const ts = a ? Math.max(0, Number(a.currentTime) || 0) : 0;
+    setMarcadores((prev) => [...prev, { ts, rotulo: '' }]);
+    toast(`Marca inserida em ${fmtTs(ts)}.`);
+  }
+
+  function removerMarca(idx) {
+    setMarcadores((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  /*
+   * Atalhos de teclado do editor (só quando o foco NÃO está num campo de texto,
+   * para não roubar a barra de espaço à correção de palavras):
+   *   Espaço / K  -> reproduzir/pausar        J / L -> recuar / avançar 2s
+   *   I           -> inserir marca de tempo
+   */
+  function onKeyEditor(ev) {
+    const alvo = ev.target;
+    const tag = alvo && alvo.tagName ? alvo.tagName.toUpperCase() : '';
+    const editavel = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (alvo && alvo.isContentEditable);
+    if (editavel) return; // deixa o campo tratar a tecla (ex.: espaço na correção)
+    const k = ev.key;
+    if (k === ' ' || k === 'k' || k === 'K') { ev.preventDefault(); alternarReproducao(); return; }
+    if (k === 'j' || k === 'J') { ev.preventDefault(); saltar(-2); return; }
+    if (k === 'l' || k === 'L') { ev.preventDefault(); saltar(2); return; }
+    if (k === 'i' || k === 'I') { ev.preventDefault(); inserirMarcaTempo(); }
   }
 
   async function corrigirPalavra() {
@@ -237,7 +285,15 @@ export default function TranscricaoDetailPage() {
             </div>
           </section>
 
-          <section className="card" data-testid="editor-card" data-demo-target="transcricao-explicacao">
+          <section
+            className="card"
+            data-testid="editor-card"
+            data-demo-target="transcricao-explicacao"
+            ref={editorRef}
+            tabIndex={0}
+            onKeyDown={onKeyEditor}
+            style={{ outline: 'none' }}
+          >
             <div className="row row-2" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h2 className="card-title" style={{ margin: 0 }}>Revisão</h2>
@@ -251,6 +307,60 @@ export default function TranscricaoDetailPage() {
                 </Button>
               ) : null}
             </div>
+
+            {/* Transporte de revisão sem rato: os mesmos comandos existem em botões
+                (descobríveis) e em teclas (rápidos). Determinístico - opera sobre o
+                elemento <audio> e sobre a lista de marcas. */}
+            <div
+              className="row row-2"
+              data-testid="transcricao-transporte"
+              style={{ flexWrap: 'wrap', alignItems: 'center', gap: 'var(--sp-2, 0.5rem)', padding: 'var(--sp-2) 0' }}
+            >
+              <Button size="sm" variant="secondary" data-testid="transcricao-play-pause" onClick={alternarReproducao}>
+                Reproduzir / pausar
+              </Button>
+              <Button size="sm" variant="secondary" data-testid="transcricao-recuar" onClick={() => saltar(-2)}>
+                Recuar 2s
+              </Button>
+              <Button size="sm" variant="secondary" data-testid="transcricao-avancar" onClick={() => saltar(2)}>
+                Avançar 2s
+              </Button>
+              <Button size="sm" data-testid="transcricao-inserir-marca" onClick={inserirMarcaTempo}>
+                Inserir marca de tempo
+              </Button>
+              <span className="text-xs text-subtle" data-testid="transcricao-atalhos">
+                Teclas (com o editor em foco): Espaço/K reproduzir ou pausar · J recuar · L avançar · I inserir marca
+              </span>
+            </div>
+
+            {marcadores.length > 0 ? (
+              <div className="stack stack-2" data-testid="transcricao-marcadores" style={{ padding: 'var(--sp-2) 0' }}>
+                <span className="text-xs text-subtle">Marcas de tempo ({marcadores.length})</span>
+                {marcadores.map((m, mi) => (
+                  <div key={mi} className="row row-2" style={{ alignItems: 'center', gap: 'var(--sp-2, 0.5rem)' }} data-testid={`marca-${mi}`}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      data-testid={`marca-ir-${mi}`}
+                      onClick={() => tocarDesde(m.ts)}
+                      title="Reproduzir a partir desta marca"
+                    >
+                      <span className="numeric" data-testid={`marca-ts-${mi}`}>{fmtTs(m.ts)}</span>
+                    </Button>
+                    <input
+                      data-testid={`marca-rotulo-${mi}`}
+                      placeholder="anotação (opcional)"
+                      value={m.rotulo}
+                      onChange={(e) => setMarcadores((prev) => prev.map((x, i) => (i === mi ? { ...x, rotulo: e.target.value } : x)))}
+                      style={{ flex: 1 }}
+                    />
+                    <Button size="sm" variant="secondary" data-testid={`marca-remover-${mi}`} onClick={() => removerMarca(mi)}>
+                      Remover
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {selecionada ? (
               <div className="row row-2" style={{ alignItems: 'center', padding: 'var(--sp-2) 0' }}>

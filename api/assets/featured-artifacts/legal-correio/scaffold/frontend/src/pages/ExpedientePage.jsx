@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   useSharedCollection,
   updateShared,
@@ -147,15 +147,42 @@ const ESTADOS = ['rascunho', 'expedido', 'entregue', 'devolvido'];
 export default function ExpedientePage() {
   const { items: correio, loading, refresh } = useSharedCollection('correio');
   const { items: processos } = useSharedCollection('processos');
+  const [searchParams] = useSearchParams();
 
   const [fEstado, setFEstado] = useState('');
   const [texto, setTexto] = useState('');
   const [tracking, setTracking] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  // Linha em foco por deep-link (ida-e-volta a partir do dossiê): destaque + scroll.
+  const [focoRef, setFocoRef] = useState(null);
 
   // Um único input de ficheiro escondido; a linha-alvo é guardada antes de o abrir.
   const fileInputRef = useRef(null);
   const comprovativoRowRef = useRef(null);
+
+  /*
+   * Contrato de deep-link (ida-e-volta correio<->dossiê, só por parâmetros de URL):
+   *   /apps/legal-correio/?ref=<registoRef>     -> foca a carta com essa referência
+   *   /apps/legal-correio/?processo=<processoId> -> filtra o expediente desse processo
+   * O dossiê (ou a notificação de comprovativo) constrói este URL; o expediente é
+   * o lado receptor. Semeia o filtro de texto e assinala a linha a destacar. Não
+   * exige qualquer alteração no dossiê - é apenas o parâmetro que muda.
+   */
+  useEffect(() => {
+    const ref = searchParams.get('ref');
+    const processo = searchParams.get('processo');
+    if (ref) {
+      setTexto(ref);
+      setFocoRef(ref);
+    } else if (processo) {
+      // Sem campo de processo no filtro; usa o número do processo como texto de busca.
+      const p = processos.find((x) => x.id === processo);
+      if (p && p.numeroProcesso) setTexto(p.numeroProcesso);
+      setFocoRef(null);
+    }
+    // Reage apenas à chegada do deep-link (e à resolução tardia dos processos).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, processos.length]);
 
   const processoById = useMemo(() => {
     const map = new Map();
@@ -170,10 +197,15 @@ export default function ExpedientePage() {
     if (needle) {
       list = list.filter((r) => {
         const dest = (r.destinatario && r.destinatario.nome) || '';
+        // O número do processo associado também conta: o deep-link ?processo=
+        // semeia o filtro com esse número, e a linha tem de continuar visível.
+        const proc = r.processoId ? processoById.get(r.processoId) : null;
+        const nproc = (proc && proc.numeroProcesso) || '';
         return (
           dest.toLowerCase().includes(needle) ||
           String(r.registoRef || '').toLowerCase().includes(needle) ||
-          String(r.conteudoDescricao || '').toLowerCase().includes(needle)
+          String(r.conteudoDescricao || '').toLowerCase().includes(needle) ||
+          nproc.toLowerCase().includes(needle)
         );
       });
     }
@@ -182,7 +214,7 @@ export default function ExpedientePage() {
       const db = (b.datas && (b.datas.expedido || b.datas.entregue)) || '';
       return String(db).localeCompare(String(da));
     });
-  }, [correio, fEstado, texto]);
+  }, [correio, fEstado, texto, processoById]);
 
   async function transicionar(row, novoEstado) {
     setBusyId(row.id);
@@ -306,7 +338,20 @@ export default function ExpedientePage() {
     {
       key: 'registoRef',
       label: 'Referência',
-      render: (r) => <span className="text-xs" style={MONO} data-testid={`correio-ref-${r.id}`}>{r.registoRef || '—'}</span>,
+      render: (r) => {
+        const emFoco = Boolean(focoRef) && r.registoRef === focoRef;
+        return (
+          <span
+            className="row row-2"
+            style={{ alignItems: 'center', gap: 4 }}
+            data-testid={emFoco ? `correio-foco-${r.id}` : undefined}
+            ref={emFoco ? (el) => { if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } : undefined}
+          >
+            <span className="text-xs" style={MONO} data-testid={`correio-ref-${r.id}`}>{r.registoRef || '—'}</span>
+            {emFoco ? <Badge tone="info" data-testid="correio-foco-badge">Em foco</Badge> : null}
+          </span>
+        );
+      },
     },
     {
       key: 'estado',

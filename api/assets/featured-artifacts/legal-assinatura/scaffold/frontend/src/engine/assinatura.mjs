@@ -540,3 +540,82 @@ export function gerarCertificado(envelope, opts = {}) {
     showWork: { passos },
   };
 }
+
+/* --------------------------------------------------------------------------
+ * Manifesto de impressões digitais (hash manifest).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Constrói o MANIFESTO determinístico de um envelope: a lista canónica das
+ * impressões digitais SHA-256 de cada documento, por ordem ESTÁVEL (nome, depois
+ * hash), mais os metadados mínimos de identificação. É a estrutura EXATA que se
+ * serializa e sobre a qual se calcula o `manifestoHash` - sem carimbos de tempo
+ * nem campos voláteis, para que o mesmo envelope produza sempre o mesmo manifesto
+ * e, logo, o mesmo hash. O cálculo do SHA-256 do manifesto vive na app (Web
+ * Crypto); o motor mantém-se puro e devolve o hash recebido em `manifestoHash`.
+ *
+ * @param {object} envelope
+ * @param {{ manifestoHash?:string }} [opts] hash já calculado da serialização canónica
+ * @returns {object} manifesto canónico
+ */
+export function gerarManifesto(envelope, opts = {}) {
+  if (!envelope || typeof envelope !== 'object') throw new Error('envelope inválido.');
+
+  // Ordenação ESTÁVEL e determinística: por nome, desempate por hash. Independente
+  // da ordem de entrada dos documentos no envelope.
+  const documentos = (envelope.documentos || [])
+    .map((d) => ({
+      nome: d.nome,
+      algoritmo: d.hash ? 'sha-256' : null,
+      hash: d.hash || null,
+      ...(d.docId != null ? { docId: String(d.docId) } : {}),
+    }))
+    .sort((a, b) => {
+      const n = String(a.nome).localeCompare(String(b.nome), 'pt');
+      if (n !== 0) return n;
+      return String(a.hash || '').localeCompare(String(b.hash || ''));
+    });
+
+  const manifesto = {
+    versao: 1,
+    tipo: 'manifesto-impressoes-digitais',
+    envelopeId: envelope.id || null,
+    titulo: envelope.titulo,
+    totalDocumentos: documentos.length,
+    documentosComHash: documentos.filter((d) => d.hash).length,
+    documentos,
+  };
+
+  let manifestoHash = null;
+  if (opts.manifestoHash != null && String(opts.manifestoHash).trim() !== '') {
+    const h = String(opts.manifestoHash).trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(h)) {
+      throw new Error(`manifestoHash não é um SHA-256 hex (64 hex): ${opts.manifestoHash}`);
+    }
+    manifestoHash = h;
+  }
+  manifesto.manifestoHash = manifestoHash;
+  manifesto.algoritmoManifesto = manifestoHash ? 'sha-256' : null;
+  return manifesto;
+}
+
+/**
+ * Serialização CANÓNICA de um manifesto para hashing: JSON estável com as chaves
+ * por ordem alfabética em cada nível, EXCLUINDO os campos de hash (manifestoHash,
+ * algoritmoManifesto) - o hash cobre o CONTEÚDO do manifesto, não a si próprio.
+ * Mesma entrada -> mesma string -> mesmo SHA-256, em qualquer runtime.
+ */
+export function serializarManifesto(manifesto) {
+  if (!manifesto || typeof manifesto !== 'object') throw new Error('manifesto inválido.');
+  const { manifestoHash: _mh, algoritmoManifesto: _am, ...conteudo } = manifesto;
+  const ordenarChaves = (value) => {
+    if (Array.isArray(value)) return value.map(ordenarChaves);
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const k of Object.keys(value).sort()) out[k] = ordenarChaves(value[k]);
+      return out;
+    }
+    return value;
+  };
+  return JSON.stringify(ordenarChaves(conteudo));
+}
