@@ -1,0 +1,8 @@
+{ "slice": "C3", "kind": "ui", "status": "passed", "at": "2026-07-18T08:46:53Z",
+  "wall": {"tscWeb": 0, "eslint": 0, "unit": "voice 93/93 zero mocks", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "web/__tests__/voice reducer+grace+speakable; SUITE_LEDGER frontend_unit"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent", "actualModel": "claude-fable-5", "findings": "barge-in mic-dormant bug fixed + regression-pinned"},
+  "adversarialTest": {"status": "deferred", "reason": "part-level at C7"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "4 real across 3 rounds, all fixed and re-verified"},
+  "design": {"status": "skipped", "reason": "kind-conditional (pure logic, no UI)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (C7 carries the voice walkthrough)"} }
