@@ -27,8 +27,17 @@
       "at": "2026-07-18T02:16:00Z"
     },
     "adversarialReview": {
-      "verdict": "pending",
-      "at": null
+      "verdict": "approve",
+      "by": "fresh-context adversarial reviewer (claude-opus-4-8), hermetic - no implementer rationale, no gate-status/evidence-index read",
+      "evidence": [
+        "legal numbers/citations re-verified against primary sources (DR, OA, APCMC, SFJ, ETF)",
+        "all arithmetic re-computed from scratch",
+        "typecheck 0"
+      ],
+      "findings": [
+        "F1 (low, style): em-dash in 9 added lines across 4 modules - non-blocking, queued for the post-wave sweep (consistent with pre-existing idiom in those files)"
+      ],
+      "at": "2026-07-18T03:45:00Z"
     },
     "adversarialTest": {
       "verdict": "pending",

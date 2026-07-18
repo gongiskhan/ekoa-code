@@ -200,6 +200,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-18 legal-engines citation audit (run 20260717-202309-d797918a)
+
+- **`calculos-2023-avisos-wrong`** (legal-correctness, flagged by impl-S3's WebSearch verification,
+  independently confirmed by the lead against DR/OA/APCMC sources) - the 2023 rows of
+  `api/assets/legal-engines/tabelas-taxas.json` cited non-existent instruments: "Aviso n.º 1261/2023"
+  for 2023-S1 (real: **Aviso n.º 1672/2023**, DR 2.ª série, 25 Jan 2023) and "Aviso n.º 20214/2023"
+  for 2023-S2 (real: **Aviso n.º 14922/2023**, DR 2.ª série, 9 Ago 2023). The RATES were correct
+  (10,5% / 12,0%; all golden totals unchanged) - only the citation strings were wrong, and both were
+  byte-pinned by the ported `api/tests/legal/calculos-engines.test.ts` and the frozen
+  `web/e2e/legal-calculos.spec.ts`, which is why the wrong strings survived the port. Fixed by an
+  explicit, logged frozen-spec amendment (see decisions.md 2026-07-18): data v3 + both tests corrected
+  in the same unit of work. Unit suite 21/21 green; the amended e2e spec re-runs with the S3 gate.
+
 ## Recently fixed - 2026-07-18 S1 adversarial-test round (run 20260717-202309-d797918a)
 
 - **`nucleo-global-search-mouse-only`** (a11y/UX, fresh-context adversarial tester, live) - the
