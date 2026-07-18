@@ -115,6 +115,9 @@ test.describe('OS mode - run 1 exit scenarios', () => {
     await expect
       .poll(async () => (await w1.boundingBox())!.width, { timeout: 5_000 })
       .toBeLessThan(halfW + 5);
+    // The snapped window must actually SIT in the left half - a width-only
+    // check once let a transform-stranded window pass at x=-418.
+    expect(Math.abs((await w1.boundingBox())!.x - layer.x)).toBeLessThan(4);
 
     // Window 2: an artifact app; snap RIGHT -> fills the empty half.
     const icon = await rightSideArtifactIcon(page);
@@ -172,10 +175,13 @@ test.describe('OS mode - run 1 exit scenarios', () => {
       .poll(async () => page.locator('[data-testid^=artifact-use-]').count(), { timeout: 20_000 })
       .toBe(cardsBefore + 1);
 
-    // Rename the copy (sorted first under "Recentes") through the same menu.
+    // Rename the COPY - scoped to the "(cópia)" card, never by sort position
+    // (sort ties put the ORIGINAL first and a positional pick renamed and then
+    // deleted seeded data - found the hard way).
     const copyCard = page
-      .locator('div.group', { has: page.locator('[data-testid^=artifact-use-]') })
+      .locator('div.group', { has: page.locator('h3', { hasText: '(cópia)' }) })
       .first();
+    await expect(copyCard).toBeVisible({ timeout: 20_000 });
     await copyCard.locator('[aria-label="Mais ações"]').click();
     await page.locator('[role=menuitem]', { hasText: 'Mudar o nome' }).click();
     const input = page.locator('input:focus');

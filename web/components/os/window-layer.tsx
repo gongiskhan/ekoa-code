@@ -117,11 +117,21 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
     return { x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0) };
   };
 
-  const applyLive = (winId: string, rect: Rect) => {
+  // Live gestures never touch the props React owns (left/top/width/height):
+  // a move rides a transform and a resize writes width/height that the commit
+  // then re-asserts through the store. Mixing imperative left/top with React's
+  // style reconciliation left windows stranded at stale drag positions.
+  const applyMoveTransform = (winId: string, dx: number, dy: number) => {
+    const el = windowEls.current.get(winId);
+    if (el) el.style.transform = `translate(${dx}px, ${dy}px)`;
+  };
+  const clearMoveTransform = (winId: string) => {
+    const el = windowEls.current.get(winId);
+    if (el) el.style.transform = '';
+  };
+  const applyLiveSize = (winId: string, rect: Rect) => {
     const el = windowEls.current.get(winId);
     if (!el) return;
-    el.style.left = `${rect.x}px`;
-    el.style.top = `${rect.y}px`;
     el.style.width = `${rect.w}px`;
     el.style.height = `${rect.h}px`;
   };
@@ -182,7 +192,8 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
         setDragActive(true);
         if (drag.wasTiled) {
           // Detach: the window floats under the pointer at its remembered size.
-          untile(drag.winId);
+          // Commit the detach rect so React's layout and the live transform
+          // share the same origin.
           const win = workspace?.windows.find((w) => w.id === drag.winId);
           const w = win?.rect.w ?? drag.startRect.w;
           const h = win?.rect.h ?? drag.startRect.h;
@@ -190,6 +201,8 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
           drag.startRect = { x: p.x - Math.min(120, w / 2), y: p.y - 16, w, h };
           drag.startX = e.clientX;
           drag.startY = e.clientY;
+          untile(drag.winId);
+          setWindowRect(drag.winId, drag.startRect);
         }
       }
       drag.liveRect = {
@@ -197,7 +210,7 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
         x: drag.startRect.x + (e.clientX - drag.startX),
         y: drag.startRect.y + (e.clientY - drag.startY),
       };
-      applyLive(drag.winId, drag.liveRect);
+      applyMoveTransform(drag.winId, drag.liveRect.x - drag.startRect.x, drag.liveRect.y - drag.startRect.y);
       setCandidate(findCandidate(localPoint(e), drag.winId));
     },
     [findCandidate, untile, workspace],
@@ -211,6 +224,7 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
       setDragActive(false);
       const final = candidate;
       setCandidate(null);
+      clearMoveTransform(drag.winId);
       if (!drag.moved) return;
       if (final?.kind === 'edge') {
         snapEdge(drag.winId, final.side);
@@ -259,7 +273,7 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
         w: drag.edge !== 's' ? Math.max(min.w, drag.startRect.w + dx) : drag.startRect.w,
         h: drag.edge !== 'e' ? Math.max(min.h, drag.startRect.h + dy) : drag.startRect.h,
       };
-      applyLive(drag.winId, drag.liveRect);
+      applyLiveSize(drag.winId, drag.liveRect);
     },
     [],
   );
@@ -332,6 +346,24 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
       className="pointer-events-none absolute inset-0"
       data-testid="os-window-layer"
     >
+      {/* Edge snap drop zones - locatable anchors for the half-screen gesture.
+          The zones are inert (snap detection reads the pointer), but they
+          REFLECT the live drop candidate as an `over` class so automation can
+          confirm the drop state closed-loop. */}
+      <div
+        data-testid="os-snap-left"
+        className={`pointer-events-none absolute inset-y-0 left-0 w-6 ${
+          candidate?.kind === 'edge' && candidate.side === 'left' ? 'over' : ''
+        }`}
+        aria-hidden
+      />
+      <div
+        data-testid="os-snap-right"
+        className={`pointer-events-none absolute inset-y-0 right-0 w-6 ${
+          candidate?.kind === 'edge' && candidate.side === 'right' ? 'over' : ''
+        }`}
+        aria-hidden
+      />
       {workspace.windows.map((win, index) => {
         if (win.minimized) return null;
         const rect = displayRect(win);
