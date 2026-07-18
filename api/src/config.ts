@@ -206,6 +206,37 @@ export function __resetVoiceConfigForTests(): void {
   cachedVoice = undefined;
 }
 
+/**
+ * Portal connector base URLs (Part E open-data connectors, mega-run E2/E3, BRIEF §8 items
+ * 1-3). Real HTTP clients (`api/src/legal/portal-connectors.ts`) behind a base-URL config
+ * so the operator can point them at the real portal later (BRIEF §0/§8 constraint: no live
+ * portal calls with real credentials in THIS run); dev/tests drive them through committed
+ * fixture servers via the `PORTAL_*_BASE_URL` env overrides. Same env-driven memoized-loader
+ * shape as `loadVoiceConfig` - a standalone loader (not a `Config` field) so the many bare-
+ * `Config` test literals stay valid. */
+export interface PortalConnectorsConfig {
+  certidaoComercialBaseUrl: string;
+  certidaoPredialBaseUrl: string;
+  certidaoCivilBaseUrl: string;
+}
+
+export function defaultPortalConnectorsConfig(): PortalConnectorsConfig {
+  return {
+    certidaoComercialBaseUrl: process.env.PORTAL_CERTIDAO_COMERCIAL_BASE_URL ?? 'https://certidaopermanente.justica.gov.pt',
+    certidaoPredialBaseUrl: process.env.PORTAL_CERTIDAO_PREDIAL_BASE_URL ?? 'https://predialonline.justica.gov.pt',
+    certidaoCivilBaseUrl: process.env.PORTAL_CERTIDAO_CIVIL_BASE_URL ?? 'https://civilonline.justica.gov.pt',
+  };
+}
+
+let cachedPortalConnectors: PortalConnectorsConfig | undefined;
+export function loadPortalConnectorsConfig(): PortalConnectorsConfig {
+  if (!cachedPortalConnectors) cachedPortalConnectors = defaultPortalConnectorsConfig();
+  return cachedPortalConnectors;
+}
+export function __resetPortalConnectorsConfigForTests(): void {
+  cachedPortalConnectors = undefined;
+}
+
 class ConfigError extends Error {}
 
 function required(name: string): string {

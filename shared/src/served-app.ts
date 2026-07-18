@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { OkResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
-import { PortalDossierRecordsResponse } from './portal.js';
+import { PortalDossierRecordsResponse, PortalCertidaoRequest, PortalCertidaoResponse } from './portal.js';
 
 /** An opaque stored document in a served-app collection (shape owned by the app, ch04). */
 export const AppDataDocument = z.record(z.unknown());
@@ -99,6 +99,16 @@ export const servedAppEndpoints = {
   // Portal connector receiving surface (mega-run E1) - the first legal descriptor that is
   // NOT z.unknown() (08-portal-audit.md pin 1): a dossiê's portal-sourced documents/events.
   legalPortalDossier: { method: 'GET', path: '/api/legal/portal', auth: 'header-scoped', query: GenericQuery, response: PortalDossierRecordsResponse },
+  // Retrieval-by-access-code for the three open-data certidão sources (mega-run E2/E3,
+  // BRIEF §8 items 1-3): fetches + parses + attaches a PortalDocument, returning the
+  // structured record alongside it.
+  legalPortalCertidao: {
+    method: 'POST',
+    path: '/api/legal/portal/certidao',
+    auth: 'header-scoped',
+    request: PortalCertidaoRequest,
+    response: PortalCertidaoResponse,
+  },
   signatureSend: { method: 'POST', path: '/api/signature/send', auth: 'header-scoped', request: z.unknown(), response: z.unknown() },
 
   // Adobe Sign webhook (deliberately public; authenticity re-verified server-side).

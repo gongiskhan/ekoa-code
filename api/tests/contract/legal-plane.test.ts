@@ -19,8 +19,11 @@ import { adobeSignRouter } from '../../src/integrations/adobe-sign.js';
 import { designTokensHandler, type OrgBrand } from '../../src/services/design-tokens.js';
 import type { ActivationState } from '../../src/data/activation.js';
 import type { FetchImpl as CitiusFetchImpl, FetchLikeResponse } from '../../src/legal/citius.js';
+import type { SaveBlobFn } from '../../src/legal/portal-connectors.js';
 
 const citiusFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/citius-consulta.html', import.meta.url)));
+const certidaoComercialFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/portal-certidao-comercial.html', import.meta.url)), 'utf-8');
+const certidaoInvalidoFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/portal-certidao-invalido.html', import.meta.url)), 'utf-8');
 
 // --- Stub injected deps -----------------------------------------------------
 // Allowlisted apps map to a registered owner; a few resolve to a deactivated /
@@ -52,6 +55,24 @@ const citiusFetch: CitiusFetchImpl = async (): Promise<FetchLikeResponse> => ({
   headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
   arrayBuffer: async () => citiusFixture.buffer.slice(citiusFixture.byteOffset, citiusFixture.byteOffset + citiusFixture.byteLength) as ArrayBuffer,
 });
+
+// mega-run E2/E3 - the certidão-by-access-code fetch seam, driven by CODE-BAD to select the
+// "invalid/expired code" fixture, exactly the way a real portal would answer a rejected code.
+const certidaoFetch: CitiusFetchImpl = async (url): Promise<FetchLikeResponse> => {
+  const html = String(url).includes('codigoAcesso=CODE-BAD') ? certidaoInvalidoFixture : certidaoComercialFixture;
+  const buf = Buffer.from(html, 'utf-8');
+  return {
+    status: 200,
+    ok: true,
+    headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
+    arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+  };
+};
+const savedBlobs: Array<{ appId: string; name: string }> = [];
+const saveBlob: SaveBlobFn = async (appId, name, contentType, bytes) => {
+  savedBlobs.push({ appId, name });
+  return { fileId: `blob-${savedBlobs.length}`, url: `/api/app-files/${appId}/blob-${savedBlobs.length}`, mime: contentType, size: bytes.length };
+};
 
 const brandFor = async (appIdOrSlug: string): Promise<OrgBrand | null> => {
   if (appIdOrSlug === 'app-a') return { branding: { primaryColor: '#AA0000' } };
@@ -132,6 +153,7 @@ beforeAll(async () => {
         listDocumentos: async (a, processoId) => (portalDocumentos[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
         listEventos: async (a, processoId) => (portalEventos[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
       },
+      portalCertidao: { saveBlob, fetchImpl: certidaoFetch },
     }),
   );
   app.use(adobeSignRouter({ resolveApp: async (h) => APPS[h] ?? null }));
@@ -270,6 +292,26 @@ describe('legal-suite — happy paths validate against the shared descriptor', (
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ documentos: [], eventos: [] });
   });
+
+  it('POST /api/legal/portal/certidao (comercial) fetches + parses + attaches, validated against the shared descriptor', async () => {
+    const res = await appApi('/api/legal/portal/certidao', 'legal-citius', {
+      method: 'POST',
+      body: JSON.stringify({ source: 'certidao-comercial', accessCode: 'CODE-1', processoId: 'proc-cert', subjectIds: ['500000000'] }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; source: string; record: { nif: string }; document: { source: string } };
+    expect(body.ok).toBe(true);
+    expect(body.record.nif).toBe('500000000');
+    expect(body.document.source).toBe('certidao-comercial');
+    expect(servedAppEndpoints.legalPortalCertidao!.response!.safeParse(body).success).toBe(true);
+    expect(savedBlobs.some((b) => b.appId === 'legal-citius')).toBe(true);
+
+    // Rendered on the GET read surface too (documentos + a document.retrieved eventos row).
+    const read = await appApi('/api/legal/portal?processoId=proc-cert', 'legal-citius');
+    const readBody = (await read.json()) as { documentos: unknown[]; eventos: unknown[] };
+    expect(readBody.documentos).toHaveLength(1);
+    expect(readBody.eventos.some((e) => (e as { kind: string }).kind === 'document.retrieved')).toBe(true);
+  });
 });
 
 describe('GET /api/legal/portal — gate (mega-run E1, same discipline as citius)', () => {
@@ -293,6 +335,52 @@ describe('GET /api/legal/portal — gate (mega-run E1, same discipline as citius
 
   it('missing X-Ekoa-App-Id header -> 400', async () => {
     const res = await api('/api/legal/portal?processoId=proc-1');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Missing X-Ekoa-App-Id header' });
+  });
+});
+
+describe('POST /api/legal/portal/certidao — gate + validation + failure (mega-run E2/E3)', () => {
+  const post = (body: Record<string, unknown>) =>
+    appApi('/api/legal/portal/certidao', 'legal-citius', { method: 'POST', body: JSON.stringify(body) });
+
+  it('missing source -> 400 PT', async () => {
+    const res = await post({ accessCode: 'CODE-1', processoId: 'proc-x' });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: expect.stringContaining('source') });
+  });
+
+  it('missing accessCode -> 400 PT', async () => {
+    const res = await post({ source: 'certidao-comercial', processoId: 'proc-x' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Parâmetro "accessCode" em falta' });
+  });
+
+  it('missing processoId -> 400 PT', async () => {
+    const res = await post({ source: 'certidao-comercial', accessCode: 'CODE-1' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Parâmetro "processoId" em falta' });
+  });
+
+  it('a bad/expired access code -> clean PT 503, no throw, no partial attach', async () => {
+    const res = await post({ source: 'certidao-comercial', accessCode: 'CODE-BAD', processoId: 'proc-bad-contract' });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'Certidão permanente comercial indisponível' });
+    const read = await appApi('/api/legal/portal?processoId=proc-bad-contract', 'legal-citius');
+    expect(await read.json()).toEqual({ documentos: [], eventos: [] });
+  });
+
+  it('non-allowlisted app -> 403 PT (same gate as citius/portal)', async () => {
+    const res = await appApi('/api/legal/portal/certidao', 'not-a-legal-app', {
+      method: 'POST',
+      body: JSON.stringify({ source: 'certidao-comercial', accessCode: 'CODE-1', processoId: 'proc-x' }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Aplicação não autorizada para consultar o dossiê' });
+  });
+
+  it('missing X-Ekoa-App-Id header -> 400', async () => {
+    const res = await api('/api/legal/portal/certidao', { method: 'POST', body: '{}' });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Missing X-Ekoa-App-Id header' });
   });

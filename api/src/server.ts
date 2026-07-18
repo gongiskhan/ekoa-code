@@ -59,7 +59,7 @@ import { loadSlugIndex } from './apps/slug-index.js';
 import { seedFeaturedArtifacts } from './apps/featured-seeder.js';
 import { buildAndRegisterFeaturedArtifacts } from './apps/featured-builder.js';
 import { resolveApp } from './apps/registry.js';
-import { appFilesRouter } from './apps/app-files.js';
+import { appFilesRouter, saveAppFileBlob } from './apps/app-files.js';
 import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
@@ -664,6 +664,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         legalEngine.list(spineScope(a), 'documentos').then((rows) => rows.filter((r) => r.processoId === processoId)),
       listEventos: (a, processoId) =>
         legalEngine.list(spineScope(a), 'eventos').then((rows) => rows.filter((r) => r.processoId === processoId)),
+    },
+    // Portal certidão-by-access-code connector seams (mega-run E2/E3): the blob-save path
+    // is the SAME app-files store a served app's own uploadFile uses (saveAppFileBlob),
+    // never a second storage mechanism or an HTTP self-call.
+    portalCertidao: {
+      saveBlob: async (appId, name, contentType, bytes) => {
+        const meta = await saveAppFileBlob(appId, name, contentType, bytes);
+        return { fileId: meta.id, url: `/api/app-files/${appId}/${meta.id}`, mime: meta.type, size: meta.size };
+      },
     },
   }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));

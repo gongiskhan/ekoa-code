@@ -109,6 +109,14 @@
     "E1": {
       "status": "passed",
       "at": "2026-07-18T17:53:34Z"
+    },
+    "E2": {
+      "status": "passed",
+      "at": "2026-07-18T18:49:09Z"
+    },
+    "E3": {
+      "status": "passed",
+      "at": "2026-07-18T18:49:09Z"
     }
   },
   "globalGate": {

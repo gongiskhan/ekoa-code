@@ -129,6 +129,15 @@ async function admitApp(idOrSlug: string, res: Response): Promise<{ appId: strin
   return { appId: app?.appId ?? idOrSlug };
 }
 
+/** Persist a blob under an app's file store outside the HTTP upload path (mega-run E2/E3):
+ *  the composition root wires this to `legal/portal-connectors.ts`'s `SaveBlobFn` seam so a
+ *  server-side portal retrieval can store its fetched document through the SAME app-files
+ *  blob path a served app's own `window.__ekoa.uploadFile` uses - no HTTP self-call, no
+ *  second storage mechanism. */
+export async function saveAppFileBlob(appId: string, name: string, type: string, bytes: Buffer): Promise<AppFileMeta> {
+  return appFilesStore.save(appId, name, type, bytes);
+}
+
 export function appFilesRouter(): Router {
   const r = Router();
   const maxSize = process.env.EKOA_APP_FILES_MAX_SIZE || '25mb';

@@ -93,3 +93,36 @@ export const PortalDossierRecordsResponse = z.object({
   eventos: z.array(PortalEvent),
 });
 export type PortalDossierRecordsResponse = z.infer<typeof PortalDossierRecordsResponse>;
+
+/**
+ * POST /api/legal/portal/certidao (mega-run E2/E3, BRIEF §8 items 1-3): retrieval-by-
+ * access-code for the three open-data certidão sources this run's connectors cover. A
+ * strict subset of `PortalSource` (`.extract`, zod ≥3.20) - keeps the request enum in
+ * lockstep with the record enum without a second literal list to drift.
+ *
+ * `accessCode` and `subjectIds` are ORDINARY client-supplied dossiê fields (BRIEF §8
+ * constraint 0), never secrets: `accessCode` authenticates to the EXTERNAL portal only
+ * and is never written into a stored record, a log line, or an audit row
+ * (api/src/legal/portal-connectors.ts never persists it).
+ */
+export const PortalCertidaoSource = PortalSource.extract(['certidao-comercial', 'certidao-predial', 'certidao-civil']);
+export type PortalCertidaoSource = z.infer<typeof PortalCertidaoSource>;
+
+export const PortalCertidaoRequest = z.object({
+  source: PortalCertidaoSource,
+  accessCode: z.string().min(1),
+  processoId: z.string().min(1),
+  subjectIds: z.array(z.string()).default([]),
+});
+export type PortalCertidaoRequest = z.infer<typeof PortalCertidaoRequest>;
+
+/** 200 response: the structured record the connector parsed (shape varies by source -
+ *  passthrough, same "no discriminated unions" pin as `PortalDocument.parsed`) plus the
+ *  `PortalDocument` the retrieval attached to the dossiê. */
+export const PortalCertidaoResponse = z.object({
+  ok: z.literal(true),
+  source: PortalCertidaoSource,
+  record: z.object({}).passthrough(),
+  document: PortalDocument,
+});
+export type PortalCertidaoResponse = z.infer<typeof PortalCertidaoResponse>;

@@ -408,6 +408,43 @@ describe('shared contract - security ratchet (G12)', () => {
     if (parsedEvent.success) expect((parsedEvent.data as typeof extendedEvent).pollRunId).toBe('run-9');
   });
 
+  it('PortalCertidaoRequest/Response represent POST /api/legal/portal/certidao (mega-run E2/E3, BRIEF §8 items 1-3)', async () => {
+    const { PortalCertidaoRequest, PortalCertidaoResponse, PortalCertidaoSource } = await import('./portal.js');
+
+    const req = { source: 'certidao-comercial', accessCode: 'CODE-1', processoId: 'proc-1', subjectIds: ['500000000'] };
+    expect(PortalCertidaoRequest.safeParse(req).success).toBe(true);
+    // subjectIds defaults to [] when omitted (a caller may retrieve before it knows the subject).
+    const { subjectIds: _drop, ...reqNoSubjects } = req;
+    const parsedNoSubjects = PortalCertidaoRequest.safeParse(reqNoSubjects);
+    expect(parsedNoSubjects.success).toBe(true);
+    if (parsedNoSubjects.success) expect(parsedNoSubjects.data.subjectIds).toEqual([]);
+
+    // Only the three open-data sources this run's connectors cover - not the full PortalSource
+    // enum (citius-insolvencia/dgsi/dre are not retrievable by this route).
+    expect(PortalCertidaoSource.safeParse('certidao-predial').success).toBe(true);
+    expect(PortalCertidaoSource.safeParse('citius-insolvencia').success).toBe(false);
+    expect(PortalCertidaoRequest.safeParse({ ...req, source: 'citius-insolvencia' }).success).toBe(false);
+    // accessCode/processoId are required, non-empty strings (VALIDATION_FAILED, never a
+    // silent empty-string retrieval).
+    expect(PortalCertidaoRequest.safeParse({ ...req, accessCode: '' }).success).toBe(false);
+    expect(PortalCertidaoRequest.safeParse({ ...req, processoId: '' }).success).toBe(false);
+
+    const res = {
+      ok: true,
+      source: 'certidao-comercial',
+      record: { nome: 'Exemplo, Lda', nif: '500000000', formaJuridica: 'Sociedade por Quotas', capitalSocial: '5000', registos: [] },
+      document: {
+        source: 'certidao-comercial',
+        type: 'Certidão permanente comercial',
+        subjectIds: ['500000000'],
+        retrievedAt: '2026-07-18T10:00:00.000Z',
+        fileRef: { fileId: 'f1', appId: 'legal-dossie', url: '/api/app-files/legal-dossie/f1', mime: 'text/html', size: 1024 },
+        parsed: { nif: '500000000' },
+      },
+    };
+    expect(PortalCertidaoResponse.safeParse(res).success).toBe(true);
+  });
+
   it('RegistoEntry represents the portal vocabulary rows (mega-run E1, A5 memo)', async () => {
     const { RegistoEntry } = await import('./registo.js');
     const retrieved = {

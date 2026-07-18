@@ -1,0 +1,7 @@
+{ "slice": "E2", "kind": "api", "status": "passed", "at": "2026-07-18T18:49:09Z",
+  "wall": {"tscApi": 0, "chokepoint": 0, "eslint": 0, "unit": "portal-connectors 18 + portal 6", "secrets": "clean; access codes never logged"},
+  "test": {"status": "passed", "evidence": "portal-connectors.test.ts (fetch/parse/attach per source, SSRF, bad-code, event-fail best-effort, retry-idempotent, wrong-org no-blob); contract; fixtures committed; SUITE_LEDGER"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent (boundary)", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "partial-attach + retry-dup + key-collision + orphan-blob, all fixed"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (E5 carries the Part E walkthrough)"} }

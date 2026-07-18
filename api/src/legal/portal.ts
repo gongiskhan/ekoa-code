@@ -80,7 +80,9 @@ function toDateOnly(iso: string): string {
   return iso.slice(0, 10);
 }
 
-async function assertOwnerOrg(
+/** Fail-closed org ownership check (exported so callers can assert BEFORE expensive side
+ *  effects like a blob save, not only inside the attach). */
+export async function assertOwnerOrg(
   app: ResolvedLegalApp,
   orgId: string,
   deps: Pick<PortalSpineDeps, 'getOwnerOrgId'>,

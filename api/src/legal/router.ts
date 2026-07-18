@@ -10,6 +10,7 @@
  *   GET  /api/tracking/consulta    TRACKING_ALLOWED_APPS    6/20 per min
  *   GET  /api/citius/consulta      CITIUS_ALLOWED_APPS      6/20 per min (+ registration)
  *   GET  /api/legal/portal         PORTAL_ALLOWED_APPS      20/60 per min (+ registration)
+ *   POST /api/legal/portal/certidao PORTAL_ALLOWED_APPS     10/30 per min (+ registration)
  *
  * The gate, allowlists and rate windows are carried exactly; see access-gate.ts.
  * Every dependency that reaches outside legal/ (slug→app resolution, the owner
@@ -31,7 +32,10 @@ import { trackShipment, type TrackingDeps } from './tracking.js';
 import { consultarCitius, type FetchImpl as CitiusFetchImpl } from './citius.js';
 import { getSttProvider, meterStt, type SttUsageRecorder } from './transcricao.js';
 import { listPortalDossierRecords, type PortalSpineDeps } from './portal.js';
+import { retrieveCertidao, type SaveBlobFn, type FetchImpl as PortalCertidaoFetchImpl } from './portal-connectors.js';
 import type { ActivationState } from '../data/activation.js';
+import type { ActivityActor } from '../data/activity.js';
+import type { PortalCertidaoSource } from '@ekoa/shared';
 
 // --- Allowlists (carried verbatim from the old server.ts) --------------------
 const CITIUS_ALLOWED_APPS = new Set(['legal-citius', 'legal-nucleo', 'legal-prazos', 'legal-dossie']);
@@ -73,6 +77,14 @@ export interface LegalRouterDeps {
   };
   /** legal/portal owner-spine seams (mega-run E1). Absent => the route 503s. */
   portal?: PortalSpineDeps;
+  /** legal/portal-connectors seams (mega-run E2/E3): the blob-save path (required - no
+   *  honest default exists for writing bytes) and an optional fetch/base-URL override for
+   *  tests. Absent `saveBlob` => the route 503s (same posture as `portal` above). */
+  portalCertidao?: {
+    saveBlob: SaveBlobFn;
+    fetchImpl?: PortalCertidaoFetchImpl;
+    baseUrls?: Partial<Record<PortalCertidaoSource, string>>;
+  };
 }
 
 export function legalRouter(deps: LegalRouterDeps): Router {
@@ -87,6 +99,7 @@ export function legalRouter(deps: LegalRouterDeps): Router {
   const trackingLimited = makeAppRateLimiter(6, 20, 60_000, now);
   const citiusLimited = makeAppRateLimiter(6, 20, 60_000, now);
   const portalLimited = makeAppRateLimiter(20, 60, 60_000, now);
+  const portalCertidaoLimited = makeAppRateLimiter(10, 30, 60_000, now);
 
   const noStore = (res: Response): void => {
     res.setHeader('Cache-Control', 'no-store');
@@ -326,6 +339,68 @@ export function legalRouter(deps: LegalRouterDeps): Router {
       res.json(records);
     } catch {
       res.status(503).json({ error: 'Consulta de documentos de portal indisponível' });
+    }
+  });
+
+  // --- POST /api/legal/portal/certidao (mega-run E2/E3) ----------------------
+  const CERTIDAO_SOURCES = new Set<string>(['certidao-comercial', 'certidao-predial', 'certidao-civil']);
+  r.post('/api/legal/portal/certidao', async (req: Request, res: Response) => {
+    noStore(res);
+    const app = await requireLegalSuiteApp(req, res, gateDeps, {
+      allowed: PORTAL_ALLOWED_APPS,
+      notAllowedMessage: 'Aplicação não autorizada para consultar o dossiê',
+      requireRegistered: true,
+    });
+    if (!app) return;
+    if (portalCertidaoLimited(app.appId)) {
+      res.status(429).json({ error: 'Demasiados pedidos de certidão. Tente novamente dentro de um minuto.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { source?: unknown; accessCode?: unknown; processoId?: unknown; subjectIds?: unknown };
+    const source = String(body.source || '');
+    if (!CERTIDAO_SOURCES.has(source)) {
+      res.status(400).json({ error: 'Parâmetro "source" inválido: use "certidao-comercial", "certidao-predial" ou "certidao-civil".' });
+      return;
+    }
+    const accessCode = String(body.accessCode || '').trim();
+    if (!accessCode) {
+      res.status(400).json({ error: 'Parâmetro "accessCode" em falta' });
+      return;
+    }
+    const processoId = String(body.processoId || '').trim();
+    if (!processoId) {
+      res.status(400).json({ error: 'Parâmetro "processoId" em falta' });
+      return;
+    }
+    const subjectIds = Array.isArray(body.subjectIds) ? body.subjectIds.map((s) => String(s)) : [];
+
+    if (!deps.portal || !deps.portalCertidao) {
+      res.status(503).json({ error: 'Consulta de certidão indisponível' });
+      return;
+    }
+    try {
+      const ownerOrgId = await deps.portal.getOwnerOrgId(app.ownerUserId);
+      if (!ownerOrgId) {
+        res.status(503).json({ error: 'Consulta de certidão indisponível' });
+        return;
+      }
+      // No independent end-user JWT exists on this served-app plane (header-scoped only,
+      // same as every legal-suite route) - the app's own resolved owner is the acting
+      // principal, exactly like apps/app-assistant-route.ts's owner-actor pattern.
+      const actor: ActivityActor = { userId: app.ownerUserId, username: app.appId, orgId: ownerOrgId };
+      const result = await retrieveCertidao(app, processoId, source as PortalCertidaoSource, accessCode, subjectIds, actor, {
+        ...deps.portal,
+        ...deps.portalCertidao,
+        now,
+      });
+      if (!result.ok) {
+        res.status(503).json({ error: result.error });
+        return;
+      }
+      res.json({ ok: true, source, record: result.record, document: result.document });
+    } catch {
+      res.status(503).json({ error: 'Consulta de certidão indisponível' });
     }
   });
 

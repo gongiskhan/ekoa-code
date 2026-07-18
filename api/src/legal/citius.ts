@@ -14,8 +14,16 @@
  * (not installed): `parsePublicacoes` is re-implemented with a zero-dependency
  * regex table walker that reproduces the same output for the committed fixtures.
  * The default live fetch rides the SSRF-guarded `guardedFetch` (ch09 invariant 8).
+ *
+ * `decodeHtml`/`decodeEntities`/`cellText` moved to `portal-html.ts` (08-portal-audit.md
+ * Part E pin 4, mega-run E2): reused by every certidão connector for the same PT-PT
+ * charset/entity quirks. `decodeHtml` is re-exported here for byte-compat (this module's
+ * own tests import it from here).
  */
 import { guardedFetch } from '../services/url-fetcher.js';
+import { decodeHtml, cellText } from './portal-html.js';
+
+export { decodeHtml };
 
 /** URL público da consulta de citações e notificações do Citius. */
 export const CITIUS_CONSULTA_URL = 'https://www.citius.mj.pt/portal/consultas/ConsultasCitacoes.aspx';
@@ -54,46 +62,6 @@ const LIVE_FETCH_TIMEOUT_MS = 12_000;
 const defaultFetch: FetchImpl = async (url, init) => {
   return guardedFetch(url, { headers: init?.headers, timeoutMs: LIVE_FETCH_TIMEOUT_MS });
 };
-
-/**
- * Descodifica um corpo HTML segundo o charset declarado. Os portais legais PT
- * servem com frequência ISO-8859-1 / Windows-1252 (não UTF-8); descodificar isso
- * como UTF-8 estraga cada acento. Lê o charset do Content-Type, com fallback para
- * um <meta charset>, e trata a família latin-1 como Node 'latin1'.
- */
-export function decodeHtml(buf: Buffer, contentType: string): string {
-  let charset = '';
-  const m = /charset\s*=\s*["']?([^;"'>\s]+)/i.exec(contentType || '');
-  if (m) charset = m[1] ?? '';
-  if (!charset) {
-    const head = buf.subarray(0, 2048).toString('latin1');
-    const mm = /<meta[^>]+charset\s*=\s*["']?\s*([^;"'>\s]+)/i.exec(head);
-    if (mm) charset = mm[1] ?? '';
-  }
-  const c = charset.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (c.includes('8859') || c.includes('1252') || c.includes('latin')) {
-    return buf.toString('latin1');
-  }
-  return buf.toString('utf-8');
-}
-
-/** Decode the small set of HTML entities that can appear in Citius cell text. */
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0*39;|&apos;/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(parseInt(d, 10)));
-}
-
-/** Strip tags + decode entities + collapse whitespace on a cell/row fragment. */
-function cellText(html: string): string {
-  return decodeEntities(html.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
-}
 
 /**
  * Heurística: a resposta é uma página de erro / redireção do WebForms (e não uma

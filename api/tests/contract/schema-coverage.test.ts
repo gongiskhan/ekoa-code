@@ -111,6 +111,12 @@ const COVERED = new Set<string>([
   // endpoint on the existing servedApp domain: covering it keeps EXPECTED_PENDING_COUNT
   // unchanged.
   'servedApp.legalPortalDossier',
+  // mega-run E2/E3 (Part E, certidão-by-access-code connectors) - the retrieval+attach
+  // write route (legal-plane.test.ts contract: happy path + validation + bad-code 503 +
+  // gate reuse; api/tests/legal/portal-connectors.test.ts: fetch/parse + attach unit
+  // coverage). Additive endpoint on the existing servedApp domain: covering it keeps
+  // EXPECTED_PENDING_COUNT unchanged.
+  'servedApp.legalPortalCertidao',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

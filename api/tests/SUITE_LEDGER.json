@@ -473,6 +473,12 @@
         "count": 0,
         "targetGate": "G12",
         "note": "mega-run 20260717-190134 slice C7: no new vitest FILES - extensions to existing suites (count stays 0, B5 precedent). chat-lifecycle.test.ts gains the voice-sourced-run test (input.source:'voice' -> the system prompt carries voiceContextNote's 'Sessão de voz ativa' text; a plain run over the SAME session gets none; the paired voice.turn activity row - written independently by the voice WS session itself, api/src/voice/index.ts auditTurn, C2 - carries source:'voice' + the transcriptMessageId ref, proving both halves hold for one logical voice turn without duplicating C2's own metering.test.ts). contract/chat.test.ts + shared/src/contract.test.ts pin the extended ChatRunCreateRequest.source (optional literal 'voice'; any other string/empty string rejected -> 400 envelope). The client wire (page.tsx handleChatSend/handleSendMessage + chat-panel.tsx sendVoicePathRef threading source:'voice' on direct sends) and the e2e half are pinned by web/e2e/voice-proof.spec.ts (band5_live_proof). Green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
+        "group": "portal certidão connectors E2/E3 (retrieval-by-access-code: comercial/predial/civil)",
+        "count": 1,
+        "targetGate": "G12",
+        "note": "mega-run 20260717-190134 slices E2/E3: tests/legal/portal-connectors.test.ts (fetchCertidao parse-unit tests per source against committed fixtures api/tests/e2e/fixtures/portal-certidao-{comercial,predial,civil,invalido}.html - company/property/civil record shapes; empty-code, invalid/expired-code, non-2xx, and thrown-fetch all resolve to a clean PT-PT 'indisponível' error, never a throw; retrieveCertidao end-to-end over mongodb-memory-server - attaches a documentos row (attachPortalDocument) AND a document.retrieved eventos row (attachPortalEvent) + audit, org-scoped, access code never persisted/logged; a failed retrieval attaches nothing (no blob saved, no row written); wrong-org caller rejects with PortalOrgMismatchError). contract/legal-plane.test.ts gains POST /api/legal/portal/certidao coverage (happy path validated against the shared descriptor + rendering on the GET read surface, field validation 400s, bad-code 503, gate reuse). shared/src/contract.test.ts gains PortalCertidaoRequest/Response representability (the 3-source subset enum, required-field 400 shapes, an extended-record passthrough). Green in the per-PR vitest lane from landing; ratchet applies."
       }
     ]
   },

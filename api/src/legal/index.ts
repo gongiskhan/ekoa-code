@@ -51,3 +51,15 @@ export {
   PortalOrgMismatchError,
   type PortalSpineDeps,
 } from './portal.js';
+
+// Portal retrieval-by-access-code connectors (mega-run E2/E3; ch03 §3.9).
+export {
+  fetchCertidao,
+  retrieveCertidao,
+  buildCertidaoUrl,
+  type SaveBlobFn,
+  type SavedPortalBlob,
+  type CertidaoFetchResult,
+  type RetrieveCertidaoDeps,
+  type RetrieveCertidaoResult,
+} from './portal-connectors.js';
