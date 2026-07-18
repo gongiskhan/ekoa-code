@@ -1,0 +1,34 @@
+{
+  "title": "Ekoa: portal connectors (Part E) - evidence pass",
+  "project": "ekoa",
+  "folder": "part-e-portals",
+  "video": { "width": 1280, "height": 800, "fps": 30 },
+  "segments": [
+    {
+      "type": "evidence",
+      "id": "ac1",
+      "file": "e5-panel-ac1.json",
+      "cwd": "/private/tmp/claude-501/-Users-ggomes-dev-ekoa-code/9d4c1cbf-dfe7-4af7-9c49-c3fce00fc21e/scratchpad",
+      "kind": "json",
+      "lineNumbers": false,
+      "source": "GET /api/legal/portal - registo documentos (dossiê id_0)",
+      "caption": "AC-1 - certidão comercial recebida por código de acesso",
+      "expectedScreen": "a JSON evidence panel showing a documentos row with tipo 'Certidão permanente comercial', origem 'portal', source 'certidao-comercial', subjectIds ['500000000'], and a parsed company record with nif '500000000' and nome 'Exemplo Comercial, Lda'; the 'Certidão permanente comercial' line highlighted",
+      "highlight": { "match": "Certidão permanente comercial", "note": "etiqueta PT-PT exacta devolvida pelo conector e guardada na dossiê" },
+      "hold": 2000
+    },
+    {
+      "type": "evidence",
+      "id": "ac2",
+      "file": "e5-panel-ac2.json",
+      "cwd": "/private/tmp/claude-501/-Users-ggomes-dev-ekoa-code/9d4c1cbf-dfe7-4af7-9c49-c3fce00fc21e/scratchpad",
+      "kind": "json",
+      "lineNumbers": false,
+      "source": "GET /api/legal/portal - registo eventos (mesma dossiê id_0)",
+      "caption": "AC-2 - alerta de insolvência na mesma dossiê",
+      "expectedScreen": "a JSON evidence panel showing an eventos row on the SAME dossiê (processoId id_0) with titulo 'Nova publicação encontrada', origem 'portal', source 'citius-insolvencia', kind 'watch.hit', subjectRef 'Contraparte Exemplo, Lda', and descricao 'Nova publicação para a contraparte Contraparte Exemplo, Lda'; that descricao line highlighted",
+      "highlight": { "match": "Nova publicação para a contraparte Contraparte Exemplo, Lda", "note": "mensagem PT-PT verbatim exigida pelo gate, guardada em descricao" },
+      "hold": 2000
+    }
+  ]
+}

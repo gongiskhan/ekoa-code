@@ -91,6 +91,12 @@ const ORIGEM_LABEL = {
   email: 'Email',
   whatsapp: 'WhatsApp',
   nota: 'Nota',
+  // mega-run E5 (BRIEF §8 gate): documentos rows attachPortalDocument writes
+  // (certidão comercial/predial/civil, DGSI/DRE) carry origem:'portal' — this
+  // tab renders them with zero other code changes (08-portal-audit.md pin 2),
+  // but without this entry the badge fell back to the raw string "portal"
+  // instead of a PT-PT label.
+  portal: 'Portal',
 };
 export function origemLabel(o) {
   return ORIGEM_LABEL[o] || o || 'Outro';
@@ -98,7 +104,7 @@ export function origemLabel(o) {
 
 /* Tom (cor do badge) por origem. */
 export function origemTone(o) {
-  if (o === 'upload') return 'info';
+  if (o === 'upload' || o === 'portal') return 'info';
   if (o === 'nota') return 'neutral';
   if (o === 'email' || o === 'whatsapp') return 'ok';
   return 'neutral';

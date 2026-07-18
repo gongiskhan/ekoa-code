@@ -160,9 +160,14 @@ export async function attachPortalEvent(
   const parsed = PortalEvent.parse(ev);
   await assertOwnerOrg(app, actor.orgId, deps);
 
+  // A portal event's payload may carry a PT-PT `mensagem` (e.g. the watcher's "Nova publicação
+  // para a contraparte X"): surface it as the eventos row's `descricao` so it RENDERS in the
+  // dossiê's CronologiaTab (which shows titulo + descricao), not only in the raw payload.
+  const mensagem = typeof parsed.payload?.mensagem === 'string' ? parsed.payload.mensagem : undefined;
   const row: Record<string, unknown> = {
     processoId: parsed.dossierRef,
     titulo: EVENT_TITLES_PT[parsed.kind] ?? EVENT_TITLES_PT['document.retrieved'],
+    ...(mensagem ? { descricao: mensagem } : {}),
     data: toDateOnly(parsed.observedAt),
     tipo: `portal.${parsed.kind}`,
     origem: 'portal',

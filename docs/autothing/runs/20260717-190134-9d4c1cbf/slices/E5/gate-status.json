@@ -1,0 +1,7 @@
+{ "slice": "E5", "kind": "mixed", "status": "passed", "at": "2026-07-18T20:17:37Z",
+  "wall": {"tscApi": 0, "tscShared": 0, "chokepoint": 0, "eslint": 0, "unit": "gate 7 + portal 6 + watcher 12 + research 14", "secrets": "clean"},
+  "test": {"status": "passed", "evidence": "e5-portal-gate.test.ts (BRIEF §8 gate: certidão+watcher on one dossiê, verbatim PT-PT, org-scoped, fetch-URL + descricao asserts); DGSI/DRE verify-only; SUITE_LEDGER E5"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "codexSliceReview": {"status": "approve-then-degraded", "actualModel": "gpt-5.5-high", "findings": "2 gate-fidelity gaps found + fixed; recheck degraded (codex-unavailable, hung x2) - run-level checkpoint re-covers"},
+  "design": {"status": "skipped", "reason": "kind-conditional (data-plane; badge is a 1-line label)"},
+  "video": {"status": "verified", "mode": "evidence", "url": "http://100.108.210.116:8099/ekoa/part-e-portals/2026-07-18_21-15-01/final.mp4", "videoSha256": "376f237c696cc8b1779f9d75ad8047150047745eda071d196f2bed482be77879", "videoBytes": 89073 } }

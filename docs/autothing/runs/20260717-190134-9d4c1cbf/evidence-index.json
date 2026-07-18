@@ -121,6 +121,10 @@
     "E4": {
       "status": "passed",
       "at": "2026-07-18T19:22:50Z"
+    },
+    "E5": {
+      "status": "passed",
+      "at": "2026-07-18T20:17:37Z"
     }
   },
   "globalGate": {
@@ -140,7 +144,13 @@
       "sha256": "5bfefed10d2ddf461933360ed2ca3387e9fb4f335d9baface0b98f8e92609af8",
       "bytes": 1766844,
       "status": "verified"
+    },
+    {
+      "slice": "E5",
+      "sha256": "376f237c696cc8b1779f9d75ad8047150047745eda071d196f2bed482be77879",
+      "bytes": 89073,
+      "status": "verified"
     }
   ],
-  "modelFallbacks": 1
+  "modelFallbacks": 2
 }
