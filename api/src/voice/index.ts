@@ -19,9 +19,20 @@
  * a 10-minute inactivity timeout (config knob), and per-stage latency JSON logging
  * (audio_in_first / first_interim / utterance_end / tts_first_audio per turn - session.ts).
  *
+ * Metering + audit (mega-run C2, BRIEF §5): at session close each connection records its
+ * usage through billing/tracker.ts `recordUsageCounters` - THE single metering writer; this
+ * module NEVER writes a ledger collection itself. Counters are `voice_stt_ms` (ungated:
+ * capture open = billed, bytes at the known rate) and `voice_tts_chars` (characters submitted
+ * for synthesis), SEPARATE from token counters, no token conversion, attributed to the
+ * session's org + user from the VERIFIED upgrade token. Voice turns audit through the single
+ * `logActivity` path per the A5 vocabulary (`voice.turn` + `voice.tts`, `source:'voice'`,
+ * refs only - never transcript or audio bodies). Both are best-effort: a metering/audit
+ * failure logs and never drops the socket.
+ *
  * voice/ is NOT model egress: transcripts enter the normal chat pipeline elsewhere; nothing
- * here imports llm/. Imports: config.ts, auth/ (verify), shared/ (wire schemas), ws, node
- * builtins - strictly downward (tier table, docs/architecture.md).
+ * here imports llm/. Imports: config.ts, auth/ (verify), billing/ (the tracker seam), data/
+ * (logActivity), shared/ (wire schemas), ws, node builtins - strictly downward (tier table,
+ * docs/architecture.md).
  */
 import type { Server as HttpServer, IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
@@ -39,10 +50,13 @@ import {
 import { loadVoiceConfig } from '../config.js';
 import { verifySseToken } from '../auth/middleware.js';
 import type { JwtClaims } from '../auth/jwt.js';
+import { recordUsageCounters } from '../billing/index.js';
+import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 import { resolveSttProvider, resolveTtsProvider } from './providers.js';
 import {
   openVoiceSession,
   closeVoiceSession,
+  sttMsOfBytes,
   SttTurnLatency,
   TtsTurnLatency,
   defaultVoiceLog,
@@ -59,6 +73,8 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 interface AttachVoiceOptions {
   /** Optional structured logger; defaults to the console JSON logger. */
   log?: VoiceLog;
+  /** Injectable clock/id for the audit rows; defaults to wall clock (tests pin time). */
+  deps?: LogActivityDeps;
 }
 
 export function attachVoiceServer(
@@ -66,6 +82,7 @@ export function attachVoiceServer(
   opts: AttachVoiceOptions = {},
 ): { sttWss: WebSocketServer; ttsWss: WebSocketServer } {
   const log = opts.log ?? defaultVoiceLog;
+  const deps = opts.deps ?? { now: () => Date.now() };
   const sttWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
   const ttsWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
@@ -79,8 +96,8 @@ export function attachVoiceServer(
     if (!claims) return; // rejected + logged inside
     const wss = path === VOICE_STT_WS_PATH ? sttWss : ttsWss;
     wss.handleUpgrade(req, socket as Socket, head, (ws: WebSocket) => {
-      if (path === VOICE_STT_WS_PATH) handleSttConnection(ws, req, claims, log);
-      else handleTtsConnection(ws, claims, log);
+      if (path === VOICE_STT_WS_PATH) handleSttConnection(ws, req, claims, log, deps);
+      else handleTtsConnection(ws, claims, log, deps);
     });
   });
 
@@ -120,6 +137,7 @@ function handleSttConnection(
   req: IncomingMessage,
   claims: JwtClaims,
   log: VoiceLog,
+  deps: LogActivityDeps,
 ): void {
   const cfg = loadVoiceConfig();
   const sampleRate = clampInt(queryParam(req.url, 'sample_rate'), 8_000, 48_000, 16_000);
@@ -142,8 +160,37 @@ function handleSttConnection(
     userId: claims.sub,
     username: claims.username,
     provider: resolved.key,
+    sampleRate,
   });
   log('voice.session.opened', sessionFields(record));
+
+  // One finished-but-unaudited turn at most (A5 vocabulary): `utterance_end` arms it, a client
+  // `turn_committed` writes the `voice.turn` row WITH the transcript ref, and the next
+  // `utterance_end` (or close) flushes it WITHOUT the ref - the transcript never became a
+  // message (e.g. discarded in manual mode). Billing does not depend on this: the session
+  // total meters at close regardless.
+  let pendingTurn: { turn: number; sttMs: number } | null = null;
+  let turnStartBytes = 0;
+  const auditTurn = (extra?: { transcriptMessageId: string; mode?: 'manual' | 'talking' }): void => {
+    if (!pendingTurn) return;
+    const { turn, sttMs } = pendingTurn;
+    pendingTurn = null;
+    void logActivity(
+      actorOf(record),
+      'voice',
+      'turn',
+      deps,
+      {
+        source: 'voice',
+        sessionId: record.sessionId,
+        turn,
+        ...(lang ? { lang } : {}),
+        ...(extra ? { transcriptMessageId: extra.transcriptMessageId } : {}),
+        ...(extra?.mode ? { mode: extra.mode } : {}),
+      },
+      { voice_stt_ms: sttMs },
+    ).catch((err) => log('voice.audit_error', { sessionId: record.sessionId, errorClass: errorClass(err) }));
+  };
 
   const send = jsonSender<VoiceSttServerMessage>(ws);
   const latency = new SttTurnLatency(record, log);
@@ -168,6 +215,10 @@ function handleSttConnection(
           send({ type: 'transcript', text: ev.text, isFinal: ev.isFinal, speechFinal: ev.speechFinal });
         } else if (ev.kind === 'utterance_end') {
           latency.onUtteranceEnd();
+          auditTurn(); // an uncommitted previous turn flushes without its ref
+          const turnBytes = record.audioInBytes - turnStartBytes;
+          turnStartBytes = record.audioInBytes;
+          pendingTurn = { turn: record.turns, sttMs: sttMsOfBytes(turnBytes) };
           send({ type: 'utterance_end', transcript: ev.transcript });
         } else {
           log('voice.provider_error', { sessionId: record.sessionId, errorClass: 'ProviderStreamError' });
@@ -203,11 +254,17 @@ function handleSttConnection(
       return;
     }
     if (parsed.type === 'close_stream') stream.close(); // flush; pump loop closes the socket
+    else if (parsed.type === 'turn_committed') {
+      // Annotates the last finished turn with its chat-message ref (a ref, never text).
+      // Idempotent: with no pending turn there is nothing to audit.
+      auditTurn({ transcriptMessageId: parsed.transcriptMessageId, mode: parsed.mode });
+    }
   });
 
   ws.on('close', () => {
     idle.clear();
     stream.close();
+    auditTurn(); // a still-pending turn flushes without its ref
     closeVoiceSession(record.sessionId);
     log('voice.session.closed', {
       ...sessionFields(record),
@@ -215,13 +272,16 @@ function handleSttConnection(
       audioInBytes: record.audioInBytes,
       turns: record.turns,
     });
+    // BRIEF §5 (decided): ungated v1 - capture open = billed. The whole session's received
+    // audio meters at the known rate, through the tracker only (single metering writer).
+    meterSessionClose(record, { voice_stt_ms: sttMsOfBytes(record.audioInBytes) }, log);
   });
   ws.on('error', () => { try { ws.close(); } catch { /* already closed */ } });
 }
 
 /* ------------------------------- TTS: /api/voice/tts-stream ------------------------------- */
 
-function handleTtsConnection(ws: WebSocket, claims: JwtClaims, log: VoiceLog): void {
+function handleTtsConnection(ws: WebSocket, claims: JwtClaims, log: VoiceLog, deps: LogActivityDeps): void {
   const cfg = loadVoiceConfig();
   const record = openVoiceSession({
     kind: 'tts',
@@ -282,6 +342,23 @@ function handleTtsConnection(ws: WebSocket, claims: JwtClaims, log: VoiceLog): v
     record.ttsChars += parsed.text.length;
     record.turns += 1;
 
+    // One spoken reply = one `voice.tts` audit row (A5 vocabulary): refs + labels only, never
+    // the text; chars submitted = billed, matching the session counter above.
+    void logActivity(
+      actorOf(record),
+      'voice',
+      'tts',
+      deps,
+      {
+        source: 'voice',
+        sessionId: record.sessionId,
+        provider: resolved.key,
+        lang: parsed.lang,
+        ...(parsed.sheetId ? { sheetId: parsed.sheetId } : {}),
+      },
+      { voice_tts_chars: parsed.text.length },
+    ).catch((err) => log('voice.audit_error', { sessionId: record.sessionId, errorClass: errorClass(err) }));
+
     const latency = new TtsTurnLatency(record, log, turnId, parsed.lang);
     latency.onSay();
     send({ type: 'speaking', turnId, lang: parsed.lang, ttsProvider: resolved.key });
@@ -327,11 +404,38 @@ function handleTtsConnection(ws: WebSocket, claims: JwtClaims, log: VoiceLog): v
       ttsChars: record.ttsChars,
       turns: record.turns,
     });
+    // Characters submitted for synthesis over the whole session, through the tracker only.
+    meterSessionClose(record, { voice_tts_chars: record.ttsChars }, log);
   });
   ws.on('error', () => { try { ws.close(); } catch { /* already closed */ } });
 }
 
 /* ------------------------------------- shared helpers ------------------------------------- */
+
+/** The audit actor is ALWAYS the session record's verified-token identity (never a message). */
+function actorOf(record: VoiceSessionRecord): ActivityActor {
+  return { userId: record.userId, username: record.username, orgId: record.orgId };
+}
+
+/** Session-close metering through the ONE tracker seam (`billing/tracker.ts`, the single
+ *  metering writer - this module never writes a ledger collection). Attributed to the
+ *  session's org + user from the verified token; keyed org+session (idempotent upsert);
+ *  best-effort - a metering failure logs and never affects the socket teardown. */
+function meterSessionClose(
+  record: VoiceSessionRecord,
+  counters: Record<string, number>,
+  log: VoiceLog,
+): void {
+  void recordUsageCounters({
+    orgId: record.orgId,
+    billeeUserId: record.userId,
+    sessionId: record.sessionId,
+    source: 'voice',
+    counters,
+  }).catch((err) =>
+    log('voice.metering_error', { sessionId: record.sessionId, errorClass: errorClass(err) }),
+  );
+}
 
 /** Provider error text is untrusted and may echo request/transcript content, so logs record
  *  only a bounded class token, never the message (and never a vendor-controlled `.name`

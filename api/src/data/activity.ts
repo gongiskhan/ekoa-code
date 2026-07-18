@@ -24,6 +24,7 @@ export async function logActivity(
   type: string,
   deps: LogActivityDeps,
   metadata?: Record<string, unknown>,
+  usageCounts?: Record<string, number>,
 ): Promise<void> {
   const id = deps.genId ? deps.genId() : `act_${deps.now()}_${idSeq++}`;
   const doc: ActivityLogDoc = {
@@ -35,6 +36,8 @@ export async function logActivity(
     type,
     timestamp: new Date(deps.now()).toISOString(),
     ...(metadata ? { metadata } : {}),
+    // Counter names verbatim from the metering ledger (A5 vocabulary memo rule 3).
+    ...(usageCounts && Object.keys(usageCounts).length > 0 ? { usageCounts } : {}),
   };
   await activityLogs.insert(doc);
 }

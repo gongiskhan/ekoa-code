@@ -22,11 +22,25 @@ export type VoiceLang = z.infer<typeof VoiceLang>;
 
 /** Client -> server JSON on /api/voice/stream. Audio itself is binary 16 kHz linear16 mono
  *  PCM frames (not JSON). `close_stream` asks the relay to flush + finalize the provider
- *  stream; the relay closes the socket when the provider drains. Session parameters ride the
- *  upgrade query string (`?token=&sample_rate=&utterance_end_ms=&lang=`), mirroring the SSE
- *  token-query idiom (CONV-1) - a browser WS cannot set headers. */
+ *  stream; the relay closes the socket when the provider drains. `turn_committed` (C2)
+ *  annotates the LAST finished turn (the most recent `utterance_end`) with the REFERENCE to
+ *  the chat message its final transcript became, plus the client mode - refs only, never
+ *  transcript text (the A5 vocabulary memo rule 2); the relay writes the turn's `voice.turn`
+ *  audit row on receipt, or without the ref if none arrives before the next turn / close.
+ *  Attribution (org + user) always comes from the verified upgrade token, never from these
+ *  messages. Session parameters ride the upgrade query string
+ *  (`?token=&sample_rate=&utterance_end_ms=&lang=`), mirroring the SSE token-query idiom
+ *  (CONV-1) - a browser WS cannot set headers. */
 export const VoiceSttClientMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('close_stream') }),
+  z.object({
+    type: z.literal('turn_committed'),
+    /** Id of the chat message the finished turn's final transcript became. A ref, never text:
+     *  capped at an id length so a client cannot smuggle prose into the audit row (A5 rule 2). */
+    transcriptMessageId: z.string().min(1).max(128),
+    /** The client voice-machine mode the turn ran under (BRIEF §5). */
+    mode: z.enum(['manual', 'talking']).optional(),
+  }),
 ]);
 export type VoiceSttClientMessage = z.infer<typeof VoiceSttClientMessage>;
 
@@ -64,8 +78,12 @@ export const VoiceTtsClientMessage = z.discriminatedUnion('type', [
     type: z.literal('say'),
     text: z.string().min(1),
     lang: VoiceLang,
-    /** Client correlation id; echoed on `speaking`/`audio_end`/`cleared`. Generated when absent. */
-    turnId: z.string().optional(),
+    /** Client correlation id; echoed on `speaking`/`audio_end`/`cleared`. Generated when absent.
+     *  Capped at an id length - it reaches latency logs, so it must not carry prose (A5 rule 2). */
+    turnId: z.string().min(1).max(128).optional(),
+    /** Optional ref to the sheet whose summary is being spoken - rides the `voice.tts` audit
+     *  row's metadata (refs only, never content). Capped at an id length (A5 rule 2). */
+    sheetId: z.string().min(1).max(128).optional(),
   }),
   z.object({ type: z.literal('clear') }),
 ]);

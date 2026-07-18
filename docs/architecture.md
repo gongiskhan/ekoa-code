@@ -49,7 +49,7 @@ exhaustive; the lint rules of `docs/governance.md` enforce the load-bearing edge
 | `data/` | All persistence: Mongo stores, collections engine, the one crypto module (AES-256-GCM), and the single audit write path `logActivity`. |
 | `llm/` | THE egress module - one module, three concerns (see below). |
 | `auth/` | JWT mint/verify middleware, login, refresh, device login, admin seeding, the revocation set + activation cache. |
-| `billing/` | Token accounting: tracker (the single metering writer), ledger, allowance middleware, credits, overage. |
+| `billing/` | Token accounting: tracker (the single metering writer), ledger, allowance middleware, credits, overage. Also the non-token usage ledger (`usage_events`, mega-run C2): per-org-per-session counters (`voice_stt_ms`, `voice_tts_chars`) recorded by the SAME tracker, never token-converted; Part D's assistant-turn metering adds counter keys on the same schema. |
 | `content/` | Agent-context loader: composes per-run context from package directories. A loader, not a framework. |
 | `services/` | Cross-domain logic: error sanitiser, secret-commit guard, safe-path jail, browser pool, SSRF-guarded fetcher, GitHub pipeline. Never imports `llm/`. |
 | `memory/` | Org memory: resolver, formatter, post-run extraction (one FAST call per run, always `visibility: private`). No model call of its own. |
@@ -57,7 +57,7 @@ exhaustive; the lint rules of `docs/governance.md` enforce the load-bearing edge
 | `integrations/` | OAuth flows, encrypted credentials, action runner, Pipedream, e-signature. |
 | `bridge/` | Daemon-facing WS server the ekoa-local daemon dials into; delegation dispatch; the provider endpoint routes back through `llm/`. |
 | `streaming/` | Live browser-canvas media relay (the one FIXED-2 WebSocket carve-out). |
-| `voice/` | Voice relay (Part C), `streaming/`'s sibling WS carve-out: WS `/api/voice/stream` (16 kHz PCM up, interim/final transcripts + `utterance_end` down) + `/api/voice/tts-stream` (audio frames down, `{clear}` barge-in). Session-JWT `?token=` auth (CONV-1), org+user attribution on every provider call record, 10-min inactivity timeout, per-stage latency JSON logging. Vendor-neutral `SttProvider`/`TtsProvider` registry, config-selected per language; v1 ships stub providers only (live vendors land at C6). NOT model egress - never imports `llm/`. |
+| `voice/` | Voice relay (Part C), `streaming/`'s sibling WS carve-out: WS `/api/voice/stream` (16 kHz PCM up, interim/final transcripts + `utterance_end` down) + `/api/voice/tts-stream` (audio frames down, `{clear}` barge-in). Session-JWT `?token=` auth (CONV-1), org+user attribution on every provider call record, 10-min inactivity timeout, per-stage latency JSON logging. Vendor-neutral `SttProvider`/`TtsProvider` registry, config-selected per language; v1 ships stub providers only (live vendors land at C6). Metering (C2): at session close each connection records `voice_stt_ms` (ungated - capture open = billed, bytes at the known rate) / `voice_tts_chars` through `billing/tracker.ts` (the single metering writer; voice never writes a ledger), attributed to the verified token's org+user; voice turns audit through the one `logActivity` path (`voice.turn`/`voice.tts`, `source:'voice'`, refs only). NOT model egress - never imports `llm/`. |
 | `events/` | SSE manager (four streams), durable event queue, webhook ingress, trigger delivery. |
 | `agents/` | Agent SDK execution of user work: job lifecycle, context assembly, typed streaming, marker parsing. |
 | `apps/` | User-app pipeline: esbuild, registry, static serving + context injection, slugs, artifact backends, backups. |
@@ -192,6 +192,15 @@ write time so historical events re-total identically. `GET /billing/breakdown` g
 model against the three configured tier models - a match runs AND meters at that tier (EXPERT ~20x
 FAST cost); any other model keeps the FAST clamp. This deliberately un-clamps EXPERT so the
 strict-JSON planner and thinking-heavy builds do not starve on FAST.
+
+Non-token usage (mega-run C2, BRIEF §5 "Shared surface"): quantities that are not tokens ride the
+SAME single writer (`recordUsageCounters` in `billing/tracker.ts`) into the sibling append-only
+`usage_events` ledger - one doc per (source, org, session), `_id` = `<source>:<orgId>:<sessionId>`, org+user
+attributed, `counters` an open map keyed by canonical counter names. Today: `voice_stt_ms` and
+`voice_tts_chars` as SEPARATE counters with NO token conversion (they never move the token meter,
+credit, or `token_events`). Part D's assistant-turn metering extends this by adding a counter key
+under its own `source` - one coherent schema, no new ledger concept, no migration. Activity rows
+carry the same counter names verbatim in `usageCounts` (A5 vocabulary memo rule 3).
 
 ## Diagrams
 

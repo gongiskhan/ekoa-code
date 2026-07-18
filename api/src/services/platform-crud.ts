@@ -222,6 +222,10 @@ export function registoEntry(a: ActivityLogDoc) {
     timestamp: a.timestamp,
     ...(targetIds.length > 0 ? { targetIds } : {}),
     ...(a.metadata ? { metadata: a.metadata } : {}),
+    // Per-event usage amounts (C2): counter names verbatim from the metering ledger
+    // (voice.turn -> voice_stt_ms, voice.tts -> voice_tts_chars) - the shared RegistoEntry
+    // `usageCounts` field, previously never emitted.
+    ...(a.usageCounts ? { usageCounts: a.usageCounts } : {}),
     orgId: a.orgId,
   };
 }

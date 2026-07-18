@@ -6,6 +6,7 @@
  */
 export {
   recordTokenEvent,
+  recordUsageCounters,
   computeMetered,
   setUsageNotifier,
   setPlatformBilleeResolver,
@@ -13,6 +14,7 @@ export {
   readGlobalOverageEnabled,
   writeGlobalOverageEnabled,
   type TokenEventInput,
+  type UsageCountersInput,
   type AttributionKind,
   type Tier,
   type BillingAccountDoc,

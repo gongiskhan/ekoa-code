@@ -5,9 +5,11 @@
  * (§6.5.3 shape), and folds the metered total into the billee's `billing_accounts` meter
  * with a lazy 30-day period reset (§6.6.2), CAS-safe credit deduction, and a fire-and-forget
  * usage push (§6.7). Non-Anthropic surfaces (STT, Pipedream) ride the same recorder (§6.5.6).
+ * Non-token usage counters (voice, mega-run C2) ride `recordUsageCounters` below - same single
+ * writer, separate `usage_events` ledger, never token-converted.
  */
 import { randomUUID } from 'node:crypto';
-import { tokenEvents, billingAccounts, settings, users } from '../data/stores.js';
+import { tokenEvents, usageEvents, billingAccounts, settings, users } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 import { billingConfig, cacheReadFactor, periodMs, type Tier, tierWeight } from './constants.js';
 
@@ -239,4 +241,52 @@ export async function recordTokenEvent(e: TokenEventInput): Promise<{ metered: n
   }
 
   return { metered };
+}
+
+// ---------------------------------------------------------------------------
+// Non-token usage counters (mega-run C2; BRIEF §5 "Shared surface"). The SAME single
+// metering writer records quantities that are NOT tokens: today the voice counters
+// (voice_stt_ms, voice_tts_chars) per org per session, as SEPARATE counters - decided,
+// NO token conversion, never folded into the token meter / credit math above. One
+// `usage_events` doc per (source, session), upserted so a re-recorded session close is
+// idempotent. ONE COHERENT SCHEMA by design: Part D's assistant-turn metering (D6) adds
+// a counter key under its own `source` on this same record shape through this same
+// function - a new counter never needs a new ledger concept or a migration.
+// ---------------------------------------------------------------------------
+
+export interface UsageCountersInput {
+  /** Org attribution, from the VERIFIED token of the session - never client-supplied. */
+  orgId: string;
+  /** User attribution, from the verified token (token_events' billee naming). */
+  billeeUserId: string;
+  sessionId: string;
+  /** Producing surface: 'voice' today; D6 adds its own. */
+  source: string;
+  /** Canonical counter name -> amount. Non-finite / non-positive entries are dropped. */
+  counters: Record<string, number>;
+  /** injectable clock for tests; default Date.now() */
+  now?: number;
+}
+
+/** Record one session's non-token usage counters. Returns { recorded: false } when no
+ *  counter survives sanitisation (a zero-usage session writes no ledger row). */
+export async function recordUsageCounters(e: UsageCountersInput): Promise<{ recorded: boolean }> {
+  const counters: Record<string, number> = {};
+  for (const [name, amount] of Object.entries(e.counters)) {
+    if (Number.isFinite(amount) && amount > 0) counters[name] = Math.round(amount);
+  }
+  if (Object.keys(counters).length === 0) return { recorded: false };
+  await usageEvents.put({
+    // Org-scoped key: server-minted session ids do not collide across orgs, but keying by
+    // org too keeps per-org idempotency correct by construction (a reused id can never
+    // overwrite another org's usage row).
+    _id: `${e.source}:${e.orgId}:${e.sessionId}`,
+    orgId: e.orgId,
+    billeeUserId: e.billeeUserId,
+    sessionId: e.sessionId,
+    source: e.source,
+    counters,
+    timestamp: e.now ?? Date.now(),
+  });
+  return { recorded: true };
 }

@@ -77,6 +77,10 @@
     "C3": {
       "status": "passed",
       "at": "2026-07-18T08:46:53Z"
+    },
+    "C2": {
+      "status": "passed",
+      "at": "2026-07-18T09:39:15Z"
     }
   },
   "globalGate": {

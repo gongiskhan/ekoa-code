@@ -32,6 +32,8 @@ export interface VoiceSessionRecord {
    *  resolution is per-language, so this is the LAST resolved key. */
   provider: string;
   startedAt: string;
+  /** STT: the negotiated PCM sample rate (Hz) - the known rate `sttMsOf` bills bytes at. */
+  sampleRate: number;
   /** STT: total binary PCM bytes received (C2 derives voice_stt_ms at the known rate). */
   audioInBytes: number;
   /** TTS: total characters submitted for synthesis (C2's voice_tts_chars input). */
@@ -48,6 +50,7 @@ export function openVoiceSession(input: {
   userId: string;
   username: string;
   provider: string;
+  sampleRate?: number;
 }): VoiceSessionRecord {
   const record: VoiceSessionRecord = {
     sessionId: randomUUID(),
@@ -57,12 +60,27 @@ export function openVoiceSession(input: {
     username: input.username,
     provider: input.provider,
     startedAt: new Date().toISOString(),
+    sampleRate: input.sampleRate ?? 16_000,
     audioInBytes: 0,
     ttsChars: 0,
     turns: 0,
   };
   active.set(record.sessionId, record);
   return record;
+}
+
+/** The wire format is ALWAYS 16 kHz linear16 mono (BRIEF §5: the worklet downsamples to 16 kHz
+ *  before the socket, whatever the device AudioContext rate). Billing is pinned to this canonical
+ *  rate, NOT the client-declared `sample_rate` query (which only configures the provider stream) -
+ *  so a client cannot fabricate its metered duration by claiming a different rate. */
+export const BILLING_SAMPLE_RATE = 16_000;
+
+/** The C2 billing derivation (BRIEF §5, decided): v1 is UNGATED - capture open = billed, so
+ *  billed STT milliseconds are the received linear16 mono PCM bytes at the canonical wire rate
+ *  (2 bytes per sample), not a VAD-gated subset and not a client-declared rate. Pure so tests
+ *  pin the arithmetic. */
+export function sttMsOfBytes(audioInBytes: number): number {
+  return Math.round((audioInBytes * 1000) / (BILLING_SAMPLE_RATE * 2));
 }
 
 export function closeVoiceSession(sessionId: string): void {

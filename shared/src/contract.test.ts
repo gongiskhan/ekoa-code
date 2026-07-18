@@ -287,8 +287,17 @@ describe('shared contract - security ratchet (G12)', () => {
     expect(VoiceSttClientMessage.safeParse({ type: 'close_stream' }).success).toBe(true);
     expect(VoiceSttServerMessage.safeParse({ type: 'audio', data: 'AAAA' }).success).toBe(false);
 
+    // C2: turn_committed annotates the last finished turn with its chat-message REF (never
+    // text); an empty ref is not a ref.
+    expect(VoiceSttClientMessage.safeParse({ type: 'turn_committed', transcriptMessageId: 'm1', mode: 'talking' }).success).toBe(true);
+    expect(VoiceSttClientMessage.safeParse({ type: 'turn_committed', transcriptMessageId: 'm1' }).success).toBe(true);
+    expect(VoiceSttClientMessage.safeParse({ type: 'turn_committed', transcriptMessageId: '' }).success).toBe(false);
+    expect(VoiceSttClientMessage.safeParse({ type: 'turn_committed', transcriptMessageId: 'm1', mode: 'shouting' }).success).toBe(false);
+
     // TTS: say/clear up; ready/speaking/audio_end/cleared/error down. Barge-in is {clear}.
     expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: 'Olá.', lang: 'pt-PT', turnId: 't1' }).success).toBe(true);
+    // C2: say may carry the spoken sheet's ref for the voice.tts audit row.
+    expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: 'Olá.', lang: 'pt-PT', sheetId: 'sh1' }).success).toBe(true);
     expect(VoiceTtsClientMessage.safeParse({ type: 'clear' }).success).toBe(true);
     expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: '', lang: 'pt-PT' }).success).toBe(false);
     expect(VoiceTtsClientMessage.safeParse({ type: 'say', text: 'Hi', lang: 'fr' }).success).toBe(false);
@@ -300,5 +309,31 @@ describe('shared contract - security ratchet (G12)', () => {
       { type: 'cleared' },
       { type: 'error', code: 'VOICE_PROVIDER_ERROR', message: 'Erro no serviço de voz. Tente novamente.' },
     ]) expect(VoiceTtsServerMessage.safeParse(msg).success, JSON.stringify(msg)).toBe(true);
+  });
+
+  it('RegistoEntry represents the voice vocabulary rows with their usageCounts (mega-run C2)', async () => {
+    const { RegistoEntry, RegistoListResponse } = await import('./registo.js');
+    // A5 vocabulary memo: voice.turn carries voice_stt_ms, voice.tts carries voice_tts_chars -
+    // usageCounts keys reuse the metering counter names VERBATIM; metadata is refs only.
+    const turn = {
+      actor: 'u1', username: 'ana', actionType: 'voice.turn', timestamp: '2026-07-18T10:00:00.000Z',
+      targetIds: ['sess-1', 'msg-42'],
+      metadata: { source: 'voice', sessionId: 'sess-1', transcriptMessageId: 'msg-42', mode: 'talking', lang: 'pt-PT', turn: 1 },
+      usageCounts: { voice_stt_ms: 61_500 },
+      orgId: 'orgA',
+    };
+    const tts = {
+      actor: 'u1', username: 'ana', actionType: 'voice.tts', timestamp: '2026-07-18T10:00:01.000Z',
+      targetIds: ['sess-1'],
+      metadata: { source: 'voice', sessionId: 'sess-1', provider: 'stub', lang: 'pt-PT', sheetId: 'sh1' },
+      usageCounts: { voice_tts_chars: 87 },
+      orgId: 'orgA',
+    };
+    for (const row of [turn, tts]) {
+      expect(RegistoEntry.safeParse(row).success, JSON.stringify(row)).toBe(true);
+    }
+    expect(RegistoListResponse.safeParse({ items: [turn, tts], total: 2 }).success).toBe(true);
+    // usageCounts is numeric amounts only - a stringly count is a shape defect, not data.
+    expect(RegistoEntry.safeParse({ ...turn, usageCounts: { voice_stt_ms: '61500' } }).success).toBe(false);
   });
 });

@@ -3,6 +3,15 @@ import { z } from 'zod';
 import { Id, IsoTimestamp, listResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
+/**
+ * One activity row. `actionType` = `<category>.<type>` under the ONE event vocabulary (A5
+ * memo, run 20260717-190134): `app-assistant.action.<outcome>` (landed), `voice.turn` +
+ * `voice.tts` (C2 - a voice turn logs like any agent action, `source:'voice'` + refs in
+ * metadata, never transcript/audio bodies), `portal.*` (Part E). `usageCounts` keys reuse the
+ * metering-ledger counter names VERBATIM (memo rule 3) - e.g. `voice.turn` carries
+ * `voice_stt_ms`, `voice.tts` carries `voice_tts_chars`; the ledger and the activity row
+ * never invent two names for one quantity. Vocabulary extension is additive only.
+ */
 export const RegistoEntry = z
   .object({
     actor: Id,

@@ -91,6 +91,10 @@ export interface ActivityLogDoc extends Doc {
   type: string;
   timestamp: string;
   metadata?: Record<string, unknown>;
+  /** Per-event usage amounts, keys reusing the metering counter names VERBATIM (A5 vocabulary
+   *  memo rule 3): the ledger and the activity row never invent two names for one quantity
+   *  (e.g. voice.turn -> { voice_stt_ms }, voice.tts -> { voice_tts_chars }). */
+  usageCounts?: Record<string, number>;
 }
 /** Change-requests queue (operator-run H4). A user's request to change a served app; the app
  *  OWNER's org-admins read + convert it. `orgId` is the isolation boundary (owner org for a
@@ -160,6 +164,28 @@ export const jobs = new Store<Doc>('jobs');
 export const settings = new Store<SettingsDoc>('settings');
 export const userSettings = new Store<UserSettingsDoc>('user_settings');
 export const tokenEvents = new Store<Doc>('token_events');
+/**
+ * Non-token usage ledger (mega-run C2; BRIEF §5 "Shared surface" - one coherent schema).
+ * The append-only sibling of `token_events` for quantities that are NOT tokens and are NEVER
+ * converted into the token meter: today the voice counters (`voice_stt_ms`, `voice_tts_chars`),
+ * per org per session as separate counters. One doc per (source, session), `_id` =
+ * `<source>:<orgId>:<sessionId>`; `counters` is an open map keyed by the canonical counter names, so
+ * Part D's assistant-turn metering (D6) extends this by adding a counter key under its own
+ * `source` - a new counter never needs a new collection, a migration, or a new ledger concept.
+ * Written ONLY by `billing/tracker.ts` (`recordUsageCounters`, the single metering writer).
+ */
+export interface UsageEventDoc extends Doc {
+  orgId: string;
+  /** Attributed user (from the verified token), mirroring token_events' billee naming. */
+  billeeUserId: string;
+  sessionId: string;
+  /** Which product surface produced the usage: 'voice' today; D6 adds its own. */
+  source: string;
+  /** Canonical counter name -> integer amount, e.g. { voice_stt_ms, voice_tts_chars }. */
+  counters: Record<string, number>;
+  timestamp: number;
+}
+export const usageEvents = new Store<UsageEventDoc>('usage_events');
 export const billingAccounts = new Store<Doc>('billing_accounts');
 export const automations = new Store<Doc>('automations');
 export const automationRuns = new Store<Doc>('automation_runs');
