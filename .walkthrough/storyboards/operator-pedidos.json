@@ -1,0 +1,341 @@
+{
+  "title": "Pedidos de alteração",
+  "project": "ekoa",
+  "folder": "operator",
+  "video": {
+    "width": 1280,
+    "height": 800,
+    "fps": 30
+  },
+  "segments": [
+    {
+      "type": "title",
+      "id": "intro",
+      "text": "Pedidos de alteração",
+      "subtitle": "Quem não pode editar, pede - e o administrador converte num clique",
+      "duration": 2.8,
+      "reflectFlag": true
+    },
+    {
+      "type": "browser",
+      "id": "user-app",
+      "baseURL": "http://localhost:4111",
+      "startPath": "/apps/8fded896-9944-4f04-83c4-9f231081af91/",
+      "authState": ".walkthrough/auth-user.json",
+      "beats": [
+        {
+          "id": "user-open",
+          "caption": "A Joana usa a aplicação, mas não tem permissões de edição",
+          "expectedScreen": "the assistant panel open WITHOUT an admin badge, showing a 'Pedir alteração' button",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 30000
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-launcher"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-request-open",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-request-open",
+            "highlight": true
+          },
+          "hold": 3800
+        },
+        {
+          "id": "req-compose",
+          "caption": "Pode pedir a alteração ao administrador",
+          "expectedScreen": "the request compose form ('Não pode editar esta aplicação, mas pode pedir uma alteração ao administrador.')",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-request-open"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-request-textarea",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-request-intro",
+            "text": "pedir uma alteração",
+            "highlight": true
+          },
+          "hold": 4000
+        },
+        {
+          "id": "req-send",
+          "caption": "O pedido segue para a fila do administrador",
+          "expectedScreen": "the confirmation note 'Pedido enviado ao administrador. Obrigado.'",
+          "actions": [
+            {
+              "type": "fill",
+              "selector": ".ekoa-assistant-request-textarea",
+              "text": "Adicione um campo de telefone a cada tarefa, por favor."
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-request-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-request[data-request-phase=\"note\"]",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-request",
+            "text": "Pedido enviado ao administrador.",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "title",
+      "id": "bridge",
+      "text": "E no Ekoa?",
+      "subtitle": "Um pedido recusado nunca é um beco sem saída",
+      "duration": 2.2
+    },
+    {
+      "type": "browser",
+      "id": "chat-refusal",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat",
+      "authState": ".walkthrough/auth-user.json",
+      "beats": [
+        {
+          "id": "chat-ask",
+          "caption": "No Ekoa, a Joana pede uma aplicação nova",
+          "expectedScreen": "the chat composer with the build request sent",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "textarea",
+              "timeout": 60000
+            },
+            {
+              "type": "fill",
+              "selector": "textarea",
+              "text": "Cria uma aplicação de férias."
+            },
+            {
+              "type": "click",
+              "selector": "[title=\"Enviar mensagem\"]"
+            }
+          ],
+          "assert": {
+            "selector": "text:aplicação de férias",
+            "highlight": true
+          },
+          "hold": 2800
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "chat-wait",
+      "continue": true,
+      "speed": 8,
+      "runTimeoutMs": 420000,
+      "beats": [
+        {
+          "id": "analysing",
+          "caption": "O pedido é analisado...",
+          "expectedScreen": "the chat processing the request until the refusal with a file-request button appears",
+          "holdUntil": {
+            "selector": "testid:chat-refusal-file",
+            "timeout": 300000
+          },
+          "holdAfter": 1000
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "chat-file",
+      "continue": true,
+      "beats": [
+        {
+          "id": "refusal",
+          "caption": "Sem permissão para criar aplicações - mas nunca um beco sem saída",
+          "expectedScreen": "the refusal message with a 'Pedir ao administrador' button",
+          "assert": {
+            "selector": "testid:chat-refusal-file",
+            "highlight": true
+          },
+          "hold": 4500
+        },
+        {
+          "id": "file-it",
+          "caption": "Um clique: o pedido já está na fila do administrador",
+          "expectedScreen": "the confirmation 'Pedido enviado ao administrador.'",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "testid:chat-refusal-file"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:chat-refusal-filed",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": "testid:chat-refusal-filed",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "title",
+      "id": "admin-bridge",
+      "text": "Do outro lado",
+      "subtitle": "A fila de pedidos do administrador",
+      "duration": 2.2
+    },
+    {
+      "type": "browser",
+      "id": "queue",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/pedidos",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        {
+          "id": "rows",
+          "caption": "Os pedidos da Joana, na fila do administrador",
+          "expectedScreen": "the Pedidos table with two open rows from joana.silva (phone field + vacations app)",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "testid:pedidos-table",
+              "timeout": 60000
+            }
+          ],
+          "assert": {
+            "selector": "testid:pedidos-table",
+            "highlight": true
+          },
+          "hold": 5000
+        },
+        {
+          "id": "convert",
+          "caption": "Converter: o pedido torna-se uma revisão real da aplicação",
+          "expectedScreen": "the phone-field request row converting (spinner) then leaving the open list",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "[data-testid=\"pedidos-table\"] tr:has-text(\"telefone\") button:has-text(\"Converter\")"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 4000
+            }
+          ],
+          "assert": {
+            "selector": "testid:pedidos-table",
+            "highlight": false
+          },
+          "hold": 3200
+        },
+        {
+          "id": "converted",
+          "caption": "Convertido - e ligado à revisão que acabou de começar",
+          "expectedScreen": "the status filter on Convertidos showing the phone-field row with a Convertido badge",
+          "actions": [
+            {
+              "type": "select",
+              "selector": "testid:pedidos-filter-status",
+              "value": "converted"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[data-testid=\"pedidos-table\"] tr:has-text(\"telefone\")",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": "testid:pedidos-table",
+            "text": "telefone",
+            "highlight": true
+          },
+          "hold": 4500
+        },
+        {
+          "id": "dismiss",
+          "caption": "Ou dispensar com um clique, com registo",
+          "expectedScreen": "back on Abertos, dismissing the vacations request",
+          "actions": [
+            {
+              "type": "select",
+              "selector": "testid:pedidos-filter-status",
+              "value": "open"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[data-testid=\"pedidos-table\"] tr:has-text(\"férias\")",
+              "timeout": 20000
+            },
+            {
+              "type": "click",
+              "selector": "[data-testid=\"pedidos-table\"] tr:has-text(\"férias\") button:has-text(\"Dispensar\")"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 2500
+            },
+            {
+              "type": "select",
+              "selector": "testid:pedidos-filter-status",
+              "value": "dismissed"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[data-testid=\"pedidos-table\"] tr:has-text(\"férias\")",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": "testid:pedidos-table",
+            "text": "férias",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "evidence",
+      "id": "converted-api",
+      "command": "node .walkthrough/storyboards/api-evidence.mjs pedidos converted",
+      "source": "GET /api/v1/change-requests?status=converted",
+      "kind": "json",
+      "caption": "O pedido convertido ficou ligado à revisão (jobId)",
+      "expectedScreen": "a JSON change-request with status converted and a jobId, that line highlighted",
+      "highlight": {
+        "match": "jobId",
+        "note": "a revisão criada a partir do pedido da Joana"
+      },
+      "hold": 5000
+    },
+    {
+      "type": "title",
+      "id": "outro",
+      "text": "Pedir · Converter · Dispensar",
+      "subtitle": "Nenhum pedido fica sem caminho",
+      "duration": 2.4
+    }
+  ]
+}

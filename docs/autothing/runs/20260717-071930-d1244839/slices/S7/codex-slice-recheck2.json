@@ -1,0 +1,1 @@
+{"verdict":"approve","summary":"Count_tokens collision is closed: both gateway paths use the shared disjoint deriveVaultSession namespaces, and the count_tokens crafted gwkey session_id now lands in a billee-scoped csid vault. Static review only; no material remaining hole found.","findings":[]}

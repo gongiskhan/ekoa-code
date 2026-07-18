@@ -23,6 +23,7 @@ import { checkRateCaps, recordSpend, type RateCapKey, type RateCapVerdict } from
 import { users } from '../data/stores.js';
 import {
   type LlmAttribution,
+  type UserWorkAgentType,
   requireAttribution,
   assertNotPlatformCall,
   billeeOf,
@@ -130,8 +131,11 @@ async function capKeyFor(billeeUserId: string): Promise<RateCapKey> {
 /** Pre-admission gate (§6.6.4): resolve the cap key, check the sliding window, and throw a typed
  *  LlmRateCapError WITHOUT recording when a cap is tripped. Returns the key so the caller records
  *  spend against the same identity AFTER metering succeeds. */
-async function admitOrThrow(billeeUserId: string): Promise<RateCapKey> {
-  const key = await capKeyFor(billeeUserId);
+async function admitOrThrow(
+  billeeUserId: string,
+  keyScope?: { keyId: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } },
+): Promise<RateCapKey> {
+  const key: RateCapKey = { ...(await capKeyFor(billeeUserId)), ...(keyScope ?? {}) };
   const verdict = checkRateCaps(key);
   if (!verdict.ok) throw new LlmRateCapError(verdict);
   return key;
@@ -148,11 +152,18 @@ async function admitOrThrow(billeeUserId: string): Promise<RateCapKey> {
  *  per-call key so a session-less call still gets a consistent, isolated vault. `ephemeral` is
  *  true for the per-call fallback so the entry can clear that vault as soon as it is done (a
  *  session vault is left to live for the conversation + its TTL, §17.5). */
-function sessionKeyFor(attribution: LlmAttribution): { sessionId: string; ephemeral: boolean } {
+async function sessionKeyFor(attribution: LlmAttribution): Promise<{ sessionId: string; ephemeral: boolean }> {
   if (attribution.kind === 'user_work' && attribution.sessionId) {
-    return { sessionId: attribution.sessionId, ephemeral: false };
+    // Same disjoint namespacing as the gateway path (S7): a conversation id is ORG-scoped
+    // (`csid:<org>:<conv>`, §18.4.3 "keys by {org, session}") so the hosted SDK turn and the
+    // delegated gateway turn - which the bridge deliberately shares a vault between (§17.5:
+    // bridge/provider sets meta.session_id = the conversation id) - derive the SAME vault key
+    // even for a same-org cross-user delegation, while no conversation id can collide with the
+    // reserved `gwkey:<keyId>` per-key vault space.
+    const orgId = (await orgResolver(billeeOf(attribution))) ?? '';
+    return { sessionId: `csid:${orgId}:${attribution.sessionId}`, ephemeral: false };
   }
-  return { sessionId: `sess_${newCorrelationId()}`, ephemeral: true };
+  return { sessionId: `eph:${newCorrelationId()}`, ephemeral: true };
 }
 
 /** Build the anonymisation context: resolve the billee's org, load its ruleset, and stamp the
@@ -196,6 +207,10 @@ export interface RestCallParams {
   /** The Messages API request body (already carrying the FAST model). */
   payload: Record<string, unknown>;
   stream: boolean;
+  /** Provider REST path under /v1/messages (S3, run 20260717): 'count_tokens' selects
+   *  /v1/messages/count_tokens; absent (or 'messages') keeps the Messages endpoint. An optional
+   *  field so every existing full-object test fake stays compilable and behavior-identical. */
+  endpoint?: 'messages' | 'count_tokens';
   signal?: AbortSignal;
 }
 
@@ -460,7 +475,8 @@ const defaultTransport: ChokepointTransport = {
 
   async messages(p) {
     const isOauth = p.mode === 'oauth';
-    const url = `${p.providerBaseUrl}/v1/messages${isOauth ? '?beta=true' : ''}`;
+    const suffix = p.endpoint === 'count_tokens' ? '/count_tokens' : '';
+    const url = `${p.providerBaseUrl}/v1/messages${suffix}${isOauth ? '?beta=true' : ''}`;
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'anthropic-version': '2023-06-01',
@@ -730,7 +746,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     // Anonymise the model-bound text BEFORE the transport (§17.3): prompt + system prompt
     // tokenize into one session vault; the streamed response is de-tokenized on the way back.
     const correlationId = newCorrelationId();
-    const sk = sessionKeyFor(attribution);
+    const sk = await sessionKeyFor(attribution);
     const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
     const promptAnon = anonymize(opts.prompt, ctx);
     const handle: VaultHandle = promptAnon.handle;
@@ -866,7 +882,7 @@ export async function runOneShot(opts: OneShotOptions, attribution: LlmAttributi
   const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
   // Anonymise prompt + system BEFORE the transport; de-tokenize the returned text (§17.3).
   const correlationId = newCorrelationId();
-  const sk = sessionKeyFor(attribution);
+  const sk = await sessionKeyFor(attribution);
   const ctx = await anonContextFor(attribution, sk.sessionId, correlationId);
   const promptAnon = anonymize(opts.prompt, ctx);
   const systemAnon = opts.systemPrompt ? anonymize(opts.systemPrompt, ctx) : undefined;
@@ -925,16 +941,23 @@ export interface MessagesResult {
  * type cannot express a higher tier, §6.2.2). One forced-token-refresh retry on 401 (carried).
  * Rejects with LlmAbortedError on abort.
  */
-export async function completeFast(opts: MessagesOptions, attribution: LlmAttribution): Promise<MessagesResult> {
+export async function completeFast(
+  opts: MessagesOptions,
+  attribution: LlmAttribution,
+  /** Per-key cap scope (S4a): present when the caller acts for a gateway-key principal, so the
+   *  key window composes here exactly as on the messages path. Optional - existing callers
+   *  are untouched. */
+  capScope?: { keyId: string; keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number } },
+): Promise<MessagesResult> {
   requireAttribution(attribution);
   assertNotPlatformCall(attribution);
-  const capKey = await admitOrThrow(billeeOf(attribution)); // §6.6.4 pre-admission cap
+  const capKey = await admitOrThrow(billeeOf(attribution), capScope); // §6.6.4 pre-admission cap (+ key window)
   const decision = decideForTier('FAST'); // FAST by construction
   const mode = (await currentMode()) ?? 'oauth';
   // Anonymise the model-bound request body BEFORE the transport (§17.3); the response body is
   // de-tokenized before the text is parsed.
   const correlationId = newCorrelationId();
-  const sk = sessionKeyFor(attribution);
+  const sk = await sessionKeyFor(attribution);
   const anonCtx = await anonContextFor(attribution, sk.sessionId, correlationId);
   const anon = anonymizeRequestBody(
     { messages: opts.messages, ...(opts.system ? { system: opts.system } : {}) },
@@ -1017,6 +1040,21 @@ function matchConfiguredTier(requestedModel: string): Tier | null {
   return null;
 }
 
+/** The tier a stock model-id FAMILY maps to (S2, run 20260717): opus -> EXPERT,
+ *  sonnet -> WORKHORSE, haiku -> FAST. The family name must appear as a whole TOKEN of the id
+ *  (segments split on non-alphanumerics) — never as a within-word substring, so an unrelated id
+ *  like `opusculum-1` keeps the historical FAST clamp (codex S2 finding: raw `includes` let any
+ *  substring bypass the clamp and carry reasoning params). Case-insensitive, tolerant of
+ *  `claude-` prefixes, generation infixes, dated suffixes, and the `[1m]` marker. Exact
+ *  configured-tier match always wins first. Checked opus -> sonnet -> haiku for determinism. */
+export function matchFamilyTier(requestedModel: string): Tier | null {
+  const tokens = requestedModel.replace(/\[1m\]$/, '').toLowerCase().split(/[^a-z0-9]+/);
+  if (tokens.includes('opus')) return 'EXPERT';
+  if (tokens.includes('sonnet')) return 'WORKHORSE';
+  if (tokens.includes('haiku')) return 'FAST';
+  return null;
+}
+
 export interface GatewayForwardResult {
   status: number;
   headers: Record<string, string | string[]>;
@@ -1026,6 +1064,18 @@ export interface GatewayForwardResult {
   metered: number;
   /** The correlation id the hosted anon-audit was recorded under (ch18 §18.5 S6 join key). */
   correlationId: string;
+  /** The tier/model that actually ran (S4a: the gateway's Registo row records them). */
+  wireTier: Tier;
+  wireModel: string;
+}
+
+/** Per-call options for gateway forwards (S4a). Every field optional so existing callers are
+ *  untouched: agentType defaults to the historical 'pi-fast-loop'; keyId/keyCaps add the
+ *  per-key rate-cap window for user-key principals. */
+export interface GatewayForwardOpts {
+  agentType?: UserWorkAgentType;
+  keyId?: string;
+  keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number };
 }
 
 /** A content block is an empty text block when it is `{type:'text', text: ''|whitespace}`. The
@@ -1063,6 +1113,42 @@ function stripEmptyTextBlocks(messages: unknown): { value: unknown; removed: num
   return removed > 0 ? { value, removed } : { value: messages, removed: 0 };
 }
 
+/**
+ * Derive the anonymisation vault session key for a gateway call (S7). The three namespaces are
+ * DISJOINT so no client-supplied value can reach another principal's vault (codex S7 High):
+ *  - `csid:<billee>:<session_id>` - a client-supplied metadata.session_id, BILLEE-scoped so a
+ *    crafted "gwkey:<victim>" can never equal the reserved per-key vault name;
+ *  - `gwkey:<keyId>` - a gateway-KEY principal (keyId from the verified seam, unforgeable), so
+ *    one stock-client session shares one vault across its agentic tool loop;
+ *  - `eph:<correlationId>` - truly session-less + key-less, a fresh per-request vault.
+ * `ephemeral` is true only for the last case (the finally clears exactly those).
+ */
+/**
+ * Derive the anonymisation vault session key for a gateway call (S7). Who may open the SHARED
+ * `csid:<org>:<conv>` conversation vault is the crux (S7 fresh-review F6): a stock client can put
+ * ANY string in metadata.session_id, and the platform's conversation ownership is USER-scoped
+ * (`ownedSession` -> 404 for a non-owner), so an org-scoped conversation vault opened from an
+ * untrusted client-supplied id is a re-identification side channel around that check. Rules, most
+ * specific first:
+ *  - a gateway-KEY principal (Claude Code): `gwkey:<keyId>` (its OWN unforgeable namespace; a
+ *    client session_id, if any, is subscoped UNDER the key - never a conversation vault);
+ *  - the BRIDGE/daemon path (`trustedSession`, i.e. a server-passed correlationId, ownership
+ *    pre-validated by bridge/provider): the shared `csid:<org>:<conv>` vault (§18.4.3), matching
+ *    the hosted SDK turn's sessionKeyFor;
+ *  - a direct client with an UNTRUSTED session_id (no key, no correlationId - e.g. a JWT gateway
+ *    user): `csid:<org>:usr:<billee>:<id>` - billee-ISOLATED, so it can never name another user's
+ *    conversation vault;
+ *  - otherwise ephemeral `eph:<correlationId>`.
+ * `ephemeral` is true only for the last case (the finally clears exactly those).
+ */
+function deriveVaultSession(args: { metaSessionId: unknown; orgId: string; billeeUserId: string; keyId?: string; correlationId: string; trustedSession: boolean }): { sessionId: string; ephemeral: boolean } {
+  const sid = typeof args.metaSessionId === 'string' ? args.metaSessionId : undefined;
+  if (args.keyId) return { sessionId: sid ? `gwkey:${args.keyId}:${sid}` : `gwkey:${args.keyId}`, ephemeral: false };
+  if (sid && args.trustedSession) return { sessionId: `csid:${args.orgId}:${sid}`, ephemeral: false };
+  if (sid) return { sessionId: `csid:${args.orgId}:usr:${args.billeeUserId}:${sid}`, ephemeral: false };
+  return { sessionId: `eph:${args.correlationId}`, ephemeral: true };
+}
+
 export async function proxyGatewayMessages(
   reqBody: Record<string, unknown>,
   billeeUserId: string,
@@ -1071,8 +1157,10 @@ export async function proxyGatewayMessages(
    *  ledger row share ONE correlation id — the join key (§18.4.5, §18.8 criterion 5). Absent for a
    *  non-bridge caller: mint a fresh one as before. */
   correlationIdIn?: string,
+  opts?: GatewayForwardOpts,
 ): Promise<GatewayForwardResult> {
-  const capKey = await admitOrThrow(billeeUserId); // §6.6.4 pre-admission cap (empty => platform admin)
+  // §6.6.4 pre-admission cap (empty => platform admin); a key principal adds its per-key window.
+  const capKey = await admitOrThrow(billeeUserId, opts?.keyId ? { keyId: opts.keyId, keyCaps: opts.keyCaps } : undefined);
   // Tier resolution (rc-1 amendment to §6.5.4, decision logged 2026-07-11): a requested model
   // that IS one of the three configured tier models runs at THAT tier — the chokepoint no longer
   // silently degrades its own subprocess traffic (the Agent-SDK spawns ride this gateway via
@@ -1080,8 +1168,12 @@ export async function proxyGatewayMessages(
   // regardless of the configured tier, and the strict-JSON planner starved). Any OTHER model
   // string keeps the historical behavior: clamp to FAST and strip model-tuned reasoning params.
   const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
+  // Resolution order (S2, run 20260717): exact configured-tier match -> model-FAMILY match
+  // (opus/sonnet/haiku -> EXPERT/WORKHORSE/FAST, so stock Claude Code ids land on real tiers)
+  // -> the historical FAST clamp for anything else.
   const matchedTier = matchConfiguredTier(requestedModel);
-  const wireTier: Tier = matchedTier ?? 'FAST';
+  const resolvedTier = matchedTier ?? matchFamilyTier(requestedModel);
+  const wireTier: Tier = resolvedTier ?? 'FAST';
   const decision = decideForTier(wireTier);
   const mode = (await currentMode()) ?? 'oauth';
   const isStream = reqBody.stream === true;
@@ -1094,8 +1186,15 @@ export async function proxyGatewayMessages(
   const correlationId = correlationIdIn ?? newCorrelationId();
   const orgId = (await orgResolver(billeeUserId)) ?? '';
   const ruleset = await resolveRuleset(orgId);
-  const hasSession = typeof meta.session_id === 'string';
-  const sessionId = hasSession ? (meta.session_id as string) : `sess_${correlationId}`;
+  // Vault session key (S7, run 20260717). Order: an explicit conversation id wins; else, for a
+  // gateway-KEY principal (a stock Anthropic client like Claude Code, which sends no session_id)
+  // key the vault by the KEY id so ALL of that key's requests share ONE vault across the agentic
+  // tool loop - a deny-list literal then tokenizes consistently turn-to-turn and prior-turn tokens
+  // detokenize reliably (without this, each request opened a fresh vault and the CLI saw a
+  // "directory that does not exist"; findings gateway-vault-per-request-instability). A stable
+  // vault persists to its 30-min TTL and is NOT cleared per request; only a truly ephemeral
+  // (no-session, no-key) vault is cleared in the finally.
+  const { sessionId, ephemeral: ephemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, keyId: opts?.keyId, correlationId, trustedSession: correlationIdIn !== undefined });
   const anonCtx: AnonymiseContext = {
     sessionId,
     ruleset,
@@ -1111,11 +1210,12 @@ export async function proxyGatewayMessages(
     if (GATEWAY_FORWARD_FIELDS.has(key)) forwarded[key] = value;
     else droppedFields.push(key);
   }
-  // Reasoning params travel ONLY with a matched tier model: when the wire model is the one the
-  // client targeted, its thinking/output_config are valid for it. On a clamp the client's
-  // model-tuned params target THEIR model, not the FAST wire model - which can reject them
-  // outright (observed live: 400 "adaptive thinking is not supported on <model>").
-  if (matchedTier === null) {
+  // Reasoning params travel with a matched OR family-matched tier model: the wire model is the
+  // tier the client targeted (exactly or by family), so its thinking/output_config are valid for
+  // it. Only on the unknown-model clamp do the client's model-tuned params target THEIR model,
+  // not the FAST wire model - which can reject them outright (observed live: 400 "adaptive
+  // thinking is not supported on <model>").
+  if (resolvedTier === null) {
     for (const key of ['thinking', 'output_config']) {
       if (key in forwarded) {
         delete forwarded[key];
@@ -1171,9 +1271,11 @@ export async function proxyGatewayMessages(
     // loop acts on the REAL value, not a placeholder that does not exist on disk.
     resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
   } finally {
-    // Clear the no-session vault on EVERY exit incl. a transport error (§17.5, Codex checkpoint M1):
-    // the re-identification key must not linger to TTL after a failed gateway call.
-    if (!hasSession) endSession(anon.handle);
+    // Clear a truly EPHEMERAL (no-session, no-key) vault on EVERY exit incl. a transport error
+    // (§17.5, Codex checkpoint M1): the re-identification key must not linger to TTL after a
+    // failed gateway call. A stable per-key vault (S7) is deliberately kept - it must persist
+    // across the Claude Code session's requests; it TTL-sweeps on its own (30 min).
+    if (ephemeralVault) endSession(anon.handle);
   }
 
   // Diagnostics honesty (run s7, D6): a terminal provider status is CLASSED onto /health's
@@ -1193,7 +1295,7 @@ export async function proxyGatewayMessages(
       // principal (empty billee) is platform overhead — attributed `platform`, which the tracker
       // ledgers against the platform admin (§6.3 rule 3), never user_work with an empty billee.
       const attribution: LlmAttribution = billeeUserId
-        ? { kind: 'user_work', agentType: 'pi-fast-loop', billeeUserId }
+        ? { kind: 'user_work', agentType: opts?.agentType ?? 'pi-fast-loop', billeeUserId }
         : { kind: 'platform', agentType: 'pi-fast-loop', justification: 'ekoa-local gateway API-key principal — platform overhead billed to the platform admin (§6.5.4)' };
       // Metered at the tier that actually ran (§6.3): a matched EXPERT call bills EXPERT weight.
       metered = await meter(attribution, wireTier, decision.model, usage);
@@ -1202,5 +1304,113 @@ export async function proxyGatewayMessages(
       unmetered = true; // parse-or-skip (§6.5.4); the caller bumps gateway_unmetered_call
     }
   }
-  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId };
+  return { status: resp.status, headers: resp.headers, body: resp.body, unmetered, metered, correlationId, wireTier, wireModel: decision.model };
+}
+
+// --- count_tokens forwarding (S3, run 20260717) --------------------------------------------
+
+/** count_tokens forward allowlist — the documented count_tokens request surface ONLY (the
+ *  strict endpoint 400s on extras): no stream, no max_tokens, no sampling params, no metadata. */
+const COUNT_TOKENS_FORWARD_FIELDS: ReadonlySet<string> = new Set([
+  'model', 'messages', 'system', 'tools', 'tool_choice', 'thinking', 'output_config',
+  'mcp_servers', 'betas',
+]);
+
+/** Fields a stock Messages client (Claude Code) sends on EVERY call that count_tokens simply
+ *  does not accept — dropping them is routine, so they are excluded from the unexpected-key
+ *  warning (same honesty rule as the metadata session_id exclusion above). */
+const COUNT_TOKENS_ROUTINE_DROPS: ReadonlySet<string> = new Set([
+  'stream', 'max_tokens', 'metadata', 'temperature', 'top_k', 'top_p', 'stop_sequences',
+  'service_tier', 'cache_control', 'container',
+]);
+
+export interface GatewayCountTokensResult {
+  status: number;
+  headers: Record<string, string | string[]>;
+  body: string;
+  correlationId: string;
+}
+
+/**
+ * Forward a count_tokens request through the chokepoint (S3, run 20260717). Same credential
+ * injection and FULL anonymisation posture as proxyGatewayMessages (request tokenized before
+ * transport, response detokenized, ephemeral vault cleared), and the same tier resolution so
+ * the count is honest for the model that will actually run. Deliberately NO admitOrThrow, NO
+ * allowance gate, NO metering: count_tokens is free upstream and produces no usage, and Claude
+ * Code polls it continuously for context management — counting it against the shared per-user
+ * call window would starve real turns (decision 2026-07-17; abuse residual in docs/security.md).
+ */
+export async function proxyGatewayCountTokens(
+  reqBody: Record<string, unknown>,
+  billeeUserId: string,
+  /** The verified gateway key id for a key principal (S7 consistency, codex checkpoint): a key
+   *  principal keys the vault by gwkey:<keyId> on count_tokens exactly as on messages, so invariant
+   *  2 holds uniformly. Absent for non-key callers. */
+  keyId?: string,
+): Promise<GatewayCountTokensResult> {
+  const requestedModel = typeof reqBody.model === 'string' ? reqBody.model : '';
+  const matchedTier = matchConfiguredTier(requestedModel);
+  const resolvedTier = matchedTier ?? matchFamilyTier(requestedModel);
+  const wireTier: Tier = resolvedTier ?? 'FAST';
+  const decision = decideForTier(wireTier);
+  const mode = (await currentMode()) ?? 'oauth';
+  const meta = (reqBody.metadata as Record<string, unknown> | undefined) ?? {};
+
+  const correlationId = newCorrelationId();
+  const orgId = (await orgResolver(billeeUserId)) ?? '';
+  const ruleset = await resolveRuleset(orgId);
+  // count_tokens threads no keyId, so a client session_id is billee-scoped and everything else is
+  // ephemeral - the SAME disjoint namespacing as messages (S7 codex High: this sibling path must
+  // not let a crafted session_id open a reserved gwkey vault either).
+  const { sessionId, ephemeral: hasEphemeralVault } = deriveVaultSession({ metaSessionId: meta.session_id, orgId, billeeUserId, keyId, correlationId, trustedSession: false });
+  const anonCtx: AnonymiseContext = {
+    sessionId,
+    ruleset,
+    correlationId,
+    actor: { userId: billeeUserId, orgId, username: billeeUserId },
+  };
+  const anon = anonymizeRequestBody(reqBody, anonCtx);
+  const forwarded: Record<string, unknown> = {};
+  const droppedFields: string[] = [];
+  for (const [key, value] of Object.entries(anon.body)) {
+    if (COUNT_TOKENS_FORWARD_FIELDS.has(key)) forwarded[key] = value;
+    else droppedFields.push(key);
+  }
+  if (resolvedTier === null) {
+    for (const key of ['thinking', 'output_config']) {
+      if (key in forwarded) {
+        delete forwarded[key];
+        droppedFields.push(`${key} (fast-clamp)`);
+      }
+    }
+  }
+  const scrubbed = stripEmptyTextBlocks(forwarded.messages);
+  if (scrubbed.removed > 0) forwarded.messages = scrubbed.value;
+  const scrubbedSystem = stripEmptyTextBlocksFromContent(forwarded.system);
+  if (scrubbedSystem.removed > 0) forwarded.system = scrubbedSystem.value;
+  // A '(fast-clamp)'-suffixed drop is routine on every unknown-model call (S3 fresh review F3).
+  const noisyDrops = droppedFields.filter((k) => !COUNT_TOKENS_ROUTINE_DROPS.has(k.replace(/ \(fast-clamp\)$/, '')));
+  if (noisyDrops.length > 0) {
+    console.warn(`[llm] gateway count_tokens: dropped unexpected top-level fields: ${noisyDrops.join(', ')}`);
+  }
+  const payload: Record<string, unknown> = {
+    ...forwarded,
+    model: decision.model.replace(/\[1m\]$/, ''),
+  };
+
+  let resp: RawRestResponse;
+  try {
+    resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await getSecret(), payload, stream: false, endpoint: 'count_tokens' });
+    if (resp.status === 401) {
+      resp = await transport.messages({ providerBaseUrl: providerBaseUrl(), mode, secret: await forceRefresh(), payload, stream: false, endpoint: 'count_tokens' });
+    }
+    resp = { ...resp, body: deanonymize(resp.body, anon.handle) };
+  } finally {
+    // Same vault hygiene as proxyGatewayMessages: never let an ephemeral re-identification key
+    // linger to TTL after the call (a client-scoped csid: vault persists, like messages).
+    if (hasEphemeralVault) endSession(anon.handle);
+  }
+  const errClass = providerErrorClassOf(resp.status);
+  if (errClass && errClass !== 'transient' && errClass !== 'rate_limit') noteProviderError(errClass);
+  return { status: resp.status, headers: resp.headers, body: resp.body, correlationId };
 }

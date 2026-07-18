@@ -1,0 +1,28 @@
+{
+  "slice": "S3",
+  "title": "count_tokens forwarding + live 50MB gateway body limit",
+  "updatedAt": "2026-07-17T10:55:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "profile": "build",
+  "commits": ["4813886", "dad8e9f"],
+  "retries": { "limit": 5, "used": 2 },
+  "gates": {
+    "tests": { "cmd": "npm test --workspace api", "exit": 0, "at": "2026-07-17T10:27:00Z", "durationMs": 423950, "summary": "full lane green at 4813886 (incl. new count-tokens 7 + body-limit 5 + contract 2); fix delta dad8e9f verified by the 34-test affected suites + typecheck" },
+    "typecheck": { "cmd": "npm run typecheck", "exit": 0, "at": "2026-07-17T10:41:00Z", "durationMs": 20000, "summary": "clean (re-run after fix)" },
+    "lint": { "cmd": "npm run lint", "exit": 0, "at": "2026-07-17T10:17:00Z", "durationMs": 15000, "summary": "clean" },
+    "securityWall": { "gitleaks": { "exit": 0 }, "semgrep": { "exit": 0, "findings": 0 }, "depAudit": { "exit": 0, "high": 0, "critical": 0 }, "chokepointGrep": { "exit": 0 }, "at": "2026-07-17T10:17:00Z", "durationMs": 46000, "summary": "clean" },
+    "build": { "cmd": "npm run build --workspaces --if-present", "exit": 0, "at": "2026-07-17T10:28:00Z", "durationMs": 180000, "summary": "green (shared rebuilt for the new descriptors; api dist rebuilt before evidence)" },
+    "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "evidence": ["reviewer ran typecheck + 8 suites + chokepoint grep + live probes itself (incl. a case-variant 2MB probe and a >50MB 413 probe)"], "at": "2026-07-17T10:40:00Z", "durationMs": 1100000, "findings": ["[Low F1, FIXED dad8e9f] parser-skip predicate case-sensitive while Express routing is not - /API/v1/llm still hit the global 1mb parser (CONV-2 on the Anthropic surface)", "[Low F2, FIXED] 413-branch and vault-cleared clauses had no committed pins - both added", "[nit F3, FIXED] fast-clamp drops logged as unexpected"], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/agent-adversarial-review-report.md" },
+    "codexSliceReview": { "verdict": "approve", "by": "gpt-5.5", "actualModel": "gpt-5.5", "effort": "high", "at": "2026-07-17T10:50:00Z", "durationMs": 480000, "findings": ["[Medium, FIXED dad8e9f] bare startsWith parser exemption also exempted /api/v1/llmfoo -> exact-subtree + case-insensitive predicate", "[Low, FIXED] error handler shaped ANY 4xx-status error -> gated on the body-parser signature (string type + 4xx status)"], "recheck": { "verdict": "approve", "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/codex-slice-recheck.json" }, "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/codex-slice-review.json" },
+    "adversarialTest": { "status": "skipped", "reason": "kind-conditional" },
+    "designAudit": { "status": "skipped", "reason": "kind-conditional" },
+    "video": { "status": "verified", "mode": "evidence", "verifiedAt": "2026-07-17T10:54:00Z", "flagged": false, "link": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/evidence.cast", "evidence": "asciinema live demo vs real gatewayRouter: count_tokens 200 {input_tokens:1234} via endpoint selector, wire model family-resolved, stream/max_tokens dropped, deny-listed party TOKENIZED on the wire, zero token_events, billing-blocked owner counts (200) while real message 402s, malformed JSON answers Anthropic-shaped 400. Every beat machine-asserted against the cast text.", "videoBytes": 1170, "videoSha256": "e414592fcac47fc5e43a7961ac2c6e87444eb0bb79b0bc5e285fb1ca78e72c5d" }
+  },
+  "notes": [
+    "Carried finding closed: the S1-review dead-50MB-limit defect fixed here (global parser skips /api/v1/llm, gateway parses its own bodies, Anthropic-shaped parse errors).",
+    "Fresh-review residual documented in security.md: uncapped count_tokens allows uncapped short-lived vault allocation via client session_ids (TTL-swept, tiny)."
+  ],
+  "blockers": []
+}

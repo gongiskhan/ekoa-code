@@ -146,7 +146,7 @@ async function main() {
   await intro.waitFor({ state: 'visible', timeout: 10_000 });
   const introText = (await intro.innerText()).toLowerCase();
   assert(introText.includes('três formas'), `first-open lead missing "três formas": "${introText}"`);
-  for (const cap of ['apresentar', 'ensinar', 'oper']) {
+  for (const cap of ['mostrar', 'ensinar', 'oper']) {
     assert(introText.includes(cap), `first-open lead missing capability "${cap}": "${introText}"`);
   }
   const exampleCount = await page.locator('.ekoa-assistant-example').count();

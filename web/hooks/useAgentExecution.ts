@@ -175,11 +175,22 @@ export function useAgentExecution(sessionId: string | null) {
             error,
           }));
           store.getState().setIsExecuting(false);
+          // Refused-build feed (BRIEF 9a): a capability refusal is never a dead end. Carry
+          // the pre-drafted request on the error message so the bubble offers to file it to
+          // the org-admin queue (change-requests fileFromRefusal). Only the two app-change
+          // capabilities route there; anything else is a plain error.
+          const details = result.error.details as { capability?: unknown } | undefined;
+          const capability = result.error.status === 403 && typeof details?.capability === 'string'
+            ? details.capability
+            : null;
+          const refusal = capability === 'canBuildApps' || capability === 'canEditApps'
+            ? { text: message, ...(options.artifactInstanceId ? { appId: options.artifactInstanceId } : {}) }
+            : undefined;
           // Never surface raw provider/engine error text to the user.
           store.getState().addMessage(sessionId, {
             role: 'system',
             content: sanitizeUserFacingError(error.message, useI18nStore.getState().language),
-            metadata: { isEssential: true, type: 'error' },
+            metadata: { isEssential: true, type: 'error', ...(refusal ? { refusal } : {}) },
           });
           return;
         }

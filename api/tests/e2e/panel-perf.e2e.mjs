@@ -233,6 +233,11 @@ async function main() {
   // PROVES the lazy-mounted panel actually fetched the route.
   let demosFetches = 0;
   await page.route('**/api/demos/**', (route) => {
+    // Availability probe (always-200 {available}) vs the spec fetch: count only SPEC
+    // fetches so the fulfil-count gate keeps proving the panel fetched the tour itself.
+    if (route.request().url().endsWith('/availability')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true }) });
+    }
     demosFetches += 1;
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) });
   });

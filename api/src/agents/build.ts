@@ -531,6 +531,45 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       // clock inside the runner (verifyWallClockMs), not the build timers (cleared above).
       const verifyMarkers = new MarkerProcessor();
       const verifyRedactor = new StreamingIdentityRedactor();
+      // Per-action live progress (operator ask 2026-07-14): the verify agent marks each
+      // discrete action with ">> " (verify-runner buildPrompt). The scan is MARKER-anchored,
+      // not line-anchored: live runs showed the model gluing ">>" to the end of the previous
+      // sentence ("Vou registar o pedido.>> A ir para Aprovações"), which a startsWith('>>')
+      // line parser silently drops. An action runs from a ">>" to the next newline or the
+      // next ">>". Chunks are scanned AFTER the same marker+identity scrub as the thinking
+      // copy; each action re-emits as a same-status plan_step - the client shows it beside
+      // the spinner and in the Output tab without adding chat messages.
+      const VERIFY_ACTION_MAX = 200;
+      let verifyLineBuf = '';
+      const emitVerifyActions = (clean: string): void => {
+        verifyLineBuf += clean;
+        for (;;) {
+          const start = verifyLineBuf.indexOf('>>');
+          if (start < 0) {
+            // No marker: keep one char so a ">" pair split across chunks still matches.
+            verifyLineBuf = verifyLineBuf.slice(-1);
+            return;
+          }
+          const rest = verifyLineBuf.slice(start + 2);
+          const nl = rest.indexOf('\n');
+          const next = rest.indexOf('>>');
+          const end = nl >= 0 && (next < 0 || nl < next) ? nl : next;
+          if (end < 0) {
+            // Incomplete action: wait for more text, bounded so a marker mid-prose
+            // cannot grow the buffer without ever emitting.
+            verifyLineBuf = verifyLineBuf.slice(start);
+            if (verifyLineBuf.length > 2 + VERIFY_ACTION_MAX) {
+              const action = verifyLineBuf.slice(2, 2 + VERIFY_ACTION_MAX).trim();
+              if (action) sink.planStep('verifying', action);
+              verifyLineBuf = '';
+            }
+            return;
+          }
+          const action = rest.slice(0, end).trim().slice(0, VERIFY_ACTION_MAX);
+          if (action) sink.planStep('verifying', action);
+          verifyLineBuf = rest.slice(end + (nl >= 0 && end === nl ? 1 : 0));
+        }
+      };
       const verdict = await verifyRunner({
         artifactId,
         projectDir,
@@ -540,9 +579,26 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         request: input.description,
         onProgress: (text) => {
           const clean = verifyRedactor.push(verifyMarkers.push(text));
-          if (clean) sink.thinking(clean);
+          if (clean) {
+            sink.thinking(clean);
+            emitVerifyActions(clean);
+          }
         },
       });
+      // Flush the scrub chain's hold-back tails (MarkerProcessor + redactor buffer partial
+      // input to catch split markers) - without this the final characters of the verify
+      // narration, and any last un-terminated ">> " action line, were silently dropped.
+      const verifyTail = verifyMarkers.end();
+      const verifyTailClean = verifyRedactor.push(verifyTail.text) + verifyRedactor.end();
+      if (verifyTailClean) {
+        sink.thinking(verifyTailClean);
+        emitVerifyActions(verifyTailClean);
+      }
+      if (verifyLineBuf.trim().startsWith('>>')) {
+        const lastAction = verifyLineBuf.trim().slice(2).trim().slice(0, VERIFY_ACTION_MAX);
+        if (lastAction) sink.planStep('verifying', lastAction);
+      }
+      verifyLineBuf = '';
       if (verdict.ran && !verdict.passed) {
         if (finalizeOnce(jobId)) {
           const message = `A verificação da aplicação falhou. ${verdict.note ?? ''}`.trim();

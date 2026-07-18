@@ -1,0 +1,1 @@
+{"verdict":"approve","summary":"Both S3 findings are closed: parser exemption is exact-subtree/case-insensitive, gateway error shaping is limited to body-parser-style 4xx errors, and no new violation of the original invariants was found.","findings":[]}

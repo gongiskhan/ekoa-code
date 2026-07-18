@@ -1,0 +1,1 @@
+{"verdict":"approve","summary":"All four S6 findings are closed in df3d4c6. The reviewed driver gates exit on failures, keeps TOLERATED and KNOWN LIMITATION visibly distinct from OK/PASS, and node --check passes.","findings":[]}

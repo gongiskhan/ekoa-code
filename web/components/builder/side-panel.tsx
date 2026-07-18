@@ -538,12 +538,20 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
                       </button>
                     </div>
                   )}
+                  {/* Deliberately NO sandbox attribute (decision 2026-07-14): with both
+                      allow-scripts and allow-same-origin the sandbox is escapable (Chrome
+                      warned on every load, incl. each about:blank hot-reload), and dropping
+                      allow-same-origin breaks the injected __ekoa runtime (same-origin data
+                      fetches, the CHIPS SSO cookie, storage). Real isolation is the ORIGIN
+                      SPLIT (apps on the api origin, :4111 in dev / api.<domain> in prod) +
+                      the /apps frame-ancestors allowlist (api/src/security-headers.ts).
+                      Matches the other two preview surfaces (DemoTourProvider,
+                      artifact-preview-overlay), which never carried a sandbox. */}
                   <iframe
                     ref={iframeRef}
                     src={previewReady ? (previewUrlWithToken || previewUrl) : undefined}
                     className="w-full h-full border-0"
                     title="App Preview"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
                     onLoad={handleIframeLoad}
                     onError={handleIframeError}
                   />

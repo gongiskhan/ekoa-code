@@ -1,0 +1,526 @@
+{
+  "title": "Modo de edição",
+  "project": "ekoa",
+  "folder": "operator",
+  "video": {
+    "width": 1280,
+    "height": 800,
+    "fps": 30
+  },
+  "segments": [
+    {
+      "type": "title",
+      "id": "intro",
+      "text": "Modo de edição",
+      "subtitle": "O administrador altera a aplicação por pedido - com revisão e reversão",
+      "duration": 2.8,
+      "reflectFlag": true
+    },
+    {
+      "type": "browser",
+      "id": "detect",
+      "baseURL": "http://localhost:4111",
+      "startPath": "/apps/8fded896-9944-4f04-83c4-9f231081af91/",
+      "authState": ".walkthrough/auth.json",
+      "beats": [
+        {
+          "id": "use-app",
+          "caption": "A aplicação em uso: a equipa regista as tarefas do dia",
+          "expectedScreen": "the task-list app with two tasks just added to the list",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 30000
+            },
+            {
+              "type": "fill",
+              "selector": "placeholder:Adicionar uma nova tarefa",
+              "text": "Rever o contrato da D. Amélia"
+            },
+            {
+              "type": "click",
+              "selector": "button:Adicionar"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 700
+            },
+            {
+              "type": "fill",
+              "selector": "placeholder:Adicionar uma nova tarefa",
+              "text": "Preparar a audiência de sexta-feira"
+            },
+            {
+              "type": "click",
+              "selector": "button:Adicionar"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 700
+            }
+          ],
+          "assert": {
+            "selector": "[data-demo-target=\"app-content\"]",
+            "text": "Rever o contrato da D. Amélia",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "admin",
+          "caption": "Sessão de administrador: o assistente deteta as permissões",
+          "expectedScreen": "the assistant panel open with an 'Administrador' badge in the header",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-launcher"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-admin-badge",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-admin-badge",
+            "highlight": true
+          },
+          "hold": 3800
+        },
+        {
+          "id": "discover",
+          "caption": "Nada muda sozinho: ativar o modo de edição é uma escolha explícita",
+          "expectedScreen": "the discovery note offering to activate edit mode",
+          "assert": {
+            "selector": ".ekoa-assistant-discovery",
+            "text": "modo de edição",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "enable",
+          "caption": "Modo de edição ativado",
+          "expectedScreen": "the edit-mode section open with a change textarea and 'Preparar alteração'",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-discovery-cta"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit",
+            "highlight": true
+          },
+          "hold": 3200
+        },
+        {
+          "id": "compose",
+          "caption": "Descreva a alteração por palavras suas",
+          "expectedScreen": "the confirmation step asking 'Vou preparar esta alteração como uma revisão. Confirma?'",
+          "actions": [
+            {
+              "type": "fill",
+              "selector": ".ekoa-assistant-edit-textarea",
+              "text": "Adiciona dois botões: 'Concluir todas' (marca todas as tarefas como concluídas) e 'Limpar concluídas' (apaga da lista as tarefas concluídas)."
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit[data-edit-phase=\"confirm\"]",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit",
+            "text": "Confirma?",
+            "highlight": true
+          },
+          "hold": 4000
+        },
+        {
+          "id": "confirm",
+          "caption": "Confirmada: começa uma revisão real da aplicação",
+          "expectedScreen": "the edit section in the running state with a spinner",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit-running",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit-running",
+            "highlight": true
+          },
+          "hold": 3200
+        }
+      ]
+    },
+    {
+      "type": "title",
+      "id": "wait1",
+      "text": "≈ 15 minutos depois",
+      "subtitle": "A revisão fica pronta",
+      "duration": 2
+    },
+    {
+      "type": "browser",
+      "id": "preview",
+      "continue": true,
+      "runTimeoutMs": 420000,
+      "waitBefore": {
+        "selector": ".ekoa-assistant-edit-preview",
+        "timeout": 1500000
+      },
+      "beats": [
+        {
+          "id": "diff",
+          "caption": "Revisão pronta: versão anterior e nova, lado a lado",
+          "expectedScreen": "the edit preview showing 'Versão anterior' / 'Nova versão' shas with Aprovar and Reverter buttons",
+          "assert": {
+            "selector": ".ekoa-assistant-edit-preview",
+            "highlight": true
+          },
+          "hold": 4500
+        },
+        {
+          "id": "approve",
+          "caption": "Aprovar mantém a alteração na aplicação",
+          "expectedScreen": "the edit section showing 'Alteração mantida.'",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit[data-edit-phase=\"note\"]",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit",
+            "text": "Alteração mantida.",
+            "highlight": true
+          },
+          "hold": 4000
+        },
+        {
+          "id": "reload1",
+          "caption": "Ao recarregar, a alteração aprovada está na aplicação",
+          "expectedScreen": "the reloaded task-list app now showing 'Concluir todas' and 'Limpar concluídas' buttons",
+          "actions": [
+            {
+              "type": "waitTimeout",
+              "ms": 15000
+            },
+            {
+              "type": "goto",
+              "path": "http://localhost:4111/apps/8fded896-9944-4f04-83c4-9f231081af91/"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 60000
+            },
+            {
+              "type": "waitFor",
+              "selector": "button:Concluir todas",
+              "timeout": 45000
+            },
+            {
+              "type": "waitFor",
+              "selector": "button:Limpar concluídas",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": "button:Limpar concluídas",
+            "highlight": true
+          },
+          "hold": 4500
+        },
+        {
+          "id": "use-it",
+          "caption": "E funciona: concluir todas, limpar concluídas - lista vazia",
+          "expectedScreen": "the task list empty ('Ainda sem tarefas') after using both buttons",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "button:Concluir todas"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 1000
+            },
+            {
+              "type": "click",
+              "selector": "button:Limpar concluídas"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 1000
+            }
+          ],
+          "assert": {
+            "selector": "[data-demo-target=\"app-content\"]",
+            "text": "Ainda sem tarefas",
+            "highlight": true
+          },
+          "hold": 4500
+        }
+      ]
+    },
+    {
+      "type": "evidence",
+      "id": "versions",
+      "command": "node .walkthrough/storyboards/api-evidence.mjs versions 8fded896-9944-4f04-83c4-9f231081af91 5",
+      "source": "GET /api/v1/artifacts/:id/versions",
+      "kind": "json",
+      "caption": "Cada revisão fica registada no histórico de versões da aplicação",
+      "expectedScreen": "a JSON versions list with sha entries, the newest highlighted",
+      "highlight": {
+        "match": "\"sha\"",
+        "note": "a revisão aprovada é a nova versão ativa"
+      },
+      "hold": 5000
+    },
+    {
+      "type": "browser",
+      "id": "second",
+      "beats": [
+        {
+          "id": "compose2",
+          "caption": "Outra alteração - desta vez, para reverter",
+          "expectedScreen": "a second change (rename the app title) confirmed and running",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 30000
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-launcher"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-editswitch",
+              "timeout": 20000
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-editswitch"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit-textarea",
+              "timeout": 15000
+            },
+            {
+              "type": "fill",
+              "selector": ".ekoa-assistant-edit-textarea",
+              "text": "Muda o título principal da aplicação para 'As Minhas Tarefas'."
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit[data-edit-phase=\"confirm\"]",
+              "timeout": 15000
+            },
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-primary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit-running",
+              "timeout": 20000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit-running",
+            "highlight": true
+          },
+          "hold": 3400
+        }
+      ],
+      "baseURL": "http://localhost:4111",
+      "startPath": "/apps/8fded896-9944-4f04-83c4-9f231081af91/",
+      "authState": ".walkthrough/auth.json"
+    },
+    {
+      "type": "title",
+      "id": "wait2",
+      "text": "≈ 15 minutos depois",
+      "subtitle": "A segunda revisão fica pronta",
+      "duration": 2
+    },
+    {
+      "type": "browser",
+      "id": "rollback",
+      "continue": true,
+      "runTimeoutMs": 600000,
+      "waitBefore": {
+        "selector": ".ekoa-assistant-edit-preview",
+        "timeout": 1500000
+      },
+      "beats": [
+        {
+          "id": "diff2",
+          "caption": "Segunda revisão pronta: reveja - e desta vez, reverta",
+          "expectedScreen": "the edit preview again with new shas and Aprovar / Reverter buttons",
+          "assert": {
+            "selector": ".ekoa-assistant-edit-preview",
+            "highlight": true
+          },
+          "hold": 4200
+        },
+        {
+          "id": "revert",
+          "caption": "Um clique em Reverter - e a revisão nunca entra",
+          "expectedScreen": "the edit section showing 'Alteração revertida.'",
+          "actions": [
+            {
+              "type": "click",
+              "selector": ".ekoa-assistant-edit-secondary"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-edit[data-edit-phase=\"note\"]",
+              "timeout": 30000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-edit",
+            "text": "Alteração revertida.",
+            "highlight": true
+          },
+          "hold": 4200
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "aftermath",
+      "continue": true,
+      "speed": 8,
+      "runTimeoutMs": 600000,
+      "beats": [
+        {
+          "id": "rebuild1",
+          "caption": "A versão anterior é reposta e a aplicação reconstruída (acelerado)",
+          "expectedScreen": "the served app reloading while the restored version is rebuilt",
+          "actions": [
+            {
+              "type": "waitTimeout",
+              "ms": 25000
+            },
+            {
+              "type": "goto",
+              "path": "http://localhost:4111/apps/8fded896-9944-4f04-83c4-9f231081af91/"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 60000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-launcher",
+            "highlight": false
+          },
+          "hold": 16000
+        },
+        {
+          "id": "rebuild2",
+          "caption": "Quase pronta...",
+          "expectedScreen": "the served app reloading again as the rebuild lands",
+          "actions": [
+            {
+              "type": "waitTimeout",
+              "ms": 25000
+            },
+            {
+              "type": "goto",
+              "path": "http://localhost:4111/apps/8fded896-9944-4f04-83c4-9f231081af91/"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 60000
+            }
+          ],
+          "assert": {
+            "selector": ".ekoa-assistant-launcher",
+            "highlight": false
+          },
+          "hold": 16000
+        },
+        {
+          "id": "reverted",
+          "caption": "Título original de volta - e os botões aprovados continuam a funcionar",
+          "expectedScreen": "the reloaded app with the ORIGINAL title, a fresh task added, and the approved 'Concluir todas' / 'Limpar concluídas' buttons visible",
+          "actions": [
+            {
+              "type": "waitTimeout",
+              "ms": 25000
+            },
+            {
+              "type": "goto",
+              "path": "http://localhost:4111/apps/8fded896-9944-4f04-83c4-9f231081af91/"
+            },
+            {
+              "type": "waitFor",
+              "selector": ".ekoa-assistant-launcher",
+              "timeout": 60000
+            },
+            {
+              "type": "fill",
+              "selector": "placeholder:Adicionar uma nova tarefa",
+              "text": "Arquivar o processo n.º 42"
+            },
+            {
+              "type": "click",
+              "selector": "button:Adicionar"
+            },
+            {
+              "type": "waitFor",
+              "selector": "button:Limpar concluídas",
+              "timeout": 30000
+            }
+          ],
+          "assert": {
+            "selector": "button:Limpar concluídas",
+            "highlight": true
+          },
+          "hold": 40000
+        }
+      ]
+    },
+    {
+      "type": "title",
+      "id": "outro",
+      "text": "Pedir · Rever · Aprovar ou Reverter",
+      "subtitle": "Alterações reais, sempre com rede de segurança",
+      "duration": 2.4
+    }
+  ]
+}

@@ -466,6 +466,32 @@ export function appSsoRouter(deps: AppSsoDeps): Router {
     });
   });
 
+  // --- session probe: 200 in BOTH states (identity when signed in, data:null when not) --
+  // The quiet sibling of /me for on-load probes (shared/src/served-app.ts appSsoSession):
+  // a signed-out visitor's app load must produce ZERO non-2xx console noise, and the
+  // browser logs every non-2xx regardless of JS handling. /me keeps its byte-compat 401
+  // (docs/api-contract.md §3.9) - only the scaffold wiring (bases/app/wiring/
+  // protocol-client.ts) is repointed here; window.__ekoa.whoami and every already-built
+  // bundle keep calling /me. Lives under /api/app-sso so the Path-scoped session cookie
+  // rides along. Precedent: app-assistant whoami's always-200 { admin: false }.
+  r.get('/session', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const scope = await resolveCanonical(req);
+    const token = scope ? readNamedCookie(req, appSsoCookieName(scope.appId)) : undefined;
+    const session = scope && token ? await findValidAppSession(token, scope.appId) : null;
+    if (!session) { res.json({ success: true, data: null }); return; }
+    res.json({
+      success: true,
+      data: {
+        email: session.email,
+        name: session.name || null,
+        oid: session.oid || null,
+        tid: session.tid || null,
+        canSendMail: Boolean(session.graphTokensEnc),
+      },
+    });
+  });
+
   // --- sign out — delete the session + clear the per-app cookie -----------------------
   r.post('/logout', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');

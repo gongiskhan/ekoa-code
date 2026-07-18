@@ -39,3 +39,13 @@
 - API serves dist: after api/src changes, rebuild + restart + re-provision credential before recording.
 - Dashboard keeps a persistent SSE (notifications + chat streams): prefer selector waits over networkidle-ish settles; settle each fresh page with a waitFor before its first caption beat.
 - Real model runs: chat legal answer ~60s; builds take minutes (use continue + speed/waitBefore); brand research ~1-2 min.
+
+## Operator-suite lessons (2026-07-14, 3 verified walkthroughs: panel / edit-mode / pedidos)
+- Fresh app-base apps are PRIVATE: plain /apps/<id>/ 410s until `PATCH /artifacts/:id {shareable:true}`; `visibility:'org'` additionally gates change-request filing + org-admin edit (both needed for the operator flows).
+- `POST /users` WITHOUT orgId puts the user in a NEW org - pass the admin's orgId explicitly (request-changes-journey pattern) or the pedido file 404s on cross-org isolation. Re-mint the auth state after recreating a user (the JWT carries sub+orgId).
+- Panel auth on :4111: craft storageState with `ekoa_token` on BOTH origins (:3000 + :4111) and strip `ekoa_orchestration` (stale session pointers 404 on camera). `playwright-cli state-save` resolves relative to the CALLER cwd - use absolute paths.
+- Recorder gotchas: `goto` paths inside continue segments MUST be absolute URLs (relative never navigates, beats fail downstream); a goto INSIDE a recorded segment poisons the NEXT continue segment's reattach ("produced no parseable result") - make the following segment FRESH (re-open with authState) instead; `text:X` waitFors can match a CLOSED select's option text (invisible - times out) - scope waits to `[data-testid=...] tr:has-text(...)`.
+- Edit-mode filming: the served page never auto-reloads after a patch run - approve/revert from the sha diff, THEN reload to show the effect; the post-RESTORE dist rebuild is LAZY (~60-90s) - bridge with a speed-8 continue segment of captioned reload cycles; generated task apps HIDE bulk buttons on an empty list - seed a row before asserting them.
+- Pedidos queue keeps take residue - dismiss stale open pedidos (POST /change-requests/:id/dismiss) between takes; the chat-refusal pedido carries the AGENT-drafted build description, not the user's literal message (by design).
+- This stack's patch runs took ~2-8 min (faster than the 12-17 min worst case); build the request text to name button labels in quotes so asserts are deterministic.
+- Stack ops: the model credential is per-boot (`provision-credential.mjs` with the token from ~/.config/ekoa/claude-credentials.json accessToken); panel-runtime.js and action-runtime-client.js are cached in memory at first serve/boot - asset fixes go live only on restart (restart wipes the DB: rebuild fixtures + re-provision + re-mint auth).

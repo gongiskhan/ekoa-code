@@ -47,6 +47,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored Monaco AMD tree (scripts/copy-monaco.mjs) - third-party minified assets.
+    "public/monaco/**",
   ]),
 ]);
 

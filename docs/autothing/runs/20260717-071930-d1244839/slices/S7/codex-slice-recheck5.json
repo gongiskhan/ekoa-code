@@ -1,0 +1,1 @@
+{"verdict":"approve","summary":"F6 appears closed: direct JWT/key/count_tokens paths cannot reach shared conversation vaults, bridge trusted-session sharing still works, gwkey remains server-derived, and cross-org bridge requests are rejected before vault access. Targeted tests could not run because the read-only sandbox blocked Vitest config temp-file creation.","findings":[]}

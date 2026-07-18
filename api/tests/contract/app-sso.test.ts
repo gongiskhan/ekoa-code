@@ -7,6 +7,7 @@ import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
 import { CollectionsEngine, appScope } from '../../src/data/collections-engine.js';
+import { AppSsoSessionResponse } from '@ekoa/shared';
 import { appSsoRouter } from '../../src/integrations/app-sso.js';
 import { m365ProxyRouter } from '../../src/integrations/m365-proxy.js';
 import { appCloudFilesRouter, type CloudFilesStatus } from '../../src/integrations/app-cloud-files.js';
@@ -145,6 +146,36 @@ describe('app-sso password auth: cookie mint, whoami, wrong password', () => {
 
     const signedOut = await api('/api/app-sso/me', { headers: { 'x-ekoa-app-id': 'app1' } });
     expect(signedOut.status).toBe(401);
+  });
+
+  it('session probe is 200 in BOTH states: identity with the cookie, data:null without — never a 401 (appSsoSession)', async () => {
+    // The quiet sibling of /me (operator ask 2026-07-14): the scaffold's on-load whoami must
+    // produce ZERO non-2xx console noise. /me keeps its byte-compat 401 (asserted above).
+    const anon = await api('/api/app-sso/session', { headers: { 'x-ekoa-app-id': 'app1' } });
+    expect(anon.status).toBe(200);
+    const anonParsed = AppSsoSessionResponse.safeParse(await anon.json());
+    expect(anonParsed.success).toBe(true);
+    if (anonParsed.success) expect(anonParsed.data.data).toBeNull();
+
+    const cookie = cookieFrom(await login('app1', 'ana@lex.pt', 'segredo123'));
+    const signedIn = await api('/api/app-sso/session', { headers: { 'x-ekoa-app-id': 'app1', cookie } });
+    expect(signedIn.status).toBe(200);
+    const inParsed = AppSsoSessionResponse.safeParse(await signedIn.json());
+    expect(inParsed.success).toBe(true);
+    if (inParsed.success) {
+      expect(inParsed.data.data?.email).toBe('ana@lex.pt');
+      expect(inParsed.data.data?.canSendMail).toBe(false);
+    }
+
+    // Post-logout: back to 200 data:null. And with no app header at all: still 200 null
+    // (a quiet non-oracle — deliberately more permissive than /me's 401, see route comment).
+    await api('/api/app-sso/logout', { method: 'POST', headers: { 'x-ekoa-app-id': 'app1', cookie } });
+    const out = await api('/api/app-sso/session', { headers: { 'x-ekoa-app-id': 'app1', cookie } });
+    expect(out.status).toBe(200);
+    const outParsed = AppSsoSessionResponse.safeParse(await out.json());
+    if (outParsed.success) expect(outParsed.data.data).toBeNull();
+    const noHeader = await api('/api/app-sso/session');
+    expect(noHeader.status).toBe(200);
   });
 
   it('wrong password → 401 invalid_credentials (and no cookie)', async () => {

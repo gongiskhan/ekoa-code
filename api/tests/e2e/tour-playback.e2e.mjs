@@ -253,6 +253,12 @@ async function main() {
   // cached/embedded tour) — a regression that stopped fetching would drop this to 0.
   let demosFetches = 0;
   await page.route('**/api/demos/**', (route) => {
+    // The panel's mount probe hits /:appId/availability (always-200 {available}); the
+    // PLAYER fetches /:appId for the spec. Count only SPEC fetches so the gate below
+    // still proves the panel fetched the tour itself.
+    if (route.request().url().endsWith('/availability')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true }) });
+    }
     demosFetches += 1;
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildTour(artifactId)) });
   });

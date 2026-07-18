@@ -376,6 +376,9 @@ export function useJobStream(
           const detail = event.detail as string | undefined;
           const stepDescription = event.description as string | undefined;
           setState(prev => ({ ...prev, phase }));
+          // Mirror the phase into the store's sessionJob so phase-gated UI (the FC-505
+          // verification banner) actually sees it — hook state alone never reached the store.
+          if (sessionId) useOrchestrationStore.getState().setSessionJob(sessionId, { phase });
 
           if (sessionId && phase !== lastPhaseRef.current) {
             lastPhaseRef.current = phase;
@@ -401,6 +404,22 @@ export function useJobStream(
 
             useOrchestrationStore.getState().setActivityMessage(sessionId, null);
             startFillerTimer(phase);
+          } else if (sessionId && (stepDescription || detail)) {
+            // Same-status repeat carrying a description: live progress narration (the verify
+            // stage's per-action lines, "A clicar em ..."). Updates the spinner label and logs
+            // to the Output tab — NEVER a chat message and never persisted (only status
+            // CHANGES become transcript entries above).
+            const narration = (stepDescription || detail) as string;
+            useOrchestrationStore.getState().setActivityMessage(sessionId, narration);
+            startFillerTimer(phase); // restart so the 4s filler rotation doesn't clobber it
+            const outputId = `${sessionId}-phase-${outputIdRef.current++}`;
+            addOutputToStore({
+              id: outputId,
+              timestamp: new Date().toISOString(),
+              type: 'status',
+              content: narration,
+              phase,
+            });
           }
           break;
         }

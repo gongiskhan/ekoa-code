@@ -1,0 +1,232 @@
+{
+  "project": "ekoa-code",
+  "runId": "20260717-071930-d1244839",
+  "runDir": "docs/autothing/runs/20260717-071930-d1244839",
+  "host": "Goncalos-MacBook-Pro",
+  "profile": "build",
+  "updatedAt": "2026-07-17T14:57:51Z",
+  "runLog": "RUN_LOG.md",
+  "runSpec": "docs/autothing/runs/20260717-071930-d1244839/RUN_SPEC.md",
+  "landing": "docs/autothing/runs/20260717-071930-d1244839/LANDING.md",
+  "gatesConfig": {
+    "test": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "codexSliceReview": true,
+    "design": true,
+    "walkthrough": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": true,
+    "deliberateRed": true,
+    "mutation": true,
+    "askQuestions": false,
+    "profile": "build"
+  },
+  "slices": [
+    {
+      "slice": "S1",
+      "title": "Heartbeat-and-replay SSE liveness",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S1/evidence.cast",
+      "videoBytes": 2252,
+      "videoSha256": "3629f628eb7dcced2f924d3188b33909c14856e7f0034deb06f022bb3bf37715",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T09:26:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S2",
+      "title": "Model family mapping",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S2/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S2/evidence.cast",
+      "videoBytes": 1795,
+      "videoSha256": "44ea25a75e5e08d1840d74b4991ddd23f346bc357341a43ad34198c020b796c9",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T10:18:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S3",
+      "title": "count_tokens forwarding",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S3/evidence.cast",
+      "videoBytes": 1170,
+      "videoSha256": "e414592fcac47fc5e43a7961ac2c6e87444eb0bb79b0bc5e285fb1ca78e72c5d",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T10:54:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S4a",
+      "title": "Per-user gateway keys (api)",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S4a/evidence.cast",
+      "videoBytes": 1447,
+      "videoSha256": "bc13e3cedbc7c8d8cdac4e4f750591201cb2d0b13cd89e4f7c5eb22ff1f70f48",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T11:53:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S4b",
+      "title": "Gateway keys settings UI",
+      "kind": "ui",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/gate-status.json",
+      "video": "http://100.108.210.116:8099/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/final.mp4",
+      "videoBytes": 1207843,
+      "videoSha256": "c23a4db045aeae7006b140fadac387e73bdbdee6b22a97d292a3802b86fbdd83",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T12:33:00Z",
+      "flagged": false,
+      "evidence": "/Users/ggomes/.walkthrough/runs/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/evidence.json"
+    },
+    {
+      "slice": "S7",
+      "title": "Stable gateway-session vault",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S7/evidence.cast",
+      "videoBytes": 1865,
+      "videoSha256": "ae332d935e7135129431d2261561c4430803f3d084a533b0524a3609ade04ad8",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T13:54:00Z",
+      "flagged": false
+    },
+    {
+      "slice": "S6",
+      "title": "Live stock-Claude-Code proof driver",
+      "kind": "api",
+      "status": "passed",
+      "gateStatus": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/gate-status.json",
+      "video": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/evidence.cast",
+      "videoBytes": 1919,
+      "videoSha256": "f393367b050e457aeefd0fb2b7c357bd94c05b79f9009ef39be94cb21e37eec8",
+      "videoMode": "evidence",
+      "verifiedAt": "2026-07-17T14:33:00Z",
+      "flagged": false
+    }
+  ],
+  "globalGate": {
+    "status": "passed",
+    "e2eAll": {
+      "cmd": "npm run gate:ledger (census 24/24) + committed drivers; the S6 OPERATOR-RUN driver is health-gated",
+      "exit": 0,
+      "note": "census green both directions; the S6 live driver ran PASS by hand (credentialed stack); npm run e2e (--run) is CI's executing gate"
+    },
+    "verifyApp": {
+      "via": "the S6 live stock-Claude-Code driver (drove the real gateway end-to-end) + the S4b Playwright spec (real UI)",
+      "verdict": "clean"
+    },
+    "build": {
+      "cmd": "npm run build --workspaces --if-present",
+      "exit": 0
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": 0
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": 0
+    },
+    "securityWall": {
+      "gitleaks": 0,
+      "semgrep": 0,
+      "depAudit": 0,
+      "note": "all changed-source trees (api/src, shared/src, web/*) clean; chokepoint+encryption+garrison grep gates clean; the full-repo --source . 42 hits are node_modules/gitignored-auth.json/evidence dirs, outside CI git-mode scope"
+    },
+    "decorrelatedVerification": {
+      "reviewAllApproved": true,
+      "pwTestAllPassed": true,
+      "note": "every slice got a fresh-context review approve (S1/S2/S3/S4a/S4b/S6/S7); S4b got a fresh independent Playwright test pass; api slices covered by the S6 batched live functional proof"
+    },
+    "codexSliceReview": {
+      "ran": 7,
+      "approved": 7,
+      "degraded": 0,
+      "status": "all-approved",
+      "note": "every slice ran the per-slice cross-model Codex pass (build profile); several drove real fixes (S2 substring, S3 parser+error-shape, S4a classify-admission, S4b revoke-guard, S7 6 HIGHs, S6 4 findings)"
+    },
+    "designAudit": {
+      "verdict": "clean",
+      "note": "S4b only ui slice; 3 audit rounds -> platform Table/Badge/useConfirm adoption"
+    },
+    "mutation": {
+      "status": "ran-scoped",
+      "score": 67.5,
+      "baseline": null,
+      "changedModulesOnly": true,
+      "note": "Stryker on the changed rate-caps.ts (per-key cap window): 102 killed / 49 survived / 13 no-cov = 67.5% covered. Survivors dominated by env-var-name string literals (num(\"EKOA_RATECAP_*\",default) -> num(\"\",default) survives because the default is used when the env is unset) and log-message text - non-behavioral; the per-key comparison LOGIC mutants were killed. Whole-repo mutation over gateway.ts was impractical (648 mutants x the heavy serial vitest project ~12min/full-run); its behaviour is proven by the once-per-run deliberate-red + the exhaustive per-slice dual reviews, each real finding shipped with a committed regression pin."
+    },
+    "deliberateRed": {
+      "status": "proven",
+      "gatesProven": [
+        "gate:chokepoint (exit 1 on planted api.anthropic.com ref outside llm/, exit 0 after revert)",
+        "gitleaks (exit 1, 1 leak on planted AWS key pair, exit 0 after revert)"
+      ],
+      "at": "2026-07-17T07:48:00Z"
+    },
+    "everySliceVideoVerified": true,
+    "builtinSecurityReview": {
+      "status": "issues-fixed",
+      "at": "2026-07-17T14:52:00Z",
+      "findings": [
+        "[Medium] unauthenticated 50MB pre-auth body buffering (S3 regression) - FIXED ee0df59 (authGate before largeJson; regression pin)",
+        "[Medium] gateway-anon-tooluse-fidelity can egress a MANGLED deny-list near-miss to the provider - RECLASSED with a confidentiality note (findings.md), repro owed, deeper fix is the existing follow-up"
+      ],
+      "clean": [
+        "credential custody (no secret logged/persisted/returned; sha256-as-id no timing oracle; web store no persist)",
+        "authorization (owner-scoped mint/list/revoke, uniform 404, no cross-user billing)",
+        "anonymisation vault keying - the three namespaces genuinely disjoint, trustedSession unforgeable from HTTP (ID-provenance traced)",
+        "egress chokepoint clean"
+      ],
+      "report": "docs/autothing/runs/20260717-071930-d1244839/security-review-report.md"
+    },
+    "codexCheckpoint": {
+      "status": "issues-fixed",
+      "scopes": [
+        {
+          "scope": "a-credential-authz",
+          "verdict": "issues-fixed",
+          "by": "codex/gpt-5.5",
+          "effort": "high",
+          "at": "2026-07-17T15:00:00Z",
+          "finding": "/classify buffered 50MB before auth (the authGate fix missed it) -> fixed 61dfa6a, recheck clean",
+          "report": "docs/autothing/runs/20260717-071930-d1244839/codex-checkpoint-a-recheck.json"
+        },
+        {
+          "scope": "b-vault-keying",
+          "verdict": "issues-fixed",
+          "by": "codex/gpt-5.5",
+          "effort": "high",
+          "at": "2026-07-17T15:07:00Z",
+          "finding": "count_tokens did not key key principals by gwkey:<keyId> (inconsistent with messages; not a bypass - untrusted path already billee-isolated) -> fixed 249f397, recheck clean",
+          "report": "docs/autothing/runs/20260717-071930-d1244839/codex-checkpoint-b-recheck.json"
+        },
+        {
+          "scope": "c-contract-egress",
+          "verdict": "clean",
+          "by": "codex/gpt-5.5",
+          "effort": "high",
+          "at": "2026-07-17T15:09:00Z",
+          "report": "docs/autothing/runs/20260717-071930-d1244839/codex-checkpoint-c-contract-egress.json"
+        }
+      ],
+      "overrides": [],
+      "at": "2026-07-17T15:09:00Z",
+      "note": "ChatGPT auth (no API key - DECISION logged); all calls serial + scoped. 2 real findings found + fixed + re-verified clean within the ceiling."
+    },
+    "modelFallbacks": 0
+  }
+}

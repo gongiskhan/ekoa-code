@@ -83,7 +83,15 @@ minted with a **deliberately invalid checksum** so a fake can never collide with
 
 The vault (value->token map) is per-session, **in-memory, TTL, never persisted, cleared on session
 end** - a re-identification key that does not exist cannot be produced. It is keyed by the hosted
-conversation id so tokens stay consistent across delegated local turns. Audit is **metadata only**
+conversation id so tokens stay consistent across delegated local turns. On the LLM gateway path a
+stock Anthropic client (Claude Code) sends no conversation id, so the vault key is derived (S7,
+2026-07-17): an explicit `session_id` wins; else a gateway-KEY principal keys the vault by its key
+id (`gwkey_<keyId>`) so one client session shares one vault across its agentic tool loop and
+deny-list literals tokenize consistently turn-to-turn (a fresh per-request vault broke Claude
+Code's tool loop - findings `gateway-vault-per-request-instability`); a truly session-less,
+key-less call keeps a per-request ephemeral vault cleared on exit. The stable per-key vault
+persists only to its 30-min TTL, maps the OWNER's own literals to stable fakes for that key alone,
+and the fakes never leave the chokepoint. Audit is **metadata only**
 (entity classes, counts, correlation id, payload hash - never bodies, never the vault), async, hash-
 chained and tamper-evident, folded into the single Registo write path. The payload-capture harness
 asserts every planted synthetic value appears tokenized (never cleartext) in every captured outbound
@@ -189,9 +197,46 @@ re-runnable gates so they cannot silently regress:
   `served-app-data-unauthenticated-writes`.
 
 **Frame headers (current state).** The api plane sets `X-Frame-Options: DENY` / `frame-ancestors
-'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`. The `/apps` embed
-allowlist (so the cross-origin dashboard can iframe a served artifact) is **PENDING** - tracked as an
-open security task in `docs/findings.md`.
+'none'`. The served-app plane sets `frame-ancestors 'self'` + `SAMEORIGIN`, except `/apps/*`, which
+answers `frame-ancestors 'self' <dashboard origins>` (the embed allowlist: `EKOA_DASHBOARD_ORIGINS`
+csv -> `EKOA_APP_ORIGIN` -> dev localhost:3000; invalid entries dropped) with no `X-Frame-Options`,
+so the cross-origin dashboard can iframe a served artifact (landed commit 55d9294; recorded in
+`docs/findings.md` `apps-embed-frame-headers` - this paragraph previously said PENDING, stale).
+The dashboard's preview iframes carry NO `sandbox` attribute (decision 2026-07-14): with both
+`allow-scripts` and `allow-same-origin` a sandbox is escapable by design (Chrome warns on every
+document load), while dropping `allow-same-origin` breaks the injected `__ekoa` runtime
+(same-origin data fetches, the CHIPS SSO cookie, storage) across the byte-compat app estate.
+Isolation between arbitrary served-app code and the authenticated dashboard is therefore the
+ORIGIN SPLIT plus this allowlist - deployments must keep served apps on the api origin
+(`api.<domain>`, `:4111` in dev), never on the dashboard origin.
+
+**Per-user gateway API keys (S4a, 2026-07-17).** Stock Anthropic clients (Claude Code) authenticate
+to the LLM gateway with self-service, long-lived, revocable keys: secret `ekoa_gk_` + 32 random
+bytes base64url; at rest the sha256 (the store id - O(1) verify) plus a 4-char display TAIL of
+the secret (the industry-standard recognition hint, a deliberate 24-of-256-bit trade -
+decisions.md 2026-07-17; the full plaintext is shown exactly once at mint and never stored or
+logged). Verification is an injected seam
+(`auth/gateway-keys-service.ts` -> `GatewayDeps.verifyGatewayKey`; `llm/` never imports `auth/`)
+and fails CLOSED through the activation cache: unknown/revoked keys and inactive/deleted owners
+are 401, a billing-locked owner is a distinct 402, revocation is durable and effective on the
+next call. The billee is always the key OWNER (`agentType: 'gateway-client'` in the billing
+ledger - its own breakdown line), the allowance gate applies, and a third per-KEY rate-cap
+window (`EKOA_RATECAP_CALLS_PER_KEY`/`EKOA_RATECAP_SPEND_PER_KEY`, per-key doc overrides)
+composes with the user/org windows - the abuse answer for a metered Anthropic-compatible
+endpoint (token-farming target). Ownership is the authorization: keys are minted/listed/revoked
+only by their owner (`/api/v1/gateway-keys`, uniform 404 cross-user), `lastUsedAt` is a throttled
+anomaly surface, and every metered key turn lands a metadata-only `gateway_turn` row in the
+owner's Registo (who/when/tier/model/metered - never content).
+
+**LLM gateway count_tokens is uncapped (accepted residual, 2026-07-17).** The gateway's
+`count_tokens` forward is auth-gated but exempt from the rate caps, the allowance gate, and
+metering: it is free upstream, produces no billable usage, and stock Claude Code polls it
+continuously - counting it against the shared per-user window would starve real turns. Residual:
+an authenticated caller can hammer it, bounded only by upstream provider limits on the central
+credential - and, with client-chosen metadata.session_id values, can allocate short-lived
+server-side vault entries without a call cap (tiny, TTL-swept at 30 min; the capped messages
+path shares the same session_id behavior). Revisit with a dedicated cap bucket if abuse is observed; the anonymisation posture
+applies to it in full, so no content risk is added.
 
 ## Incident response
 

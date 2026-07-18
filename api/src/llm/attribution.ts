@@ -23,6 +23,7 @@ export type UserWorkAgentType =
   | 'brand-research'
   | 'agent-face'
   | 'pi-fast-loop'
+  | 'gateway-client'
   | 'automation-plan'
   | 'automation-rehearse'
   | 'vision-resolve'

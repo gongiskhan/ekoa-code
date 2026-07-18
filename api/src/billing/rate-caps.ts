@@ -17,6 +17,9 @@ export interface RateCapConfig {
   maxCallsPerOrg: number;
   maxSpendPerUser: number; // metered tokens per window
   maxSpendPerOrg: number; // metered tokens per window
+  /** Per-KEY defaults (S4a gateway keys): a third, tighter window keyed by keyId. */
+  maxCallsPerKey: number;
+  maxSpendPerKey: number;
   /** Fraction of a cap whose crossing raises a burn alert (0..1). */
   burnAlertFraction: number;
 }
@@ -24,17 +27,21 @@ export interface RateCapConfig {
 export interface RateCapVerdict {
   ok: boolean;
   reason?: string;
-  scope?: 'user' | 'org';
+  scope?: 'user' | 'org' | 'key';
   kind?: 'rate' | 'spend';
 }
 
 export interface RateCapKey {
   billeeUserId: string;
   orgId: string;
+  /** Present on gateway-key calls (S4a): adds the per-key window to the user/org checks. */
+  keyId?: string;
+  /** Per-key overrides from the key doc; absent fields fall back to the config defaults. */
+  keyCaps?: { maxCallsPerWindow?: number; maxSpendPerWindow?: number };
   now?: number;
 }
 
-type BurnAlert = (info: { scope: 'user' | 'org'; kind: 'rate' | 'spend'; key: string; value: number; cap: number }) => void;
+type BurnAlert = (info: { scope: 'user' | 'org' | 'key'; kind: 'rate' | 'spend'; key: string; value: number; cap: number }) => void;
 
 function num(envName: string, fallback: number): number {
   const raw = process.env[envName];
@@ -50,6 +57,8 @@ export function defaultRateCapConfig(): RateCapConfig {
     maxCallsPerOrg: num('EKOA_RATECAP_CALLS_PER_ORG', 300),
     maxSpendPerUser: num('EKOA_RATECAP_SPEND_PER_USER', 5_000_000),
     maxSpendPerOrg: num('EKOA_RATECAP_SPEND_PER_ORG', 20_000_000),
+    maxCallsPerKey: num('EKOA_RATECAP_CALLS_PER_KEY', 30),
+    maxSpendPerKey: num('EKOA_RATECAP_SPEND_PER_KEY', 2_000_000),
     burnAlertFraction: num('EKOA_RATECAP_BURN_FRACTION', 0.8),
   };
 }
@@ -65,6 +74,7 @@ export class RateLimiter {
   private readonly onBurn: BurnAlert;
   private readonly userWindows = new Map<string, WindowEntry[]>();
   private readonly orgWindows = new Map<string, WindowEntry[]>();
+  private readonly keyWindows = new Map<string, WindowEntry[]>();
   private readonly alerted = new Set<string>();
 
   constructor(cfg?: Partial<RateCapConfig>, onBurn?: BurnAlert) {
@@ -108,6 +118,16 @@ export class RateLimiter {
     if (o.count >= this.cfg.maxCallsPerOrg) return { ok: false, scope: 'org', kind: 'rate', reason: 'per-org call rate exceeded' };
     if (u.spend >= this.cfg.maxSpendPerUser) return { ok: false, scope: 'user', kind: 'spend', reason: 'per-user spend cap exceeded' };
     if (o.spend >= this.cfg.maxSpendPerOrg) return { ok: false, scope: 'org', kind: 'spend', reason: 'per-org spend cap exceeded' };
+
+    if (key.keyId) {
+      const keys = this.prune(this.keyWindows.get(key.keyId) ?? [], now);
+      this.keyWindows.set(key.keyId, keys);
+      const k = this.countAndSpend(keys);
+      const maxCalls = key.keyCaps?.maxCallsPerWindow ?? this.cfg.maxCallsPerKey;
+      const maxSpend = key.keyCaps?.maxSpendPerWindow ?? this.cfg.maxSpendPerKey;
+      if (k.count >= maxCalls) return { ok: false, scope: 'key', kind: 'rate', reason: 'per-key call rate exceeded' };
+      if (k.spend >= maxSpend) return { ok: false, scope: 'key', kind: 'spend', reason: 'per-key spend cap exceeded' };
+    }
     return { ok: true };
   }
 
@@ -131,9 +151,18 @@ export class RateLimiter {
     this.maybeAlert('org', 'rate', key.orgId, o.count, this.cfg.maxCallsPerOrg);
     this.maybeAlert('user', 'spend', key.billeeUserId, u.spend, this.cfg.maxSpendPerUser);
     this.maybeAlert('org', 'spend', key.orgId, o.spend, this.cfg.maxSpendPerOrg);
+
+    if (key.keyId) {
+      const keys = this.prune(this.keyWindows.get(key.keyId) ?? [], now);
+      keys.push({ ts: now, metered: key.metered });
+      this.keyWindows.set(key.keyId, keys);
+      const k = this.countAndSpend(keys);
+      this.maybeAlert('key', 'rate', key.keyId, k.count, key.keyCaps?.maxCallsPerWindow ?? this.cfg.maxCallsPerKey);
+      this.maybeAlert('key', 'spend', key.keyId, k.spend, key.keyCaps?.maxSpendPerWindow ?? this.cfg.maxSpendPerKey);
+    }
   }
 
-  private maybeAlert(scope: 'user' | 'org', kind: 'rate' | 'spend', key: string, value: number, cap: number): void {
+  private maybeAlert(scope: 'user' | 'org' | 'key', kind: 'rate' | 'spend', key: string, value: number, cap: number): void {
     if (cap <= 0) return;
     const alertKey = `${scope}:${kind}:${key}`;
     if (value >= cap * this.cfg.burnAlertFraction) {
@@ -149,6 +178,7 @@ export class RateLimiter {
   reset(): void {
     this.userWindows.clear();
     this.orgWindows.clear();
+    this.keyWindows.clear();
     this.alerted.clear();
   }
 }

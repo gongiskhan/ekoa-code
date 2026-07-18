@@ -778,6 +778,35 @@ export interface Translations {
   // PLATFORM SETTINGS
   // ============================================
 
+  pages_gatewayKeys: {
+    title: string;
+    subtitle: string;
+    mintLabel: string;
+    mintPlaceholder: string;
+    mintButton: string;
+    minting: string;
+    showOnceTitle: string;
+    showOnceWarning: string;
+    copyKey: string;
+    copied: string;
+    copyFailed: string;
+    dismiss: string;
+    configTitle: string;
+    configHint: string;
+    listTitle: string;
+    listEmpty: string;
+    colLabel: string;
+    colKey: string;
+    colCreated: string;
+    colLastUsed: string;
+    colStatus: string;
+    statusActive: string;
+    statusRevoked: string;
+    neverUsed: string;
+    revoke: string;
+    revokeConfirm: string;
+    cancel: string;
+  };
   pages_platform: {
     title: string;
     subtitle: string;
@@ -1252,6 +1281,7 @@ export interface Translations {
       fixing: string;
       reviewing: string;
       deploying: string;
+      verifying: string;
       complete: string;
     };
     phaseDefault: (phase: string) => string;

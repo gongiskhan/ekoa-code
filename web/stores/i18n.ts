@@ -74,6 +74,7 @@ export function useTranslation() {
     pages_artifacts: t('pages_artifacts'),
     pages_memory: t('pages_memory'),
     pages_billing: t('pages_billing'),
+    pages_gatewayKeys: t('pages_gatewayKeys'),
     sidebar: t('sidebar'),
     emptyState: t('emptyState'),
     onboarding: t('onboarding'),

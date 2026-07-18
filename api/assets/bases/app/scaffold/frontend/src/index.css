@@ -159,6 +159,29 @@ code {
   line-height: 1.6;
 }
 
+/* Building-state pulse shown by the default HomePage while the agent works. */
+.empty-state-dots {
+  display: inline-flex;
+  gap: var(--space-2, 0.5rem);
+  margin-bottom: var(--space-4, 1rem);
+}
+
+.empty-state-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary, #0F766E);
+  animation: empty-state-pulse 1.2s ease-in-out infinite;
+}
+
+.empty-state-dots span:nth-child(2) { animation-delay: 0.2s; }
+.empty-state-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes empty-state-pulse {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
 /* -- Assistant mount point ------------------------------------------------ */
 
 /*

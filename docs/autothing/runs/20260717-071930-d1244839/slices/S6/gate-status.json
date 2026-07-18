@@ -1,0 +1,29 @@
+{
+  "slice": "S6",
+  "title": "Live stock-Claude-Code proof driver + ancillary inventory",
+  "updatedAt": "2026-07-17T14:35:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "api",
+  "profile": "build",
+  "commits": ["f7be80f", "df3d4c6", "ab238ae"],
+  "retries": { "limit": 5, "used": 3 },
+  "gates": {
+    "tests": { "cmd": "node api/tests/e2e/gateway-claude-code.e2e.mjs (live, health-gated) + npm run gate:ledger (census)", "exit": 0, "at": "2026-07-17T14:30:00Z", "durationMs": 60000, "summary": "S6 LIVE GATE PASS live (mint + empty-ruleset byte-identical + heartbeat framing + count_tokens + OWNER tokensUsed grew); node --check clean; census 24/24 drivers; driver reports awaiting OPERATOR-RUN (no false green)" },
+    "typecheck": { "cmd": "npm run typecheck", "exit": 0, "at": "2026-07-17T13:43:00Z", "durationMs": 25000, "summary": "clean (S6 is a .mjs driver + docs; no TS change)" },
+    "lint": { "cmd": "npm run lint", "exit": 0, "at": "2026-07-17T13:20:00Z", "durationMs": 15000, "summary": "clean" },
+    "securityWall": { "gitleaks": { "exit": 0 }, "semgrep": { "exit": 0, "findings": 0 }, "depAudit": { "exit": 0, "high": 0, "critical": 0 }, "chokepointGrep": { "exit": 0 }, "at": "2026-07-17T13:20:00Z", "durationMs": 0, "summary": "clean (run-level wall green; S6 adds a test driver + docs; no secret in the driver - key never printed)" },
+    "build": { "cmd": "npm run build --workspaces --if-present", "exit": 0, "at": "2026-07-17T13:44:00Z", "durationMs": 180000, "summary": "green (no source change in S6)" },
+    "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "evidence": ["reviewer ran the driver LIVE end-to-end 3 times across 3 rounds (its own claude CLI + credential), traced every counter, semantic-diffed the ledger, checked shared/billing schema", "verdict trail: needs-work(f7be80f F1-blocking+F2) -> needs-work(df3d4c6, F3 only) -> approve(ab238ae)"], "at": "2026-07-17T14:32:00Z", "durationMs": 3600000, "findings": ["[F1 BLOCKING, FIXED df3d4c6] ledgered at G12 -> a DUE artifact that books green on a bare exit-0 skip (the repo's documented false-green trap) -> retargeted to OPERATOR-RUN (awaiting, never a false green)", "[F2, FIXED df3d4c6] docblock claimed a --continue multi-turn beat that did not exist", "[F3 HIGH, FIXED ab238ae] billing proved 'gateway-client grew platform-wide' not 'on the key owner' (/breakdown has no owner field) -> now reads the OWNER's own admin/usage row and asserts it grew", "[F4-F7 rode along: percentage-sum, empty-ruleset precondition assert, ping-guard]"], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/agent-adversarial-review-report.md" },
+    "codexSliceReview": { "verdict": "approve", "by": "gpt-5.5", "actualModel": "gpt-5.5", "effort": "high", "at": "2026-07-17T14:10:00Z", "durationMs": 360000, "findings": ["[High, FIXED df3d4c6] overbroad tolerate could swallow a non-rate-limit upstream error -> only 429/rate_limit_error", "[High, FIXED df3d4c6] billing proof was skippable while the gate passed -> hard assert (then F3-refined to the owner row)", "[Medium, FIXED df3d4c6] cleanup not guaranteed on throw -> try/finally", "[Low, FIXED df3d4c6] known-limitation could print as OK -> distinct known() channel"], "recheck": { "verdict": "approve", "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/codex-slice-recheck.json" }, "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/codex-slice-review.json" },
+    "adversarialTest": { "status": "skipped", "reason": "kind-conditional" },
+    "designAudit": { "status": "skipped", "reason": "kind-conditional" },
+    "video": { "status": "verified", "mode": "evidence", "verifiedAt": "2026-07-17T14:33:00Z", "flagged": false, "link": "docs/autothing/runs/20260717-071930-d1244839/slices/S6/evidence.cast", "evidence": "asciinema of the live driver run against a real stock claude CLI: key mint, empty-ruleset (deny-list purged first) byte-identical file round trip, deny-listed KNOWN LIMITATION (honest, distinct from OK), heartbeat ping-before-replay + in-stream rate_limit_error path proven live, count_tokens real counts, the key OWNER's own tokensUsed grew (owner attribution). Independently reproduced by the fresh reviewer 3x.", "videoBytes": 1919, "videoSha256": "f393367b050e457aeefd0fb2b7c357bd94c05b79f9009ef39be94cb21e37eec8" }
+  },
+  "notes": [
+    "The dual review caught a real false-green ledger trap (F1) + a five-times-repeated attribution overclaim (F3) - both closed; the fresh reviewer ran the driver live 3x.",
+    "The deny-listed multi-tool round trip is a documented OPEN finding (gateway-anon-tooluse-fidelity), recorded as an honest known-limitation - a top LANDING item for a follow-up run.",
+    "adversarialTest: api slice, covered by the batched run-level pass (the driver IS an independent live functional exercise)."
+  ],
+  "blockers": []
+}

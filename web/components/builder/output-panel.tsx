@@ -631,8 +631,9 @@ export default function OutputPanel({ sessionId }: OutputPanelProps) {
       </div>
 
       {/* FC-505: per-build verification banner, shown while the verification
-          (testing) stage of the build runs. */}
-      {job?.status === "running" && job?.phase === "testing" && <VerificationBanner />}
+          stage of the build runs. The build pipeline emits plan_step status
+          'verifying' (build.ts step 5); useJobStream mirrors it into the store. */}
+      {job?.status === "running" && job?.phase === "verifying" && <VerificationBanner />}
 
       {/* Output area */}
       <div

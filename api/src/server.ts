@@ -72,6 +72,8 @@ import { appPdfRouter, getArtifactPdfDir } from './apps/pdf.js';
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
+import { verifyGatewayKey } from './auth/gateway-keys-service.js';
+import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -522,7 +524,21 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/app-files', appFilesRouter());
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 
-  app.use(express.json({ limit: '1mb' }));
+  // The LLM gateway sub-app carries its own 50 MB body limit (stock Claude Code clients
+  // routinely send >1 MB bodies - long transcripts, base64 screenshots). The global 1 MB parser
+  // must not pre-parse its routes, or the router-level limit is dead code and every large
+  // gateway body 413s before reaching it (S3, run 20260717; surfaced by the S1 fresh review).
+  // The gateway router carries its own Anthropic-shaped body-parser error handler.
+  // Exact-subtree + case-insensitive match (codex S3 Medium: bare startsWith also exempted
+  // /api/v1/llmfoo; S3 fresh review F1: Express route matching is case-insensitive by default,
+  // so /API/v1/llm was a live gateway route the case-sensitive predicate did not exempt).
+  const globalJson = express.json({ limit: '1mb' });
+  const isGatewayPath = (path: string): boolean => {
+    const p = path.toLowerCase();
+    return p === '/api/v1/llm' || p.startsWith('/api/v1/llm/');
+  };
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    isGatewayPath(req.path) ? next() : globalJson(req, res, next));
   // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
   // without this, Express's default handler returns an HTML page with the full stack trace and
   // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;
@@ -574,9 +590,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/chat', chatRouter(deps));
   app.use('/api/v1/jobs', jobsRouter(deps));
   // G7 — the ekoa-local LLM gateway sub-app (ch03 §3.10; metering inside the chokepoint,
-  // §6.5.4). Mounted at /api/v1/llm; the owner-bypass token verifier is injected (llm/ needs
-  // no auth/ import — the gateway takes it as a dep). Bills wire-tier FAST per proxied call.
-  registerGateway(app, { verifyToken });
+  // §6.5.4). Mounted at /api/v1/llm; the token verifier AND the per-user key verifier (S4a)
+  // are injected (llm/ needs no auth/ import — the gateway takes them as deps). A user-key
+  // principal bills its OWNER; the static key stays platform overhead.
+  registerGateway(app, { verifyToken, verifyGatewayKey });
+  // S4a — per-user gateway API keys: mint (show-once) / list / revoke, self-service.
+  app.use('/api/v1/gateway-keys', gatewayKeysRouter(deps));
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).

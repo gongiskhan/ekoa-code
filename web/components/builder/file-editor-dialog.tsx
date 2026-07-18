@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import Editor, { type OnMount } from '@monaco-editor/react';
+import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import {
   X,
   Minimize2,
@@ -20,6 +20,12 @@ import {
 import { api } from '@/lib/api';
 import { getMonacoLanguage, getSandboxDisplayPath } from '@/lib/file-utils';
 import { useTranslation } from '@/stores/i18n';
+
+// Self-hosted Monaco: the loader's default CDN (cdn.jsdelivr.net) is blocked by the
+// dashboard CSP (script-src 'self', next.config.ts ch09 D1). The AMD tree is copied to
+// public/monaco/vs by web/scripts/copy-monaco.mjs (predev/prebuild), so every asset -
+// loader.js, editor chunks, CSS, codicon font, workers - is same-origin.
+loader.config({ paths: { vs: '/monaco/vs' } });
 
 // ============================================
 // TYPES

@@ -12,6 +12,8 @@
     "node": ">=20 <21"
   },
   "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:auth": "node scripts/dev-credential.mjs --reauth --provision",
     "build": "npm run build --workspace shared && npm run build --workspace api && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint . && npm run lint --workspace web",

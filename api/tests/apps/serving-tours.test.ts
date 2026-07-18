@@ -137,4 +137,27 @@ describe('E1 — GET /api/demos/:appId generated-tour fallback (integration)', (
     const { status: emptyData } = await getJson(port, `/api/demos/${id}`);
     expect(emptyData).toBe(404);
   });
+
+  it('availability probe answers 200 in BOTH states — {available:true} with a stored tour, {available:false} without (never 404)', async () => {
+    // Always-200 by design (shared demoAvailability, operator ask 2026-07-14): the panel
+    // probes availability on every mount, so a tourless app must not log a 404 into the
+    // app's console. The spec route above keeps its loud 404.
+    const id = 'art-tour-avail';
+    await artifacts.insert({ _id: id, data: { tours: [tourSpec(id, 'geral', 'overview')] } } as never);
+    const withTour = await getJson(port, `/api/demos/${id}/availability`);
+    expect(withTour.status).toBe(200);
+    expect(withTour.body).toEqual({ available: true });
+
+    const without = await getJson(port, '/api/demos/art-none-avail/availability');
+    expect(without.status).toBe(200);
+    expect(without.body).toEqual({ available: false });
+
+    // Provenance carries over from the spec resolution: a tour stamped for another app
+    // is not available here either.
+    const id2 = 'art-tour-avail-2';
+    await artifacts.insert({ _id: id2, data: { tours: [tourSpec('victim-app', 'geral', 'overview')] } } as never);
+    const smuggled = await getJson(port, `/api/demos/${id2}/availability`);
+    expect(smuggled.status).toBe(200);
+    expect(smuggled.body).toEqual({ available: false });
+  });
 });

@@ -6,6 +6,49 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+### Cortex gateway (run 20260717-071930-d1244839)
+
+- **`gateway-anon-tooluse-fidelity`** (OPEN, HIGH - found by S6 live proof; a top follow-up item;
+  CONFIDENTIALITY dimension added by the run-level security review 2026-07-17). The EXACT deny-listed
+  literal never leaks - egress tokenization deep-walks tool_result/tool_use string leaves and is
+  fail-closed, so a deny-listed literal in an `ls` output is tokenized before it crosses the wire.
+  BUT the run's own live evidence shows the literal comes back to the client MANGLED across turns
+  (`ZarkovH90305` -> `ZarkovH9305`, a dropped digit); the deny-list is matched LITERALLY, so the
+  corrupted variant is NOT re-tokenized when the CLI feeds it back as a tool_result (e.g. a
+  "no such file: ZarkovH9305" error) - a near-miss of the secret literal can then egress to the
+  PROVIDER in cleartext (partial, not full, disclosure - to the very party §17.4(b) withholds it
+  from; NOT a cross-tenant leak). The re-egress step is inferred from the code path, not yet
+  reproduced live - a targeted repro is owed before sizing. Deny-list orgs only; empty-ruleset is a
+  proven no-op. The deeper anonymisation-plane fix direction is unchanged; this note re-classes it
+  so it is not deprioritised as merely cosmetic.
+  With a NON-empty deny-list, a stock Claude Code session cannot reliably navigate a filesystem
+  whose paths contain a deny-listed literal: the tokenized directory name that reaches the model in
+  a `tool_result` (an `ls`/`find` output) does not reliably detokenize back in the model's next
+  `tool_use` argument, so the CLI tries to open the FAKE path and reports "directory not found", or
+  the literal comes back mangled across calls (observed: `ZarkovH90305` -> `ZarkovH9305`, a dropped
+  digit). This survives the S7 stable-vault fix (tokens are now consistent turn-to-turn), so the
+  residual is DETOKENIZATION FIDELITY of `tool_use` argument blocks under the tool_use/tool_result
+  density that coding traffic exercises and bridge traffic never did - exactly the brief's §3
+  anticipated risk ("coding traffic exercises tool_use/tool_result density the bridge traffic never
+  did"). The EMPTY-ruleset case is a true no-op and lands byte-identical (proven live), so ONLY
+  deny-list orgs doing filesystem work through Claude Code are affected. Fix is a deeper
+  anonymisation-plane change (reliable whole-token detokenization of tool_use args when the model
+  reformats/splits a format-preserving fake, plus overlapping deny-list x structured-ID x NER span
+  resolution) - a dedicated follow-up run, NOT bolted onto the S6 proof driver. The S6 driver
+  records this as an honest KNOWN LIMITATION (never green-washed).
+
+- **`gateway-vault-per-request-instability`** (FIXED by S7, commit bdbc472/d783f7d/31309d9). On the
+  gateway path a stock Anthropic client (Claude Code) sends no `metadata.session_id`, so
+  `proxyGatewayMessages` opens a FRESH ephemeral vault per request (`sess_${correlationId}`). Vault
+  tokens are minted per-class by sequence and are deterministic only WITHIN one vault, so across
+  Claude Code's agentic tool loop (each tool step is a separate gateway request) a deny-list literal
+  in a filesystem path tokenizes inconsistently and a prior turn's token fails to detokenize - the
+  CLI then sees a directory that "does not exist" and the tool loop fails in confusing ways (exactly
+  the brief's §3 anticipated failure). The EMPTY-ruleset round trip is a true no-op and lands
+  byte-identical (proven live), so only deny-list orgs are affected. Fix (S7): derive a STABLE
+  session key for a gateway principal without an explicit session_id (the gateway keyId), so one
+  Claude Code session shares one vault (30-min TTL) and tokens stay stable across the loop.
+
 ### Contract / schema drift (the schema-coverage honor-system class)
 
 - **`schema-coverage-honor-system`** (structural). The schema-coverage gate is a hand-maintained
@@ -198,6 +241,128 @@ model turn (needs a live credential) and was caught on staging.
 Follow-up (recommended, not done here): add a container **boot smoke** to `deploy.yml` (run the api
 image against a throwaway mongo, assert `/health` 200) so this whole class - a runtime import or native
 binary absent from the shipped image - fails CI instead of first appearing on a server.
+
+## Recently fixed - 2026-07-14 operator UX round (scope steering, verify narration, console noise)
+
+- **`build-ambiguous-request-no-scoping`** (UX, operator 2026-07-14, live) - "faz uma app para
+  ferias" built a personal vacation-itinerary planner with zero questions: the chat agent had no
+  business-context steer and no scoping step, so ambiguous one-liners went straight to the wrong
+  interpretation. Fixed in the content packs (business-scope section + ONE pre-marker scoping
+  round; see decisions 2026-07-14) and pinned by a loader.test.ts canary.
+- **`scaffold-copy-dev-facing`** (UX, operator 2026-07-14, live) - the app-base HomePage the end
+  user watches DURING a build showed developer instructions ("Adicione páginas ao registo PAGES...
+  frontend/src/pages/"). Now a user-facing PT building state ("A construir algo fantástico..." +
+  pulse). data-demo-target="home-empty" and the mustEdit gate are untouched.
+- **`verify-phase-silent-progress`** (UX, operator 2026-07-14, live) - the verify stage showed one
+  status line then generic fillers for minutes (narration existed but landed in the COLLAPSED
+  thinking block). Fixed: per-action ">> " narration contract in the verify prompt, re-emitted as
+  same-status plan_steps -> live spinner label + Output tab (pinned by build.test.ts +
+  verify-runner.test.ts). Two adjacent defects fixed with it: the verify scrub chain's hold-back
+  tail was never flushed (final narration characters silently dropped), and the FC-505
+  VerificationBanner was dead code (gated on a phase the store never received - plan_step phases
+  now mirror into the store and the gate keys on 'verifying').
+- **`monaco-cdn-csp-block`** (broken feature, operator 2026-07-14, live) - the file-editor dialog
+  never initialized under the dashboard CSP: @monaco-editor/react's default loader pulls from
+  cdn.jsdelivr.net, blocked by script-src 'self' ("Monaco initialization: error" + uncaught
+  promise rejections in the console). Fixed by self-hosting the AMD tree from web/public/monaco
+  (copy-monaco.mjs, predev/prebuild); the CSP was not widened.
+- **`expected-absent-probe-console-noise`** (console hygiene, operator 2026-07-14, live) - every
+  served-app load logged `GET /api/app-sso/me 401` (scaffold whoami) and, on tourless apps,
+  `GET /api/demos/:appId 404` (panel teach probe) - "expected-absent" by design but console-visible
+  on every load. Fixed with two additive always-200 probe routes (appSsoSession,
+  demoAvailability - contract-tested) + repointed scaffold wiring and panel probe. Residual
+  ACCEPTED: apps built BEFORE this change baked the old wiring and keep logging the /me 401, so
+  the e2e benign-console allowlists for the 401 stay; the demos-404 allowlist entries were removed
+  (the probe no longer 404s on any panel version served by a rebuilt api).
+- **`preview-iframe-sandbox-warning`** (console hygiene, operator 2026-07-14, live) - Chrome
+  warned "An iframe which has both allow-scripts and allow-same-origin... can escape its
+  sandboxing" on every side-panel preview load (incl. each about:blank hot-reload hop). The
+  sandbox attribute was removed (escapable as configured; see decisions 2026-07-14 for the
+  isolation model + accepted top-navigation residual). Out of scope, not ours: the
+  ObjectMultiplex "orphaned data" and MaxListenersExceededWarning lines in the same console
+  capture come from the MetaMask extension's content script, not the product.
+- **`suite-ledger-gate-crash-operator-run-gates`** (QA infra, found 2026-07-14 while running the
+  gate) - `scripts/suite-ledger-run.mjs` threw `Unknown gate: operator-run C5` on the slice-named
+  targetGates the operator run registered (commit ac1f3d3), so `npm run gate:ledger` AND
+  `npm run e2e` crashed outright. Fixed: `gateIndex` maps any `operator-run*` gate to one shared
+  post-G13 `OPERATOR-RUN` milestone (those drivers need the credentialed live stack and report
+  as awaiting in the CI lane; they were live-verified during the operator run itself).
+- **`suite-ledger-census-refusal-file-request`** (QA infra, found 2026-07-14 by the same gate
+  run) - the unit census was red (disk 31 != ledger 30): commit 8996048 (BRIEF-9a) said
+  "ledgered" but never added `refusal-file-request` to `frontend_unit.surviving`. Registered,
+  with a census_note breadcrumb.
+
+## Recently fixed - 2026-07-14 walkthrough-prep sweep (operator evidence pass)
+
+- **`api-js-yaml-undeclared-dependency`** (dev-mode boot, 2026-07-14) - `api/` imports `js-yaml`
+  (action-manifest parsing) but never declared it: at runtime it resolved ONLY as a transitive dep
+  of **eslint** (a devDependency), so a production `npm ci --omit=dev` install would crash the API
+  on import, and types came from an ambient shim (`api/src/automation/vendor.d.ts`) that tsc loads
+  via `include` but the ts-node ESM loader does not (`files: false`) - making `EKOA_API_MODE=dev`
+  die on boot with an unrenderable TS7016 diagnostic (`[Object: null prototype]`). This was the
+  ledgered G8 action the shim itself prescribed. Fixed: `js-yaml` added to api dependencies,
+  `@types/js-yaml` to devDependencies, shim deleted, and the api `dev` script switched to
+  `ts-node/esm/transpile-only` (type checking stays with the `typecheck` gate; dev watch restarts
+  no longer pay a whole-program check and are immune to the ambient-file-loading gap class).
+- **`app-manifest-recipe-dsl-undocumented`** (discovery, 2026-07-14, live) - the app base ships
+  skills for `ui_actions` (declaring-ui-actions) and tours (authoring-tours) but NONE for the
+  `capabilities:` recipe DSL, so build agents GUESS the shape. Observed live on a fresh tarefas
+  build: the agent flattened `store.query` (`{ op: store.query, field: ..., op: eq, ... }` - the
+  comparison belongs under `where: { field, op, value }`), duplicating the `op` key; ONE invalid
+  line fails the whole frontmatter YAML parse at activation, so the app lost BOTH its action
+  manifest AND its tours (`actionManifestError` + `toursError`) - the assistant could neither
+  operate nor teach the app, and the errors surface only in server logs (no operator UI). Fixed:
+  (a) new base skill `api/assets/bases/app/skills/declaring-capabilities.md` documenting the EXACT
+  recipe op shapes (source of truth: `api/src/automation/platform-primitives.ts`) with the
+  store.query `where:` mistake called out; (b) the live app repaired through the product's own
+  path (an admin patch run dictating the corrected line) - tour + 2 actions now served. Residual
+  (minor, open): `actionManifestError`/`toursError` are invisible outside server logs; consider an
+  operator-visible surface.
+- **`app-custom-action-unregistered`** (discovery, 2026-07-14, live) - second instance of the
+  agent-content class: the tarefas build declared `ui_actions: - id: tarefa-adicionar, kind: custom`
+  but never registered `window.__ekoaApp.actions['tarefa-adicionar']` (the declaring-ui-actions
+  contract), so the assistant's operate flow ALWAYS failed its second action ("Não foi possível
+  executar a ação.") - observed on camera. No build-time check catches a declared custom id with no
+  registration in the app source. Live app repaired via patch run (kind -> `toggle`, a declarative
+  click, no registration needed). Residual (minor, open): readUiActions could WARN when a custom id
+  has no `__ekoaApp.actions[` registration anywhere in frontend/src.
+- **`edit-mode-preview-not-visible-in-page`** (UX, open, 2026-07-14, observed live) - after a
+  patch run completes, the panel's preview phase shows only the sha diff; the RUNNING served-app
+  page keeps executing the old bundle (nothing reloads it), and manually reloading to SEE the
+  change destroys the pending approve/revert panel state (client-only), leaving no panel path to
+  revert. The admin therefore decides from shas alone. Fast-follow candidates: an in-panel
+  "recarregar a aplicação" affordance that persists the pending preview (e.g. sessionStorage), or
+  a live-reload signal to the served page on activation (the dashboard preview already gets
+  preview_reload). Sits beside the ledgered `h3-edit-mode-no-cancel` fast-follow. Also note: the
+  post-restore dist rebuild is asynchronous - an immediate reload can race it.
+- **`assistant-operate-turn-noise-citations`** (minor, open, 2026-07-14) - an operate-mode panel
+  turn ("Adiciona uma tarefa...") rendered a Fontes block citing five irrelevant jurisprudência
+  acórdãos (org grounding ran and cited for a non-question turn). Cosmetic but confusing; consider
+  suppressing citations on do-mode turns whose grounding contributed nothing.
+- **`panel-dead-tour-launcher`** (discovery, 2026-07-14, fixed in d172c2a) - teach mode offered
+  "Iniciar tutorial guiado" unconditionally; on an app with no stored tour the player can only
+  error ("an app with no tours simply has no teach path", authoring-tours). The panel now probes
+  GET /api/demos/:appId once on mount (zero-token) and renders the launcher only when a tour
+  exists. Asset rebuilt; the RUNNING api caches panel bytes in memory, so the live swap (and its
+  live verification) lands on the next stack boot - the E2 driver covers it (its demos stub
+  precedes navigation, so the probe is fulfilled).
+
+- **`chat-refusal-affordance-unwired`** (discovery, 2026-07-14) - BRIEF 9a promised a refused
+  build in the dashboard chat "converts into a pre-drafted build request routed to the org-admin
+  - never a dead end", and diagram 03's H4 block + the change-requests store's `fileFromRefusal`
+  action both claimed the feed - but NO component ever called it: a capability refusal
+  (POST /jobs 403 `canBuildApps`/`canEditApps`) rendered as a plain red error with no way to file
+  the pedido (code-behind-diagram drift; the served-app panel path was wired, the dashboard chat
+  path was not). Fixed: `useAgentExecution` attaches the pre-drafted request
+  (`metadata.refusal = { text, appId? }`) to the capability-refusal message, and the chat bubble
+  renders "Pedir ao administrador" -> `fileFromRefusal` -> "Pedido enviado ao administrador."
+  (`data-testid` chat-refusal-file/filed). Pinned by `web/__tests__/refusal-file-request.test.ts`
+  (403+capability carries the payload incl. appId on follow-ups; 500 and capability-less 403 do
+  not). Diagram 03 already depicted the flow - no diagram change needed.
+- **`assistant-panel-e2e-stale-intro-assert`** (discovery, 2026-07-14) - the committed D2 driver
+  `api/tests/e2e/assistant-panel.e2e.mjs` asserted the first-open lead contains "apresentar", but
+  the shipped copy (AssistantPanel.jsx) says "mostrar ... ensinar ... operá-la": a re-run failed at
+  step B on copy drift, not behavior. Fixed the assertion to the shipped copy ('mostrar').
 
 ## Recently fixed - 2026-07-13 preview probe CORS duplicate header (operator)
 

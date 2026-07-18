@@ -1,0 +1,25 @@
+{
+  "slice": "S4b",
+  "title": "Gateway keys settings UI (/settings/api-keys)",
+  "updatedAt": "2026-07-17T12:35:00Z",
+  "phase": "done",
+  "status": "passed",
+  "kind": "ui",
+  "profile": "build",
+  "commits": ["4f55327", "7544456", "2d5399f", "fcaaa83"],
+  "retries": { "limit": 5, "used": 4 },
+  "gates": {
+    "tests": { "cmd": "npx playwright test e2e/gateway-keys.spec.ts (repo root, live stack)", "exit": 0, "at": "2026-07-17T12:15:00Z", "durationMs": 10200, "summary": "committed spec green repeatedly (6+ runs across fix rounds; one wrong-cwd operator error and one hot-reload race, not product defects); web unit lane 172 green; SUITE_LEDGER census 67/67" },
+    "typecheck": { "cmd": "npm run typecheck", "exit": 0, "at": "2026-07-17T12:14:00Z", "durationMs": 25000, "summary": "clean" },
+    "lint": { "cmd": "npm run lint", "exit": 0, "at": "2026-07-17T12:14:30Z", "durationMs": 15000, "summary": "clean" },
+    "securityWall": { "gitleaks": { "exit": 0 }, "semgrep": { "exit": 0, "findings": 0 }, "depAudit": { "exit": 0, "high": 0, "critical": 0 }, "chokepointGrep": { "exit": 0 }, "at": "2026-07-17T10:58:00Z", "durationMs": 0, "summary": "run-level wall green at S4a; S4b adds only web UI files (re-verified by lint + FIXED-1 zones)" },
+    "build": { "cmd": "npm run build --workspaces --if-present", "exit": 0, "at": "2026-07-17T11:20:00Z", "durationMs": 0, "summary": "green at S4a base; web changes verified by typecheck + the dev server serving them live (prod web build re-run at the run-level gate)" },
+    "adversarialReview": { "verdict": "approve", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "evidence": ["reviewer ran typecheck/lint/web tests/ledger census itself + mechanical locale-parity check"], "at": "2026-07-17T12:05:00Z", "durationMs": 1200000, "findings": ["[Material, FIXED 7544456] bare navigator.clipboard on the show-once secret (the one irreversible moment) - silent failure on http LAN/Tailscale; now the repo's guarded copyToClipboard + visible copyFailed alert", "[Minor, FIXED] em dash in the spec docstring (repo rule)", "[Minor, FIXED] show-once panel missing role=status (devices-page parity)"], "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/agent-adversarial-review-report.md", "note": "the post-approve design rework (2d5399f/fcaaa83) is presentation-layer on platform primitives, verified by typecheck/lint/spec + the design re-audits" },
+    "codexSliceReview": { "verdict": "approve", "by": "gpt-5.5", "actualModel": "gpt-5.5", "effort": "high", "at": "2026-07-17T12:10:00Z", "durationMs": 420000, "findings": ["[Medium, FIXED 7544456] revoke had no in-flight guard (double-fire) - submitRevoke short-circuits + buttons disable"], "recheck": { "verdict": "approve", "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/codex-slice-recheck.json" }, "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/codex-slice-review.json" },
+    "adversarialTest": { "result": "pass", "by": "claude-fable-5", "actualModel": "claude-fable-5", "fallbackCause": null, "probe": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/adversarial-probe.mjs", "at": "2026-07-17T12:12:00Z", "durationMs": 900000, "note": "fresh-context probe incl. the API cross-check (minted key 200 on count_tokens pre-revoke, 401 post-revoke); ran against the pre-design-rework UI - the confirm interaction is re-pinned by the committed spec against the dialog", "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/adversarial-test-report.md" },
+    "designAudit": { "verdict": "clean", "by": ["s4b-design-audit agent (vision + measured DOM geometry)"], "at": "2026-07-17T12:20:00Z", "durationMs": 2400000, "notes": "3 rounds: 6 findings (table burst out of its card via the in-cell confirm; shell-drag at 390 hiding the primary action; orphan mint form; hand-rolled table vs ui/table; inverted status tones; wrapped button) -> platform Table/Badge/useConfirm adoption + icon-only action + responsive column collapse + named-key dialog -> CLEAN at the platform's own bar. Report + before/after screenshots in the slice dir.", "report": "docs/autothing/runs/20260717-071930-d1244839/slices/S4b/design-audit-report.md" },
+    "video": { "status": "verified", "mode": "evidence", "verifiedAt": "2026-07-17T12:33:00Z", "flagged": false, "link": "http://100.108.210.116:8099/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/final.mp4", "runDir": "/Users/ggomes/.walkthrough/runs/ekoa/gateway-keys-s4b/2026-07-17_12-27-21", "evidence": "/Users/ggomes/.walkthrough/runs/ekoa/gateway-keys-s4b/2026-07-17_12-27-21/evidence.json", "videoBytes": 1207843, "videoSha256": "c23a4db045aeae7006b140fadac387e73bdbdee6b22a97d292a3802b86fbdd83", "note": "5/5 acceptance beats recorded live + vision-verified per beat (evidence mode); one selector-ambiguity re-record (row-scoped selectors + unique label); gallery link answers 206" }
+  },
+  "notes": ["Design audit earned its keep hard: measured geometry (not vibes) drove two structural fixes onto the platform's own primitives."],
+  "blockers": []
+}

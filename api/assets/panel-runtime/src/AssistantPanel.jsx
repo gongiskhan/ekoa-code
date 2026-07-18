@@ -48,6 +48,14 @@ const ENDPOINT = '/api/app-assistant';
 // invariant holds) and its result NEVER auto-enables anything - it only lights a discreet
 // indicator. The edit-mode switch + its opt-in UX are H3; this panel does not build them.
 const WHOAMI_ENDPOINT = '/api/app-assistant/whoami';
+// Tour AVAILABILITY probe base (E1/E2) - the probe hits /:appId/availability, an
+// always-200 { available } endpoint (a tourless app is a by-design state, and the
+// browser logs every non-2xx to the console); the PLAYER still fetches /:appId for
+// the spec itself. Probed ONCE per mounted panel (cheap, non-LLM, zero-token) so
+// the teach-mode launcher is only offered when this app actually stores a tour:
+// "an app with no tours simply has no teach path" (authoring-tours skill). A dead
+// launcher that can only error is a bug.
+const DEMOS_PROBE_ENDPOINT = '/api/demos/';
 // The platform session token key web/lib/api/token.ts uses. Read best-effort for detection only:
 // a served app on the SAME origin as the dashboard can read it; a CROSS-origin / sandboxed iframe
 // (the dev preview) throws on access, so detection simply falls back to "not admin".
@@ -286,6 +294,9 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   // is 100% client-side and issues ZERO model calls: it fetches the pre-generated
   // tour from GET /api/demos/:appId and drives it in the page.
   const [tour, setTour] = useState(null);
+  // Tour availability: null until the mount probe answers; the teach launcher renders
+  // ONLY on true, so the panel never offers a tutorial the app does not have.
+  const [tourAvailable, setTourAvailable] = useState(null);
   // H2 detect-then-ask: whether the current viewer is an admin of this app's owner org.
   // Default false (fail-closed). Set ONCE by the mount detection below. This flag NEVER
   // auto-enables anything - it only decides whether the H3 edit-mode SWITCH is shown (and
@@ -325,6 +336,7 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   const textareaRef = useRef(null);
   const playerRef = useRef(null);
   const whoamiDoneRef = useRef(false); // guards the once-only admin detection (H2)
+  const tourProbeDoneRef = useRef(false); // guards the once-only tour-availability probe
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -381,6 +393,39 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
       if (controller) controller.abort();
     };
     // Mount-only: detection is a one-shot for the panel's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tour-availability probe: ONE cheap non-LLM GET on mount (the same route the player
+  // fetches), so teach mode only offers "Iniciar tutorial guiado" when a stored tour
+  // actually exists. Zero-token invariant holds (no assistant turn). A startTour ACTION
+  // from the assistant is unaffected - the player fetches for itself and renders its own
+  // error state; this probe only gates the STANDING launcher affordance.
+  useEffect(() => {
+    const id = appId();
+    if (!id || tourProbeDoneRef.current) return;
+    tourProbeDoneRef.current = true;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    void (async () => {
+      try {
+        const res = await fetch(`${DEMOS_PROBE_ENDPOINT}${encodeURIComponent(id)}/availability`, {
+          method: 'GET',
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!res.ok) {
+          setTourAvailable(false); // unexpected (the probe is always-200) - no launcher
+          return;
+        }
+        const body = await res.json().catch(() => null);
+        setTourAvailable(!!(body && body.available === true));
+      } catch {
+        // network error / aborted unmount -> stay null (no launcher; best-effort).
+      }
+    })();
+    return () => {
+      if (controller) controller.abort();
+    };
+    // Mount-only: availability is a one-shot for the panel's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1109,7 +1154,7 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
 
       {tourActive ? (
         <TourView tour={tour} onNext={tourNext} onClose={tourClose} />
-      ) : mode === 'teach' ? (
+      ) : mode === 'teach' && tourAvailable === true ? (
         <div className="ekoa-assistant-tour-launch">
           <button
             type="button"
