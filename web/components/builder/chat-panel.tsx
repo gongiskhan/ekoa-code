@@ -28,13 +28,20 @@ import {
   Copy,
   Check,
   Pencil,
+  FileText,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { ComposerAttachMenu } from "@/components/privacy/composer-attach-menu";
 import { TrustChip } from "@/components/privacy/trust-chip";
 import { ThinkingBlock } from "@/components/chat/thinking-block";
 import { redactProviderIdentity } from "@/lib/sanitize-error";
-import { useOrchestrationStore, type ChatMessage, type OutputEntry } from "@/stores/orchestration";
+import { classifyEditIntent } from "@/lib/edit-intent";
+import {
+  useOrchestrationStore,
+  type ChatMessage,
+  type OutputEntry,
+  type ReplySummaryEntry,
+} from "@/stores/orchestration";
 import { useChangeRequestsStore } from "@/stores/change-requests";
 import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
@@ -148,6 +155,18 @@ function stripCodeBlocks(content: string): string {
   return stripped.replace(/\n{3,}/g, '\n\n');
 }
 
+/** First non-empty line of a reply, markdown markers stripped - the summary card's
+ *  PLACEHOLDER text (locked decision 8: shown while streaming and whenever the post-run
+ *  summary never arrives; mirrors the sheet feed's title derivation). */
+function firstLineOf(content: string): string {
+  const line =
+    stripCodeBlocks(content)
+      .split("\n")
+      .map((l) => l.replace(/^#+\s*/, "").trim())
+      .find((l) => l.length > 0) ?? "";
+  return line.length > 180 ? `${line.slice(0, 180)}...` : line;
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -210,7 +229,7 @@ export default function ChatPanel({
   onResend,
   onEdit,
 }: ChatPanelProps) {
-  const { quickActions: quickActionsTranslations, chatPanel: chatPanelT, pages } = useTranslation();
+  const { quickActions: quickActionsTranslations, chatPanel: chatPanelT, pages, sheetFeed } = useTranslation();
   const language = useI18nStore((s) => s.language);
   const quickActions = getQuickActions(quickActionsTranslations);
 
@@ -241,6 +260,42 @@ export default function ChatPanel({
     sessionId ? s.composerDraft[sessionId] : undefined
   );
   const setComposerDraft = useOrchestrationStore((s) => s.setComposerDraft);
+  // B5: summary-card entries + the composer chip's state + the card->sheet focus seam.
+  const replySummaries = useOrchestrationStore((s) =>
+    sessionId ? s.replySummaries[sessionId] : undefined
+  );
+  const editTarget = useOrchestrationStore((s) =>
+    sessionId ? s.editTargets[sessionId] : undefined
+  );
+  const setEditTarget = useOrchestrationStore((s) => s.setEditTarget);
+  const requestSheetFocus = useOrchestrationStore((s) => s.requestSheetFocus);
+
+  // Summary cards + chip belong to the chat grammar only: a build session's deliverable is
+  // the artifact panel, its transcript keeps the classic bubbles.
+  const sheetCardsActive = !isBuildSession;
+
+  // B5 (codex fix 2): the feed's createdFromMessageId back-references - the by-message-id
+  // resolution source for cards whose summary never arrived (server-id turns after reload).
+  const sheetLinks = useOrchestrationStore((s) =>
+    sessionId ? s.sheetLinks[sessionId] : undefined
+  );
+
+  /** Card click -> focus ITS sheet through the store seam (locked 5: multiple cards can
+   *  point at ONE sheet; a revision card focuses the SAME sheet its reply revised). The
+   *  link resolves from server truth only: (a) the attached reply_summary's ids, then
+   *  (b) the turn's stamped/persisted back-reference metadata, then (c) the feed's
+   *  createdFromMessageId back-reference. NO resolved link -> no-op (codex fix 2):
+   *  a card is never allowed to focus the wrong sheet. */
+  const openSheetFor = useCallback(
+    (msg: ChatMessage) => {
+      if (!sessionId) return;
+      const entry = replySummaries?.[msg.id];
+      const sheetId = entry?.sheetId ?? msg.metadata?.sheetId ?? sheetLinks?.[msg.id];
+      if (!sheetId) return;
+      requestSheetFocus(sessionId, sheetId);
+    },
+    [sessionId, replySummaries, sheetLinks, requestSheetFocus]
+  );
 
   // Filter to essential messages only
   const essentialMessages = messages.filter((msg) => {
@@ -297,12 +352,37 @@ export default function ChatPanel({
     }
   }
 
+  // B5 chip auto set/clear (bound decision B.D): the LOCAL heuristic runs at typing/draft
+  // time, so the editing target is VISIBLE before the message sends (locked 6 - wrong
+  // defaults are tolerable because the chip is overridable, and the send path attaches
+  // reviseSheetId ONLY from this visible chip state, never by re-inferring). A manual
+  // dismissal (null) suppresses auto-set until the next send; an explicit new-topic marker
+  // clears back to auto; a manually SET target (e.g. a follow-up pill) stands.
+  const applyEditIntentHeuristic = useCallback(
+    (text: string) => {
+      if (!sheetCardsActive || !sessionId) return;
+      const intent = classifyEditIntent(text);
+      const store = useOrchestrationStore.getState();
+      const cur = store.editTargets[sessionId];
+      if (intent === "new") {
+        if (cur) store.setEditTarget(sessionId, undefined);
+      } else if (intent === "edit" && cur === undefined) {
+        const latest = store.sessionLatestSheet[sessionId];
+        if (latest) store.setEditTarget(sessionId, latest);
+      }
+    },
+    [sheetCardsActive, sessionId]
+  );
+
   // Restore a draft into the composer (e.g. after Stop hands the cancelled
-  // message back for editing). Consumed + cleared so it applies once.
+  // message back for editing, or a sheet follow-up pill). Consumed + cleared so
+  // it applies once. Runs the chip heuristic too: a draft that bypassed typing
+  // must surface its chip BEFORE send, exactly like typed text (locked 6).
   useEffect(() => {
     if (!sessionId || composerDraft == null) return;
     setInputText(composerDraft);
     setComposerDraft(sessionId, undefined);
+    applyEditIntentHeuristic(composerDraft);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -311,13 +391,14 @@ export default function ChatPanel({
         el.style.height = Math.min(el.scrollHeight, 128) + "px";
       }
     });
-  }, [sessionId, composerDraft, setComposerDraft]);
+  }, [sessionId, composerDraft, setComposerDraft, applyEditIntentHeuristic]);
 
   function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setInputText(e.target.value);
     const el = e.target;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 128) + "px";
+    applyEditIntentHeuristic(e.target.value);
   }
 
   // Close attach menu on outside click
@@ -406,12 +487,16 @@ export default function ChatPanel({
                 isPulsing={idx === lastStatusIdx}
                 onEdit={canEdit && idx === lastUserIdx ? onEdit : undefined}
                 onRetry={canRetry && idx === lastAssistantIdx ? onResend : undefined}
+                summary={sheetCardsActive ? replySummaries?.[msg.id] : undefined}
+                onOpenSheet={
+                  sheetCardsActive && msg.role === "assistant" ? () => openSheetFor(msg) : undefined
+                }
               />
             ))}
 
             {/* Live streaming agent text */}
             {isExecuting && sessionId && (
-              <StreamingChatSection sessionId={sessionId} />
+              <StreamingChatSection sessionId={sessionId} asSheetCard={sheetCardsActive} />
             )}
 
             {/* Progress indicator during execution. Build sessions gate on the
@@ -477,6 +562,31 @@ export default function ChatPanel({
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* B5 composer chip (locked 6): the editing target is VISIBLE, never inferred
+            silently. Sent messages default to revising this sheet; the X forces a new
+            sheet for the next send. PT-PT: "A editar: <título da sheet>". */}
+        {sheetCardsActive && editTarget && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            <div
+              data-testid="composer-chip"
+              className="flex items-center bg-teal-50 border border-teal-200 rounded-full pl-2.5 pr-1.5 py-1 text-xs text-teal-800"
+              title={editTarget.title}
+            >
+              <Pencil size={12} className="mr-1.5 shrink-0 text-teal-600" />
+              <span className="truncate max-w-[240px]">{sheetFeed.editingChip(editTarget.title)}</span>
+              <button
+                data-testid="composer-chip-dismiss"
+                onClick={() => sessionId && setEditTarget(sessionId, null)}
+                title={sheetFeed.editingChipDismiss}
+                aria-label={sheetFeed.editingChipDismiss}
+                className="ml-1 p-0.5 rounded-full text-teal-500 hover:text-teal-900 hover:bg-teal-100 transition-colors"
+              >
+                <X size={12} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -611,6 +721,65 @@ export default function ChatPanel({
 }
 
 // ============================================
+// SUMMARY CARD (B5, locked decisions 3 + 8)
+// ============================================
+
+/**
+ * The compact transcript representation of an assistant reply (locked 3: card left, full
+ * sheet right - no inline-vs-panel threshold). Placeholder shape = the reply's first line
+ * (while streaming, after reload, and whenever the post-run summary never arrived - B.E
+ * degradation); the B2 `reply_summary` upgrades it to title + summary. Revision turns carry
+ * the "Revisão N" framing and clicking ANY card focuses ITS sheet in the panel (locked 5:
+ * several cards, one sheet) through the store's focus seam - never the feed's DOM.
+ */
+function SummaryCard({
+  message,
+  summary,
+  onOpen,
+}: {
+  message: ChatMessage;
+  summary?: ReplySummaryEntry;
+  onOpen: () => void;
+}) {
+  const { sheetFeed } = useTranslation();
+  const revisionNumber = summary?.revision ?? message.metadata?.revisionNumber;
+  const revisionLabel = revisionNumber !== undefined ? sheetFeed.revisionCard(revisionNumber) : null;
+  return (
+    <button
+      data-testid="summary-card"
+      onClick={onOpen}
+      title={sheetFeed.summaryCardOpen}
+      className="group/card w-full text-left bg-white border border-neutral-200 rounded-lg px-3 py-2 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 cursor-pointer"
+    >
+      {summary ? (
+        <>
+          <span className="flex items-center gap-1.5 min-w-0 text-xs font-semibold text-neutral-800">
+            <FileText size={12} className="shrink-0 text-teal-600" />
+            <span data-testid="summary-card-title" className="truncate">
+              {revisionLabel ? `${revisionLabel} · ${summary.title}` : summary.title}
+            </span>
+          </span>
+          <span
+            data-testid="summary-card-summary"
+            className="block mt-0.5 pl-[18px] text-[11px] leading-relaxed text-neutral-500"
+          >
+            {summary.summary}
+          </span>
+        </>
+      ) : (
+        <span className="flex items-center gap-1.5 min-w-0 text-xs text-neutral-700">
+          <FileText size={12} className="shrink-0 text-neutral-400" />
+          <span data-testid="summary-card-placeholder" className="truncate">
+            {revisionLabel ? `${revisionLabel} · ` : ""}
+            {firstLineOf(message.content)}
+          </span>
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ============================================
 // MESSAGE BUBBLE
 // ============================================
 
@@ -619,11 +788,18 @@ function MessageBubble({
   isPulsing = false,
   onEdit,
   onRetry,
+  summary,
+  onOpenSheet,
 }: {
   message: ChatMessage;
   isPulsing?: boolean;
   onEdit?: () => void;
   onRetry?: () => void;
+  /** B5: the reply_summary attached to this turn (chat sessions only). */
+  summary?: ReplySummaryEntry;
+  /** B5: present = render the assistant turn as a summary CARD whose click focuses its
+   *  sheet (locked 3); absent = classic full-markdown bubble (build sessions). */
+  onOpenSheet?: () => void;
 }) {
   const { chatPanel: chatPanelT } = useTranslation();
   const language = useI18nStore((s) => s.language);
@@ -804,6 +980,15 @@ function MessageBubble({
               </div>
             )}
           </div>
+        ) : onOpenSheet ? (
+          /* B5 summary card (locked 3): the full reply lives in the sheet panel; the
+             transcript carries the compact card. Redaction still applies to the
+             placeholder line (it renders raw reply text). */
+          <SummaryCard
+            message={{ ...message, content: redactProviderIdentity(message.content) }}
+            summary={summary}
+            onOpen={onOpenSheet}
+          />
         ) : (
           <div
             className={`text-xs leading-relaxed break-words text-neutral-700 chat-markdown ${
@@ -1072,8 +1257,10 @@ function DetailLine({ entry }: { entry: OutputEntry }) {
  *  Renders the live thinking section (auto-expanded until the answer starts, then it
  *  collapses) above the streamed answer. Both surfaces render through the provider-identity
  *  redactor — applied to the ACCUMULATED buffer, so a name split across chunks can never
- *  flash on screen (the historical "sonnet" leak). */
-function StreamingChatSection({ sessionId }: { sessionId: string }) {
+ *  flash on screen (the historical "sonnet" leak). In chat sessions (`asSheetCard`) the
+ *  streamed answer renders as the summary card's PLACEHOLDER - the truncated first line
+ *  (locked decision 8) - because the full reply's home is the sheet panel, not the rail. */
+function StreamingChatSection({ sessionId, asSheetCard }: { sessionId: string; asSheetCard?: boolean }) {
   const text = useOrchestrationStore((s) => s.streamingChat[sessionId] || '');
   const thinking = useOrchestrationStore((s) => s.streamingThinking[sessionId] || '');
   const stripped = stripCodeBlocks(redactProviderIdentity(text)).trim();
@@ -1087,7 +1274,18 @@ function StreamingChatSection({ sessionId }: { sessionId: string }) {
       />
       <div className="flex-1 min-w-0">
         {thinking.trim() && <ThinkingBlock text={thinking} live={!stripped} />}
-        {stripped && (
+        {stripped && asSheetCard ? (
+          <div
+            data-testid="summary-card-streaming"
+            className="w-full bg-white border border-neutral-200 rounded-lg px-3 py-2 shadow-sm"
+          >
+            <span className="flex items-center gap-1.5 min-w-0 text-xs text-neutral-700">
+              <FileText size={12} className="shrink-0 text-neutral-400 animate-pulse" />
+              <span className="truncate">{firstLineOf(stripped)}</span>
+              <span className="inline-block w-0.5 h-3.5 bg-teal-600 shrink-0 animate-pulse" />
+            </span>
+          </div>
+        ) : stripped ? (
           <div className="text-xs leading-relaxed break-words text-neutral-700 chat-markdown">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -1097,7 +1295,7 @@ function StreamingChatSection({ sessionId }: { sessionId: string }) {
             </ReactMarkdown>
             <span className="inline-block w-0.5 h-3.5 bg-teal-600 ml-0.5 -mb-0.5 animate-pulse" />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

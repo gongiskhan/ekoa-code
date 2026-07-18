@@ -151,7 +151,7 @@ export function emitChatAnswer(userId: string, ev: { sessionId: string; sourceRu
  *  on success; a failed summarisation emits nothing (the client keeps its placeholder). */
 export function emitReplySummary(
   userId: string,
-  ev: { sessionId: string; sheetId: string; revisionId: string; title: string; summary: string },
+  ev: { sessionId: string; sheetId: string; revisionId: string; title: string; summary: string; revision?: number },
 ): void {
   const payload: NotificationEvent = { type: 'reply_summary', ...ev };
   sseManager.emit('notifications', userId, 'reply_summary', payload);

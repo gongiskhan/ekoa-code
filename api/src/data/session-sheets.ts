@@ -14,7 +14,16 @@ export interface SheetDeps {
   genId: () => string;
 }
 
-type MessageRow = Doc & { sessionId?: string; role?: string; content?: unknown; timestamp?: string };
+type MessageRow = Doc & {
+  sessionId?: string;
+  role?: string;
+  content?: unknown;
+  timestamp?: string;
+  /** B.B back-reference: an assistant turn that REVISED an existing sheet carries that sheet's
+   *  ids in metadata (written by the chat pipeline, B5). Such a turn belongs to its sheet and
+   *  must never derive a second one. */
+  metadata?: { sheetId?: unknown };
+};
 
 const DERIVED_SHEET_PREFIX = 'sheet-';
 
@@ -36,9 +45,12 @@ function sheetTitleFrom(content: string): string {
 }
 
 /** The read-time derived view of one assistant message as a one-revision sheet, or null when
- *  the row is not a sheet-bearing message (non-assistant, or empty/non-string content). */
+ *  the row is not a sheet-bearing message (non-assistant, empty/non-string content, or a
+ *  revision turn back-referencing an existing sheet - locked decision 5: a reply that revised
+ *  a sheet lives on THAT sheet, never as a new derived one). */
 function deriveSheet(m: MessageRow): SessionSheetDoc | null {
   if (m.role !== 'assistant' || typeof m.content !== 'string' || !m.content.trim()) return null;
+  if (typeof m.metadata?.sheetId === 'string' && m.metadata.sheetId) return null;
   return {
     sheetId: derivedSheetId(m._id),
     title: sheetTitleFrom(m.content),
@@ -91,6 +103,20 @@ async function deriveById(session: SessionDoc, sheetId: string): Promise<Session
   const m = (await messages.get(messageId)) as MessageRow | null;
   if (!m || m.sessionId !== session._id) return null;
   return deriveSheet(m);
+}
+
+/**
+ * Resolve one sheet by id: the stored subdocument when materialised, else the derived view
+ * (deterministic `sheet-<messageId>` ids only). Used by the chat pipeline's agent-revision
+ * routing (B5) to read the base (latest) content BEFORE appending - the diff basis the
+ * revision-turn summary needs. Returns null for unknown sheets.
+ */
+export async function findSessionSheet(sessionId: string, sheetId: string): Promise<SessionSheetDoc | null> {
+  const session = await sessions.get(sessionId);
+  if (!session) return null;
+  const stored = (session.sheets ?? []).find((s) => s.sheetId === sheetId);
+  if (stored) return stored;
+  return deriveById(session, sheetId);
 }
 
 /**

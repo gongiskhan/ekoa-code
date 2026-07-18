@@ -17,7 +17,8 @@
  *   - A consistent footer: provenance (memoriesUsed / traceId from the source message's
  *     metadata - the B1 writers), an EXTENSIBLE actions array (editar / copiar /
  *     promover-stub; Part C appends ouvir), and 2-3 heuristic follow-up suggestions
- *     that draft into the composer.
+ *     that draft into the composer AND set the composer chip to target THIS sheet
+ *     (the pill's intent is an edit of the sheet it sits under - locked 6's manual SET).
  *   - editar posts to the B1 revisions endpoint (who/when/what recorded server-side)
  *     and renders the new revision; prev/next navigation walks revisions[].
  *   - Revise-in-place (locked 5): when a sheet gains a revision - a local edit or a
@@ -193,6 +194,12 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
   const { notifications } = useApi();
   const isExecuting = useOrchestrationStore((s) => s.isExecuting);
   const setComposerDraft = useOrchestrationStore((s) => s.setComposerDraft);
+  const setEditTarget = useOrchestrationStore((s) => s.setEditTarget);
+  const setSessionLatestSheet = useOrchestrationStore((s) => s.setSessionLatestSheet);
+  const setSheetLinks = useOrchestrationStore((s) => s.setSheetLinks);
+  // B5 focus seam: the transcript's summary cards request a scroll-to + flash through the
+  // store (never this component's DOM). seq-keyed so repeat clicks re-fire.
+  const sheetFocus = useOrchestrationStore((s) => (sessionId ? s.sheetFocus[sessionId] : undefined));
   const messages = useOrchestrationStore((s) => (sessionId ? s.messages[sessionId] : undefined));
 
   // The loaded feed is keyed by the session it belongs to, so a session switch simply
@@ -237,8 +244,10 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
     return () => clearTimeout(timer);
   }, [copiedId]);
 
-  /** Scroll-to + brief highlight (locked 5's revise-in-place behavior). */
-  const flashSheet = useCallback((sheetId: string) => {
+  /** Scroll-to + brief highlight (locked 5's revise-in-place behavior). `force` scrolls
+   *  even when auto-follow is disengaged - an EXPLICIT card click is user intent, unlike a
+   *  background revision arriving while the reader scrolled up. */
+  const flashSheet = useCallback((sheetId: string, opts?: { force?: boolean }) => {
     setHighlightId(sheetId);
     if (highlightTimer.current) clearTimeout(highlightTimer.current);
     highlightTimer.current = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
@@ -247,7 +256,7 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
     requestAnimationFrame(() => {
       // Highlight always; scroll only while auto-follow is engaged - a reader who
       // scrolled up is never yanked to the revised sheet (codex B4 finding 1).
-      if (!autoFollowRef.current) return;
+      if (!opts?.force && !autoFollowRef.current) return;
       scrollRef.current
         ?.querySelector(`[data-sheet-id="${CSS.escape(sheetId)}"]`)
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -316,6 +325,49 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
       if (event.sessionId === sessionId) void loadFeed();
     });
   }, [notifications, sessionId, loadFeed]);
+
+  // B5 chip target: publish the most recently TOUCHED sheet (latest revision createdAt;
+  // transcript order breaks ties) - the heuristic's "most recent sheet". Rides every feed
+  // commit (initial load, settle refetch, local edit), so the chip always names server truth.
+  // Alongside it (codex fix 2): the createdFromMessageId back-references, the transcript
+  // cards' by-message-id card->sheet resolution source when no summary/stamp exists.
+  useEffect(() => {
+    if (!feed) return;
+    let pick: Sheet | null = null;
+    let pickAt = "";
+    const links: Record<string, string> = {};
+    for (const s of feed.items) {
+      links[s.createdFromMessageId] = s.sheetId;
+      const at = s.revisions[s.revisions.length - 1]?.createdAt ?? "";
+      if (!pick || at >= pickAt) {
+        pick = s;
+        pickAt = at;
+      }
+    }
+    setSessionLatestSheet(feed.forSession, pick ? { sheetId: pick.sheetId, title: pick.title } : null);
+    setSheetLinks(feed.forSession, links);
+  }, [feed, setSessionLatestSheet, setSheetLinks]);
+
+  // B5 focus seam consumption: a summary-card click lands here as a seq-bumped request.
+  // The baseline effect adopts whatever seq existed BEFORE this mount so a remount never
+  // replays a stale request (effects run in declaration order).
+  const lastFocusSeq = useRef(0);
+  useEffect(() => {
+    lastFocusSeq.current = sessionId
+      ? (useOrchestrationStore.getState().sheetFocus[sessionId]?.seq ?? 0)
+      : 0;
+  }, [sessionId]);
+  useEffect(() => {
+    if (!sheetFocus || sheetFocus.seq <= lastFocusSeq.current) return;
+    lastFocusSeq.current = sheetFocus.seq;
+    const items = feedRef.current?.forSession === sessionId ? feedRef.current.items : null;
+    if (!items || items.length === 0) return;
+    const targetId = sheetFocus.sheetId ?? items[items.length - 1]!.sheetId;
+    // An id the feed does not hold (e.g. a local-only mirror turn whose summary never
+    // arrived) must not flash a misleading card - do nothing.
+    if (!items.some((s) => s.sheetId === targetId)) return;
+    flashSheet(targetId, { force: true });
+  }, [sheetFocus, sessionId, flashSheet]);
 
   // null = not loaded yet (skeleton); [] = loaded, session has no sheets.
   const sheets: Sheet[] | null = !sessionId
@@ -614,7 +666,14 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
                     <button
                       key={suggestion}
                       data-testid="sheet-follow-up"
-                      onClick={() => sessionId && setComposerDraft(sessionId, suggestion)}
+                      onClick={() => {
+                        if (!sessionId) return;
+                        setComposerDraft(sessionId, suggestion);
+                        // The pill lives in THIS sheet's footer - its intent is an edit of
+                        // this sheet, so it also sets the composer chip to target it (the
+                        // manual-SET affordance locked 6 needs; the X remains the dismiss).
+                        setEditTarget(sessionId, { sheetId: sheet.sheetId, title: sheet.title });
+                      }}
                       className="text-[11px] px-2.5 py-1 rounded-full border border-neutral-200 text-neutral-600 hover:border-teal-300 hover:text-teal-700 hover:bg-teal-50 transition-colors"
                     >
                       {suggestion}

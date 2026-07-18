@@ -148,6 +148,54 @@ interface CodeBlock {
   code: string;
 }
 
+/**
+ * B5 settle-time link resolution (codex fix 2 - server truth for the card->sheet linkage).
+ * The run pipeline persists the reply BEFORE emitting `complete`, so after settle the newest
+ * assistant row whose content equals the reply IS this run's persisted turn. Its ids get
+ * stamped onto the local mirror: a revision reply carries its back-reference metadata
+ * (sheetId/revisionId/revisionNumber); a fresh reply - including the server's
+ * fallback-to-fresh on an unknown/foreign/stale reviseSheetId - carries none, and its sheet
+ * is resolved from the live sheets read by createdFromMessageId. Resolution failure stamps
+ * nothing: the card stays link-less (click = no-op) until the reply_summary event or a
+ * reload supplies server ids - never a wrong-sheet focus.
+ */
+async function resolveMirrorSheetLink(sessionId: string, mirrorId: string, runId: string): Promise<void> {
+  const rowsRes = await tryCall(() => api.sessions.getMessages({ id: sessionId }));
+  if (!rowsRes.ok) return;
+  const rows = rowsRes.data.items;
+  // Route by the run's traceId (persisted server-side since B1) - never by content
+  // recency: two same-content replies settling out of order must not cross-stamp.
+  let reply: (typeof rows)[number] | undefined;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    const trace = (r.metadata as { traceId?: unknown } | undefined)?.traceId;
+    if (r.role === "assistant" && trace === runId) {
+      reply = r;
+      break;
+    }
+  }
+  if (!reply) return;
+  const meta = (reply.metadata ?? {}) as { sheetId?: unknown; revisionId?: unknown; revisionNumber?: unknown };
+  if (typeof meta.sheetId === "string" && typeof meta.revisionId === "string") {
+    useOrchestrationStore.getState().stampTurnSheetLink(sessionId, mirrorId, {
+      sheetId: meta.sheetId,
+      revisionId: meta.revisionId,
+      ...(typeof meta.revisionNumber === "number" ? { revisionNumber: meta.revisionNumber } : {}),
+    });
+    return;
+  }
+  const sheetsRes = await tryCall(() => api.sheets.list({ id: sessionId }));
+  if (!sheetsRes.ok) return;
+  const replyId = String(reply.id);
+  const sheet = sheetsRes.data.items.find((s) => s.createdFromMessageId === replyId);
+  const rev = sheet?.revisions[sheet.revisions.length - 1];
+  if (!sheet || !rev) return;
+  useOrchestrationStore.getState().stampTurnSheetLink(sessionId, mirrorId, {
+    sheetId: sheet.sheetId,
+    revisionId: rev.revisionId,
+  });
+}
+
 // ============================================
 // MAIN PAGE COMPONENT
 // ============================================
@@ -844,6 +892,25 @@ export default function UnifiedChatPage() {
     });
   }, [notifications]);
 
+  // B5 — reply_summary subscription (locked decisions 3 + 8). The B2 post-run hook delivers
+  // {sessionId, sheetId, revisionId, title, summary, revision?} on the per-user notifications
+  // channel after the run stream is torn down. Attaching it upgrades the newest assistant
+  // turn's placeholder card to title + summary; when it never arrives (summary failure,
+  // reload) the card keeps its first-line placeholder - decision B.E's degradation.
+  useEffect(() => {
+    if (!notifications) return;
+    return notifications.on("reply_summary", (event) => {
+      if (!event.sessionId) return;
+      useOrchestrationStore.getState().attachReplySummary(event.sessionId, {
+        sheetId: event.sheetId,
+        revisionId: event.revisionId,
+        title: event.title,
+        summary: event.summary,
+        ...(event.revision !== undefined ? { revision: event.revision } : {}),
+      });
+    });
+  }, [notifications]);
+
   // Integration build intent — chat-agent emits <ekoa-integration-build-redirect/>,
   // server converts to integration_build_intent SSE. Switch the side panel to
   // the integration builder for this chat session.
@@ -958,6 +1025,17 @@ export default function UnifiedChatPage() {
       }
     }
 
+    // B5 chip consumption (locked 5+6+7): resolve the revision target NOW, synchronously,
+    // before any await - and ONLY from the VISIBLE chip state at send time. Setting the chip
+    // is the job of the typing/draft-time heuristic and the explicit affordances (a follow-up
+    // pill targets its sheet; the X dismisses); no chip shown (auto with nothing set, or
+    // dismissed) means the send is a fresh sheet - a revision is never silently inferred here
+    // (locked 6). Consumed = reset to auto for the next turn.
+    const chipStore = useOrchestrationStore.getState();
+    const chipState = chipStore.editTargets[sessionId];
+    const reviseSheetId = chipState?.sheetId;
+    if (chipState !== undefined) chipStore.setEditTarget(sessionId, undefined);
+
     const attachmentsForMessage = pendingAttachments.length > 0
       ? pendingAttachments.map((a) => ({ displayName: a.displayName, type: a.type }))
       : undefined;
@@ -1009,6 +1087,9 @@ export default function UnifiedChatPage() {
         message: text,
         ...(uploadRefs.length > 0 ? { attachments: uploadRefs } : {}),
         ...(references.length > 0 ? { references } : {}),
+        // B5 (locked 5+7): the chip's target - the api persists the reply as a NEW
+        // REVISION on this sheet instead of spawning a new one.
+        ...(reviseSheetId ? { reviseSheetId } : {}),
       });
       chatTraceIdRef.current = runId;
 
@@ -1068,7 +1149,7 @@ export default function UnifiedChatPage() {
         );
         // Local mirror only: the run pipeline persists the assistant turn
         // server-side (ch05 §5.6.1 step 7).
-        addMessage(sessionId!, {
+        const mirrorId = addMessage(sessionId!, {
           role: "assistant",
           content: finalContent,
           metadata: {
@@ -1084,8 +1165,18 @@ export default function UnifiedChatPage() {
               : {}),
             // FC-402: the trust chip's per-turn data (transient; never server-persisted).
             ...(localActivity ? { localFileActivity: localActivity } : {}),
+            // B5 (codex fix 2): deliberately NO sheet ids here. Stamping reviseSheetId
+            // would be the CLIENT'S guess - wrong whenever the server fell back to a fresh
+            // sheet (unknown/foreign/stale id). The settle-time resolution below stamps the
+            // ids the server actually persisted.
           },
         }, { persist: false });
+        // B5 (codex fix 2): resolve the card->sheet link from SERVER truth at settle - the
+        // persisted turn located by this run's traceId, its back-reference metadata, or the
+        // fresh sheet's createdFromMessageId - never the chip's reviseSheetId.
+        // The lexical runId from this run's closure - the shared ref is already
+        // cleared by finishStream() and can belong to a newer run.
+        void resolveMirrorSheetLink(sessionId!, mirrorId, runId);
       };
 
       const handleError = (event: { message?: string }) => {

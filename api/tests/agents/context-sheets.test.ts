@@ -184,4 +184,42 @@ describe('loadHistory wiring (the ONE history-assembly point applies the canonic
     await seedSession('s1');
     expect(await loadHistory('s1')).toEqual([]);
   });
+
+  it('an agent revision-carrier turn (metadata.sheetId) derives no second sheet and is dropped from history (B5, locked 5+7)', async () => {
+    await seedSession('s1');
+    await seedMessage('m1', 's1', 'user', 'faz a minuta', 1);
+    await seedMessage('m2', 's1', 'assistant', 'minuta original', 2);
+    await seedMessage('m3', 's1', 'user', 'torna-a mais formal', 3);
+    // What the B5 chat pipeline persists for a chip-send: the revision on m2's sheet plus the
+    // carrier assistant turn back-referencing that sheet (decision B.B).
+    await appendSheetRevision(
+      's1',
+      derivedSheetId('m2'),
+      { content: 'minuta mais formal', instruction: 'torna-a mais formal', editSource: 'agent' },
+      deps,
+    );
+    await messages.insert({
+      _id: 'm4',
+      sessionId: 's1',
+      role: 'assistant',
+      content: 'minuta mais formal',
+      timestamp: t(4),
+      metadata: { sheetId: derivedSheetId('m2'), revisionId: 'rev-x', revisionNumber: 2 },
+    });
+
+    // Read path: still ONE sheet (multiple cards -> one sheet); the carrier derives nothing.
+    const session = await sessions.get('s1');
+    const sheets = await listSessionSheets(session!);
+    expect(sheets.map((s) => s.sheetId)).toEqual([derivedSheetId('m2')]);
+    expect(sheets[0]!.revisions).toHaveLength(2);
+    expect(sheets[0]!.revisions[1]!.editSource).toBe('agent');
+
+    // History: the ORIGIN turn is rewritten to the latest revision and the carrier turn is
+    // dropped - canonical content is never sent twice (locked decision 7).
+    expect(await loadHistory('s1')).toEqual([
+      { role: 'user', content: 'faz a minuta' },
+      { role: 'assistant', content: 'minuta mais formal' },
+      { role: 'user', content: 'torna-a mais formal' },
+    ]);
+  });
 });

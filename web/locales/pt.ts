@@ -584,6 +584,10 @@ export const pt: Translations = {
     followUpSummarize: 'Resumir os pontos principais',
     followUpSimplify: 'Simplificar a linguagem',
     followUpFormal: 'Tornar o tom mais formal',
+    editingChip: (title: string) => `A editar: ${title}`,
+    editingChipDismiss: 'Remover destino de edição; a próxima resposta cria uma nova folha',
+    revisionCard: (n: number) => `Revisão ${n}`,
+    summaryCardOpen: 'Ver a folha no painel',
   },
 
   chatPanel: {

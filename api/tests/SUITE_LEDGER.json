@@ -101,7 +101,8 @@
         "live-bridge",
         "branding-colors",
         "chat-layout-unified",
-        "sheet-feed"
+        "sheet-feed",
+        "summary-cards-chip"
       ]
     }
   },
@@ -139,7 +140,9 @@
       "use-bridge-presence",
       "device-code",
       "bridge-local",
-      "refusal-file-request"
+      "refusal-file-request",
+      "lib/edit-intent",
+      "orchestration-reply-summary"
     ],
     "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list \u2014 the census was red again).",
     "mock_update_needed": [
@@ -419,6 +422,12 @@
         "count": 1,
         "targetGate": "G12",
         "note": "mega-run 20260717-190134 slice B2: tests/agents/reply-summary.test.ts (the decision-B.E post-run hook in isolation over the fake chokepoint transport - fresh-sheet turn emits ONE FAST user_work reply-summary call + ONE schema-valid reply_summary notification; revision turn feeds the model the edit instruction + compact diff basis, never the whole reply; model failure / unparseable output emit NO event and never throw; compactDiffBasis caps). Pipeline threading (event ids == the persisted turn's derived sheet ids, notifications channel not the run stream) is pinned in chat-lifecycle.test.ts; the event schema representability in shared/src/contract.test.ts. Green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
+        "group": "agent-revision routing B5 (chip -> revision on the SAME sheet)",
+        "count": 0,
+        "targetGate": "G12",
+        "note": "mega-run 20260717-190134 slice B5: no new vitest FILES - extensions to existing suites (count stays 0 to keep the file census honest). chat-lifecycle.test.ts gains the reviseSheetId pipeline tests (reply persists as an AGENT revision on the SAME sheet with instruction = user message; the persisted turn back-references sheetId/revisionId/revisionNumber; reply_summary carries the revised sheet's ids + revision ordinal; the hook receives the REVISION-turn input - instruction + compact diff, never the whole reply; unknown sheet falls back to fresh). context-sheets.test.ts gains the carrier-turn rule (a metadata.sheetId assistant turn derives no second sheet and is dropped from model-bound history - locked 5+7). contract/chat.test.ts + shared/src/contract.test.ts pin the extended ChatRunCreateRequest.reviseSheetId and the reply_summary.revision field; contract/chat.test.ts also pins run-creation session ownership (another user's / unknown sessionId -> uniform 404, the B1 sessions/sheets idiom). The e2e half is the summary-cards-chip spec (band4); the client-side summary ID-routing/buffering (codex B5 fixes 1+2) is pinned by frontend_unit orchestration-reply-summary. Green in the per-PR vitest lane from landing; ratchet applies."
       }
     ]
   },

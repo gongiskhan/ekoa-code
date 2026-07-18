@@ -43,6 +43,11 @@ export const ChatRunCreateRequest = z.object({
   // injects one "autorizações locais ativas nesta sessão" line so the model calls
   // delegate_to_local with real refs.
   references: z.array(ReferenceToken).max(20).optional(),
+  // Part B locked decisions 5+7 (mega-run B5): when the composer chip targets a sheet, the
+  // completed reply persists as a NEW REVISION on that sheet (editSource 'agent', the user
+  // message as the instruction) instead of spawning a new sheet. Unknown sheet ids fall back
+  // to the fresh-sheet behavior server-side - the chip is a default, never a hard failure.
+  reviseSheetId: z.string().min(1).optional(),
 });
 export type ChatRunCreateRequest = z.infer<typeof ChatRunCreateRequest>;
 

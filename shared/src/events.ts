@@ -208,6 +208,11 @@ export const NotificationEvent = z.discriminatedUnion('type', [
     revisionId: z.string(),
     title: z.string(),
     summary: z.string(),
+    // Present only on REVISION turns (mega-run B5, locked decision 5): the 1-based ordinal of
+    // the revision this reply appended to an EXISTING sheet, so the transcript card can render
+    // the revision framing ("Revisão 2 · ...") without refetching the sheet. Absent on fresh
+    // turns; old clients ignore it (optional = backwards compatible).
+    revision: z.number().int().positive().optional(),
   }),
 ]);
 export type NotificationEvent = z.infer<typeof NotificationEvent>;

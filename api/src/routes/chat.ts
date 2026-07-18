@@ -11,6 +11,7 @@ import { can } from '../auth/capabilities.js';
 import { sseManager } from '../events/sse-manager.js';
 import { createChatRun, executeChatRun, getRun, cancelRun } from '../agents/index.js';
 import { chatRunView } from '../agents/registry.js';
+import { ownedSession } from '../services/platform-crud.js';
 import { actorOf, notFound, parseBody, sendError } from './helpers.js';
 
 export function chatRouter(deps: { now: () => number; genId: () => string }): Router {
@@ -31,7 +32,7 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
 
   r.use(requireAuth);
 
-  r.post('/runs', (req: AuthedRequest, res: Response) => {
+  r.post('/runs', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, ChatRunCreateRequest, req.body);
     if (!body) return;
     const actor = actorOf(req);
@@ -41,6 +42,10 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
     if (!can(actor, 'canUseChat')) {
       return sendError(res, 'FORBIDDEN', 'Não tem permissão para usar o assistente; pode pedir ao administrador da organização.', { capability: 'canUseChat' });
     }
+    // Session ownership (the B1 sessions/sheets idiom): the run writes into this session's
+    // transcript and sheets, so an unknown or other-user session is the uniform 404 BEFORE
+    // any run exists — never a run created against someone else's conversation.
+    if (!(await ownedSession(actor.userId, body.sessionId))) return notFound(res);
     const input = {
       actor,
       username: req.user!.username,
@@ -49,6 +54,7 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
       language: body.language,
       ...(body.attachments ? { attachments: body.attachments } : {}),
       ...(body.references ? { references: body.references } : {}),
+      ...(body.reviseSheetId ? { reviseSheetId: body.reviseSheetId } : {}),
       deps,
     };
     const { runId } = createChatRun(input);

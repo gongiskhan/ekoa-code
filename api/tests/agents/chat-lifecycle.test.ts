@@ -4,6 +4,7 @@ import { sseManager } from '../../src/events/sse-manager.js';
 import { createChatRun, executeChatRun } from '../../src/agents/chat.js';
 import { getRun } from '../../src/agents/registry.js';
 import { messages, sessions } from '../../src/data/stores.js';
+import { listSessionSheets, findSessionSheet } from '../../src/data/session-sheets.js';
 import { BUILD_MARKER, INTEGRATION_MARKER } from '../../src/agents/markers.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
 import type { FakeTransportScript } from './_fake-transport.js';
@@ -227,5 +228,160 @@ describe('chat run pipeline + streaming contract', () => {
     const evs = chatEventsFor(runId);
     expect(evs.some((e) => e.type === 'complete' || e.type === 'error')).toBe(false);
     expect(getRun(runId)?.status).toBe('cancelled');
+  });
+
+  it('reviseSheetId: the reply persists as an AGENT revision on the SAME sheet, the turn back-references it, and the summary hook gets the REVISION-turn input (B5, locked 5+7)', async () => {
+    // The origin assistant turn -> the derived sheet the composer chip targets. A common line
+    // that does NOT change lets us prove the summary hook received the DIFF basis, never the
+    // whole reply (decision B.E).
+    const baseBody = 'Minuta de carta\n\nParagrafo comum que nao muda.\n\nCumprimentos informais.';
+    const revisedBody = 'Minuta de carta\n\nParagrafo comum que nao muda.\n\nCom os melhores cumprimentos.';
+    const instruction = 'Torna a despedida mais formal';
+    // Seeded BEFORE the run's deps.now() epoch so transcript order (timestamp sort) holds.
+    await messages.insert({ _id: 'm-origin', sessionId: 's1', role: 'assistant', content: baseBody, timestamp: '2023-11-01T00:00:01.000Z' });
+
+    const transport = resetAgentState({
+      finalText: revisedBody,
+      oneShotText: '{"title":"Despedida mais formal","summary":"A despedida da minuta ficou formal."}',
+    });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: instruction, language: 'pt', reviseSheetId: 'sheet-m-origin', deps };
+    const { runId } = createChatRun(input);
+    await executeChatRun(runId, input);
+
+    // 1. Revision persistence: the SAME sheet grew one AGENT revision carrying the user
+    //    message as its instruction - no new sheet was spawned (locked 5).
+    const session = (await sessions.get('s1'))!;
+    const sheets = await listSessionSheets(session);
+    expect(sheets.map((s) => s.sheetId)).toEqual(['sheet-m-origin']);
+    const revs = sheets[0]!.revisions;
+    expect(revs).toHaveLength(2);
+    expect(revs[1]).toMatchObject({ content: revisedBody, editSource: 'agent', instruction });
+
+    // 2. The persisted assistant turn back-references the revised sheet (decision B.B).
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' }, { timestamp: 1 })) as unknown as Array<{ _id: string; metadata?: Record<string, unknown> }>;
+    expect(assistant).toHaveLength(2);
+    expect(assistant[1]!.metadata).toMatchObject({ sheetId: 'sheet-m-origin', revisionId: revs[1]!.revisionId, revisionNumber: 2 });
+
+    // 3. The reply_summary event carries the REVISED sheet's ids + the revision ordinal, so
+    //    the transcript card focuses the SAME sheet (locked 5).
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.stream === 'notifications' && e.type === 'reply_summary')).toBe(true);
+    });
+    const notif = events.find((e) => e.stream === 'notifications' && e.type === 'reply_summary')!;
+    expect(NotificationEvent.safeParse(notif.data).success).toBe(true);
+    expect(notif.data).toMatchObject({
+      type: 'reply_summary',
+      sessionId: 's1',
+      sheetId: 'sheet-m-origin',
+      revisionId: revs[1]!.revisionId,
+      revision: 2,
+    });
+
+    // 4. The hook received the REVISION-turn input (B2's waiting producer): the edit
+    //    instruction + the compact diff basis - changed lines only, never the whole reply.
+    const call = transport.oneShotCalls.find((c) => /revision/i.test(c.systemPrompt ?? ''));
+    expect(call, 'one revision-turn summary call').toBeTruthy();
+    expect(call!.prompt).toContain(`Edit instruction: ${instruction}`);
+    expect(call!.prompt).toContain('- Cumprimentos informais.');
+    expect(call!.prompt).toContain('+ Com os melhores cumprimentos.');
+    expect(call!.prompt).not.toContain('Paragrafo comum que nao muda.');
+  });
+
+  it('an UNKNOWN reviseSheetId falls back to fresh-sheet behavior (the chip is a default, never a hard failure)', async () => {
+    resetAgentState({ finalText: 'Resposta nova.', oneShotText: '{"title":"Titulo","summary":"Resumo."}' });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: 'torna mais curto', language: 'pt', reviseSheetId: 'sheet-nao-existe', deps };
+    const { runId } = createChatRun(input);
+    await executeChatRun(runId, input);
+    expect(chatEventsFor(runId).some((e) => e.type === 'complete')).toBe(true);
+
+    // No revision landed anywhere; the reply derives its OWN sheet with no back-reference.
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' })) as unknown as Array<{ _id: string; metadata?: Record<string, unknown> }>;
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]!.metadata?.sheetId).toBeUndefined();
+    const session = (await sessions.get('s1'))!;
+    const sheets = await listSessionSheets(session);
+    expect(sheets.map((s) => s.sheetId)).toEqual([`sheet-${assistant[0]!._id}`]);
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.stream === 'notifications' && e.type === 'reply_summary')).toBe(true);
+    });
+    const notif = events.find((e) => e.stream === 'notifications' && e.type === 'reply_summary')!;
+    expect(notif.data).toMatchObject({ sheetId: `sheet-${assistant[0]!._id}`, revisionId: `rev-${assistant[0]!._id}` });
+    expect((notif.data as { revision?: number }).revision).toBeUndefined();
+  });
+
+  it('a FOREIGN reviseSheetId (a well-formed sheet-<messageId> from ANOTHER session) falls back to FRESH - deriveById\'s session guard rejects it and neither session record is corrupted (codex fix 4)', async () => {
+    // A message in ANOTHER session of the SAME user: its derived id is perfectly well-formed,
+    // so only the session guard stands between it and a cross-session revision.
+    await sessions.insert({ _id: 's2', userId: 'u1', title: 't2', status: 'active', messageCount: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await messages.insert({ _id: 'm-foreign', sessionId: 's2', role: 'assistant', content: 'Folha de outra sessao.', timestamp: '2023-11-01T00:00:01.000Z' });
+
+    // The rejection is the SESSION GUARD in deriveById, not the id shape: the identical id
+    // resolves in its OWN session and returns null for s1.
+    expect(await findSessionSheet('s2', 'sheet-m-foreign')).not.toBeNull();
+    expect(await findSessionSheet('s1', 'sheet-m-foreign')).toBeNull();
+
+    resetAgentState({ finalText: 'Resposta nova.', oneShotText: '{"title":"Titulo","summary":"Resumo."}' });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: 'torna mais curto', language: 'pt', reviseSheetId: 'sheet-m-foreign', deps };
+    const { runId } = createChatRun(input);
+    await executeChatRun(runId, input);
+    expect(chatEventsFor(runId).some((e) => e.type === 'complete')).toBe(true);
+
+    // FRESH fallback in s1: the reply derives its OWN sheet, no back-reference.
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' })) as unknown as Array<{ _id: string; metadata?: Record<string, unknown> }>;
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]!.metadata?.sheetId).toBeUndefined();
+    const s1 = (await sessions.get('s1'))!;
+    expect(await listSessionSheets(s1)).toMatchObject([{ sheetId: `sheet-${assistant[0]!._id}` }]);
+    // Neither session record was corrupted: no sheet materialised on s1, and the foreign
+    // session's sheet gained NO revision.
+    expect(s1.sheets ?? []).toEqual([]);
+    const foreign = (await findSessionSheet('s2', 'sheet-m-foreign'))!;
+    expect(foreign.revisions).toHaveLength(1);
+    expect((await sessions.get('s2'))!.sheets ?? []).toEqual([]);
+    // The reply_summary is the FRESH shape (no revision ordinal), with the fresh derived ids.
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.stream === 'notifications' && e.type === 'reply_summary')).toBe(true);
+    });
+    const notif = events.find((e) => e.stream === 'notifications' && e.type === 'reply_summary')!;
+    expect(notif.data).toMatchObject({ sheetId: `sheet-${assistant[0]!._id}`, revisionId: `rev-${assistant[0]!._id}` });
+    expect((notif.data as { revision?: number }).revision).toBeUndefined();
+  });
+
+  it('a STALE reviseSheetId (the sheet EXISTED as a derived view, then its base message was deleted) falls back to FRESH without corrupting the session record (codex fix 4)', async () => {
+    // The sheet is real first - derivable - then its base message disappears (e.g. a pruned
+    // transcript): the chip may still carry the id at send time.
+    await messages.insert({ _id: 'm-stale', sessionId: 's1', role: 'assistant', content: 'Folha antiga.', timestamp: '2023-11-01T00:00:01.000Z' });
+    expect(await findSessionSheet('s1', 'sheet-m-stale')).not.toBeNull();
+    await messages.delete('m-stale');
+    expect(await findSessionSheet('s1', 'sheet-m-stale')).toBeNull();
+
+    resetAgentState({ finalText: 'Resposta nova.', oneShotText: '{"title":"Titulo","summary":"Resumo."}' });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: 'torna mais curto', language: 'pt', reviseSheetId: 'sheet-m-stale', deps };
+    const { runId } = createChatRun(input);
+    await executeChatRun(runId, input);
+    expect(chatEventsFor(runId).some((e) => e.type === 'complete')).toBe(true);
+
+    // FRESH fallback: the reply derives its OWN sheet, the stale sheet stays gone, and the
+    // session record gained no materialised ghost of it.
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' })) as unknown as Array<{ _id: string; metadata?: Record<string, unknown> }>;
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]!.metadata?.sheetId).toBeUndefined();
+    const s1 = (await sessions.get('s1'))!;
+    expect(s1.sheets ?? []).toEqual([]);
+    expect(await listSessionSheets(s1)).toMatchObject([{ sheetId: `sheet-${assistant[0]!._id}` }]);
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.stream === 'notifications' && e.type === 'reply_summary')).toBe(true);
+    });
+    const notif = events.find((e) => e.stream === 'notifications' && e.type === 'reply_summary')!;
+    expect(notif.data).toMatchObject({ sheetId: `sheet-${assistant[0]!._id}`, revisionId: `rev-${assistant[0]!._id}` });
+    expect((notif.data as { revision?: number }).revision).toBeUndefined();
   });
 });

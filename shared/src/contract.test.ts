@@ -122,6 +122,37 @@ describe('shared contract', () => {
     // The routing/linkage fields are required - a summary that cannot be routed to its
     // session/sheet/revision is not representable.
     expect(NotificationEvent.safeParse({ type: 'reply_summary', title: 't', summary: 's' }).success).toBe(false);
+    // B5: revision turns carry the optional 1-based ordinal (fresh turns omit it; a
+    // non-positive one is not representable).
+    expect(
+      NotificationEvent.safeParse({
+        type: 'reply_summary',
+        sessionId: 's1',
+        sheetId: 'sheet-m1',
+        revisionId: 'r2',
+        title: 'Tom mais formal',
+        summary: 'A despedida ficou formal.',
+        revision: 2,
+      }).success,
+    ).toBe(true);
+    expect(
+      NotificationEvent.safeParse({
+        type: 'reply_summary',
+        sessionId: 's1',
+        sheetId: 'sheet-m1',
+        revisionId: 'r2',
+        title: 't',
+        summary: 's',
+        revision: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ChatRunCreateRequest accepts the B5 reviseSheetId (optional; empty string rejected)', async () => {
+    const { ChatRunCreateRequest } = await import('./chat.js');
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'torna mais curto', reviseSheetId: 'sheet-m1' }).success).toBe(true);
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'olá' }).success).toBe(true);
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'x', reviseSheetId: '' }).success).toBe(false);
   });
 
   it('AutomationRunEvent step: parses both a thin legacy event and an enriched one (§3.6.3)', async () => {

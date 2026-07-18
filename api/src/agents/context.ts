@@ -71,11 +71,16 @@ export function applyLatestSheetRevisions(
  * (§5.5.2 item 5).
  */
 export async function loadHistory(sessionId: string): Promise<Array<{ role: string; content: string }>> {
-  const rows = (await messagesStore.find({ sessionId }, { timestamp: 1 })) as Array<Doc & { role?: string; content?: unknown; metadata?: { providerError?: boolean } }>;
+  const allRows = (await messagesStore.find({ sessionId }, { timestamp: 1 })) as Array<Doc & { role?: string; content?: unknown; metadata?: { providerError?: boolean; sheetId?: unknown } }>;
+  // Revision-carrier turns (B5): an assistant message that REVISED an existing sheet
+  // back-references it via metadata.sheetId. Its content is already represented at the sheet's
+  // ORIGIN turn (rewritten to the latest revision below), so the carrier itself is dropped -
+  // locked decision 7: latest revision is canonical, never sent as a duplicate.
+  const rows = allRows.filter((m) => !(m.role === 'assistant' && typeof m.metadata?.sheetId === 'string' && m.metadata.sheetId));
   const session = await sessionsStore.get(sessionId);
   // Legacy sessions derive identity sheets (one revision == the message), so the substitution
   // is a no-op there; only user/agent-edited sheets actually rewrite their source turn.
-  const sheets = session ? await listSessionSheets(session, rows) : [];
+  const sheets = session ? await listSessionSheets(session, allRows) : [];
   const flagged = rows.map((m) => ({
     id: m._id,
     role: m.role ?? 'user',

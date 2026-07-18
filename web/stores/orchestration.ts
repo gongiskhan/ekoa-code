@@ -46,7 +46,26 @@ export interface ChatMessage {
      *  pre-drafted request to the org-admin queue - a refusal is never a dead end.
      *  `text` is the user's original request; `appId` the refused follow-up's artifact. */
     refusal?: { text: string; appId?: string };
+    /** B5 (decision B.B back-reference): set on an assistant turn that REVISED an existing
+     *  sheet - the revised sheet's ids, written server-side on persist. Presence = the reply
+     *  is a revision (renders the revision card framing and focuses the SAME sheet). */
+    sheetId?: string;
+    revisionId?: string;
+    /** 1-based ordinal of the appended revision (revision turns only). */
+    revisionNumber?: number;
   };
+}
+
+/** The B2 `reply_summary` payload attached to a transcript assistant turn (B5 summary cards).
+ *  Transient by design (decision B.E): summaries are never persisted, so a reload degrades
+ *  every card to its first-line placeholder - exactly the summary-failure path. */
+export interface ReplySummaryEntry {
+  sheetId: string;
+  revisionId: string;
+  title: string;
+  summary: string;
+  /** Present on revision turns: the 1-based ordinal of the appended revision. */
+  revision?: number;
 }
 
 export interface SessionState {
@@ -293,6 +312,33 @@ interface OrchestrationState {
   // is mounted. Not persisted.
   composerDraft: Record<string, string | undefined>;
 
+  // B5 summary cards: reply_summary payloads keyed session -> transcript message id.
+  // Transient (never persisted) - a reload keeps the first-line placeholders (B.E).
+  replySummaries: Record<string, Record<string, ReplySummaryEntry>>;
+
+  // B5 (codex fix 1): reply_summary events whose ID-matching turn has not landed yet, per
+  // session, oldest-first. Capped at MAX_PENDING_REPLY_SUMMARIES (oldest dropped); drained by
+  // addMessage / stampTurnSheetLink / loadSessionMessages when a matching turn appears.
+  pendingReplySummaries: Record<string, ReplySummaryEntry[]>;
+
+  // B5 (codex fix 2): the sheet feed's back-references, createdFromMessageId -> sheetId,
+  // published on every feed commit (server truth). The card click's by-message-id resolution
+  // source when no summary entry / stamped metadata exists. Not persisted.
+  sheetLinks: Record<string, Record<string, string>>;
+
+  // B5 chip: the most recently touched sheet per session, published by the sheet feed after
+  // each load (server truth). The chip's auto-set target. Not persisted.
+  sessionLatestSheet: Record<string, { sheetId: string; title: string } | null>;
+
+  // B5 chip state per session: undefined = auto (the heuristic may set it), null = dismissed
+  // (forces a new sheet for the next send; auto-set suppressed), object = active target.
+  editTargets: Record<string, { sheetId: string; title: string } | null | undefined>;
+
+  // B5 card click -> sheet focus signal: the store seam between the transcript and the feed
+  // (locked: no cross-component DOM reach). `seq` re-fires repeat clicks on the same sheet;
+  // sheetId null = focus the newest sheet. Not persisted.
+  sheetFocus: Record<string, { sheetId: string | null; seq: number } | undefined>;
+
   // Pending attachments
   pendingAttachments: FileAttachment[];
 
@@ -313,7 +359,7 @@ interface OrchestrationState {
   renameSession: (sessionId: string, name: string) => Promise<void>;
   loadSessions: () => Promise<void>;
 
-  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }) => void;
+  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }) => string;
   loadSessionMessages: (sessionId: string) => Promise<void>;
 
   // Job state management
@@ -368,6 +414,23 @@ interface OrchestrationState {
   // Composer draft restore (Stop puts the cancelled message back for editing)
   setComposerDraft: (sessionId: string, text: string | undefined) => void;
 
+  // B5 summary cards + composer chip + focus seam
+  /** ID-ROUTED attach (codex B5 fix 1 - no recency heuristic): the reply_summary event
+   *  carries the sheet/revision ids and attaches ONLY to the turn whose ids match (a stamped
+   *  or server-persisted back-reference, or a reloaded fresh turn's deterministic
+   *  `sheet-<messageId>`). No matching turn yet (fast summary, unstamped mirror, transcript
+   *  not loaded) -> the event is BUFFERED per session and consumed when the turn lands. */
+  attachReplySummary: (sessionId: string, entry: ReplySummaryEntry) => void;
+  /** Settle-time server-truth stamp (codex B5 fix 2): write the persisted reply's sheet ids
+   *  onto its local mirror turn, then drain any buffered summary waiting for those ids. */
+  stampTurnSheetLink: (sessionId: string, messageId: string, link: { sheetId: string; revisionId: string; revisionNumber?: number }) => void;
+  /** Published by the sheet feed on every commit: createdFromMessageId -> sheetId. */
+  setSheetLinks: (sessionId: string, links: Record<string, string>) => void;
+  setSessionLatestSheet: (sessionId: string, sheet: { sheetId: string; title: string } | null) => void;
+  setEditTarget: (sessionId: string, target: { sheetId: string; title: string } | null | undefined) => void;
+  /** Ask the sheet feed to scroll-to + flash a sheet (null = the newest one). */
+  requestSheetFocus: (sessionId: string, sheetId: string | null) => void;
+
   // Remove the last user message and everything after it; returns its text
   // (or null when there's no user message). Used by Stop to hand the message
   // back to the composer for editing/resending.
@@ -416,6 +479,62 @@ export interface ArtifactRef {
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+// B5 (codex fix 1) - ID-routed reply_summary attachment. A turn matches an event by ids
+// ONLY, never by recency: a turn stamped with a revisionId matches on that revisionId (the
+// discriminator - several revision turns can share one sheetId); a turn stamped with a
+// sheetId alone matches on it; an unstamped turn matches when the event's sheet is the
+// server's deterministic derived view of the turn itself (`sheet-<messageId>` - true only
+// for server-id turns, a local mirror id can never collide). Scanned newest-first so a
+// revision turn shadows the fresh turn whose derived sheet it revised.
+const MAX_PENDING_REPLY_SUMMARIES = 8;
+
+function summaryTurnFor(
+  msgs: ChatMessage[],
+  summaries: Record<string, ReplySummaryEntry>,
+  entry: ReplySummaryEntry,
+): string | null {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]!;
+    if (m.role !== 'assistant' || summaries[m.id]) continue;
+    const meta = m.metadata;
+    const matches = meta?.revisionId
+      ? meta.revisionId === entry.revisionId
+      : meta?.sheetId
+        ? meta.sheetId === entry.sheetId
+        : `sheet-${m.id}` === entry.sheetId;
+    if (matches) return m.id;
+  }
+  return null;
+}
+
+/** Attach every buffered reply_summary whose matching turn now exists in `msgs`. Returns the
+ *  state slice to spread into a set() result, or null when nothing drained. */
+function drainPendingSummaries(
+  state: Pick<OrchestrationState, 'replySummaries' | 'pendingReplySummaries'>,
+  sessionId: string,
+  msgs: ChatMessage[],
+): Pick<OrchestrationState, 'replySummaries' | 'pendingReplySummaries'> | null {
+  const pending = state.pendingReplySummaries[sessionId];
+  if (!pending || pending.length === 0) return null;
+  let summaries = state.replySummaries[sessionId] ?? {};
+  const left: ReplySummaryEntry[] = [];
+  let changed = false;
+  for (const entry of pending) {
+    const target = summaryTurnFor(msgs, summaries, entry);
+    if (target) {
+      summaries = { ...summaries, [target]: entry };
+      changed = true;
+    } else {
+      left.push(entry);
+    }
+  }
+  if (!changed) return null;
+  return {
+    replySummaries: { ...state.replySummaries, [sessionId]: summaries },
+    pendingReplySummaries: { ...state.pendingReplySummaries, [sessionId]: left },
+  };
 }
 
 function getDefaultSessionJob(): SessionJobState {
@@ -618,6 +737,12 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       streamingThinking: {},
       queuedMessages: {},
       composerDraft: {},
+      replySummaries: {},
+      pendingReplySummaries: {},
+      sheetLinks: {},
+      sessionLatestSheet: {},
+      editTargets: {},
+      sheetFocus: {},
       retryContexts: {},
       activeIntegrationBuilds: {},
 
@@ -812,7 +937,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       // MESSAGE ACTIONS
       // ========================================
 
-      addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }) => {
+      addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>, opts?: { persist?: boolean }): string => {
         const fullMessage: ChatMessage = {
           ...message,
           id: generateId(),
@@ -826,22 +951,28 @@ export const useOrchestrationStore = create<OrchestrationState>()(
           ? message.content.substring(0, 50).trim() + (message.content.length > 50 ? '...' : '')
           : undefined;
 
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [sessionId]: [...(state.messages[sessionId] || []), fullMessage],
-          },
-          sessions: state.sessions.map((s) =>
-            s.id === sessionId
-              ? {
-                  ...s,
-                  messageCount: s.messageCount + 1,
-                  updatedAt: new Date().toISOString(),
-                  ...(autoName ? { name: autoName } : {}),
-                }
-              : s
-          ),
-        }));
+        set((state) => {
+          const nextMsgs = [...(state.messages[sessionId] || []), fullMessage];
+          return {
+            messages: {
+              ...state.messages,
+              [sessionId]: nextMsgs,
+            },
+            // B5 (codex fix 1): a landing assistant turn may be the one a buffered
+            // reply_summary was waiting for.
+            ...(fullMessage.role === 'assistant' ? (drainPendingSummaries(state, sessionId, nextMsgs) ?? {}) : {}),
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messageCount: s.messageCount + 1,
+                    updatedAt: new Date().toISOString(),
+                    ...(autoName ? { name: autoName } : {}),
+                  }
+                : s
+            ),
+          };
+        });
 
         // Persist to server (fire and forget). Callers mirroring a chat-run
         // turn pass persist:false - the run pipeline already persists those
@@ -862,6 +993,8 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         if (autoName) {
           api.sessions.update({ id: sessionId, name: autoName }).catch(() => {});
         }
+
+        return fullMessage.id;
       },
 
       loadSessionMessages: async (sessionId: string) => {
@@ -877,6 +1010,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
             }));
             set((state) => ({
               messages: { ...state.messages, [sessionId]: messages },
+              // B5 (codex fix 1): server rows carry server ids + persisted back-references -
+              // a buffered summary can now find its turn (derived `sheet-<id>` included).
+              ...(drainPendingSummaries(state, sessionId, messages) ?? {}),
             }));
           } else {
             // API returned an error or no data -- mark as loaded-but-empty so
@@ -1169,6 +1305,94 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       setComposerDraft: (sessionId: string, text: string | undefined) => {
         set((state) => ({
           composerDraft: { ...state.composerDraft, [sessionId]: text },
+        }));
+      },
+
+      // ========================================
+      // B5: SUMMARY CARDS + COMPOSER CHIP + FOCUS SEAM
+      // ========================================
+
+      attachReplySummary: (sessionId: string, entry: ReplySummaryEntry) => {
+        set((state) => {
+          const existing = state.replySummaries[sessionId] ?? {};
+          // Exact duplicate (this sheet+revision already attached somewhere): drop the event -
+          // a re-delivered summary must never migrate to a second turn.
+          if (Object.values(existing).some((e) => e.sheetId === entry.sheetId && e.revisionId === entry.revisionId)) {
+            return state;
+          }
+          const target = summaryTurnFor(state.messages[sessionId] ?? [], existing, entry);
+          if (target) {
+            return {
+              replySummaries: {
+                ...state.replySummaries,
+                [sessionId]: { ...existing, [target]: entry },
+              },
+            };
+          }
+          // No ID-matching turn yet (the summary outran the turn / the mirror is not stamped
+          // yet / the transcript is not loaded): buffer it, keyed sheetId:revisionId (newest
+          // replaces same-key), capped - oldest dropped first.
+          const pending = (state.pendingReplySummaries[sessionId] ?? []).filter(
+            (e) => !(e.sheetId === entry.sheetId && e.revisionId === entry.revisionId),
+          );
+          pending.push(entry);
+          while (pending.length > MAX_PENDING_REPLY_SUMMARIES) pending.shift();
+          return {
+            pendingReplySummaries: { ...state.pendingReplySummaries, [sessionId]: pending },
+          };
+        });
+      },
+
+      stampTurnSheetLink: (sessionId: string, messageId: string, link: { sheetId: string; revisionId: string; revisionNumber?: number }) => {
+        set((state) => {
+          const msgs = state.messages[sessionId];
+          if (!msgs) return state;
+          const idx = msgs.findIndex((m) => m.id === messageId);
+          if (idx < 0) return state;
+          const stamped: ChatMessage = { ...msgs[idx]!, metadata: { ...msgs[idx]!.metadata, ...link } };
+          const nextMsgs = [...msgs.slice(0, idx), stamped, ...msgs.slice(idx + 1)];
+          return {
+            messages: { ...state.messages, [sessionId]: nextMsgs },
+            // The stamp may be exactly what a buffered summary was waiting for.
+            ...(drainPendingSummaries(state, sessionId, nextMsgs) ?? {}),
+          };
+        });
+      },
+
+      setSheetLinks: (sessionId: string, links: Record<string, string>) => {
+        set((state) => {
+          const cur = state.sheetLinks[sessionId];
+          if (
+            cur &&
+            Object.keys(cur).length === Object.keys(links).length &&
+            Object.entries(links).every(([k, v]) => cur[k] === v)
+          ) {
+            return state;
+          }
+          return { sheetLinks: { ...state.sheetLinks, [sessionId]: links } };
+        });
+      },
+
+      setSessionLatestSheet: (sessionId: string, sheet: { sheetId: string; title: string } | null) => {
+        set((state) => {
+          const cur = state.sessionLatestSheet[sessionId];
+          if (cur?.sheetId === sheet?.sheetId && cur?.title === sheet?.title) return state;
+          return { sessionLatestSheet: { ...state.sessionLatestSheet, [sessionId]: sheet } };
+        });
+      },
+
+      setEditTarget: (sessionId: string, target: { sheetId: string; title: string } | null | undefined) => {
+        set((state) => ({
+          editTargets: { ...state.editTargets, [sessionId]: target },
+        }));
+      },
+
+      requestSheetFocus: (sessionId: string, sheetId: string | null) => {
+        set((state) => ({
+          sheetFocus: {
+            ...state.sheetFocus,
+            [sessionId]: { sheetId, seq: (state.sheetFocus[sessionId]?.seq ?? 0) + 1 },
+          },
         }));
       },
 

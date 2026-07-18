@@ -34,6 +34,9 @@ export interface ReplySummaryInput {
    *  never re-derived from content. */
   sheetId: string;
   revisionId: string;
+  /** REVISION turns only (B5): the 1-based ordinal of the appended revision, forwarded on the
+   *  event so the transcript card can render "Revisão N" without refetching the sheet. */
+  revision?: number;
   turn: ReplySummaryTurn;
 }
 
@@ -150,6 +153,7 @@ export async function runReplySummary(input: ReplySummaryInput): Promise<{ emitt
       revisionId: input.revisionId,
       title: parsed.title,
       summary: parsed.summary,
+      ...(input.revision !== undefined ? { revision: input.revision } : {}),
     });
     return { emitted: true };
   } catch (err) {

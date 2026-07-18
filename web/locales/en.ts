@@ -583,6 +583,10 @@ export const en: Translations = {
     followUpSummarize: 'Summarize the key points',
     followUpSimplify: 'Simplify the language',
     followUpFormal: 'Make the tone more formal',
+    editingChip: (title: string) => `Editing: ${title}`,
+    editingChipDismiss: 'Clear the edit target; the next reply creates a new sheet',
+    revisionCard: (n: number) => `Revision ${n}`,
+    summaryCardOpen: 'View the sheet in the panel',
   },
 
   chatPanel: {

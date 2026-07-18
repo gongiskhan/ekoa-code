@@ -626,6 +626,11 @@ export interface Translations {
     followUpSummarize: string;
     followUpSimplify: string;
     followUpFormal: string;
+    // B5: transcript summary cards + composer chip
+    editingChip: (title: string) => string;
+    editingChipDismiss: string;
+    revisionCard: (n: number) => string;
+    summaryCardOpen: string;
   };
 
   // ============================================

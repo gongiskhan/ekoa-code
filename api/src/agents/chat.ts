@@ -28,7 +28,7 @@ import { getLocalActivitySources, type DelegationToolResult } from './seams.js';
 import { assembleRunContext, renderPrompt, referencesContextLine } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 import { scheduleReplySummary } from './reply-summary.js';
-import { derivedSheetId, derivedRevisionId } from '../data/session-sheets.js';
+import { derivedSheetId, derivedRevisionId, findSessionSheet, appendSheetRevision } from '../data/session-sheets.js';
 
 export interface StartChatRunInput {
   actor: Actor;
@@ -40,6 +40,10 @@ export interface StartChatRunInput {
   /** FC-400/D4 (run s6): composer reference tokens — injected as ONE context line so the
    *  model calls delegate_to_local with real grantRefs (never hand-typed chat text). */
   references?: Array<{ grantRef: string; label: string }>;
+  /** B5 (locked 5+7): the composer chip's target — the completed reply persists as a NEW
+   *  REVISION on this sheet (editSource 'agent', instruction = the user message) instead of
+   *  spawning a new sheet. Unknown ids fall back to fresh-sheet behavior. */
+  reviseSheetId?: string;
   deps: { now: () => number; genId: () => string };
 }
 
@@ -275,11 +279,47 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
             : {}),
         }
       : undefined;
+    // Agent revision routing (B5, locked 5+7): a run sent WITH the composer chip persists its
+    // reply as a NEW REVISION on the targeted sheet (editSource 'agent', instruction = the user
+    // message) instead of spawning a new sheet. Resolved + appended BEFORE the terminal event so
+    // the client's settle refetch always sees the grown revision list (no visible race). The base
+    // (pre-append latest) content is captured first - it is the revision-turn summary's diff
+    // basis. An unknown sheet id falls back to fresh-sheet behavior: the chip is a default,
+    // never a hard failure.
+    let revisionInfo: { sheetId: string; revisionId: string; revision: number; baseContent: string } | undefined;
+    if (input.reviseSheetId && cleanText.trim()) {
+      const base = await findSessionSheet(input.sessionId, input.reviseSheetId);
+      const baseContent = base?.revisions[base.revisions.length - 1]?.content;
+      if (base && baseContent !== undefined) {
+        const updated = await appendSheetRevision(
+          input.sessionId,
+          input.reviseSheetId,
+          { content: cleanText, instruction: input.message, editSource: 'agent' },
+          input.deps,
+        );
+        const appended = updated?.revisions[updated.revisions.length - 1];
+        if (updated && appended) {
+          revisionInfo = {
+            sheetId: updated.sheetId,
+            revisionId: appended.revisionId,
+            revision: updated.revisions.length,
+            baseContent,
+          };
+        }
+      }
+    }
+
+    // The revision turn's message back-references its sheet (decision B.B): the sheets read
+    // path skips it (never a second derived sheet) and a reloaded transcript can render the
+    // revision card framing + focus the SAME sheet.
     const persisted = cleanText.trim()
       ? await persistAssistantMessage(input.sessionId, cleanText, input.deps, {
           traceId: runId,
           memoriesUsed: assembled.memoriesUsed,
           ...(thinkingMeta ?? {}),
+          ...(revisionInfo
+            ? { sheetId: revisionInfo.sheetId, revisionId: revisionInfo.revisionId, revisionNumber: revisionInfo.revision }
+            : {}),
         })
       : undefined;
     finishComplete(cleanText);
@@ -289,17 +329,29 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     void scheduleExtraction(input, runId, `${input.message}\n\n${cleanText}`);
 
     // Post-run reply summary (B2, decision B.E): same off-the-terminal, fire-and-forget posture.
-    // The persisted assistant turn IS the sheet (B1's read path derives it), so the event carries
-    // exactly the ids the sheets endpoint serves - threaded from the persisted doc, never
-    // re-derived from content. Failure inside the hook emits nothing and never touches the run.
+    // FRESH turn: the persisted assistant turn IS the sheet (B1's read path derives it), so the
+    // event carries exactly the ids the sheets endpoint serves - threaded from the persisted
+    // doc, never re-derived from content. REVISION turn (B5): the event carries the REVISED
+    // sheet's ids (multiple cards -> one sheet, locked 5) and the hook summarises the edit
+    // instruction + diff basis, never the whole reply (decision B.E). Failure inside the hook
+    // emits nothing and never touches the run.
     if (persisted) {
       void scheduleReplySummary({
         userId: input.actor.userId,
         sessionId: input.sessionId,
         runId,
-        sheetId: derivedSheetId(persisted._id),
-        revisionId: derivedRevisionId(persisted._id),
-        turn: { kind: 'fresh', replyText: cleanText },
+        ...(revisionInfo
+          ? {
+              sheetId: revisionInfo.sheetId,
+              revisionId: revisionInfo.revisionId,
+              revision: revisionInfo.revision,
+              turn: { kind: 'revision', instruction: input.message, baseContent: revisionInfo.baseContent, revisedContent: cleanText },
+            }
+          : {
+              sheetId: derivedSheetId(persisted._id),
+              revisionId: derivedRevisionId(persisted._id),
+              turn: { kind: 'fresh', replyText: cleanText },
+            }),
       });
     }
   } catch (err) {

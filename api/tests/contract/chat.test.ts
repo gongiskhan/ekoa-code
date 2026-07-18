@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import { ChatRunCreateResponse, ChatRun, ChatRunCancelResponse, ErrorEnvelope } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, userSettings } from '../../src/data/stores.js';
+import { users, userSettings, sessions } from '../../src/data/stores.js';
 import { setActivation } from '../../src/data/activation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
@@ -29,8 +29,14 @@ beforeAll(async () => {
   await setCredential({ mode: 'oauth', secret: 'tok' });
   __setTransportForTests(makeFakeTransport({ finalText: 'answer' }));
   await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o1', active: true });
+  await users.insert({ _id: 'u2', username: 'u2', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o2', active: true });
   setActivation('u1', { active: true, billingLocked: false });
   await userSettings.put({ _id: 'u1', memory: { autoExtract: false } }); // keep the test LLM-call-free
+  // Run creation resolves session ownership (the B1 sessions/sheets idiom) BEFORE minting the
+  // run, so the POSTs below need a REAL owned session; s2 belongs to u2 for the cross-user 404.
+  const ts = new Date(1_700_000_000_000).toISOString();
+  await sessions.insert({ _id: 's1', userId: 'u1', status: 'active', messageCount: 0, createdAt: ts, updatedAt: ts });
+  await sessions.insert({ _id: 's2', userId: 'u2', status: 'active', messageCount: 0, createdAt: ts, updatedAt: ts });
   const app = express();
   app.use(express.json());
   app.use('/api/v1/chat', chatRouter(deps));
@@ -56,6 +62,39 @@ describe('chat runs contract (§3.8.7)', () => {
 
     const cancelled = await api(`/api/v1/chat/runs/${runId}/cancel`, t, { method: 'POST' });
     expect(ChatRunCancelResponse.safeParse(await cancelled.json()).success).toBe(true);
+  });
+
+  it('POST /chat/runs accepts the B5 reviseSheetId field (202 ChatRunCreateResponse); a non-string one is a 400 envelope', async () => {
+    const t = await tokenFor();
+    // The agent-revision request shape (locked 5+7): the completed reply lands as a revision
+    // on this sheet. Contract-level: the field parses and creation still answers 202 + runId.
+    const ok = await api('/api/v1/chat/runs', t, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1', message: 'torna o tom mais formal', language: 'pt', reviseSheetId: 'sheet-abc' }),
+    });
+    expect(ok.status).toBe(202);
+    expect(ChatRunCreateResponse.safeParse(await ok.json()).success).toBe(true);
+
+    const bad = await api('/api/v1/chat/runs', t, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1', message: 'x', language: 'pt', reviseSheetId: 42 }),
+    });
+    expect(bad.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await bad.json()).success).toBe(true);
+  });
+
+  it("POST /chat/runs with another user's sessionId → uniform 404 envelope (session ownership, the sheets idiom)", async () => {
+    const t = await tokenFor();
+    for (const sessionId of ['s2', 'does-not-exist']) {
+      const res = await api('/api/v1/chat/runs', t, {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, message: 'hi', language: 'pt' }),
+      });
+      expect(res.status, sessionId).toBe(404);
+      const body = await res.json();
+      expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+      expect((body as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+    }
   });
 
   it('GET an unknown run → 404 error envelope', async () => {
