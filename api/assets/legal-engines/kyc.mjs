@@ -287,3 +287,100 @@ export function aplicabilidade(tipoServico) {
   }
   return { aplica: entry.aplica, fundamento: entry.fundamento };
 }
+
+/* ---------------------------------------------------------------------------
+ * Validação do dígito de controlo do NIF/NIPC (algoritmo módulo 11).
+ *
+ * O identificador fiscal português tem 9 dígitos; o último é um dígito de
+ * controlo. Cálculo: os 8 primeiros dígitos são multiplicados pelos pesos
+ * 9, 8, 7, 6, 5, 4, 3, 2 (da esquerda para a direita); soma-se; o resto da
+ * divisão da soma por 11 determina o dígito esperado - resto 0 ou 1 -> dígito
+ * 0, caso contrário -> 11 menos o resto. O primeiro dígito indica a natureza
+ * do titular (1/2/3 singular; 5 pessoa coletiva; 6 organismo público; 8
+ * empresário em nome individual; 9 pessoa coletiva/entidade equiparada, etc.).
+ *
+ * Estas funções são PURAS e não têm efeitos: recusam (devolvem inválido) em vez
+ * de adivinhar. São usadas para rejeitar identificadores mal transcritos; NÃO
+ * substituem a consulta às bases oficiais (AT, RNPC) - um NIF pode ter dígito
+ * de controlo válido e mesmo assim não corresponder a nenhum titular real.
+ * ------------------------------------------------------------------------- */
+
+/* Primeiros dígitos válidos de um identificador fiscal português. Fonte única. */
+const PRIMEIROS_DIGITOS_VALIDOS = ['1', '2', '3', '5', '6', '7', '8', '9'];
+
+/* Só os dígitos (remove espaços, pontos e o prefixo 'PT' de um NIF intracomunitário). */
+function digitosFiscais(valor) {
+  return String(valor == null ? '' : valor).replace(/\D/g, '');
+}
+
+/*
+ * Dígito de controlo esperado para os 8 primeiros dígitos (string de 8 dígitos).
+ * Devolve 0-9. Não valida comprimento - é responsabilidade do chamador.
+ */
+function digitoControlo(oito) {
+  let soma = 0;
+  for (let i = 0; i < 8; i += 1) {
+    soma += Number(oito[i]) * (9 - i);
+  }
+  const resto = soma % 11;
+  return resto < 2 ? 0 : 11 - resto;
+}
+
+/**
+ * Valida o dígito de controlo de um número fiscal português (NIF ou NIPC).
+ * Aceita espaços, pontos e o prefixo 'PT'; valida sobre os 9 dígitos.
+ *
+ * @param {string} valor
+ * @returns {{ valido: boolean, digitos: string, motivo: string }}
+ *  - valido: o número tem 9 dígitos, primeiro dígito admissível e check-digit correto.
+ *  - digitos: os dígitos normalizados (para exibir/persistir de forma limpa).
+ *  - motivo: explicação legível quando inválido ('' quando válido).
+ */
+export function validaNumeroFiscal(valor) {
+  const digitos = digitosFiscais(valor);
+  if (digitos.length === 0) {
+    return { valido: false, digitos, motivo: 'Sem dígitos: indique um número fiscal.' };
+  }
+  if (digitos.length !== 9) {
+    return { valido: false, digitos, motivo: `O número fiscal tem 9 dígitos (tem ${digitos.length}).` };
+  }
+  if (!PRIMEIROS_DIGITOS_VALIDOS.includes(digitos[0])) {
+    return { valido: false, digitos, motivo: `Primeiro dígito inválido (${digitos[0]}): não corresponde a nenhuma natureza de titular.` };
+  }
+  const esperado = digitoControlo(digitos);
+  if (esperado !== Number(digitos[8])) {
+    return { valido: false, digitos, motivo: `Dígito de controlo inválido: esperado ${esperado}, obtido ${digitos[8]}.` };
+  }
+  return { valido: true, digitos, motivo: '' };
+}
+
+/**
+ * Valida um NIF de pessoa singular (primeiro dígito 1, 2 ou 3, além do
+ * check-digit). Um número com check-digit válido mas primeiro dígito de pessoa
+ * coletiva (5/9) é recusado como NIF singular.
+ * @param {string} valor
+ * @returns {{ valido: boolean, digitos: string, motivo: string }}
+ */
+export function validaNif(valor) {
+  const base = validaNumeroFiscal(valor);
+  if (!base.valido) return base;
+  if (!['1', '2', '3'].includes(base.digitos[0])) {
+    return { valido: false, digitos: base.digitos, motivo: `NIF de pessoa singular começa por 1, 2 ou 3 (começa por ${base.digitos[0]}).` };
+  }
+  return base;
+}
+
+/**
+ * Valida um NIPC de pessoa coletiva (primeiro dígito 5, 6, 7, 8 ou 9, além do
+ * check-digit). Um número de pessoa singular (1/2/3) é recusado como NIPC.
+ * @param {string} valor
+ * @returns {{ valido: boolean, digitos: string, motivo: string }}
+ */
+export function validaNipc(valor) {
+  const base = validaNumeroFiscal(valor);
+  if (!base.valido) return base;
+  if (!['5', '6', '7', '8', '9'].includes(base.digitos[0])) {
+    return { valido: false, digitos: base.digitos, motivo: `NIPC de pessoa coletiva começa por 5, 6, 7, 8 ou 9 (começa por ${base.digitos[0]}).` };
+  }
+  return base;
+}

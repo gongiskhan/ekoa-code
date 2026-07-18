@@ -73,6 +73,36 @@ function fullExcerpt(value) {
   return { before: '', match: String(value || ''), after: '' };
 }
 
+/*
+ * Tokens de pesquisa de um termo folded: palavras com 2+ caracteres. Uma pesquisa
+ * multi-palavra ("padaria central") gera ['padaria', 'central'].
+ */
+function termoTokens(foldedTermo) {
+  return foldedTermo.split(/\s+/).filter((t) => t.length >= 2);
+}
+
+/*
+ * Correspondência determinística por SUBCONJUNTO de tokens, independente da ordem:
+ * verdadeiro quando TODOS os tokens do termo aparecem (como subcadeia) no valor.
+ * Isto ALARGA (nunca reduz) a cobertura da subcadeia contígua: "padaria central"
+ * acerta "Central Padaria, Lda." apesar de não ser uma subcadeia. Só se usa
+ * quando há 2+ tokens - com um único token é, por definição, a subcadeia simples,
+ * já coberta. Devolve o excerto ancorado no PRIMEIRO token, ou null.
+ */
+function tokenSubsetExcerpt(value, tokens) {
+  if (tokens.length < 2) return null;
+  const { folded } = foldWithMap(value);
+  if (!tokens.every((t) => folded.includes(t))) return null;
+  // Excerto ancorado no token que aparece mais cedo, para um destaque estável.
+  let primeiro = tokens[0];
+  let melhorIdx = folded.indexOf(primeiro);
+  for (const t of tokens) {
+    const at = folded.indexOf(t);
+    if (at >= 0 && (melhorIdx < 0 || at < melhorIdx)) { melhorIdx = at; primeiro = t; }
+  }
+  return substringExcerpt(value, primeiro);
+}
+
 /* Texto plano de um excerto (para persistir em conflitos_check.resultado). */
 export function excerptText(excerto) {
   if (!excerto) return '';
@@ -90,14 +120,33 @@ export function searchConflitos({ termo, nif, clientes, processos }) {
   const nifDigits = digitsOnly(nif);
   const hasTermo = foldedTermo.length > 0;
   const hasNif = nifDigits.length > 0;
+  const tokens = termoTokens(foldedTermo);
 
   const hits = [];
-  const push = (h) => hits.push({ key: `${h.tipo}:${h.refId}:${h.campoKey}`, ...h });
+  const vistos = new Set();
+  const push = (h) => {
+    const key = `${h.tipo}:${h.refId}:${h.campoKey}`;
+    if (vistos.has(key)) return; // deduplica campo já acertado (subcadeia > tokens)
+    vistos.add(key);
+    hits.push({ key, ...h });
+  };
+  /*
+   * Correspondência de um campo por `termo`: primeiro subcadeia contígua; se não
+   * acertar e o termo tiver 2+ tokens, tenta o subconjunto de tokens (alarga a
+   * cobertura sem a reduzir). Marca `parcial: true` quando só acertou por tokens.
+   */
+  const matchTermo = (valor) => {
+    const ex = substringExcerpt(valor, foldedTermo);
+    if (ex) return { excerto: ex, parcial: false };
+    const exTok = tokenSubsetExcerpt(valor, tokens);
+    if (exTok) return { excerto: exTok, parcial: true };
+    return null;
+  };
 
   for (const c of Array.isArray(clientes) ? clientes : []) {
     if (hasTermo) {
-      const ex = substringExcerpt(c.nome, foldedTermo);
-      if (ex) push({ tipo: 'cliente', refId: c.id, nome: c.nome, campo: 'Nome', campoKey: 'nome', excerto: ex });
+      const m = matchTermo(c.nome);
+      if (m) push({ tipo: 'cliente', refId: c.id, nome: c.nome, campo: 'Nome', campoKey: 'nome', excerto: m.excerto, parcial: m.parcial });
     }
     if (hasNif && digitsOnly(c.nif) === nifDigits) {
       push({ tipo: 'cliente', refId: c.id, nome: c.nome, campo: 'NIF', campoKey: 'nif', excerto: fullExcerpt(c.nif) });
@@ -107,14 +156,14 @@ export function searchConflitos({ termo, nif, clientes, processos }) {
   for (const p of Array.isArray(processos) ? processos : []) {
     const cp = p.contraparte || {};
     if (hasTermo) {
-      const exCp = substringExcerpt(cp.nome, foldedTermo);
-      if (exCp) push({ tipo: 'contraparte', refId: p.id, nome: cp.nome, processoNumero: p.numeroProcesso, campo: 'Contraparte', campoKey: 'contraparte.nome', excerto: exCp });
+      const mCp = matchTermo(cp.nome);
+      if (mCp) push({ tipo: 'contraparte', refId: p.id, nome: cp.nome, processoNumero: p.numeroProcesso, campo: 'Contraparte', campoKey: 'contraparte.nome', excerto: mCp.excerto, parcial: mCp.parcial });
 
-      const exDesc = substringExcerpt(p.descricao, foldedTermo);
-      if (exDesc) push({ tipo: 'processo', refId: p.id, nome: p.numeroProcesso, processoNumero: p.numeroProcesso, campo: 'Descrição', campoKey: 'descricao', excerto: exDesc });
+      const mDesc = matchTermo(p.descricao);
+      if (mDesc) push({ tipo: 'processo', refId: p.id, nome: p.numeroProcesso, processoNumero: p.numeroProcesso, campo: 'Descrição', campoKey: 'descricao', excerto: mDesc.excerto, parcial: mDesc.parcial });
 
-      const exNum = substringExcerpt(p.numeroProcesso, foldedTermo);
-      if (exNum) push({ tipo: 'processo', refId: p.id, nome: p.numeroProcesso, processoNumero: p.numeroProcesso, campo: 'Nº do processo', campoKey: 'numeroProcesso', excerto: exNum });
+      const mNum = matchTermo(p.numeroProcesso);
+      if (mNum) push({ tipo: 'processo', refId: p.id, nome: p.numeroProcesso, processoNumero: p.numeroProcesso, campo: 'Nº do processo', campoKey: 'numeroProcesso', excerto: mNum.excerto, parcial: mNum.parcial });
     }
     if (hasNif && digitsOnly(cp.nif) === nifDigits) {
       push({ tipo: 'contraparte', refId: p.id, nome: cp.nome, processoNumero: p.numeroProcesso, campo: 'NIF da contraparte', campoKey: 'contraparte.nif', excerto: fullExcerpt(cp.nif) });

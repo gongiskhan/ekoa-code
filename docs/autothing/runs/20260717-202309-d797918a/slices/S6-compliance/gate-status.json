@@ -1,0 +1,68 @@
+{
+  "slice": "S6-compliance",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "in_progress",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": { "e2e": 0, "typecheck": 0 },
+      "note": "Batch 1: 12/13 - the PORTED legal-rcbe journey failed at the calendario assertion ('Cumprida'): the journey is non-idempotent, its own prior green completion set the demo obligation to cumprida in the persistent spine. The app's demo-reset (EntidadesPage) only fires inside a tutorial-bridge tour (isDemoActive), never in a Playwright run. Fixed by an explicit frozen-spec amendment (decisions.md 2026-07-18 entry): idempotency preamble performing the app's own reset via the real /api/app-shared surface (PUT merge-upsert + DELETE); assertions untouched, no app code changed. Batch 2 (re-run): 13/13 in 4.1s exit 0 - and the re-run itself proves idempotency (obligation was cumprida going in, preamble reopened it, journey completed green again). typecheck 0. Unit layer: kyc-checksum 13/13 + ferias-engine 16/16 (also independently re-run by adv-review).",
+      "at": "2026-07-18T04:20:00Z"
+    },
+    "review": {
+      "verdict": "findings(2) - resolved or dispositioned",
+      "by": "review-S6 fresh-context same-model agent (claude-opus-4-8), hermetic (NIF/NIPC mod-11 verified against an independent Python reference for all 8 fixture values; ferias golden matches the committed engine; all testids/imports resolve; no e2e)",
+      "findings": [
+        "F1 (medium, ledger): the 4 S6 specs on disk but not in SUITE_LEDGER band3_served_app.specs. DISPOSITION: the planned per-slice landing step registers the 4 names in the S6 landing commit.",
+        "F2 (nit): RCBE dedupBeneficiarios _ordem bookkeeping correct but subtle. FIXED by lead: one-line clarifying comment added at EntidadeDetailPage.jsx (insert uses map size, replace keeps original order); bundle rebuilt."
+      ],
+      "notes": [
+        "Correctness clean: conflitos token-subset matcher only widens recall and dedups by field key; RCBE beneficiary dedup deterministic first-appearance order. Citations verified NOT contradictory: KYC/archive cites Lei 83/2017 (AML, art. 51.o conservation) while RCBE cites Lei 89/2017 (RJRCBE) - two distinct laws each applied to the right domain. Honesty holds: 'o RCBE nao tem API' with assisted-manual flow."
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "needs-work",
+      "by": "fresh-context adversarial reviewer (claude-opus-4-8), hermetic - no implementer rationale, no gate-status/evidence-index read",
+      "evidence": [
+        "mod-11 check digit re-derived for every fiscal number in tests+fixtures - all match",
+        "ferias goldens recomputed (CT art. 238/239): all correct",
+        "Lei 83/2017 vs 89/2017 vs art. 99 EOA correctly separated by domain",
+        "kyc.mjs + ferias.mjs scaffold copies byte-identical to canonical (cmp 0)",
+        "vitest 13/13 + 16/16, tsc 0 (web+api+standalone specs)",
+        "no emoji, no em-dash in added lines, PT-PT assertions only"
+      ],
+      "findings": [
+        "F1 (blocker, ledger): 4 S6 specs absent from SUITE_LEDGER; gate:ledger census red. Also notes the 2 new api vitest suites are not in any ledger unit section."
+      ],
+      "at": "2026-07-18T03:45:00Z",
+      "resolution": "F1 RESOLVED at S6 landing: the 4 band3 rows (legal-x-{kyc,rcbe,conflitos,recursos}) registered in SUITE_LEDGER.json in the S6 commit (band3 legal-x rows now 26; census 95/98, remaining gap = exactly S7's 3 specs, closed at S7 landing). Unit-suite note: the ledger census counts only playwright specs + drivers + frontend-unit files (api vitest has no census section); module_tests_146.groups are coarse port-era counts left untouched - the 2 new api vitest suites are dispositioned here, not census-tracked."
+    },
+    "adversarialTest": {
+      "verdict": "pending",
+      "at": null
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-core screenshot sweep (design-s6.mjs): 13 pages across the 4 S6 apps at 1440x900, zero console errors + zero pageerrors on every page; 7 key screenshots read back by vision",
+      "issues": [
+        "FIXED during audit: conflitos VerificarPage said 'correspondência exacta' (pre-AO90) while sibling copy is AO90 ('Beneficiário Efetivo', 'direção de topo') - patched to 'exata' (VerificarPage.jsx:161), bundle rebuilt out-of-process, re-probed live (fixed=true, old spelling gone, zero pageerrors). Remaining pre-AO90 hits in the sweep are code comments only (not user-visible), left untouched. Included in the S6 commit."
+      ],
+      "notes": [
+        "kyc fichas: Lei n.o 83/2017 citation in header + list, 7-year conservation banner citing art. 51.o with the honest 'nao podem ser eliminadas antes da data de arquivo', risco/estado/RCBE badges, arquivo ate 15/07/2033 (aprovacao +7 anos) - clean",
+        "kyc radar de conservacao: honest '1 ficha(s) em conservacao - nenhuma com prazo de arquivo nos proximos 180 dias', Em conservacao badge - clean",
+        "rcbe entidades: 25%-do-capital/direitos-de-voto threshold explained with direcao-de-topo fallback, NIPC row (synthetic checksum-invalid 509876543, per fixture policy) + beneficiarios count + Em dia badge, Adicionar disabled until cliente chosen - clean",
+        "conflitos verificar: matching semantics honestly described (subcadeia + palavras por qualquer ordem + folding de acentos; NIF exato), art. 99.o do EOA citation, Verificar disabled until input - clean after the fix above",
+        "recursos pessoas: papel badges (Advogado/a, Administrativo/a, Advogado/a estagiario/a) + desde dates, search + papel filter ('Todos os papeis' AO90-correct) - clean",
+        "recursos mapa de ausencias: month navigation, barra cheia/contornada legend (aprovada vs pedida), per-person bars, ferias table with tipo/estado badges, Exportar mapa (PDF) - clean",
+        "recursos alocacoes: dedicacao %, processo refs, Ativa badges, Editar/Terminar per row, honest 'Termine uma alocacao definindo a data de fim' - clean",
+        "PT-PT copy, no emojis, no em dashes; shared layout/sidebar consistent across the 4 apps"
+      ],
+      "at": "2026-07-18T03:05:00Z"
+    },
+    "walkthrough": {
+      "status": "pending"
+    }
+  }
+}

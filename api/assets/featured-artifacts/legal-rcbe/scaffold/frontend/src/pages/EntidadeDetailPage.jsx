@@ -2,11 +2,47 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getShared, updateShared, createShared, useSharedCollection, formatDate, registarEvento } from '../shared.js';
 import { Button, Badge, EmptyState, useToast } from '../components/ui.jsx';
-import { IconBuilding, IconCheck, IconFileText, IconPlus } from '../components/Icons.jsx';
+import { IconBuilding, IconCheck, IconFileText, IconPlus, IconPrinter } from '../components/Icons.jsx';
 import { useDemoResult } from '../demo.js';
 import { calendarioObrigacoes, buildRcbeDeepLink } from '../rcbe.js';
+import { declaracaoRcbeHtml } from './declaracao-pdf.js';
 
 const TIPO_LABEL = { inicial: 'Declaração inicial', atualizacao: 'Atualização', confirmacao_anual: 'Confirmação anual' };
+const ESTADO_LABEL = { cumprida: 'Cumprida', em_atraso: 'Em atraso', pendente: 'Pendente' };
+
+/*
+ * Chave determinística de um beneficiário para deduplicação sobre a espinha
+ * partilhada: os mesmos beneficiários são escritos por este módulo e lidos pelo
+ * KYC, e a mesma pessoa pode chegar por vias diferentes. Preferimos o NIF (só
+ * dígitos); sem NIF, caímos no nome normalizado (sem acentos, minúsculas,
+ * espaços colapsados). Puro, sem efeitos.
+ */
+function chaveBeneficiario(b) {
+  const nif = String((b && b.nif) || '').replace(/\D/g, '');
+  if (nif) return `nif:${nif}`;
+  const nome = String((b && b.nome) || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+  return `nome:${nome}`;
+}
+
+/*
+ * Deduplica beneficiários pela chave acima, mantendo, em caso de repetição, a
+ * linha com maior participação (a mais completa para efeitos da declaração).
+ * A ordem de primeira aparição é preservada - determinístico.
+ */
+function dedupBeneficiarios(lista) {
+  const porChave = new Map();
+  for (const b of lista) {
+    const k = chaveBeneficiario(b);
+    const atual = porChave.get(k);
+    if (!atual || Number(b.percentagem || 0) > Number(atual.percentagem || 0)) {
+      // _ordem estável: inserção nova usa o tamanho do mapa; substituição mantém a ordem original.
+      porChave.set(k, atual ? { ...b, _ordem: atual._ordem } : { ...b, _ordem: porChave.size });
+    }
+  }
+  return [...porChave.values()].sort((a, b) => a._ordem - b._ordem).map(({ _ordem, ...b }) => b);
+}
 
 /* Passos da submissão ASSISTIDA no Portal da Justiça (RCBE não tem API - o
  * compensatório é a proveniência, um evento por passo, §3.2.5). */
@@ -37,7 +73,12 @@ export default function EntidadeDetailPage() {
   useEffect(() => { carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
 
   const hoje = new Date().toISOString().slice(0, 10);
-  const meusBos = useMemo(() => (ent ? bos.filter((b) => b.entidadeNipc === ent.nipc || b.entidadeId === ent.id) : []), [bos, ent]);
+  // Beneficiários desta entidade sobre a espinha partilhada (a mesma coleção que
+  // o KYC lê), DEDUPLICADOS: a mesma pessoa pode ter sido escrita mais do que uma
+  // vez; a declaração e o ecrã mostram cada beneficiário uma só vez.
+  const meusBosRaw = useMemo(() => (ent ? bos.filter((b) => b.entidadeNipc === ent.nipc || b.entidadeId === ent.id) : []), [bos, ent]);
+  const meusBos = useMemo(() => dedupBeneficiarios(meusBosRaw), [meusBosRaw]);
+  const duplicadosOcultos = meusBosRaw.length - meusBos.length;
   const minhasObr = useMemo(() => (ent ? obrigacoes.filter((o) => o.entidadeId === ent.id) : []), [obrigacoes, ent]);
   const calendario = useMemo(() => {
     if (!ent) return [];
@@ -82,6 +123,36 @@ export default function EntidadeDetailPage() {
       'Base: Lei n.º 89/2017 (RJRCBE); Portaria n.º 233/2018.',
     ];
     setDeclaracao(linhas.join('\n'));
+  }
+
+  // Exporta a declaração + checklist em PDF pela ponte da plataforma. Construída
+  // do mesmo snapshot mostrado (beneficiários deduplicados, obrigações, passos),
+  // pelo que o PDF e o ecrã não divergem. Sem a ponte, avisa e não finge.
+  async function exportarDeclaracaoPdf() {
+    const api = typeof window !== 'undefined' ? window.__ekoa : null;
+    if (!api || typeof api.exportPdf !== 'function') {
+      toast('Exportação PDF indisponível neste ambiente.');
+      return;
+    }
+    const obrigacoesLinhas = minhasObr.map((o) => ({
+      tipoLabel: TIPO_LABEL[o.tipo] || o.tipo,
+      dataLimite: formatDate(o.dataLimite),
+      estado: ESTADO_LABEL[o.estado] || o.estado,
+    }));
+    const checklist = PASSOS_PORTAL.map((texto, i) => ({ texto, feito: Boolean(passos[i]) }));
+    const { html, filename } = declaracaoRcbeHtml({
+      entidade: { nome: ent.nome, nipc: ent.nipc, formaJuridica: ent.formaJuridica },
+      beneficiarios: meusBos,
+      obrigacoes: obrigacoesLinhas,
+      passos: checklist,
+      portalUrl: buildRcbeDeepLink({ nipc: ent.nipc }),
+      geradoEm: hoje,
+    });
+    try {
+      await api.exportPdf({ html, format: 'A4', landscape: false, filename: `${filename}.pdf`, download: true });
+    } catch {
+      toast('Não foi possível exportar a declaração.');
+    }
   }
 
   async function marcarPasso(i) {
@@ -154,6 +225,11 @@ export default function EntidadeDetailPage() {
             ))}
           </ul>
         )}
+        {duplicadosOcultos > 0 && (
+          <p className="field-hint" data-testid="rcbe-bo-dedup">
+            {duplicadosOcultos} entrada(s) duplicada(s) sobre a espinha foram unificadas por NIF/nome - cada beneficiário conta uma vez.
+          </p>
+        )}
         <div className="row row-3" style={{ flexWrap: 'wrap', gap: 'var(--sp-2, 0.5rem)', alignItems: 'end' }}>
           <input placeholder="Nome" data-testid="bo-nome" value={novoBo.nome} onChange={(e) => setNovoBo({ ...novoBo, nome: e.target.value })} />
           <input placeholder="NIF" data-testid="bo-nif" value={novoBo.nif} onChange={(e) => setNovoBo({ ...novoBo, nif: e.target.value })} style={{ width: 130 }} />
@@ -204,9 +280,14 @@ export default function EntidadeDetailPage() {
                 </li>
               ))}
             </ol>
-            <Button data-testid="rcbe-arquivar" data-demo-target="rcbe-arquivar" disabled={aCorrer || !todos} onClick={arquivarComprovativo}>
-              <IconCheck /> Arquivar comprovativo e fechar obrigação
-            </Button>
+            <div className="row row-2" style={{ gap: 'var(--sp-2, 0.5rem)', flexWrap: 'wrap' }}>
+              <Button variant="secondary" data-testid="rcbe-exportar-pdf" onClick={exportarDeclaracaoPdf}>
+                <IconPrinter /> Exportar declaração (PDF)
+              </Button>
+              <Button data-testid="rcbe-arquivar" data-demo-target="rcbe-arquivar" disabled={aCorrer || !todos} onClick={arquivarComprovativo}>
+                <IconCheck /> Arquivar comprovativo e fechar obrigação
+              </Button>
+            </div>
           </>
         )}
       </section>

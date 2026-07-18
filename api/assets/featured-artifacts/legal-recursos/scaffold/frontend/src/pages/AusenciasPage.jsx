@@ -1,10 +1,19 @@
 import { useMemo, useState } from 'react';
 import { useSharedCollection, formatDate } from '../shared.js';
-import { Badge, Button, Skeleton, EmptyState, DataTable } from '../components/ui.jsx';
-import { IconChevronRight, IconCalendar } from '../components/Icons.jsx';
+import { Badge, Button, Skeleton, EmptyState, DataTable, toast } from '../components/ui.jsx';
+import { IconChevronRight, IconCalendar, IconPrinter } from '../components/Icons.jsx';
 import {
   diasNoMes, nomeMes, intersecaoNoMes, tipoLabel, tipoTone, estadoLabel, estadoTone,
 } from './recursos-logic.js';
+import { mapaFeriasHtml } from './mapa-ferias-pdf.js';
+
+/* Data local em 'YYYY-MM-DD' - a data de geração entra explícita no documento. */
+function hojeISO() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
 
 /*
  * Mapa de férias: uma faixa por mês (predefinição: mês corrente) com uma linha
@@ -67,6 +76,44 @@ export default function AusenciasPage() {
     [pessoas, porPessoa],
   );
 
+  // Mapa de férias da equipa em PDF pela ponte da plataforma. O documento é
+  // construído do mesmo snapshot já desenhado no ecrã (linhas + fatias do mês),
+  // pelo que o PDF e a faixa não podem divergir. Sem a ponte, avisa e não finge.
+  async function exportarMapaPdf() {
+    const api = typeof window !== 'undefined' ? window.__ekoa : null;
+    if (!api || typeof api.exportPdf !== 'function') {
+      toast('Exportação PDF indisponível neste ambiente.', { tone: 'error' });
+      return;
+    }
+    const linhasPdf = linhas.map(({ pessoa, barras }) => ({
+      nome: pessoa.nome,
+      barras: barras.map((b) => ({
+        startDay: b.startDay,
+        endDay: b.endDay,
+        estado: b.estado,
+        dataInicio: formatDate(b.dataInicio),
+        dataFim: formatDate(b.dataFim),
+      })),
+    }));
+    const { html, filename } = mapaFeriasHtml({
+      mesLabel: nomeMes(ano, mes),
+      dias,
+      linhas: linhasPdf,
+      geradoEm: hojeISO(),
+    });
+    try {
+      await api.exportPdf({
+        html,
+        format: 'A4',
+        landscape: true,
+        filename: `${filename}.pdf`,
+        download: true,
+      });
+    } catch {
+      toast('Não foi possível exportar o mapa de férias.', { tone: 'error' });
+    }
+  }
+
   return (
     <div data-testid="ausencias-page" data-demo-page="recursos/ausencias">
       <div className="page-header">
@@ -83,6 +130,9 @@ export default function AusenciasPage() {
           <span className="text-strong" data-testid="mapa-mes-label" style={{ minWidth: '9rem', textAlign: 'center' }}>{nomeMes(ano, mes)}</span>
           <Button variant="secondary" size="sm" data-testid="mapa-next" onClick={() => shiftMes(1)} aria-label="Mês seguinte">
             <IconChevronRight />
+          </Button>
+          <Button variant="secondary" size="sm" data-testid="mapa-exportar-pdf" onClick={exportarMapaPdf} disabled={loading || pessoas.length === 0}>
+            <IconPrinter /> Exportar mapa (PDF)
           </Button>
         </div>
       </div>

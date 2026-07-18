@@ -1,10 +1,11 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
 import { ToastHost } from './components/ui.jsx';
-import { IconShieldCheck, IconPlus } from './components/Icons.jsx';
+import { IconShieldCheck, IconPlus, IconInbox } from './components/Icons.jsx';
 import FichasPage from './pages/FichasPage.jsx';
 import NovaFichaPage from './pages/NovaFichaPage.jsx';
 import FichaDetailPage from './pages/FichaDetailPage.jsx';
+import ArquivoRadarPage from './pages/ArquivoRadarPage.jsx';
 
 // KYC é o satélite de conformidade da suite jurídica: fichas de identificação e
 // diligência de clientes (Lei n.º 83/2017), risco determinístico (motor kyc.mjs),
@@ -14,11 +15,13 @@ import FichaDetailPage from './pages/FichaDetailPage.jsx';
 const NAV = [
   { to: '/', label: 'Fichas', icon: IconShieldCheck, end: true, testid: 'nav-fichas' },
   { to: '/nova', label: 'Nova ficha', icon: IconPlus, testid: 'nav-nova' },
+  { to: '/arquivo', label: 'Radar de conservação', icon: IconInbox, testid: 'nav-arquivo' },
 ];
 
 const TITLE_MAP = {
   '/': 'Fichas de diligência',
   '/nova': 'Nova ficha',
+  '/arquivo': 'Radar de conservação',
 };
 
 export default function App() {
@@ -27,6 +30,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<FichasPage />} />
         <Route path="/nova" element={<NovaFichaPage />} />
+        <Route path="/arquivo" element={<ArquivoRadarPage />} />
         <Route path="/ficha/:id" element={<FichaDetailPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

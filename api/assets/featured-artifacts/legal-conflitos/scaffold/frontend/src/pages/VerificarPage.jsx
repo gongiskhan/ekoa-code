@@ -156,8 +156,9 @@ export default function VerificarPage() {
       <section className="card" aria-label="Verificar conflito">
         <h2 className="card-title">Verificar</h2>
         <p className="card-subtitle">
-          O nome coincide por subcadeia (ignora acentos e maiúsculas). O NIF coincide por
-          correspondência exacta.
+          O nome coincide por subcadeia e também quando todas as palavras aparecem por
+          qualquer ordem (ignora acentos e maiúsculas); as correspondências aproximadas
+          vêm assinaladas. O NIF coincide por correspondência exata.
         </p>
 
         <form
@@ -263,6 +264,11 @@ export default function VerificarPage() {
                         </div>
                         <span className="text-subtle text-xs conflitos-hit-campo">
                           {h.campo}: <Excerpt excerto={h.excerto} />
+                          {h.parcial ? (
+                            <Badge tone="media" data-testid="conflitos-hit-aproximada" style={{ marginLeft: 'var(--sp-2, 0.5rem)' }}>
+                              aproximada
+                            </Badge>
+                          ) : null}
                         </span>
                         {h.tipo === 'contraparte' && h.processoNumero ? (
                           <span className="text-subtle text-xs">Processo {h.processoNumero}</span>

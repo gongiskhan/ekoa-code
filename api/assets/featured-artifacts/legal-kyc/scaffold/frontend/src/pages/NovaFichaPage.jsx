@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSharedCollection, createShared, listShared } from '../shared.js';
 import { useDemoResult } from '../demo.js';
 import { buildRcbeDeepLink, parseRcbeExtract } from '../rcbe.js';
-import { avaliarRisco, aplicabilidade } from '../engine/kyc.mjs';
+import { avaliarRisco, aplicabilidade, validaNif, validaNipc } from '../engine/kyc.mjs';
 import {
   Button,
   Badge,
@@ -123,6 +123,15 @@ export default function NovaFichaPage() {
 
   const aplic = useMemo(() => aplicabilidade(tipoServico), [tipoServico]);
   const cliente = useMemo(() => clientes.find((c) => c.id === form.clienteId) || null, [clientes, form.clienteId]);
+
+  // Validação do dígito de controlo do NIF/NIPC do cliente selecionado. Uma
+  // sociedade valida-se como NIPC; um particular como NIF. Só orienta - o
+  // advogado decide se avança apesar de um número mal transcrito.
+  const nifCheck = useMemo(() => {
+    if (!cliente || !cliente.nif) return null;
+    const valida = form.tipoCliente === 'empresa' ? validaNipc : validaNif;
+    return valida(cliente.nif);
+  }, [cliente, form.tipoCliente]);
 
   const risco = useMemo(() => {
     try {
@@ -314,6 +323,31 @@ export default function NovaFichaPage() {
                 </Select>
               </Field>
 
+              {nifCheck ? (
+                <div
+                  className={`citius-resultado ${nifCheck.valido ? 'is-review' : 'is-erro'}`}
+                  data-testid="kyc-nif-check"
+                  data-nif-valido={nifCheck.valido ? 'true' : 'false'}
+                  role="note"
+                >
+                  <span className="citius-resultado-icon" aria-hidden="true">
+                    {nifCheck.valido ? <IconShieldCheck /> : <IconShieldAlert />}
+                  </span>
+                  <span className="citius-resultado-text">
+                    <span className="citius-resultado-strong">
+                      {nifCheck.valido
+                        ? `${form.tipoCliente === 'empresa' ? 'NIPC' : 'NIF'} com dígito de controlo válido`
+                        : `${form.tipoCliente === 'empresa' ? 'NIPC' : 'NIF'} com dígito de controlo inválido`}
+                    </span>
+                    <span className="citius-resultado-meta">
+                      {nifCheck.valido
+                        ? 'O identificador fiscal passa a verificação módulo 11. Confirme ainda assim o titular nas bases oficiais.'
+                        : `${nifCheck.motivo} Reveja o número antes de prosseguir com a diligência.`}
+                    </span>
+                  </span>
+                </div>
+              ) : null}
+
               <div className="form-grid">
                 <Field label="Tipo de cliente">
                   <Select data-testid="kyc-tipo" data-demo-target="kyc-tipo" value={form.tipoCliente} onChange={(e) => setForm((p) => ({ ...p, tipoCliente: e.target.value }))}>
@@ -438,6 +472,20 @@ export default function NovaFichaPage() {
                   <div className="stack stack-1">
                     <span className="text-strong">Beneficiários efetivos ({rcbeParsed.beneficiarios.length})</span>
                     {rcbeParsed.entidade ? <span className="text-subtle text-xs">{rcbeParsed.entidade}{rcbeParsed.nipc ? ` - ${rcbeParsed.nipc}` : ''}</span> : null}
+                    {rcbeParsed.nipc ? (() => {
+                      const chk = validaNipc(rcbeParsed.nipc);
+                      return (
+                        <span
+                          className={`text-xs ${chk.valido ? 'text-subtle' : 'resultado-erro'}`}
+                          data-testid="kyc-rcbe-nipc-check"
+                          data-nipc-valido={chk.valido ? 'true' : 'false'}
+                        >
+                          {chk.valido
+                            ? 'NIPC da entidade: dígito de controlo válido.'
+                            : `NIPC da entidade: ${chk.motivo}`}
+                        </span>
+                      );
+                    })() : null}
                   </div>
                   {rcbeParsed.beneficiarios.length === 0 ? (
                     <p className="field-hint" style={{ marginTop: 'var(--sp-2, 0.5rem)' }}>
