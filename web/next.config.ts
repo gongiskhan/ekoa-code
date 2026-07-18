@@ -12,6 +12,13 @@ import { join } from "node:path";
 // to set NEXT_PUBLIC_API_URL explicitly at build time, so we only enforce
 // the file's presence in dev.
 function resolveApiUrl(): string {
+  // The committed e2e:full harness (scripts/e2e-full.mjs) boots its own api + CORS
+  // proxy on parameterized ports so it can run beside a live dev stack; it points
+  // the web app at the proxy via this purpose-named var. Deliberately NOT the
+  // generic NEXT_PUBLIC_API_URL (which stays un-honored in dev, per above): only
+  // the harness sets EKOA_E2E_API_ORIGIN, so it cannot linger in a shell and drift.
+  const harnessOrigin = process.env.EKOA_E2E_API_ORIGIN;
+  if (harnessOrigin) return harnessOrigin;
   const portFile = join(process.cwd(), "..", "backend.port");
   if (existsSync(portFile)) {
     const port = readFileSync(portFile, "utf8").trim();
@@ -44,6 +51,14 @@ function resolveVertical(): string {
   return "generic";
 }
 
+// Resolved once at config load and used by BOTH consumers below: the client-bundle
+// env inline (NEXT_PUBLIC_API_URL) and the CSP connect-src/img-src/frame-src in
+// headers(). headers() previously read the raw process.env.NEXT_PUBLIC_API_URL,
+// which only garrison's driver sets - under the committed e2e:full harness (which
+// sets EKOA_E2E_API_ORIGIN only) the CSP shipped WITHOUT the api origin and the
+// browser blocked every api call ("Failed to fetch" on login, 2026-07-18 run).
+const API_URL = resolveApiUrl();
+
 const nextConfig: NextConfig = {
   devIndicators: false,
   // Standalone output for the container image (Dockerfile.web sets NEXT_OUTPUT_STANDALONE=1):
@@ -54,7 +69,7 @@ const nextConfig: NextConfig = {
   // corrupts a live dev server's .next incremental state.
   distDir: process.env.NEXT_BUILD_DIST_DIR || ".next",
   env: {
-    NEXT_PUBLIC_API_URL: resolveApiUrl(),
+    NEXT_PUBLIC_API_URL: API_URL,
     NEXT_PUBLIC_EKOA_VERTICAL: resolveVertical(),
   },
   // The single carried redirect (FC-100): `/settings` is a natural URL users
@@ -72,7 +87,7 @@ const nextConfig: NextConfig = {
   // so the authenticated dashboard cannot be framed by a served app or hostile origin), plus
   // HSTS / nosniff / referrer / X-Frame-Options.
   async headers() {
-    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || "";
+    const apiOrigin = API_URL;
     // The ekoa-bridge daemon's loopback surface (FC-406/FC-407, run D2): grants + the
     // egress ledger are fetched by the BROWSER straight from 127.0.0.1 — never proxied or
     // persisted hosted-side. Default port is the proposed C1 stable port; keep the literal
