@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useSharedCollection,
   createShared,
@@ -54,18 +54,28 @@ function recentesPrimeiro(a, b) {
   return key(b).localeCompare(key(a));
 }
 
+/* Parâmetro de deep-link (?processo=... vindo do núcleo, por ex.). */
+function queryParam(name) {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get(name) || '';
+}
+
 export default function RegistosPage() {
   const { items: registos, loading, refresh } = useSharedCollection('registos_tempo');
-  const { items: processos } = useSharedCollection('processos');
+  const { items: processos, loading: loadingProcessos } = useSharedCollection('processos');
   const { items: clientes } = useSharedCollection('clientes');
   const { items: pessoas } = useSharedCollection('pessoas');
 
-  const [startForm, setStartForm] = useState({ ...START_FORM });
-  const [manual, setManual] = useState({ ...MANUAL_FORM, data: hojeISO() });
+  const processoInicial = queryParam('processo');
+  const [startForm, setStartForm] = useState({ ...START_FORM, processoId: processoInicial });
+  const [manual, setManual] = useState({ ...MANUAL_FORM, data: hojeISO(), processoId: processoInicial });
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [transferindoId, setTransferindoId] = useState(null);
+  // Tranca síncrona: o estado React só é visível após re-render, pelo que dois
+  // cliques no mesmo tick passariam ambos o guard de estado.
+  const transferindoRef = useRef(null);
   const [agoraMs, setAgoraMs] = useState(Date.now());
 
   const processoById = useMemo(() => {
@@ -73,6 +83,16 @@ export default function RegistosPage() {
     processos.forEach((p) => map.set(p.id, p));
     return map;
   }, [processos]);
+
+  // Honestidade do deep-link: se o ?processo= não existir na espinha, limpa a
+  // pré-selecção em vez de deixar o Select a apontar para um id inválido (que
+  // acabaria gravado como FK fantasma no registo).
+  useEffect(() => {
+    if (loadingProcessos) return;
+    const limpar = (p) => (p.processoId && !processoById.has(p.processoId) ? { ...p, processoId: '' } : p);
+    setStartForm(limpar);
+    setManual(limpar);
+  }, [loadingProcessos, processoById]);
 
   const clienteNome = useMemo(() => {
     const map = new Map();
@@ -208,7 +228,8 @@ export default function RegistosPage() {
     // `registoTempoId` (chave de idempotência). Antes de criar, relê o registo
     // E procura um lançamento órfão da mesma origem - se existir, apenas
     // repara o registo em vez de duplicar a faturação.
-    if (!podeTransferir(registo) || transferindoId) return;
+    if (!podeTransferir(registo) || transferindoRef.current) return;
+    transferindoRef.current = registo.id;
     setTransferindoId(registo.id);
     try {
       const fresco = await getShared('registos_tempo', registo.id);
@@ -251,6 +272,7 @@ export default function RegistosPage() {
     } catch {
       toast('Não foi possível transferir o tempo.', { tone: 'error' });
     } finally {
+      transferindoRef.current = null;
       setTransferindoId(null);
     }
   }

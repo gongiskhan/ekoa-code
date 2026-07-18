@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useSharedCollection, useDebounced } from '../shared.js';
 import { Button, Badge, DataTable, SearchInput, EmptyState, Skeleton } from '../components/ui.jsx';
 import {
-  IconUsers, IconUserCircle, IconBuilding, IconMail, IconPhone, IconPlus, IconChevronRight,
+  IconUsers, IconUserCircle, IconBuilding, IconMail, IconPhone, IconPlus, IconChevronRight, IconDownload,
 } from '../components/Icons.jsx';
 import { ClienteFormModal } from './forms.jsx';
 import { tipoLabel, fold } from './widgets.jsx';
+import { downloadCsv } from './csv.js';
 
 const FILTROS = [
   { value: 'ativos', label: 'Ativos' },
@@ -46,6 +47,16 @@ export default function ClientesPage() {
       .map((c) => ({ ...c, processosCount: count.get(c.id) || 0 }));
   }, [clientes, processos, debounced, filtro]);
 
+  // Exporta EXACTAMENTE o que a tabela mostra (filtro + pesquisa correntes),
+  // com escaping RFC 4180 - nomes com vírgulas/aspas saem intactos.
+  const exportarCsv = () => {
+    downloadCsv(
+      'clientes.csv',
+      ['nome', 'tipo', 'nif', 'email', 'telefone', 'processos'],
+      rows.map((c) => [c.nome || '', tipoLabel(c.tipo), c.nif || '', c.email || '', c.telefone || '', c.processosCount]),
+    );
+  };
+
   const columns = [
     {
       key: 'nome', label: 'Nome',
@@ -79,9 +90,19 @@ export default function ClientesPage() {
           <h1 className="page-title">Clientes</h1>
           <p className="page-subtitle">O registo central de entidades partilhado por toda a edição jurídica.</p>
         </div>
-        <Button data-testid="novo-cliente" onClick={() => setCreating(true)}>
-          <IconPlus /> Novo cliente
-        </Button>
+        <div className="page-actions">
+          <Button
+            variant="secondary"
+            data-testid="clientes-exportar-csv"
+            disabled={rows.length === 0}
+            onClick={exportarCsv}
+          >
+            <IconDownload /> Exportar CSV
+          </Button>
+          <Button data-testid="novo-cliente" onClick={() => setCreating(true)}>
+            <IconPlus /> Novo cliente
+          </Button>
+        </div>
       </div>
 
       <div className="filters">

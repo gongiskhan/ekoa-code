@@ -200,6 +200,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-18 S1 adversarial-test round (run 20260717-202309-d797918a)
+
+- **`nucleo-global-search-mouse-only`** (a11y/UX, fresh-context adversarial tester, live) - the
+  dashboard GlobalSearch dropdown (`role=listbox`/`option`) had NO keyboard support: ArrowDown did
+  not move a selection and Enter never opened a result (mouse-only). The tester attributed it to
+  the Ctrl+K palette, but its probe drove `data-testid=global-search-result` (the header search);
+  QuickOpen already had full keyboard nav. Fixed with the combobox pattern (activeIndex +
+  ArrowDown/ArrowUp wrap + Enter opens + `aria-selected`/`aria-activedescendant`) in
+  legal-nucleo `widgets.jsx`, mirroring QuickOpen. Closed by the committed test "pesquisa global
+  do painel navega com setas e Enter" (`web/e2e/legal-x-nucleo.spec.ts`).
+- **`tempos-transferir-same-tick-double-fire`** (defence-in-depth, fresh-context adversarial
+  tester, live) - two `.click()` dispatches in the SAME JS tick on "Transferir para honorários"
+  created 2 identical lancamentos: the in-flight guard was React state, which re-renders too late
+  to stop a same-tick second dispatch. Not reproducible with a real mouse (80/120/400 ms gaps all
+  yielded exactly 1). Fixed with a synchronous `transferindoRef` lock in `RegistosPage.onTransferir`
+  (on top of the existing `registoTempoId` idempotency repair). Closed by the committed test "dois
+  cliques no mesmo tick transferem apenas UM lancamento" (`web/e2e/legal-x-tempos.spec.ts`).
+
 ## Recently fixed - 2026-07-14 operator UX round (scope steering, verify narration, console noise)
 
 - **`build-ambiguous-request-no-scoping`** (UX, operator 2026-07-14, live) - "faz uma app para

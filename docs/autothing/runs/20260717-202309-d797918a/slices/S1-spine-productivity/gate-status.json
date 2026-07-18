@@ -1,0 +1,117 @@
+{
+  "slice": "S1-spine-productivity",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "passed",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": { "tests": 0, "typecheck": 0, "lint": 0, "build": 0 },
+      "evidence": [
+        "npx playwright test legal-x-nucleo legal-x-agenda legal-x-kanban legal-x-tempos legal-x-reservas (+ S2 specs in the same serialized lane): 24 passed after the insolvencias checkbox fix (S2 file)",
+        "frozen ported suites for the 8 S1/S2 apps + full 29-app smoke: 60 passed (43.9s)",
+        "npm run typecheck: 0 (3 workspaces)",
+        "npm run lint: 0 errors (247 warnings - ~220 pre-existing + concurrent slices' files)",
+        "api build (tsc -b + panel-runtime esbuild): 0; web build deliberately not run in-place (live dev server owns .next; S1 touches only api/assets scaffolds + e2e specs, outside the Next build graph; web typecheck covers the specs)",
+        "served bundles refreshed via out-of-process rebuild (scratchpad/rebuild-featured.mjs) - no stack restart; new symbols verified in served JS via curl"
+      ],
+      "at": "2026-07-17T21:30:00Z"
+    },
+    "review": {
+      "status": "clean",
+      "engine": "inline-fallback (code-review Workflow unavailable this run: external API billing constraint)",
+      "findings": [],
+      "nits": [
+        "QuickOpen fold() null-safe accent-insensitive matching verified; csv.js RFC-4180 escaping + BOM + CRLF verified",
+        "ics.js 75-octet line folding + WET/WEST VTIMEZONE verified; agenda-logic sobreposicoes sorted-sweep early-break correct",
+        "reservas ics.js byte-identical to agenda's (cmp) - acceptable duplication, apps are self-contained by design"
+      ],
+      "at": "2026-07-17T21:35:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "approve",
+      "by": "claude-fable-5 (fresh-context agent adv-review-S1; spawned with acceptance+diff only, no implementer rationale)",
+      "evidence": [
+        "npm run typecheck: PASS (shared + api + web)",
+        "npm run lint: 0 errors (247 pre-existing warnings)",
+        "npx playwright test legal-x-{nucleo,agenda,agenda-reservas,kanban,tempos} --workers=1: 15 passed (14.3s)",
+        "frozen ported legal-{nucleo,agenda,kanban,tempos}: 17 passed (18.9s)",
+        "frozen shared layer byte-clean in all 5 S1 apps; ported specs unmodified; SUITE_LEDGER registers all 5 S1 specs in band3",
+        "emoji/em-dash/en-dash scan over added S1 lines: none; icons + testids confirmed present"
+      ],
+      "findings": [],
+      "notes": [
+        "spec honesty probed as behavioral, not existence-only: .ics byte-identity + UID + VTIMEZONE; kanban keyboard move asserts lane change + persisted estado + focus; tempos timer survives reload; reservas degraded-state aborts API and asserts the honest error; CSV BOM/CRLF/RFC-4180 on downloaded bytes",
+        "tempos billable->honorarios clause satisfied by pre-existing code (correct scoping; golden transfer asserted by frozen legal-tempos spec)",
+        "repo-wide ledger census deliberately not run (concurrent S2-S7 specs in tree would conflate it; S1 requirement met)"
+      ],
+      "at": "2026-07-17T23:55:00Z"
+    },
+    "adversarialTest": {
+      "verdict": "pass",
+      "by": "claude-fable-5 (fresh-context agent adv-test-S1; independent probe pass, ADVT1-nonce fixtures, own playwright-core harness)",
+      "probes": 20,
+      "evidence": [
+        "quick-open/search: accent-fold byte-identical result sets (marília/marilia/MARILIA), honest empty states, Escape/reopen state reset, debounce race clean, click navigates",
+        "CSV RFC-4180 hostile name (quotes+comma+CRLF+=SUM formula): quotes doubled, wrapped, BOM EF BB BF, all-CRLF; .ics RFC-5545 escaping of ; , \\ + newlines->\\n, <=75 octets, VTIMEZONE, byte-identical consecutive exports with constant DTSTAMP",
+        "kanban zero-card filter states honest; estado move persists across reload (seed restored)",
+        "financeiro: zero-lancamentos no NaN; -1234567.895 renders -1 234 567,90 EUR; totals correct",
+        "tempos timer survives reload deriving from stored inicio (00:00:07 == wall 7s); week KPIs + real PDF folha-tempos (43KB %PDF-)",
+        "agenda Imprimir semana = real server PDF (39KB) via /api/app-pdf - working as designed, not window.print",
+        "reservas degraded states (abort/500-JSON/503-HTML) all show honest retry error; session picker reveals days+slots on real click",
+        "zero uncaught console/page errors across all probes; cleanup sweep CLEAN (0 ADVT1 rows in 10 collections; seed counts restored exactly; 'Preparar contestação' back to em_curso)"
+      ],
+      "findings": [
+        {
+          "severity": "minor",
+          "summary": "dashboard GlobalSearch (role listbox/option) had NO keyboard navigation - ArrowDown/Enter dead, mouse-only (tester attributed it to the Ctrl+K palette, but its probe drove data-testid=global-search-result; QuickOpen already had full keyboard nav)",
+          "resolution": "FIXED forward in the slice: activeIndex + ArrowDown/ArrowUp wrap + Enter opens + aria-selected/aria-activedescendant combobox pattern in legal-nucleo widgets.jsx GlobalSearch, mirroring QuickOpen; pinned by new committed test 'pesquisa global do painel navega com setas e Enter' in legal-x-nucleo.spec.ts"
+        },
+        {
+          "severity": "minor",
+          "summary": "tempos Transferir para honorarios: two same-tick programmatic clicks created 2 identical lancamentos (React-state guard re-renders too late); NOT reproducible with a real mouse (80/120/400ms gaps all yielded 1)",
+          "resolution": "FIXED forward in the slice: synchronous transferindoRef lock in RegistosPage.onTransferir (defence-in-depth on top of the existing registoTempoId idempotency repair); pinned by new committed test 'dois cliques no mesmo tick transferem apenas UM lancamento' in legal-x-tempos.spec.ts"
+        }
+      ],
+      "postFixVerification": "rebuilt legal-nucleo + legal-tempos bundles (out-of-process, no restart); npx playwright test legal-x-nucleo legal-x-tempos --workers=1: 8 passed (7.5s) including the 2 new regression tests; typecheck 0; lint 0 errors",
+      "at": "2026-07-18T01:50:00Z"
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-cli screenshots of the 5 S1 surfaces (audit session)",
+      "issues": [],
+      "notes": [
+        "nucleo quick-open: typed icons, NIF/court subtitles, focus highlight, honest 'Sem resultados' empty state - clean",
+        "nucleo processo detail: Lancamentos financeiros card (badges, right-aligned euro values, por-faturar summary, Ver em Honorarios / Registar tempo links) + Noutras aplicacoes links - clean",
+        "clientes: Exportar CSV button correctly placed beside Novo cliente - clean",
+        "agenda: Exportar .ics + Imprimir semana + per-day print buttons in header row - clean",
+        "kanban: 3 filter Selects + search aligned above board; card deep-links visible - clean",
+        "tempos semana: KPI cards + per-day cards + Exportar folha (PDF) - clean",
+        "reservas public page: session-type picker with price badges, focus ring - clean",
+        "DEFERRED (pre-existing, fleet-wide, not S1): empty-value placeholder glyph is an em dash in the canonical shared layer (api/assets/legal-shared/shared.js, components/ui.jsx) used by all 29 apps; operator rule prefers plain dash. Changing it mid-run collides with in-flight slice agents - queued as post-wave sweep"
+      ],
+      "at": "2026-07-17T21:57:00Z"
+    },
+    "walkthrough": {
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S1-spine-productivity/video/s1-spine-productivity-walkthrough.webm",
+      "durationSeconds": 38.1,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine) - read-only flows, run alongside the serialized e2e lane without touching it; self-verified by frame extraction + the recorder's own probe report",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames read back by vision)",
+        "checks": [
+          "quick-open palette opens on Ctrl+K with hint copy; probe: 3 results for 'marilia' (accent-insensitive fold)",
+          "processo 1234/26.0T8LSB detail: Lancamentos financeiros card (2 entries, por faturar 1026,00 EUR, Total 1026,00 EUR) + Ver em Honorarios / Registar tempo + Noutras aplicacoes links",
+          "clientes Exportar CSV produced a real download: clientes.csv",
+          "agenda Exportar .ics produced a real download: agenda-semana-2026-07-13.ics; Imprimir semana + per-day print buttons visible",
+          "kanban cliente filter narrowed the board to Marilia Costa (Por fazer 0 / Em curso 1 visible in frame)",
+          "tempos Semana: KPI cards + Exportar folha (PDF) produced a real download: folha-tempos-2026-07-13.pdf",
+          "reservas public page loads clean (closing frame)",
+          "recorder error list: empty"
+        ]
+      },
+      "at": "2026-07-17T22:02:00Z"
+    }
+  }
+}

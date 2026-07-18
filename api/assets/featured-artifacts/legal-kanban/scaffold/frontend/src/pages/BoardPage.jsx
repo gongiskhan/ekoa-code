@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   useSharedCollection, createShared, updateShared, appHref, formatDate, diasRestantes,
 } from '../shared.js';
@@ -19,6 +19,12 @@ const URGENCIAS = [
 
 const FORM_EMPTY = { titulo: '', processoId: '', responsavel: '', prazo: '', urgencia: 'media' };
 
+/* Parâmetro de query (?processo=…/?cliente=…) - o Núcleo liga para o quadro já filtrado. */
+function queryParam(name) {
+  try { return new URLSearchParams(window.location.search).get(name) || null; }
+  catch { return null; }
+}
+
 /* Distintivo de prazo - realça os cartões vencidos (dias restantes < 0). */
 function PrazoBadge({ prazo }) {
   const dias = diasRestantes(prazo);
@@ -37,6 +43,7 @@ export default function BoardPage() {
   const { items: tarefas, loading, refresh } = useSharedCollection('tarefas');
   const { items: boards } = useSharedCollection('kanban_boards');
   const { items: processos } = useSharedCollection('processos');
+  const { items: clientes } = useSharedCollection('clientes');
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(FORM_EMPTY);
@@ -45,11 +52,15 @@ export default function BoardPage() {
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
   const [responsavelFiltro, setResponsavelFiltro] = useState('all');
-  const [processoFiltro, setProcessoFiltro] = useState('all');
+  const [processoFiltro, setProcessoFiltro] = useState(() => queryParam('processo') || 'all');
+  const [clienteFiltro, setClienteFiltro] = useState(() => queryParam('cliente') || 'all');
   const [texto, setTexto] = useState('');
 
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
+
+  // Depois de mover por teclado o cartão renasce noutro <li>: devolve-lhe o foco.
+  const pendingFocusRef = useRef(null);
 
   // O quadro por omissão vive em memória enquanto ninguém criar um em kanban_boards.
   const board = boards && boards.length > 0 ? boards[0] : DEFAULT_BOARD;
@@ -69,23 +80,43 @@ export default function BoardPage() {
     [tarefas],
   );
   const processosComTarefa = useMemo(() => {
-    const ids = Array.from(new Set(tarefas.map((t) => t.processoId).filter(Boolean)));
-    return ids
+    const ids = new Set(tarefas.map((t) => t.processoId).filter(Boolean));
+    // O filtro vindo do deep-link do Núcleo fica sempre na lista, mesmo que o
+    // processo ainda não tenha cartões - senão o Select mentia sobre o filtro activo.
+    if (processoFiltro !== 'all') ids.add(processoFiltro);
+    return Array.from(ids)
       .map((id) => ({ id, numero: processoNumero(id) || 'Sem número' }))
       .sort((a, b) => a.numero.localeCompare(b.numero, 'pt'));
-  }, [tarefas, processoNumero]);
+  }, [tarefas, processoNumero, processoFiltro]);
+
+  const clienteNome = useMemo(() => {
+    const map = new Map(clientes.map((c) => [c.id, c.nome]));
+    return (id) => map.get(id) || 'Sem nome';
+  }, [clientes]);
+
+  /* Cliente efectivo de um cartão: o próprio clienteId, ou o do processo ligado. */
+  const tarefaClienteId = (t) => t.clienteId || processoCliente(t.processoId) || null;
+
+  const clientesComTarefa = useMemo(() => {
+    const ids = new Set(tarefas.map(tarefaClienteId).filter(Boolean));
+    if (clienteFiltro !== 'all') ids.add(clienteFiltro);
+    return Array.from(ids)
+      .map((id) => ({ id, nome: clienteNome(id) }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+  }, [tarefas, clienteNome, clienteFiltro, processoCliente]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const termo = texto.trim().toLowerCase();
   const visible = useMemo(() => tarefas.filter((t) => {
     if (responsavelFiltro !== 'all' && t.responsavel !== responsavelFiltro) return false;
     if (processoFiltro !== 'all' && t.processoId !== processoFiltro) return false;
+    if (clienteFiltro !== 'all' && tarefaClienteId(t) !== clienteFiltro) return false;
     if (termo) {
       const num = processoNumero(t.processoId) || '';
       const hay = `${t.titulo || ''} ${t.descricao || ''} ${t.responsavel || ''} ${num}`.toLowerCase();
       if (!hay.includes(termo)) return false;
     }
     return true;
-  }), [tarefas, responsavelFiltro, processoFiltro, termo, processoNumero]);
+  }), [tarefas, responsavelFiltro, processoFiltro, clienteFiltro, termo, processoNumero, processoCliente]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useDemoResult('kanban-board', tarefas.length > 0);
 
@@ -111,6 +142,21 @@ export default function BoardPage() {
     setDraggingId(null);
     const tarefa = tarefas.find((t) => t.id === id);
     if (tarefa) moveTo(tarefa, col, null);
+  };
+
+  // Movimento por teclado: setas esquerda/direita com o CARTÃO focado movem-no
+  // de coluna. O handler vive no próprio <li> e só dispara quando o alvo é o
+  // cartão (e.target === e.currentTarget), pelo que nunca rouba as teclas ao
+  // Select "Mover para", às ligações nem a qualquer campo de texto.
+  const onCardKeyDown = (t, col) => (e) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const idx = colunas.findIndex((c) => c.id === col.id);
+    const target = colunas[idx + (e.key === 'ArrowRight' ? 1 : -1)];
+    if (!target) return;
+    pendingFocusRef.current = t.id;
+    moveTo(t, target, null);
   };
 
   const onCardDrop = (col, beforeId) => (e) => {
@@ -160,6 +206,11 @@ export default function BoardPage() {
         data-testid="kanban-card"
         data-card-id={t.id}
         draggable
+        tabIndex={0}
+        aria-keyshortcuts="ArrowLeft ArrowRight"
+        title="Com o cartão focado, as setas esquerda/direita movem-no de coluna."
+        ref={(el) => { if (el && pendingFocusRef.current === t.id) { pendingFocusRef.current = null; el.focus(); } }}
+        onKeyDown={onCardKeyDown(t, col)}
         onDragStart={(e) => { setDraggingId(t.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.id); }}
         onDragEnd={() => { setDraggingId(null); setDragOverCol(null); }}
         onDragOver={(e) => { e.preventDefault(); }}
@@ -188,6 +239,18 @@ export default function BoardPage() {
                 title="Abrir o dossiê do processo"
               >
                 <span>{numero}</span>
+                <IconExternalLink size={12} />
+              </a>
+            ) : null}
+            {numero ? (
+              <a
+                href={appHref('legal-nucleo', `processos/${t.processoId}`)}
+                data-testid="kanban-card-nucleo"
+                className="row row-1"
+                style={{ alignItems: 'center', gap: 4 }}
+                title="Abrir o processo no Núcleo"
+              >
+                <span>Núcleo</span>
                 <IconExternalLink size={12} />
               </a>
             ) : null}
@@ -225,7 +288,7 @@ export default function BoardPage() {
         <div>
           <h1 className="page-title">Quadro de Tarefas</h1>
           <p className="page-subtitle">
-            Arraste ou use "Mover para" para reorganizar. O estado da tarefa é canónico:
+            Arraste, use "Mover para" ou foque um cartão e mova-o com as setas. O estado da tarefa é canónico:
             as colunas mapeadas a um estado sincronizam-no; "Em revisão" reposiciona sem o alterar.
           </p>
         </div>
@@ -274,9 +337,13 @@ export default function BoardPage() {
           <option value="all">Todos os responsáveis</option>
           {responsaveis.map((r) => <option key={r} value={r}>{r}</option>)}
         </Select>
-        <Select value={processoFiltro} onChange={(e) => setProcessoFiltro(e.target.value)} aria-label="Filtrar por processo" style={{ width: 'auto', minWidth: 160 }}>
+        <Select value={processoFiltro} onChange={(e) => setProcessoFiltro(e.target.value)} aria-label="Filtrar por processo" data-testid="kanban-filtro-processo" style={{ width: 'auto', minWidth: 160 }}>
           <option value="all">Todos os processos</option>
           {processosComTarefa.map((p) => <option key={p.id} value={p.id}>{p.numero}</option>)}
+        </Select>
+        <Select value={clienteFiltro} onChange={(e) => setClienteFiltro(e.target.value)} aria-label="Filtrar por cliente" data-testid="kanban-filtro-cliente" style={{ width: 'auto', minWidth: 160 }}>
+          <option value="all">Todos os clientes</option>
+          {clientesComTarefa.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
         </Select>
         <Input
           type="search"

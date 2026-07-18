@@ -36,9 +36,14 @@
     },
     "band3_served_app": {
       "targetGate": "G6",
-      "note": "37 ported specs run UNMODIFIED against api/ alone; a failure is a byte-compat defect in the served-app plane, never a reason to edit the spec. legal-dossie also stubs /api/app-sso/me + /api/app-sso/m365/**. legal-apps-smoke (run 20260717-202309) is new-authored, same served-app plane: all 29 legal apps load clean.",
+      "note": "37 ported specs run UNMODIFIED against api/ alone; a failure is a byte-compat defect in the served-app plane, never a reason to edit the spec. legal-dossie also stubs /api/app-sso/me + /api/app-sso/m365/**. legal-apps-smoke (run 20260717-202309) is new-authored, same served-app plane: all 29 legal apps load clean. legal-x-* specs (run 20260717-202309) are new-authored per-app capability specs, appended in landing order.",
       "specs": [
         "legal-apps-smoke",
+        "legal-x-nucleo",
+        "legal-x-agenda",
+        "legal-x-agenda-reservas",
+        "legal-x-kanban",
+        "legal-x-tempos",
         "legal-nucleo",
         "legal-dossie",
         "legal-prazos",

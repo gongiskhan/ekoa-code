@@ -9,6 +9,7 @@ import ClienteDetailPage from './pages/ClienteDetailPage.jsx';
 import ProcessosPage from './pages/ProcessosPage.jsx';
 import ProcessoDetailPage from './pages/ProcessoDetailPage.jsx';
 import TarefasPage from './pages/TarefasPage.jsx';
+import QuickOpen from './pages/QuickOpen.jsx';
 import { seedSpine } from './shared.js';
 
 // Navegação e títulos do Núcleo, expandidos com Tarefas. Passados ao Layout
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/tarefas" element={<TarefasPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <QuickOpen />
       <ToastHost />
     </Layout>
   );

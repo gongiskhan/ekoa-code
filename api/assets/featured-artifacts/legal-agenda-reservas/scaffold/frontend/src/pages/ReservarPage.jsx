@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { construirEventoDeReserva } from '../engine/agenda.mjs';
 import {
-  listShared, createShared, updateShared, deleteShared,
+  listShared, createShared, updateShared, deleteShared, spineDisponivel,
   agoraLocal, daquiA, proximosDias, horaDe, rotuloDataCurto, rotuloDataLongo, formatEur,
 } from '../reservas-data.js';
+import { construirIcs, reservaParaVevent, descarregarIcs } from './ics.js';
 
 const DIAS_JANELA = 14;
 // Referência Multibanco de DEMONSTRAÇÃO (fixa). A confirmação real chega pelo
@@ -37,6 +38,9 @@ function setQueryTipo(id) {
  */
 export default function ReservarPage() {
   const [carregando, setCarregando] = useState(true);
+  // Estado degradado HONESTO: ponte da plataforma ausente ou leitura falhada.
+  // Distinto de "não há sessões" - nunca se fingem horários nem espinha vazia.
+  const [indisponivel, setIndisponivel] = useState(false);
   const [tipos, setTipos] = useState([]);
   // PRIVACIDADE: esta página é pública/anónima e lê APENAS a colecção saneada
   // `agenda_publica` ({sessaoTipoId, inicio, fim} dos horários livres) mantida
@@ -60,13 +64,20 @@ export default function ReservarPage() {
 
   async function carregar() {
     setCarregando(true);
+    setIndisponivel(false);
     try {
+      if (!spineDisponivel()) {
+        setIndisponivel(true);
+        return;
+      }
       const [ts, publica] = await Promise.all([
         listShared('sessao_tipos'), listShared('agenda_publica'),
       ]);
       setTipos((ts || []).filter((t) => t && t.publico));
       setAgendaPublica(publica || []);
       setAgora(agoraLocal());
+    } catch {
+      setIndisponivel(true);
     } finally {
       setCarregando(false);
     }
@@ -185,6 +196,23 @@ export default function ReservarPage() {
     return <div className="rz-card"><p className="rz-empty">A carregar horários…</p></div>;
   }
 
+  // Serviço indisponível: diz a verdade e oferece repetir - nunca se disfarça
+  // de "sem sessões disponíveis".
+  if (indisponivel) {
+    return (
+      <div className="rz-stack" data-testid="reservas-page">
+        <div className="rz-card">
+          <p className="rz-empty" data-testid="reservas-indisponivel">
+            Não foi possível ligar ao serviço de marcações. Verifique a ligação e tente novamente.
+          </p>
+          <button type="button" className="rz-btn rz-btn-ghost" data-testid="reservas-tentar" onClick={carregar}>
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Painel de resultado (pagamento ou confirmada).
   if ((fase === 'pagamento' || fase === 'confirmada') && resultado && tipo) {
     return (
@@ -208,6 +236,11 @@ export default function ReservarPage() {
           <h1 className="rz-title">Marcar uma sessão</h1>
           <p className="rz-subtitle">Escolha o tipo de sessão. Mostramos-lhe os horários livres.</p>
         </div>
+        {tipoId ? (
+          <p className="rz-small rz-muted" data-testid="reservas-tipo-indisponivel" style={{ margin: 0 }}>
+            A sessão da ligação que seguiu já não está disponível para marcação. Escolha outro tipo de sessão.
+          </p>
+        ) : null}
         {tipos.length === 0 ? (
           <div className="rz-card"><p className="rz-empty" data-testid="reservas-sem-tipos">De momento não há sessões disponíveis para marcação.</p></div>
         ) : (
@@ -335,9 +368,20 @@ function ResultadoPanel({ fase, tipo, dia, slot, email, telefone, onVoltar }) {
         </div>
 
         {confirmada ? (
-          <p className="rz-small rz-muted" data-testid="reservas-confirmada-nota" style={{ marginTop: '0.85rem' }}>
-            Marcação confirmada. Enviámos os detalhes para {email}.
-          </p>
+          <div style={{ marginTop: '0.85rem' }}>
+            <p className="rz-small rz-muted" data-testid="reservas-confirmada-nota" style={{ margin: 0 }}>
+              Marcação confirmada. Enviámos os detalhes para {email}.
+            </p>
+            <button
+              type="button"
+              className="rz-btn rz-btn-ghost"
+              data-testid="reservas-ics"
+              style={{ marginTop: '0.6rem' }}
+              onClick={() => descarregarIcs(`reserva-${slot.id}.ics`, construirIcs([reservaParaVevent(slot, tipo.nome)]))}
+            >
+              Adicionar ao calendário (.ics)
+            </button>
+          </div>
         ) : (
           <div className="rz-pay" data-testid="reservas-pagamento" style={{ marginTop: '0.85rem' }}>
             <p className="rz-small rz-strong" style={{ marginTop: 0 }}>Conclua o pagamento de {formatEur(tipo.preco)}</p>

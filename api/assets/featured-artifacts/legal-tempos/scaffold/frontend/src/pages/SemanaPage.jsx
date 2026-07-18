@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { useSharedCollection, formatDate } from '../shared.js';
-import { Badge, EmptyState } from '../components/ui.jsx';
-import { IconCalendar } from '../components/Icons.jsx';
+import { Badge, Button, EmptyState, toast } from '../components/ui.jsx';
+import { IconCalendar, IconPrinter } from '../components/Icons.jsx';
 import { agruparSemana, formatDuracao, ESTADO_TONE, ESTADO_LABEL } from './tempos-logic.js';
+import { htmlFolhaSemana } from './tempos-print.js';
 
 export default function SemanaPage() {
   const { items: registos, loading } = useSharedCollection('registos_tempo');
@@ -17,6 +18,27 @@ export default function SemanaPage() {
   const semana = useMemo(() => agruparSemana(registos), [registos]);
   const temAlgum = semana.total > 0;
 
+  // Folha de tempos em PDF pelo exportPdf da plataforma. Sem a ponte não há
+  // meio-termo: avisa e não finge que exportou.
+  async function exportarPdf() {
+    const api = typeof window !== 'undefined' ? window.__ekoa : null;
+    if (!api || typeof api.exportPdf !== 'function') {
+      toast('Exportação PDF indisponível neste ambiente.', { tone: 'error' });
+      return;
+    }
+    try {
+      await api.exportPdf({
+        html: htmlFolhaSemana({ semana, processoNumero }),
+        format: 'A4',
+        landscape: false,
+        filename: `folha-tempos-${semana.inicioISO}.pdf`,
+        download: true,
+      });
+    } catch {
+      toast('Não foi possível exportar a folha de tempos.', { tone: 'error' });
+    }
+  }
+
   return (
     <div data-testid="semana-page" data-demo-page="tempos/semana">
       <div className="page-header">
@@ -26,6 +48,11 @@ export default function SemanaPage() {
             Tempo registado de {formatDate(semana.inicioISO)} a {formatDate(semana.fimISO)}, por dia,
             faturável e não faturável.
           </p>
+        </div>
+        <div className="page-actions">
+          <Button variant="secondary" data-testid="semana-exportar-pdf" onClick={exportarPdf} disabled={loading}>
+            <IconPrinter /> Exportar folha (PDF)
+          </Button>
         </div>
       </div>
 

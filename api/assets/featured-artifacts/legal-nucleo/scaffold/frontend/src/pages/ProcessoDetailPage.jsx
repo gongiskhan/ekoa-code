@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  useSharedCollection, updateShared, appHref, formatDate,
+  useSharedCollection, updateShared, appHref, formatDate, formatEur,
 } from '../shared.js';
 import {
   Button, Badge, ConfirmDialog, EmptyState, Skeleton, useToast,
@@ -21,6 +21,7 @@ export default function ProcessoDetailPage() {
   const { items: prazos } = useSharedCollection('prazos');
   const { items: tarefas } = useSharedCollection('tarefas');
   const { items: eventos } = useSharedCollection('eventos');
+  const { items: lancamentos } = useSharedCollection('lancamentos');
 
   const processo = useMemo(() => processos.find((p) => p.id === id) || null, [processos, id]);
   const cliente = useMemo(() => (processo ? clientes.find((c) => c.id === processo.clienteId) : null), [clientes, processo]);
@@ -36,6 +37,21 @@ export default function ProcessoDetailPage() {
   ), [prazos, id]);
 
   const minhasTarefas = useMemo(() => tarefas.filter((t) => t.processoId === id && t.estado !== 'concluida'), [tarefas, id]);
+
+  // Agregação financeira da espinha: todos os lançamentos deste processo (o
+  // total soma-os todos; a lista mostra os mais recentes). "Por faturar" são os
+  // lançamentos ainda em pré-fatura - os já faturados ficam fora dessa soma.
+  const financeiro = useMemo(() => {
+    const meus = lancamentos
+      .filter((l) => l.processoId === id)
+      .slice()
+      .sort((a, b) => String(b.data || '').localeCompare(String(a.data || '')));
+    const total = meus.reduce((acc, l) => acc + (Number(l.valor) || 0), 0);
+    const porFaturar = meus
+      .filter((l) => !l.faturado)
+      .reduce((acc, l) => acc + (Number(l.valor) || 0), 0);
+    return { recentes: meus.slice(0, 5), count: meus.length, total, porFaturar };
+  }, [lancamentos, id]);
   const meusEventos = useMemo(() => (
     eventos.filter((e) => e.processoId === id)
       .slice()
@@ -138,6 +154,50 @@ export default function ProcessoDetailPage() {
               </ul>
             )}
           </section>
+
+          {/* Lançamentos financeiros (espinha partilhada, escritos por Tempos/Honorários) */}
+          <section className="card" data-testid="processo-lancamentos">
+            <h2 className="card-title" style={{ marginBottom: 'var(--sp-3, 0.75rem)' }}>Lançamentos financeiros</h2>
+            {financeiro.count === 0 ? (
+              <p className="text-small text-subtle" style={{ margin: 0 }}>Sem lançamentos para este processo.</p>
+            ) : (
+              <div className="stack stack-3">
+                <ul className="stack stack-2" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {financeiro.recentes.map((l) => (
+                    <li
+                      key={l.id}
+                      data-testid="processo-lancamento"
+                      className="row row-space-between"
+                      style={{ padding: 'var(--sp-2, 0.5rem) var(--sp-3, 0.75rem)', border: '1px solid var(--color-border)', borderRadius: 'var(--r-2, 0.5rem)', gap: 'var(--sp-3, 0.75rem)' }}
+                    >
+                      <span className="stack stack-1" style={{ minWidth: 0 }}>
+                        <span className="text-small text-strong">{l.descricao || 'Lançamento'}</span>
+                        <span className="text-xs text-subtle numeric">{formatDate(l.data)}</span>
+                      </span>
+                      <span className="row row-2">
+                        <Badge tone={l.faturado ? 'ok' : 'warn'}>{l.faturado ? 'Faturado' : 'Pré-fatura'}</Badge>
+                        <span className="text-small text-strong numeric">{formatEur(l.valor)}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="row row-space-between text-small" data-testid="processo-lancamentos-total">
+                  <span className="text-subtle">
+                    {financeiro.count} {financeiro.count === 1 ? 'lançamento' : 'lançamentos'} · por faturar {formatEur(financeiro.porFaturar)}
+                  </span>
+                  <span className="text-strong numeric">Total {formatEur(financeiro.total)}</span>
+                </div>
+              </div>
+            )}
+            <div className="row row-2" style={{ marginTop: 'var(--sp-3, 0.75rem)', flexWrap: 'wrap' }}>
+              <a href={appHref('legal-honorarios')} className="btn btn-secondary btn-sm" data-testid="link-honorarios">
+                Ver em Honorários <IconExternalLink />
+              </a>
+              <a href={appHref('legal-tempos', `?processo=${processo.id}`)} className="btn btn-secondary btn-sm" data-testid="link-tempos">
+                Registar tempo <IconExternalLink />
+              </a>
+            </div>
+          </section>
         </div>
 
         <div className="stack stack-6">
@@ -175,6 +235,19 @@ export default function ProcessoDetailPage() {
                 ))}
               </ul>
             )}
+          </section>
+
+          {/* Ligações rápidas às restantes aplicações da espinha */}
+          <section className="card" data-testid="processo-ligacoes">
+            <h2 className="card-title" style={{ marginBottom: 'var(--sp-3, 0.75rem)' }}>Noutras aplicações</h2>
+            <div className="stack stack-2">
+              <a href={appHref('legal-kanban', `?processo=${processo.id}`)} className="btn btn-secondary btn-sm" data-testid="link-kanban" style={{ justifyContent: 'flex-start' }}>
+                Quadro kanban filtrado por este processo <IconExternalLink />
+              </a>
+              <a href={appHref('legal-agenda')} className="btn btn-secondary btn-sm" data-testid="link-agenda" style={{ justifyContent: 'flex-start' }}>
+                Agenda do escritório <IconExternalLink />
+              </a>
+            </div>
           </section>
         </div>
       </div>

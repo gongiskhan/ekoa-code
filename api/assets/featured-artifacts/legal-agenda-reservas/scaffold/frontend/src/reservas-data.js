@@ -14,6 +14,13 @@ function api() {
   return null;
 }
 
+/*
+ * A ponte da plataforma está presente? A página usa isto para distinguir com
+ * honestidade "não há sessões" (espinha vazia) de "não conseguimos ligar ao
+ * serviço" (ponte ausente/avariada) - nunca mostra o primeiro quando é o segundo.
+ */
+export function spineDisponivel() { return api() !== null; }
+
 export async function listShared(collection) {
   const a = api();
   if (!a || typeof a.list !== 'function') return [];

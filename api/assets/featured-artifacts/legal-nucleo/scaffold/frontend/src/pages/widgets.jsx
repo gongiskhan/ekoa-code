@@ -113,6 +113,7 @@ export function GlobalSearch({ placeholder = 'Pesquisar clientes e processos…'
   const { items: processos } = useSharedCollection('processos');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const wrapRef = useRef(null);
   const debounced = useDebounced(query, 180);
 
@@ -165,8 +166,28 @@ export function GlobalSearch({ placeholder = 'Pesquisar clientes e processos…'
     return [...cli, ...prc];
   }, [debounced, clientes, processos]);
 
+  // O índice activo nunca aponta para fora da lista corrente.
+  useEffect(() => {
+    setActiveIndex((i) => (results.length === 0 ? 0 : Math.min(i, results.length - 1)));
+  }, [results]);
+
   const go = (to) => { setOpen(false); setQuery(''); navigate(to); };
   const term = debounced.trim();
+
+  const onInputKeyDown = (e) => {
+    if (!open || results.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIndex((i) => (i + 1) % results.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIndex((i) => (i - 1 + results.length) % results.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const alvo = results[activeIndex];
+      if (alvo) go(alvo.to);
+    }
+  };
 
   return (
     <div className="global-search" ref={wrapRef} style={{ position: 'relative', width: '100%', maxWidth: 460 }}>
@@ -174,15 +195,21 @@ export function GlobalSearch({ placeholder = 'Pesquisar clientes e processos…'
         value={query}
         onChange={(v) => { setQuery(v); setOpen(true); }}
         onFocus={() => setOpen(true)}
+        onKeyDown={onInputKeyDown}
         placeholder={placeholder}
         data-testid="global-search"
         aria-label="Pesquisa global"
+        role="combobox"
+        aria-expanded={open && Boolean(term)}
+        aria-controls="global-search-listbox"
+        aria-activedescendant={open && term && results.length > 0 ? `global-search-opt-${activeIndex}` : undefined}
       />
       {open && term ? (
         <div
           className="card"
           data-testid="global-search-menu"
           role="listbox"
+          id="global-search-listbox"
           style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 40, padding: 0, maxHeight: 360, overflowY: 'auto' }}
         >
           {results.length === 0 ? (
@@ -190,17 +217,21 @@ export function GlobalSearch({ placeholder = 'Pesquisar clientes e processos…'
               Sem resultados para "{term}".
             </div>
           ) : (
-            results.map((r) => (
+            results.map((r, i) => (
               <button
                 key={`${r.kind}-${r.id}`}
                 type="button"
                 role="option"
+                id={`global-search-opt-${i}`}
+                aria-selected={i === activeIndex}
                 data-testid="global-search-result"
+                onMouseEnter={() => setActiveIndex(i)}
                 onClick={() => go(r.to)}
                 style={{
                   display: 'flex', width: '100%', textAlign: 'left', gap: 'var(--sp-3, 0.75rem)',
                   alignItems: 'center', padding: 'var(--sp-3, 0.75rem) var(--sp-4, 1rem)',
-                  background: 'transparent', border: 0, borderTop: '1px solid var(--color-border)',
+                  background: i === activeIndex ? 'var(--accent-weak, #eaeff4)' : 'transparent',
+                  border: 0, borderTop: '1px solid var(--color-border)',
                 }}
               >
                 <span className="row-icon" aria-hidden="true">{r.kind === 'cliente' ? <IconUserCircle /> : <IconFolder />}</span>

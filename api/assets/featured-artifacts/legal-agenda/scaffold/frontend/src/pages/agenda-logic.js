@@ -87,3 +87,67 @@ export function rotuloDia(ymd) {
 
 /* 'YYYY-MM-DD' é hoje (calendário local)? */
 export function ehHoje(ymd) { return ymd === ymdLocal(new Date()); }
+
+/* ---------- Sobreposições de participantes ---------- */
+
+/* Estados de reserva que ocupam a agenda (espelha ESTADOS_OCUPAM do motor). */
+const ESTADOS_QUE_OCUPAM = ['hold', 'pendente_pagamento', 'confirmada'];
+
+/*
+ * Detecta sobreposições de horário POR PARTICIPANTE nos dias dados, sobre as
+ * marcações COM hora: reservas activas (participantes = participantesNecessarios
+ * do tipo de sessão) e eventos com inicio+fim+pessoaIds (os derivados de
+ * reservas são ignorados quando a própria reserva já conta, para não se
+ * sobreporem a si mesmos). Eventos só-de-dia não têm hora - ficam de fora,
+ * honestamente. Puro e determinista; comparação lexicográfica dos instantes
+ * de relógio de parede 'YYYY-MM-DDTHH:mm:ss'.
+ *
+ * Devolve [{ pessoaId, a, b }] com a/b = { rotulo, inicio, fim }, ordenado.
+ */
+export function sobreposicoesDeParticipantes({ eventos = [], reservas = [], sessaoTipos = [], dias = [] }) {
+  const diasSet = new Set(dias);
+  const porTipo = new Map((sessaoTipos || []).map((t) => [t.id, t]));
+  const itensPorPessoa = new Map();
+  const marcar = (pessoaId, item) => {
+    if (!pessoaId) return;
+    if (!itensPorPessoa.has(pessoaId)) itensPorPessoa.set(pessoaId, []);
+    itensPorPessoa.get(pessoaId).push(item);
+  };
+
+  const reservasContadas = new Set();
+  for (const r of reservas || []) {
+    if (!r || !ESTADOS_QUE_OCUPAM.includes(r.estado)) continue;
+    if (!diasSet.has(dataDe(r.inicio))) continue;
+    const tipo = porTipo.get(r.sessaoTipoId);
+    const participantes = (tipo && Array.isArray(tipo.participantesNecessarios))
+      ? tipo.participantesNecessarios.filter(Boolean) : [];
+    if (participantes.length === 0) continue;
+    reservasContadas.add(r.id);
+    const rotulo = `${(tipo && tipo.nome) || 'Sessão'} - ${r.nome || 'Cliente'}`;
+    for (const p of participantes) marcar(p, { rotulo, inicio: String(r.inicio), fim: String(r.fim) });
+  }
+
+  for (const e of eventos || []) {
+    if (!e || !e.inicio || !e.fim || !Array.isArray(e.pessoaIds) || e.pessoaIds.length === 0) continue;
+    if (!diasSet.has(dataDe(e.inicio))) continue;
+    if (e.reservaId && reservasContadas.has(e.reservaId)) continue;
+    for (const p of e.pessoaIds.filter(Boolean)) {
+      marcar(p, { rotulo: e.titulo || 'Evento', inicio: String(e.inicio), fim: String(e.fim) });
+    }
+  }
+
+  const conflitos = [];
+  for (const [pessoaId, itens] of itensPorPessoa) {
+    itens.sort((a, b) => a.inicio.localeCompare(b.inicio) || a.fim.localeCompare(b.fim));
+    for (let i = 0; i < itens.length; i += 1) {
+      for (let j = i + 1; j < itens.length; j += 1) {
+        const a = itens[i];
+        const b = itens[j];
+        if (b.inicio >= a.fim) break; // ordenado: mais nada colide com `a`
+        conflitos.push({ pessoaId, a, b });
+      }
+    }
+  }
+  conflitos.sort((x, y) => x.a.inicio.localeCompare(y.a.inicio) || String(x.pessoaId).localeCompare(String(y.pessoaId)));
+  return conflitos;
+}
