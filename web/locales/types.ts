@@ -627,6 +627,20 @@ export interface Translations {
   };
 
   // ============================================
+  // GLOBAL CHAT DOCK
+  // ============================================
+
+  chatDock: {
+    title: string;
+    expand: string;
+    collapse: string;
+    newSession: string;
+    sessions: string;
+    openChatPage: string;
+    resize: string;
+  };
+
+  // ============================================
   // ATTACHMENTS
   // ============================================
 

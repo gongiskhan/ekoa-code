@@ -583,6 +583,16 @@ export const en: Translations = {
     hideThinking: 'Hide reasoning',
   },
 
+  chatDock: {
+    title: 'Assistant',
+    expand: 'Show the chat panel',
+    collapse: 'Hide the chat panel',
+    newSession: 'New conversation',
+    sessions: 'Conversations',
+    openChatPage: 'Open the chat page',
+    resize: 'Resize the chat panel',
+  },
+
   attachments: {
     attachFile: 'Attach file',
     supportedFormats: 'Supported: txt, md, json, js, ts, jsx, tsx, css, html, csv, xml, yaml, yml, toml, py, rb, rs, go, java, c, cpp, sql, sh',

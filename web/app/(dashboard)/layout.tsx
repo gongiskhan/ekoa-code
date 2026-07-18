@@ -12,6 +12,7 @@ import { BlockedAccountGuard } from "@/components/blocked-account-guard";
 import { FirstBuildDialog } from "@/components/verification/first-build-dialog";
 import { DemoTourProvider } from "@/components/demos/DemoTourProvider";
 import { ChatRuntimeProvider } from "@/components/chat/chat-runtime";
+import { GlobalChatDock } from "@/components/chat/global-chat-dock";
 import { LoadingState } from "@/components/ui/spinner";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
@@ -137,15 +138,22 @@ export default function DashboardLayout({
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onToggleSidebar={handleToggleSidebar} />
         <BillingWarningBanner />
-        <motion.main
-          key={pathname.startsWith("/chat") ? "/chat" : pathname}
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25, ease: [0.25, 1, 0.5, 1] }}
-          className="flex flex-1 overflow-hidden bg-canvas"
-        >
-          {children}
-        </motion.main>
+        {/* The main row: the page plus the global chat dock (surface contract 5).
+            The dock is a SIBLING of motion.main so page transitions never
+            remount the conversation; `relative` anchors the dock's collapsed
+            edge tab. */}
+        <div className="relative flex flex-1 overflow-hidden">
+          <motion.main
+            key={pathname.startsWith("/chat") ? "/chat" : pathname}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, ease: [0.25, 1, 0.5, 1] }}
+            className="flex flex-1 overflow-hidden bg-canvas"
+          >
+            {children}
+          </motion.main>
+          <GlobalChatDock />
+        </div>
       </div>
 
       {/* Global pause-for-user modal overlay. Sits above sidebar +

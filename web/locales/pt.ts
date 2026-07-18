@@ -584,6 +584,16 @@ export const pt: Translations = {
     hideThinking: 'Ocultar raciocínio',
   },
 
+  chatDock: {
+    title: 'Assistente',
+    expand: 'Mostrar o painel de conversa',
+    collapse: 'Ocultar o painel de conversa',
+    newSession: 'Nova conversa',
+    sessions: 'Conversas',
+    openChatPage: 'Abrir a página de conversa',
+    resize: 'Redimensionar o painel de conversa',
+  },
+
   attachments: {
     attachFile: 'Anexar ficheiro',
     supportedFormats: 'Suportados: txt, md, json, js, ts, jsx, tsx, css, html, csv, xml, yaml, yml, toml, py, rb, rs, go, java, c, cpp, sql, sh',
