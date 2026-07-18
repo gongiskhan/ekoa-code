@@ -242,6 +242,35 @@ Follow-up (recommended, not done here): add a container **boot smoke** to `deplo
 image against a throwaway mongo, assert `/health` 200) so this whole class - a runtime import or native
 binary absent from the shipped image - fails CI instead of first appearing on a server.
 
+## Recently fixed - 2026-07-16 staging edge-proxy path allowlist incomplete
+
+- **`staging-caddy-api-path-allowlist-incomplete`** (HIGH, deploy config; caught by the staging UI pass).
+  The staging Caddyfile `@api` matcher routed only `/api/* /health /hooks` to the api container and sent
+  **everything else** to Next (web). But the api owns a whole set of NON-`/api` browser-facing prefixes -
+  the served-app pipeline `/apps/*` (the live build-**preview** iframe) and its injected runtime scripts
+  `/__ekoa/*`, plus the static mounts `/artifact-screenshots/*`, `/artifact-pdfs/*`,
+  `/automation-screenshots/*`, `/brand-assets/*`, and the share-link `/build/*` (all enumerated in
+  `api/src/server.ts` buildApp). None were in the matcher, so each fell through to Next and returned a
+  Next **HTML 404**. User-visible impact: (1) every featured/artifact card thumbnail 404'd -> blank
+  cards on the home + `/artifacts` pages; (2) more seriously, `/apps/<id>/` app previews + `/__ekoa/`
+  runtime were unreachable through the public origin - the core "build an app and preview it" flow was
+  broken end-to-end via `staging.ekoa.io`. Loopback `http://127.0.0.1:4111` served all of these `200`,
+  proving a pure edge-routing gap (not an api, seeding, or image defect). **Why it slipped:** Phase-5
+  verification ran a chat turn (entirely under `/api/*`, which WAS routed) but never loaded a
+  thumbnail-bearing dashboard page or an app preview through the public origin; and the dry-run deploy CI
+  builds the images but never routes traffic through Caddy. **Fix:** extended `@api` to the full,
+  documented allowlist (`/apps`, `/__ekoa/*`, the four static mounts, `/build`) - the Caddyfile now
+  carries a source-of-truth comment mapping each prefix to its server.ts mount and stating the lockstep
+  invariant. **Operational trap hit while deploying:** the Caddyfile is a single-file bind mount, which
+  pins to an inode - editing it in place + `caddy reload` did NOT pick up the change (the container kept
+  serving the stale inode); a `docker compose restart caddy` was required (now documented in the runbook +
+  staging README). **Verified** via the public origin: all listed prefixes `200` (thumbnails `image/png`,
+  `/apps/<id>/` `text/html`, `/__ekoa/*.js` `application/javascript`), web routes still reach Next, the
+  `/api/v1` JSON envelope + `/health` intact, and a real-browser audit of `/` + `/artifacts` shows **0**
+  broken images (41/41 and 82/82 thumbnails render) with **0** page errors. This **supersedes** the
+  earlier working note that the blank thumbnails were "a fresh-staging seeding gap, not a deploy bug" -
+  it was a deploy bug (the screenshots were on disk and served fine on loopback the whole time).
+
 ## Recently fixed - 2026-07-14 operator UX round (scope steering, verify narration, console noise)
 
 - **`build-ambiguous-request-no-scoping`** (UX, operator 2026-07-14, live) - "faz uma app para

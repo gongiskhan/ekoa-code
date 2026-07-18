@@ -119,10 +119,24 @@ box built from the same two images. See `deploy/staging/README.md` for the full 
 
 - **Topology.** `docker-compose.yml` runs four services on the VM: **Caddy** (auto-HTTPS +
   same-origin reverse proxy), **web** (`Dockerfile.web`), **api** (`Dockerfile.api`), and a self-hosted
-  **Mongo** (standalone - the api uses no transactions). Caddy path-routes `/api/*`, `/health`, `/hooks`
-  to the api and everything else to web, so the browser calls the API on the same origin it was served
-  from - the `web/lib/api/base-url.ts` "same-origin (Caddy proxy)" contract. The web image is built with
+  **Mongo** (standalone - the api uses no transactions). Caddy path-routes the api-owned prefixes to the
+  api and everything else to web, so the browser calls the API on the same origin it was served from -
+  the `web/lib/api/base-url.ts` "same-origin (Caddy proxy)" contract. The web image is built with
   `NEXT_PUBLIC_API_URL=https://staging.ekoa.io`.
+- **Caddy `@api` allowlist is a maintained invariant.** The api serves a FIXED set of non-`/api`
+  browser-facing prefixes beyond `/api/*`, `/health`, `/hooks`: the served-app pipeline `/apps/*` (the
+  live preview iframe) + its injected `/__ekoa/*` runtime scripts, and the static mounts
+  `/artifact-screenshots/*`, `/artifact-pdfs/*`, `/automation-screenshots/*`, `/brand-assets/*`, plus the
+  share-link `/build/*`. All are enumerated in `api/src/server.ts` (buildApp) and MUST be mirrored in the
+  Caddyfile `@api` matcher - anything missing falls through to Next and returns a Next HTML 404 (this once
+  broke app previews + card thumbnails through the public origin; `docs/findings.md`
+  `staging-caddy-api-path-allowlist-incomplete`). Adding a new non-`/api` api mount is a structural change:
+  update the Caddyfile in the same unit of work.
+- **Editing the Caddyfile requires a `restart`, not a `reload`.** The Caddyfile is a single-file bind
+  mount (`./Caddyfile:/etc/caddy/Caddyfile:ro`), which pins to the file's inode at container start; an
+  in-place edit that changes the inode leaves `caddy reload` serving the stale config. After any Caddyfile
+  change run `docker compose -f deploy/staging/docker-compose.yml restart caddy` and confirm with
+  `docker compose exec -T caddy grep '@api path' /etc/caddy/Caddyfile`.
 - **Secrets.** Injected at runtime from `deploy/staging/.env` (gitignored, VM-only, mode 600); only
   `.env.example` is committed. Staging uses **freshly generated** `JWT_SECRET` / `ENCRYPTION_KEY` /
   `MONGO_PASSWORD` - never production's. The prod secrets are preserved separately in GCP Secret Manager.
