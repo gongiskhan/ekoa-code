@@ -5,7 +5,7 @@ import {
   appHref,
 } from '../shared.js';
 import { useDemoResult } from '../demo.js';
-import { Badge, EmptyState } from '../components/ui.jsx';
+import { Badge, EmptyState, Field, Select } from '../components/ui.jsx';
 import {
   IconClock,
   IconSearchText,
@@ -19,6 +19,7 @@ import {
   fonteTone,
   citacoesComUrl,
 } from './pesquisa-logic.js';
+import { CopiarCitacaoButton } from './CopiarCitacao.jsx';
 
 /* Uma linha de histórico. O cabeçalho é o alvo de demonstração
  * (data-demo-target="pesquisa-historico-item"): ao expandir, mostra as citações
@@ -80,23 +81,27 @@ function HistoricoRow({ pesquisa, processo }) {
           ) : null}
 
           {nCitacoes > 0 ? (
-            <div className="chip-row" data-demo-target="pesquisa-citacoes" data-testid={`pesquisa-citacoes-${pesquisa.id}`}>
+            <div className="stack stack-2" data-demo-target="pesquisa-citacoes" data-testid={`pesquisa-citacoes-${pesquisa.id}`}>
               {citacoes.map((c, i) => (
-                <a
-                  key={`${c.url}-${i}`}
-                  className="chip as-button"
-                  href={c.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  data-testid="pesquisa-historico-citacao"
-                  title={c.titulo || c.url}
-                >
-                  <Badge tone={fonteTone(c.fonte)}>{fonteLabel(c.fonte)}</Badge>
-                  <span style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {c.titulo || c.url}
-                  </span>
-                  <IconExternalLink size={12} />
-                </a>
+                <div key={`${c.url}-${i}`} className="stack stack-1" style={{ borderTop: i === 0 ? 'none' : '1px solid var(--line-1)', paddingTop: i === 0 ? 0 : 'var(--sp-2)' }}>
+                  <div className="chip-row">
+                    <a
+                      className="chip as-button"
+                      href={c.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="pesquisa-historico-citacao"
+                      title={c.titulo || c.url}
+                    >
+                      <Badge tone={fonteTone(c.fonte)}>{fonteLabel(c.fonte)}</Badge>
+                      <span style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.titulo || c.url}
+                      </span>
+                      <IconExternalLink size={12} />
+                    </a>
+                  </div>
+                  <CopiarCitacaoButton citacao={c} />
+                </div>
               ))}
             </div>
           ) : (
@@ -118,6 +123,7 @@ function HistoricoRow({ pesquisa, processo }) {
 export default function HistoricoPage() {
   const { items: pesquisas, loading } = useSharedCollection('pesquisas');
   const { items: processos } = useSharedCollection('processos');
+  const [filtroProcesso, setFiltroProcesso] = useState('');
 
   const processoById = useMemo(() => {
     const map = new Map();
@@ -125,7 +131,7 @@ export default function HistoricoPage() {
     return map;
   }, [processos]);
 
-  const rows = useMemo(
+  const ordenadas = useMemo(
     () =>
       pesquisas
         .slice()
@@ -133,8 +139,26 @@ export default function HistoricoPage() {
     [pesquisas],
   );
 
+  // Processos que TÊM pesquisas guardadas - as únicas opções úteis no filtro, com
+  // a contagem de pesquisas por processo (pesquisas guardadas POR processo).
+  const processosComPesquisas = useMemo(() => {
+    const contagem = new Map();
+    for (const p of ordenadas) {
+      if (p.processoId) contagem.set(p.processoId, (contagem.get(p.processoId) || 0) + 1);
+    }
+    return [...contagem.entries()]
+      .map(([id, n]) => ({ processo: processoById.get(id) || null, id, n }))
+      .filter((x) => x.processo)
+      .sort((a, b) => String(a.processo.numeroProcesso || '').localeCompare(String(b.processo.numeroProcesso || ''), 'pt'));
+  }, [ordenadas, processoById]);
+
+  const rows = useMemo(
+    () => (filtroProcesso ? ordenadas.filter((p) => p.processoId === filtroProcesso) : ordenadas),
+    [ordenadas, filtroProcesso],
+  );
+
   // A seguir à história semeada estar visível, sinaliza a ponte de demonstração.
-  useDemoResult('pesquisa-resultados', rows.length > 0);
+  useDemoResult('pesquisa-resultados', ordenadas.length > 0);
 
   return (
     <div data-testid="pesquisa-historico-page" data-demo-page="pesquisa/historico">
@@ -157,16 +181,45 @@ export default function HistoricoPage() {
         {DISCLAIMER}
       </p>
 
+      {!loading && ordenadas.length > 0 && processosComPesquisas.length > 0 ? (
+        <div className="row row-2" style={{ marginTop: 'var(--sp-4)', maxWidth: 420, alignItems: 'flex-end' }}>
+          <Field label="Pesquisas guardadas por processo">
+            <Select
+              data-testid="pesquisa-filtro-processo"
+              value={filtroProcesso}
+              onChange={(e) => setFiltroProcesso(e.target.value)}
+            >
+              <option value="">Todos os processos ({ordenadas.length})</option>
+              {processosComPesquisas.map(({ id, processo, n }) => (
+                <option key={id} value={id}>
+                  {processo.numeroProcesso || '(sem número)'} ({n})
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="loading"><span className="spinner" aria-hidden="true" /><span>A carregar o histórico.</span></div>
-      ) : rows.length === 0 ? (
+      ) : ordenadas.length === 0 ? (
         <EmptyState
           icon={<IconClock />}
           title="Sem pesquisas guardadas"
           hint="Faça uma pesquisa em Pesquisar e guarde-a num processo para a ver aqui."
         />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={<IconClock />}
+          title="Sem pesquisas neste processo"
+          hint="Este processo ainda não tem pesquisas guardadas. Escolha outro processo ou volte a Todos."
+        />
       ) : (
-        <ul className="stack stack-3" style={{ listStyle: 'none', margin: 'var(--sp-5, 1.25rem) 0 0', padding: 0 }}>
+        <ul
+          className="stack stack-3"
+          data-testid="pesquisa-historico-lista"
+          style={{ listStyle: 'none', margin: 'var(--sp-5, 1.25rem) 0 0', padding: 0 }}
+        >
           {rows.map((p) => (
             <HistoricoRow key={p.id} pesquisa={p} processo={p.processoId ? processoById.get(p.processoId) : null} />
           ))}

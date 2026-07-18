@@ -1,56 +1,54 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSharedCollection, createShared, listShared, formatDate } from '../shared.js';
+import { useMemo, useState } from 'react';
+import { useSharedCollection, createShared } from '../shared.js';
 import { Button, Badge, EmptyState, useToast } from '../components/ui.jsx';
-import { IconChartBar, IconFileText, IconPrinter } from '../components/Icons.jsx';
+import { IconFileText, IconPrinter } from '../components/Icons.jsx';
 import { useDemoResult } from '../demo.js';
 import REFERENCIAS from '../referencias.json';
-
-/* Meses entre duas datas ISO (aproximação a 30,44 dias - suficiente para médias). */
-function mesesEntre(a, b) {
-  const da = new Date(a); const db = new Date(b);
-  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return null;
-  return Math.max(0, (db.getTime() - da.getTime()) / (30.44 * 86400000));
-}
+import {
+  construirLinhas,
+  totalFindos,
+  comparadorSemDados,
+  fonteInterna,
+  fontePublica,
+  AMOSTRA_MINIMA,
+} from './jurimetria-stats.js';
 
 /*
  * Comparador interno: os processos FINDOS do escritório (dataAbertura ->
  * dataFecho) contra as referências públicas por área. Estatística descritiva -
  * médias históricas; a página nunca fala do desfecho de um caso concreto.
+ *
+ * REGRA DA HONESTIDADE ESTATÍSTICA (ver jurimetria-stats.js): toda a estatística
+ * mostrada carrega fonte + período. A média interna só aparece com amostra
+ * suficiente (n >= AMOSTRA_MINIMA); abaixo disso a linha diz "sem dados
+ * suficientes", nunca um número enganador. A média pública cita a DGPJ e o seu
+ * período; sem referência publicada, di-lo.
  */
 export default function JurimetriaPage() {
   const toast = useToast();
   const { items: processos } = useSharedCollection('processos');
   const [ficha, setFicha] = useState('');
 
-  const findosPorArea = useMemo(() => {
-    const grupos = {};
-    for (const p of processos) {
-      if (p.estado !== 'arquivado' || !p.dataAbertura || !p.dataFecho) continue;
-      const m = mesesEntre(p.dataAbertura, p.dataFecho);
-      if (m == null) continue;
-      (grupos[p.area || 'Outra'] ||= []).push(m);
-    }
-    return Object.entries(grupos).map(([area, meses]) => ({
-      area,
-      n: meses.length,
-      mediaMeses: Math.round((meses.reduce((s, x) => s + x, 0) / meses.length) * 10) / 10,
-    })).sort((a, b) => b.n - a.n);
-  }, [processos]);
-
-  const linhas = useMemo(() => findosPorArea.map((f) => {
-    const ref = REFERENCIAS.referencias.find((r) => r.area === f.area) || null;
-    return { ...f, ref: ref ? ref.duracaoMediaMeses : null, refNota: ref ? ref.nota : null };
-  }), [findosPorArea]);
+  const linhas = useMemo(() => construirLinhas(processos, REFERENCIAS), [processos]);
+  const total = useMemo(() => totalFindos(linhas), [linhas]);
+  const semDados = useMemo(() => comparadorSemDados(linhas), [linhas]);
 
   useDemoResult('jurimetria-ficha', Boolean(ficha), 'Ficha de expectativas gerada');
 
   async function gerarFicha() {
+    const publicaveis = linhas.filter((l) => l.suficiente);
     const corpo = [
       'FICHA DE EXPECTATIVAS - durações médias (estatística descritiva)',
       `Fonte pública: ${REFERENCIAS.fonte} · período ${REFERENCIAS.periodo}`,
-      `Amostra interna: processos findos do escritório (${findosPorArea.reduce((s, f) => s + f.n, 0)} processos)`,
+      `Amostra interna: processos findos do escritório (${total} processos; mínimo ${AMOSTRA_MINIMA} por área para publicar média)`,
       '',
-      ...linhas.map((l) => `  ${l.area}: média interna ${l.mediaMeses} meses (n=${l.n}) · média pública ${l.ref != null ? `${l.ref} meses` : 'sem referência publicada'}`),
+      ...publicaveis.map((l) => {
+        const pub = l.refMeses != null ? `${l.refMeses} meses` : 'sem referência publicada';
+        return `  ${l.area}: média interna ${l.mediaMeses} meses (n=${l.n}${l.periodoInterno ? `, fechos ${l.periodoInterno}` : ''}) · média pública ${pub}`;
+      }),
+      ...(publicaveis.length === 0
+        ? ['  Sem áreas com amostra suficiente - a ficha não publica médias enganadoras.']
+        : []),
       '',
       'Nota: valores são médias históricas de conjuntos de processos.',
       'Não constituem garantia nem antecipação do desfecho ou da duração de um caso concreto.',
@@ -79,21 +77,51 @@ export default function JurimetriaPage() {
       <section className="card" data-testid="jurimetria-tabela" data-demo-target="jurimetria-explicacao">
         <h2 className="card-title">Comparador interno vs. médias públicas</h2>
         {linhas.length === 0 ? (
-          <EmptyState title="Sem processos findos" hint="O comparador precisa de processos arquivados com datas de abertura e fecho." />
+          <EmptyState
+            title="Sem processos findos"
+            hint="O comparador precisa de processos arquivados com datas de abertura e fecho. Sem eles, não há médias a mostrar - e nada é inventado."
+          />
+        ) : semDados ? (
+          <div className="resultado-panel" data-testid="jurimetria-sem-dados">
+            <p className="text-strong" style={{ margin: 0 }}>Sem dados suficientes</p>
+            <p className="text-subtle text-small" style={{ margin: '4px 0 0' }}>
+              Nenhuma área tem, ainda, {AMOSTRA_MINIMA} ou mais processos findos - uma média sobre 1 ou 2 casos seria
+              enganadora. As médias internas aparecem à medida que o escritório fecha mais processos. As referências
+              públicas ({REFERENCIAS.fonte} · {REFERENCIAS.periodo}) continuam abaixo para enquadramento.
+            </p>
+          </div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Área</th><th>Findos (n)</th><th>Média interna</th><th>Média pública</th><th>Fonte</th></tr>
+                <tr>
+                  <th>Área</th>
+                  <th>Findos (n)</th>
+                  <th>Média interna</th>
+                  <th>Fonte interna</th>
+                  <th>Média pública</th>
+                  <th>Fonte pública</th>
+                </tr>
               </thead>
               <tbody>
                 {linhas.map((l) => (
                   <tr key={l.area} data-testid="jurimetria-linha">
                     <td>{l.area}</td>
                     <td className="numeric">{l.n}</td>
-                    <td className="numeric" data-testid={`interna-${l.area}`}>{l.mediaMeses} meses</td>
-                    <td className="numeric">{l.ref != null ? `${l.ref} meses` : '-'}</td>
-                    <td className="text-xs text-subtle">{l.ref != null ? `${REFERENCIAS.fonte} · ${REFERENCIAS.periodo}` : 'sem referência'}</td>
+                    <td className="numeric" data-testid={`interna-${l.area}`}>
+                      {l.suficiente ? (
+                        `${l.mediaMeses} meses`
+                      ) : (
+                        <span className="text-subtle text-xs" data-testid={`interna-sem-dados-${l.area}`}>sem dados suficientes (n={l.n})</span>
+                      )}
+                    </td>
+                    <td className="text-xs text-subtle" data-testid={`fonte-interna-${l.area}`}>
+                      {fonteInterna(l) || `mínimo ${AMOSTRA_MINIMA} findos`}
+                    </td>
+                    <td className="numeric">{l.refMeses != null ? `${l.refMeses} meses` : '-'}</td>
+                    <td className="text-xs text-subtle" data-testid={`fonte-publica-${l.area}`}>
+                      {fontePublica(l) || 'sem referência'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -101,8 +129,9 @@ export default function JurimetriaPage() {
           </div>
         )}
         <p className="field-hint">
-          Referências nacionais por área (os dados abertos da DGPJ não publicam desagregação por comarca);
-          valores por confirmar saram-se com a ingestão periódica do conjunto público.
+          Cada número traz a sua fonte e período: a média interna cita a amostra do escritório (n e intervalo de
+          fechos); a média pública cita a DGPJ. Referências nacionais por área (os dados abertos da DGPJ não publicam
+          desagregação por comarca); valores por confirmar saram-se com a ingestão periódica do conjunto público.
         </p>
       </section>
 

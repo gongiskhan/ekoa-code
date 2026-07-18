@@ -55,7 +55,11 @@ async function ensureDemoEntity(page: Page): Promise<string> {
   await expect(page.getByTestId('demo-spine-card')).toBeVisible({ timeout: 20_000 });
   const estado = await page.getByTestId('demo-estado').innerText();
   if (/Não instalado/i.test(estado)) {
-    await page.getByTestId('demo-instalar').click();
+    // "Não instalado" também é o estado TRANSITÓRIO do cartão enquanto a coleção
+    // carrega - se o botão desmontar (já instalado afinal), o banner é a prova.
+    try {
+      await page.getByTestId('demo-instalar').click({ timeout: 5_000 });
+    } catch { /* a coleção resolveu para Instalado e o botão desmontou */ }
     await expect(page.getByTestId('demo-banner')).toBeVisible({ timeout: 90_000 });
   }
   await waitForSpine(page);

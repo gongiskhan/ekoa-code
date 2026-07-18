@@ -36,6 +36,7 @@ import {
   hitsParaCitacoes,
   citacoesParaTexto,
 } from './pesquisa-logic.js';
+import { CopiarCitacaoButton } from './CopiarCitacao.jsx';
 
 function ekoaApi() {
   return typeof window !== 'undefined' ? window.__ekoa : null;
@@ -102,6 +103,12 @@ function ResultadoCard({ hit }) {
         >
           <IconExternalLink size={12} /> {citacaoTexto}
         </a>
+      </div>
+      {/* Referência na forma portuguesa, pronta a colar - só com URL (nunca-inventar). */}
+      <div style={{ marginTop: 'var(--sp-2)' }}>
+        <CopiarCitacaoButton
+          citacao={{ fonte: fonteLabel(hit.source), titulo: hit.title, url: hit.url, excerto: hit.snippet, citation: hit.citation }}
+        />
       </div>
     </li>
   );
@@ -238,14 +245,14 @@ export default function PesquisarPage() {
           <Textarea
             data-testid="pesquisa-pergunta"
             data-demo-target="pesquisa-pergunta"
-            placeholder="Ex.: prazo de contestação em acção declarativa comum"
+            placeholder="Ex.: prazo de contestação em ação declarativa comum"
             rows={3}
             value={pergunta}
             onChange={(e) => setPergunta(e.target.value)}
           />
         </Field>
 
-        <Field label="Fontes" hint="A pesquisa cobre as fontes seleccionadas.">
+        <Field label="Fontes" hint="A pesquisa cobre as fontes selecionadas.">
           <div className="row row-3" style={{ flexWrap: 'wrap', gap: 'var(--sp-4)' }}>
             {FONTES.map((f) => (
               <label key={f.id} className="checkbox-field" data-testid={`pesquisa-fonte-${f.id}-label`}>

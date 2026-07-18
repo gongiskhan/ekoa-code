@@ -1,0 +1,60 @@
+{
+  "slice": "S7-knowledge-portal",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "in_progress",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": { "e2e": 0, "typecheck": 0 },
+      "note": "Batch 1: 6/7 - legal-x-jurimetria failed in ensureDemo: the Nucleo demo card renders 'Nao instalado' + the install button TRANSIENTLY while useSharedCollection loads (instalada = demoEstado.some(...) over an empty array); the spec read the badge in that window, the fetch resolved, the button unmounted, the click timed out on a detached element. SPEC BUG (latent race, bites under 2-worker load): fixed with a tolerant click (5s timeout + catch; the demo-banner is the proof either way) in legal-x-jurimetria AND legal-x-rcbe (same copied helper, S6 spec touched up in this commit). The ported legal-rcbe spec shares the pattern but has never flaked on it - left frozen. Batch 2: 9/9 in 3.7s exit 0 (3 S7 specs + legal-x-rcbe re-proven). typecheck 0. gate:ledger census GREEN after the 3 S7 registrations: specs 98/98, drivers 24/24, frontend-unit 31/31 (the script's 139 'due (unrun)' lines are its no---run mode, not a census failure; the full suite runs at the full-lane regression).",
+      "at": "2026-07-18T04:55:00Z"
+    },
+    "review": {
+      "verdict": "findings(2) - both resolved",
+      "by": "review-S7 fresh-context same-model agent (claude-opus-4-8), hermetic (typecheck exit 0, eslint on the 3 specs exit 0; no e2e)",
+      "findings": [
+        "F1 (blocking, ledger): legal-x-{pesquisa,jurimetria,portal} on disk but not in SUITE_LEDGER band3_served_app.specs - gate:ledger red. DISPOSITION: the planned per-slice landing step registers the 3 names in the S7 landing commit (same pattern flagged by review-S3/S4/S6 for their slices).",
+        "F2 (rule): em-dash in comments/test-titles across the 3 spec files. FIXED by lead: 15 replacements (5+3+7) with plain dash, grep-verified zero remaining."
+      ],
+      "notes": [
+        "Substantive review clean: citation formatting matches forum norm, fonte casing consistent live vs saved, honest degradation; jurimetria stats guarded (n>=3 sufficiency, no div-by-zero, no NaN-date), internal averages from spine findos, public figures carry cited DGPJ source + period; explicit-share invariant structurally sound (cronologia + extrato PDF draw only from resolved vis - a non-shared item cannot leak); no fake integrations; empty-index search shows honest failure, zero fabricated 'verificada' badges; frozen shared layer + api/assets/bases/ + jurimetria-referencias.json untouched."
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "approve",
+      "by": "fresh-context adversarial reviewer (claude-opus-4-8), hermetic - no implementer rationale, no gate-status/evidence-index read",
+      "evidence": [
+        "fonte-verificada badge gating re-derived from code: renders only from verification.checked && verification.ok set by the verify=1 route",
+        "all three invariants hold structurally; the 3 specs genuinely prove them"
+      ],
+      "findings": [],
+      "at": "2026-07-18T03:45:00Z"
+    },
+    "adversarialTest": {
+      "verdict": "pending",
+      "at": null
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-core screenshot sweep (design-s7.mjs): 8 pages across the 3 S7 apps at 1440x900, zero console errors + zero pageerrors on every page; 5 key screenshots read back by vision",
+      "issues": [
+        "FIXED during audit: pesquisa PesquisarPage had two pre-AO90 spellings in UI copy - placeholder 'em accao declarativa comum' and hint 'fontes seleccionadas' - patched to 'acao'/'selecionadas' (PesquisarPage.jsx:248,255); bundle rebuilt out-of-process, live re-probed (placeholder attribute + body text verified fixed, old spellings gone, zero pageerrors). Remaining pre-AO90 hits are code comments (styles.css, shared.js:27) and seeded user content (shared.js:195 descricao, shared.js:642 saved-search title - what a user typed), left per the established rule. Included in the S7 commit."
+      ],
+      "notes": [
+        "pesquisa pesquisar: honest grounding copy ('Cada fonte so e mostrada com a ligacao confirmada; nada e inventado'), green disclaimer 'o advogado reve sempre as fontes', DGSI/DRE source checkboxes, Pesquisar disabled until pergunta, honest 'Ainda sem pesquisa' empty state - clean",
+        "pesquisa historico: saved searches grouped por processo with '1 citacao' count badge, honest 'cada citacao e uma ligacao real para a fonte', expandable rows - clean",
+        "jurimetria: comparador interno vs medias publicas per area (Civel/Laboral/Comercial/Familia/Execucao/Administrativo), each row citing fonte interna (amostra n=6, fechos 2025-2026) AND fonte publica (DGPJ dados.justica.gov.pt/dataset/duracaomedia, 2024 valor anual); honest framing 'estatistica descritiva - medias historicas, nunca antecipacao do desfecho' in header + footnote on missing desagregacao por comarca; Ficha de expectativas CTA - clean",
+        "portal acessos: invite flow with honest 'nada fica visivel para o cliente ate ser partilhado', 0 ativos / 0 convidados badges, per-client Convidar buttons, client search - clean",
+        "portal partilhas: item-by-item explicit sharing ('Nada e partilhado por omissao - so o que ligar aqui aparece do lado do cliente'), per-processo estado/documentos/eventos sections with Partilhar per item, 'O que <cliente> ve no portal' preview with honest 0-count chips + empty-state message, banner explaining the convite must be accepted first - clean",
+        "NOTED for the queued placeholder sweep: AcessosPage.jsx:137 uses the em-dash glyph as the empty ULTIMO ACESSO value (same pattern as the shared-layer occurrences already queued)",
+        "PT-PT copy, no emojis; shared layout/sidebar consistent across the 3 apps"
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "walkthrough": {
+      "status": "pending"
+    }
+  }
+}

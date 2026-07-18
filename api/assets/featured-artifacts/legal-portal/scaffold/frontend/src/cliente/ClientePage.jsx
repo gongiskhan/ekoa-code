@@ -15,6 +15,8 @@ import {
   IconShieldCheck,
   IconUpload,
   IconMail,
+  IconClock,
+  IconPrinter,
 } from '../components/Icons.jsx';
 import {
   appId,
@@ -27,7 +29,12 @@ import {
   enviarMensagemCliente,
   mensagensDoCliente,
 } from '../portal.js';
+import { construirCronologia, extratoHtml } from './extrato.js';
 import ClienteShell from './ClienteShell.jsx';
+
+/* Marca do escritório para o extrato branded (white-label). Valor por omissão
+ * honesto; o cabeçalho, selo e rodapé do PDF usam-no. */
+const MARCA_ESCRITORIO = 'Escritório';
 
 const ESTADO_PROC_TONE = { ativo: 'ok', suspenso: 'media', arquivado: 'neutral' };
 
@@ -357,6 +364,36 @@ function SharedView({ user, onSignOut }) {
     [clienteId, partilhas, processos, documentos, eventos],
   );
 
+  // Cronologia do cliente - construída SÓ da visibilidade resolvida (nunca de
+  // colecções cruas): um item não partilhado não pode entrar aqui.
+  const cronologia = useMemo(() => construirCronologia(vis), [vis]);
+
+  async function onExtrato() {
+    const api = typeof window !== 'undefined' ? window.__ekoa : null;
+    if (!api || typeof api.exportPdf !== 'function') {
+      toast('Exportação de PDF indisponível neste contexto.', { tone: 'error' });
+      return;
+    }
+    try {
+      const { html, filename } = extratoHtml({
+        vis,
+        clienteNome: user.nome,
+        clienteEmail: user.email,
+        escritorio: MARCA_ESCRITORIO,
+        geradoEm: new Date().toISOString(),
+      });
+      await api.exportPdf({ html, filename, format: 'A4' });
+      await writeAudit({
+        clienteId,
+        titulo: 'Extrato de partilhas descarregado',
+        descricao: 'O cliente descarregou o extrato de partilhas do portal (PDF).',
+      });
+      toast('Extrato gerado.', { tone: 'ok' });
+    } catch {
+      toast('Não foi possível gerar o extrato.', { tone: 'error' });
+    }
+  }
+
   async function onDownload(doc) {
     // Auditoria de consulta de documento (não fatal, não bloqueia o download).
     await writeAudit({
@@ -449,6 +486,40 @@ function SharedView({ user, onSignOut }) {
                   </li>
                 ))}
               </ul>
+            </section>
+          )}
+
+          {/* Cronologia: os itens partilhados por ordem de data. Draws SÓ de `vis`
+              (nunca de colecções cruas) - a garantia da partilha-explícita mantém-se. */}
+          {cronologia.length > 0 && (
+            <section className="card stack stack-3" style={{ padding: 'var(--sp-5)' }} data-testid="portal-cronologia">
+              <div className="row row-space-between" style={{ alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+                <div className="row row-2" style={{ alignItems: 'center' }}>
+                  <span className="row-icon" aria-hidden="true"><IconClock size={16} /></span>
+                  <span className="text-strong">Cronologia do que foi partilhado</span>
+                </div>
+                <Button variant="secondary" size="sm" data-testid="portal-extrato" onClick={onExtrato}>
+                  <IconPrinter size={14} /> Descarregar extrato (PDF)
+                </Button>
+              </div>
+              <ol className="stack stack-2" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+                {cronologia.map((e, i) => (
+                  <li
+                    key={`${e.tipo}-${e.refId || i}`}
+                    className="row row-2"
+                    data-testid="portal-cronologia-item"
+                    style={{ alignItems: 'flex-start', gap: 'var(--sp-3)' }}
+                  >
+                    <span className="text-subtle text-xs" style={{ minWidth: 92, fontVariantNumeric: 'tabular-nums' }}>
+                      {e.dia ? formatDate(e.dia) : '-'}
+                    </span>
+                    <div className="stack stack-1" style={{ minWidth: 0 }}>
+                      <span className="text-strong">{e.titulo}</span>
+                      {e.detalhe ? <span className="text-subtle text-xs">{e.detalhe}</span> : null}
+                    </div>
+                  </li>
+                ))}
+              </ol>
             </section>
           )}
         </div>
