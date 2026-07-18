@@ -9,6 +9,7 @@
  *   GET  /api/legal-research       RESEARCH_ALLOWED_APPS    4/10 per min
  *   GET  /api/tracking/consulta    TRACKING_ALLOWED_APPS    6/20 per min
  *   GET  /api/citius/consulta      CITIUS_ALLOWED_APPS      6/20 per min (+ registration)
+ *   GET  /api/legal/portal         PORTAL_ALLOWED_APPS      20/60 per min (+ registration)
  *
  * The gate, allowlists and rate windows are carried exactly; see access-gate.ts.
  * Every dependency that reaches outside legal/ (slug→app resolution, the owner
@@ -29,10 +30,13 @@ import { legalResearch, type ResearchSearchImpl, type ResearchFetchImpl } from '
 import { trackShipment, type TrackingDeps } from './tracking.js';
 import { consultarCitius, type FetchImpl as CitiusFetchImpl } from './citius.js';
 import { getSttProvider, meterStt, type SttUsageRecorder } from './transcricao.js';
+import { listPortalDossierRecords, type PortalSpineDeps } from './portal.js';
 import type { ActivationState } from '../data/activation.js';
 
 // --- Allowlists (carried verbatim from the old server.ts) --------------------
 const CITIUS_ALLOWED_APPS = new Set(['legal-citius', 'legal-nucleo', 'legal-prazos', 'legal-dossie']);
+// Same four processo-touching apps as Citius (mega-run E1) - the dossiê's own apps.
+const PORTAL_ALLOWED_APPS = CITIUS_ALLOWED_APPS;
 const TRACKING_ALLOWED_APPS = new Set(['legal-correio', 'legal-apoio', 'legal-dossie', 'legal-nucleo']);
 const RESEARCH_ALLOWED_APPS = new Set(['legal-pesquisa', 'legal-pecas']);
 const CALCULOS_ALLOWED_APPS = new Set(['legal-calculos', 'legal-cobrancas', 'legal-injuncoes', 'legal-honorarios', 'legal-pecas']);
@@ -67,6 +71,8 @@ export interface LegalRouterDeps {
     updateRow: (app: ResolvedLegalApp, collection: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     recordUsage?: SttUsageRecorder;
   };
+  /** legal/portal owner-spine seams (mega-run E1). Absent => the route 503s. */
+  portal?: PortalSpineDeps;
 }
 
 export function legalRouter(deps: LegalRouterDeps): Router {
@@ -80,6 +86,7 @@ export function legalRouter(deps: LegalRouterDeps): Router {
   const researchLimited = makeAppRateLimiter(4, 10, 60_000, now);
   const trackingLimited = makeAppRateLimiter(6, 20, 60_000, now);
   const citiusLimited = makeAppRateLimiter(6, 20, 60_000, now);
+  const portalLimited = makeAppRateLimiter(20, 60, 60_000, now);
 
   const noStore = (res: Response): void => {
     res.setHeader('Cache-Control', 'no-store');
@@ -288,6 +295,37 @@ export function legalRouter(deps: LegalRouterDeps): Router {
       res.json({ processo: result.processo, publicacoes: result.publicacoes });
     } catch {
       res.status(503).json({ error: 'Consulta Citius indisponível', processo });
+    }
+  });
+
+  // --- GET /api/legal/portal (mega-run E1) -----------------------------------
+  r.get('/api/legal/portal', async (req: Request, res: Response) => {
+    noStore(res);
+    const app = await requireLegalSuiteApp(req, res, gateDeps, {
+      allowed: PORTAL_ALLOWED_APPS,
+      notAllowedMessage: 'Aplicação não autorizada para consultar o dossiê',
+      requireRegistered: true,
+    });
+    if (!app) return;
+    if (portalLimited(app.appId)) {
+      res.status(429).json({ error: 'Demasiados pedidos de consulta ao dossiê. Tente novamente dentro de um minuto.' });
+      return;
+    }
+
+    const processoId = String(req.query.processoId || '').trim();
+    if (!processoId) {
+      res.status(400).json({ error: 'Parâmetro "processoId" em falta' });
+      return;
+    }
+    if (!deps.portal) {
+      res.status(503).json({ error: 'Consulta de documentos de portal indisponível' });
+      return;
+    }
+    try {
+      const records = await listPortalDossierRecords(app, processoId, deps.portal);
+      res.json(records);
+    } catch {
+      res.status(503).json({ error: 'Consulta de documentos de portal indisponível' });
     }
   });
 

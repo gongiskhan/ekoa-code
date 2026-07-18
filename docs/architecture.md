@@ -62,7 +62,7 @@ exhaustive; the lint rules of `docs/governance.md` enforce the load-bearing edge
 | `agents/` | Agent SDK execution of user work: job lifecycle, context assembly, typed streaming, marker parsing. |
 | `apps/` | User-app pipeline: esbuild, registry, static serving + context injection, slugs, artifact backends, backups. |
 | `automation/` | Vision-first automation engine, action runner, planner + rehearsal, catalog. |
-| `legal/` | Legal vertical: calculators, research, CITIUS/eTribunal, tracking. |
+| `legal/` | Legal vertical: calculators, research, CITIUS/eTribunal, tracking. Portal connectors (Part E, mega-run E1): `portal.ts` attaches a `PortalDocument`/`PortalEvent` (`shared/`, the first legal contract that is not `z.unknown()`) onto a dossiê (`processos` row) as a `documentos`/`eventos` satellite row on the owner spine, org-checked against the dossiê owner's real org; `GET /api/legal/portal` (header-scoped, same tier as citius/calculos) is the read surface. E2-E5 connectors and the signed-in follow-up connectors write through the same seam. |
 | `routes/` | One thin Express router per domain: validate against `shared/`, call one module, shape the response. Never imports `data/`. |
 
 Tier table (imports point strictly down; the graph is acyclic by construction):

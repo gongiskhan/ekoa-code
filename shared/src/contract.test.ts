@@ -344,4 +344,90 @@ describe('shared contract - security ratchet (G12)', () => {
     // usageCounts is numeric amounts only - a stringly count is a shape defect, not data.
     expect(RegistoEntry.safeParse({ ...turn, usageCounts: { voice_stt_ms: '61500' } }).success).toBe(false);
   });
+
+  it('PortalDocument/PortalEvent represent the E1 record shapes (mega-run E1, BRIEF §8)', async () => {
+    const { PortalDocument, PortalEvent, PortalDossierRecordsResponse } = await import('./portal.js');
+    const fileRef = { fileId: 'f1', appId: 'legal-dossie', url: '/api/app-files/legal-dossie/f1', mime: 'application/pdf', size: 12345 };
+    const doc = {
+      source: 'certidao-comercial',
+      type: 'certidao-permanente',
+      subjectIds: ['500000000'],
+      retrievedAt: '2026-07-18T10:00:00.000Z',
+      fileRef,
+      parsed: { firma: 'Exemplo, Lda', nipc: '500000000' },
+    };
+    const watchHit = {
+      source: 'citius-insolvencia',
+      kind: 'watch.hit',
+      subjectRef: 'Contraparte Lda',
+      dossierRef: 'proc-1',
+      observedAt: '2026-07-18T11:00:00.000Z',
+      payload: { processo: '1234/26.0T8LSB', ato: 'Sentença' },
+    };
+    expect(PortalDocument.safeParse(doc).success).toBe(true);
+    expect(PortalEvent.safeParse(watchHit).success).toBe(true);
+    expect(PortalDossierRecordsResponse.safeParse({ documentos: [doc], eventos: [watchHit] }).success).toBe(true);
+
+    // A closed enum (E1 pin: only the five open-data sources this run covers) - not free text.
+    expect(PortalDocument.safeParse({ ...doc, source: 'portal-das-financas' }).success).toBe(false);
+    // A document with no fileRef cannot represent an ATTACHED document.
+    const { fileRef: _drop, ...docNoFile } = doc;
+    expect(PortalDocument.safeParse(docNoFile).success).toBe(false);
+  });
+
+  it('signed-in connectors later EXTEND PortalDocument/PortalEvent (FLOW_PLAN structural decision) - an extended superset still parses', async () => {
+    const { PortalDocument, PortalEvent } = await import('./portal.js');
+    // A follow-up signed-in connector (Citius eTribunal, Portal das Finanças, ...) adds
+    // fields the E1 shape never anticipated (a session ref, a listener id, ...); the
+    // FLOW_PLAN decision is that this must never be a schema break - the shape is extended,
+    // not redesigned.
+    const extendedDoc = {
+      source: 'certidao-comercial',
+      type: 'certidao-permanente',
+      subjectIds: ['500000000'],
+      retrievedAt: '2026-07-18T10:00:00.000Z',
+      fileRef: { fileId: 'f1', appId: 'legal-dossie', url: '/x', mime: 'application/pdf', size: 1 },
+      sessionRef: 'browser-session-abc',
+      submittedBy: 'oa-cert-123',
+    };
+    const extendedEvent = {
+      source: 'citius-insolvencia',
+      kind: 'watch.hit',
+      subjectRef: 'Contraparte Lda',
+      dossierRef: 'proc-1',
+      observedAt: '2026-07-18T11:00:00.000Z',
+      payload: {},
+      pollRunId: 'run-9',
+      listenerId: 'listener-1',
+    };
+    const parsedDoc = PortalDocument.safeParse(extendedDoc);
+    const parsedEvent = PortalEvent.safeParse(extendedEvent);
+    expect(parsedDoc.success).toBe(true);
+    expect(parsedEvent.success).toBe(true);
+    if (parsedDoc.success) expect((parsedDoc.data as typeof extendedDoc).sessionRef).toBe('browser-session-abc');
+    if (parsedEvent.success) expect((parsedEvent.data as typeof extendedEvent).pollRunId).toBe('run-9');
+  });
+
+  it('RegistoEntry represents the portal vocabulary rows (mega-run E1, A5 memo)', async () => {
+    const { RegistoEntry } = await import('./registo.js');
+    const retrieved = {
+      actor: 'u1', username: 'ana', actionType: 'portal.document.retrieved', timestamp: '2026-07-18T10:00:00.000Z',
+      targetIds: ['proc-1'],
+      metadata: {
+        dossierId: 'proc-1', source: 'certidao-comercial', type: 'certidao-permanente',
+        subjectIds: ['500000000'],
+        fileRef: { fileId: 'f1', appId: 'legal-dossie', url: '/x', mime: 'application/pdf', size: 1 },
+      },
+      orgId: 'org-a',
+    };
+    const watchHit = {
+      actor: 'u1', username: 'ana', actionType: 'portal.watch.hit', timestamp: '2026-07-18T11:00:00.000Z',
+      targetIds: ['proc-1'],
+      metadata: { dossierId: 'proc-1', source: 'citius-insolvencia', kind: 'watch.hit', subjectRef: 'Contraparte Lda' },
+      orgId: 'org-a',
+    };
+    for (const row of [retrieved, watchHit]) {
+      expect(RegistoEntry.safeParse(row).success, JSON.stringify(row)).toBe(true);
+    }
+  });
 });

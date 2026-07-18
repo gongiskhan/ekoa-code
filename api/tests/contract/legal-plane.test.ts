@@ -62,6 +62,43 @@ const brandFor = async (appIdOrSlug: string): Promise<OrgBrand | null> => {
 let server: Server;
 let port: number;
 
+// mega-run E1 — a dossiê's own portal-sourced documentos/eventos rows, keyed by owner
+// (the shared owner-spine), pre-seeded exactly as attachPortalDocument/attachPortalEvent
+// would leave them (api/tests/legal/portal.test.ts exercises those functions directly;
+// this file only exercises the READ route + gate, no mongo needed here either).
+const portalDocumentos: Record<string, Array<Record<string, unknown>>> = {
+  'owner-active': [
+    {
+      nome: 'Certidão comercial - certidao-permanente',
+      tipo: 'certidao-permanente',
+      processoId: 'proc-1',
+      data: '2026-07-18',
+      origem: 'portal',
+      ficheiro: { fileId: 'f1', appId: 'legal-dossie', url: '/api/app-files/legal-dossie/f1', mime: 'application/pdf', size: 111 },
+      versao: 1,
+      source: 'certidao-comercial',
+      subjectIds: ['500000000'],
+      retrievedAt: '2026-07-18T10:00:00.000Z',
+    },
+  ],
+};
+const portalEventos: Record<string, Array<Record<string, unknown>>> = {
+  'owner-active': [
+    {
+      processoId: 'proc-1',
+      titulo: 'Nova publicação encontrada',
+      data: '2026-07-18',
+      tipo: 'portal.watch.hit',
+      origem: 'portal',
+      source: 'citius-insolvencia',
+      kind: 'watch.hit',
+      subjectRef: 'Contraparte Lda',
+      observedAt: '2026-07-18T11:00:00.000Z',
+      payload: {},
+    },
+  ],
+};
+
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
@@ -81,6 +118,19 @@ beforeAll(async () => {
         recordUsage: (u) => {
           recordedStt.push(u as Record<string, unknown>);
         },
+      },
+      portal: {
+        getOwnerOrgId: async () => 'org-legal',
+        createDocumento: async (a, row) => {
+          (portalDocumentos[a.ownerUserId] ??= []).push(row);
+          return row;
+        },
+        createEvento: async (a, row) => {
+          (portalEventos[a.ownerUserId] ??= []).push(row);
+          return row;
+        },
+        listDocumentos: async (a, processoId) => (portalDocumentos[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
+        listEventos: async (a, processoId) => (portalEventos[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
       },
     }),
   );
@@ -201,6 +251,50 @@ describe('legal-suite — happy paths validate against the shared descriptor', (
     expect(body.publicacoes).toHaveLength(2);
     expect(body.publicacoes[0]!.ato).toBe('Citação');
     expect(servedAppEndpoints.citiusConsulta!.response!.safeParse(body).success).toBe(true);
+  });
+
+  it('GET /api/legal/portal returns the dossiê\'s portal-sourced documents + events, validated against the shared descriptor', async () => {
+    // 'legal-citius' is the registered PORTAL_ALLOWED_APPS member in this fixture map
+    // (legal-dossie/legal-nucleo/legal-prazos are allowlisted-but-unregistered here, same
+    // as the citius happy-path test above).
+    const res = await appApi('/api/legal/portal?processoId=proc-1', 'legal-citius');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { documentos: unknown[]; eventos: unknown[] };
+    expect(body.documentos).toHaveLength(1);
+    expect(body.eventos).toHaveLength(1);
+    expect(servedAppEndpoints.legalPortalDossier!.response!.safeParse(body).success).toBe(true);
+  });
+
+  it('GET /api/legal/portal for a dossiê with no portal activity -> 200, empty arrays', async () => {
+    const res = await appApi('/api/legal/portal?processoId=proc-none', 'legal-citius');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ documentos: [], eventos: [] });
+  });
+});
+
+describe('GET /api/legal/portal — gate (mega-run E1, same discipline as citius)', () => {
+  it('missing processoId -> 400 PT', async () => {
+    const res = await appApi('/api/legal/portal', 'legal-citius');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Parâmetro "processoId" em falta' });
+  });
+
+  it('non-allowlisted app -> 403 PT', async () => {
+    const res = await appApi('/api/legal/portal?processoId=proc-1', 'not-a-legal-app');
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Aplicação não autorizada para consultar o dossiê' });
+  });
+
+  it('allowlisted but unregistered app -> 404 Unknown app', async () => {
+    const res = await appApi('/api/legal/portal?processoId=proc-1', 'legal-prazos');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'Unknown app' });
+  });
+
+  it('missing X-Ekoa-App-Id header -> 400', async () => {
+    const res = await api('/api/legal/portal?processoId=proc-1');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Missing X-Ekoa-App-Id header' });
   });
 });
 

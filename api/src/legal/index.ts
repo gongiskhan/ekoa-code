@@ -42,3 +42,12 @@ export {
   type SttProvider,
   type SttUsageRecorder,
 } from './transcricao.js';
+
+// Portal connector receiving surface (mega-run E1; ch03 §3.9).
+export {
+  attachPortalDocument,
+  attachPortalEvent,
+  listPortalDossierRecords,
+  PortalOrgMismatchError,
+  type PortalSpineDeps,
+} from './portal.js';

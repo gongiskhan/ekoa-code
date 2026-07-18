@@ -64,6 +64,9 @@ export * from './capabilities.js';
 export * from './action-manifest.js';
 export * from './artifact-type.js';
 export * from './app-assistant.js';
+// Portal connector records (mega-run E1) - no descriptor map of its own; the one route
+// that returns them (legalPortalDossier) lives in servedAppEndpoints below.
+export * from './portal.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';

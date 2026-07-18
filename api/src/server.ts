@@ -652,6 +652,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         create: (scope, coll, data) => legalEngine.create({ scopeKey: scope, appId: scope }, coll, data),
       },
     },
+    // Portal connector owner-spine seams (mega-run E1): documentos/eventos through the
+    // same collections engine the app itself drives; getOwnerOrgId is the org-scoping
+    // check no prior legal-suite route needed (access-gate.ts's ResolvedLegalApp carries
+    // no orgId).
+    portal: {
+      getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
+      createDocumento: (a, row) => legalEngine.create(spineScope(a), 'documentos', row),
+      createEvento: (a, row) => legalEngine.create(spineScope(a), 'eventos', row),
+      listDocumentos: (a, processoId) =>
+        legalEngine.list(spineScope(a), 'documentos').then((rows) => rows.filter((r) => r.processoId === processoId)),
+      listEventos: (a, processoId) =>
+        legalEngine.list(spineScope(a), 'eventos').then((rows) => rows.filter((r) => r.processoId === processoId)),
+    },
   }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
   app.get('/api/design-tokens.css', designTokensHandler());

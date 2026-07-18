@@ -106,6 +106,11 @@ const COVERED = new Set<string>([
   // derived list / rename / user revision + envelope + cross-user 404). Covering all three
   // keeps EXPECTED_PENDING_COUNT unchanged.
   'sheets.list', 'sheets.rename', 'sheets.createRevision',
+  // mega-run E1 (Part E, portal connectors) - the dossiê portal-records read route
+  // (legal-plane.test.ts contract: happy path + org-scoping + PT-PT refusals). Additive
+  // endpoint on the existing servedApp domain: covering it keeps EXPECTED_PENDING_COUNT
+  // unchanged.
+  'servedApp.legalPortalDossier',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

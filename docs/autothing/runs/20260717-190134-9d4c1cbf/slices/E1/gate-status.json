@@ -1,0 +1,7 @@
+{ "slice": "E1", "kind": "api", "status": "passed", "at": "2026-07-18T17:53:34Z",
+  "wall": {"tscApi": 0, "tscShared": 0, "chokepoint": 0, "eslint": 0, "unit": "portal 6/6 + legal-plane + shared 54", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "portal.test.ts (org-scoped attach + refs-only audit + passthrough); contract representability; SUITE_LEDGER E1 group"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent (boundary)", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "1 real (audit PII) fixed, 2 rebutted"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (E5 carries the Part E walkthrough)"} }
