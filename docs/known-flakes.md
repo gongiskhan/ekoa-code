@@ -34,11 +34,11 @@ Remedy: use the DEDICATED account path — node api/tests/journeys/boot-b.mjs up
 $EKOA_CLAUDE_CREDENTIALS / ~/.config/ekoa/claude-credentials.json) instead of driver.mjs up +
 provision-credential.mjs with a scavenged token.
 
-## coherence-locale: header EN flip fails only in large multi-spec batches (2026-07-18)
-Seen once while running the six-spec regression band back-to-back (ui-foundation, shell-nav,
-chat-thinking, regressions-dashboard, coherence-locale, os-mode): the "automations renders PT
-by default and flips to EN via the header toggle" assertion failed mid-batch, then passed
-standalone AND paired with its predecessor (regressions-dashboard) on immediate re-runs.
-Suspected server-side language/user-settings state left by an earlier spec's run; unrelated to
-the OS-mode work (whose spec ran after it). If it recurs in the ledger lane, bisect the batch
-ordering; do not loosen the assertion.
+## coherence-locale: header EN flip fails only in large multi-spec batches (RESOLVED 2026-07-18)
+Root-caused the same day (was NOT a flake and was unrelated to language): the failing
+assertion was the zero-console-error gate catching a 404 DELETE /api/v1/sessions/<id>. The
+chat runtime (OS-mode run 1) initializes on every shell mount, so the surplus-empty-session
+sweep ran on every page load; a fast navigation re-listed a session whose fire-and-forget
+delete from the previous mount was still in flight, and the re-delete 404d in the console.
+Deterministic repro: chat-thinking then coherence-locale. Fixed in orchestration.ts by
+tracking swept session ids per tab (sessionStorage) so an id is only ever deleted once.
