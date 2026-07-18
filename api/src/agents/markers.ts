@@ -116,24 +116,36 @@ export class MarkerProcessor {
     this.stripSignals();
     let emit: string;
     if (flush) {
-      // End-of-stream: the hold-back no longer protects the tail, so a generation that ends
-      // exactly on a strict prefix of a marker would flush it to the wire. §5.7.2 forbids any
-      // marker fragment in a `text_chunk`, so drop the longest trailing suffix of the buffer
-      // that is a strict prefix of any marker.
+      // End-of-stream: an UNCLOSED `<ekoa-context>` internal state block (the generation ended
+      // before its close tag) is still in the buffer after stripSignals. It must NEVER flush to
+      // the wire - it is internal state, not answer prose. Drop from the open tag to end and
+      // record the truncated body as a context block (codex checkpoint finding: the live-path
+      // fix left the flush path leaking an unclosed block at end-of-stream).
+      for (;;) {
+        const openIdx = this.buffer.indexOf(CONTEXT_OPEN);
+        if (openIdx === -1) break;
+        // stripSignals already removed every COMPLETE block, so any remaining open is unclosed.
+        const body = this.buffer.slice(openIdx + CONTEXT_OPEN.length);
+        if (body) this.contextBlocks.push(body);
+        this.buffer = this.buffer.slice(0, openIdx);
+      }
+      // The hold-back no longer protects the tail, so a generation that ends exactly on a strict
+      // prefix of a marker would flush it to the wire. §5.7.2 forbids any marker fragment in a
+      // `text_chunk`, so drop the longest trailing suffix of the buffer that is a strict prefix
+      // of any marker.
       this.dropTrailingMarkerPrefix();
       emit = this.buffer;
       this.buffer = '';
     } else {
       let emitEnd = this.buffer.length - Math.min(HOLD_BACK, this.buffer.length);
-      // An OPEN `<ekoa-context>` whose close has not yet arrived stays in the buffer after
-      // stripSignals. The fixed HOLD_BACK only protects the trailing ~marker-length chars, so
-      // the open block's body would otherwise stream to the live text_chunk wire (and be spoken
-      // by TTS) before its close tag lands. Hold back from the open tag itself until the close
-      // arrives - the full block is then stripped by stripSignals and never reaches the wire.
+      // stripSignals already extracted every depth-BALANCED context block, so ANY remaining
+      // `<ekoa-context>` open is unclosed/unbalanced internal state. The fixed HOLD_BACK only
+      // protects the trailing ~marker-length chars, so such an open's body would otherwise
+      // stream to the live text_chunk wire (and be spoken by TTS) before its balancing close
+      // lands. Hold back from the open tag itself until it balances - the full block is then
+      // stripped by stripSignals and never reaches the wire (codex checkpoint finding).
       const openIdx = this.buffer.indexOf(CONTEXT_OPEN);
-      if (openIdx !== -1 && this.buffer.indexOf(CONTEXT_CLOSE, openIdx + CONTEXT_OPEN.length) === -1) {
-        emitEnd = Math.min(emitEnd, openIdx);
-      }
+      if (openIdx !== -1) emitEnd = Math.min(emitEnd, openIdx);
       emit = this.buffer.slice(0, emitEnd);
       this.buffer = this.buffer.slice(emitEnd);
     }
@@ -181,15 +193,35 @@ export class MarkerProcessor {
       this.integration = { ...(hint ? { hint } : {}) };
       this.buffer = this.buffer.slice(0, idx) + this.buffer.slice(end);
     }
-    // Context blocks: extract every complete `<ekoa-context>…</ekoa-context>`.
+    // Context blocks: extract every complete `<ekoa-context>…</ekoa-context>`. Uses DEPTH-
+    // BALANCED matching (not first-open/first-close): a malformed nested emission like
+    // `<ekoa-context>outer <ekoa-context>INNER</ekoa-context> SECRET</ekoa-context>` must strip
+    // the WHOLE outer span, never mis-pair the outer open with the inner close and leak the
+    // trailing internal state as prose (codex checkpoint finding). An open that never balances
+    // stays in the buffer (the drain live-path holds it; the flush-path drops it).
     for (;;) {
       const open = this.buffer.indexOf(CONTEXT_OPEN);
       if (open === -1) break;
-      const close = this.buffer.indexOf(CONTEXT_CLOSE, open + CONTEXT_OPEN.length);
-      if (close === -1) break; // wait for the close tag
-      const body = this.buffer.slice(open + CONTEXT_OPEN.length, close);
+      let depth = 0;
+      let i = open;
+      let endClose = -1;
+      while (i < this.buffer.length) {
+        const nextOpen = this.buffer.indexOf(CONTEXT_OPEN, i);
+        const nextClose = this.buffer.indexOf(CONTEXT_CLOSE, i);
+        if (nextClose === -1) break; // unclosed - leave for the caller (hold live / drop flush)
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          depth++;
+          i = nextOpen + CONTEXT_OPEN.length;
+        } else {
+          depth--;
+          i = nextClose + CONTEXT_CLOSE.length;
+          if (depth === 0) { endClose = nextClose; break; }
+        }
+      }
+      if (endClose === -1) break; // not yet balanced - wait for the balancing close
+      const body = this.buffer.slice(open + CONTEXT_OPEN.length, endClose);
       this.contextBlocks.push(body);
-      this.buffer = this.buffer.slice(0, open) + this.buffer.slice(close + CONTEXT_CLOSE.length);
+      this.buffer = this.buffer.slice(0, open) + this.buffer.slice(endClose + CONTEXT_CLOSE.length);
     }
   }
 }

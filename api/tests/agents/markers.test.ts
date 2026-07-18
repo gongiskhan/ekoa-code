@@ -109,6 +109,47 @@ describe('MarkerProcessor — integration handoff + context blocks', () => {
     expect(tail.findings.contextBlocks).toEqual(['{"userGoal":"segredo interno muito longo que nunca deve ser falado"}']);
   });
 
+  it('an UNCLOSED context block at END-OF-STREAM is dropped from the flush, never leaked (codex checkpoint finding)', () => {
+    const p = new MarkerProcessor();
+    const live = p.push('Resposta. <ekoa-context>{"userGoal":"segredo"');
+    const tail = p.end(); // stream ends WITH the block still open (no close tag)
+    const total = live + tail.text;
+    expect(total).not.toContain('ekoa-context');
+    expect(total).not.toContain('userGoal');
+    expect(total).not.toContain('segredo');
+    expect(total).toContain('Resposta');
+    // The truncated body is captured as a context block, not emitted to the wire.
+    expect(tail.findings.contextBlocks).toEqual(['{"userGoal":"segredo"']);
+  });
+
+  it('a malformed NESTED context block strips the whole outer span, never leaking trailing state (codex checkpoint nested finding)', () => {
+    const { emitted } = drive(new MarkerProcessor(), ['hello <ekoa-context>outer <ekoa-context>INNER</ekoa-context> SECRET_AFTER</ekoa-context> world']);
+    expect(emitted).not.toContain('ekoa-context');
+    expect(emitted).not.toContain('SECRET_AFTER');
+    expect(emitted).not.toContain('INNER');
+    expect(emitted).toContain('hello');
+    expect(emitted).toContain('world');
+  });
+
+  it('a nested open whose OUTER never closes leaks nothing (drops at flush)', () => {
+    const { emitted } = drive(new MarkerProcessor(), ['hi <ekoa-context>outer <ekoa-context>INNER</ekoa-context> SECRET_AFTER']);
+    expect(emitted).not.toContain('ekoa-context');
+    expect(emitted).not.toContain('SECRET_AFTER');
+    expect(emitted).not.toContain('INNER');
+    expect(emitted).toContain('hi');
+  });
+
+  it('a split context-open tag across deltas with no close never leaks at flush (codex checkpoint edge)', () => {
+    const p = new MarkerProcessor();
+    const l1 = p.push('Olá <ekoa-');
+    const l2 = p.push('context>DADOS INTERNOS');
+    const tail = p.end();
+    const total = l1 + l2 + tail.text;
+    expect(total).not.toContain('ekoa-context');
+    expect(total).not.toContain('DADOS INTERNOS');
+    expect(total).toContain('Olá');
+  });
+
   it('emits plain prose unchanged', () => {
     const { emitted, findings } = drive(new MarkerProcessor(), ['Just a normal answer.']);
     expect(emitted).toBe('Just a normal answer.');

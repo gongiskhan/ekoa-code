@@ -1,0 +1,11 @@
+verdict=clean
+
+findings:
+- No issues found in [api/src/agents/markers.ts](/Users/ggomes/dev/ekoa-code/api/src/agents/markers.ts:196). `stripSignals()` is depth-balanced and leaves unbalanced opens buffered.
+- Live path in [drain](/Users/ggomes/dev/ekoa-code/api/src/agents/markers.ts:115) holds from any remaining `<ekoa-context>` open; flush drops remaining open-to-end.
+- Exact probes passed:
+  - balanced nested input emitted exactly `hello  world`
+  - unclosed outer input emitted exactly `hi `
+- Exhaustive runtime probe checked all 1-, 2-, and 3-chunk splits for both inputs: `7,284` split sequences, no live delta or flush tail leaked `<ekoa-context>`, `outer`, `INNER`, or `SECRET_AFTER`.
+- `npm run typecheck --workspace api` passed.
+- `vitest` direct run was blocked by read-only sandbox `EPERM` writing `.vite-temp`, but the real `MarkerProcessor` was executed via `ts-node` probes.
