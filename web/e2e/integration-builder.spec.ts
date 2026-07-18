@@ -91,14 +91,16 @@ test.describe('integration builder', () => {
     expect(NotificationEvent.safeParse(INTENT_EVENT).success, 'intent stub validates').toBe(true);
     expect(IntegrationBuilderChatResponse.safeParse(CHAT_STUB).success, 'chat stub validates').toBe(true);
 
-    // The api is CROSS-ORIGIN from the dashboard (:3000 → :4111) and Playwright-fulfilled
-    // responses still pass the browser's CORS checks — every stub must carry ACAO (and the
-    // chat POST needs its preflight answered) or the client fails silently.
-    const CORS_HEADERS = {
-      'access-control-allow-origin': 'http://localhost:3000',
+    // The api is CROSS-ORIGIN from the dashboard (:3000 → :4111 in dev; harness ports under
+    // e2e:full) and Playwright-fulfilled responses still pass the browser's CORS checks —
+    // every stub must carry ACAO (and the chat POST needs its preflight answered) or the
+    // client fails silently. Reflect the REQUEST's Origin (docs/testing.md CORS note): a
+    // hardcoded :3000 broke the whole spec under the harness's :3001 (2026-07-18 run).
+    const corsHeaders = (route: import('@playwright/test').Route) => ({
+      'access-control-allow-origin': route.request().headers()['origin'] ?? 'http://localhost:3000',
       'access-control-allow-headers': 'authorization, content-type',
       'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    };
+    });
 
     // Stub 1 — the notifications SSE: EVERY connection carries the intent event (the page's
     // handler may subscribe after the first connect; EventSource reconnects deliver it once
@@ -107,7 +109,7 @@ test.describe('integration builder', () => {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
-        headers: CORS_HEADERS,
+        headers: corsHeaders(route),
         body: `event: integration_build_intent\ndata: ${JSON.stringify(INTENT_EVENT)}\n\n`,
       });
     });
@@ -115,12 +117,12 @@ test.describe('integration builder', () => {
     // Stub 2 — the model-backed builder chat turn (+ its CORS preflight).
     await page.route('**/api/v1/integration-builder/chat', async (route) => {
       if (route.request().method() === 'OPTIONS') {
-        return route.fulfill({ status: 204, headers: CORS_HEADERS });
+        return route.fulfill({ status: 204, headers: corsHeaders(route) });
       }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        headers: CORS_HEADERS,
+        headers: corsHeaders(route),
         body: JSON.stringify(CHAT_STUB),
       });
     });

@@ -46,8 +46,9 @@ function startStubDaemon(): Promise<StubDaemon> {
   };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${DAEMON_PORT}`);
-    // C2: CORS for the app origin; bind stays loopback-only.
-    res.setHeader('access-control-allow-origin', 'http://localhost:3000');
+    // C2: CORS for the app origin (reflected, so the e2e:full harness's web port works
+    // as well as the dev :3000); bind stays loopback-only.
+    res.setHeader('access-control-allow-origin', req.headers.origin ?? 'http://localhost:3000');
     res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
     res.setHeader('access-control-allow-headers', 'content-type');
     if (req.method === 'OPTIONS') {
@@ -109,15 +110,35 @@ function trackConsoleErrors(page: Page, opts: { allow?: (text: string, url: stri
 
 async function stubConnectedPresence(page: Page) {
   expect(BridgeStatusResponse.safeParse(CONNECTED).success).toBe(true);
-  await page.route('**/api/v1/bridge/status', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONNECTED) }),
-  );
+  // The dashboard fetches the api cross-origin, and Playwright-fulfilled responses still
+  // pass the browser's CORS checks (docs/testing.md CORS note) — reflect the request's
+  // Origin and answer the Authorization preflight, or the presence poll fails silently and
+  // the page renders the not-installed state (2026-07-18 e2e:full run).
+  await page.route('**/api/v1/bridge/status', (route) => {
+    const cors = {
+      'access-control-allow-origin': route.request().headers()['origin'] ?? '*',
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-allow-methods': 'GET, OPTIONS',
+    };
+    if (route.request().method() === 'OPTIONS') {
+      return route.fulfill({ status: 204, headers: cors });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: cors,
+      body: JSON.stringify(CONNECTED),
+    });
+  });
 }
 
 /** The ledger picker needs at least one hosted session; create one through the real API. */
 async function ensureSession(page: Page): Promise<void> {
   const token = await page.evaluate(() => window.localStorage.getItem('ekoa_token'));
-  const res = await page.request.post('http://localhost:4111/api/v1/sessions', {
+  // EKOA_E2E_API_ORIGIN first (e2e:full harness origin); hardcoded :4111 would create
+  // the session on the live dev stack when the harness runs beside it.
+  const api = process.env.EKOA_E2E_API_ORIGIN ?? 'http://localhost:4111';
+  const res = await page.request.post(`${api}/api/v1/sessions`, {
     headers: { authorization: `Bearer ${token}` },
     data: { name: 'e2e-ledger-session' },
   });

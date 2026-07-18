@@ -10,7 +10,9 @@ import { test, expect, type Page } from '@playwright/test';
  * state, with zero console errors (QA block, CLAUDE.md).
  */
 
-const API = process.env.EKOA_API_BASE || 'http://127.0.0.1:4111';
+// EKOA_E2E_API_ORIGIN first: the committed e2e:full harness exports the api(proxy)
+// origin it booted, and this spec creates real automations/runs against the api.
+const API = process.env.EKOA_E2E_API_ORIGIN || process.env.EKOA_API_BASE || 'http://127.0.0.1:4111';
 
 async function login(page: Page) {
   await page.goto('/login');

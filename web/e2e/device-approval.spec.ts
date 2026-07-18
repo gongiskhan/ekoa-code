@@ -9,7 +9,9 @@ import { DeviceStartResponse, DevicePollResponse } from '@ekoa/shared';
  * the invalid-code path are exercised the same way. Real UI login, zero console errors.
  */
 
-const API = process.env.EKOA_API_URL ?? 'http://localhost:4111';
+// EKOA_E2E_API_ORIGIN first: the committed e2e:full harness exports the api(proxy)
+// origin it booted, and this spec starts real device flows against the api.
+const API = process.env.EKOA_E2E_API_ORIGIN ?? process.env.EKOA_API_URL ?? 'http://localhost:4111';
 
 async function login(page: Page) {
   await page.goto('/login');

@@ -21,6 +21,10 @@ import { resolve } from 'node:path';
 const DESKTOP = { width: 1280, height: 800 };
 
 function apiBase(): string {
+  // The committed e2e:full harness exports the api(proxy) origin it booted; honor it
+  // FIRST so this spec's real PATCH /org calls can never cross over to the live dev
+  // stack the backend.port file points at (review finding, 2026-07-18).
+  if (process.env.EKOA_E2E_API_ORIGIN) return process.env.EKOA_E2E_API_ORIGIN;
   try {
     const port = readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim();
     if (port) return `http://127.0.0.1:${port}`;

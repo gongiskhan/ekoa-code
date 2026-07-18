@@ -25,7 +25,10 @@ import { test, expect, type Page } from '@playwright/test';
 
 const LIVE = process.env.LIVE_BRIDGE === '1';
 const CLI = process.env.EKOA_BRIDGE_CLI ?? '';
-const API = 'http://localhost:4111';
+// EKOA_E2E_API_ORIGIN first: the committed e2e:full harness exports the api(proxy)
+// origin it booted; a hardcoded :4111 would hit the live dev stack when the harness
+// runs beside it (review finding, 2026-07-18).
+const API = process.env.EKOA_E2E_API_ORIGIN ?? 'http://localhost:4111';
 
 async function login(page: Page) {
   await page.goto('/login');
