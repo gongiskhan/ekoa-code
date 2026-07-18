@@ -194,6 +194,46 @@ input, textarea, select, button {
   animation: panel-enter 0.25s ease-out;
 }
 
+/* ============================================================
+   Sheet feed (Part B, B4) - length-scaled sheet typography.
+   Locked decision 10: typography scales with CONTENT LENGTH via
+   a pure class switch (no layout engine) - short reply = display
+   scale, medium = article, long = dense document. The markdown
+   elements inside .sheet-markdown size themselves in em, so the
+   base font-size on the scale class is the single scaling knob.
+   ============================================================ */
+.sheet-markdown {
+  overflow-wrap: break-word;
+}
+.sheet-scale-display {
+  font-size: 1.0625rem;
+  line-height: 1.7;
+}
+.sheet-scale-article {
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.sheet-scale-dense {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/* Brief highlight when a sheet gains a revision (locked decision 5's
+   revise-in-place: the feed scrolls to the revised sheet and flashes it). */
+@keyframes sheet-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--color-teal-300);
+    background-color: var(--color-teal-50);
+  }
+  100% {
+    box-shadow: var(--shadow-card);
+    background-color: var(--color-surface);
+  }
+}
+.sheet-flash {
+  animation: sheet-flash 1.4s ease-out;
+}
+
 /* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

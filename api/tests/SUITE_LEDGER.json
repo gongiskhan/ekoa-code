@@ -100,7 +100,8 @@
         "reference-attach",
         "live-bridge",
         "branding-colors",
-        "chat-layout-unified"
+        "chat-layout-unified",
+        "sheet-feed"
       ]
     }
   },

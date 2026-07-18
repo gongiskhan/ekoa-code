@@ -609,6 +609,23 @@ export interface Translations {
     empty: string;
     openPanel: string;
     hidePanel: string;
+    provenanceMemories: (n: number) => string;
+    actionEdit: string;
+    actionCopy: string;
+    actionCopied: string;
+    actionPromote: string;
+    promoteSoon: string;
+    editAreaLabel: string;
+    editError: string;
+    revisionOf: (current: number, total: number) => string;
+    prevRevision: string;
+    nextRevision: string;
+    followUpElaborate: string;
+    followUpExample: string;
+    followUpConcise: string;
+    followUpSummarize: string;
+    followUpSimplify: string;
+    followUpFormal: string;
   };
 
   // ============================================
