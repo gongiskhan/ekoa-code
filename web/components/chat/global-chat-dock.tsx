@@ -18,12 +18,25 @@ import { useChatRuntime } from '@/components/chat/chat-runtime';
 import { ActionMenu, type ActionMenuPosition } from '@/components/ui/action-menu';
 import { IconButton } from '@/components/ui/button';
 import { useOrchestrationStore } from '@/stores/orchestration';
-import { useOsStore, clampChatDockWidth } from '@/stores/os';
+import { useOsStore, clampChatDockWidth, type ChatDockMode } from '@/stores/os';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTranslation } from '@/stores/i18n';
-import type { ActionDef } from '@/lib/os/types';
+import { api } from '@/lib/api';
+import { AppWindow } from 'lucide-react';
+import { OsDockSections } from '@/components/os/os-dock-sections';
+import type { ActionDef, SurfaceHost } from '@/lib/os/types';
+import { OS_STRINGS as osStrings } from '@/lib/os/strings';
 
-export function GlobalChatDock() {
+interface GlobalChatDockProps {
+  /** 'classic' (default): every dashboard page, hidden on /chat + mobile.
+   *  'os': docked in the OS shell, open by default, with the Files/Output
+   *  sections and the open-preview-as-window affordance. */
+  mode?: ChatDockMode;
+  /** OS mode only: the shell's SurfaceHost (opens artifact-app windows). */
+  host?: SurfaceHost;
+}
+
+export function GlobalChatDock({ mode = 'classic', host }: GlobalChatDockProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -36,7 +49,13 @@ export function GlobalChatDock() {
   const setActiveSession = useOrchestrationStore((s) => s.setActiveSession);
   const activateOrCreateEmptySession = useOrchestrationStore((s) => s.activateOrCreateEmptySession);
 
-  const prefs = useOsStore((s) => s.chatDock.classic);
+  const prefs = useOsStore((s) => s.chatDock[mode]);
+  const sessionJob = useOrchestrationStore((s) =>
+    s.activeSessionId ? s.sessionJobs[s.activeSessionId] : null,
+  );
+  const sessionPreview = useOrchestrationStore((s) =>
+    s.activeSessionId ? s.sessionPreviews[s.activeSessionId] : null,
+  );
   const setCollapsed = useOsStore((s) => s.setChatDockCollapsed);
   const setWidth = useOsStore((s) => s.setChatDockWidth);
 
@@ -72,20 +91,21 @@ export function GlobalChatDock() {
   const onHandlePointerUp = useCallback(() => {
     if (dragStartRef.current === null) return;
     dragStartRef.current = null;
-    if (dragWidthRef.current != null) setWidth('classic', dragWidthRef.current);
+    if (dragWidthRef.current != null) setWidth(mode, dragWidthRef.current);
     dragWidthRef.current = null;
     setDragWidth(null);
-  }, [setWidth]);
+  }, [setWidth, mode]);
 
-  // The dock never renders on /chat or on mobile. All hooks are above this
-  // point so the hook order is stable across route changes.
-  if (isMobile || pathname.startsWith('/chat')) return null;
+  // Classic never renders on /chat or on mobile (the page IS the chat there;
+  // phones use the /chat route). All hooks are above this point so the hook
+  // order is stable across route changes.
+  if (mode === 'classic' && (isMobile || pathname.startsWith('/chat'))) return null;
 
   if (prefs.collapsed) {
     return (
       <button
         data-testid="global-chat-dock-tab"
-        onClick={() => setCollapsed('classic', false)}
+        onClick={() => setCollapsed(mode, false)}
         title={chatDock.expand}
         aria-label={chatDock.expand}
         className="absolute right-0 top-1/2 z-40 -translate-y-1/2 rounded-l-lg border border-r-0 border-neutral-200 bg-white px-1.5 py-3 text-neutral-500 shadow-card transition-colors hover:bg-neutral-50 hover:text-teal-700 focus-ring"
@@ -147,6 +167,27 @@ export function GlobalChatDock() {
           <ChevronDown size={12} className="shrink-0 text-neutral-400" aria-hidden />
         </button>
         <div className="flex items-center">
+          {mode === 'os' && host && (sessionJob?.artifactInstanceId || sessionPreview?.appUrl) && (
+            <IconButton
+              icon={AppWindow}
+              label={osStrings.chatDock.openInWindow}
+              size="sm"
+              onClick={() => {
+                const appIdentifier = sessionJob?.slug || sessionJob?.artifactInstanceId;
+                const appUrl = appIdentifier
+                  ? api.appUrl(appIdentifier)
+                  : sessionPreview?.appUrl
+                    ? api.resolveUrl(sessionPreview.appUrl)
+                    : null;
+                if (!appUrl) return;
+                host.openSurface('artifact-app', {
+                  artifactId: sessionJob?.artifactInstanceId ?? appIdentifier,
+                  title: sessionLabel,
+                  appUrl,
+                });
+              }}
+            />
+          )}
           <IconButton
             icon={Plus}
             label={chatDock.newSession}
@@ -163,7 +204,7 @@ export function GlobalChatDock() {
             icon={ChevronsRight}
             label={chatDock.collapse}
             size="sm"
-            onClick={() => setCollapsed('classic', true)}
+            onClick={() => setCollapsed(mode, true)}
           />
         </div>
       </div>
@@ -186,6 +227,9 @@ export function GlobalChatDock() {
         onResend={runtime.retryActive}
         onEdit={runtime.editLastUserMessage}
       />
+
+      {/* OS mode: the former side-panel tabs as shell pieces (contract D8). */}
+      {mode === 'os' && <OsDockSections />}
     </aside>
   );
 }

@@ -26,6 +26,9 @@ import { Desktop } from './desktop';
 import { Dock } from './dock';
 import { WorkspaceSwitcher } from './workspace-switcher';
 import { WindowLayer } from './window-layer';
+import { NarrowSurfaceHost } from './narrow-surface-host';
+import { GlobalChatDock } from '@/components/chat/global-chat-dock';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /** Artifact enriched with what the shell needs to render/open it. */
 export interface OsArtifact extends ArtifactLike {
@@ -40,6 +43,7 @@ function isRunnable(status: string): boolean {
 
 export function OsShell() {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const { pages_artifacts: a, common } = useTranslation();
   const workspace = useActiveWorkspace();
   const seedDesktop = useOsStore((s) => s.seedDesktop);
@@ -159,16 +163,20 @@ export function OsShell() {
         </Link>
       </div>
 
-      {/* Desktop area: icons below, windows above. */}
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-dots" data-testid="os-desktop-area">
-        <Desktop
-          artifacts={artifacts}
-          host={host}
-          onStartRename={setRenaming}
-          onRequestDelete={setDeleting}
-          onRefresh={() => void refreshArtifacts()}
-        />
-        <WindowLayer host={host} />
+      {/* Main row: desktop (+ windows or the narrow full-screen host) with the
+          docked chat panel beside any window arrangement (contract 5). */}
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-dots" data-testid="os-desktop-area">
+          <Desktop
+            artifacts={artifacts}
+            host={host}
+            onStartRename={setRenaming}
+            onRequestDelete={setDeleting}
+            onRefresh={() => void refreshArtifacts()}
+          />
+          {isMobile ? <NarrowSurfaceHost host={host} /> : <WindowLayer host={host} />}
+        </div>
+        {!isMobile && <GlobalChatDock mode="os" host={host} />}
       </div>
 
       <Dock host={host} artifacts={artifacts} />
