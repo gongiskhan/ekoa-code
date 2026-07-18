@@ -162,6 +162,13 @@
       "reason": "external blocker: codex OAuth refresh token revoked (refresh token already used); interactive codex login required - cannot be performed autonomously. Preflight ping failed twice; no OPENAI_API_KEY fallback. Recorded in docs/decisions.md 2026-07-18. Never reported clean or silently skipped.",
       "at": "2026-07-18T10:01:00Z"
     },
-    "statusNote": "All 8 slices passed every enabled gate (test, review, adversarialReview, adversarialTest, design, walkthrough 8/8 verified). Downgraded from passed solely by the external codex-checkpoint blocker (OAuth refresh token revoked - see codexCheckpoint + docs/decisions.md 2026-07-18). Full-lane e2e: all run work green; 11 remaining reds are pre-existing documented estate debt (findings.md e2e-estate-baseline-13, 2 of 13 closed by this run)."
+    "statusNote": "All 8 slices passed every enabled gate (test, review, adversarialReview, adversarialTest, design, walkthrough 8/8 verified). Downgraded from passed solely by the external codex-checkpoint blocker (OAuth refresh token revoked - see codexCheckpoint + docs/decisions.md 2026-07-18). Full-lane e2e: all run work green; 11 remaining reds are pre-existing documented estate debt (findings.md e2e-estate-baseline-13, 2 of 13 closed by this run).",
+    "report": {
+      "status": "composed-not-delivered",
+      "summary": "docs/autothing/runs/20260717-202309-d797918a/report-summary.md",
+      "reportUrl": "http://192.168.68.109:8091/20260717-202309-d797918a/ (standing serve.mjs, LAN IP - tailscale not active; verified HTTP 200)",
+      "note": "notify.mjs composed the Slack payload but AUTOTHING_SLACK_WEBHOOK_URL is unset and no Slack MCP is connected in this session - notification not sent (skill rule: a missing webhook never fails the run). Set the webhook and re-run autothing-report standalone to deliver.",
+      "at": "2026-07-18T11:25:00Z"
+    }
   }
 }
