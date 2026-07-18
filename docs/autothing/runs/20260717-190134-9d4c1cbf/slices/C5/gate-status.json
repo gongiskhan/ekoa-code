@@ -1,0 +1,8 @@
+{ "slice": "C5", "kind": "mixed", "status": "passed", "at": "2026-07-18T10:51:32Z",
+  "wall": {"tscApi": 0, "tscWeb": 0, "chokepoint": 0, "eslint": 0, "unit": "voice api 75 + web 86", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "tts-text-pipeline (sanitizer/chunking + adversarial regressions) + wav/playback-queue/tts-playback + speakable(moved) + voice-context-note; SUITE_LEDGER C5 group"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent", "actualModel": "claude-fable-5", "findings": "prose-eating sanitizer bug fixed"},
+  "adversarialTest": {"status": "deferred", "reason": "part-level at C7"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "2 table-detection edge cases fixed + re-verified"},
+  "design": {"status": "skipped", "reason": "kind-conditional (pipeline + injectable playback; UI at C4/C7)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (C7 carries the voice walkthrough)"} }

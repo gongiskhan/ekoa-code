@@ -44,6 +44,12 @@ export interface StartChatRunInput {
    *  REVISION on this sheet (editSource 'agent', instruction = the user message) instead of
    *  spawning a new sheet. Unknown ids fall back to fresh-sheet behavior. */
   reviseSheetId?: string;
+  /** C5 (BRIEF §5): 'voice' marks a voice-sourced turn — the run context then carries the
+   *  spoken-modality system note (context.ts voiceContextNote; never shortens replies).
+   *  TODO(C7 seam): nothing sets this yet. C7 wires the client signal through — a field on
+   *  shared/ ChatRunCreateRequest (+ contract test) that routes/chat.ts copies here when the
+   *  composer sends a transcript from an active voice session. */
+  source?: 'voice';
   deps: { now: () => number; genId: () => string };
 }
 
@@ -134,6 +140,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       sessionId: input.sessionId,
       isChat: true,
       groundKnowledge: false,
+      voiceActive: input.source === 'voice',
       now: input.deps.now,
     });
     if (entry.abort.signal.aborted) { settleAborted(); return; }

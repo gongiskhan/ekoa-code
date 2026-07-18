@@ -196,8 +196,13 @@ describe('TTS session metering (voice_tts_chars) + voice.tts audit', () => {
 describe('single-writer discipline', () => {
   it('the voice module never touches a ledger collection directly - only the tracker + logActivity seams', () => {
     const voiceSrc = join(dirname(fileURLToPath(import.meta.url)), '../../src/voice');
-    for (const file of readdirSync(voiceSrc)) {
-      const source = readFileSync(join(voiceSrc, file), 'utf8');
+    // Recursive walk (C5 added voice/text/): EVERY source file in the module stays covered.
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+      );
+    for (const file of walk(voiceSrc)) {
+      const source = readFileSync(file, 'utf8');
       expect(source, `${file} must not reference ledger stores`).not.toMatch(/usageEvents|tokenEvents|activityLogs|billingAccounts/);
       expect(source, `${file} must not import data/stores`).not.toContain('data/stores');
     }

@@ -1,8 +1,16 @@
 /**
  * Speakable number normalization (BRIEF §5 TTS text pipeline, run 20260717-190134, slice C3).
  * New write per memos/c-voice-deviations.md (i): no speakable-numbers-pt exists anywhere in
- * garrison history; only the toSpeakable() sanitizer idea (strip what reads terribly aloud)
- * is seeded from jarvis-os, and the number work here is fresh.
+ * the reference repo's history; only the jarvis-os toSpeakable() sanitizer idea (strip what
+ * reads terribly aloud) is seeded, and the number work here is fresh.
+ *
+ * LOCATION (C5 decision, docs/decisions.md 2026-07-18): landed at C3 as web/lib/voice/
+ * speakable.ts; RELOCATED here because the TTS text pipeline runs API-SIDE (the relay applies
+ * sanitize -> normalize -> chunk to `say` text before the provider). FIXED-1 forbids api
+ * importing web/ and web importing api/, shared/ is contract-only (zod schemas + descriptor
+ * maps - a text transform is not contract), and a cross-boundary parity test would itself
+ * violate the lint zones. The web playback client consumes AUDIO, not text, so the ONE copy
+ * lives here; the C3 tests moved with it (api/tests/voice/speakable.test.ts), unchanged.
  *
  * normalizeNumbersPt / normalizeNumbersEn rewrite digit forms into words the TTS voices read
  * naturally: cardinals ("16" -> "dezasseis" in PT-PT, never pt-BR "dezesseis"), currency
@@ -33,7 +41,7 @@ const PT_HUNDREDS = [
 function ptUnit(n: number, feminine: boolean): string {
   if (feminine && n === 1) return 'uma';
   if (feminine && n === 2) return 'duas';
-  return PT_UNITS[n];
+  return PT_UNITS[n]!; // n < 20, caller-guaranteed
 }
 
 /** 0..999 in PT-PT words; feminine agreement for 1/2 and the hundreds. */
@@ -42,12 +50,12 @@ function ptSubThousand(n: number, feminine: boolean): string {
   if (n < 100) {
     const t = Math.floor(n / 10);
     const r = n % 10;
-    return r === 0 ? PT_TENS[t] : `${PT_TENS[t]} e ${ptUnit(r, feminine)}`;
+    return r === 0 ? PT_TENS[t]! : `${PT_TENS[t]} e ${ptUnit(r, feminine)}`;
   }
   if (n === 100) return 'cem';
   const h = Math.floor(n / 100);
   const r = n % 100;
-  let hundred = PT_HUNDREDS[h];
+  let hundred = PT_HUNDREDS[h]!; // 1..9 after the n === 100 branch
   if (feminine && h >= 2) hundred = hundred.replace(/os$/, 'as');
   return r === 0 ? hundred : `${hundred} e ${ptSubThousand(r, feminine)}`;
 }
@@ -104,11 +112,11 @@ const EN_UNITS = [
 const EN_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
 
 function enSubThousand(n: number): string {
-  if (n < 20) return EN_UNITS[n];
+  if (n < 20) return EN_UNITS[n]!;
   if (n < 100) {
     const t = Math.floor(n / 10);
     const r = n % 10;
-    return r === 0 ? EN_TENS[t] : `${EN_TENS[t]}-${EN_UNITS[r]}`;
+    return r === 0 ? EN_TENS[t]! : `${EN_TENS[t]}-${EN_UNITS[r]}`;
   }
   const h = Math.floor(n / 100);
   const r = n % 100;
@@ -149,7 +157,7 @@ export function cardinalEn(n: number): string | null {
 /* ------------------------------ shared digit helpers ------------------------------ */
 
 function digitsSpoken(digits: string, units: string[]): string {
-  return digits.split('').map((d) => units[Number(d)]).join(' ');
+  return digits.split('').map((d) => units[Number(d)]!).join(' ');
 }
 
 /** Parse "1.234" / "1,234" style grouped or plain integer strings. */
@@ -207,7 +215,7 @@ const PT_CURRENCY_UNITS: Record<string, { one: string; many: string }> = {
 };
 
 function ptAmount(whole: number, centsRaw: string | undefined, symbol: string): string {
-  const unit = PT_CURRENCY_UNITS[symbol];
+  const unit = PT_CURRENCY_UNITS[symbol]!; // symbol regex-constrained to €/$
   const cents = centsRaw === undefined ? 0 : Number(centsRaw.padEnd(2, '0'));
   const parts: string[] = [];
   if (whole > 0 || cents === 0) {
@@ -326,10 +334,11 @@ const EN_ORDINAL_SPECIAL: Record<number, string> = {
 
 /** Day-of-month ordinal, 1..31. */
 function ordinalEn(n: number): string {
-  if (EN_ORDINAL_SPECIAL[n]) return EN_ORDINAL_SPECIAL[n];
+  const special = EN_ORDINAL_SPECIAL[n];
+  if (special) return special;
   if (n > 20) {
     const unit = n % 10;
-    const tens = EN_TENS[Math.floor(n / 10)];
+    const tens = EN_TENS[Math.floor(n / 10)]!; // 21..31 -> index 2..3
     return unit === 0 ? `${tens.replace(/y$/, 'ie')}th` : `${tens}-${ordinalEn(unit)}`;
   }
   return `${EN_UNITS[n]}th`;
@@ -341,7 +350,7 @@ function yearEn(y: number): string {
   const hi = Math.floor(y / 100);
   const lo = y % 100;
   if (lo === 0) return `${enSubThousand(hi)} hundred`;
-  if (lo < 10) return `${enSubThousand(hi)} oh ${EN_UNITS[lo]}`;
+  if (lo < 10) return `${enSubThousand(hi)} oh ${EN_UNITS[lo]!}`;
   return `${enSubThousand(hi)} ${enSubThousand(lo)}`;
 }
 
@@ -351,7 +360,7 @@ const EN_CURRENCY_UNITS: Record<string, { one: string; many: string }> = {
 };
 
 function enAmount(whole: number, centsRaw: string | undefined, symbol: string): string {
-  const unit = EN_CURRENCY_UNITS[symbol];
+  const unit = EN_CURRENCY_UNITS[symbol]!; // symbol regex-constrained to €/$
   const cents = centsRaw === undefined ? 0 : Number(centsRaw.padEnd(2, '0'));
   const parts: string[] = [];
   if (whole > 0 || cents === 0) {
@@ -422,7 +431,7 @@ export function normalizeNumbersEn(text: string): string {
     const hour = Number(h);
     const minute = Number(min);
     if (minute === 0) return `${cardinalEn(hour)} o'clock`;
-    if (minute < 10) return `${cardinalEn(hour)} oh ${EN_UNITS[minute]}`;
+    if (minute < 10) return `${cardinalEn(hour)} oh ${EN_UNITS[minute]!}`;
     return `${cardinalEn(hour)} ${enSubThousand(minute)}`;
   });
 

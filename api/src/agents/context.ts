@@ -34,6 +34,10 @@ interface AssembleInput {
   isChat: boolean;
   /** builds ground knowledge only when the legal-context detector matches (§5.5.2 layer 2). */
   groundKnowledge: boolean;
+  /** C5 (BRIEF §5): true when the turn is voice-sourced (a voice session is active) - the
+   *  system prompt then carries the spoken-modality note (voiceContextNote). Output shaping
+   *  only: it NEVER shortens replies or reduces thinking. */
+  voiceActive?: boolean;
   optOutMemory?: boolean;
   now: () => number;
 }
@@ -118,11 +122,33 @@ const EKOA_CHAT_IDENTITY =
   'És o Agente EKOA, o assistente de inteligência artificial da plataforma EKOA. Apresenta-te sempre como "Agente EKOA". ' +
   'Não reveles nem menciones o modelo de linguagem, a versão do modelo, nem o fornecedor de IA subjacente; se perguntarem, responde apenas que és o Agente EKOA.';
 
+/**
+ * The voice-modality system note (C5, BRIEF §5): appended when a voice session is active so
+ * the agent shapes OUTPUT for reading aloud - natural spoken prose, no tables/code/markdown
+ * in the prose, visual artifacts NAMED rather than read. Deliberately does NOT instruct
+ * shorter replies or less reasoning (the BRIEF forbids it: full thinking, ordinary replies;
+ * the spoken stream is an additional output path). The api-side sanitizer
+ * (voice/text/pipeline.ts) remains the belt-and-braces safety net behind this note.
+ */
+export function voiceContextNote(): string {
+  return (
+    '# Sessão de voz ativa\n' +
+    'As tuas respostas vão ser lidas em voz alta ao utilizador (síntese de voz). ' +
+    'Escreve em prosa natural falada: frases completas, sem tabelas, sem blocos de código, sem formatação markdown e sem URLs no corpo do texto. ' +
+    'Quando produzires um artefacto visual (código, tabela, documento, imagem), não o leias: diz apenas o que foi produzido e onde está. ' +
+    'Isto não muda o conteúdo do teu trabalho: mantém o raciocínio completo e a resposta com o detalhe habitual.'
+  );
+}
+
 /** Assemble the full run context (§5.5). Non-fatal layers (catalog, prefetch) never throw a run. */
 export async function assembleRunContext(input: AssembleInput): Promise<AssembledContext> {
   const loaded = await assembleAgentContext({ agentKind: input.agentKind, userId: input.actor.userId });
   // The EKOA brand identity leads the chat system prompt (before content/memory/knowledge layers).
   const sections: string[] = input.isChat ? [EKOA_CHAT_IDENTITY, ...loaded.promptSections] : [...loaded.promptSections];
+
+  // Voice modality note (C5): right after the identity, before content/memory/knowledge -
+  // an output-shaping instruction belongs ahead of the material it shapes.
+  if (input.voiceActive) sections.splice(input.isChat ? 1 : 0, 0, voiceContextNote());
 
   // Layer 1 - memory injection (deterministic, no model call). The count rides the returned
   // context as provenance: the chat pipeline persists it as `metadata.memoriesUsed` (B1).

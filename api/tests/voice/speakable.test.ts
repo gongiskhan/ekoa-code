@@ -1,11 +1,11 @@
-// @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { cardinalEn, cardinalPt, normalizeNumbersEn, normalizeNumbersPt } from '@/lib/voice/speakable';
+import { cardinalEn, cardinalPt, normalizeNumbersEn, normalizeNumbersPt } from '../../src/voice/text/speakable.js';
 
 /**
  * C3 (mega-run 20260717-190134): speakable number normalization for the C5 TTS text pipeline.
  * PT-PT forms are binding (BRIEF §5: "dezasseis", never pt-BR "dezesseis"); long-scale 10^9 is
- * "mil milhões". Pure string transforms, zero mocks.
+ * "mil milhões". Pure string transforms, zero mocks. Moved verbatim from web/__tests__/voice/
+ * with the module's C5 relocation to api/src/voice/text/ (see the module header + decisions.md).
  */
 
 describe('cardinalPt (PT-PT words)', () => {

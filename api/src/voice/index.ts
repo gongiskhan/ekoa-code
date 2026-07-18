@@ -9,6 +9,10 @@
  *    client-configurable via the upgrade query, clamped 1000..20000).
  *  - WS /api/voice/tts-stream: client sends {say, lang} control messages; the relay streams
  *    synthesized audio frames back; {clear} aborts the current synthesis - the barge-in path.
+ *    The C5 text pipeline (text/pipeline.ts) runs on every `say` BEFORE the provider:
+ *    sanitize (strip markdown/code/tables/images) -> normalize numbers (PT-PT/EN words) ->
+ *    sentence-chunk; the relay synthesizes per-sentence, so each sentence arrives as its own
+ *    complete audio container and playback starts at the first sentence, not the whole reply.
  *
  * Auth mirrors the WS/SSE token-query idiom (CONV-1, the streaming/ carve-out shape): the
  * platform session JWT rides `?token=` and is verified at upgrade time through the ONE verify
@@ -53,6 +57,7 @@ import type { JwtClaims } from '../auth/jwt.js';
 import { recordUsageCounters } from '../billing/index.js';
 import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 import { resolveSttProvider, resolveTtsProvider } from './providers.js';
+import { speakableChunks } from './text/pipeline.js';
 import {
   openVoiceSession,
   closeVoiceSession,
@@ -363,18 +368,27 @@ function handleTtsConnection(ws: WebSocket, claims: JwtClaims, log: VoiceLog, de
     latency.onSay();
     send({ type: 'speaking', turnId, lang: parsed.lang, ttsProvider: resolved.key });
 
+    // C5 text pipeline: sanitize -> normalize -> sentence-chunk BEFORE synthesis. Billing
+    // stays on characters SUBMITTED by the client (above, the C2 counter semantics); the
+    // provider receives the speakable units. An empty result (say text was only markdown/
+    // code) completes the turn without synthesizing - nothing speakable is not an error.
+    const sentences = speakableChunks(parsed.text, parsed.lang);
+
     void (async () => {
       try {
-        const chunks = resolved.provider.synthesizeStream(parsed.text, parsed.lang, controller.signal, {
-          orgId: record.orgId,
-          userId: record.userId,
-          sessionId: record.sessionId,
-        });
-        for await (const chunk of chunks) {
+        for (const sentence of sentences) {
           if (controller.signal.aborted) return;
-          latency.onFirstAudio();
-          const sent = await sendAudioWithBackpressure(ws, chunk, controller.signal);
-          if (!sent) return; // aborted or socket closed while sending/waiting
+          const chunks = resolved.provider.synthesizeStream(sentence, parsed.lang, controller.signal, {
+            orgId: record.orgId,
+            userId: record.userId,
+            sessionId: record.sessionId,
+          });
+          for await (const chunk of chunks) {
+            if (controller.signal.aborted) return;
+            latency.onFirstAudio();
+            const sent = await sendAudioWithBackpressure(ws, chunk, controller.signal);
+            if (!sent) return; // aborted or socket closed while sending/waiting
+          }
         }
         if (!controller.signal.aborted) {
           send({ type: 'audio_end', turnId });
