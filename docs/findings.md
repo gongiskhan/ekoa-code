@@ -138,6 +138,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Product bugs
 
+- **`featured-update-decision-pending`** (medium, director decision owed - brief note B). The
+  featured-update badge flow has no REST path: the seeder's `customized`/`updateAvailable` flags
+  live in the artifact `data` bag, but (a) PATCH `/api/v1/artifacts/:id` strips
+  `RESERVED_ARTIFACT_DATA_KEYS` (so a test/seeder cannot plant `updateAvailable`), and (b) no
+  artifacts REST response returns the `data` bag (so nothing can read it back). The migrated
+  `web/e2e/artifacts-apps-section.spec.ts` badge test stays HONESTLY RED (its KNOWN GAP comments
+  point here) until the director picks: expose a typed update-state surface + a dev-guarded
+  simulate route, or restructure/retire the badge test. See
+  docs/e2e-harness-remediation-brief.md note B.
 - **`restoreVersion-featured-500`** (medium). `restoreVersion` on a *featured* artifact still 500s.
   (The broader versions-500 - never-built artifacts and the featured list - was fixed 2026-07-11; this
   case remains.)
@@ -172,6 +181,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   master toggle, simuladores-trabalho missing ../ekoa-data/apps source) re-confirmed with
   identical signatures - none touch the run's diffs; remediation stays owed per
   docs/e2e-harness-remediation-brief.md (notes B/C still need a director decision).
+  RE-OBSERVED 2026-07-18 (e2e-harness remediation, second verified e2e:full run: 288 passed /
+  6 failed / 1 skipped (live-bridge LIVE gate) / 1 did-not-run): group (a) is now largely CLOSED
+  by the band2 REST migration - update-from-bundle, vertical-profile and artifacts-apps-section
+  are green (the badge test is an annotated `test.fail()` expected-fail pending the note-B
+  director decision; update-from-bundle saw one Escape-close flake in run 1, green in run 2 -
+  watch). Still red from (a): artifact-backend-panel:147 (dry-run poll surface) and
+  onboarding :122/:175 (welcome renders 2 chips; the 'Sou advogado(a) num escritório' chip is
+  missing - :147 re-entry is the serial did-not-run sibling). Group (b) re-confirmed with
+  identical signatures (pages-manage search input, integrations-sections webhook rows,
+  integrations-pipedream master toggle). Group (c): simuladores-trabalho now sits in the
+  ledger's `deferred` map (external APP_DIR source; director decision pending); demos skips as
+  `portfile-conflicted` beside a live stack. Net: 6 red specs, ALL product gaps - zero
+  harness/migration defects remain.
 
 - **`branding-tab-stale-after-research`** (minor, UI freshness). Right after a brand research
   completes, the Marca tab can render the PREVIOUS palette (local component state seeded at page
@@ -208,6 +230,81 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 - **`remote-tag-f25`** (operator action). The remote tag `batch1-f25` still points at the broken
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
+
+## Recently fixed - 2026-07-18 e2e-harness remediation (journeys lane bring-up)
+
+- **`j1-auth-revoked-token-reuse`** (probe defect, surfaced by the new `journeys:credless` lane) -
+  `api/tests/journeys/j1-auth.mjs` logged the admin out at J1c (proving server-side revocation) and
+  then kept using that same revoked token for J1e-J1i, so org/user creation 401'd
+  ("Sessão expirada"). The probe predates logout revocation actually working; the tail had only ever
+  "passed" because the revoked token made J1h a no-op too. Fixed: re-login after the revocation
+  check (recorded as `J1c.relogin`).
+- **`j1-auth-stale-role-builder`** (probe defect, unmasked by the fix above) - the probe created its
+  org user with `role: 'builder'`; the product enum is `super-admin | org-admin | user`
+  (400 VALIDATION_FAILED). Fixed to `role: 'user'`.
+- **`j1-auth-password-restore-poison`** (probe defect, lane-wide blast radius) - with a live token,
+  J1h's password change (tmp12345 -> tmp12345x) now really succeeds, which bumps the token epoch and
+  revokes the old token - so the probe's restore call (made with that old token, status ignored)
+  silently failed and left admin=tmp12345x, crashing every later probe on the same api boot with
+  "Credenciais inválidas". Fixed: restore runs on a fresh session obtained with the NEW password and
+  is verified by a final login (`J1h.restore` PASS/FAIL - a failed restore is now loud, not a
+  downstream mystery). Lane green after all three: 6/6 probes, zero FAIL lines.
+
+## Recently fixed - 2026-07-18 e2e-harness remediation (e2e:full bring-up + review fixes)
+
+- **`csp-connect-src-ignores-harness-origin`** (HIGH for the test estate, root cause of a full-lane
+  wipeout) - `web/next.config.ts` `headers()` built the CSP `connect-src` from the RAW
+  `process.env.NEXT_PUBLIC_API_URL`, which only garrison's driver sets - it did NOT go through
+  `resolveApiUrl()`. Under the committed `e2e:full` harness (which sets `EKOA_E2E_API_ORIGIN` only)
+  the served CSP shipped WITHOUT the api origin, so the browser blocked every api fetch: ALL UI
+  logins failed with "Failed to fetch" while request-context API calls (no CSP) kept passing - the
+  first harness run's signature. Fixed by resolving once (`const API_URL = resolveApiUrl()`) and
+  using it for BOTH the client-bundle env inline and the CSP origins. Ironic upside: the bug acted
+  as a safety interlock - the hazard specs that would have mutated the live-stack DB all died at
+  login before any mutating step.
+- **`e2e-teardown-killed-check-dead`** (harness defect, review finding) - `e2e-with-server.mjs`'s
+  SIGKILL escalation guarded on `server.killed`, which only records that a signal was SENT (it is
+  true right after the SIGTERM), so the escalation could never fire and a SIGTERM-ignoring server
+  leaked. Now guards on `exitCode === null && signalCode === null`. All three harnesses also now
+  spawn tracked children `detached: true` and kill PROCESS GROUPS (`kill(-pid)`), so grandchildren
+  (next dev, mongod, playwright) die with their wrapper (`scripts/lib/harness.mjs`).
+- **`e2e-waitforline-buffer-loss`** (harness defect) - the copy-pasted waitForLine consumed chunks
+  per-wait: a gate line arriving in the same chunk as (or before) the previous gate's match was
+  lost, hanging the next wait until timeout; and each wait re-attached a permanent echo listener,
+  double-printing all later output. Replaced by the shared buffered watcher (single persistent
+  echo + accumulated transcript scanned by every wait) in `scripts/lib/harness.mjs`, with a
+  `failPattern` fast-reject so a failed featured prebuild rejects immediately instead of burning
+  the 10-minute gate.
+- **`journeys-credentialed-ekoa-base-drift`** (harness hardening, review finding) - the
+  credentialed lane's base URL honored a shell `EKOA_BASE`, so a lingering export would silently
+  retarget the whole lane at another server. Now pinned to boot-b's contractual `:4111` proxy.
+- **`band4-specs-hardcoded-live-origin`** (test-estate hazard, review finding) - five gap-plan
+  specs (branding-colors, device-approval, automation-deterministic, live-bridge,
+  privacy-grants-ledger) reached the api via `backend.port`/hardcoded `:4111`/`EKOA_API_URL`, so
+  under the harness-beside-live-stack topology their REAL mutations (org PATCH, device flows,
+  automations, sessions) would have landed on the live dev stack's DB. All five now honor
+  `EKOA_E2E_API_ORIGIN` first. The frozen band1 `demos` spec (same hazard, unfixable bytes) is
+  handled by the ledger's new `portfileBound` skip; `simuladores-trabalho` moved to the ledger's
+  new `deferred` map (external APP_DIR source; director decision pending). Both mechanisms are
+  printed + censused, never silent (docs/testing.md).
+- **`integration-builder-stub-hardcoded-acao`** (test defect, found by harness run 1) - the
+  spec's stub CORS headers hardcoded `access-control-allow-origin: http://localhost:3000`, so
+  under the harness's web port (:3001) the browser blocked both stubs (the SSE intent event and
+  the builder chat POST) at CORS and the whole journey failed at the panel-open step. Fixed:
+  `corsHeaders(route)` reflects the request's Origin (docs/testing.md CORS note).
+- **`privacy-grants-stub-cors-missing`** (test defect x2, found by harness run 1) - the
+  connected-presence stub (`**/api/v1/bridge/status`) fulfilled with NO CORS headers at all, so
+  the presence poll failed silently (`use-bridge-presence` keeps last state on fetch failure)
+  and the page rendered the honest not-installed state instead of the grants; and the in-spec
+  stub daemon hardcoded ACAO `:3000`. Both now reflect the request Origin and answer the
+  OPTIONS preflight.
+- **`e2e-full-missing-app-origin`** (harness completeness, found by harness run 1) - the api's
+  `/apps/*` frame-ancestors allowlist (`security-headers.ts` `dashboardOrigins()`) defaults to
+  the dev dashboard `:3000`, so the harness web origin was never allowlisted and the artifact
+  preview overlay iframe rendered EMPTY (regressions-dashboard red, no console error - the
+  frame is refused by the browser). `scripts/e2e-full.mjs` now passes
+  `EKOA_APP_ORIGIN=<harness web origin>` to the api spawn. All three fixes verified green in
+  run 2 (288 passed; the only reds are the documented product-gap set).
 
 ## Recently fixed - 2026-07-18 legal-engines citation audit (run 20260717-202309-d797918a)
 

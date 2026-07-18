@@ -55,6 +55,34 @@ ledger (a band) in the same change that adds it, or the census goes red - this i
 forces new behavior to travel with a registered spec. `npm run gate:ledger` runs the census-only
 lane; `npm run e2e` runs `--run`.
 
+**Web lane (`needsWeb`/`webExempt`):** bands whose specs drive the Next.js dashboard (relative
+`page.goto`) carry `needsWeb: true`; a per-band `webExempt` array opts individual specs back into the
+api-only lane (band1 exempts `legal-shared-drift`, a pure file census). Unless `EKOA_E2E_WEB=1`, due
+`needsWeb` specs print `skipped (web lane - run npm run e2e:full)` - reasoned and censused, never
+silent, never red. `npm run e2e:full` boots the full stack and runs them for real. The harness's
+api(proxy) origin is threaded through the single env var `EKOA_E2E_API_ORIGIN` (honored by
+`next.config.ts` - including the CSP `connect-src` it serves - the e2e helpers, global-setup, the
+band4 specs that talk to the api directly, and the ledger runner; deliberately not the generic
+`NEXT_PUBLIC_API_URL`, which dev does not honor).
+
+Two further per-spec ledger mechanisms, both printed and censused, never silent:
+
+- **`portfileBound`** (per-band array): specs whose *frozen* bytes read the committed `backend.port`
+  file (band1 `demos` only). When the web lane runs with an `EKOA_E2E_API_ORIGIN` whose port differs
+  from `backend.port` - i.e. the harness is running beside a live dev stack that owns the portfile -
+  these specs are skipped as `portfile-conflicted` instead of silently mutating the live stack's
+  database. Full coverage of them requires running `e2e:full` with the live stack stopped (default
+  ports), where the portfile matches the harness.
+- **`deferred`** (per-band `{spec: reason}` map): specs censused on disk but due in NO lane until
+  the entry is removed - each carries its reason inline in the ledger (currently band1
+  `simuladores-trabalho`: its external APP_DIR app source is not in the repo; director decision
+  pending, see `docs/findings.md`).
+
+**CI posture (honest note):** no CI lane currently sets `EKOA_E2E_WEB=1`, so the `needsWeb` estate
+runs only when an operator invokes `npm run e2e:full` manually. That is a deliberate, documented
+gap, not an oversight - promoting `e2e:full` to a scheduled or per-PR CI job is an open director
+decision (build cost vs. dashboard regression coverage).
+
 ## Contract gates
 
 - **schema-coverage** - every `shared/` descriptor is COVERED (hand-maintained allowlist) or PENDING
@@ -77,9 +105,23 @@ lane; `npm run e2e` runs `--run`.
 - `npm run test` - vitest across workspaces (no build).
 - `npm run e2e` - the suite-ledger `--run` lane (Playwright + node drivers).
 - `npm run e2e:server` (`scripts/e2e-with-server.mjs`) - boots `dev-api.mjs --built` (build first),
-  waits for the featured-app prebuild, runs the ledger e2e. Carries documented committed-baseline debt
-  (band1 dashboard specs need the separately-running Next web; band2 retired-`/api/v1/action` specs;
-  the deferred `erp-*` CUTOVER fork). Not a regression - see `docs/known-flakes.md`.
+  waits for the featured-app prebuild, runs the ledger e2e api-only: `needsWeb` specs defer with
+  `skipped (web lane)`; the `erp-*` CUTOVER fork stays deferred.
+- `npm run e2e:full` (`scripts/e2e-full.mjs`) - the full-stack web lane: boots `dev-api.mjs --built`,
+  a zero-dep CORS proxy, and `next dev`, then runs the ledger with `EKOA_E2E_WEB=1` so the dashboard
+  (`needsWeb`) specs execute too. Ports parameterized via `EKOA_E2E_API_PORT`/`EKOA_E2E_PROXY_PORT`/
+  `EKOA_E2E_WEB_PORT` (defaults 4211/4111/3000) with a port-free preflight, so it can run beside a
+  live dev stack on overridden ports (where the `portfileBound` specs skip; see above). The web app
+  builds into an isolated dist dir (`NEXT_BUILD_DIST_DIR=.next-e2e`) so Next's per-distDir dev lock
+  cannot collide with a live `next dev`; the harness warns if Next regenerated
+  `web/next-env.d.ts`/`web/tsconfig.json` against that dir (git-restore them, never commit them).
+  Never run `e2e:full` and `e2e:server` concurrently - they share Playwright's `test-results/`.
+- `npm run journeys:credless` / `npm run journeys:credentialed` (`scripts/journeys-run.mjs`) - the
+  journey-probe lanes (ledger `journeys` section; never run through `suite-ledger-run.mjs`, never
+  ratcheted). Credless is per-PR-capable: api alone on `EKOA_JOURNEYS_PORT` (default 4123), 6 probes,
+  a lane failure = probe nonzero exit or a `FAIL ` line. Credentialed is opt-in only (operator
+  keychain credential, real model egress via `boot-b.mjs`), never a per-PR gate. Both enforce a
+  two-way disk<->ledger census over `api/tests/journeys/`.
 - Security gates, out of the lane: `gate:sast` (semgrep), `gate:secrets` (gitleaks), `gate:audit`
   (`npm audit --audit-level=high`).
 
