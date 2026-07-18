@@ -6,6 +6,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`insolvencia-watch-at-least-once`** (OPEN, LOW, quality — run 20260717-190134 E4). The Citius
+  insolvência polling watcher persists a seen-ref after each durable watch.hit emit, but the
+  emit-then-persist is at-least-once not atomic: if `updateWatch` itself fails after the event
+  write, that one publication can re-emit a duplicate dossiê timeline entry on the next poll (never
+  data loss, never cross-org). The seenRefs cap (500 newest) likewise assumes the portal's active
+  window stays under the cap. Both are documented v1 limits (fixture-driven; the real-portal use is
+  the attended signed-in-connector follow-up run per BRIEF §8 run-2 note); a windowed cursor +
+  idempotent event write is the follow-up hardening.
+
 ### Part B live proof + walkthrough (run 20260717-190134-9d4c1cbf)
 
 - **`answer-channel-preamble-leak`** (OPEN, MEDIUM, quality). A live chat turn's sheet revision 1

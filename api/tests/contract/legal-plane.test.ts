@@ -24,6 +24,7 @@ import type { SaveBlobFn } from '../../src/legal/portal-connectors.js';
 const citiusFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/citius-consulta.html', import.meta.url)));
 const certidaoComercialFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/portal-certidao-comercial.html', import.meta.url)), 'utf-8');
 const certidaoInvalidoFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/portal-certidao-invalido.html', import.meta.url)), 'utf-8');
+const insolvenciaFixture = readFileSync(fileURLToPath(new URL('../e2e/fixtures/citius-insolvencia-v1.html', import.meta.url)), 'utf-8');
 
 // --- Stub injected deps -----------------------------------------------------
 // Allowlisted apps map to a registered owner; a few resolve to a deactivated /
@@ -72,6 +73,21 @@ const savedBlobs: Array<{ appId: string; name: string }> = [];
 const saveBlob: SaveBlobFn = async (appId, name, contentType, bytes) => {
   savedBlobs.push({ appId, name });
   return { fileId: `blob-${savedBlobs.length}`, url: `/api/app-files/${appId}/blob-${savedBlobs.length}`, mime: contentType, size: bytes.length };
+};
+
+// mega-run E4 - always answers with the same insolvência fixture regardless of the queried
+// subject (a per-subject query result page in real life; the fixture already IS that page).
+const insolvenciaBuf = Buffer.from(insolvenciaFixture, 'utf-8');
+const insolvenciaFetch: CitiusFetchImpl = async (): Promise<FetchLikeResponse> => ({
+  status: 200,
+  ok: true,
+  headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
+  arrayBuffer: async () => insolvenciaBuf.buffer.slice(insolvenciaBuf.byteOffset, insolvenciaBuf.byteOffset + insolvenciaBuf.byteLength) as ArrayBuffer,
+});
+// One pre-registered watch on 'owner-active' (mirrors documentos/eventos seeding above): a
+// dossiê with a watched counterparty, ready for the manual poll route to exercise.
+const insolvenciaWatches: Record<string, Array<Record<string, unknown>>> = {
+  'owner-active': [{ id: 'watch-1', processoId: 'proc-insolvencia', subjects: ['Contraparte Exemplo, Lda'], seenRefs: [] }],
 };
 
 const brandFor = async (appIdOrSlug: string): Promise<OrgBrand | null> => {
@@ -154,6 +170,15 @@ beforeAll(async () => {
         listEventos: async (a, processoId) => (portalEventos[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
       },
       portalCertidao: { saveBlob, fetchImpl: certidaoFetch },
+      insolvenciaWatch: {
+        listWatches: async (a, processoId) => (insolvenciaWatches[a.ownerUserId] ?? []).filter((r) => r.processoId === processoId),
+        updateWatch: async (a, watchId, patch) => {
+          const rows = insolvenciaWatches[a.ownerUserId] ?? [];
+          const idx = rows.findIndex((r) => r.id === watchId);
+          if (idx >= 0) rows[idx] = { ...rows[idx], ...patch };
+        },
+        fetchImpl: insolvenciaFetch,
+      },
     }),
   );
   app.use(adobeSignRouter({ resolveApp: async (h) => APPS[h] ?? null }));
@@ -312,6 +337,31 @@ describe('legal-suite — happy paths validate against the shared descriptor', (
     expect(readBody.documentos).toHaveLength(1);
     expect(readBody.eventos.some((e) => (e as { kind: string }).kind === 'document.retrieved')).toBe(true);
   });
+
+  it('POST /api/legal/portal/insolvency/poll (mega-run E4) polls the registered watch -> one watch.hit event, validated against the shared descriptor', async () => {
+    const res = await appApi('/api/legal/portal/insolvency/poll', 'legal-citius', {
+      method: 'POST',
+      body: JSON.stringify({ processoId: 'proc-insolvencia' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; processoId: string; newEvents: Array<{ kind: string; source: string }> };
+    expect(body.ok).toBe(true);
+    expect(body.newEvents).toHaveLength(1);
+    expect(body.newEvents[0]).toMatchObject({ kind: 'watch.hit', source: 'citius-insolvencia' });
+    expect(servedAppEndpoints.legalPortalInsolvencyPoll!.response!.safeParse(body).success).toBe(true);
+
+    // Rendered on the GET read surface too.
+    const read = await appApi('/api/legal/portal?processoId=proc-insolvencia', 'legal-citius');
+    const readBody = (await read.json()) as { eventos: Array<{ kind: string }> };
+    expect(readBody.eventos.some((e) => e.kind === 'watch.hit')).toBe(true);
+
+    // A second poll of the same fixture is idempotent - no duplicate event.
+    const again = await appApi('/api/legal/portal/insolvency/poll', 'legal-citius', {
+      method: 'POST',
+      body: JSON.stringify({ processoId: 'proc-insolvencia' }),
+    });
+    expect(((await again.json()) as { newEvents: unknown[] }).newEvents).toHaveLength(0);
+  });
 });
 
 describe('GET /api/legal/portal — gate (mega-run E1, same discipline as citius)', () => {
@@ -381,6 +431,38 @@ describe('POST /api/legal/portal/certidao — gate + validation + failure (mega-
 
   it('missing X-Ekoa-App-Id header -> 400', async () => {
     const res = await api('/api/legal/portal/certidao', { method: 'POST', body: '{}' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Missing X-Ekoa-App-Id header' });
+  });
+});
+
+describe('POST /api/legal/portal/insolvency/poll — gate + validation (mega-run E4)', () => {
+  const post = (body: Record<string, unknown>) =>
+    appApi('/api/legal/portal/insolvency/poll', 'legal-citius', { method: 'POST', body: JSON.stringify(body) });
+
+  it('missing processoId -> 400 PT', async () => {
+    const res = await post({});
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Parâmetro "processoId" em falta' });
+  });
+
+  it('a dossiê with no registered watch -> 200, no events (never a 404/500)', async () => {
+    const res = await post({ processoId: 'proc-no-watch' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, processoId: 'proc-no-watch', newEvents: [] });
+  });
+
+  it('non-allowlisted app -> 403 PT (same gate as portal/certidao)', async () => {
+    const res = await appApi('/api/legal/portal/insolvency/poll', 'not-a-legal-app', {
+      method: 'POST',
+      body: JSON.stringify({ processoId: 'proc-x' }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Aplicação não autorizada para consultar o dossiê' });
+  });
+
+  it('missing X-Ekoa-App-Id header -> 400', async () => {
+    const res = await api('/api/legal/portal/insolvency/poll', { method: 'POST', body: '{}' });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Missing X-Ekoa-App-Id header' });
   });

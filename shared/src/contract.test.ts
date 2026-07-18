@@ -445,6 +445,32 @@ describe('shared contract - security ratchet (G12)', () => {
     expect(PortalCertidaoResponse.safeParse(res).success).toBe(true);
   });
 
+  it('InsolvenciaPollRequest/Response represent POST /api/legal/portal/insolvency/poll (mega-run E4, BRIEF §8 item 4)', async () => {
+    const { InsolvenciaPollRequest, InsolvenciaPollResponse } = await import('./portal.js');
+
+    expect(InsolvenciaPollRequest.safeParse({ processoId: 'proc-1' }).success).toBe(true);
+    expect(InsolvenciaPollRequest.safeParse({ processoId: '' }).success).toBe(false);
+    expect(InsolvenciaPollRequest.safeParse({}).success).toBe(false);
+
+    const res = {
+      ok: true,
+      processoId: 'proc-1',
+      newEvents: [
+        {
+          source: 'citius-insolvencia',
+          kind: 'watch.hit',
+          subjectRef: 'Contraparte Lda',
+          dossierRef: 'proc-1',
+          observedAt: '2026-07-18T11:00:00.000Z',
+          payload: { ato: 'Sentença de insolvência', mensagem: 'Nova publicação para a contraparte Contraparte Lda' },
+        },
+      ],
+    };
+    expect(InsolvenciaPollResponse.safeParse(res).success).toBe(true);
+    // A poll with no new publications answers an empty array, not an absent field.
+    expect(InsolvenciaPollResponse.safeParse({ ...res, newEvents: [] }).success).toBe(true);
+  });
+
   it('RegistoEntry represents the portal vocabulary rows (mega-run E1, A5 memo)', async () => {
     const { RegistoEntry } = await import('./registo.js');
     const retrieved = {

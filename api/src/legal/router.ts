@@ -33,6 +33,7 @@ import { consultarCitius, type FetchImpl as CitiusFetchImpl } from './citius.js'
 import { getSttProvider, meterStt, type SttUsageRecorder } from './transcricao.js';
 import { listPortalDossierRecords, type PortalSpineDeps } from './portal.js';
 import { retrieveCertidao, type SaveBlobFn, type FetchImpl as PortalCertidaoFetchImpl } from './portal-connectors.js';
+import { pollInsolvencyWatches, type InsolvencyWatchSpineDeps, type FetchImpl as InsolvenciaFetchImpl } from './insolvencia-watch.js';
 import type { ActivationState } from '../data/activation.js';
 import type { ActivityActor } from '../data/activity.js';
 import type { PortalCertidaoSource } from '@ekoa/shared';
@@ -85,6 +86,13 @@ export interface LegalRouterDeps {
     fetchImpl?: PortalCertidaoFetchImpl;
     baseUrls?: Partial<Record<PortalCertidaoSource, string>>;
   };
+  /** legal/insolvencia-watch owner-spine seams (mega-run E4): the citius_watches satellite
+   *  collection + an optional fetch/base-URL override for tests. Absent `insolvenciaWatch`
+   *  => the manual poll route 503s (same posture as `portal`/`portalCertidao` above). */
+  insolvenciaWatch?: InsolvencyWatchSpineDeps & {
+    fetchImpl?: InsolvenciaFetchImpl;
+    baseUrl?: string;
+  };
 }
 
 export function legalRouter(deps: LegalRouterDeps): Router {
@@ -100,6 +108,7 @@ export function legalRouter(deps: LegalRouterDeps): Router {
   const citiusLimited = makeAppRateLimiter(6, 20, 60_000, now);
   const portalLimited = makeAppRateLimiter(20, 60, 60_000, now);
   const portalCertidaoLimited = makeAppRateLimiter(10, 30, 60_000, now);
+  const insolvenciaPollLimited = makeAppRateLimiter(10, 30, 60_000, now);
 
   const noStore = (res: Response): void => {
     res.setHeader('Cache-Control', 'no-store');
@@ -401,6 +410,55 @@ export function legalRouter(deps: LegalRouterDeps): Router {
       res.json({ ok: true, source, record: result.record, document: result.document });
     } catch {
       res.status(503).json({ error: 'Consulta de certidão indisponível' });
+    }
+  });
+
+  // --- POST /api/legal/portal/insolvency/poll (mega-run E4) ------------------
+  // No scheduler exists yet (insolvencia-watch.ts doc comment records the decision): this
+  // route runs ONE poll cycle for a single dossiê so a test/gate/future UI action can trigger
+  // a watcher event deterministically. The operator/cron invokes `pollInsolvencyWatches`
+  // directly, looping dossiês, for the scheduled path.
+  r.post('/api/legal/portal/insolvency/poll', async (req: Request, res: Response) => {
+    noStore(res);
+    const app = await requireLegalSuiteApp(req, res, gateDeps, {
+      allowed: PORTAL_ALLOWED_APPS,
+      notAllowedMessage: 'Aplicação não autorizada para consultar o dossiê',
+      requireRegistered: true,
+    });
+    if (!app) return;
+    if (insolvenciaPollLimited(app.appId)) {
+      res.status(429).json({ error: 'Demasiados pedidos de vigilância de insolvência. Tente novamente dentro de um minuto.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { processoId?: unknown };
+    const processoId = String(body.processoId || '').trim();
+    if (!processoId) {
+      res.status(400).json({ error: 'Parâmetro "processoId" em falta' });
+      return;
+    }
+    if (!deps.portal || !deps.insolvenciaWatch) {
+      res.status(503).json({ error: 'Vigilância de insolvência indisponível' });
+      return;
+    }
+    try {
+      const ownerOrgId = await deps.portal.getOwnerOrgId(app.ownerUserId);
+      if (!ownerOrgId) {
+        res.status(503).json({ error: 'Vigilância de insolvência indisponível' });
+        return;
+      }
+      // No independent end-user JWT exists on this served-app plane (header-scoped only) -
+      // the app's own resolved owner is the acting principal, same synthesis as the certidão
+      // route above.
+      const actor: ActivityActor = { userId: app.ownerUserId, username: app.appId, orgId: ownerOrgId };
+      const result = await pollInsolvencyWatches(app, processoId, actor, {
+        ...deps.portal,
+        ...deps.insolvenciaWatch,
+        now,
+      });
+      res.json(result);
+    } catch {
+      res.status(503).json({ error: 'Vigilância de insolvência indisponível' });
     }
   });
 

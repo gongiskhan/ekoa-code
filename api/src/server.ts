@@ -67,6 +67,7 @@ import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
 import { adobeSignRouter } from './integrations/adobe-sign.js';
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
+import { CITIUS_WATCH_COLLECTION } from './legal/insolvencia-watch.js';
 import { designTokensHandler } from './services/design-tokens.js';
 import { getArtifactScreenshotDir } from './services/artifact-screenshot.js';
 import { appPdfRouter, getArtifactPdfDir } from './apps/pdf.js';
@@ -672,6 +673,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       saveBlob: async (appId, name, contentType, bytes) => {
         const meta = await saveAppFileBlob(appId, name, contentType, bytes);
         return { fileId: meta.id, url: `/api/app-files/${appId}/${meta.id}`, mime: meta.type, size: meta.size };
+      },
+    },
+    // Insolvência-watch owner-spine seams (mega-run E4): the citius_watches satellite
+    // collection through the SAME collections engine as documentos/eventos - a watch is
+    // ordinary dossiê data, not a new storage mechanism.
+    insolvenciaWatch: {
+      listWatches: (a, processoId) =>
+        legalEngine.list(spineScope(a), CITIUS_WATCH_COLLECTION).then((rows) => rows.filter((r) => r.processoId === processoId)),
+      updateWatch: async (a, watchId, patch) => {
+        await legalEngine.upsert(spineScope(a), CITIUS_WATCH_COLLECTION, watchId, patch);
       },
     },
   }));

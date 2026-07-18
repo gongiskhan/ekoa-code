@@ -218,6 +218,11 @@ export interface PortalConnectorsConfig {
   certidaoComercialBaseUrl: string;
   certidaoPredialBaseUrl: string;
   certidaoCivilBaseUrl: string;
+  /** Citius público - publicações de insolvência (mega-run E4, BRIEF §8 item 4). Same
+   *  host as `citius.ts`'s `CITIUS_CONSULTA_URL` by default; a distinct env override lets
+   *  tests/dev point the insolvência watcher at a fixture server independently of the
+   *  citations/notifications consulta. */
+  citiusInsolvenciaBaseUrl: string;
 }
 
 export function defaultPortalConnectorsConfig(): PortalConnectorsConfig {
@@ -225,6 +230,7 @@ export function defaultPortalConnectorsConfig(): PortalConnectorsConfig {
     certidaoComercialBaseUrl: process.env.PORTAL_CERTIDAO_COMERCIAL_BASE_URL ?? 'https://certidaopermanente.justica.gov.pt',
     certidaoPredialBaseUrl: process.env.PORTAL_CERTIDAO_PREDIAL_BASE_URL ?? 'https://predialonline.justica.gov.pt',
     certidaoCivilBaseUrl: process.env.PORTAL_CERTIDAO_CIVIL_BASE_URL ?? 'https://civilonline.justica.gov.pt',
+    citiusInsolvenciaBaseUrl: process.env.PORTAL_CITIUS_INSOLVENCIA_BASE_URL ?? 'https://www.citius.mj.pt',
   };
 }
 

@@ -63,3 +63,14 @@ export {
   type RetrieveCertidaoDeps,
   type RetrieveCertidaoResult,
 } from './portal-connectors.js';
+
+// Citius insolvência-publications watcher (mega-run E4; ch03 §3.9).
+export {
+  pollInsolvencyWatches,
+  fetchInsolvenciaPublicacoes,
+  CITIUS_WATCH_COLLECTION,
+  type InsolvencyWatchSpineDeps,
+  type PollInsolvencyDeps,
+  type PollInsolvencyResult,
+  type InsolvenciaSubjectFetchResult,
+} from './insolvencia-watch.js';

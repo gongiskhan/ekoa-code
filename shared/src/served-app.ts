@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { OkResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
-import { PortalDossierRecordsResponse, PortalCertidaoRequest, PortalCertidaoResponse } from './portal.js';
+import { PortalDossierRecordsResponse, PortalCertidaoRequest, PortalCertidaoResponse, InsolvenciaPollRequest, InsolvenciaPollResponse } from './portal.js';
 
 /** An opaque stored document in a served-app collection (shape owned by the app, ch04). */
 export const AppDataDocument = z.record(z.unknown());
@@ -108,6 +108,16 @@ export const servedAppEndpoints = {
     auth: 'header-scoped',
     request: PortalCertidaoRequest,
     response: PortalCertidaoResponse,
+  },
+  // Manual insolvência-watch poll trigger (mega-run E4, BRIEF §8 item 4): no scheduler
+  // exists yet (see InsolvenciaPollRequest doc comment for the decision) - runs one poll
+  // cycle for a single dossiê, same tier + allowlist as the other portal routes.
+  legalPortalInsolvencyPoll: {
+    method: 'POST',
+    path: '/api/legal/portal/insolvency/poll',
+    auth: 'header-scoped',
+    request: InsolvenciaPollRequest,
+    response: InsolvenciaPollResponse,
   },
   signatureSend: { method: 'POST', path: '/api/signature/send', auth: 'header-scoped', request: z.unknown(), response: z.unknown() },
 

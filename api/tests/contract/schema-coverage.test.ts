@@ -117,6 +117,11 @@ const COVERED = new Set<string>([
   // coverage). Additive endpoint on the existing servedApp domain: covering it keeps
   // EXPECTED_PENDING_COUNT unchanged.
   'servedApp.legalPortalCertidao',
+  // mega-run E4 (Part E, insolvência watcher) - the manual poll route (legal-plane.test.ts
+  // contract: happy path + idempotent re-poll + validation + gate reuse; api/tests/legal/
+  // insolvencia-watch.test.ts: fetch/parse + poll unit coverage). Additive endpoint on the
+  // existing servedApp domain: covering it keeps EXPECTED_PENDING_COUNT unchanged.
+  'servedApp.legalPortalInsolvencyPoll',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

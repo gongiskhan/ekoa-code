@@ -1,0 +1,7 @@
+{ "slice": "E4", "kind": "mixed", "status": "passed", "at": "2026-07-18T19:22:50Z",
+  "wall": {"tscApi": 0, "chokepoint": 0, "eslint": 0, "unit": "watcher 12 + legal-plane", "secrets": "clean"},
+  "test": {"status": "passed", "evidence": "insolvencia-watch.test.ts (poll emits, idempotent no-dup, new pub, org-mismatch, partial-fetch-fail, double-emit-on-attach-fail); contract; fixtures; SUITE_LEDGER E4"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent (boundary)", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "double-emit fixed; 2 edges documented as v1 limits"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (E5 carries the Part E walkthrough)"} }

@@ -126,3 +126,26 @@ export const PortalCertidaoResponse = z.object({
   document: PortalDocument,
 });
 export type PortalCertidaoResponse = z.infer<typeof PortalCertidaoResponse>;
+
+/**
+ * POST /api/legal/portal/insolvency/poll (mega-run E4, BRIEF §8 item 4): runs one
+ * insolvência-watch poll cycle for a single dossiê. 08-portal-audit.md §4 found the
+ * automation `listenerConfig { pollAction, pollIntervalMs }` DECLARED with no runtime
+ * anywhere - but that declared listener belongs to the SIGNED-IN eTribunal integration
+ * (audit §1c), which the BRIEF §10 "Run 2 note" excludes from this run entirely (needs
+ * attended validation against a real portal). No cron/scheduler exists for a public-tier
+ * connector either (audit §4: "the only periodic loop in the codebase is the delivery
+ * safety-net drain", which is delivery-pipeline-specific). DECISION: `pollInsolvencyWatches`
+ * (`api/src/legal/insolvencia-watch.ts`) is a plain callable an operator/cron invokes
+ * directly per dossiê for the scheduled path; this route is the deterministic manual
+ * trigger a test/gate uses instead of waiting on a scheduler that does not exist yet.
+ */
+export const InsolvenciaPollRequest = z.object({ processoId: z.string().min(1) });
+export type InsolvenciaPollRequest = z.infer<typeof InsolvenciaPollRequest>;
+
+export const InsolvenciaPollResponse = z.object({
+  ok: z.literal(true),
+  processoId: z.string(),
+  newEvents: z.array(PortalEvent),
+});
+export type InsolvenciaPollResponse = z.infer<typeof InsolvenciaPollResponse>;
