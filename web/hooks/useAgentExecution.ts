@@ -165,6 +165,9 @@ export function useAgentExecution(sessionId: string | null) {
       }
 
       try {
+        // New attempt: the previous job id must not mask this attempt's no-job
+        // failure paths (the catch below keys its stamp-reset on the ref).
+        jobIdRef.current = null;
         const result = await tryCall(() => api.jobs.create(request));
 
         if (!result.ok) {
@@ -175,6 +178,9 @@ export function useAgentExecution(sessionId: string | null) {
             error,
           }));
           store.getState().setIsExecuting(false);
+          // No job was created: consume the pre-job 'queued' stamp so a stale
+          // build-armed session cannot displace the chat panel on a later send.
+          store.getState().setSessionJob(sessionId, { status: 'idle' });
           // Refused-build feed (BRIEF 9a): a capability refusal is never a dead end. Carry
           // the pre-drafted request on the error message so the bubble offers to file it to
           // the org-admin queue (change-requests fileFromRefusal). Only the two app-change
@@ -202,6 +208,8 @@ export function useAgentExecution(sessionId: string | null) {
         if (result.data.status === 'answered') {
           setExecState((prev) => ({ ...prev, isExecuting: false }));
           store.getState().setIsExecuting(false);
+          // Answered (no job): consume the pre-job 'queued' stamp (see !result.ok path).
+          store.getState().setSessionJob(sessionId, { status: 'idle' });
           return;
         }
 
@@ -268,6 +276,11 @@ export function useAgentExecution(sessionId: string | null) {
           error,
         }));
         store.getState().setIsExecuting(false);
+        // Threw before a jobId existed: consume the pre-job 'queued' stamp. If the
+        // throw happened after job creation, the stream/job state overwrites this.
+        if (!jobIdRef.current) {
+          store.getState().setSessionJob(sessionId, { status: 'idle' });
+        }
         store.getState().addMessage(sessionId, {
           role: 'system',
           content: `Error: ${error.message}`,

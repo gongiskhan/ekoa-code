@@ -176,6 +176,24 @@ input, textarea, select, button {
   to { opacity: 1; }
 }
 
+/* Unified side-panel entrance (Part B, B.F): a one-shot slide+fade played when the
+   panel mounts on the conversation's first send. Mount-triggered, so typing in the
+   blank state never moves the layout. Covered by the reduced-motion block below. */
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.panel-enter {
+  animation: panel-enter 0.25s ease-out;
+}
+
 /* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

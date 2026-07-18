@@ -1,0 +1,8 @@
+{ "slice": "B3", "kind": "ui", "status": "passed", "at": "2026-07-18T01:09:37Z",
+  "wall": {"tscWeb": 0, "eslint": 0, "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "committed web/e2e/chat-layout-unified.spec.ts green on finished diff + chat-thinking regression green; SUITE_LEDGER band4 registered"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "deferred", "reason": "part-level: B7 runs the independent Part B pass"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "7 real across 4 rounds, all fixed and re-verified"},
+  "design": {"status": "deferred", "reason": "audited at finished surface (B6/B7); B3 feed is a placeholder"},
+  "video": {"status": "deferred", "reason": "B7 carries the Part B walkthrough"} }

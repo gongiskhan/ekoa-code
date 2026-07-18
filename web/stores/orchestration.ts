@@ -152,6 +152,66 @@ export interface ActiveIntegrationBuild {
   ready?: boolean;
 }
 
+/**
+ * Panel-host content (Part B bound decision B.A, run 20260717-190134): ONE layout for every
+ * mode. Once a conversation has content the right panel is always present; a mode change
+ * swaps WHICH content the host renders, never the page structure. The union is DERIVED from
+ * the existing per-session state (sidePanelState restored per session, sessionJobs /
+ * sessionPreviews / activeIntegrationBuilds) via `panelContentFor` below - no new store, no
+ * registry, and the build/integrate keying keeps working untouched. 'sheet-feed' is the
+ * chat-mode variant (B3 hosts a placeholder; B4 renders the real desk surface). A future
+ * content type adds one member here plus one branch in the SidePanel host.
+ */
+export type PanelContent =
+  | { kind: 'sheet-feed' }
+  | { kind: 'build' }
+  | { kind: 'integrate'; build: ActiveIntegrationBuild };
+
+/**
+ * Derive the panel content for `sessionId` from current state. Pure so components can
+ * select `panelContentFor(s, id).kind` (a stable primitive) without re-render churn.
+ * The build/integrate conditions mirror the page's previous `showSidePanel` expression
+ * exactly - per-session gating so a stale global `sidePanelState` never renders a dead
+ * build panel for a session that has no build.
+ */
+export function panelContentFor(
+  s: Pick<
+    OrchestrationState,
+    'sidePanelState' | 'sessionJobs' | 'sessionPreviews' | 'activeIntegrationBuilds' | 'isExecuting'
+  >,
+  sessionId: string | null,
+): PanelContent {
+  if (sessionId) {
+    const integrationBuild = s.activeIntegrationBuilds[sessionId];
+    if (s.sidePanelState === 'integrate' && integrationBuild) {
+      return { kind: 'integrate', build: integrationBuild };
+    }
+    const job = s.sessionJobs[sessionId];
+    const preview = s.sessionPreviews[sessionId];
+    const isBuildSession =
+      job?.artifactInstanceId != null || preview?.templateId != null || !!preview?.appUrl;
+    const hasJob = job?.jobId != null;
+    // `isExecuting` keeps the build panel up the instant a delegated build starts
+    // (before the jobId lands) - but only for a build INITIATED this lifecycle:
+    // every build-initiation handler stamps the session job (status 'queued')
+    // alongside its setSidePanelState('build'), and persist sanitizes
+    // queued/running back to 'idle' on reload. So the build variant renders for
+    // real content OR an initiated-this-lifecycle build. A session with a stale
+    // restored sidePanelState==='build' and only an idle seed entry (e.g.
+    // createSession's default) is a plain chat session: a normal chat send flips
+    // the global isExecuting and must not swap its panel to a dead build
+    // variant - it falls through to sheet-feed.
+    const buildInitiated = job != null && job.status !== 'idle';
+    if (
+      s.sidePanelState === 'build' &&
+      (isBuildSession || hasJob || (s.isExecuting && buildInitiated))
+    ) {
+      return { kind: 'build' };
+    }
+  }
+  return { kind: 'sheet-feed' };
+}
+
 // Per-session retry payload — set when an agent execution starts, cleared on success,
 // kept on failure so a Retry button can re-fire the exact same execute() call.
 export interface RetryContext {

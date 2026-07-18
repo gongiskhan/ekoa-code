@@ -562,6 +562,13 @@ export const pt: Translations = {
     buildPhase5: 'Quase pronto...',
   },
 
+  sheetFeed: {
+    title: 'Folhas',
+    empty: 'As respostas do agente aparecem aqui como folhas.',
+    openPanel: 'Mostrar painel',
+    hidePanel: 'Ocultar painel',
+  },
+
   chatPanel: {
     describeYourApp: 'Descreva a sua app...',
     attachFile: 'Anexar ficheiro',

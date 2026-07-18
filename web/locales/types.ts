@@ -601,6 +601,17 @@ export interface Translations {
   };
 
   // ============================================
+  // SHEET FEED (unified panel, chat mode - Part B)
+  // ============================================
+
+  sheetFeed: {
+    title: string;
+    empty: string;
+    openPanel: string;
+    hidePanel: string;
+  };
+
+  // ============================================
   // CHAT PANEL
   // ============================================
 

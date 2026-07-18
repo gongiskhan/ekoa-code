@@ -63,6 +63,7 @@ export function useTranslation() {
     quickActions: t('quickActions'),
     messages: t('messages'),
     sidePanel: t('sidePanel'),
+    sheetFeed: t('sheetFeed'),
     chatPanel: t('chatPanel'),
     attachments: t('attachments'),
     status: t('status'),

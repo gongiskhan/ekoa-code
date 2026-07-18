@@ -99,7 +99,8 @@
         "trust-chip",
         "reference-attach",
         "live-bridge",
-        "branding-colors"
+        "branding-colors",
+        "chat-layout-unified"
       ]
     }
   },

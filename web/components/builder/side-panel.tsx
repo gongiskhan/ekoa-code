@@ -21,7 +21,8 @@ import {
   History,
 } from "lucide-react";
 import { VersionsPanel } from "@/components/artifacts/versions-panel";
-import { useOrchestrationStore, type FileNode } from "@/stores/orchestration";
+import SheetFeedPanel from "@/components/chat/sheet-feed-panel";
+import { useOrchestrationStore, panelContentFor, type FileNode } from "@/stores/orchestration";
 import { useSettingsStore } from "@/stores/settings";
 import { useAuthStore } from "@/stores/auth";
 import { api } from "@/lib/api";
@@ -106,7 +107,10 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
 
   const activeTab = useOrchestrationStore((s) => s.sidePanelTab);
   const setSidePanelTab = useOrchestrationStore((s) => s.setSidePanelTab);
-  const sidePanelState = useOrchestrationStore((s) => s.sidePanelState);
+  // Panel-host content selection (B.A): the discriminated union decides WHICH content
+  // this host renders - 'integrate' and 'build' behave exactly as before; 'sheet-feed'
+  // is the chat-mode variant. Selecting the `.kind` primitive keeps the selector stable.
+  const panelKind = useOrchestrationStore((s) => panelContentFor(s, sessionId).kind);
   const preview = useOrchestrationStore((s) =>
     sessionId ? s.sessionPreviews[sessionId] : null
   );
@@ -400,14 +404,19 @@ export default function SidePanel({ sessionId, onClose }: SidePanelProps) {
 
   const viewportWidth = VIEWPORT_WIDTHS[viewport];
 
-  // When the side panel is in 'integrate' state, host the integration
-  // builder instead of the Files/Output/Preview/Versions tabs.
-  if (sidePanelState === "integrate") {
+  // Whole-panel content swap on the B.A union: 'integrate' hosts the integration
+  // builder, 'sheet-feed' hosts the chat-mode sheet feed, 'build' falls through to
+  // the Files/Output/Preview/Versions tabs below - the page frame never changes.
+  if (panelKind === "integrate") {
     return (
       <div className="flex-1 bg-neutral-50 flex flex-col min-w-0">
         <IntegrationBuildPanel sessionId={sessionId} />
       </div>
     );
+  }
+
+  if (panelKind === "sheet-feed") {
+    return <SheetFeedPanel sessionId={sessionId} onClose={onClose} />;
   }
 
   return (

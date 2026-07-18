@@ -561,6 +561,13 @@ export const en: Translations = {
     buildPhase5: 'Almost there...',
   },
 
+  sheetFeed: {
+    title: 'Sheets',
+    empty: 'Agent replies appear here as sheets.',
+    openPanel: 'Show panel',
+    hidePanel: 'Hide panel',
+  },
+
   chatPanel: {
     describeYourApp: 'Describe your app...',
     attachFile: 'Attach file',

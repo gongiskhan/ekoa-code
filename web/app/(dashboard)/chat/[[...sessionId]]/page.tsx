@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -165,10 +164,10 @@ export default function UnifiedChatPage() {
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [mobileSidePanelOpen, setMobileSidePanelOpen] = useState(false);
 
-  // Desktop side-panel override. null = follow the auto signal (showSidePanel);
-  // true/false = force open/closed via the floating toggle. This is the mitigation
-  // for build sessions where the side panel fails to auto-show after loading a
-  // session: the user can always force it open. Reset per session below.
+  // Desktop side-panel override. null = follow the default (panel present whenever
+  // the conversation has content, Part B locked decision 2); true/false = force
+  // open/closed via the floating toggle / the panel's collapse chevron. Reset per
+  // session below.
   const [forceSidePanelOpen, setForceSidePanelOpen] = useState<boolean | null>(null);
 
   // Extract sessionId from optional catch-all route: [[...sessionId]]
@@ -184,18 +183,17 @@ export default function UnifiedChatPage() {
     activeSessionId ? s.messages[activeSessionId] : undefined
   );
 
-  const sidePanelState = useOrchestrationStore((s) => s.sidePanelState);
   const setSidePanelState = useOrchestrationStore((s) => s.setSidePanelState);
   const createSession = useOrchestrationStore((s) => s.createSession);
   const initializeBuilderSession = useOrchestrationStore((s) => s.initializeBuilderSession);
   const clearAttachments = useOrchestrationStore((s) => s.clearAttachments);
   const setSidePanelTab = useOrchestrationStore((s) => s.setSidePanelTab);
+  const setSessionJob = useOrchestrationStore((s) => s.setSessionJob);
 
   const pendingDelegation = useOrchestrationStore((s) => s.pendingDelegation);
   const setPendingDelegation = useOrchestrationStore((s) => s.setPendingDelegation);
   const addMessage = useOrchestrationStore((s) => s.addMessage);
   const setActiveIntegrationBuild = useOrchestrationStore((s) => s.setActiveIntegrationBuild);
-  const activeIntegrationBuilds = useOrchestrationStore((s) => s.activeIntegrationBuilds);
   const markIntegrationBuildReady = useOrchestrationStore((s) => s.markIntegrationBuildReady);
 
   const showExampleCards = useSettingsStore((s) => s.settings.chat.showExampleCards);
@@ -210,7 +208,7 @@ export default function UnifiedChatPage() {
   const isLegalOrg = useSettingsStore((s) =>
     s.isLoaded ? s.settings.general.vertical === "legal" : false,
   );
-  const { common, chatPanel, emptyState, onboarding, language: uiLanguage } = useTranslation();
+  const { common, chatPanel, emptyState, onboarding, sheetFeed, language: uiLanguage } = useTranslation();
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
 
@@ -543,6 +541,10 @@ export default function UnifiedChatPage() {
     setPendingDelegation(null);
     setSidePanelState("build");
     setSidePanelTab("files");
+    // Stamp the session job as initiated (status 'queued') alongside the panel
+    // flip: panelContentFor only renders the build variant for a non-idle job
+    // entry, so a stale restored 'build' panel state can't hijack a chat send.
+    setSessionJob(activeSessionId, { status: "queued" });
     // Note: forceSidePanelOpen is already null here (a delegate only fires on the
     // first chat→build hand-off, before the panel ever showed). handleBuildFirstMessage
     // / handleBuildSendMessage re-arm auto-open for the paths where it can be stale.
@@ -563,6 +565,7 @@ export default function UnifiedChatPage() {
     setPendingDelegation,
     setSidePanelState,
     setSidePanelTab,
+    setSessionJob,
   ]);
 
   // ========================================
@@ -594,6 +597,20 @@ export default function UnifiedChatPage() {
   );
   const showEmptyState =
     !hasMessages && messagesReady && !isExecuting && !hasArtifactContext;
+
+  // panel-enter gating (B.F): the entrance animation plays ONLY on the blank ->
+  // content transition inside an interactive page - i.e. this mount actually
+  // rendered the full-width blank state before the panel appeared (first send).
+  // On a direct load / reload of a session that already has messages the panel
+  // is part of initial hydration and must appear static, so the class is
+  // withheld. Three-state one-shot: a blank render ARMS the latch (guarded
+  // set-during-render - the React "storing information from previous renders"
+  // pattern) and the panel's first mount CONSUMES it ('armed' -> 'done', effect
+  // below the sidePanelVisible definition), so a later collapse/reopen or
+  // remount in the same page mount renders statically until another blank
+  // state re-arms it.
+  const [panelEnterPhase, setPanelEnterPhase] = useState<"idle" | "armed" | "done">("idle");
+  if (showEmptyState && panelEnterPhase !== "armed") setPanelEnterPhase("armed");
 
   // ========================================
   // ATTACH FILE / FOLDER HANDLERS
@@ -674,6 +691,10 @@ export default function UnifiedChatPage() {
       // A new build re-arms auto-open: clear any stale manual-close from earlier
       // in this session so the panel reveals for this build.
       setForceSidePanelOpen(null);
+      // Stamp the session job as initiated (status 'queued') alongside the panel
+      // flip: panelContentFor only renders the build variant for a non-idle job
+      // entry, so a stale restored 'build' panel state can't hijack a chat send.
+      setSessionJob(sessionId, { status: "queued" });
       // Drop URL attachments here — they were already prepended to the message
       // text by handleSendMessage. Only file/folder atts go through execute().
       const attachments = pendingAttachments.filter((a) => a.type !== "url");
@@ -696,6 +717,7 @@ export default function UnifiedChatPage() {
       pendingAttachments,
       setSidePanelState,
       setSidePanelTab,
+      setSessionJob,
       clearAttachments,
       language,
     ]
@@ -710,6 +732,10 @@ export default function UnifiedChatPage() {
       setSidePanelState("build");
       setSidePanelTab("preview");
       setForceSidePanelOpen(null);
+      // Stamp the session job as initiated (status 'queued') alongside the panel
+      // flip: panelContentFor only renders the build variant for a non-idle job
+      // entry, so a stale restored 'build' panel state can't hijack a chat send.
+      setSessionJob(activeSessionId, { status: "queued" });
 
       // Pass existing artifact context so the backend modifies it instead of creating new
       const currentJob = sessionJobs[activeSessionId];
@@ -732,7 +758,7 @@ export default function UnifiedChatPage() {
 
       clearAttachments();
     },
-    [activeSessionId, pendingAttachments, execute, setSidePanelState, setSidePanelTab, clearAttachments, sessionJobs, language]
+    [activeSessionId, pendingAttachments, execute, setSidePanelState, setSidePanelTab, setSessionJob, clearAttachments, sessionJobs, language]
   );
 
   // Server-side build intent safety net: listen for build_intent SSE events.
@@ -1202,23 +1228,28 @@ export default function UnifiedChatPage() {
     sessionPreview?.templateId != null ||
     !!sessionPreview?.appUrl;
   const sessionHasJob = sessionJob?.jobId != null;
-  const activeIntegrationBuild = activeSessionId
-    ? activeIntegrationBuilds[activeSessionId]
-    : null;
-  // sidePanelState is global; gate visibility on what the current session
-  // actually has so it doesn't leak across navigation. Build needs a job or
-  // artifact; integrate needs an active integration build for this session.
-  // `isExecuting` is included so the panel auto-opens the instant a delegated
-  // build starts (before the jobId lands) — gated on sidePanelState==='build'
-  // so a chat-only stream doesn't render a dead empty panel.
-  const showSidePanel =
-    (sidePanelState === "build" && (isBuildSession || sessionHasJob || isExecuting)) ||
-    (sidePanelState === "integrate" && activeIntegrationBuild != null);
 
-  // The desktop side panel honors the user's manual override when set, otherwise
-  // follows the auto signal. forceSidePanelOpen===false (user closed it) wins over
-  // the auto signal; a NEW build resets it to null so the panel re-opens.
-  const sidePanelVisible = forceSidePanelOpen ?? showSidePanel;
+  // ONE layout, all modes (Part B locked decision 1 + B.F): once the conversation has
+  // content the right panel is PRESENT - presence is no longer a function of build state
+  // (the old `showSidePanel` expression). WHICH content the panel hosts is decided by
+  // the panelContent union in the orchestration store (SidePanel switches on it): sheet
+  // feed for chat, the existing build tabs / integration builder for those modes. The
+  // manual override still wins: forceSidePanelOpen===false (user collapsed it) hides
+  // the panel until the floating open button (or a new build) re-opens it.
+  const sidePanelVisible = forceSidePanelOpen ?? true;
+
+  // Consume the panel-enter latch (B.F one-shot): the panel's first mount flips
+  // 'armed' -> 'done', but only AFTER the 0.25s entrance animation has played -
+  // removing the class earlier would cancel the animation mid-flight (its end
+  // state equals the static styles, so the late removal is invisible). Once
+  // consumed, a collapse/reopen or remount in this page mount renders
+  // statically until another blank state re-arms the latch.
+  const sidePanelMounted = !showEmptyState && sidePanelVisible && !!activeSessionId;
+  useEffect(() => {
+    if (panelEnterPhase !== "armed" || !sidePanelMounted) return;
+    const t = window.setTimeout(() => setPanelEnterPhase("done"), 300);
+    return () => window.clearTimeout(t);
+  }, [panelEnterPhase, sidePanelMounted]);
 
   const handleSendMessage = useCallback(
     (textArg?: string) => {
@@ -1519,9 +1550,9 @@ export default function UnifiedChatPage() {
               Anexar/Captura/Cola URL, suggestion pills, and shortcuts footer.
               See mockups/Tela em branco.png.
 
-              Empty state always takes the full width — sidePanelState may still
-              be set from a prior build session, but with no messages there's
-              nothing to preview, so we ignore it here. */
+              The blank conversation always takes the full width (Part B locked
+              decision 2 + B.F): the panel enters on the FIRST SEND, with a
+              skeleton sheet, never while typing. */
           <>
           <div className="flex flex-1 flex-col bg-white min-w-0">
             {/* Header + artifact stripe — centered single column. */}
@@ -1707,16 +1738,15 @@ export default function UnifiedChatPage() {
           </>
         ) : (
           /* ======================== ACTIVE CONVERSATION ========================
-              ChatPanel is the canonical message renderer for both chat-only Q&A
-              and build sessions. It reads from orchestration store messages and
-              handles streaming + activity uniformly.
-
-              The side panel only renders for sessions that actually have a build
-              attached. `sidePanelState` is shared across sessions; without this
-              guard it'd leak (a chat-only session would render a dead SidePanel
-              just because a prior build session left it open). */
+              ONE layout for every mode (Part B locked decision 1): transcript rail
+              left, deliverables panel right. ChatPanel is the canonical message
+              renderer for chat-only Q&A and build sessions alike; the panel is
+              always present once the conversation has content, and mode changes
+              swap the PANEL CONTENT only (SidePanel switches on the store's
+              panelContent union) - the page frame never restructures. */
           <>
             <div
+              data-testid="chat-rail"
               className={
                 sidePanelVisible
                   ? "relative flex flex-col w-full md:w-[380px] md:min-w-[320px] md:max-w-[420px] shrink-0 h-full min-h-0"
@@ -1738,22 +1768,39 @@ export default function UnifiedChatPage() {
                   closed (when it's open the panel carries its own collapse
                   control, so this button is redundant). Anchored bottom-right,
                   ~10% up from the column bottom so it sits clear of the
-                  composer's send/stop button. Only relevant for build sessions
-                  (a chat-only session has nothing to show in the panel). */}
-              {!isMobile && activeSessionId && !sidePanelVisible && (isBuildSession || sessionHasJob) && (
+                  composer's send/stop button. Every mode has panel content now
+                  (sheet feed / build tabs / integration builder), so any session
+                  with content can re-open it. */}
+              {!isMobile && activeSessionId && !sidePanelVisible && (
                 <button
                   onClick={() => setForceSidePanelOpen(true)}
                   className="absolute bottom-[10%] right-4 z-40 w-12 h-12 bg-teal-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-teal-700 transition-colors"
-                  title="Show files & preview"
-                  aria-label="Open side panel"
+                  title={sheetFeed.openPanel}
+                  aria-label={sheetFeed.openPanel}
                 >
                   <PanelRight size={20} />
                 </button>
               )}
             </div>
 
+            {/* The unified deliverables panel. `panel-enter` is a one-shot CSS
+                entrance (globals.css) played when the panel mounts on first send
+                (B.F) - tied to the send action, never to keystrokes, so typing
+                in the blank state causes no layout movement. Gated on the
+                panelEnterPhase latch: only a mount that actually showed the
+                blank full-width state animates ('armed'), and the first mount
+                consumes the latch, so direct-loading / reloading a session that
+                already has messages - and any later collapse/reopen in the same
+                page mount - renders the panel statically. */}
             {sidePanelVisible && activeSessionId && (
-              <div className="hidden md:flex flex-1 min-w-0">
+              <div
+                data-testid="side-panel-container"
+                className={
+                  panelEnterPhase === "armed"
+                    ? "hidden md:flex flex-1 min-w-0 panel-enter"
+                    : "hidden md:flex flex-1 min-w-0"
+                }
+              >
                 <SidePanel sessionId={activeSessionId} onClose={() => setForceSidePanelOpen(false)} />
               </div>
             )}
