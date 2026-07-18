@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 import Sidebar from "@/components/sidebar";
 import Header from "@/components/header";
 import BillingWarningBanner from "@/components/billing-warning-banner";
@@ -14,7 +15,6 @@ import { DemoTourProvider } from "@/components/demos/DemoTourProvider";
 import { ChatRuntimeProvider } from "@/components/chat/chat-runtime";
 import { GlobalChatDock } from "@/components/chat/global-chat-dock";
 import { LoadingState } from "@/components/ui/spinner";
-import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { useAutomationRun } from "@/hooks/useAutomationRun";
 
@@ -27,10 +27,7 @@ export default function DashboardLayout({
   // the PauseForUserOverlay reacts no matter which page the user is on.
   useAutomationRun();
 
-  const router = useRouter();
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const hasHydrated = useAuthStore((s) => s.hasHydrated);
-  const checkAuth = useAuthStore((s) => s.checkAuth);
+  const { hasHydrated, isAuthenticated } = useRequireAuth();
 
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -53,22 +50,6 @@ export default function DashboardLayout({
   useEffect(() => {
     setIsMobileSidebarOpen(false);
   }, [pathname]);
-
-  // Auth check: redirect to login if not authenticated
-  useEffect(() => {
-    if (hasHydrated && !isAuthenticated) {
-      router.push("/login");
-    }
-  }, [hasHydrated, isAuthenticated, router]);
-
-  // Refresh the cached user from the server once per mount so role/profile
-  // changes since last login (e.g. super-admin migration) are picked up
-  // without forcing a logout.
-  useEffect(() => {
-    if (hasHydrated && isAuthenticated) {
-      void checkAuth();
-    }
-  }, [hasHydrated, isAuthenticated, checkAuth]);
 
   // Fetch settings on auth
   useEffect(() => {

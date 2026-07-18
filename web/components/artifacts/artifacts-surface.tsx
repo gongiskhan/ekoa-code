@@ -59,6 +59,7 @@ import { ArtifactPreviewOverlay } from "@/components/artifacts/artifact-preview-
 import { ActionMenu, ActionMenuButton, type ActionMenuPosition } from "@/components/ui/action-menu";
 import { useLongPress } from "@/hooks/useLongPress";
 import { buildArtifactActions, type ArtifactActionCtx } from "@/components/artifacts/artifact-actions";
+import { RenameArtifactDialog } from "@/components/artifacts/rename-artifact-dialog";
 import type { SurfaceProps } from "@/lib/os/types";
 import { VersionsPanel } from "@/components/artifacts/versions-panel";
 import { DataBackupsPanel } from "@/components/artifacts/data-backups-panel";
@@ -2545,8 +2546,9 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
 
       {/* Rename from the item menu (the detail view keeps its inline editor). */}
       {renamingArtifact && (
-        <RenameDialog
-          artifact={renamingArtifact}
+        <RenameArtifactDialog
+          artifactId={renamingArtifact.id}
+          initialName={getArtifactTitle(renamingArtifact)}
           onClose={() => setRenamingArtifact(null)}
           onRenamed={() => void fetchInstances()}
         />
@@ -2639,73 +2641,3 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
   );
 }
 
-/* ---------- Rename Dialog (item action menu) ---------- */
-
-function RenameDialog({
-  artifact,
-  onClose,
-  onRenamed,
-}: {
-  artifact: ArtifactInstance;
-  onClose: () => void;
-  onRenamed: () => void;
-}) {
-  const { pages_artifacts: a, common } = useTranslation();
-  const [name, setName] = useState(getArtifactTitle(artifact));
-  const [isSaving, setIsSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Claim focus AFTER the shared Dialog's focus trap runs its initial focus
-  // (parent effects fire after child effects, so plain autoFocus loses).
-  useEffect(() => {
-    const timer = setTimeout(() => inputRef.current?.select(), 80);
-    return () => clearTimeout(timer);
-  }, []);
-
-  async function save() {
-    const trimmed = name.trim();
-    if (!trimmed || isSaving) return;
-    setIsSaving(true);
-    const result = await tryCall(() => api.artifacts.patch({ id: artifact.id, name: trimmed }));
-    setIsSaving(false);
-    if (result.ok) {
-      toast.success(a.cardMenu.renamed);
-      onRenamed();
-      onClose();
-    } else {
-      toast.error(result.error.message);
-    }
-  }
-
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="sm"
-      title={a.cardMenu.rename}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={isSaving}>
-            {common.cancel}
-          </Button>
-          <Button variant="primary" onClick={() => void save()} loading={isSaving} disabled={!name.trim()}>
-            {common.save}
-          </Button>
-        </>
-      }
-    >
-      <input
-        ref={inputRef}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            void save();
-          }
-        }}
-        className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-teal-600 focus:ring-1 focus:ring-teal-600/20"
-      />
-    </Dialog>
-  );
-}

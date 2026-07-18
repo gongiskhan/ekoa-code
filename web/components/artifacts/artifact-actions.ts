@@ -1,7 +1,8 @@
-import { Play, Pencil, TextCursorInput, CopyPlus, Trash2 } from 'lucide-react';
+import { Play, Pencil, TextCursorInput, CopyPlus, Trash2, Pin, PinOff, MonitorX } from 'lucide-react';
 import { api, tryCall } from '@/lib/api';
 import { toast } from '@/stores/toast';
 import type { ActionDef, SurfaceHost } from '@/lib/os/types';
+import { OS_STRINGS } from '@/lib/os/strings';
 import type { Translations } from '@/locales/types';
 
 /**
@@ -27,6 +28,11 @@ export interface ArtifactActionUi {
   startRename: (artifact: ArtifactLike) => void;
   requestDelete: (artifact: ArtifactLike) => void;
   refreshList: () => void;
+  /** OS shell only: dock pinning + desktop membership (client state). */
+  isPinned?: (artifact: ArtifactLike) => boolean;
+  pinToDock?: (artifact: ArtifactLike) => void;
+  unpinFromDock?: (artifact: ArtifactLike) => void;
+  removeFromDesktop?: (artifact: ArtifactLike) => void;
 }
 
 export interface ArtifactActionCtx {
@@ -86,6 +92,31 @@ export function buildArtifactActions(
           toast.error(result.error.message);
         }
       },
+    },
+    // OS-shell-only items (availability keys on host.mode + the ui hooks the
+    // shell binds; labels are OS-only strings, raw PT-PT per contract 6.1.5).
+    {
+      id: 'pin-dock',
+      label: OS_STRINGS.desktop.pinToDock,
+      icon: Pin,
+      available: ({ host, ui, artifact }) =>
+        host.mode === 'os' && !!ui.pinToDock && !(ui.isPinned?.(artifact) ?? false),
+      run: ({ artifact, ui }) => ui.pinToDock?.(artifact),
+    },
+    {
+      id: 'unpin-dock',
+      label: OS_STRINGS.dock.unpin,
+      icon: PinOff,
+      available: ({ host, ui, artifact }) =>
+        host.mode === 'os' && !!ui.unpinFromDock && (ui.isPinned?.(artifact) ?? false),
+      run: ({ artifact, ui }) => ui.unpinFromDock?.(artifact),
+    },
+    {
+      id: 'remove-desktop',
+      label: OS_STRINGS.desktop.removeFromDesktop,
+      icon: MonitorX,
+      available: ({ host, ui }) => host.mode === 'os' && !!ui.removeFromDesktop,
+      run: ({ artifact, ui }) => ui.removeFromDesktop?.(artifact),
     },
     {
       id: 'delete',
