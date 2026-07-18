@@ -14,12 +14,13 @@ import {
   Input,
   Select,
   Modal,
+  SearchInput,
   ConfirmDialog,
   EmptyState,
   toast,
 } from '../components/ui.jsx';
 import { IconFileText, IconPlus, IconTrash, IconExternalLink } from '../components/Icons.jsx';
-import { ORIGENS, fonteMeta, categoriaDe, versaoDe } from './modelos-util.js';
+import { ORIGENS, fonteMeta, categoriaDe, versaoDe, foldText } from './modelos-util.js';
 
 const CATEGORIAS_SUGERIDAS = ['Procurações', 'Requerimentos', 'Declarações', 'Contratos', 'Apoio judiciário'];
 
@@ -39,15 +40,36 @@ export default function ModelosPage() {
   const [edit, setEdit] = useState(null); // { id, nome, categoria, licenca, corpo, variaveis, versaoAtual }
   const [guardando, setGuardando] = useState(false);
   const [aEliminar, setAEliminar] = useState(null);
+  const [preview, setPreview] = useState(null); // modelo a pré-visualizar (só leitura)
+  const [query, setQuery] = useState('');
+  const [tag, setTag] = useState(''); // categoria (tag) selecionada
 
-  const rows = useMemo(() => (
+  const ordenados = useMemo(() => (
     modelos
       .slice()
       .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
   ), [modelos]);
 
+  // Tags = categorias distintas presentes (para os chips de filtro).
+  const tags = useMemo(() => {
+    const set = new Set();
+    for (const m of ordenados) { const c = categoriaDe(m); if (c) set.add(c); }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt'));
+  }, [ordenados]);
+
+  // Pesquisa (nome/categoria/fonte/licença, sem acentos) + filtro por tag.
+  const rows = useMemo(() => {
+    const folded = foldText(query.trim());
+    return ordenados
+      .filter((m) => (tag ? categoriaDe(m) === tag : true))
+      .filter((m) => {
+        if (!folded) return true;
+        return foldText(`${m.nome} ${categoriaDe(m)} ${m.fonte || ''} ${m.licenca || ''} ${m.descricao || ''}`).includes(folded);
+      });
+  }, [ordenados, query, tag]);
+
   // Sinaliza à ponte de demos que a lista tem conteúdo (annotate-result).
-  useDemoResult('modelos-lista', rows.length > 0);
+  useDemoResult('modelos-lista', ordenados.length > 0);
 
   function abrirEdicao(m) {
     setEdit({
@@ -120,13 +142,53 @@ export default function ModelosPage() {
         </div>
       </div>
 
+      {ordenados.length > 0 && (
+        <div className="filters">
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder="Pesquisar por nome, categoria, fonte ou licença…"
+            data-testid="modelos-pesquisa"
+          />
+          {tags.length > 0 && (
+            <div className="chip-row">
+              <button
+                type="button"
+                className={`chip as-button${tag === '' ? ' is-active' : ''}`}
+                data-testid="modelos-tag-todas"
+                onClick={() => setTag('')}
+              >
+                Todas
+              </button>
+              {tags.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`chip as-button${tag === t ? ' is-active' : ''}`}
+                  data-testid={`modelos-tag-${t}`}
+                  onClick={() => setTag((prev) => (prev === t ? '' : t))}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <div className="loading"><span className="spinner" aria-hidden="true" /><span>A carregar modelos.</span></div>
-      ) : rows.length === 0 ? (
+      ) : ordenados.length === 0 ? (
         <EmptyState
           icon={<IconFileText />}
           title="Ainda não há modelos"
           hint="Importe uma minuta da biblioteca para começar."
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={<IconFileText />}
+          title="Sem resultados"
+          hint="Nenhum modelo corresponde à pesquisa. Ajuste os filtros."
         />
       ) : (
         <div className="table-wrap" data-testid="modelos-lista" data-demo-target="modelos-lista">
@@ -150,15 +212,23 @@ export default function ModelosPage() {
                 return (
                   <tr key={m.id} data-testid={`modelo-row-${m.id}`}>
                     <td>{m.nome || '(sem nome)'}</td>
-                    <td>{categoriaDe(m) || '—'}</td>
+                    <td>{categoriaDe(m) || '-'}</td>
                     <td>
                       <Badge tone={meta.tone} data-testid={`modelo-fonte-${m.id}`}>{meta.label}</Badge>
                     </td>
-                    <td className="text-small text-subtle">{m.licenca || '—'}</td>
+                    <td className="text-small text-subtle">{m.licenca || '-'}</td>
                     <td data-testid={`modelo-versao-${m.id}`}>v{versaoDe(m)}</td>
                     <td>{nVars}</td>
                     <td>
                       <div className="row row-wrap" style={{ gap: 'var(--space-2, 0.5rem)' }}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          data-testid={`modelo-preview-${m.id}`}
+                          onClick={() => setPreview(m)}
+                        >
+                          Pré-visualizar
+                        </Button>
                         <Button
                           size="sm"
                           variant="ghost"
@@ -174,6 +244,13 @@ export default function ModelosPage() {
                           data-testid={`modelo-usar-${m.id}`}
                         >
                           Usar em Contratos <IconExternalLink size={14} />
+                        </a>
+                        <a
+                          className="btn btn-ghost btn-sm"
+                          href={appHref('legal-pecas', `?modelo=${m.id}`)}
+                          data-testid={`modelo-usar-pecas-${m.id}`}
+                        >
+                          Usar em Peças <IconExternalLink size={14} />
                         </a>
                         <Button
                           size="sm"
@@ -334,6 +411,89 @@ export default function ModelosPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ---------- Pré-visualização (só leitura) ---------- */}
+      <Modal
+        open={!!preview}
+        title={preview ? `Pré-visualizar: ${preview.nome || '(sem nome)'}` : 'Pré-visualizar'}
+        onClose={() => setPreview(null)}
+        data-testid="modelo-preview-drawer"
+        style={{ maxWidth: '760px' }}
+        actions={
+          preview ? (
+            <>
+              <Button variant="ghost" onClick={() => setPreview(null)}>Fechar</Button>
+              <a
+                className="btn btn-secondary"
+                href={appHref('legal-pecas', `?modelo=${preview.id}`)}
+                data-testid="modelo-preview-usar-pecas"
+              >
+                Usar em Peças <IconExternalLink size={14} />
+              </a>
+              <a
+                className="btn btn-primary"
+                href={appHref('legal-contratos', `gerar/${preview.id}`)}
+                data-testid="modelo-preview-usar"
+              >
+                Usar em Contratos <IconExternalLink size={14} />
+              </a>
+            </>
+          ) : null
+        }
+      >
+        {preview && (
+          <div className="stack stack-4">
+            <div className="row row-wrap" style={{ gap: 'var(--space-2, 0.5rem)', alignItems: 'center' }}>
+              {categoriaDe(preview) ? <Badge tone="info">{categoriaDe(preview)}</Badge> : null}
+              <Badge tone={fonteMeta(preview.fonte).tone}>{fonteMeta(preview.fonte).label}</Badge>
+              <span className="text-small text-subtle">v{versaoDe(preview)}</span>
+            </div>
+            {/* Proveniência CITADA: fonte de origem e licença, quando declaradas. */}
+            {preview.fonteOriginal || preview.licenca ? (
+              <div className="stack" style={{ gap: '2px' }}>
+                {preview.fonteOriginal ? (
+                  <span className="text-small text-subtle" data-testid="modelo-preview-fonte">
+                    Fonte: {preview.fonteOriginal}
+                  </span>
+                ) : null}
+                {preview.licenca ? (
+                  <span className="text-small text-subtle" data-testid="modelo-preview-licenca">
+                    Licença: {preview.licenca}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            <div>
+              <span className="field-label">Corpo</span>
+              <div
+                className="clausulas-list"
+                data-testid="modelo-preview-corpo"
+                style={{ marginTop: 'var(--space-2, 0.5rem)', padding: 'var(--space-4, 1rem)', display: 'block', whiteSpace: 'pre-wrap', maxHeight: '46vh', overflowY: 'auto' }}
+              >
+                {String(preview.corpo || '').trim()
+                  ? String(preview.corpo).split('\n').map((line, i) => (
+                      line.trim()
+                        ? <p key={i} style={{ margin: '0 0 0.5rem' }}>{line}</p>
+                        : <div key={i} style={{ height: '0.5rem' }} />
+                    ))
+                  : <p className="text-small text-subtle" style={{ margin: 0 }}>Este modelo ainda não tem corpo.</p>}
+              </div>
+            </div>
+            {Array.isArray(preview.variaveis) && preview.variaveis.length > 0 ? (
+              <div>
+                <span className="field-label">Variáveis ({preview.variaveis.length})</span>
+                <div className="chip-row" style={{ marginTop: 'var(--space-2, 0.5rem)' }}>
+                  {preview.variaveis.map((v, i) => (
+                    <span key={v.chave || `pv-${i}`} className="chip" data-testid={`modelo-preview-var-${i}`}>
+                      {v.rotulo || v.chave}{v.obrigatoria ? ' *' : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </Modal>

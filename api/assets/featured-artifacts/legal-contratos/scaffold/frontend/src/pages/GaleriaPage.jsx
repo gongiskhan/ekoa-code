@@ -15,6 +15,7 @@ import {
   toast,
 } from '../components/ui.jsx';
 import { IconFileText, IconPlus } from '../components/Icons.jsx';
+import { PROCURACAO_FORENSE_MODELO } from './procuracao-forense.js';
 
 /* Esqueleto de um modelo novo - corpo e variáveis vazios, preenchidos no editor. */
 const NOVO_MODELO = { nome: 'Novo modelo', area: '', descricao: '', corpo: '', variaveis: [] };
@@ -26,6 +27,7 @@ export default function GaleriaPage() {
   const [query, setQuery] = useState('');
   const [area, setArea] = useState('');
   const [criando, setCriando] = useState(false);
+  const [criandoProcuracao, setCriandoProcuracao] = useState(false);
   const [duplicando, setDuplicando] = useState(false);
   const [aEliminar, setAEliminar] = useState(null);
 
@@ -63,6 +65,36 @@ export default function GaleriaPage() {
       toast('Não foi possível criar o modelo.', { tone: 'error' });
     } finally {
       setCriando(false);
+    }
+  }
+
+  // Um clique -> procuração forense: cria (ou reutiliza) o modelo de procuração
+  // e abre já o wizard de geração. A minuta é app-local e cita os arts. 44.º e
+  // 45.º do CPC (mandato judicial + poderes especiais).
+  async function onProcuracaoForense() {
+    if (criandoProcuracao) return;
+    setCriandoProcuracao(true);
+    try {
+      // Reutiliza um modelo de procuração forense já existente (evita duplicar a
+      // cada clique); só cria um novo se ainda não houver nenhum.
+      const existente = modelos.find(
+        (m) => m && typeof m.nome === 'string' && m.nome.trim().toLowerCase() === PROCURACAO_FORENSE_MODELO.nome.toLowerCase(),
+      );
+      if (existente && existente.id) {
+        navigate(`/gerar/${existente.id}`);
+        return;
+      }
+      const created = await createShared('modelos', PROCURACAO_FORENSE_MODELO);
+      await refresh();
+      if (created && created.id) {
+        navigate(`/gerar/${created.id}`);
+        return;
+      }
+      toast('Não foi possível criar a procuração forense.', { tone: 'error' });
+    } catch {
+      toast('Não foi possível criar a procuração forense.', { tone: 'error' });
+    } finally {
+      setCriandoProcuracao(false);
     }
   }
 
@@ -111,6 +143,14 @@ export default function GaleriaPage() {
           </p>
         </div>
         <div className="page-actions">
+          <Button
+            variant="secondary"
+            data-testid="procuracao-forense-rapida"
+            onClick={onProcuracaoForense}
+            disabled={criandoProcuracao}
+          >
+            <IconFileText /> {criandoProcuracao ? 'A preparar…' : 'Procuração forense'}
+          </Button>
           <Button data-testid="novo-modelo" onClick={onNovo} disabled={criando}>
             <IconPlus /> Novo modelo
           </Button>

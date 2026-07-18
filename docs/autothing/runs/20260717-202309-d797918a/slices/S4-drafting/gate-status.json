@@ -1,0 +1,71 @@
+{
+  "slice": "S4-drafting",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "in_progress",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": {
+        "specs": 0,
+        "typecheck": null
+      },
+      "note": "First LIVE run of the 4 S4 specs (batch 1) surfaced 3 real defects the hermetic reviews could not see: (1) APP BUG - GerarWizardPage deep-link prefill raced processos load (guard only waited for clientes; the processo preselection was silently dropped whenever processos resolved second) - FIXED: prefill now waits for both collections' loading flags (GerarWizardPage.jsx), bundle rebuilt; (2) SPEC BUG - legal-x-pecas seeded cliente/processo AFTER page mount but useSharedCollection fetches once on mount - FIXED: reload after seeding; (3) SPEC BUG - legal-x-modelos BASE pointed at the app root (Biblioteca) while modelos-page lives at /modelos - FIXED: BASE = legalAppUrl(legal-modelos, modelos). Batch 2 after fixes: 11/11 passed in 2.9s, exit 0. Batch-1 exit-code caveat: the first batch printed a false EXIT 0 from a zsh PIPESTATUS idiom; capture idiom corrected (log file + direct $?).",
+      "at": "2026-07-18T03:52:00Z"
+    },
+    "review": {
+      "verdict": "findings(1) + 3 nits - all resolved or dispositioned",
+      "by": "review-S4 fresh-context same-model agent (claude-opus-4-8), hermetic (typecheck exit 0, eslint exit 0, frozen shared layer + api/assets/bases/ byte-untouched; verified the fixture PDF is a synthetic 7-field AcroForm with no PII; no e2e)",
+      "findings": [
+        "F1 (blocker, ledger): the 4 S4 specs on disk but not in SUITE_LEDGER band3_served_app.specs. DISPOSITION: the planned per-slice landing step registers the 4 names in the S4 landing commit.",
+        "nit2 (fixture tracking): web/e2e/fixtures/requerimento-generico-form.pdf untracked. DISPOSITION: git add in the S4 landing commit (already on its file list).",
+        "nit3 (fixture policy defensiveness): dynamic NIFs 123+timestamp could coincidentally be checksum-valid. FIXED by lead: pinned the known checksum-invalid constant '123456780' in legal-x-contratos.spec.ts:25 and legal-x-pecas.spec.ts (seedProcesso).",
+        "nit4 (dangling comment): legal-x-pecas.spec.ts:174-176 comment described a removed assertion. FIXED by lead: replaced with a live assertion expect(page.url()).not.toContain('modelo=')."
+      ],
+      "notes": [
+        "Correctness clean: docx isHeading/stripNumberedItem ordering correct, NUMBERING_REF wires w:numPr + numbering.xml as the spec asserts, placeholder resolution sound, all imports resolve; the diff removes 2 em-dashes (net improvement)."
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "needs-work",
+      "by": "fresh-context adversarial reviewer (claude-opus-4-8), hermetic - no implementer rationale, no gate-status/evidence-index read",
+      "evidence": [
+        "docx generators exercised in node: real OOXML (Title/Heading1/numPr/numbering.xml), contratos-pecas parity",
+        "fixture PDF parsed via pdf-lib: 7 AcroForm fields, self-labelled synthetic, no PII",
+        "NIF 123456780 mod-11 recomputed: checksum-INVALID confirmed",
+        "deep-link contract verified both sides, app-local",
+        "typecheck 0, eslint --no-ignore 0, emoji scan 0, em-dash scan of added lines 0",
+        "frozen layers byte-zero diff"
+      ],
+      "findings": [
+        "F1 (blocker, ledger): 4 S4 specs absent from SUITE_LEDGER band3_served_app.specs - acceptance \"+ ledger\" unmet"
+      ],
+      "at": "2026-07-18T03:45:00Z",
+      "resolution": "F1 RESOLVED at landing: the 4 rows registered (band3 now 18 legal-x rows; census gap 11 = exactly S5+S6+S7). Independently, the first LIVE run of the S4 specs surfaced 3 defects the hermetic reviews could not see - recorded under the test gate."
+    },
+    "adversarialTest": {
+      "verdict": "pending",
+      "at": null
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-core screenshot sweep (design-s4.mjs): 12 pages across the 4 S4 apps at 1440x900, zero console errors + zero pageerrors on every page; 8 key screenshots read back by vision",
+      "issues": [],
+      "notes": [
+        "contratos modelos: card grid with variaveis count + area badges + Gerar/Editar/Duplicar/Eliminar, Procuracao forense quick action, search + Todas/Civel/Comercial filter chips - clean",
+        "pecas lista: estado badges (Rascunho/Em revisao/Final filters), versao counter, processo link out to dossie, Nova peca CTA - clean",
+        "pecas precedentes: precedente card with tipo/area badges, corpo preview (contestacao-tipo I - Por impugnacao / II - Por excepcao), Editar/Eliminar - clean; nota: 'excepcao' is pre-AO90 spelling inside seeded user content (a firm precedent) - plausible traditional legal register, left as-is",
+        "modelos biblioteca: 8-card grid of minutas oficiais with fonte + licenca lines and 'Importar para os meus modelos' per card, filter chips per categoria - layout consistent, zero errors",
+        "modelos os-meus-modelos: table NOME/CATEGORIA/FONTE/LICENCA/VERSAO/VARIAVEIS with per-row actions incl. Usar em Contratos / Usar em Pecas cross-app links + Preparar assinatura - clean; NIT (non-blocking): the 6 action links stack vertically inflating row height (~200px/row) - a compact kebab menu would tighten it; queued as polish, not a slice defect",
+        "forms preencher: dependent selects (processo disabled until cliente chosen, 'Selecione primeiro o cliente.'), honest empty state 'Escolha um modelo' with Ir aos modelos CTA - clean",
+        "forms historico: honest empty state 'Ainda nao ha formularios preenchidos' with guidance - clean",
+        "PT-PT copy, no emojis, no em dashes; shared layout/sidebar consistent across the 4 apps"
+      ],
+      "at": "2026-07-18T02:35:00Z"
+    },
+    "walkthrough": {
+      "status": "pending"
+    }
+  }
+}

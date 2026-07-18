@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useSharedCollection,
   createShared,
+  getShared,
   appHref,
   formatDate,
 } from '../shared.js';
@@ -33,6 +34,7 @@ export default function PecasPage() {
   const { items: processos } = useSharedCollection('processos');
   const { items: clientes } = useSharedCollection('clientes');
   const { items: precedentes } = useSharedCollection('precedentes');
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [query, setQuery] = useState('');
   const [estadoFiltro, setEstadoFiltro] = useState('');
@@ -45,6 +47,42 @@ export default function PecasPage() {
   const [erro, setErro] = useState(null);
   const [criando, setCriando] = useState(false);
   const criandoRef = useRef(false);
+
+  // Deep-link app-local vindo de Modelos ("Usar em Peças"): ?modelo=<id>. O corpo
+  // do modelo entra na peça pela via determinística (como um precedente), com as
+  // {{chaves}} resolvidas do processo. Carregado UMA vez (getShared), abre já o
+  // assistente e limpa o parâmetro do URL para não repetir.
+  const [modeloSeed, setModeloSeed] = useState(null); // modelo importado, ou null
+  const deepLinkDoneRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkDoneRef.current) return;
+    const modeloId = searchParams.get('modelo');
+    if (!modeloId) { deepLinkDoneRef.current = true; return; }
+    deepLinkDoneRef.current = true;
+    let alive = true;
+    getShared('modelos', modeloId)
+      .then((m) => {
+        if (!alive) return;
+        if (m && m.id) {
+          setModeloSeed(m);
+          setTipo('peticao_inicial');
+          setProcessoId('');
+          setPrecedenteId('');
+          setErro(null);
+          setModalAberto(true);
+        }
+      })
+      .catch(() => { /* modelo inexistente: o assistente abre-se em branco à mesma */ })
+      .finally(() => {
+        // Limpa o parâmetro para o recarregar/partilhar não reabrir o assistente.
+        const next = new URLSearchParams(searchParams);
+        next.delete('modelo');
+        setSearchParams(next, { replace: true });
+      });
+    return () => { alive = false; };
+    // Só na montagem: o deep-link é lido uma vez.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const processoById = useMemo(() => {
     const map = {};
@@ -71,8 +109,14 @@ export default function PecasPage() {
     setTipo('peticao_inicial');
     setProcessoId('');
     setPrecedenteId('');
+    setModeloSeed(null); // "Nova peça" a partir do botão nunca traz modelo
     setErro(null);
     setModalAberto(true);
+  }
+
+  function fecharModal() {
+    setModalAberto(false);
+    setModeloSeed(null);
   }
 
   async function criarPeca() {
@@ -82,12 +126,14 @@ export default function PecasPage() {
     if (!tipo) { setErro('Escolha o tipo de peça.'); return; }
     if (!processo) { setErro('Selecione o processo.'); return; }
     const cliente = clientes.find((c) => c.id === processo.clienteId) || null;
+    // Um precedente escolhido tem prioridade sobre o modelo do deep-link.
     const precedente = precedenteId ? precedentes.find((pr) => pr.id === precedenteId) || null : null;
+    const modelo = !precedente ? modeloSeed : null;
 
     criandoRef.current = true;
     setCriando(true);
     try {
-      const corpo = composeSkeleton({ tipo, processo, cliente, precedente });
+      const corpo = composeSkeleton({ tipo, processo, cliente, precedente, modelo });
       const row = {
         processoId: processo.id,
         tipo,
@@ -98,9 +144,10 @@ export default function PecasPage() {
         fundamentacao: [],
       };
       if (precedente) row.precedenteId = precedente.id;
+      if (modelo) row.modeloId = modelo.id;
       const created = await createShared('pecas', row);
       if (created && created.id) {
-        setModalAberto(false);
+        fecharModal();
         navigate(`/editar/${created.id}`);
         return;
       }
@@ -222,10 +269,10 @@ export default function PecasPage() {
       <Modal
         open={modalAberto}
         title="Nova peça"
-        onClose={() => setModalAberto(false)}
+        onClose={fecharModal}
         actions={
           <>
-            <Button variant="ghost" onClick={() => setModalAberto(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={fecharModal}>Cancelar</Button>
             <Button
               data-testid="pecas-criar"
               data-demo-target="pecas-criar"
@@ -238,6 +285,24 @@ export default function PecasPage() {
         }
       >
         <Disclaimer style={{ marginBottom: 'var(--space-4, 1rem)' }} />
+        {/* Modelo trazido pelo deep-link de Modelos: o corpo entra na peça (a menos
+            que se escolha um precedente, que tem prioridade). */}
+        {modeloSeed ? (
+          <div
+            className="card"
+            data-testid="pecas-modelo-seed"
+            style={{ marginBottom: 'var(--space-4, 1rem)', borderColor: 'var(--color-info, #2563eb)', display: 'flex', flexDirection: 'column', gap: 'var(--space-1, 0.25rem)' }}
+          >
+            <div className="row" style={{ gap: 'var(--space-2, 0.5rem)', alignItems: 'center' }}>
+              <Badge tone="info">Modelo</Badge>
+              <strong data-testid="pecas-modelo-seed-nome">{modeloSeed.nome || '(sem nome)'}</strong>
+            </div>
+            <span className="text-small text-subtle">
+              O corpo deste modelo será a base da peça, com as chaves resolvidas do processo.
+              {precedenteId ? ' Escolheu um precedente - este tem prioridade sobre o modelo.' : ''}
+            </span>
+          </div>
+        ) : null}
         <div className="form-grid">
           <Field label="Tipo de peça" required>
             <Select

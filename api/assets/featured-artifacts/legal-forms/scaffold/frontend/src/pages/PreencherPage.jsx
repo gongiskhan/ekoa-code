@@ -137,11 +137,38 @@ export default function PreencherPage() {
     return m;
   }, [resolvido]);
 
+  // Resumo do mapeamento: quantos campos já têm um valor resolvido. Um campo de
+  // origem da espinha que resolva para vazio (ex.: o cliente não tem email) é uma
+  // LACUNA sinalizada - a exportação não é bloqueada, mas o utilizador vê o que
+  // falta antes de preencher.
+  const resumoMapa = useMemo(() => {
+    let preenchidos = 0;
+    const lacunas = [];
+    for (const c of campos) {
+      const origem = mapaOrigem[c.nome] || 'manual';
+      const valor = String(valorPorCampo.get(c.nome) || '').trim();
+      if (valor) preenchidos += 1;
+      else if (origem !== 'manual') lacunas.push(c.nome); // espinha sem valor
+    }
+    return { total: campos.length, preenchidos, lacunas };
+  }, [campos, mapaOrigem, valorPorCampo]);
+
   // Sinaliza à ponte de demonstrações que o resultado (annotate-result) está visível.
   useDemoResult('forms-resultado', !!resultado);
 
   function onSelectTemplate(id) {
     setParams(id ? { template: id } : {});
+  }
+
+  // Repor o mapeamento sugerido pela heurística (descarta ajustes manuais das
+  // origens; os valores manuais escritos ficam preservados para reaproveitar).
+  function reporSugestao() {
+    const sugestoes = new Map(
+      suggestMapeamento(campos.map((c) => c.nome)).map((s) => [s.campo, s.origem]),
+    );
+    const origem = {};
+    for (const c of campos) origem[c.nome] = sugestoes.get(c.nome) || 'manual';
+    setMapaOrigem(origem);
   }
 
   async function exportar() {
@@ -347,6 +374,22 @@ export default function PreencherPage() {
             </Badge>
           </div>
 
+          {campos.length > 0 ? (
+            <div className="row row-wrap" style={{ marginTop: 'var(--space-3, 0.75rem)', gap: 'var(--space-2, 0.5rem)', alignItems: 'center' }}>
+              <Badge tone={resumoMapa.preenchidos === resumoMapa.total ? 'ok' : 'neutral'} data-testid="forms-mapa-resumo">
+                {resumoMapa.preenchidos} de {resumoMapa.total} com valor
+              </Badge>
+              {resumoMapa.lacunas.length > 0 ? (
+                <Badge tone="media" data-testid="forms-mapa-lacunas">
+                  {resumoMapa.lacunas.length} da espinha por preencher
+                </Badge>
+              ) : null}
+              <Button size="sm" variant="ghost" data-testid="forms-repor-sugestao" onClick={reporSugestao}>
+                Repor mapeamento sugerido
+              </Button>
+            </div>
+          ) : null}
+
           {campos.length === 0 ? (
             <p className="field-hint" style={{ marginTop: 'var(--space-4, 1rem)' }}>
               Este PDF não tem campos preenchíveis. Abra o editor de disposição para colocar campos manualmente.
@@ -389,7 +432,9 @@ export default function PreencherPage() {
                               data-testid={`forms-manual-${c.nome}`}
                             />
                           ) : (
-                            <span className="text-small" data-testid={`forms-valor-${c.nome}`}>{valor || <span className="text-subtle">—</span>}</span>
+                            <span className="text-small" data-testid={`forms-valor-${c.nome}`}>
+                              {valor || <span className="text-subtle" title="A origem da espinha não tem valor para este cliente/processo">sem valor</span>}
+                            </span>
                           )}
                         </td>
                       </tr>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Packer } from 'docx';
 import {
   useSharedCollection,
@@ -35,6 +35,14 @@ export default function GerarWizardPage() {
   const { modeloId } = useParams();
   const navigate = useNavigate();
 
+  // Contrato de deep-link (prefill app-local): outra app pode abrir este wizard
+  // já com o cliente e o processo escolhidos, via ?cliente=<id>&processo=<id>.
+  // O app de Modelos ("Usar em Contratos") emite estes parâmetros; aqui são
+  // lidos uma vez para pré-selecionar o passo 1 (validados contra a espinha).
+  const [searchParams] = useSearchParams();
+  const prefillClienteId = searchParams.get('cliente') || '';
+  const prefillProcessoId = searchParams.get('processo') || '';
+
   const [modelo, setModelo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -45,7 +53,7 @@ export default function GerarWizardPage() {
     error: clientesErro,
     refresh: refreshClientes,
   } = useSharedCollection('clientes');
-  const { items: processos, refresh: refreshProcessos } = useSharedCollection('processos');
+  const { items: processos, loading: processosLoading, refresh: refreshProcessos } = useSharedCollection('processos');
 
   // Um cliente registado no Núcleo noutro separador tem de aparecer aqui sem
   // recarregar a página: ao voltar o foco à janela, relê clientes e processos.
@@ -67,6 +75,26 @@ export default function GerarWizardPage() {
   // Última seleção cliente|processo já resolvida para a espinha - permite não
   // pisar variáveis que o utilizador destravou/editou ao voltar e avançar.
   const lastResolvedRef = useRef('');
+
+  // Prefill do deep-link aplicado só UMA vez (não voltar a pisar a seleção que o
+  // utilizador faça a seguir, nem re-aplicar quando clientes/processos relêem).
+  const prefillDoneRef = useRef(false);
+
+  // Recebe o deep-link (?cliente=&processo=) e pré-seleciona o passo 1, mas só
+  // depois de clientes e processos existirem na espinha e só se os ids forem
+  // válidos: o cliente tem de existir, e o processo tem de existir E pertencer a
+  // esse cliente (senão fica só o cliente pré-selecionado, sem inventar dados).
+  useEffect(() => {
+    if (prefillDoneRef.current) return;
+    if (!prefillClienteId && !prefillProcessoId) { prefillDoneRef.current = true; return; }
+    if (clientesLoading || processosLoading) return; // espera AMBAS as coleções (o processo lê-se abaixo)
+    const c = prefillClienteId ? clientes.find((x) => x.id === prefillClienteId) : null;
+    if (!c) { prefillDoneRef.current = true; return; }
+    setClienteId(c.id);
+    const p = prefillProcessoId ? processos.find((x) => x.id === prefillProcessoId) : null;
+    if (p && p.clienteId === c.id) setProcessoId(p.id);
+    prefillDoneRef.current = true;
+  }, [clientes, processos, clientesLoading, processosLoading, prefillClienteId, prefillProcessoId]);
 
   // Trava síncrona contra reentrância: um duplo-clique em "Gerar documento"
   // dispara dois handlers antes de setGerando(true) pintar e desativar o botão.

@@ -32,10 +32,31 @@ import {
   estadoTone,
   nextEstado,
   appendCitacao,
+  substitute,
+  resolveValues,
   slugFile,
   hojeISO,
 } from './pecas-logic.js';
 import { buildPecaDocx } from './pecas-docx.js';
+
+/*
+ * Extrai a árvore (outline) da peça a partir dos cabeçalhos do corpo, para a
+ * navegação lateral. Um cabeçalho é uma linha em MAIÚSCULAS com pelo menos duas
+ * letras (a mesma noção do gerador de .docx): "I. DOS FACTOS", "II. DO DIREITO",
+ * "EXMO. SENHOR…". Devolve { linha, texto } por ordem de aparição.
+ */
+function extractOutline(corpo) {
+  const linhas = String(corpo || '').split('\n');
+  const out = [];
+  for (let i = 0; i < linhas.length; i += 1) {
+    const t = linhas[i].trim();
+    if (!t) continue;
+    const letras = t.replace(/[^A-Za-zÀ-ÿ]/g, '');
+    if (letras.length < 2) continue;
+    if (t === t.toUpperCase() && /[A-ZÀ-Þ]/.test(t)) out.push({ linha: i, texto: t });
+  }
+  return out;
+}
 
 export default function EditorPage() {
   const { id } = useParams();
@@ -56,6 +77,7 @@ export default function EditorPage() {
   const { items: clientes } = useSharedCollection('clientes');
   const { items: pesquisas } = useSharedCollection('pesquisas');
   const { items: calculos } = useSharedCollection('calculos');
+  const { items: precedentes } = useSharedCollection('precedentes');
 
   const [erro, setErro] = useState(null);
   const [exportando, setExportando] = useState(false);
@@ -108,6 +130,56 @@ export default function EditorPage() {
   }, [pesquisas, peca]);
 
   const proximoEstado = nextEstado(estado);
+
+  // Árvore da peça para a navegação lateral, recalculada a cada edição do corpo.
+  const outline = useMemo(() => extractOutline(corpo), [corpo]);
+
+  // Precedentes relevantes, priorizando os do mesmo tipo da peça.
+  const precedentesRelevantes = useMemo(() => {
+    const tipoPeca = peca && peca.tipo;
+    return precedentes
+      .slice()
+      .sort((a, b) => {
+        const at = a.tipo === tipoPeca ? 0 : 1;
+        const bt = b.tipo === tipoPeca ? 0 : 1;
+        if (at !== bt) return at - bt;
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+  }, [precedentes, peca]);
+
+  // Salta a navegação lateral para um cabeçalho: foca o corpo e coloca o cursor
+  // no início dessa linha (a textarea faz scroll para o cursor).
+  function saltarPara(linhaIdx) {
+    const ta = corpoRef.current;
+    if (!ta) return;
+    const linhas = corpo.split('\n');
+    let pos = 0;
+    for (let i = 0; i < linhaIdx && i < linhas.length; i += 1) pos += linhas[i].length + 1;
+    ta.focus();
+    try { ta.setSelectionRange(pos, pos); } catch { /* browsers antigos */ }
+    // Aproxima a linha do topo visível de forma proporcional (sem depender de
+    // métricas exactas): scrollTop = fração da linha * altura de scroll.
+    const frac = linhas.length > 1 ? linhaIdx / linhas.length : 0;
+    ta.scrollTop = Math.max(0, Math.round(frac * ta.scrollHeight - ta.clientHeight / 3));
+  }
+
+  // Insere o corpo de um precedente no fim da peça, com as {{chaves}} resolvidas
+  // do processo/cliente (mesma via determinística da criação). Persiste logo.
+  async function inserirPrecedente(precedente) {
+    const bruto = String(precedente && precedente.corpo || '').trim();
+    if (!bruto) { toast('O precedente não tem corpo.', { tone: 'error' }); return; }
+    const resolvido = substitute(bruto, resolveValues(processo, cliente));
+    const base = String(corpo || '');
+    const sep = base.length === 0 ? '' : base.endsWith('\n') ? '\n' : '\n\n';
+    const novoCorpo = `${base}${sep}${resolvido}\n`;
+    setCorpo(novoCorpo);
+    try {
+      await updateShared('pecas', id, { corpo: novoCorpo });
+      toast('Precedente inserido.', { tone: 'ok' });
+    } catch {
+      toast('Não foi possível inserir o precedente.', { tone: 'error' });
+    }
+  }
 
   async function guardar() {
     const novaVersao = versao + 1;
@@ -377,6 +449,29 @@ export default function EditorPage() {
               <Input value={titulo} onChange={(e) => setTitulo(e.target.value)} data-testid="pecas-titulo" placeholder="Título da peça" />
             </Field>
           </section>
+          {outline.length > 0 ? (
+            <section className="card" data-testid="pecas-outline">
+              <h2 className="card-title">Estrutura</h2>
+              <p className="card-subtitle" style={{ marginBottom: 'var(--space-2, 0.5rem)' }}>
+                Navegação pela peça. Clique num cabeçalho para saltar para essa secção.
+              </p>
+              <nav className="chip-row" aria-label="Estrutura da peça">
+                {outline.map((h, i) => (
+                  <button
+                    key={`${h.linha}-${i}`}
+                    type="button"
+                    className="chip as-button"
+                    data-testid={`pecas-outline-${i}`}
+                    onClick={() => saltarPara(h.linha)}
+                    title={h.texto}
+                    style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {h.texto}
+                  </button>
+                ))}
+              </nav>
+            </section>
+          ) : null}
           <section className="card">
             <div className="row-space-between">
               <div>
@@ -411,6 +506,25 @@ export default function EditorPage() {
                   </span>
                   <Button size="sm" data-testid={`inserir-memoria-${c.id}`} onClick={() => inserirMemoria(c)}>
                     Inserir memória
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {precedentesRelevantes.length > 0 ? (
+            <div className="stack stack-2" data-testid="pecas-precedentes-inserir" style={{ marginBottom: 'var(--space-4, 1rem)' }}>
+              <p className="card-subtitle" style={{ margin: 0 }}>
+                Precedentes do escritório. Inserir acrescenta o corpo ao fim da peça, com as chaves resolvidas do processo.
+              </p>
+              {precedentesRelevantes.slice(0, 6).map((pr) => (
+                <div key={pr.id} className="row row-2" style={{ alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2, 0.5rem)' }}>
+                  <span className="text-small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {pr.titulo || '(sem título)'}
+                    {pr.tipo === (peca && peca.tipo) ? <Badge tone="info" style={{ marginLeft: 'var(--space-2, 0.5rem)' }}>mesmo tipo</Badge> : null}
+                  </span>
+                  <Button size="sm" data-testid={`pecas-inserir-precedente-${pr.id}`} onClick={() => inserirPrecedente(pr)}>
+                    Inserir
                   </Button>
                 </div>
               ))}

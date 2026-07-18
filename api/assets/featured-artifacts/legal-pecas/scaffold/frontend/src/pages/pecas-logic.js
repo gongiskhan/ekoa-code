@@ -161,9 +161,15 @@ const ESTRUTURA = {
   ],
 };
 
-function composeBody({ tipo, processo, cliente, precedente }) {
+function composeBody({ tipo, processo, cliente, precedente, modelo }) {
+  // Um precedente tem prioridade (é a via principal); um modelo importado da app
+  // de Modelos entra pela mesma porta determinística - o seu corpo é o corpo da
+  // peça, com as {{chaves}} resolvidas do processo/cliente (sem IA, sem geração).
   if (precedente && String(precedente.corpo || '').trim()) {
     return substitute(precedente.corpo, resolveValues(processo, cliente));
+  }
+  if (modelo && String(modelo.corpo || '').trim()) {
+    return substitute(modelo.corpo, resolveValues(processo, cliente));
   }
   const estrutura = ESTRUTURA[tipo] || ESTRUTURA.requerimento;
   return estrutura.join('\n');
@@ -171,11 +177,12 @@ function composeBody({ tipo, processo, cliente, precedente }) {
 
 /*
  * Compõe o esqueleto DETERMINÍSTICO de uma peça: cabeçalho do processo + corpo
- * (do precedente, com {{chaves}} resolvidas, ou a estrutura-tipo vazia).
+ * (do precedente ou de um modelo importado, com {{chaves}} resolvidas, ou a
+ * estrutura-tipo vazia). `precedente` tem prioridade sobre `modelo`.
  */
-export function composeSkeleton({ tipo, processo, cliente, precedente }) {
+export function composeSkeleton({ tipo, processo, cliente, precedente, modelo }) {
   const header = composeHeader({ processo, cliente });
-  const body = composeBody({ tipo, processo, cliente, precedente });
+  const body = composeBody({ tipo, processo, cliente, precedente, modelo });
   return `${header}${body}\n`;
 }
 
