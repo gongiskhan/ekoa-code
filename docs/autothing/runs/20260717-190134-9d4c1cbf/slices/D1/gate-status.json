@@ -1,0 +1,6 @@
+{ "slice": "D1", "kind": "api", "status": "passed", "at": "2026-07-18T16:44:13Z",
+  "test": {"status": "passed", "evidence": "6/7 operator drivers 61/61 asserts green vs boot-b; assistant-modes DO-turn flake reproduced on clean main = pre-existing, not run drift (known-flakes.md)"},
+  "adversarialReview": {"status": "skipped", "reason": "kind-conditional (verify slice, no diff — pure verification run)"},
+  "codexSliceReview": {"status": "skipped", "reason": "kind-conditional (no diff)"},
+  "design": {"status": "skipped", "reason": "kind-conditional"},
+  "video": {"status": "skipped", "reason": "kind-conditional (verify slice)"} }

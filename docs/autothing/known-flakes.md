@@ -20,3 +20,14 @@ Full ci:lane (api+web vitest concurrent, session under load): 9 tests / 1 file f
 connection-class signature; same file estate re-run in isolation on a quiet machine: 190/190 green.
 File identity not captured (lane output truncated by a tail pipe - avoid piping the lane; capture to
 a log file). Remedy stands: quiet machine for full-lane runs, or re-run the failing file in isolation.
+
+## assistant-modes.e2e.mjs DO-turn is live-model-flaky (2026-07-18, run 20260717-190134 D1)
+The operator three-modes driver's "DO" step drives a REAL model to emit a structured setField
+action; the model non-deterministically returns the action with an empty/wrong value (field stays
+"") or the setup locator.fill times out under live-model latency. REPRODUCED ON CLEAN main (a
+worktree at 52d586f: same PASS=5 FAIL=1, failing at the fill/DO step), so it is NOT a mega-run
+regression - a pre-existing flaky live-model assertion. The other 6 operator drivers
+(action-registry, assistant-panel, assistant-billing, tour-playback, fees-knowledge, panel-perf)
+are deterministic and green. Remedy: the DO-turn's single model-emit assertion needs a wider retry
+budget or a determinism harness (a canned action manifest for the emit step) - a follow-up hardening
+item for the driver, not a product defect.
