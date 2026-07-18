@@ -52,6 +52,14 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { sanitizeUserFacingError, redactProviderIdentity } from "@/lib/sanitize-error";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
 
+// A wedged backend worker (no more events on an otherwise-open SSE connection)
+// must not leave the composer stuck on "A pensar..." forever - bound the
+// thinking window and surface a retryable error if nothing settles it. Chosen
+// between the plain-request DEFAULT_TIMEOUT_MS (2min, too tight for a
+// multi-tool agent turn) and the long-poll SESSION_POLL_MAX_MS (7min) already
+// used elsewhere in this app for a bounded "long but not forever" wait.
+const CHAT_RUN_STUCK_TIMEOUT_MS = 5 * 60_000;
+
 // ============================================
 // MARKDOWN COMPONENTS
 // ============================================
@@ -1001,6 +1009,7 @@ export default function UnifiedChatPage() {
 
       const finishStream = () => {
         stream.close();
+        clearTimeout(stuckTimer);
         setIsExecutingStore(false);
         setActivityMessage(sessionId!, null);
         chatStreamCleanupRef.current = null;
@@ -1080,6 +1089,19 @@ export default function UnifiedChatPage() {
         });
       };
 
+      // A wedged worker can leave the SSE connection open with no further
+      // events ever arriving - the spinner and "A pensar..." would otherwise
+      // run forever with no error, no timeout, no retry. Bound the wait and
+      // settle it as a retryable error (cleared in finishStream on any real
+      // settlement, and on manual Stop below).
+      const stuckTimer = setTimeout(() => {
+        handleError({
+          message: language === "pt"
+            ? "A resposta demorou demasiado tempo. Tente novamente."
+            : "The response took too long. Please try again.",
+        });
+      }, CHAT_RUN_STUCK_TIMEOUT_MS);
+
       stream.on("text_chunk", (event) => {
         if (event.text) {
           if (thinkingStartedAt !== null && thinkingEndedAt === null) thinkingEndedAt = Date.now();
@@ -1147,6 +1169,7 @@ export default function UnifiedChatPage() {
       // the first event arrives (during routing/pre-stream).
       chatStreamCleanupRef.current = () => {
         stream.close();
+        clearTimeout(stuckTimer);
         setIsExecutingStore(false);
         setActivityMessage(sessionId!, null);
         clearStreamingChat(sessionId!);

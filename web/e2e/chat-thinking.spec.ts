@@ -126,4 +126,69 @@ test.describe('chat thinking channel', () => {
     );
     expect(meaningful, `console errors: ${meaningful.join(' | ')}`).toHaveLength(0);
   });
+
+  const STUCK_RUN_ID = 'run-thinking-stuck-e2e';
+
+  test('a wedged worker times out with a retryable error instead of a stuck spinner forever', async ({ page }) => {
+    // Dogfood bug: a queued message can sit in "A pensar..." indefinitely when
+    // the backend worker never emits another event (observed live stuck for
+    // 182 minutes — no error, no timeout, no retry). Simulate the wedge with
+    // an SSE stub that sends only `ready`, never `thinking_chunk`/`complete`/
+    // `error` — the native EventSource reconnects and gets the same
+    // single-event body every time, so the run never settles on its own.
+    const createResponse = { runId: STUCK_RUN_ID };
+    expect(ChatRunCreateResponse.safeParse(createResponse).success).toBe(true);
+    const stillRunning = { id: STUCK_RUN_ID, status: 'running' };
+    expect(ChatRun.safeParse(stillRunning).success).toBe(true);
+    const readyEvent = { type: 'ready', runId: STUCK_RUN_ID };
+    expect(ChatRunEvent.safeParse(readyEvent).success).toBe(true);
+
+    await page.route('**/api/v1/chat/runs', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify(createResponse) })
+        : route.fallback(),
+    );
+    await page.route(`**/api/v1/chat/runs/${STUCK_RUN_ID}/events**`, (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+        body: `event: ready\ndata: ${JSON.stringify(readyEvent)}\nid: 1\n\n`,
+      }),
+    );
+    // The `ready` re-sync path (GET .../runs/:id) also reports still-running,
+    // so re-sync never settles the run early either — this is a GENUINE wedge.
+    await page.route(`**/api/v1/chat/runs/${STUCK_RUN_ID}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stillRunning) }),
+    );
+
+    await login(page);
+
+    // Install the mock clock AFTER login/compile (never before — it would
+    // freeze the dev-server's own real-time chunk loading) but BEFORE the
+    // send, so the page's own `setTimeout(..., CHAT_RUN_STUCK_TIMEOUT_MS)`
+    // for THIS run is captured as a virtual timer from the moment it is
+    // created — a timer already scheduled on the real clock before install()
+    // is not retroactively fast-forwardable.
+    await page.clock.install();
+
+    const composer = page.locator('textarea').first();
+    await composer.fill('mensagem que nunca mais chega...');
+    await composer.press('Enter');
+
+    // The run is genuinely in flight before we fast-forward past the deadline.
+    await expect(page.getByText(/A pensar|Pensando|Thinking/i).first()).toBeVisible({ timeout: 10_000 });
+
+    // Jump past the client's stuck-run deadline (CHAT_RUN_STUCK_TIMEOUT_MS =
+    // 5min in the page) without a real 5-minute wait.
+    await page.clock.fastForward('05:01');
+
+    // A retryable, branded error surfaces — never a spinner stuck forever.
+    await expect(
+      page.getByText(/demorou demasiado tempo|took too long/i).first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // The composer is usable again — the user can actually retry.
+    await composer.fill('a segunda tentativa');
+    await expect(composer).toHaveValue('a segunda tentativa');
+  });
 });
