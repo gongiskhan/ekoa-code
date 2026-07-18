@@ -1,46 +1,22 @@
-import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { test, expect, type Page } from '@playwright/test';
+import { cortexBase } from './helpers/legal';
 
 /**
  * S8 vertical-profile: the legal skin over the generic core.
  *
- * Self-contained via the SETTINGS path — beforeAll flips
- * `settings.general.vertical = 'legal'` through the real `ekoa.settings`
- * `update` intent (admin is super-admin, so this writes the global singleton),
- * which the frontend settings store then hydrates. No env var / dev-server
- * restart is required for the authenticated surfaces. The pre-auth /login page,
- * which never fetches settings, is exercised via the localStorage mirror
- * (`ekoa_vertical`) that the settings store writes for exactly this purpose.
+ * Self-contained via the SETTINGS path - beforeAll flips
+ * `settings.general.vertical = 'legal'` through the real
+ * `PATCH /api/v1/settings` (admin is super-admin, so the write is authorized;
+ * it persists on the org settings), which the frontend settings store then
+ * hydrates. No env var / dev-server restart is required for the authenticated
+ * surfaces. The pre-auth /login page, which never fetches settings, is
+ * exercised via the localStorage mirror (`ekoa_vertical`) that the settings
+ * store writes for exactly this purpose.
  *
  * Requires the dev servers (Session Start Rule). Real login (admin / tmp12345),
  * no stubs. The legal-* starting points asserted here are seeded in the running
  * backend by the earlier legal slices.
  */
-
-function backendUrl(): string {
-  try {
-    return `http://localhost:${readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim()}`;
-  } catch {
-    return 'http://localhost:4111';
-  }
-}
-
-let token = '';
-
-async function action(
-  request: APIRequestContext,
-  app: string,
-  intent: string,
-  params: Record<string, unknown>,
-) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
-    headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-vp-${Math.random().toString(36).slice(2)}` },
-    timeout: 20_000,
-  });
-  return res.json();
-}
 
 async function loginUi(page: Page) {
   await page.goto('/login');
@@ -61,13 +37,26 @@ function watchPageErrors(page: Page): string[] {
 }
 
 test.beforeAll(async ({ request }) => {
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  const loginRes = await request.post(`${cortexBase()}/api/v1/auth/login`, {
+    data: { username: 'admin', password: 'tmp12345' },
+    timeout: 20_000,
+  });
+  expect(loginRes.ok(), `login should succeed (status ${loginRes.status()})`).toBe(true);
+  const { token } = (await loginRes.json()) as { token: string };
+  expect(token).toBeTruthy();
 
-  const upd = await action(request, 'ekoa.settings', 'update', { general: { vertical: 'legal' } });
-  expect(upd.success, 'settings update should succeed').toBe(true);
-  expect((upd.data as { general?: { vertical?: string } })?.general?.vertical).toBe('legal');
+  // `general.vertical` is not a typed PlatformSettingsPatch field; it rides the
+  // schema's top-level passthrough. The server shallow-merges at the top level,
+  // replacing org.settings.general wholesale - fine for the e2e database.
+  const upd = await request.patch(`${cortexBase()}/api/v1/settings`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { general: { vertical: 'legal' } },
+    timeout: 20_000,
+  });
+  expect(upd.ok(), 'settings update should succeed').toBe(true);
+  // The merged settings object comes back directly (no success/data envelope).
+  const settings = (await upd.json()) as { general?: { vertical?: string } };
+  expect(settings.general?.vertical).toBe('legal');
 });
 
 test('chat empty state shows the legal example prompts (prazos processuais + Citius)', async ({ page }) => {

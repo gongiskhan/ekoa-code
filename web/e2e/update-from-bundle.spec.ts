@@ -1,8 +1,8 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { cortexBase } from './helpers/legal';
 
 /**
  * Gallery "Importar artefacto" update-in-place flow, against the REAL backend:
@@ -15,49 +15,13 @@ import { readFileSync } from 'node:fs';
  *
  * Requires the dev servers (Session Start Rule). Instances created here are
  * deleted in afterAll. Backend semantics (snapshot/versions/no-reseed/rollback)
- * are locked by cortex/tests/services/artifact-bundle-update.test.ts.
+ * are locked by api/tests/contract/artifact-family.test.ts.
  */
-
-function backendUrl(): string {
-  try {
-    return `http://localhost:${readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim()}`;
-  } catch {
-    return 'http://localhost:4111';
-  }
-}
 
 const STAMP = Date.now().toString(36);
 const MANIFEST_ID = `e2e-upd-src-${STAMP}`;
 const NAME_V1 = `E2E Update App ${STAMP} v1`;
 const NAME_V2 = `E2E Update App ${STAMP} v2`;
-
-const b64 = (s: string) => Buffer.from(s).toString('base64');
-
-function makeBundle(version: number, name: string, manifestId = MANIFEST_ID) {
-  return {
-    schemaVersion: 1,
-    manifest: {
-      id: manifestId,
-      name,
-      version: `${version}.0.0`,
-      entryPoint: 'frontend/src/index.jsx',
-      outputDir: 'dist/',
-      type: 'jsx-app',
-      extends: 'app-auth-persistent',
-    },
-    scaffold: [
-      {
-        path: 'frontend/src/index.jsx',
-        contentB64: b64(
-          "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')).render(<App />);\n",
-        ),
-      },
-      { path: 'frontend/src/App.jsx', contentB64: b64(`export default function App(){ return <h1>versao ${version}</h1>; }\n`) },
-    ],
-    exportedAt: new Date().toISOString(),
-    sourceArtifactId: manifestId,
-  };
-}
 
 let token = '';
 let baseId = '';
@@ -65,20 +29,59 @@ let baseSlug = '';
 let tmp = '';
 const cleanupIds: string[] = [];
 
-async function action(request: APIRequestContext, app: string, intent: string, params: Record<string, unknown>) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
+async function api(
+  request: APIRequestContext,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; json: unknown }> {
+  const res = await request.fetch(`${cortexBase()}${path}`, {
+    method,
     headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-${Math.random().toString(36).slice(2)}` },
-    // import/update intents run a real esbuild server-side; don't trip on a busy backend
+    ...(body !== undefined && { data: body }),
+    // import/bundle-update run a real esbuild server-side; don't trip on a busy backend
     timeout: 30_000,
   });
-  return res.json();
+  return { status: res.status(), json: await res.json().catch(() => ({})) };
+}
+
+function makeBundle(version: number, name: string, manifestId = MANIFEST_ID) {
+  // The import stamps only id+name into manifest.json; type/extends survive the
+  // import only via a fully-valid manifest.json carried in files[] (all six
+  // required fields), else the server silently substitutes a default manifest.
+  const manifest = {
+    id: manifestId,
+    name,
+    version: `${version}.0.0`,
+    entryPoint: 'frontend/src/index.jsx',
+    outputDir: 'dist/',
+    type: 'jsx-app',
+    extends: 'app-auth-persistent',
+  };
+  return {
+    manifestId,
+    name,
+    version: `${version}.0.0`,
+    // The gallery's update-or-create match reads bundle.manifest.id (the field a
+    // downloaded .zip's envelope carries); ArtifactBundle is .passthrough(), so
+    // this extra key rides through contract validation inert server-side.
+    manifest,
+    files: [
+      { path: 'manifest.json', content: JSON.stringify(manifest, null, 2) },
+      {
+        path: 'frontend/src/index.jsx',
+        content:
+          "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')).render(<App />);\n",
+      },
+      { path: 'frontend/src/App.jsx', content: `export default function App(){ return <h1>versao ${version}</h1>; }\n` },
+    ],
+  };
 }
 
 async function listOwnInstances(request: APIRequestContext): Promise<Array<{ id: string; slug?: string; name?: string; title?: string }>> {
-  const res = await action(request, 'ekoa.templates', 'list-instances', {});
-  const data = res.data as { instances?: unknown[] } | unknown[];
-  return (Array.isArray(data) ? data : (data?.instances ?? [])) as Array<{ id: string; slug?: string; name?: string; title?: string }>;
+  const res = await api(request, 'GET', '/api/v1/artifacts');
+  const body = res.json as { items?: unknown[] };
+  return (body?.items ?? []) as Array<{ id: string; slug?: string; name?: string; title?: string }>;
 }
 
 async function login(page: Page) {
@@ -114,20 +117,20 @@ async function importViaUi(page: Page, bundlePath: string) {
 
 test.beforeAll(async ({ request }) => {
   tmp = mkdtempSync(join(tmpdir(), 'ekoa-e2e-upd-'));
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  const loginRes = await api(request, 'POST', '/api/v1/auth/login', { username: 'admin', password: 'tmp12345' });
+  expect(loginRes.status).toBe(200);
+  token = (loginRes.json as { token: string }).token;
 
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(1, NAME_V1) });
-  expect(imp.success).toBe(true);
-  baseId = (imp.data as { id: string }).id;
-  baseSlug = (imp.data as { slug: string }).slug;
+  const imp = await api(request, 'POST', '/api/v1/artifacts/import', { bundle: makeBundle(1, NAME_V1) });
+  expect(imp.status).toBe(201);
+  baseId = (imp.json as { id: string }).id;
+  baseSlug = (imp.json as { slug: string }).slug;
   cleanupIds.push(baseId);
 });
 
 test.afterAll(async ({ request }) => {
   for (const id of cleanupIds) {
-    await action(request, 'ekoa.templates', 'delete-instance', { id }).catch(() => {});
+    await api(request, 'DELETE', `/api/v1/artifacts/${id}`).catch(() => {});
   }
 });
 
@@ -140,7 +143,10 @@ test('matching bundle offers the choice; update keeps id + slug and guides to Ve
   await expect(page.getByText(NAME_V1).first()).toBeVisible({ timeout: 15_000 });
 
   const v2Path = join(tmp, 'bundle-v2.json');
-  writeFileSync(v2Path, JSON.stringify(makeBundle(2, NAME_V2)));
+  // The REST gallery list carries no data bag, so the update-or-create match
+  // keys on the artifact id itself (the id a downloaded bundle's manifest
+  // carries) - hence baseId here, not the import-time MANIFEST_ID.
+  writeFileSync(v2Path, JSON.stringify(makeBundle(2, NAME_V2, baseId)));
   await importViaUi(page, v2Path);
 
   const dialog = page.getByTestId('update-or-create-dialog');
@@ -168,8 +174,8 @@ test('matching bundle offers the choice; update keeps id + slug and guides to Ve
   expect(mine[0].name ?? mine[0].title).toBe(NAME_V2);
 
   // The update is a revision: history carries the pre-update snapshot.
-  const versions = await action(request, 'ekoa.templates', 'versions-list', { artifactId: baseId });
-  const messages = ((versions.data as { versions: Array<{ message: string }> }).versions ?? []).map((v) => v.message);
+  const versions = await api(request, 'GET', `/api/v1/artifacts/${baseId}/versions`);
+  const messages = ((versions.json as { items?: Array<{ message?: string }> }).items ?? []).map((v) => v.message);
   expect(messages).toContain('update from bundle');
   expect(messages).toContain('pre-update snapshot');
 
@@ -183,7 +189,8 @@ test('"Criar nova instância" creates a separate copy instead of touching the or
   await expect(page.getByText(NAME_V2).first()).toBeVisible({ timeout: 15_000 });
 
   const v2Path = join(tmp, 'bundle-v2-copy.json');
-  writeFileSync(v2Path, JSON.stringify(makeBundle(2, NAME_V2)));
+  // Same artifact-id keyed bundle as above: the choice dialog must re-appear.
+  writeFileSync(v2Path, JSON.stringify(makeBundle(2, NAME_V2, baseId)));
   await importViaUi(page, v2Path);
 
   // Escape dismisses the choice without importing anything…
@@ -237,9 +244,9 @@ test('a non-matching bundle imports directly with no choice dialog', async ({ pa
 
 /** Create a fresh imported instance via the API and return its id/slug/name. */
 async function createInstance(request: APIRequestContext, manifestId: string, name: string) {
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(1, name, manifestId) });
-  expect(imp.success).toBe(true);
-  const d = imp.data as { id: string; slug: string };
+  const imp = await api(request, 'POST', '/api/v1/artifacts/import', { bundle: makeBundle(1, name, manifestId) });
+  expect(imp.status).toBe(201);
+  const d = imp.json as { id: string; slug: string };
   cleanupIds.push(d.id);
   return { id: d.id, slug: d.slug };
 }
@@ -259,7 +266,7 @@ test('detail view: "Atualizar a partir de ficheiro" updates the app IN PLACE', a
   await expect(input).toHaveCount(1, { timeout: 15_000 });
 
   const v2Path = join(tmp, 'detail-upd-v2.json');
-  // manifest.id === the source id the instance remembers (data.importedFrom),
+  // manifestId === the source id the instance remembers (data.importedFrom),
   // so the non-force update path succeeds without the mismatch confirm.
   writeFileSync(v2Path, JSON.stringify(makeBundle(2, v2, mid)));
   await input.setInputFiles(v2Path);

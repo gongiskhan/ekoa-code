@@ -1,6 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { cortexBase } from './helpers/legal';
 
 /**
  * U1 — /artifacts "Aplicações" section + universal "Usar" button + featured
@@ -8,50 +7,59 @@ import { resolve } from 'node:path';
  *
  * Against the REAL dev servers (Session Start Rule). Featured instances are the
  * seeded ekoa-data apps; own instances created here are cleaned up in afterAll.
- * The badge test mutates ONE featured instance's data via the super-admin
- * update-instance intent and restores it verbatim afterwards.
+ * The badge test mutates ONE featured instance's data via the admin REST PATCH
+ * and restores it verbatim afterwards.
  */
 
-function backendUrl(): string {
-  try {
-    return `http://localhost:${readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim()}`;
-  } catch {
-    return 'http://localhost:4111';
-  }
-}
-
 const STAMP = Date.now().toString(36);
-const b64 = (s: string) => Buffer.from(s).toString('base64');
 
 let token = '';
 const cleanupIds: string[] = [];
 
-async function action(request: APIRequestContext, app: string, intent: string, params: Record<string, unknown>) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
+async function api(
+  request: APIRequestContext,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; json: unknown }> {
+  const res = await request.fetch(`${cortexBase()}${path}`, {
+    method,
     headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-${Math.random().toString(36).slice(2)}` },
+    ...(body !== undefined && { data: body }),
     timeout: 30_000,
   });
-  return res.json();
+  return { status: res.status(), json: await res.json().catch(() => ({})) };
 }
 
 function makeBundle(name: string, manifestId: string) {
+  // The import stamps only id+name into manifest.json; type/extends survive the
+  // import only via a fully-valid manifest.json carried in files[] (all six
+  // required fields), else the server silently substitutes a default manifest.
+  const manifest = {
+    id: manifestId,
+    name,
+    version: '1.0.0',
+    entryPoint: 'frontend/src/index.jsx',
+    outputDir: 'dist/',
+    type: 'jsx-app',
+    extends: 'app-auth-persistent',
+  };
   return {
-    schemaVersion: 1,
-    manifest: { id: manifestId, name, version: '1.0.0', entryPoint: 'frontend/src/index.jsx', outputDir: 'dist/', type: 'jsx-app', extends: 'app-auth-persistent' },
-    scaffold: [
-      { path: 'frontend/src/index.jsx', contentB64: b64("import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')).render(<App />);\n") },
-      { path: 'frontend/src/App.jsx', contentB64: b64('export default function App(){ return <h1>own app</h1>; }\n') },
+    manifestId,
+    name,
+    version: '1.0.0',
+    files: [
+      { path: 'manifest.json', content: JSON.stringify(manifest, null, 2) },
+      { path: 'frontend/src/index.jsx', content: "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')).render(<App />);\n" },
+      { path: 'frontend/src/App.jsx', content: 'export default function App(){ return <h1>own app</h1>; }\n' },
     ],
-    exportedAt: new Date().toISOString(),
-    sourceArtifactId: manifestId,
   };
 }
 
 async function listFeatured(request: APIRequestContext): Promise<Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>> {
-  const res = await action(request, 'ekoa.templates', 'list-instances', {});
-  const data = res.data as { featured?: unknown[] };
-  return (data?.featured ?? []) as Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>;
+  const res = await api(request, 'GET', '/api/v1/artifacts');
+  const body = res.json as { featured?: unknown[] };
+  return (body?.featured ?? []) as Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>;
 }
 
 async function login(page: Page) {
@@ -79,14 +87,14 @@ function watchConsole(page: Page): string[] {
 }
 
 test.beforeAll(async ({ request }) => {
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  const loginRes = await api(request, 'POST', '/api/v1/auth/login', { username: 'admin', password: 'tmp12345' });
+  expect(loginRes.status).toBe(200);
+  token = (loginRes.json as { token: string }).token;
 });
 
 test.afterAll(async ({ request }) => {
   for (const id of cleanupIds) {
-    await action(request, 'ekoa.templates', 'delete-instance', { id }).catch(() => {});
+    await api(request, 'DELETE', `/api/v1/artifacts/${id}`).catch(() => {});
   }
 });
 
@@ -120,9 +128,9 @@ test('the Aplicações section lists the featured apps, each with a "Usar" actio
 test('an own artifact card shows the universal "Usar" button', async ({ page, request }) => {
   const errors = watchConsole(page);
   const name = `E2E Own Usar ${STAMP}`;
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(name, `e2e-own-usar-${STAMP}`) });
-  expect(imp.success).toBe(true);
-  const ownId = (imp.data as { id: string }).id;
+  const imp = await api(request, 'POST', '/api/v1/artifacts/import', { bundle: makeBundle(name, `e2e-own-usar-${STAMP}`) });
+  expect(imp.status).toBe(201);
+  const ownId = (imp.json as { id: string }).id;
   cleanupIds.push(ownId);
 
   await login(page);
@@ -141,8 +149,8 @@ test('clicking a featured card routes to its chat (?continue=) instead of forkin
   const target = featured[0];
 
   // No fork must be created: own-instance count stays the same.
-  const beforeList = await action(request, 'ekoa.templates', 'list-instances', {});
-  const beforeCount = ((beforeList.data as { instances?: unknown[] }).instances ?? []).length;
+  const beforeList = await api(request, 'GET', '/api/v1/artifacts');
+  const beforeCount = ((beforeList.json as { items?: unknown[] }).items ?? []).length;
 
   await login(page);
   await page.goto('/artifacts');
@@ -153,27 +161,39 @@ test('clicking a featured card routes to its chat (?continue=) instead of forkin
   // The card click routes to the direct-edit chat via ?continue=<featuredId>.
   await page.waitForURL(new RegExp(`/chat\\?continue=${target.id}`), { timeout: 15_000 });
 
-  const afterList = await action(request, 'ekoa.templates', 'list-instances', {});
-  const afterCount = ((afterList.data as { instances?: unknown[] }).instances ?? []).length;
+  const afterList = await api(request, 'GET', '/api/v1/artifacts');
+  const afterCount = ((afterList.json as { items?: unknown[] }).items ?? []).length;
   expect(afterCount).toBe(beforeCount);
 
   expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
 });
 
 test('featured update badge: "Manter a minha versão" clears the badge and records ignoredVersion', async ({ page, request }) => {
+  // Expected-fail until the featured-update product decision lands: the server
+  // strips the reserved keys (customized, updateAvailable) at the PATCH boundary,
+  // so the badge state this test seeds cannot exist yet. Ledger entry:
+  // docs/findings.md `featured-update-decision-pending` (director brief note B).
+  // test.fail() flips this spec red the day the seed starts landing.
+  test.fail();
   const errors = watchConsole(page);
   const featured = await listFeatured(request);
   expect(featured.length).toBeGreaterThan(0);
   const target = featured[featured.length - 1];
 
   // Snapshot the original data so we can restore it verbatim afterwards.
-  const originalGet = await action(request, 'ekoa.templates', 'get-instance', { id: target.id });
-  const originalData = ((originalGet.data as { data?: Record<string, unknown> })?.data) ?? {};
+  // KNOWN GAP: no artifacts REST response returns the data bag, so this
+  // snapshot is always empty (docs/findings.md, featured-update decision pending).
+  const originalGet = await api(request, 'GET', `/api/v1/artifacts/${target.id}`);
+  const originalData = ((originalGet.json as { data?: Record<string, unknown> })?.data) ?? {};
 
   // Simulate the seeder having flagged an update for a customized instance.
+  // KNOWN GAP: the server strips RESERVED_ARTIFACT_DATA_KEYS (customized,
+  // updateAvailable) at this PATCH boundary, so the seed cannot land and this
+  // test is expected to fail until the featured-update product decision lands
+  // (docs/findings.md).
   const patched = { ...originalData, customized: true, updateAvailable: { version: '9.9.9' } };
-  const patchRes = await action(request, 'ekoa.templates', 'update-instance', { id: target.id, data: patched });
-  expect(patchRes.success).toBe(true);
+  const patchRes = await api(request, 'PATCH', `/api/v1/artifacts/${target.id}`, { data: patched });
+  expect(patchRes.status).toBe(200);
 
   try {
     await login(page);
@@ -192,16 +212,15 @@ test('featured update badge: "Manter a minha versão" clears the badge and recor
     await expect(badge).toHaveCount(0, { timeout: 10_000 });
 
     // …and ignoredVersion persisted, updateAvailable cleared.
-    const after = await action(request, 'ekoa.templates', 'get-instance', { id: target.id });
-    const afterData = (after.data as { data?: Record<string, unknown> })?.data ?? {};
+    const after = await api(request, 'GET', `/api/v1/artifacts/${target.id}`);
+    const afterData = (after.json as { data?: Record<string, unknown> })?.data ?? {};
     expect(afterData.ignoredVersion).toBe('9.9.9');
     expect(afterData.updateAvailable ?? null).toBeNull();
   } finally {
-    // Restore the featured instance's data to its pre-test state. update-instance
-    // MERGES data for featured instances, so explicitly clear the keys the test
-    // introduced rather than relying on a replace.
-    await action(request, 'ekoa.templates', 'update-instance', {
-      id: target.id,
+    // Restore the featured instance's data to its pre-test state. PATCH data
+    // MERGES, so explicitly clear the keys the test introduced rather than
+    // relying on a replace.
+    await api(request, 'PATCH', `/api/v1/artifacts/${target.id}`, {
       data: { ...originalData, customized: false, updateAvailable: null, ignoredVersion: null },
     }).catch(() => {});
   }

@@ -1,6 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { cortexBase } from './helpers/legal';
 
 /**
  * Layer 3 — the artifact backend panel, against a REAL fixture backend.
@@ -20,18 +19,9 @@ import { resolve } from 'node:path';
  * dev servers (Session Start Rule). Imported instances are deleted in afterAll.
  */
 
-function backendUrl(): string {
-  try {
-    return `http://localhost:${readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim()}`;
-  } catch {
-    return 'http://localhost:4111';
-  }
-}
-
 const STAMP = Date.now().toString(36);
 const NAME_BE = `E2E Backend App ${STAMP}`;
 const NAME_PLAIN = `E2E Plain App ${STAMP}`;
-const b64 = (s: string) => Buffer.from(s).toString('base64');
 
 const FRONTEND_SRC =
   "import { createRoot } from 'react-dom/client';\nfunction App(){ return <h1>backend fixture</h1>; }\ncreateRoot(document.getElementById('root')).render(<App />);\n";
@@ -47,8 +37,13 @@ const BACKEND_SRC =
   "}\n";
 
 function makeBundle(name: string, withBackend: boolean) {
+  // The import stamps only id+name into manifest.json; type/extends/backend survive
+  // only via a FULLY-valid manifest.json carried in files[] (all of id, name, version,
+  // entryPoint, outputDir, type present) - a partial manifest is silently replaced by
+  // a backend-less jsx-app default and every backend assertion would fail downstream.
+  const manifestId = `e2e-be-${STAMP}-${withBackend ? 'be' : 'plain'}`;
   const manifest: Record<string, unknown> = {
-    id: `e2e-be-${STAMP}-${withBackend ? 'be' : 'plain'}`,
+    id: manifestId,
     name,
     version: '1.0.0',
     entryPoint: 'frontend/src/index.jsx',
@@ -56,25 +51,34 @@ function makeBundle(name: string, withBackend: boolean) {
     type: 'jsx-app',
     extends: 'app-auth-persistent',
   };
-  const scaffold = [{ path: 'frontend/src/index.jsx', contentB64: b64(FRONTEND_SRC) }];
+  const files = [{ path: 'frontend/src/index.jsx', content: FRONTEND_SRC }];
   if (withBackend) {
     manifest.backend = { entryPoint: 'backend/index.js', handlers: ['onEmail'] };
-    scaffold.push({ path: 'backend/index.js', contentB64: b64(BACKEND_SRC) });
+    files.push({ path: 'backend/index.js', content: BACKEND_SRC });
   }
-  return { schemaVersion: 1, manifest, scaffold, exportedAt: new Date().toISOString(), sourceArtifactId: manifest.id };
+  files.push({ path: 'manifest.json', content: JSON.stringify(manifest, null, 2) });
+  return { manifestId, name, version: '1.0.0', files };
 }
 
 let token = '';
 let backendAppId = '';
 let plainAppId = '';
 
-async function action(request: APIRequestContext, app: string, intent: string, params: Record<string, unknown>) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
+// Typed REST transport (ch03). Import + sample-run are admin-gated (canBuildApps /
+// canEditApps), so every call carries the harness admin's Bearer token once minted.
+function apiPost(request: APIRequestContext, path: string, body: unknown) {
+  return request.post(`${cortexBase()}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-${Math.random().toString(36).slice(2)}` },
+    data: body,
     timeout: 30_000,
   });
-  return res.json();
+}
+
+function apiDelete(request: APIRequestContext, path: string) {
+  return request.delete(`${cortexBase()}${path}`, {
+    headers: { ...(token && { Authorization: `Bearer ${token}` }) },
+    timeout: 30_000,
+  });
 }
 
 async function login(page: Page) {
@@ -109,33 +113,34 @@ async function openArtifact(page: Page, name: string) {
 test.beforeAll(async ({ request }) => {
   // Importing two bundles + a cold esbuild build (frontend fetches React from a
   // CDN on first run, plus the backend node bundle) can exceed the default hook
-  // budget; the run-sample poll waits on the fire-and-forget post-import build.
+  // budget; a build failure only warns (import still 201s as 'draft'), so the
+  // run-sample poll proves the handler actually invokes cleanly before the UI runs.
   test.setTimeout(90_000);
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  const loginRes = await apiPost(request, '/api/v1/auth/login', { username: 'admin', password: 'tmp12345' });
+  expect(loginRes.ok()).toBe(true);
+  token = ((await loginRes.json()) as { token: string }).token;
 
-  const impBe = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(NAME_BE, true) });
-  expect(impBe.success).toBe(true);
-  backendAppId = (impBe.data as { id: string }).id;
+  const impBe = await apiPost(request, '/api/v1/artifacts/import', { bundle: makeBundle(NAME_BE, true) });
+  expect(impBe.status()).toBe(201);
+  backendAppId = ((await impBe.json()) as { id: string }).id;
 
-  const impPlain = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(NAME_PLAIN, false) });
-  expect(impPlain.success).toBe(true);
-  plainAppId = (impPlain.data as { id: string }).id;
+  const impPlain = await apiPost(request, '/api/v1/artifacts/import', { bundle: makeBundle(NAME_PLAIN, false) });
+  expect(impPlain.status()).toBe(201);
+  plainAppId = ((await impPlain.json()) as { id: string }).id;
 
-  // The post-import backend build is fire-and-forget; poll a dry-run until the
-  // bundle is built and the handler invokes cleanly (no writes — pure dry-run).
+  // Poll a dry-run until the handler invokes cleanly (no writes - pure dry-run).
   await expect
     .poll(async () => {
-      const r = await action(request, 'ekoa.artifact-backend', 'run-sample', { id: backendAppId, entrypoint: 'onEmail', input: { subject: 'poll' } });
-      return (r?.data as { result?: { ok?: boolean } } | undefined)?.result?.ok === true;
+      const r = await apiPost(request, `/api/v1/artifacts/${backendAppId}/backend/sample-run`, { entrypoint: 'onEmail', input: { subject: 'poll' } });
+      if (!r.ok()) return false;
+      return ((await r.json()) as { result?: { ok?: boolean } }).result?.ok === true;
     }, { timeout: 40_000, intervals: [1000, 1500, 2000] })
     .toBe(true);
 });
 
 test.afterAll(async ({ request }) => {
   for (const id of [backendAppId, plainAppId]) {
-    if (id) await action(request, 'ekoa.templates', 'delete-instance', { id }).catch(() => {});
+    if (id) await apiDelete(request, `/api/v1/artifacts/${id}`).catch(() => {});
   }
 });
 

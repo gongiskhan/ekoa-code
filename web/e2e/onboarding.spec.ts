@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext, type Route } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { ChatRunCreateResponse } from '@ekoa/shared';
+import { cortexBase } from './helpers/legal';
 
 /**
  * Guided onboarding - entry flow, deterministic and LLM-free (ONB-4).
@@ -13,24 +13,15 @@ import { resolve } from 'node:path';
  *   - re-entry reuses the SAME session (one persistent onboarding session/user);
  *   - a quick-reply chip stages the user's message through the normal send path.
  *
- * State is controlled via the backend action API (login → list/delete onboarding
+ * State is controlled via the backend REST API (login → list/delete onboarding
  * sessions) so the spec is robust to the pre-existing dev onboarding session and
- * passes on repeated runs. The backend port is the single source of truth in
- * ../../backend.port (mirrors playwright.config.ts reading ../app.port). The live
- * conversation (interview → proposal → build) is covered by the integration-gated
- * driver cortex/tests/e2e/onboarding.e2e.mjs, not here.
+ * passes on repeated runs. The backend origin comes from cortexBase() - env-aware
+ * for the parameterized e2e:full harness ports, backed by ../../backend.port. The
+ * live conversation (interview → proposal → build) is covered by the
+ * integration-gated driver cortex/tests/e2e/onboarding.e2e.mjs, not here.
  */
 
-function backendPort(): string {
-  try {
-    return readFileSync(resolve(__dirname, '..', '..', 'backend.port'), 'utf-8').trim();
-  } catch {
-    return '4111';
-  }
-}
-// 127.0.0.1 (not localhost): cortex binds IPv4 (0.0.0.0), and the Playwright
-// request client can resolve `localhost` to IPv6 ::1, which is refused.
-const BE = `http://127.0.0.1:${backendPort()}`;
+const BE = cortexBase();
 
 // Copy anchors. Card title is locale-sourced (ekoa/locales/pt.ts `onboarding`).
 // The welcome's SEND chips are vertical-sourced (useVerticalProfile ->
@@ -43,13 +34,13 @@ const CHIP_ANCHOR = /advogad|conta própria|palavras minhas/i; // the 3 welcome 
 const FIRST_CHIP = 'Sou advogado(a) num escritório'; // legal vertical's first send chip
 
 // -------------------------------------------------------------------------
-// Backend action API helpers (absolute BE url; independent of the UI session).
+// Backend REST helpers (absolute BE url; independent of the UI session).
 // -------------------------------------------------------------------------
-async function action<T = unknown>(
+async function api<T = unknown>(
   request: APIRequestContext,
-  app: string,
-  intent: string,
-  params: Record<string, unknown>,
+  method: 'get' | 'post' | 'delete',
+  path: string,
+  data?: Record<string, unknown>,
   token?: string,
 ): Promise<T> {
   // One retry: the dev cortex can blink during a concurrent restart. Login
@@ -58,13 +49,15 @@ async function action<T = unknown>(
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await request.post(`${BE}/api/v1/action`, {
+      const res = await request[method](`${BE}${path}`, {
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        data: { app, intent, params, request_id: Math.random().toString(36).slice(2) },
+        ...(data !== undefined ? { data } : {}),
         timeout: 60_000,
       });
-      const body = await res.json();
-      return (body?.data ?? body) as T;
+      if (!res.ok()) {
+        throw new Error(`${method.toUpperCase()} ${path} -> ${res.status()}: ${await res.text()}`);
+      }
+      return (await res.json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 1_000));
@@ -74,7 +67,7 @@ async function action<T = unknown>(
 }
 
 async function apiLogin(request: APIRequestContext): Promise<string> {
-  const data = await action<{ token?: string }>(request, 'ekoa.auth', 'login', {
+  const data = await api<{ token?: string }>(request, 'post', '/api/v1/auth/login', {
     username: 'admin',
     password: 'tmp12345',
   });
@@ -83,12 +76,12 @@ async function apiLogin(request: APIRequestContext): Promise<string> {
   return token as string;
 }
 
-type Sess = { id: string; type?: string; messageCount?: number };
+type Sess = { id: string; type?: string };
 
 async function deleteOnboardingSessions(request: APIRequestContext, token: string): Promise<void> {
-  const sessions = (await action<Sess[]>(request, 'ekoa.sessions', 'list', {}, token)) || [];
-  for (const s of sessions.filter((x) => x.type === 'onboarding')) {
-    await action(request, 'ekoa.sessions', 'delete', { sessionId: s.id }, token);
+  const res = await api<{ items?: Sess[] }>(request, 'get', '/api/v1/sessions', undefined, token);
+  for (const s of (res.items ?? []).filter((x) => x.type === 'onboarding')) {
+    await api(request, 'delete', `/api/v1/sessions/${s.id}`, undefined, token);
   }
 }
 
@@ -182,16 +175,19 @@ test('re-entry reuses the single persistent onboarding session (same id)', async
 test('a quick-reply chip stages the user message through the normal send path (no LLM)', async ({ page }) => {
   // Stub the agent request so nothing depends on a live model call: the user
   // message is added locally before the request fires, so the staging is
-  // observable without any SSE reply.
-  await page.route('**/api/v1/request', (route: Route) => {
-    let traceId = 'stub-trace';
-    try { traceId = JSON.parse(route.request().postData() || '{}').trace_id || traceId; } catch { /* ignore */ }
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ trace_id: traceId, status: 'accepted' }),
-    });
-  });
+  // observable without any SSE reply. The stub body is schema-validated (QA
+  // rule: no protocol stubs except schema-validated ones).
+  const createResponse = { runId: 'run-onboarding-stub' };
+  expect(ChatRunCreateResponse.safeParse(createResponse).success).toBe(true);
+  await page.route('**/api/v1/chat/runs', (route: Route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 202,
+          contentType: 'application/json',
+          body: JSON.stringify(createResponse),
+        })
+      : route.fallback(),
+  );
 
   await page.goto('/chat');
   const card = onboardingCard(page).first();
