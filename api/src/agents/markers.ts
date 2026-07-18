@@ -124,9 +124,18 @@ export class MarkerProcessor {
       emit = this.buffer;
       this.buffer = '';
     } else {
-      const hold = Math.min(HOLD_BACK, this.buffer.length);
-      emit = this.buffer.slice(0, this.buffer.length - hold);
-      this.buffer = this.buffer.slice(this.buffer.length - hold);
+      let emitEnd = this.buffer.length - Math.min(HOLD_BACK, this.buffer.length);
+      // An OPEN `<ekoa-context>` whose close has not yet arrived stays in the buffer after
+      // stripSignals. The fixed HOLD_BACK only protects the trailing ~marker-length chars, so
+      // the open block's body would otherwise stream to the live text_chunk wire (and be spoken
+      // by TTS) before its close tag lands. Hold back from the open tag itself until the close
+      // arrives - the full block is then stripped by stripSignals and never reaches the wire.
+      const openIdx = this.buffer.indexOf(CONTEXT_OPEN);
+      if (openIdx !== -1 && this.buffer.indexOf(CONTEXT_CLOSE, openIdx + CONTEXT_OPEN.length) === -1) {
+        emitEnd = Math.min(emitEnd, openIdx);
+      }
+      emit = this.buffer.slice(0, emitEnd);
+      this.buffer = this.buffer.slice(emitEnd);
     }
     if (emit) this.emittedAnyText = true;
     return emit;

@@ -90,6 +90,25 @@ describe('MarkerProcessor — integration handoff + context blocks', () => {
     expect(findings.contextBlocks).toEqual(['{"a":1}', '{"b":2}']);
   });
 
+  it('does NOT stream an OPEN context block body to the LIVE wire before its close arrives (security review: context-block-hold-back-leak)', () => {
+    const p = new MarkerProcessor();
+    // Finer B7 deltas: the open tag + a long body arrive on the wire BEFORE the close tag.
+    const live1 = p.push('Resposta ao utilizador. <ekoa-context>{"userGoal":"segredo interno muito longo que nunca deve ser falado"}');
+    // The open block's body must NOT have leaked to this live emission.
+    expect(live1).not.toContain('userGoal');
+    expect(live1).not.toContain('segredo interno');
+    expect(live1).not.toContain('<ekoa-context>');
+    expect(live1).toContain('Resposta ao utilizador');
+    // The close arrives on a later delta; the whole block is stripped, never reaching the wire.
+    const live2 = p.push('</ekoa-context> continuação.');
+    const tail = p.end();
+    const total = live1 + live2 + tail.text;
+    expect(total).not.toContain('ekoa-context');
+    expect(total).not.toContain('userGoal');
+    expect(total).toContain('continuação');
+    expect(tail.findings.contextBlocks).toEqual(['{"userGoal":"segredo interno muito longo que nunca deve ser falado"}']);
+  });
+
   it('emits plain prose unchanged', () => {
     const { emitted, findings } = drive(new MarkerProcessor(), ['Just a normal answer.']);
     expect(emitted).toBe('Just a normal answer.');

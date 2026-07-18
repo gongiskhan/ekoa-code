@@ -32,14 +32,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   responding to a marker frame) by 9-18s while a concurrent chat run's agent work (tool calls)
   was in flight on the SAME api process. Confirms this is a genuine event-loop-wide stall, not
   scoped to the requesting HTTP/SSE connection - worth weighting into the fix's priority.
-- **`context-block-hold-back-leak`** (OPEN, MEDIUM, correctness/privacy-adjacent). Found by the
+- **`context-block-hold-back-leak`** (FIXED 2026-07-18, run 20260717-190134-9d4c1cbf closing security review). Found by the
   C7 voice proof (run 20260717-190134-9d4c1cbf) while driving a real TALKING-mode turn end to
   end: the model's internal `<ekoa-context>{...}</ekoa-context>` state-tracking block (ch05
   §5.7.2, `api/src/agents/markers.ts` `CONTEXT_OPEN`/`CONTEXT_CLOSE`) partially LEAKED onto the
   live `text_chunk` wire and was consequently spoken aloud via the voice pipeline's TTS `say`
   (observed verbatim: `<ekoa-context>\n{"userGoal": "...", "knownContext": [], ...`). The
   persisted (final, authoritative) assistant message was clean - `MarkerProcessor.end()`'s full
-  final pass correctly stripped the block from the PERSISTED text - so this is a LIVE-STREAM-ONLY
+  final pass correctly stripped the block from the PERSISTED text - so this WAS a LIVE-STREAM-ONLY
   leak, not a persistence-layer defect. Root cause (read, not yet fixed):
   `MarkerProcessor.drain()`'s split-marker hold-back (`HOLD_BACK = MAX_MARKER_LEN - 1`, ~14 chars)
   protects a MARKER LITERAL (e.g. `<ekoa-context>` itself) from splitting across a chunk
@@ -59,6 +59,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   scope (agents/markers.ts is shared chat-pipeline infrastructure, not voice-specific); a
   dedicated fix + regression test (a context block whose body exceeds HOLD_BACK, split across
   many small deltas) is owed.
+  FIX: `api/src/agents/markers.ts` `drain()` now holds back from an unclosed `<ekoa-context>` open tag (not just the fixed ~marker-length tail) until its close arrives, so the block's body never streams to the live `text_chunk` wire; stripSignals then removes the complete block. Regression-pinned in `api/tests/agents/markers.test.ts` (a split open-block delta whose body must not appear in the live emission). Verified: markers + transport + chat suites 43/43.
 - **`chip-title-raw-first-line`** (OPEN, LOW, polish). The composer chip renders the sheet's raw
   first line when no model title exists yet; once reply_summary lands the sheet has a title the
   chip could prefer.
