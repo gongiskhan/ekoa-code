@@ -33,3 +33,12 @@ operator's live Claude session (same class as the 2026-07-09 boot-b flake). NOT 
 Remedy: use the DEDICATED account path — node api/tests/journeys/boot-b.mjs up (reads
 $EKOA_CLAUDE_CREDENTIALS / ~/.config/ekoa/claude-credentials.json) instead of driver.mjs up +
 provision-credential.mjs with a scavenged token.
+
+## coherence-locale: header EN flip fails only in large multi-spec batches (2026-07-18)
+Seen once while running the six-spec regression band back-to-back (ui-foundation, shell-nav,
+chat-thinking, regressions-dashboard, coherence-locale, os-mode): the "automations renders PT
+by default and flips to EN via the header toggle" assertion failed mid-batch, then passed
+standalone AND paired with its predecessor (regressions-dashboard) on immediate re-runs.
+Suspected server-side language/user-settings state left by an earlier spec's run; unrelated to
+the OS-mode work (whose spec ran after it). If it recurs in the ledger lane, bisect the batch
+ordering; do not loosen the assertion.

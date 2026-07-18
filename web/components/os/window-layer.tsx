@@ -68,7 +68,12 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
   const untile = useOsStore((s) => s.untile);
   const setTileRatio = useOsStore((s) => s.setTileRatio);
 
-  const layerRef = useRef<HTMLDivElement>(null);
+  // The layer div only exists once a workspace does, so the observer attaches
+  // via a callback-ref-driven effect (a mount-once effect would run while the
+  // div is still null on a fresh store and never measure - windows would lay
+  // out against 0x0 bounds).
+  const [layerEl, setLayerEl] = useState<HTMLDivElement | null>(null);
+  const layerRef = useRef<HTMLDivElement | null>(null);
   const windowEls = useRef(new Map<string, HTMLElement>());
   const dragRef = useRef<DragState | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -77,14 +82,14 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
 
   // Desktop bounds via ResizeObserver - the tiled layout reflows with them.
   useEffect(() => {
-    const el = layerRef.current;
-    if (!el) return;
-    const update = () => setBounds({ x: 0, y: 0, w: el.clientWidth, h: el.clientHeight });
+    if (!layerEl) return;
+    const update = () =>
+      setBounds({ x: 0, y: 0, w: layerEl.clientWidth, h: layerEl.clientHeight });
     update();
     const ro = new ResizeObserver(update);
-    ro.observe(el);
+    ro.observe(layerEl);
     return () => ro.disconnect();
-  }, []);
+  }, [layerEl]);
 
   const tiling = workspace?.tiling ?? null;
   const layout = useMemo(() => computeLayout(tiling, bounds, DIVIDER_PX), [tiling, bounds]);
@@ -93,11 +98,15 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
     (win: WindowState): Rect => {
       const tiled = layout.rects[win.id];
       if (win.mode === 'tile' && tiled) return tiled;
-      // Clamp floats into view so a restored layout on a smaller screen stays reachable.
-      const w = Math.min(win.rect.w, Math.max(bounds.w, 320));
-      const h = Math.min(win.rect.h, Math.max(bounds.h, 240));
-      const x = Math.min(Math.max(win.rect.x, 80 - w), Math.max(bounds.w - 80, 0));
-      const y = Math.min(Math.max(win.rect.y, 0), Math.max(bounds.h - 40, 0));
+      // Before the ResizeObserver reports real bounds, render floats as stored
+      // (clamping against 0x0 would flash every window at its minimum size).
+      if (bounds.w === 0 || bounds.h === 0) return win.rect;
+      // Floats stay fully inside the desktop (a restored layout on a smaller
+      // screen stays reachable; nothing hangs under the docked chat panel).
+      const w = Math.min(win.rect.w, bounds.w);
+      const h = Math.min(win.rect.h, bounds.h);
+      const x = Math.min(Math.max(win.rect.x, 0), bounds.w - w);
+      const y = Math.min(Math.max(win.rect.y, 0), bounds.h - h);
       return { x, y, w, h };
     },
     [layout.rects, bounds],
@@ -315,7 +324,14 @@ export function WindowLayer({ host }: { host: SurfaceHost }) {
   const floatingBase = 20;
 
   return (
-    <div ref={layerRef} className="pointer-events-none absolute inset-0" data-testid="os-window-layer">
+    <div
+      ref={(el) => {
+        layerRef.current = el;
+        setLayerEl(el);
+      }}
+      className="pointer-events-none absolute inset-0"
+      data-testid="os-window-layer"
+    >
       {workspace.windows.map((win, index) => {
         if (win.minimized) return null;
         const rect = displayRect(win);

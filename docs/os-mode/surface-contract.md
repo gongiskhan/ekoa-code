@@ -210,12 +210,11 @@ manifest content (actions, sizes, component import) must not accumulate centrall
 
 - `artifacts` - the converted artifacts manager page (singleton).
 - `artifact-app` - a served-app iframe window for one artifact (multi-instance, keyed by
-  `props.artifactId`). The iframe URL/token/probe logic that exists twice today
-  (`web/components/builder/side-panel.tsx:127-151` plus poll machinery, and the artifacts
-  page preview path) is extracted to a shared hook `web/hooks/useArtifactAppSrc.ts`, reused
-  by the classic SidePanel (behavior unchanged) and this surface. Non-shareable artifacts
-  keep the `?token=` ownership check; shareable ones keep the token-less public URL
-  (existing rules, unchanged).
+  `props.artifactId`). Non-shareable artifacts keep the `?token=` ownership check; shareable
+  ones keep the token-less public URL (existing rules, unchanged). Run-1 amendment: the
+  planned `useArtifactAppSrc` dedup hook was NOT built - the surface needed only the token
+  rule plus one document probe (`web/lib/preview-probe.ts`), and extracting the side panel's
+  entangled build-preview poll machinery bought nothing. The side panel is untouched.
 
 No other page is converted in this run.
 
@@ -302,8 +301,14 @@ export interface WindowState {
 
 export type TileNode =
   | { leaf: string }                                       // windowId
+  | { empty: true }                                        // an unoccupied half (see below)
   | { dir: "row" | "col"; ratio: number; a: TileNode; b: TileNode };
 ```
+
+Run-1 amendment (implementation finding): the tree carries an `empty` leaf so that
+edge-snapping the FIRST window yields `[window | empty]` - the window takes exactly half the
+region, which is the brief's gesture - and the next opposite-edge snap fills the empty slot.
+Dividers render only between real windows; a tree left with no real windows collapses to null.
 
 Per workspace: `windows: WindowState[]` (array order = z-order, last = front; tiled render
 below floating) + `tiling: TileNode | null`. Rects are clamped/shifted into the desktop

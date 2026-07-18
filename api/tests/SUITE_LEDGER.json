@@ -1,5 +1,5 @@
 {
-  "$comment": "Suite ledger (chapter 14 \u00a714.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
+  "$comment": "Suite ledger (chapter 14 §14.2.5). Maps every ported test artifact from spec/reference/test-audit.md to the gate at which it must first be green. Skeleton written at G-P; per-file rows and their exact new paths are finalized when Phase 1 (G1) ports the estate. Before its gate a red/non-runnable artifact reports 'skipped (awaiting G<N>)'. At/after its gate, red = gate failure. Ratchet: once green, never skipped/red later. The schema-coverage allowlist (shared/ domains not yet landed) shrinks at every domain gate, empty at G9.",
   "version": 1,
   "runId": "20260706-182515-9080f2cb",
   "currentGate": "G12",
@@ -86,7 +86,7 @@
     },
     "band4_gap_plan": {
       "targetGate": "G9",
-      "note": "New specs from the ch13 \u00a713.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",
+      "note": "New specs from the ch13 §13.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists.",
       "specs": [
         "automation-deterministic",
         "chat-thinking",
@@ -99,7 +99,8 @@
         "trust-chip",
         "reference-attach",
         "live-bridge",
-        "branding-colors"
+        "branding-colors",
+        "os-mode"
       ]
     }
   },
@@ -137,9 +138,10 @@
       "use-bridge-presence",
       "device-code",
       "bridge-local",
-      "refusal-file-request"
+      "refusal-file-request",
+      "os-tiling"
     ],
-    "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page \u2014 added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list \u2014 the census was red again).",
+    "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page — added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list — the census was red again).",
     "mock_update_needed": [
       "orchestration-hydrate-reconcile",
       "components/data-backups-panel",
@@ -147,7 +149,7 @@
     ],
     "retired_as_static_audit": [
       "artifacts-page-wiring",
-      "conversation-types (FC-109: deleted in W4 with its subject, the FC-107/108 client-side mode classifier + conversation-types module; \u00a712.5)"
+      "conversation-types (FC-109: deleted in W4 with its subject, the FC-107/108 client-side mode classifier + conversation-types module; §12.5)"
     ]
   },
   "node_drivers": {
@@ -173,12 +175,12 @@
       {
         "name": "erp-auth-ui",
         "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER. Targets the brasilsalom\u00e3o ERP TENANT FORK (default APP_ID a machine-local fork UUID; emails @brasilsalomao.pt) with app-sso email/password gating + CRM + KYC + ops. The ported featured erp-imobiliario is a simpler financial+clientes ERP with NO app-sso email login (uses an accessCode gate; passwordSignIn/whoami/input[type=email] absent), CRM, or KYC - that fork is NOT in the ported reference catalog (spec \u00a714.1 reference-access) and is reconstituted at cutover (\u00a714.4, OUTSIDE this run). The G9 green ran against a non-committed local fork (ERP_APP_ID override); no committed content can satisfy it. Retargeted G9->CUTOVER (a post-run milestone) at G12 when the fresh e2e:server surfaced it. See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "note": "was G6->G9->CUTOVER. Targets the brasilsalomão ERP TENANT FORK (default APP_ID a machine-local fork UUID; emails @brasilsalomao.pt) with app-sso email/password gating + CRM + KYC + ops. The ported featured erp-imobiliario is a simpler financial+clientes ERP with NO app-sso email login (uses an accessCode gate; passwordSignIn/whoami/input[type=email] absent), CRM, or KYC - that fork is NOT in the ported reference catalog (spec §14.1 reference-access) and is reconstituted at cutover (§14.4, OUTSIDE this run). The G9 green ran against a non-committed local fork (ERP_APP_ID override); no committed content can satisfy it. Retargeted G9->CUTOVER (a post-run milestone) at G12 when the fresh e2e:server surfaced it. See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
       },
       {
         "name": "erp-crm-persistence",
         "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER; same brasilsalom\u00e3o ERP tenant-fork gap (prospects/propostas CRM not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "note": "was G6->G9->CUTOVER; same brasilsalomão ERP tenant-fork gap (prospects/propostas CRM not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
       },
       {
         "name": "erp-kyc",
@@ -193,17 +195,17 @@
       {
         "name": "ifthenpay",
         "targetGate": "G8",
-        "note": "was G4; G4 passed partial-domain (RUN_LOG G4) without the action-runner/platform-caller machinery this driver's execute step needs, and the driver still speaks the retired action API (FIXED-2) \u2014 retargeted to G8 (integration-execution) at the 2026-07-06 resume; REST adaptation owed there. See RUN_LOG DEVIATION."
+        "note": "was G4; G4 passed partial-domain (RUN_LOG G4) without the action-runner/platform-caller machinery this driver's execute step needs, and the driver still speaks the retired action API (FIXED-2) — retargeted to G8 (integration-execution) at the 2026-07-06 resume; REST adaptation owed there. See RUN_LOG DEVIATION."
       },
       {
         "name": "invoicexpress",
         "targetGate": "G8",
-        "note": "was G4; same as ifthenpay \u2014 rides the G8 integration-execution machinery; REST adaptation owed there. See RUN_LOG DEVIATION (2026-07-06 resume)."
+        "note": "was G4; same as ifthenpay — rides the G8 integration-execution machinery; REST adaptation owed there. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "pipedream",
         "targetGate": "G8",
-        "note": "was G4; the Pipedream REST layer (ch03 \u00a73.8.16) did not land in the G4 partial-domain pass \u2014 module + adapted driver owed at G8. See RUN_LOG DEVIATION (2026-07-06 resume)."
+        "note": "was G4; the Pipedream REST layer (ch03 §3.8.16) did not land in the G4 partial-domain pass — module + adapted driver owed at G8. See RUN_LOG DEVIATION (2026-07-06 resume)."
       },
       {
         "name": "integration-automation",
