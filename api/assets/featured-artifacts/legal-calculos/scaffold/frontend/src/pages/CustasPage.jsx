@@ -6,6 +6,7 @@ import { useDemoResult } from '../demo.js';
 import { Badge, toast } from '../components/ui.jsx';
 import { IconGavel, IconPlus, IconFileText } from '../components/Icons.jsx';
 import { parseEuro, hojeISO, citasDeCustas, memoriaTexto } from './calculo-view.js';
+import { curarTabelasTaxas } from '../tabelas-heal.js';
 
 const TABELAS = [
   { value: 'I-A', label: 'Tabela I-A (generalidade das acções)' },
@@ -31,6 +32,9 @@ export default function CustasPage() {
 
   async function ensureTabela() {
     if (tabela) return tabela;
+    // Mesma cura que na página de juros: o valor da UC também pode estar
+    // sombreado por uma linha-marcador 'confirmar' da sementeira.
+    await curarTabelasTaxas();
     const r = await obterTabela();
     if (r && r.ok) { setTabela(r.tabela); setTabelaErro(false); return r.tabela; }
     setTabelaErro(true);
@@ -184,6 +188,7 @@ export default function CustasPage() {
                   <span className="stat-label">Taxa de justiça</span>
                   <span className="resultado-value" data-testid="custas-total">{formatEur(resultado.valor)}</span>
                   <span className="text-xs text-subtle">{resultado.ucCount} UC × {formatEur(resultado.uc)}</span>
+                  <span className="text-xs text-subtle" data-testid="custas-uc-base">{resultado.ucBase}</span>
                 </div>
                 <div className="resultado-tile">
                   <span className="stat-label">Escalão</span>

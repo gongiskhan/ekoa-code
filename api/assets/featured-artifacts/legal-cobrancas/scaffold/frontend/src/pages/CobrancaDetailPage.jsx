@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   useSharedCollection, listShared, updateShared, createShared,
-  formatEur, formatDate, formatDateTime,
+  formatEur, formatDate, formatDateTime, appHref,
 } from '../shared.js';
 import { Badge, Button, EmptyState, Skeleton, useToast } from '../components/ui.jsx';
 import {
@@ -10,11 +10,13 @@ import {
 } from '../components/Icons.jsx';
 import {
   reconcileCobranca, gerarReferenciaDemo, proximoPasso, previewTemplate, MB_ENTIDADE,
+  diasAtraso, agingBucket, proximaAcaoBucket, cartaInterpelacao, emAberto,
 } from '../engine/cobrancas.mjs';
 import {
   ESTADO_LABEL, ESTADO_TONE, METODO_LABEL, CANAL_LABEL, atrasoLabel, atrasoTone,
 } from './cobrancas-logic.js';
 import { calcularJuros, guardarCalculo } from '../calculos-cliente.js';
+import { pdfDisponivel, escapeHtml, exportarPdf } from './exportar-pdf.js';
 
 /* Está em modo de desenvolvimento? (?dev=1 destranca a simulação de callback.) */
 function isDevMode() {
@@ -60,7 +62,8 @@ export default function CobrancaDetailPage() {
 
   const templateVars = useMemo(() => ({
     nome: cliente?.nome || 'cliente',
-    descricao: cobranca?.descricao || '',
+    // Os templates já dizem "a fatura {{descricao}}"; retirar o "Fatura " inicial evita "a fatura Fatura FT...".
+    descricao: (cobranca?.descricao || '').replace(/^fatura\s+/i, ''),
     valor: cobranca ? formatEur(cobranca.valor) : '',
   }), [cliente, cobranca]);
 
@@ -308,7 +311,155 @@ export default function CobrancaDetailPage() {
           )}
         </section>
       </div>
+
+      <EscaladaCobranca cobranca={cobranca} cliente={cliente} hoje={hoje} />
     </div>
+  );
+}
+
+/*
+ * Escalada da cobrança vencida: carta de interpelação determinística (motor
+ * cartaInterpelacao) com exportação PDF, e o passo seguinte da régua — a
+ * injunção — como deep-link para a app Injunções com a cobrança pré-escolhida.
+ * Os juros da carta vêm SEMPRE do serviço legal-calculos (troços citados por
+ * Aviso); se o serviço não responder, a carta sai sem valor de juros (remete a
+ * liquidação para a data do pagamento) — nunca se inventa uma taxa.
+ */
+function EscaladaCobranca({ cobranca, cliente, hoje }) {
+  const toast = useToast();
+  const [carta, setCarta] = useState(null);
+  const [aGerar, setAGerar] = useState(false);
+  const [aExportar, setAExportar] = useState(false);
+
+  const dias = diasAtraso(cobranca.dataVencimento, hoje);
+  const vencida = emAberto(cobranca) && Number.isFinite(dias) && dias > 0;
+  if (!vencida) return null;
+
+  const bucket = agingBucket(dias);
+  const acao = proximaAcaoBucket(bucket);
+
+  async function onGerarCarta() {
+    setAGerar(true);
+    try {
+      const hojeIso = new Date().toISOString().slice(0, 10);
+      let juros = null;
+      let avisoJuros = null;
+      try {
+        const r = await calcularJuros({
+          valor: cobranca.valor,
+          dataVencimento: cobranca.dataVencimento,
+          dataFim: hojeIso,
+          tipoJuro: 'comercial',
+        });
+        if (r.ok) juros = r.resultado;
+        else avisoJuros = r.error || 'O cálculo de juros falhou.';
+      } catch {
+        avisoJuros = 'O serviço de cálculos não respondeu.';
+      }
+      const resultado = cartaInterpelacao({
+        devedorNome: cliente?.nome || '',
+        descricao: cobranca.descricao || '',
+        valor: cobranca.valor,
+        dataVencimento: cobranca.dataVencimento,
+        juros,
+        prazoDias: 10,
+        hoje: hojeIso,
+      });
+      setCarta({ ...resultado, comJuros: Boolean(juros) });
+      if (avisoJuros) {
+        toast(`${avisoJuros} A carta foi gerada sem o valor dos juros (ficam a liquidar à data do pagamento).`, { tone: 'error' });
+      } else {
+        toast('Carta de interpelação gerada.', { tone: 'ok' });
+      }
+    } finally {
+      setAGerar(false);
+    }
+  }
+
+  async function onExportarPdf() {
+    if (!carta) return;
+    setAExportar(true);
+    try {
+      const corpoHtml = [
+        `<pre>${escapeHtml(carta.texto)}</pre>`,
+        '<h2>Fundamentação</h2>',
+        `<ul>${carta.citas.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`,
+      ].join('');
+      await exportarPdf({
+        titulo: 'Carta de interpelação (minuta)',
+        subtitulo: `${cliente?.nome || ''} - ${cobranca.descricao || ''}`.replace(/^ - /, ''),
+        corpoHtml,
+        rodape: 'Minuta gerada pela app Cobranças (Ekoa) a partir da espinha partilhada - documento de trabalho para revisão e assinatura do mandatário, não é notificação nem foi enviada. Os juros, quando incluídos, citam o Aviso de cada período.',
+        filename: `interpelacao ${cobranca.descricao || cobranca.id}`,
+      });
+      toast('Carta exportada em PDF.', { tone: 'ok' });
+    } catch (e) {
+      toast((e && e.message) || 'A exportação PDF falhou.', { tone: 'error' });
+    } finally {
+      setAExportar(false);
+    }
+  }
+
+  return (
+    <section className="card" aria-label="Escalada da cobrança" style={{ marginTop: 'var(--sp-7, 2rem)' }} data-testid="cobranca-escalada">
+      <h2 className="card-title">Escalada</h2>
+      {acao && (
+        <p className="field-hint" style={{ marginTop: 0 }} data-testid="cobranca-proxima-acao">
+          Escalão {bucket} ({atrasoLabel(cobranca.dataVencimento, hoje)}) - próxima ação sugerida:{' '}
+          <strong>{acao.label}</strong>{acao.cita ? ` (${acao.cita})` : ''}. {acao.detalhe}
+        </p>
+      )}
+
+      <div className="row row-2" style={{ marginTop: 'var(--sp-3, 0.75rem)', flexWrap: 'wrap', gap: 'var(--sp-2, 0.5rem)' }}>
+        <Button
+          variant="secondary"
+          size="sm"
+          data-testid="cobranca-carta-gerar"
+          disabled={aGerar}
+          onClick={onGerarCarta}
+        >
+          {aGerar ? 'A gerar a carta.' : 'Gerar carta de interpelação'}
+        </Button>
+        <a
+          className="btn btn-ghost btn-sm"
+          data-testid="cobranca-injuncao-link"
+          href={appHref('legal-injuncoes', `?cobranca=${cobranca.id}`)}
+        >
+          Preparar injunção (DL 269/98) <IconChevronRight size={14} />
+        </a>
+      </div>
+
+      {carta && (
+        <div className="stack stack-2" style={{ marginTop: 'var(--sp-4, 1rem)' }}>
+          <pre
+            data-testid="cobranca-interpelacao-texto"
+            style={{ whiteSpace: 'pre-wrap', margin: 0, padding: 'var(--sp-3, 0.75rem)', background: 'var(--color-surface-2, #f7fafc)', border: '1px solid var(--color-border)', borderRadius: 6, fontSize: 'var(--fs-1, 0.75rem)' }}
+          >
+            {carta.texto}
+          </pre>
+          <p className="field-hint" style={{ margin: 0 }} data-testid="cobranca-carta-nota">
+            {carta.comJuros
+              ? 'Juros calculados pelo serviço de cálculos - cada período cita o seu Aviso (ver fundamentação no PDF).'
+              : 'Carta gerada sem valor de juros (o serviço de cálculos não respondeu) - os juros ficam a liquidar à data do pagamento.'}
+            {' '}Prazo de pagamento: {carta.prazoDias} dias a contar da receção
+            {carta.prazoEstimado ? ` (estimativa, envio hoje: até ${formatDate(carta.prazoEstimado)})` : ''}.
+          </p>
+          <div className="row row-2">
+            <Button
+              size="sm"
+              data-testid="cobranca-carta-pdf"
+              disabled={aExportar || !pdfDisponivel()}
+              onClick={onExportarPdf}
+            >
+              {aExportar ? 'A gerar PDF.' : 'Exportar PDF'}
+            </Button>
+            {!pdfDisponivel() && (
+              <span className="field-hint">Exportação PDF disponível apenas dentro da plataforma.</span>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

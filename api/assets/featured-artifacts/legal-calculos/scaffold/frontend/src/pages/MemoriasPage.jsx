@@ -3,6 +3,7 @@ import { useSharedCollection, formatEur, formatDateTime } from '../shared.js';
 import { Badge, EmptyState, toast } from '../components/ui.jsx';
 import { IconFileText, IconPrinter, IconLink, IconEuro, IconGavel } from '../components/Icons.jsx';
 import { memoriaTexto } from './calculo-view.js';
+import { exportarPdf, pdfDisponivel, escapeHtml } from './exportar-pdf.js';
 
 // Isolamento de impressão: só o bloco #calculo-print é visível no diálogo de
 // impressão (o resto da moldura fica oculto), sem depender de printChrome no
@@ -52,9 +53,22 @@ async function copiar(texto) {
   }
 }
 
+/* Corpo HTML do PDF: a mesma memória determinística do motor + fundamentação. */
+function corpoHtmlDe(row) {
+  const kind = row.tipo === 'custas' ? 'custas' : 'juros';
+  const partes = [`<pre>${escapeHtml(memoriaTexto(row.resultado || {}, kind))}</pre>`];
+  const citas = Array.isArray(row.citas) ? row.citas : [];
+  if (citas.length) {
+    partes.push('<h2>Fundamentação</h2>');
+    partes.push(`<ul>${citas.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`);
+  }
+  return partes.join('');
+}
+
 export default function MemoriasPage() {
   const { items, loading, refresh } = useSharedCollection('calculos');
   const [printRow, setPrintRow] = useState(null);
+  const [exportandoId, setExportandoId] = useState(null);
 
   // Imprime quando um registo é seleccionado para exportação (após o render).
   useEffect(() => {
@@ -72,6 +86,32 @@ export default function MemoriasPage() {
   async function onCopiar(row) {
     const ok = await copiar(blocoParaPeca(row));
     toast(ok ? 'Memória copiada para a área de transferência.' : 'Não foi possível copiar.', { tone: ok ? 'ok' : 'alta' });
+  }
+
+  // Exporta em PDF pelo canal da plataforma; sem a ponte, cai no diálogo de
+  // impressão do navegador (o bloco #calculo-print). Um erro do servidor é
+  // reportado tal e qual - nunca se anuncia um PDF que não foi gerado.
+  async function onExportar(row) {
+    if (exportandoId) return;
+    if (!pdfDisponivel()) {
+      setPrintRow(row);
+      return;
+    }
+    setExportandoId(row.id);
+    try {
+      await exportarPdf({
+        titulo: row.titulo || 'Memória de cálculo',
+        subtitulo: `Memória de cálculo (${row.tipo === 'custas' ? 'taxa de justiça' : 'juros de mora'})`,
+        corpoHtml: corpoHtmlDe(row),
+        rodape: 'Memória de cálculo gerada pela app Cálculos (Ekoa). Cada valor cita a sua fonte (Avisos DGTF/ETF, RCP, Portaria n.º 291/2003). Documento de trabalho - confirme os valores no Diário da República.',
+        filename: row.titulo || 'memoria-de-calculo',
+      });
+      toast('Memória exportada em PDF.', { tone: 'ok' });
+    } catch (e) {
+      toast(e && e.message ? e.message : 'Não foi possível gerar o PDF.', { tone: 'alta' });
+    } finally {
+      setExportandoId(null);
+    }
   }
 
   function valorDe(row) {
@@ -127,8 +167,8 @@ export default function MemoriasPage() {
                   <td className="text-subtle">{formatDateTime(row.data || row.createdAt)}</td>
                   <td className="numeric">
                     <div className="row" style={{ gap: '0.5rem', justifyContent: 'flex-end' }}>
-                      <button type="button" className="btn btn-secondary btn-sm" data-testid="exportar-memoria" onClick={() => setPrintRow(row)}>
-                        <IconPrinter /> Exportar memória
+                      <button type="button" className="btn btn-secondary btn-sm" data-testid="exportar-memoria" onClick={() => onExportar(row)} disabled={Boolean(exportandoId)}>
+                        <IconPrinter /> {exportandoId === row.id ? 'A gerar PDF.' : 'Exportar PDF'}
                       </button>
                       <button type="button" className="btn btn-secondary btn-sm" data-testid="copiar-peca" onClick={() => onCopiar(row)}>
                         <IconLink /> Copiar para peça

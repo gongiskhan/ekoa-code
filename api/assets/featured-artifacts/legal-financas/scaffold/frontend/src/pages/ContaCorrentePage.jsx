@@ -1,21 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSharedCollection, formatEur, formatDate } from '../shared.js';
 import { useDemoResult } from '../demo.js';
-import { Field, Select, DataTable, EmptyState, Badge } from '../components/ui.jsx';
+import { Button, Field, Select, DataTable, EmptyState, Badge } from '../components/ui.jsx';
 import { IconWallet, IconFolder } from '../components/Icons.jsx';
 import { contaSaldo, contaExtrato, origemLabel } from './financas-logic.js';
+import { extratoCsv, descarregarCsv } from './financas-csv.js';
 
 /*
  * Conta corrente por cliente sobre a espinha partilhada. Lê `conta_corrente`
  * (débitos e créditos com origem) e mostra o extrato ordenado com o saldo
  * corrente acumulado + o saldo em dívida em destaque. Não escreve nada aqui - os
  * movimentos entram por despesas aprovadas, provisões recebidas ou pré-faturas.
+ *
+ * Vista por processo: um segundo filtro opcional restringe o extrato aos
+ * movimentos com `processoId` e soma as provisões recebidas desse processo.
+ * Movimentos antigos sem `processoId` NUNCA desaparecem em silêncio - a vista
+ * por processo declara quantos ficaram de fora (só a vista de cliente os tem).
  */
 export default function ContaCorrentePage() {
   const { items: clientes, loading: clientesLoading } = useSharedCollection('clientes');
   const { items: movimentos, loading: movLoading } = useSharedCollection('conta_corrente');
+  const { items: processos } = useSharedCollection('processos');
+  const { items: provisoes } = useSharedCollection('provisoes');
 
   const [clienteId, setClienteId] = useState('');
+  const [processoId, setProcessoId] = useState('');
   // Movimentos sem cliente (p. ex. um pagamento de reserva pública cujo email
   // não corresponde a nenhum cliente) NÃO podem ficar invisíveis no razão.
   const SEM_CLIENTE = '__sem_cliente__';
@@ -39,12 +48,59 @@ export default function ContaCorrentePage() {
     [movimentos, clienteId],
   );
 
-  const extrato = useMemo(() => contaExtrato(doCliente), [doCliente]);
-  const { debitos, creditos, saldo } = useMemo(() => contaSaldo(doCliente), [doCliente]);
+  // Vista por processo (opcional). '' = extrato completo do cliente, o
+  // comportamento original - os testes e as demos dependem dessa omissão.
+  const processosDoCliente = useMemo(
+    () => (clienteId && clienteId !== SEM_CLIENTE
+      ? processos.filter((p) => p.clienteId === clienteId)
+      : []),
+    [processos, clienteId],
+  );
+  const visiveis = useMemo(
+    () => (processoId ? doCliente.filter((m) => m.processoId === processoId) : doCliente),
+    [doCliente, processoId],
+  );
+  // Honestidade: movimentos do cliente sem processoId (lançados antes desta
+  // vista, ou genuinamente sem processo) ficam FORA da vista por processo.
+  const semProcessoCount = useMemo(
+    () => (processoId ? doCliente.filter((m) => m.processoId == null).length : 0),
+    [doCliente, processoId],
+  );
+
+  const extrato = useMemo(() => contaExtrato(visiveis), [visiveis]);
+  const { debitos, creditos, saldo } = useMemo(() => contaSaldo(visiveis), [visiveis]);
+
+  // Provisões com saldo disponível (estado 'recebida') no âmbito seleccionado:
+  // do processo quando há filtro, senão de todo o cliente.
+  const provisoesAmbito = useMemo(() => {
+    if (!clienteId || clienteId === SEM_CLIENTE) return [];
+    return provisoes.filter((p) => p.clienteId === clienteId
+      && p.estado === 'recebida'
+      && (!processoId || p.processoId === processoId));
+  }, [provisoes, clienteId, processoId]);
+  const provisoesDisponiveis = useMemo(
+    () => provisoesAmbito.reduce((sum, p) => sum + (Number(p.saldo) || 0), 0),
+    [provisoesAmbito],
+  );
 
   const cliente = clienteById.get(clienteId) || null;
+  const processo = useMemo(
+    () => processosDoCliente.find((p) => p.id === processoId) || null,
+    [processosDoCliente, processoId],
+  );
   const temSemCliente = useMemo(() => movimentos.some((m) => m && m.clienteId == null), [movimentos]);
   const loading = clientesLoading || movLoading;
+
+  function onExportarCsv() {
+    const nomeCliente = clienteId === SEM_CLIENTE ? '(movimentos por associar)' : (cliente ? cliente.nome : '');
+    const texto = extratoCsv({
+      clienteNome: nomeCliente,
+      processoNumero: processo ? processo.numeroProcesso : '',
+      geradoEm: new Date().toISOString().slice(0, 10),
+      extrato: extrato.map((m) => ({ ...m, origemLabel: origemLabel(m.origem) })),
+    });
+    descarregarCsv(`conta-corrente ${nomeCliente}${processo ? ` ${processo.numeroProcesso}` : ''}`, texto);
+  }
 
   // Sinaliza à ponte de demos que o saldo está visível (annotate-result).
   useDemoResult('financas-saldo', !loading && !!clienteId);
@@ -65,7 +121,11 @@ export default function ContaCorrentePage() {
 
       <div className="filters" style={{ marginTop: 'var(--sp-6, 1.5rem)' }}>
         <Field label="Cliente">
-          <Select data-testid="cc-cliente" value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
+          <Select
+            data-testid="cc-cliente"
+            value={clienteId}
+            onChange={(e) => { setClienteId(e.target.value); setProcessoId(''); }}
+          >
             <option value="">{clientes.length === 0 ? 'Sem clientes - abra um no Núcleo.' : 'Seleccione o cliente.'}</option>
             {clientes.map((c) => (
               <option key={c.id} value={c.id}>{c.nome}{c.nif ? ` · ${c.nif}` : ''}</option>
@@ -75,7 +135,26 @@ export default function ContaCorrentePage() {
             )}
           </Select>
         </Field>
+        {clienteId && clienteId !== SEM_CLIENTE && (
+          <Field label="Processo" hint="Opcional - restringe o extrato aos movimentos imputados ao processo.">
+            <Select data-testid="cc-processo" value={processoId} onChange={(e) => setProcessoId(e.target.value)}>
+              <option value="">Todos os movimentos do cliente</option>
+              {processosDoCliente.map((p) => (
+                <option key={p.id} value={p.id}>{p.numeroProcesso || '(sem número)'}</option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
+
+      {processoId && semProcessoCount > 0 && (
+        <p className="field-hint" data-testid="cc-sem-processo-aviso" style={{ marginTop: 'var(--sp-3, 0.75rem)' }}>
+          {semProcessoCount === 1
+            ? '1 movimento deste cliente não tem processo associado e fica fora desta vista.'
+            : `${semProcessoCount} movimentos deste cliente não têm processo associado e ficam fora desta vista.`}
+          {' '}Para o extrato completo, escolha "Todos os movimentos do cliente".
+        </p>
+      )}
 
       <div className="kpi-grid" style={{ marginTop: 'var(--sp-6, 1.5rem)' }}>
         <div className="kpi-card">
@@ -87,7 +166,10 @@ export default function ContaCorrentePage() {
           >
             {formatEur(saldo)}
           </span>
-          <span className="field-hint">{cliente ? cliente.nome : 'Sem cliente seleccionado'}</span>
+          <span className="field-hint">
+            {cliente ? cliente.nome : 'Sem cliente seleccionado'}
+            {processo ? ` - processo ${processo.numeroProcesso}` : ''}
+          </span>
         </div>
         <div className="kpi-card">
           <span className="kpi-label">Total debitado</span>
@@ -100,15 +182,37 @@ export default function ContaCorrentePage() {
           <span className="field-hint">Pagamentos e provisões recebidas</span>
         </div>
         <div className="kpi-card">
+          <span className="kpi-label">Provisões disponíveis</span>
+          <span className="kpi-value" data-testid="cc-provisoes">{formatEur(provisoesDisponiveis)}</span>
+          <span className="field-hint">
+            {provisoesAmbito.length === 0
+              ? (processoId ? 'Sem provisões recebidas neste processo' : 'Sem provisões recebidas')
+              : `Saldo por consumir de ${provisoesAmbito.length === 1 ? '1 provisão recebida' : `${provisoesAmbito.length} provisões recebidas`}${processoId ? ' do processo' : ' do cliente'}`}
+          </span>
+        </div>
+        <div className="kpi-card">
           <span className="kpi-label">Movimentos</span>
-          <span className="kpi-value" data-testid="cc-count">{doCliente.length}</span>
-          <span className="field-hint">No extrato do cliente</span>
+          <span className="kpi-value" data-testid="cc-count">{visiveis.length}</span>
+          <span className="field-hint">{processoId ? 'No extrato do processo' : 'No extrato do cliente'}</span>
         </div>
       </div>
 
       <section className="card" aria-label="Extrato de conta corrente" style={{ marginTop: 'var(--sp-7, 2rem)' }}>
-        <h2 className="card-title">Extrato</h2>
-        <p className="card-subtitle">Do mais antigo para o mais recente, com o saldo corrente à direita.</p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--sp-4, 1rem)' }}>
+          <div>
+            <h2 className="card-title">Extrato</h2>
+            <p className="card-subtitle">Do mais antigo para o mais recente, com o saldo corrente à direita.</p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="cc-exportar-csv"
+            disabled={loading || !clienteId || extrato.length === 0}
+            onClick={onExportarCsv}
+          >
+            Exportar CSV
+          </Button>
+        </div>
         {loading ? (
           <div className="loading"><span className="spinner" aria-hidden="true" /><span>A carregar o extrato.</span></div>
         ) : !clienteId ? (
@@ -126,7 +230,7 @@ export default function ContaCorrentePage() {
                 </Badge>
               ) },
               { key: 'origem', label: 'Origem', render: (m) => <Badge tone="neutral">{origemLabel(m.origem)}</Badge> },
-              { key: 'notas', label: 'Descrição', render: (m) => m.notas || m.refExterna || '—' },
+              { key: 'notas', label: 'Descrição', render: (m) => m.notas || m.refExterna || '-' },
               { key: 'valor', label: 'Valor', align: 'right', render: (m) => (
                 <span className="text-strong">{m.tipo === 'credito' ? '−' : ''}{formatEur(m.valor)}</span>
               ) },

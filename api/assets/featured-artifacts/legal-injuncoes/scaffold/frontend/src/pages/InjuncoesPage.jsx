@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useSharedCollection, createShared, deleteShared, listShared, formatEur, formatDate, registarEvento } from '../shared.js';
 import { isDemoActive } from '../demo.js';
 import { Button, Badge, EmptyState, useToast } from '../components/ui.jsx';
@@ -31,13 +31,15 @@ export const ESTADO_TONE = {
 export default function InjuncoesPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { items: injuncoes, refresh } = useSharedCollection('injuncoes');
-  const { items: cobrancas } = useSharedCollection('cobrancas');
+  const { items: cobrancas, loading: cobrancasLoading } = useSharedCollection('cobrancas');
   const { items: clientes } = useSharedCollection('clientes');
   const [aCriar, setACriar] = useState(false);
   const [cobrancaId, setCobrancaId] = useState('');
   const [transacaoComercial, setTransacaoComercial] = useState(true);
   const [devedorConsumidor, setDevedorConsumidor] = useState(false);
+  const [atalhoInvalido, setAtalhoInvalido] = useState(false);
 
   const nomeCliente = (id) => (clientes.find((c) => c.id === id) || {}).nome || '(devedor)';
 
@@ -76,6 +78,19 @@ export default function InjuncoesPage() {
     const hoje = new Date();
     return cobrancas.filter((c) => c.estado !== 'paga' && c.dataVencimento && new Date(c.dataVencimento) < hoje && !usadas.has(c.id));
   }, [cobrancas, injuncoes]);
+
+  // Atalho vindo da app Cobranças (?cobranca=<id>): pré-escolhe o crédito na
+  // lista. Se ele não for elegível para a lista (pago, por vencer, ou já com
+  // injunção), diz-se - o atalho nunca escolhe outro em silêncio.
+  const atalhoAplicado = useRef(false);
+  useEffect(() => {
+    if (atalhoAplicado.current || cobrancasLoading) return;
+    const param = new URLSearchParams(location.search).get('cobranca');
+    if (!param) { atalhoAplicado.current = true; return; }
+    atalhoAplicado.current = true;
+    if (vencidasSemInjuncao.some((c) => c.id === param)) setCobrancaId(param);
+    else setAtalhoInvalido(true);
+  }, [location.search, cobrancasLoading, vencidasSemInjuncao]);
 
   const escolhida = vencidasSemInjuncao.find((c) => c.id === cobrancaId) || null;
   const elegibilidade = useMemo(() => {
@@ -155,6 +170,11 @@ export default function InjuncoesPage() {
             <span className="text-small">Devedor é consumidor</span>
           </label>
         </div>
+        {atalhoInvalido ? (
+          <p className="text-small text-subtle" data-testid="injuncao-atalho-aviso">
+            A cobrança indicada no atalho já tem injunção, está paga ou ainda não venceu - escolha outra da lista.
+          </p>
+        ) : null}
         {elegibilidade ? (
           <p className="text-small" data-testid="injuncao-elegibilidade" style={{ color: elegibilidade.elegivel ? 'var(--ok)' : 'var(--danger)' }}>
             {elegibilidade.fundamento}

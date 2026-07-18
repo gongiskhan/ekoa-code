@@ -200,6 +200,136 @@ export function gerarReferenciaDemo(cobranca) {
 }
 
 /*
+ * Próxima ação DEVIDA por escalão de envelhecimento — a régua de escalada da
+ * carteira, determinística e citada. Só aponta o instrumento; não dispara nada:
+ *   0-30  → lembrete da sequência (a via amigável ainda resulta);
+ *   31-60 → carta de interpelação (constitui em mora, art. 805.º, n.º 1, CC);
+ *   61+   → injunção (DL n.º 269/98, de 1 de setembro) — via judicial célere.
+ */
+export const AGING_NEXT_ACTION = {
+  '0-30': {
+    id: 'lembrete',
+    label: 'Lembrete da sequência',
+    detalhe: 'Seguir os passos da sequência de lembretes associada.',
+    cita: null,
+  },
+  '31-60': {
+    id: 'interpelacao',
+    label: 'Carta de interpelação',
+    detalhe: 'Interpelar formalmente o devedor para cumprimento, com prazo.',
+    cita: 'Art. 805.º, n.º 1, do Código Civil',
+  },
+  '61+': {
+    id: 'injuncao',
+    label: 'Injunção',
+    detalhe: 'Requerer injunção para obter título executivo.',
+    cita: 'DL n.º 269/98, de 1 de setembro',
+  },
+};
+
+/* Próxima ação de um escalão (ou de uns dias de atraso, via agingBucket). */
+export function proximaAcaoBucket(bucketId) {
+  return AGING_NEXT_ACTION[bucketId] || null;
+}
+
+/* Euros em texto de carta: duas casas, vírgula decimal (determinístico). */
+function eurTexto(n) {
+  const v = Number(n);
+  return `${(Number.isFinite(v) ? v : 0).toFixed(2).replace('.', ',')} EUR`;
+}
+
+/* 'YYYY-MM-DD' -> 'DD-MM-YYYY' (texto de carta, sem locale do browser). */
+function dataTexto(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(iso || '');
+}
+
+/*
+ * CARTA DE INTERPELAÇÃO determinística — texto puro, função só dos argumentos
+ * (nenhuma data implícita: `hoje` é injetado). Regras de honestidade:
+ *   - os juros SÓ entram com valor quando o chamador fornece um resultado do
+ *     serviço de cálculos (troços citados por Aviso); sem ele, a carta remete
+ *     os juros para liquidação à data do pagamento (arts. 805.º e 806.º CC)
+ *     e NUNCA inventa uma taxa nem um total;
+ *   - o prazo conta da RECEÇÃO da carta (a data-limite exata não é conhecida
+ *     no envio); `prazoEstimado` é só uma estimativa interna (hoje + prazo);
+ *   - remetente/assinatura ficam por preencher quando não são fornecidos — a
+ *     identidade da firma não está na espinha e não se finge.
+ *
+ * Devolve { texto, citas, prazoDias, prazoEstimado, totalComJuros? }.
+ */
+export function cartaInterpelacao({
+  devedorNome,
+  credorNome,
+  descricao,
+  valor,
+  dataVencimento,
+  juros = null,
+  prazoDias = 10,
+  hoje,
+  remetenteNome = '',
+} = {}) {
+  const prazo = Number.isFinite(Number(prazoDias)) && Number(prazoDias) > 0 ? Math.round(Number(prazoDias)) : 10;
+  const prazoEstimado = hoje ? addDias(hoje, prazo) : null;
+
+  const temJuros = Boolean(juros && Number.isFinite(Number(juros.totalJuros)) && Array.isArray(juros.trocos) && juros.trocos.length > 0);
+  const totalComJuros = temJuros ? round2(Number(valor || 0) + Number(juros.totalJuros)) : null;
+
+  const citas = ['Art. 805.º, n.º 1, do Código Civil (constituição em mora por interpelação)',
+    'Art. 806.º do Código Civil (indemnização pelos juros de mora)'];
+  if (temJuros) {
+    citas.push('Art. 102.º do Código Comercial e DL n.º 62/2013, de 10 de maio (juros comerciais por semestre)');
+    for (const t of juros.trocos) {
+      if (t && t.aviso) citas.push(`${t.aviso} (${t.taxa != null ? `${String(t.taxa).replace('.', ',')}%` : 'taxa'} - ${t.inicio || ''} a ${t.fim || ''})`);
+    }
+  }
+  citas.push('DL n.º 269/98, de 1 de setembro (procedimento de injunção)');
+
+  const linhas = [];
+  linhas.push('INTERPELAÇÃO PARA CUMPRIMENTO');
+  linhas.push('(a remeter por carta registada com aviso de receção)');
+  linhas.push('');
+  if (hoje) linhas.push(`Data: ${dataTexto(hoje)}`);
+  linhas.push(`Exmo.(a) Senhor(a) ${devedorNome || '[devedor]'},`);
+  linhas.push('');
+  linhas.push(
+    `${credorNome ? `Na qualidade de mandatário(a) de ${credorNome}, venho` : 'Venho'} pela presente interpelar V. Ex.ª para proceder ao pagamento da quantia de ${eurTexto(valor)}, referente a ${descricao || '[obrigação]'}, vencida em ${dataTexto(dataVencimento)} e ainda não regularizada.`,
+  );
+  linhas.push('');
+  if (temJuros) {
+    linhas.push(
+      `Sobre a quantia em dívida acrescem juros de mora comerciais, contados por semestre nos termos do artigo 102.º do Código Comercial e do Decreto-Lei n.º 62/2013, de 10 de maio, que até ${dataTexto(juros.dataFim)} somam ${eurTexto(juros.totalJuros)} - conforme memória de cálculo anexa, que cita o Aviso aplicável a cada período. O total em dívida nessa data é assim de ${eurTexto(totalComJuros)}, sem prejuízo dos juros vincendos até integral pagamento.`,
+    );
+  } else {
+    linhas.push(
+      'Sobre a quantia em dívida acrescem juros de mora legais, contados desde o vencimento até integral e efetivo pagamento, nos termos dos artigos 805.º e 806.º do Código Civil, a liquidar à data do pagamento.',
+    );
+  }
+  linhas.push('');
+  linhas.push(
+    `O pagamento deverá ser efetuado no prazo de ${prazo} dias a contar da receção da presente carta.`,
+  );
+  linhas.push('');
+  linhas.push(
+    'Decorrido esse prazo sem que o pagamento se mostre efetuado, serão acionados, sem nova interpelação, os meios judiciais adequados à cobrança coerciva do crédito - designadamente o procedimento de injunção previsto no Decreto-Lei n.º 269/98, de 1 de setembro - com o inerente acréscimo de custas e demais encargos legais, que ficarão a cargo de V. Ex.ª.');
+  linhas.push('');
+  linhas.push('A presente carta constitui V. Ex.ª em mora, nos termos do artigo 805.º, n.º 1, do Código Civil, caso a mora não decorra já do vencimento da obrigação.');
+  linhas.push('');
+  linhas.push('Com os melhores cumprimentos,');
+  linhas.push('');
+  linhas.push(remetenteNome || '________________________________');
+  if (!remetenteNome) linhas.push('(identificação e assinatura do remetente)');
+
+  return {
+    texto: linhas.join('\n'),
+    citas,
+    prazoDias: prazo,
+    prazoEstimado,
+    totalComJuros,
+  };
+}
+
+/*
  * RECONCILIAÇÃO de um pagamento — o coração partilhado pelo dev-sim e pelo
  * backend onWebhook. Dado a cobrança encontrada (por referência), o valor pago
  * e o estado ACTUAL da conta corrente, devolve um plano determinístico:

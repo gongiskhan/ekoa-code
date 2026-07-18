@@ -116,6 +116,10 @@ export default function ProvisoesPage() {
     try {
       await createShared('conta_corrente', {
         clienteId: prov.clienteId,
+        // Imputação ao processo (quando a provisão o tem) - alimenta a vista
+        // por processo da conta corrente sem alterar o extrato do cliente.
+        processoId: prov.processoId || null,
+        provisaoId: prov.id,
         tipo: 'credito',
         origem: 'pagamento',
         valor: round2(prov.valor),

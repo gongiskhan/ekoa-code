@@ -6,6 +6,7 @@ import { useDemoResult } from '../demo.js';
 import { Badge, toast } from '../components/ui.jsx';
 import { IconEuro, IconPlus, IconAlertTriangle, IconFileText } from '../components/Icons.jsx';
 import { parseEuro, hojeISO, citasDeTrocos, memoriaTexto } from './calculo-view.js';
+import { curarTabelasTaxas } from '../tabelas-heal.js';
 
 // O app dono calcula do lado do CLIENTE com o motor vendorizado (juros.mjs),
 // obtendo a tabela (canónica + overlay do crawler) do serviço via obterTabela().
@@ -36,6 +37,9 @@ export default function JurosPage() {
   // marca degradado - o cálculo fica indisponível (honesto, nunca inventa taxas).
   async function ensureTabela() {
     if (tabela) return tabela;
+    // Remove primeiro as linhas-marcador 'confirmar' da espinha, para que a
+    // tabela devolvida já venha com os semestres verificados do canónico.
+    await curarTabelasTaxas();
     const r = await obterTabela();
     if (r && r.ok) {
       setTabela(r.tabela);
@@ -304,10 +308,11 @@ export default function JurosPage() {
               <IconFileText /> Todo o cálculo cita a fonte
             </h2>
             <p className="text-subtle text-small" style={{ marginTop: '0.5rem' }}>
-              Os juros comerciais aplicam a taxa supletiva semestral fixada por aviso da DGTF (art. 102.º, §§ 3.º
-              a 5.º do Código Comercial; Decreto-Lei n.º 62/2013). Os juros civis correm à taxa de 4% (Portaria
-              n.º 291/2003). Cada troço mostra o período, os dias, a taxa e o Aviso aplicado, e a memória de
-              cálculo pode ser guardada e inserida numa peça ou carta de interpelação.
+              Os juros comerciais aplicam a taxa supletiva semestral fixada por aviso da DGTF - hoje ETF,
+              Entidade do Tesouro e Finanças - (art. 102.º, §§ 3.º a 5.º do Código Comercial; Decreto-Lei
+              n.º 62/2013). Os juros civis correm à taxa de 4% (Portaria n.º 291/2003). Cada troço mostra o
+              período, os dias, a taxa e o Aviso aplicado, e a memória de cálculo pode ser guardada, exportada
+              em PDF e inserida numa peça ou carta de interpelação.
             </p>
           </div>
         </section>

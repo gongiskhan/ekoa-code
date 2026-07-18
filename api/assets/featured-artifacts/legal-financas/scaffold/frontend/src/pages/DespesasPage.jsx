@@ -49,6 +49,7 @@ export default function DespesasPage() {
   const [erro, setErro] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [fEstado, setFEstado] = useState('');
+  const [fProcesso, setFProcesso] = useState('');
 
   const processoById = useMemo(() => {
     const map = new Map();
@@ -75,12 +76,25 @@ export default function DespesasPage() {
   const rows = useMemo(() => {
     let list = despesas.slice();
     if (fEstado) list = list.filter((d) => (d.estado || 'registada') === fEstado);
+    if (fProcesso) list = list.filter((d) => d.processoId === fProcesso);
     return list.sort((a, b) =>
       (String(b.data || '') + String(b.createdAt || '')).localeCompare(
         String(a.data || '') + String(a.createdAt || ''),
       ),
     );
-  }, [despesas, fEstado]);
+  }, [despesas, fEstado, fProcesso]);
+
+  // Totais do filtro corrente - soma honesta do que está À VISTA, nada mais.
+  const totais = useMemo(() => {
+    let total = 0;
+    let reembolsavel = 0;
+    rows.forEach((d) => {
+      const v = Number(d.valor) || 0;
+      total += v;
+      if (d.reembolsavel) reembolsavel += v;
+    });
+    return { total: round2(total), reembolsavel: round2(reembolsavel) };
+  }, [rows]);
 
   function onOpen() {
     setForm({ ...EMPTY_FORM, data: hojeISO() });
@@ -139,6 +153,10 @@ export default function DespesasPage() {
       if (despesa.reembolsavel && despesa.clienteId && !despesa.contaLancada) {
         await createShared('conta_corrente', {
           clienteId: despesa.clienteId,
+          // Imputação ao processo (quando a despesa o tem) - alimenta a vista
+          // por processo da conta corrente sem alterar o extrato do cliente.
+          processoId: despesa.processoId || null,
+          despesaId: despesa.id,
           tipo: 'debito',
           origem: 'despesa',
           valor: round2(despesa.valor),
@@ -208,6 +226,21 @@ export default function DespesasPage() {
           <option value="aprovada">Aprovadas</option>
           <option value="faturada">Faturadas</option>
         </Select>
+        <Select data-testid="despesas-filtro-processo" value={fProcesso} onChange={(e) => setFProcesso(e.target.value)}>
+          <option value="">Todos os processos</option>
+          {processos.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.numeroProcesso || '(sem número)'}{clienteNome(p.clienteId) ? ` - ${clienteNome(p.clienteId)}` : ''}
+            </option>
+          ))}
+        </Select>
+        {!loading && (
+          <span className="field-hint" data-testid="despesas-total-filtro" style={{ alignSelf: 'center' }}>
+            {rows.length === 1 ? '1 despesa' : `${rows.length} despesas`} no filtro
+            - total {formatEur(totais.total)}
+            {totais.reembolsavel > 0 ? `, das quais ${formatEur(totais.reembolsavel)} reembolsáveis` : ''}
+          </span>
+        )}
       </div>
 
       {loading ? (

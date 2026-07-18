@@ -10,7 +10,7 @@ import { legalAppUrl } from './helpers/legal';
  *
  * Coverage:
  *  1. JUROS golden through the UI: €12.500 from 2023-04-01 to 2023-09-30 crosses
- *     2023-S1 (10,5% - Aviso 1261/2023) and 2023-S2 (12,0% - Aviso 20214/2023) ->
+ *     2023-S1 (10,5% - Aviso 1672/2023) and 2023-S2 (12,0% - Aviso 14922/2023) ->
  *     two troços, each citing its Aviso, total 560,96 €; the memória is shown and
  *     saving it lands a row in Memórias.
  *  2. CUSTAS: a €30.000 action on Tabela I-A with UC 2026 = 102,00 -> 5 UC =
@@ -76,8 +76,8 @@ test('Cálculos: juros de mora cruzam dois semestres, citam os Avisos e a memór
   const trocos = page.getByTestId('troco-row');
   await expect(trocos).toHaveCount(2, { timeout: 10_000 });
   const tabela = page.getByTestId('trocos-tabela');
-  await expect(tabela).toContainText('Aviso n.º 1261/2023, DGTF');
-  await expect(tabela).toContainText('Aviso n.º 20214/2023, DGTF');
+  await expect(tabela).toContainText('Aviso n.º 1672/2023, DGTF');
+  await expect(tabela).toContainText('Aviso n.º 14922/2023, DGTF');
   await expect(tabela).toContainText('10.5%');
   await expect(tabela).toContainText('12%');
   await expect(page.getByTestId('resultado-total')).toContainText('560,96');
@@ -85,7 +85,7 @@ test('Cálculos: juros de mora cruzam dois semestres, citam os Avisos e a memór
   // The memória cites the base legal and both Avisos.
   const memoria = page.getByTestId('memoria');
   await expect(memoria).toBeVisible();
-  await expect(memoria).toContainText('Aviso n.º 1261/2023, DGTF');
+  await expect(memoria).toContainText('Aviso n.º 1672/2023, DGTF');
   await expect(memoria).toContainText('Código Comercial');
 
   // Save and confirm it appears in Memórias.

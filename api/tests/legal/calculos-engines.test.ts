@@ -44,16 +44,16 @@ describe('computeJuros - juros comerciais por troços, um Aviso por semestre', (
 
     const [t1, t2] = r.trocos;
     // Troço 1: 2023-S1, 91 dias @ 10,5% -> round(1_000_000c × 10.5 × 91 / 36500) = 26178c.
-    expect(t1).toMatchObject({ inicio: '2023-04-01', fim: '2023-07-01', dias: 91, taxa: 10.5, aviso: 'Aviso n.º 1261/2023, DGTF', jurosCentavos: 26178, juros: 261.78 });
+    expect(t1).toMatchObject({ inicio: '2023-04-01', fim: '2023-07-01', dias: 91, taxa: 10.5, aviso: 'Aviso n.º 1672/2023, DGTF', jurosCentavos: 26178, juros: 261.78 });
     // Troço 2: 2023-S2, 91 dias @ 12,0% -> round(1_000_000c × 12 × 91 / 36500) = 29918c.
-    expect(t2).toMatchObject({ inicio: '2023-07-01', fim: '2023-09-30', dias: 91, taxa: 12, aviso: 'Aviso n.º 20214/2023, DGTF', jurosCentavos: 29918, juros: 299.18 });
+    expect(t2).toMatchObject({ inicio: '2023-07-01', fim: '2023-09-30', dias: 91, taxa: 12, aviso: 'Aviso n.º 14922/2023, DGTF', jurosCentavos: 29918, juros: 299.18 });
 
     expect(r.totalJurosCentavos).toBe(26178 + 29918);
     expect(r.totalJuros).toBe(560.96);
     expect(r.total).toBe(560.96);
     const memoria = r.showWork.passos.join('\n');
-    expect(memoria).toContain('Aviso n.º 1261/2023, DGTF');
-    expect(memoria).toContain('Aviso n.º 20214/2023, DGTF');
+    expect(memoria).toContain('Aviso n.º 1672/2023, DGTF');
+    expect(memoria).toContain('Aviso n.º 14922/2023, DGTF');
     expect(memoria).toMatch(/Código Comercial/);
   });
 

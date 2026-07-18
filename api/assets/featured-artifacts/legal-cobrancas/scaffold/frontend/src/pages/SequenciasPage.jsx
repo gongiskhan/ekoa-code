@@ -12,7 +12,7 @@ import { previewTemplate, WHATSAPP_CONSENT_NOTICE, passoRespeitaOptout } from '.
 import { CANAL_LABEL } from './cobrancas-logic.js';
 
 // Variáveis de exemplo para a pré-visualização (o template usa {{nome}} etc.).
-const PREVIEW_VARS = { nome: 'Cliente', descricao: 'a fatura', valor: '100,00 €' };
+const PREVIEW_VARS = { nome: 'Cliente', descricao: 'FT 2026/18', valor: '100,00 €' };
 
 const CANAIS = [
   { value: 'email', label: 'Email' },

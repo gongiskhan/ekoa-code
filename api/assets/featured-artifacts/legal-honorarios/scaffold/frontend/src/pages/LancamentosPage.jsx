@@ -257,7 +257,14 @@ export default function LancamentosPage() {
                 {l.tipo === 'despesa' ? 'Despesa' : 'Honorário'}
               </Badge>
             ) },
-            { key: 'modo', label: 'Modo', render: (l) => MODO_LABEL[l.modo] || l.modo || '—' },
+            { key: 'modo', label: 'Modo', render: (l) => (
+              <span className="stack stack-1" style={{ display: 'inline-flex', gap: '0.25rem' }}>
+                <span>{MODO_LABEL[l.modo] || l.modo || '—'}</span>
+                {/* Lançamentos transferidos do Tempos trazem registoTempoId (a
+                    chave de idempotência do contrato tempos->honorários). */}
+                {l.registoTempoId ? <Badge tone="ok" data-testid="lanc-origem-tempos">Do Tempos</Badge> : null}
+              </span>
+            ) },
             { key: 'valor', label: 'Valor', align: 'right', render: (l) => (
               <span className="text-strong">{formatEur(l.valor)}</span>
             ) },

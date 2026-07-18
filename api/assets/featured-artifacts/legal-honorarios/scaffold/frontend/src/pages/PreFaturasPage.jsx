@@ -33,6 +33,19 @@ import {
   round2,
   DISCLAIMER,
 } from './honorarios-logic.js';
+import { exportarPdf, pdfDisponivel, escapeHtml } from './exportar-pdf.js';
+
+/* Corpo HTML do PDF da pré-fatura: identificação, cálculo linha a linha e o
+ * aviso legal obrigatório - o mesmo conteúdo da vista de impressão. */
+function corpoHtmlPrefatura({ numeroProcesso, clienteNome, periodo, pf }) {
+  const cab = `<p>Processo: ${escapeHtml(numeroProcesso || '—')}<br>Cliente: ${escapeHtml(clienteNome || '—')}<br>Período: ${escapeHtml(periodoLabel(periodo))}</p>`;
+  const linhas = pf.linhas.map((l) => {
+    const valor = l.nota ? escapeHtml(l.nota) : `${l.negativo ? '−' : ''}${escapeHtml(formatEur(l.valor))}`;
+    return `<tr${l.destaque ? ' class="destaque"' : ''}><td>${escapeHtml(l.rotulo)}</td><td class="numeric">${valor}</td></tr>`;
+  }).join('');
+  const aviso = `<p class="aviso-legal">${escapeHtml(DISCLAIMER)} Não é fatura certificada.</p>`;
+  return `${cab}<table><tbody>${linhas}</tbody></table>${aviso}`;
+}
 
 const EMPTY_PERIODO = { modo: 'todos', mes: '', de: '', ate: '' };
 
@@ -49,6 +62,7 @@ export default function PreFaturasPage() {
   const [erro, setErro] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [emitindo, setEmitindo] = useState(false);
+  const [exportando, setExportando] = useState(false);
   // Lançamentos que ficaram faturados sem pré-fatura por uma falha irreversível
   // (rollback também falhou) - carecem de correção manual.
   const [recovery, setRecovery] = useState(null);
@@ -262,6 +276,33 @@ export default function PreFaturasPage() {
     }
   }
 
+  // PDF pelo canal da plataforma; sem a ponte, cai no diálogo de impressão
+  // (a vista .print-only). Um erro do servidor é mostrado tal e qual - nunca
+  // se anuncia um PDF que não foi gerado.
+  async function onExportarPdf() {
+    if (!pf || exportando) return;
+    if (!pdfDisponivel()) {
+      window.print();
+      return;
+    }
+    setExportando(true);
+    try {
+      const np = processo ? processo.numeroProcesso : '';
+      await exportarPdf({
+        titulo: 'Pré-fatura de honorários (rascunho de conferência)',
+        subtitulo: 'Documento de conferência - não é fatura certificada.',
+        corpoHtml: corpoHtmlPrefatura({ numeroProcesso: np, clienteNome: cliente ? cliente.nome : '', periodo, pf }),
+        rodape: 'Gerado pela app Honorários (Ekoa). Pré-fatura de conferência - não substitui nem constitui fatura certificada; a fatura oficial é emitida no software de faturação certificado.',
+        filename: `pre-fatura ${np || processoId} ${periodoLabel(periodo)}`,
+      });
+      toast('Pré-fatura exportada em PDF.', { tone: 'ok' });
+    } catch (e) {
+      toast((e && e.message) || 'Não foi possível gerar o PDF.', { tone: 'error' });
+    } finally {
+      setExportando(false);
+    }
+  }
+
   const semProcessos = processos.length === 0;
   const numeroProcesso = processo ? processo.numeroProcesso : '';
   const clienteNome = cliente ? cliente.nome : '';
@@ -352,6 +393,11 @@ export default function PreFaturasPage() {
                         <Badge tone={l.tipo === 'despesa' ? 'neutral' : 'info'} style={{ marginLeft: 'var(--sp-2, 0.5rem)' }}>
                           {l.tipo === 'despesa' ? 'Despesa' : 'Honorário'}
                         </Badge>
+                        {l.registoTempoId ? (
+                          <Badge tone="ok" data-testid="pf-origem-tempos" style={{ marginLeft: 'var(--sp-2, 0.5rem)' }}>
+                            Do Tempos
+                          </Badge>
+                        ) : null}
                       </span>
                       <span className="passo-data" style={{ minWidth: 'auto' }}>{formatEur(l.valor)}</span>
                     </li>
@@ -398,8 +444,8 @@ export default function PreFaturasPage() {
                 <Button data-testid="pf-emitir" onClick={() => setConfirmOpen(true)} disabled={emitindo}>
                   <IconFilePdf /> {emitindo ? 'A emitir.' : 'Emitir pré-fatura'}
                 </Button>
-                <Button variant="secondary" data-testid="pf-imprimir" onClick={() => window.print()}>
-                  <IconPrinter /> Guardar PDF
+                <Button variant="secondary" data-testid="pf-imprimir" onClick={onExportarPdf} disabled={exportando}>
+                  <IconPrinter /> {exportando ? 'A gerar PDF.' : 'Exportar PDF'}
                 </Button>
               </div>
             </div>

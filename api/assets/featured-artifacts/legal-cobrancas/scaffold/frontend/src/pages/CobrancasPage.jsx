@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useSharedCollection, formatEur, formatDate } from '../shared.js';
 import { Badge, EmptyState, Skeleton } from '../components/ui.jsx';
 import { IconReceipt } from '../components/Icons.jsx';
-import { AGING_BUCKETS, computeAging, emAberto } from '../engine/cobrancas.mjs';
+import { AGING_BUCKETS, computeAging, emAberto, proximaAcaoBucket } from '../engine/cobrancas.mjs';
 import {
   ESTADO_LABEL, ESTADO_TONE, METODO_LABEL,
   atrasoLabel, atrasoTone, ordenarCobrancas,
@@ -56,6 +56,7 @@ export default function CobrancasPage() {
         {AGING_BUCKETS.map((b) => {
           const cell = aging[b.id] || { count: 0, total: 0 };
           const tid = BUCKET_TESTID[b.id];
+          const acao = proximaAcaoBucket(b.id);
           return (
             <div className="kpi-card" key={b.id} data-testid={tid}>
               <span className="kpi-label">{b.label} de atraso</span>
@@ -64,6 +65,11 @@ export default function CobrancasPage() {
                 <span data-testid={`${tid}-count`}>{cell.count}</span>
                 {' '}cobrança(s) em aberto
               </span>
+              {acao && (
+                <span className="field-hint" data-testid={`${tid}-acao`}>
+                  Próxima ação: {acao.label}{acao.cita ? ` (${acao.cita})` : ''}
+                </span>
+              )}
             </div>
           );
         })}

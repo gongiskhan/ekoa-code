@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getShared, updateShared, createShared, formatEur, formatDate, registarEvento, appHref } from '../shared.js';
+import { getShared, updateShared, createShared, formatEur, formatDate, formatDateTime, registarEvento, appHref } from '../shared.js';
 import { Button, Badge, EmptyState, useToast } from '../components/ui.jsx';
 import { IconGavel, IconCheck, IconMail } from '../components/Icons.jsx';
 import { useDemoResult } from '../demo.js';
 import { cartaInterpelacao, prepararRequerimento, transitar, PRAZO_OPOSICAO_DIAS } from '../engine/injuncoes.mjs';
 import { calcularJuros, calcularTaxaJustica, guardarCalculo } from '../calculos-cliente.js';
+import { pdfDisponivel, escapeHtml, exportarPdf } from './exportar-pdf.js';
 import { ESTADO_LABEL, ESTADO_TONE } from './InjuncoesPage.jsx';
+
+/*
+ * Portais oficiais do procedimento (manual-first, sem API): a submissão
+ * eletrónica pelo mandatário faz-se no Citius (tribunaisnet); a consulta de
+ * documentos da injunção está nos serviços do portal Justiça.gov.pt. A app só
+ * prepara e aponta - nunca submete nem finge submeter.
+ */
+const BNI_CITIUS_URL = 'https://citius.tribunaisnet.mj.pt/';
+const BNI_CONSULTA_URL = 'https://justica.gov.pt/Servicos/Consultar-documentos-do-processo-de-injuncao';
 
 /* Passos da submissão ASSISTIDA no BNI (sem API oficial - o compensatório é a
  * proveniência: um evento por passo, brief §3.2.5). */
@@ -98,6 +108,65 @@ export default function InjuncaoDetailPage() {
     }
   }
 
+  /*
+   * Exporta o requerimento preparado como MINUTA de conferência em PDF - para
+   * o mandatário rever e transcrever no BNI. Cada valor do pedido cita a sua
+   * fonte (elegibilidade DL 269/98 ou DL 62/2013; Avisos por troço de juros;
+   * RCP para a taxa de justiça). Nunca se apresenta como formulário oficial.
+   */
+  async function exportarRequerimento() {
+    const req = inj.requerimento;
+    if (!req) return;
+    setACorrer(true);
+    try {
+      const linhasPedido = [
+        ['Capital em dívida', formatEur(req.pedido.capital)],
+        ['Juros de mora (serviço de cálculos)', formatEur(req.pedido.juros)],
+        ['Taxa de justiça (RCP)', formatEur(req.pedido.taxaJustica)],
+      ];
+      const citas = [];
+      if (inj.elegibilidade && inj.elegibilidade.fundamento) citas.push(inj.elegibilidade.fundamento);
+      citas.push(`Formato do requerimento: ${req.formato}`);
+      for (const t of (inj.juros && inj.juros.trocos) || []) {
+        if (t && t.aviso) citas.push(`Juros ${t.inicio || ''} a ${t.fim || ''}: ${t.aviso}`);
+      }
+      if (inj.taxaJustica) {
+        citas.push(`Taxa de justiça: ${inj.taxaJustica.citacao || 'RCP, Tabela I'}${inj.taxaJustica.ucCount ? ` (${inj.taxaJustica.ucCount} UC)` : ''}`);
+      }
+      const corpoHtml = [
+        `<p>Requerido: <strong>${escapeHtml(inj.devedor || '')}</strong></p>`,
+        `<p>Requerente: ${escapeHtml(req.credor || '')}</p>`,
+        '<h2>Pedido</h2>',
+        '<table><thead><tr><th>Rubrica</th><th class="numeric">Valor</th></tr></thead><tbody>',
+        ...linhasPedido.map(([r, v]) => `<tr><td>${escapeHtml(r)}</td><td class="numeric">${escapeHtml(v)}</td></tr>`),
+        `<tr class="destaque"><td>Total do pedido</td><td class="numeric">${escapeHtml(formatEur(req.pedido.total))}</td></tr>`,
+        '</tbody></table>',
+        '<h2>Exposição de factos</h2>',
+        `<pre>${escapeHtml(req.exposicaoFactos || '')}</pre>`,
+        '<h2>Fundamentação</h2>',
+        `<ul>${citas.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`,
+        '<p class="aviso-legal">Minuta de conferência - não é o formulário oficial do BNI nem uma submissão; a submissão é feita pelo mandatário no Citius.</p>',
+      ].join('');
+      await exportarPdf({
+        titulo: 'Requerimento de injunção (minuta de conferência)',
+        subtitulo: `${inj.descricao || 'Injunção'} - ${req.formato}`,
+        corpoHtml,
+        rodape: 'Minuta gerada pela app Injunções (Ekoa) para transcrição manual no Balcão Nacional de Injunções. Não é o formulário oficial, não foi submetida e não constitui peça processual. Juros e taxa de justiça calculados pelo serviço de cálculos, com as fontes citadas acima.',
+        filename: `requerimento-injuncao ${inj.descricao || inj.id}`,
+      });
+      await registarEvento({
+        app: 'legal-injuncoes', acao: 'requerimento-exportado',
+        fundamentacao: 'Minuta do requerimento exportada em PDF para conferência e transcrição no BNI.',
+        proveniencia: 'manual-assistido', demo: ehDemo, extra: extraDemo,
+      });
+      toast('Minuta do requerimento exportada em PDF.');
+    } catch (e) {
+      toast((e && e.message) || 'A exportação PDF falhou.');
+    } finally {
+      setACorrer(false);
+    }
+  }
+
   async function marcarPasso(idx) {
     const prox = { ...passosFeitos, [idx]: true };
     setPassosFeitos(prox);
@@ -177,9 +246,24 @@ export default function InjuncaoDetailPage() {
               {inj.taxaJustica ? ` (${inj.taxaJustica.ucCount} UC - ${inj.taxaJustica.citacao || 'RCP, Tabela I'})` : ''}
             </p>
             {inj.requerimento ? (
-              <p className="text-small" style={{ margin: 0 }} data-testid="injuncao-total">
-                Pedido total do requerimento: <strong>{formatEur(inj.requerimento.pedido.total)}</strong> ({inj.requerimento.formato})
-              </p>
+              <>
+                <p className="text-small" style={{ margin: 0 }} data-testid="injuncao-total">
+                  Pedido total do requerimento: <strong>{formatEur(inj.requerimento.pedido.total)}</strong> ({inj.requerimento.formato})
+                </p>
+                <div className="row row-2" style={{ alignItems: 'center' }}>
+                  <Button
+                    variant="secondary"
+                    data-testid="injuncao-requerimento-pdf"
+                    disabled={aCorrer || !pdfDisponivel()}
+                    onClick={exportarRequerimento}
+                  >
+                    Exportar requerimento (PDF de conferência)
+                  </Button>
+                  {!pdfDisponivel() && (
+                    <span className="text-xs text-subtle">Exportação PDF disponível apenas dentro da plataforma.</span>
+                  )}
+                </div>
+              </>
             ) : null}
           </div>
         ) : (
@@ -211,6 +295,15 @@ export default function InjuncaoDetailPage() {
           <p className="card-subtitle">
             Não existe API oficial: a plataforma prepara tudo e o mandatário confirma no BNI.
             Cada passo fica registado com proveniência (registo_eventos).
+          </p>
+          <p className="text-small" style={{ margin: '0 0 var(--sp-3, 0.75rem)' }}>
+            <a data-testid="injuncao-bni-link" href={BNI_CITIUS_URL} target="_blank" rel="noreferrer noopener" className="stat-link">
+              Abrir o Citius (submissão eletrónica pelo mandatário)
+            </a>
+            {' · '}
+            <a data-testid="injuncao-bni-consulta" href={BNI_CONSULTA_URL} target="_blank" rel="noreferrer noopener" className="stat-link">
+              Consultar documentos da injunção (Justiça.gov.pt)
+            </a>
           </p>
           <ol className="stack stack-2" style={{ margin: 0, paddingLeft: '1.25rem' }}>
             {PASSOS_BNI.map((p, i) => (
@@ -254,6 +347,21 @@ export default function InjuncaoDetailPage() {
             O requerimento vale como título executivo. Foi aberta a tarefa "Preparar execução" e o prazo de oposição ficou no radar.
             Consulte os prazos em <a href={appHref('legal-prazos')} className="stat-link">Prazos</a>.
           </p>
+        </section>
+      ) : null}
+
+      {Array.isArray(inj.trilho) && inj.trilho.length > 0 ? (
+        <section className="card" data-testid="injuncao-trilho">
+          <h2 className="card-title">Percurso do procedimento</h2>
+          <p className="card-subtitle">Cada mudança de estado fica registada com data - o trilho é a memória do processo.</p>
+          <ol className="stack stack-2" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {inj.trilho.map((t, i) => (
+              <li key={i} className="row row-2" style={{ alignItems: 'center' }} data-testid="injuncao-trilho-item">
+                <Badge tone={ESTADO_TONE[t.acao] || 'neutral'}>{t.acao === 'criada' ? 'Criada' : ESTADO_LABEL[t.acao] || t.acao}</Badge>
+                <span className="text-xs text-subtle">{t.quando ? formatDateTime(t.quando) : '-'}</span>
+              </li>
+            ))}
+          </ol>
         </section>
       ) : null}
     </div>

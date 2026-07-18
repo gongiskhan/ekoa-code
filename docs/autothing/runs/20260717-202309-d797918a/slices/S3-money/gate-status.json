@@ -1,0 +1,62 @@
+{
+  "slice": "S3-money",
+  "run": "20260717-202309-d797918a",
+  "attempt": 1,
+  "status": "in_progress",
+  "gates": {
+    "test": {
+      "status": "pass",
+      "exits": {
+        "specs": 0,
+        "typecheck": 0,
+        "eslint": 0,
+        "unit": 0
+      },
+      "note": "11/11 passed in 5.5s on the lane (5 new legal-x specs + amended frozen legal-calculos.spec.ts with the corrected 2023 Avisos). typecheck exit 0 post-batch. Unit layer 155/155 (calculos-taxas-2026, cobrancas-carta, financas-csv, calculos-engines). eslint on the 5 specs exit 0 (review-S3 hermetic evidence). Ledger: 5 rows registered in band3_served_app.",
+      "at": "2026-07-18T03:05:00Z"
+    },
+    "review": {
+      "verdict": "findings(1) - dispositioned",
+      "by": "review-S3 fresh-context same-model agent (claude-opus-4-8), hermetic (vitest 3 files/17 tests exit 0, typecheck exit 0, eslint --no-ignore on the 5 specs exit 0, gate:ledger exit 1 = F1, frozen-layer/bases diff empty; no e2e)",
+      "findings": [
+        "F1 (medium, ledger): the 5 S3 specs on disk but not in SUITE_LEDGER band3_served_app.specs - gate:ledger red ('disk 98 != ledger 78'; the 20-gap is wave-wide, S3 owns 5). DISPOSITION: the planned per-slice landing step registers the 5 names in the S3 landing commit."
+      ],
+      "notes": [
+        "Correctness clean: juros troco math independently re-derived (cent-integer, per-troco actual/365) and matches; carta de interpelacao honesty logic sound; CSV byte-exact with disclaimer; conta_corrente processoId imputation additive; despesas 'total no filtro' sums only rows in view; eligibility citations correct; no uncited number. Nits queued for the post-wave sweep: em-dashes on a few added lines (consistent with existing idiom), stale '25%' comment in an unmodified file, optional juros.incompleto honesty check."
+      ],
+      "at": "2026-07-18T02:16:00Z"
+    },
+    "adversarialReview": {
+      "verdict": "pending",
+      "at": null
+    },
+    "adversarialTest": {
+      "verdict": "pending",
+      "at": null
+    },
+    "design": {
+      "verdict": "clean",
+      "by": "lead session, playwright-core screenshot sweep (design-s3.mjs): 21 screenshots over 19 nav pages across the 5 S3 apps at 1440x900, zero console errors + zero pageerrors on every page, plus a live no-save juros compute probe",
+      "issues": [
+        "FIXED during audit: cobrancas sequencias preview rendered 'a fatura a fatura' - PREVIEW_VARS.descricao was the literal 'a fatura' while every seeded template already says 'a fatura {{descricao}}'; same duplication hit the real render path (CobrancaDetailPage passes cobranca.descricao, which starts with 'Fatura FT...', producing 'a fatura Fatura FT...'). Fix: PREVIEW_VARS.descricao -> 'FT 2026/18' (SequenciasPage.jsx) + strip leading 'Fatura ' when building templateVars (CobrancaDetailPage.jsx). Bundle rebuilt out-of-process; both paths re-probed live: dupGone=true, 'a fatura FT 2026/18' renders, zero pageerrors. Included in the S3 commit; flagged for adv-review-S3 visibility."
+      ],
+      "notes": [
+        "calculos juros: corrected 2023 Avisos render in the live UI through a real compute (capital 12.500, comercial, 2023-04-01 a 2023-09-30): Aviso n.o 1672/2023 + 14922/2023 present, old 1261/2023 / 20214/2023 absent; memoria de calculo with troco table readable - clean",
+        "calculos taxa de justica: honest 'Escaloes por confirmar' card, RCP (DL 34/2008) + art. 6.o citations, UC por OE - clean",
+        "calculos memorias: honest empty state with clear call-to-action - clean",
+        "honorarios resumo: KPI math verified by hand - 1550,00 (honorarios) + 390,50 (despesas) = 1940,50 total; 5 lancamentos across 4 processos + 1 avenca sem processo = 6 lancamentos, table/KPI split consistent - clean",
+        "honorarios pre-faturas: prominent 'Pre-faturas de conferencia - nao substituem fatura certificada' banner; emission honestly out of scope - clean",
+        "financas conta corrente: extrato running-balance math verified (885,60 - 500,00 = 385,60), KPI cards, Exportar CSV, debito/credito badges - clean",
+        "financas faturacao: honest 'Emissao certificada exclusivamente via InvoiceExpress' banner + red 'Integracao nao configurada' state with disabled Emitir button - the app never fakes fiscal emission - clean",
+        "cobrancas carteira: aging buckets internally consistent (627,30 + 0,00 + 19 200,00 = 19 827,30 total em aberto; bucket rows sum correctly), citations Art. 805.o CC + DL 269/98 on the bucket cards, estado/metodo/sequencia columns - clean",
+        "cobrancas sequencias: Dia +N / canal badges, WhatsApp consent warning + mandatory opt-out line, {{nome}}/{{descricao}}/{{valor}} personalization hints, live preview - clean after the fix above",
+        "injuncoes: DL 62/2013 transacao-comercial checkbox + consumidor guard, honest 'Sem injuncoes' empty state, disabled CTA until a credito is chosen - clean",
+        "PT-PT copy throughout, no emojis, no em dashes introduced; all five apps use the shared layout/sidebar consistently"
+      ],
+      "at": "2026-07-18T02:20:00Z"
+    },
+    "walkthrough": {
+      "status": "pending"
+    }
+  }
+}
