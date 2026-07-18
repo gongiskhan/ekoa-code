@@ -22,7 +22,7 @@ import { CAPTURE_TARGET_RATE, createMicCapture } from '@/lib/voice/capture';
 import { createSttSocket } from '@/lib/voice/stt-socket';
 import { createTtsSocket, type TtsSocket } from '@/lib/voice/tts-socket';
 import { SpeechChannel } from '@/lib/voice/speech-channel';
-import { startVadGate } from '@/lib/voice/vad-gate';
+import { startVadGate, type VadGate, type VadGateHooks } from '@/lib/voice/vad-gate';
 import { TtsPlayback, type AudioContextLike } from '@/lib/voice/tts-playback';
 import { voiceLangForLocale } from '@/lib/voice/wire';
 import {
@@ -30,7 +30,28 @@ import {
   type VoiceDriverDeps,
   type VoiceErrorCode,
 } from '@/lib/voice/session-driver';
-import type { VoiceMode, VoiceState, VoiceStatus } from '@/lib/voice/voice-machine';
+import type { VoiceMode, VoiceState, VoiceStatus, VoiceConfig } from '@/lib/voice/voice-machine';
+import { LatencyRecordCollector } from '@/lib/voice/latency-record';
+
+/**
+ * E2E test-only seams (mega-run C7 voice proof). A real Silero VAD cannot reliably fire on
+ * mocked/synthetic mic audio in headless CI (the same reason C4's e2e mocks getUserMedia rather
+ * than driving a real mic), and a real standby/inactivity wait would make a committed e2e take
+ * minutes. Both seams reuse collaborator injection points the driver ALREADY expects
+ * (VoiceDriverDeps.startVad / .config - see session-driver.ts's own unit tests, which drive full
+ * turns with fakes); only WHICH implementation gets injected is decided here, by an optional
+ * `window` global a Playwright `addInitScript` sets BEFORE the page's JS runs. Absent (every
+ * production page load): the real VAD and the real default timers apply, unchanged.
+ */
+declare global {
+  interface Window {
+    __voiceE2eTestVadFactory?: (hooks: VadGateHooks) => Promise<VadGate>;
+    __voiceE2eTestDriverConfig?: Partial<VoiceConfig> & {
+      busyAfterMs?: number;
+      inactivityTickMs?: number;
+    };
+  }
+}
 
 export interface UseVoiceSessionOptions {
   sessionId: string | null;
@@ -86,6 +107,9 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
   const speechSocketRef = useRef<TtsSocket | null>(null);
   const speechCtxRef = useRef<AudioContextLike | null>(null);
   const streamedLenRef = useRef(0);
+  /** C7: collects the per-stage marks into ONE record per turn (survives mode switches -
+   *  the turn counter is cheap and harmless to keep incrementing across them). */
+  const latencyRef = useRef(new LatencyRecordCollector());
   const optsRef = useRef(opts);
   useEffect(() => {
     optsRef.current = opts;
@@ -163,14 +187,19 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
         startVad:
           driverMode === 'talking'
             ? (ctx, stream) => {
-                if (!ctx || !stream) return Promise.reject(new Error('no capture graph'));
-                return startVadGate(ctx, stream, {
+                const vadHooks: VadGateHooks = {
                   onSpeechStart: () => driverRef.current?.handleVadSpeechStart(),
                   onSpeechEnd: () => driverRef.current?.handleVadSpeechEnd(),
                   onMisfire: () => driverRef.current?.handleVadMisfire(),
-                });
+                };
+                const testFactory =
+                  typeof window !== 'undefined' ? window.__voiceE2eTestVadFactory : undefined;
+                if (testFactory) return testFactory(vadHooks);
+                if (!ctx || !stream) return Promise.reject(new Error('no capture graph'));
+                return startVadGate(ctx, stream, vadHooks);
               }
             : undefined,
+        config: typeof window !== 'undefined' ? window.__voiceE2eTestDriverConfig : undefined,
         hooks: {
           onStateChange: (state) => {
             applyState(state);
@@ -203,9 +232,13 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
           onPendingNote: (text) => optsRef.current.onPendingNote(text),
           onError: setError,
           onLatencyMark: (mark, atMs) => {
-            // The C1 relay logs per-stage latency server-side; this is the client mirror
-            // (BRIEF §5 validation: instrumentation kept, dashboarded in C7).
-            console.info(JSON.stringify({ evt: 'voice.client_latency', mark, atMs }));
+            // C7: fold the per-mark stream into ONE record per turn (lib/voice/latency-record
+            // - the client mirror of the server's per-turn stage clocks) and log exactly one
+            // JSON line per closed turn, matching api/src/voice/session.ts's 'voice.latency'
+            // shape. The C7 dashboard memo (docs/autothing/runs/.../memos/voice-latency.md)
+            // reads these lines.
+            const record = latencyRef.current.mark(mark, atMs);
+            if (record) console.info(JSON.stringify({ evt: 'voice.client_latency_record', ...record }));
           },
         },
       };
@@ -321,6 +354,13 @@ export function useVoiceSession(opts: UseVoiceSessionOptions): VoiceSessionApi {
     return () => {
       driverRef.current?.dispose();
       driverRef.current = null;
+      // Flush a still-open latency turn (a final manual/no-TTS turn closes only here, not on
+      // a later audio_in - codex C7 finding): surface it on the SAME channel the mark path
+      // uses before the collector is dropped.
+      const finalRecord = latencyRef.current.close();
+      if (finalRecord) {
+        console.info(JSON.stringify({ evt: 'voice.client_latency_record', ...finalRecord }));
+      }
       setMode(null);
       setSuspended(false);
     };

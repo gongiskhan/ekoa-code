@@ -163,6 +163,14 @@ describe('shared contract', () => {
     expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'x', reviseSheetId: '' }).success).toBe(false);
   });
 
+  it('ChatRunCreateRequest accepts the C7 voice-source signal (optional literal "voice"; any other value rejected)', async () => {
+    const { ChatRunCreateRequest } = await import('./chat.js');
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'qual é o prazo', source: 'voice' }).success).toBe(true);
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'olá' }).success).toBe(true); // absent = ordinary run
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'x', source: 'text' }).success).toBe(false);
+    expect(ChatRunCreateRequest.safeParse({ sessionId: 's', message: 'x', source: '' }).success).toBe(false);
+  });
+
   it('AutomationRunEvent step: parses both a thin legacy event and an enriched one (§3.6.3)', async () => {
     const { AutomationRunEvent } = await import('./events.js');
     // A pre-enrichment client emitted only the thin core — it must still validate (old clients stay valid).

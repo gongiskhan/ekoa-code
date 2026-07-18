@@ -69,6 +69,13 @@ wiring; `session-driver.ts` `onPendingNote` hook doc). **C7's acceptance must te
 behavior, not the BRIEF's "appended" wording.** True mid-run append becomes feasible only if the
 agent pipeline ever gains in-run message injection - a platform capability, out of Part C scope.
 
+**Sub-caveat (C7 review):** the queued-message list is a plain `string[]`, so a pending note
+flushed via the `isExecuting` queue loses the `source:'voice'` tag - that flushed turn is treated
+as a normal chat turn (no voice-context note, no `source:voice` activity row). This is
+OUTPUT-SHAPING ONLY (the reply is not read-aloud-shaped) with no correctness/billing/security
+effect; carrying the tag would mean widening the queue to objects, deferred as gold-plating for
+v1. A direct (unqueued) voice send DOES carry the tag correctly.
+
 ## (iv) Vendor keys absent at run start - C6 gated, never improvised
 
 Preflight (RUN_LOG GATE 2026-07-17T19:09:55Z): no Deepgram key, no ElevenLabs key (optional -

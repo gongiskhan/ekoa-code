@@ -93,6 +93,10 @@
     "C6": {
       "status": "blocked",
       "at": "2026-07-18T12:28:47Z"
+    },
+    "C7": {
+      "status": "passed",
+      "at": "2026-07-18T15:57:39Z"
     }
   },
   "globalGate": {
@@ -106,6 +110,13 @@
       "sha256": "b420d7be927c927cfa7e528775c60930803035faa0210c77e3712bce533cf900",
       "bytes": 2167642,
       "status": "verified"
+    },
+    {
+      "slice": "C7",
+      "sha256": "5bfefed10d2ddf461933360ed2ca3387e9fb4f335d9baface0b98f8e92609af8",
+      "bytes": 1766844,
+      "status": "verified"
     }
-  ]
+  ],
+  "modelFallbacks": 1
 }

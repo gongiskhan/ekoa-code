@@ -55,6 +55,8 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
       ...(body.attachments ? { attachments: body.attachments } : {}),
       ...(body.references ? { references: body.references } : {}),
       ...(body.reviseSheetId ? { reviseSheetId: body.reviseSheetId } : {}),
+      // C7: the voice-source signal, threaded verbatim to StartChatRunInput.source.
+      ...(body.source ? { source: body.source } : {}),
       deps,
     };
     const { runId } = createChatRun(input);

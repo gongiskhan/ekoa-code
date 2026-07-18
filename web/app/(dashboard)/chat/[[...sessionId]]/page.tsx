@@ -1016,7 +1016,7 @@ export default function UnifiedChatPage() {
   // uses for builds), so the unified ChatPanel renders them without knowing or
   // caring which agent is talking.
 
-  const handleChatSend = useCallback(async (textArg?: string) => {
+  const handleChatSend = useCallback(async (textArg?: string, source?: "voice") => {
     const text = (textArg ?? chatInput).trim();
     if (!text || isExecuting) return;
 
@@ -1095,6 +1095,9 @@ export default function UnifiedChatPage() {
         // B5 (locked 5+7): the chip's target - the api persists the reply as a NEW
         // REVISION on this sheet instead of spawning a new one.
         ...(reviseSheetId ? { reviseSheetId } : {}),
+        // C7: a transcript sent from an active voice session - the api attaches the
+        // voice-context note (output shaping only, never a shorter reply).
+        ...(source ? { source } : {}),
       });
       chatTraceIdRef.current = runId;
 
@@ -1359,13 +1362,19 @@ export default function UnifiedChatPage() {
   }, [panelEnterPhase, sidePanelMounted]);
 
   const handleSendMessage = useCallback(
-    (textArg?: string) => {
+    (textArg?: string, source?: "voice") => {
       const rawText = (textArg ?? chatInput).trim();
       if (!rawText) return;
 
       // Queue-while-building: don't reject messages sent during an active run.
       // Queue them and flush (FIFO) when the run finishes. The flush effect calls
       // this same function once isExecuting is false, so this guard won't loop.
+      // KNOWN SCOPE BOUNDARY (C7): the queue is plain strings (orchestration.ts
+      // queuedMessages: Record<string, string[]>) and drainQueue joins multiple queued
+      // entries into ONE flushed send, so a voice-sourced pending note loses its `source`
+      // tag here - the flushed turn omits the voice-context note. Only cosmetic (output
+      // shaping, never correctness): the queued-then-flushed behavior itself (deviation
+      // memo c-voice-deviations.md §v) is unaffected and is what C7's proof asserts.
       if (isExecuting) {
         if (activeSessionId) {
           enqueueMessage(activeSessionId, rawText);
@@ -1403,7 +1412,7 @@ export default function UnifiedChatPage() {
           }
         }
         // setChatInput("") happens inside handleChatSend after it captures the value.
-        handleChatSend(text);
+        handleChatSend(text, source);
       } else if (isBuildSession && (sessionHasJob || sessionArtifactId)) {
         // Follow-up edit of an existing artifact. `sessionArtifactId` (without a
         // jobId) is the "Continue working"/?continue= case: the session was
@@ -1417,7 +1426,7 @@ export default function UnifiedChatPage() {
         handleBuildFirstMessage(text);
       } else {
         // setChatInput("") happens inside handleChatSend after it captures the value.
-        handleChatSend(text);
+        handleChatSend(text, source);
       }
     },
     [

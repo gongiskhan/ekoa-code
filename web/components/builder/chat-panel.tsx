@@ -197,9 +197,11 @@ interface ChatPanelProps {
   sessionId: string | null;
   isExecuting: boolean;
   isBuildSession: boolean;
-  onSendMessage: (message: string) => void;
+  // C7: an optional third-state source tag - 'voice' when the send originates from the mic
+  // (the voice send path below), absent for the ordinary composer.
+  onSendMessage: (message: string, source?: "voice") => void;
   onCancel: () => void;
-  onFirstMessage: (message: string) => void;
+  onFirstMessage: (message: string, source?: "voice") => void;
   onResend?: () => void;
   onEdit?: () => void;
   /** C4 fix 6: fires when the voice bar appears/disappears so the page can move fixed
@@ -340,13 +342,18 @@ export default function ChatPanel({
   // turn when the run settles (run memo c-voice-deviations.md §v; C7 accepts this
   // behavior, not the BRIEF's wording). Manual tap-stop instead hands the transcript to
   // the composer for an explicit send.
+  // C7: every direct send through this path tags source:'voice' - the api attaches the
+  // voice-context note (context.ts voiceContextNote) to the resulting run. The QUEUED
+  // (isExecuting) branch inside onSendMessage/onFirstMessage cannot carry the tag through
+  // to its eventual flush (see the page.tsx handleSendMessage comment) - a documented,
+  // cosmetic scope boundary, not a correctness gap.
   const sendVoicePathRef = useRef<(text: string) => void>(() => undefined);
   useEffect(() => {
     sendVoicePathRef.current = (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (essentialMessages.length === 0) onFirstMessage(trimmed);
-      else onSendMessage(trimmed);
+      if (essentialMessages.length === 0) onFirstMessage(trimmed, "voice");
+      else onSendMessage(trimmed, "voice");
     };
   });
   const voice = useVoiceSession({
@@ -689,6 +696,7 @@ export default function ChatPanel({
             {queuedMessages.map((q, i) => (
               <div
                 key={i}
+                data-testid="queued-message"
                 className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 text-xs text-amber-800"
                 title={q}
               >

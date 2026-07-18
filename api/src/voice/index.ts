@@ -261,7 +261,11 @@ function handleSttConnection(
     if (parsed.type === 'close_stream') stream.close(); // flush; pump loop closes the socket
     else if (parsed.type === 'turn_committed') {
       // Annotates the last finished turn with its chat-message ref (a ref, never text).
-      // Idempotent: with no pending turn there is nothing to audit.
+      // Idempotent: with no pending turn there is nothing to audit. The ref is CLIENT-ASSERTED
+      // (length-capped in shared/, but the voice module at tier 3 does not reach message
+      // storage to verify it exists / belongs to the session) - it is a same-user annotation
+      // on that user's own activity log, recorded as reported, never trusted as a verified
+      // foreign key by any consumer (codex C7 finding; see the shared schema comment).
       auditTurn({ transcriptMessageId: parsed.transcriptMessageId, mode: parsed.mode });
     }
   });

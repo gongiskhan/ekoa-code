@@ -46,9 +46,12 @@ export interface StartChatRunInput {
   reviseSheetId?: string;
   /** C5 (BRIEF §5): 'voice' marks a voice-sourced turn — the run context then carries the
    *  spoken-modality system note (context.ts voiceContextNote; never shortens replies).
-   *  TODO(C7 seam): nothing sets this yet. C7 wires the client signal through — a field on
-   *  shared/ ChatRunCreateRequest (+ contract test) that routes/chat.ts copies here when the
-   *  composer sends a transcript from an active voice session. */
+   *  C7 closed the seam: shared/ ChatRunCreateRequest.source rides the wire, routes/chat.ts
+   *  copies it here verbatim, and the mic UI's send path (chat-panel.tsx / page.tsx
+   *  handleChatSend) sets it when the composer sends a transcript from an active voice
+   *  session. The paired audit signal (source:'voice' on the voice.turn activity row) is the
+   *  voice WS session's own write (api/src/voice/index.ts auditTurn, C2) — independent of this
+   *  field, which only drives output shaping. */
   source?: 'voice';
   deps: { now: () => number; genId: () => string };
 }

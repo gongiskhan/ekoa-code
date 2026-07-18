@@ -3,9 +3,10 @@ import { ChatRunEvent, NotificationEvent } from '@ekoa/shared';
 import { sseManager } from '../../src/events/sse-manager.js';
 import { createChatRun, executeChatRun } from '../../src/agents/chat.js';
 import { getRun } from '../../src/agents/registry.js';
-import { messages, sessions } from '../../src/data/stores.js';
+import { messages, sessions, activityLogs } from '../../src/data/stores.js';
 import { listSessionSheets, findSessionSheet } from '../../src/data/session-sheets.js';
 import { BUILD_MARKER, INTEGRATION_MARKER } from '../../src/agents/markers.js';
+import { logActivity } from '../../src/data/activity.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
 import type { FakeTransportScript } from './_fake-transport.js';
 
@@ -42,7 +43,7 @@ describe('chat run pipeline + streaming contract', () => {
   beforeAll(() => bootAgentTestDb('ekoa_chat_lifecycle'));
   afterAll(shutdownAgentTestDb);
   beforeEach(async () => { await seedUser('u1', 'o1'); await sessions.insert({ _id: 's1', userId: 'u1', title: 't', status: 'active', messageCount: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }); });
-  afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await messages.deleteMany({}); await sessions.deleteMany({}); });
+  afterEach(async () => { vi.restoreAllMocks(); restoreTransport(); await messages.deleteMany({}); await sessions.deleteMany({}); await activityLogs.deleteMany({}); });
 
   it('completes with the FULL concatenated stream: complete.result + the persisted assistant message equal the joined deltas, never the final-frame tail (F20)', async () => {
     // REWRITTEN for F20: this test previously scripted a final frame carrying MORE than the
@@ -229,6 +230,50 @@ describe('chat run pipeline + streaming contract', () => {
     const call = transport.streamCalls[0]!;
     expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'delegate_to_local']);
     expect(call.allowedTools).toEqual(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__delegate_to_local']);
+  });
+
+  it('a voice-sourced run (input.source==="voice") carries the voice-context note in the system prompt; the paired voice.turn activity row carries source:voice (C7 seam close)', async () => {
+    // The voice.turn row is written by the VOICE WS SESSION itself (api/src/voice/index.ts
+    // auditTurn, landed C2) - an entirely separate module from the chat run pipeline, fired
+    // when the STT turn commits (BEFORE its transcript ever reaches this HTTP endpoint). C7's
+    // job is only the other half: source:'voice' on THIS run threads the voiceContextNote
+    // (assembleRunContext's voiceActive, wired since C5). This test proves both halves hold
+    // for one logical voice turn without duplicating either module's own tests (C2's
+    // tests/voice/metering.test.ts already pins the row's shape+writer).
+    await logActivity(
+      { userId: 'u1', username: 'u1', orgId: 'o1' },
+      'voice',
+      'turn',
+      deps,
+      { source: 'voice', sessionId: 'voice-sess-1', transcriptMessageId: 'm-voice-1', lang: 'pt', mode: 'talking' },
+      { voice_stt_ms: 1200 },
+    );
+
+    const transport = resetAgentState({ finalText: 'O prazo é de 30 dias.' });
+    events = [];
+    vi.spyOn(sseManager, 'emit').mockImplementation((stream, streamId, type, data) => { events.push({ stream, streamId, type, data }); });
+    const input = { actor, username: 'u1', sessionId: 's1', message: 'Qual é o prazo?', language: 'pt', source: 'voice' as const, deps };
+    const { runId } = createChatRun(input);
+    await executeChatRun(runId, input);
+    expect(chatEventsFor(runId).some((e) => e.type === 'complete')).toBe(true);
+
+    // 1. The voice-context note (output shaping only) rode the system prompt.
+    const call = transport.streamCalls[0]!;
+    expect(call.systemPrompt).toContain('Sessão de voz ativa');
+    expect(call.systemPrompt).toContain('lidas em voz alta');
+
+    // 2. A non-voice run over the SAME session gets no such note (voiceActive defaults false).
+    const plain = resetAgentState({ finalText: 'Resposta normal.' });
+    const plainInput = { actor, username: 'u1', sessionId: 's1', message: 'outra pergunta', language: 'pt', deps };
+    const { runId: plainRunId } = createChatRun(plainInput);
+    await executeChatRun(plainRunId, plainInput);
+    expect(plain.streamCalls[0]!.systemPrompt ?? '').not.toContain('Sessão de voz ativa');
+
+    // 3. The paired voice.turn activity row (the voice session's own write) carries source:voice.
+    const rows = (await activityLogs.find({ category: 'voice', type: 'turn' })) as unknown as Array<{
+      metadata?: { source?: string; transcriptMessageId?: string };
+    }>;
+    expect(rows.some((r) => r.metadata?.source === 'voice' && r.metadata?.transcriptMessageId === 'm-voice-1')).toBe(true);
   });
 
   it('never emits subagent_event, phase_changed, or usage_progress on the wire (§5.7.3)', async () => {

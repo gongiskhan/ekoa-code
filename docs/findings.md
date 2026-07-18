@@ -17,6 +17,39 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 - **`knowledge-tool-sync-io-stall`** (OPEN, MEDIUM, perf). Knowledge tool calls block the api
   event loop for multi-second stretches (observed ~3s+ per call during B7 debugging; it stalled
   SSE keep-alives long enough to 502 the old dev proxy). Async/offload candidate.
+  **Addendum (C7 voice proof, run 20260717-190134-9d4c1cbf):** the blast radius is wider than
+  the SSE-keepalive framing above - the SAME stall was observed delaying an entirely UNRELATED
+  live WebSocket connection's server-side message processing (the voice relay's stub STT
+  responding to a marker frame) by 9-18s while a concurrent chat run's agent work (tool calls)
+  was in flight on the SAME api process. Confirms this is a genuine event-loop-wide stall, not
+  scoped to the requesting HTTP/SSE connection - worth weighting into the fix's priority.
+- **`context-block-hold-back-leak`** (OPEN, MEDIUM, correctness/privacy-adjacent). Found by the
+  C7 voice proof (run 20260717-190134-9d4c1cbf) while driving a real TALKING-mode turn end to
+  end: the model's internal `<ekoa-context>{...}</ekoa-context>` state-tracking block (ch05
+  §5.7.2, `api/src/agents/markers.ts` `CONTEXT_OPEN`/`CONTEXT_CLOSE`) partially LEAKED onto the
+  live `text_chunk` wire and was consequently spoken aloud via the voice pipeline's TTS `say`
+  (observed verbatim: `<ekoa-context>\n{"userGoal": "...", "knownContext": [], ...`). The
+  persisted (final, authoritative) assistant message was clean - `MarkerProcessor.end()`'s full
+  final pass correctly stripped the block from the PERSISTED text - so this is a LIVE-STREAM-ONLY
+  leak, not a persistence-layer defect. Root cause (read, not yet fixed):
+  `MarkerProcessor.drain()`'s split-marker hold-back (`HOLD_BACK = MAX_MARKER_LEN - 1`, ~14 chars)
+  protects a MARKER LITERAL (e.g. `<ekoa-context>` itself) from splitting across a chunk
+  boundary, but does NOT protect an OPEN-but-not-yet-CLOSED context block's UNBOUNDED body: once
+  `<ekoa-context>` has opened and its close tag has not yet arrived, `stripSignals()`'s context
+  loop can only wait (`if (close === -1) break`), while `drain()`'s hold-back releases everything
+  except the last ~14 characters of the buffer regardless - so as soon as the open tag + body
+  grows past the hold-back window (very plausible: the body is a small JSON object, easily
+  >14 chars, and can arrive over several deltas while the model keeps generating), the excess
+  streams to the wire as if it were safe prose. This affects the ORDINARY (non-voice) chat
+  transcript too - text_chunk is the same wire regardless of modality - but no existing test
+  scans transcript content for the literal `<ekoa-context>` substring (existing marker tests use
+  a short FIXED marker split across exactly two chunks, not an unbounded, late-closing block), so
+  it went unnoticed until the voice pipeline made the leak audible. Likely fix direction: track
+  "inside an open, unclosed context block" as buffer state and hold back from the open tag
+  forward (not just the trailing HOLD_BACK window) until the close tag resolves it. Out of C7's
+  scope (agents/markers.ts is shared chat-pipeline infrastructure, not voice-specific); a
+  dedicated fix + regression test (a context block whose body exceeds HOLD_BACK, split across
+  many small deltas) is owed.
 - **`chip-title-raw-first-line`** (OPEN, LOW, polish). The composer chip renders the sheet's raw
   first line when no model title exists yet; once reply_summary lands the sheet has a title the
   chip could prefer.

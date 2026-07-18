@@ -1,0 +1,243 @@
+{
+  "title": "Ekoa: voice modality (Part C) - evidence pass",
+  "project": "ekoa",
+  "folder": "part-c-voice",
+  "video": {
+    "width": 1280,
+    "height": 900,
+    "fps": 30
+  },
+  "segments": [
+    {
+      "type": "browser",
+      "id": "manual-setup",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat/1997cff1-2970-470a-b038-90be9b257475",
+      "authState": ".walkthrough/auth.json",
+      "initScript": "(function() {\n  var fakeGetUserMedia = async function() {\n    var ctx = new AudioContext();\n    var destination = ctx.createMediaStreamDestination();\n    var osc = ctx.createOscillator();\n    var gain = ctx.createGain();\n    gain.gain.value = 0.05;\n    osc.connect(gain);\n    gain.connect(destination);\n    osc.start();\n    return destination.stream;\n  };\n  Object.defineProperty(navigator, 'mediaDevices', {\n    value: { getUserMedia: fakeGetUserMedia },\n    configurable: true\n  });\n\n  var NativeWebSocket = window.WebSocket;\n  var armed = null;\n  class TestWebSocket extends NativeWebSocket {\n    constructor(url, protocols) {\n      super(url, protocols);\n      this.isStt = /\\/api\\/voice\\/stream(\\?|$)/.test(String(url));\n    }\n    send(data) {\n      if (this.isStt && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {\n        if (armed !== null) {\n          var key = armed;\n          armed = null;\n          var bytes = new TextEncoder().encode('EKOA-STT:' + key);\n          super.send(bytes.buffer);\n        }\n        return;\n      }\n      super.send(data);\n    }\n  }\n  Object.defineProperty(window, 'WebSocket', {\n    value: TestWebSocket,\n    configurable: true,\n    writable: true\n  });\n  window.__voiceTestArmMarker = function(key) { armed = key; };\n\n  window.__voiceE2eTestVadFactory = async function(hooks) {\n    var speaking = false;\n    window.__voiceTestVad = {\n      fireSpeechStart: function() { speaking = true; hooks.onSpeechStart(); },\n      fireSpeechEnd: function() { speaking = false; hooks.onSpeechEnd(); }\n    };\n    return {\n      get speaking() { return speaking; },\n      destroy: function() { window.__voiceTestVad = undefined; }\n    };\n  };\n})();",
+      "runTimeoutMs": 240000,
+      "beats": [
+        {
+          "id": "ac1",
+          "caption": "AC-1 - microfone e medidor de nivel",
+          "expectedScreen": "chat completo aberto (feed + composer), barra de voz visivel a mostrar \"A captar\" e o medidor de nivel junto ao botao de microfone",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-mic-button",
+              "timeout": 30000
+            },
+            {
+              "type": "click",
+              "selector": "testid:voice-mic-button"
+            }
+          ],
+          "assert": {
+            "selector": "testid:voice-bar",
+            "text": "A captar",
+            "highlight": true,
+            "timeout": 15000
+          },
+          "hold": 1800
+        },
+        {
+          "id": "ac2a",
+          "caption": "AC-2 - ditado torna-se mensagem",
+          "expectedScreen": "a mensagem \"Qual e o prazo do processo?\" enviada e visivel no feed do chat",
+          "actions": [
+            {
+              "type": "evaluate",
+              "script": "() => { window.__voiceTestArmMarker && window.__voiceTestArmMarker(\"prazo\"); }"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-interim",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": "text=Qual é o prazo do processo? >> nth=0",
+            "highlight": true,
+            "timeout": 20000
+          },
+          "hold": 1800
+        }
+      ],
+      "settleReload": true
+    },
+    {
+      "type": "browser",
+      "id": "manual-result",
+      "continue": true,
+      "waitBefore": {
+        "selector": "[data-testid=\"sheet-card\"] >> nth=1",
+        "timeout": 180000
+      },
+      "runTimeoutMs": 240000,
+      "beats": [
+        {
+          "id": "ac2b",
+          "caption": "AC-2 - resposta em cartao e ficha",
+          "expectedScreen": "novo cartao de resumo na conversa e nova ficha no painel direito com a resposta do agente",
+          "assert": {
+            "selector": "[data-testid=\"sheet-card\"] >> nth=1",
+            "highlight": true,
+            "timeout": 10000
+          },
+          "hold": 2000
+        },
+        {
+          "id": "ac3",
+          "caption": "AC-3 - ouvir le a resposta",
+          "expectedScreen": "o botao Ouvir da nova ficha mudou para \"Parar\", a ler a resposta em voz alta (stub TTS)",
+          "actions": [
+            {
+              "type": "click",
+              "selector": "[data-testid=\"sheet-card\"] >> nth=1 >> [data-testid=\"sheet-action-ouvir\"]"
+            }
+          ],
+          "assert": {
+            "selector": "[data-testid=\"sheet-card\"] >> nth=1 >> [data-testid=\"sheet-action-ouvir\"]",
+            "text": "Parar",
+            "highlight": true,
+            "timeout": 15000
+          },
+          "hold": 1800
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "talking-setup",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat/16e82ef1-5244-4771-ad9f-815efa9ed2c1",
+      "authState": ".walkthrough/auth.json",
+      "initScript": "(function() {\n  var fakeGetUserMedia = async function() {\n    var ctx = new AudioContext();\n    var destination = ctx.createMediaStreamDestination();\n    var osc = ctx.createOscillator();\n    var gain = ctx.createGain();\n    gain.gain.value = 0.05;\n    osc.connect(gain);\n    gain.connect(destination);\n    osc.start();\n    return destination.stream;\n  };\n  Object.defineProperty(navigator, 'mediaDevices', {\n    value: { getUserMedia: fakeGetUserMedia },\n    configurable: true\n  });\n\n  var NativeWebSocket = window.WebSocket;\n  var armed = null;\n  class TestWebSocket extends NativeWebSocket {\n    constructor(url, protocols) {\n      super(url, protocols);\n      this.isStt = /\\/api\\/voice\\/stream(\\?|$)/.test(String(url));\n    }\n    send(data) {\n      if (this.isStt && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {\n        if (armed !== null) {\n          var key = armed;\n          armed = null;\n          var bytes = new TextEncoder().encode('EKOA-STT:' + key);\n          super.send(bytes.buffer);\n        }\n        return;\n      }\n      super.send(data);\n    }\n  }\n  Object.defineProperty(window, 'WebSocket', {\n    value: TestWebSocket,\n    configurable: true,\n    writable: true\n  });\n  window.__voiceTestArmMarker = function(key) { armed = key; };\n\n  window.__voiceE2eTestVadFactory = async function(hooks) {\n    var speaking = false;\n    window.__voiceTestVad = {\n      fireSpeechStart: function() { speaking = true; hooks.onSpeechStart(); },\n      fireSpeechEnd: function() { speaking = false; hooks.onSpeechEnd(); }\n    };\n    return {\n      get speaking() { return speaking; },\n      destroy: function() { window.__voiceTestVad = undefined; }\n    };\n  };\n})();",
+      "runTimeoutMs": 240000,
+      "beats": [
+        {
+          "id": "ac4",
+          "caption": "AC-4 - modo maos-livres envia sozinho",
+          "expectedScreen": "barra de voz em \"A enviar\" sem qualquer clique manual de envio, apos o modo maos-livres captar a fala",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-mic-button",
+              "timeout": 30000
+            },
+            {
+              "type": "mousePress",
+              "selector": "testid:voice-mic-button",
+              "holdMs": 650
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-status",
+              "timeout": 15000
+            },
+            {
+              "type": "evaluate",
+              "script": "async () => {\n  const start = Date.now();\n  while (!window.__voiceTestVad) {\n    if (Date.now() - start > 10000) throw new Error('vad hook not ready');\n    await new Promise((r) => setTimeout(r, 100));\n  }\n  window.__voiceTestVad.fireSpeechStart();\n}"
+            },
+            {
+              "type": "waitFor",
+              "selector": "[data-testid=\"voice-status\"][data-voice-status=\"capturing\"]",
+              "timeout": 8000
+            },
+            {
+              "type": "evaluate",
+              "script": "() => { window.__voiceTestArmMarker && window.__voiceTestArmMarker(\"prazo\"); }"
+            },
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-interim",
+              "timeout": 15000
+            }
+          ],
+          "assert": {
+            "selector": "testid:voice-status",
+            "text": "A enviar",
+            "highlight": true,
+            "timeout": 10000
+          },
+          "hold": 1800
+        }
+      ],
+      "settleReload": true
+    },
+    {
+      "type": "browser",
+      "id": "talking-bargein-wait",
+      "continue": true,
+      "waitBefore": {
+        "selector": "[data-testid=\"voice-status\"][data-voice-status=\"speaking\"]",
+        "timeout": 180000
+      },
+      "runTimeoutMs": 240000,
+      "beats": [
+        {
+          "id": "ac5",
+          "caption": "AC-5 - interrupcao corta e capta",
+          "expectedScreen": "a fala captada de interrupcao (\"Ola, bom dia.\") substitui a leitura em curso, barra em \"A captar\"",
+          "actions": [
+            {
+              "type": "evaluate",
+              "script": "async () => {\n  const start = Date.now();\n  while (!window.__voiceTestVad) {\n    if (Date.now() - start > 10000) throw new Error('vad hook not ready');\n    await new Promise((r) => setTimeout(r, 100));\n  }\n  window.__voiceTestVad.fireSpeechStart();\n}"
+            },
+            {
+              "type": "waitTimeout",
+              "ms": 400
+            },
+            {
+              "type": "waitFor",
+              "selector": "[data-testid=\"voice-status\"][data-voice-status=\"capturing\"]",
+              "timeout": 8000
+            },
+            {
+              "type": "evaluate",
+              "script": "() => { window.__voiceTestArmMarker && window.__voiceTestArmMarker(\"ola\"); }"
+            }
+          ],
+          "assert": {
+            "selector": "testid:voice-interim",
+            "text": "Olá, bom dia.",
+            "highlight": true,
+            "timeout": 15000
+          },
+          "hold": 1800
+        }
+      ]
+    },
+    {
+      "type": "browser",
+      "id": "secure-context",
+      "baseURL": "http://localhost:3000",
+      "startPath": "/chat/1997cff1-2970-470a-b038-90be9b257475",
+      "authState": ".walkthrough/auth.json",
+      "initScript": "Object.defineProperty(window, 'isSecureContext', { get: function() { return false; }, configurable: true });",
+      "runTimeoutMs": 120000,
+      "beats": [
+        {
+          "id": "ac6",
+          "caption": "AC-6 - mic desativado: liga segura",
+          "expectedScreen": "botao de microfone desativado (icone riscado) por contexto inseguro; mensagem clara em vez de falha silenciosa",
+          "actions": [
+            {
+              "type": "waitFor",
+              "selector": "testid:voice-mic-button",
+              "timeout": 30000
+            }
+          ],
+          "assert": {
+            "selector": "testid:voice-mic-button",
+            "enabled": false,
+            "highlight": true,
+            "timeout": 10000
+          },
+          "hold": 2000
+        }
+      ],
+      "settleReload": true
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{ "slice": "C7", "kind": "mixed", "status": "passed", "at": "2026-07-18T15:57:39Z",
+  "wall": {"tscApi": 0, "tscWeb": 0, "chokepoint": 0, "eslint": 0, "unit": "api voice 75 + web voice 150", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "voice-proof.spec.ts 3 passed + 1 honest env-gated skip; contract+chat-lifecycle voice-source tests; SUITE_LEDGER band5_live_proof"},
+  "adversarialReview": {"status": "approve-after-fix", "by": "fresh-context sync agent", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "adversarialTest": {"status": "pass", "by": "independent fresh-context probes (13)", "actualModel": "claude-sonnet-5", "fallbackCause": "fable-usage-limit"},
+  "codexSliceReview": {"status": "approve-after-fix", "actualModel": "gpt-5.5-high", "findings": "2 minor fixed"},
+  "design": {"status": "passed", "reason": "voice affordances audited at C4"},
+  "video": {"status": "verified", "mode": "evidence", "url": "http://100.108.210.116:8099/ekoa/part-c-voice/2026-07-18_16-42-38/final.mp4", "videoSha256": "5bfefed10d2ddf461933360ed2ca3387e9fb4f335d9baface0b98f8e92609af8", "videoBytes": 1766844, "note": "5/7 clean frames, 2 evidence-degraded on frame timing (asserts all passed)" } }

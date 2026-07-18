@@ -48,6 +48,11 @@ export const ChatRunCreateRequest = z.object({
   // message as the instruction) instead of spawning a new sheet. Unknown sheet ids fall back
   // to the fresh-sheet behavior server-side - the chip is a default, never a hard failure.
   reviseSheetId: z.string().min(1).optional(),
+  // C7 (BRIEF §5, closing the C5-documented seam on StartChatRunInput.source): set when the
+  // composer sends a transcript from an active voice session. Routes/chat.ts copies it verbatim
+  // to the agent run input, which appends the voiceContextNote (output shaping only - never
+  // shortens the reply or reduces thinking).
+  source: z.literal('voice').optional(),
 });
 export type ChatRunCreateRequest = z.infer<typeof ChatRunCreateRequest>;
 

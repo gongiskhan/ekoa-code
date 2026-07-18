@@ -36,7 +36,9 @@ export const VoiceSttClientMessage = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('turn_committed'),
     /** Id of the chat message the finished turn's final transcript became. A ref, never text:
-     *  capped at an id length so a client cannot smuggle prose into the audit row (A5 rule 2). */
+     *  capped at an id length so a client cannot smuggle prose into the audit row (A5 rule 2).
+     *  CLIENT-ASSERTED: the server records it on the caller's own activity log as reported and
+     *  does not verify it resolves to a real message - never treat it as a validated FK. */
     transcriptMessageId: z.string().min(1).max(128),
     /** The client voice-machine mode the turn ran under (BRIEF §5). */
     mode: z.enum(['manual', 'talking']).optional(),

@@ -83,6 +83,26 @@ describe('chat runs contract (§3.8.7)', () => {
     expect(ErrorEnvelope.safeParse(await bad.json()).success).toBe(true);
   });
 
+  it('POST /chat/runs accepts the C7 source:"voice" field (202 ChatRunCreateResponse); any other value is a 400 envelope', async () => {
+    const t = await tokenFor();
+    // The wire-level pin: routes/chat.ts threads body.source into StartChatRunInput.source
+    // (unit-pinned in agents/chat-lifecycle.test.ts); here only that the request PARSES and
+    // creation still answers 202 + runId - no LLM call is asserted.
+    const ok = await api('/api/v1/chat/runs', t, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1', message: 'qual é o prazo', language: 'pt', source: 'voice' }),
+    });
+    expect(ok.status).toBe(202);
+    expect(ChatRunCreateResponse.safeParse(await ok.json()).success).toBe(true);
+
+    const bad = await api('/api/v1/chat/runs', t, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1', message: 'x', language: 'pt', source: 'typed' }),
+    });
+    expect(bad.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await bad.json()).success).toBe(true);
+  });
+
   it("POST /chat/runs with another user's sessionId → uniform 404 envelope (session ownership, the sheets idiom)", async () => {
     const t = await tokenFor();
     for (const sessionId of ['s2', 'does-not-exist']) {
