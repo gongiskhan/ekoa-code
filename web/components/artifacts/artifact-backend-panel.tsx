@@ -150,7 +150,7 @@ export function ArtifactBackendPanel({ appId }: { appId: string }) {
   }, [appId, resp, load]);
 
   return (
-    <section data-testid="artifact-backend-panel" className="rounded-xl border border-neutral-200 bg-white p-5">
+    <section data-testid="artifact-backend-panel" className="rounded-2xl border border-line bg-surface p-5 shadow-card">
       <header className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
           <Server className="h-5 w-5 text-teal-600" aria-hidden />

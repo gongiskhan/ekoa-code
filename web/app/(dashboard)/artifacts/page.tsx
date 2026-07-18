@@ -394,7 +394,7 @@ function ArtifactCard({
     <motion.div
       variants={cardVariants}
       onClick={onClick}
-      className="group flex cursor-pointer flex-col rounded-xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong"
+      className="group flex cursor-pointer flex-col rounded-2xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong"
     >
       {/* Header row */}
       <div className="flex items-start justify-between mb-2">
@@ -1342,7 +1342,7 @@ function ArtifactDetail({
       {/* Details section */}
       <div className="flex-1 overflow-y-auto p-6 bg-canvas scrollbar-light">
         <div className="max-w-2xl space-y-4">
-          <div className="rounded-xl border border-line bg-surface p-4">
+          <div className="rounded-2xl border border-line bg-surface p-4">
             <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
               {a.details}
             </h4>
@@ -1415,7 +1415,7 @@ function ArtifactDetail({
             </dl>
           </div>
 
-          <div className="rounded-xl border border-line bg-surface">
+          <div className="rounded-2xl border border-line bg-surface">
             <div className="flex items-center gap-2 border-b border-line px-5 py-3">
               <History size={14} className="text-neutral-500" />
               <h4 className="text-sm font-semibold text-neutral-900">
@@ -1501,7 +1501,7 @@ function EmptyState() {
 
 function CardSkeleton() {
   return (
-    <div className="flex flex-col rounded-xl border border-line bg-surface p-4 animate-pulse">
+    <div className="flex flex-col rounded-2xl border border-line bg-surface p-4 animate-pulse">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2 flex-1">
           <div className="w-5 h-5 rounded bg-neutral-200" />
@@ -2321,7 +2321,7 @@ export default function ArtifactsPage() {
                             <div
                               key={f.id}
                               onClick={() => handleCustomizeFeatured(f)}
-                              className="group flex cursor-pointer flex-col rounded-xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong"
+                              className="group flex cursor-pointer flex-col rounded-2xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong"
                               data-testid={`starting-point-card-${f.id}`}
                             >
                               {f.screenshotUrl ? (

@@ -129,27 +129,24 @@ function CardGrid({ cards, isMixed, onSelectPrompt }: CardGridProps) {
   const { emptyState } = useTranslation();
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: 0.2, ease: "easeOut" }}
-      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-4xl"
-    >
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-4xl">
       {cards.map((card, idx) => {
         const Icon = CATEGORY_ICONS[card.category];
         return (
           <motion.button
             key={`${card.category}-${idx}`}
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
             whileHover={{ y: -2 }}
             whileTap={{ scale: 0.98 }}
-            transition={{ duration: 0.15 }}
+            transition={{ duration: 0.35, delay: 0.2 + idx * 0.05, ease: [0.25, 1, 0.5, 1] }}
             onClick={() => onSelectPrompt(card.prompt, card.category)}
-            className={`group flex flex-col justify-between p-4 bg-white border border-neutral-200 rounded-xl ${HOVER_BG[card.category]} hover:border-neutral-300 hover:shadow-md transition-all text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 min-h-[90px] md:min-h-[116px]`}
+            className={`group flex flex-col justify-between p-4 bg-surface border border-line rounded-2xl shadow-card ${HOVER_BG[card.category]} hover:border-line-strong hover:shadow-raised transition-[border-color,box-shadow,background-color] text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 min-h-[90px] md:min-h-[116px]`}
           >
             <div>
               {isMixed ? (
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded-full mb-2.5 ${CATEGORY_COLORS[card.category]}`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] rounded-full ring-1 ring-inset ring-current/10 mb-2.5 ${CATEGORY_COLORS[card.category]}`}
                 >
                   <Icon size={10} />
                   {emptyState.categoryLabels[card.category as keyof typeof emptyState.categoryLabels] ?? card.category}
@@ -168,13 +165,13 @@ function CardGrid({ cards, isMixed, onSelectPrompt }: CardGridProps) {
             <div className="flex justify-end mt-2">
               <ArrowRight
                 size={14}
-                className="text-neutral-200 group-hover:text-teal-500 group-hover:translate-x-0.5 transition-all"
+                className="text-neutral-300 group-hover:text-teal-600 group-hover:translate-x-0.5 transition-all"
               />
             </div>
           </motion.button>
         );
       })}
-    </motion.div>
+    </div>
   );
 }
 
@@ -210,7 +207,7 @@ export function ChatLoadingScreen({ visible }: ChatLoadingScreenProps) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.3 }}
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface"
         >
           <Spinner size="md" className="mb-5 text-teal-600" />
           <AnimatePresence mode="wait">
@@ -312,7 +309,7 @@ export function PromptSuggestionsStrip({
             <button
               key={`${card.category}-${card.prompt}`}
               onClick={() => onSelectPrompt(card.prompt, card.category)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs bg-white text-neutral-700 border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 transition-all whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs bg-surface text-neutral-700 border border-line shadow-card hover:border-line-strong hover:bg-neutral-50 transition-all whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
               title={card.prompt}
             >
               <span aria-hidden className="w-2 h-2 rounded-sm bg-teal-500 flex-shrink-0" />
@@ -378,12 +375,18 @@ export default function EmptyState({ mode, onSelectPrompt }: EmptyStateProps) {
   );
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 py-8 overflow-y-auto">
+    <div className="relative flex-1 flex flex-col items-center justify-center px-4 md:px-8 py-8 overflow-y-auto">
+      {/* Quiet dot lattice behind the hero, fading out radially. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-dots [mask-image:radial-gradient(ellipse_60%_70%_at_50%_40%,black_20%,transparent_75%)]"
+      />
+
       <motion.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
-        className="mb-5 shrink-0"
+        className="relative mb-5 shrink-0"
       >
         <Image
           src="/ekoa_logo.png"
@@ -398,7 +401,7 @@ export default function EmptyState({ mode, onSelectPrompt }: EmptyStateProps) {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
-        className="text-xl font-semibold text-neutral-900 mb-1.5 text-center shrink-0"
+        className="relative font-display text-3xl font-semibold tracking-tight text-neutral-900 mb-2 text-center shrink-0"
       >
         {profile.modeTaglines[mode] ?? mode}
       </motion.h1>
@@ -407,7 +410,7 @@ export default function EmptyState({ mode, onSelectPrompt }: EmptyStateProps) {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.15, ease: "easeOut" }}
-        className="text-sm text-neutral-400 mb-5 md:mb-8 text-center max-w-md shrink-0"
+        className="relative text-sm text-neutral-500 mb-5 md:mb-8 text-center max-w-md shrink-0"
       >
         {emptyState.modeSubtitles[mode] ?? ""}
       </motion.p>

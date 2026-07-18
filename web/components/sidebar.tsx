@@ -42,7 +42,7 @@ function NavItem({
           relative mx-2 flex items-center rounded-lg cursor-pointer transition-colors duration-150
           ${
             isActive
-              ? "bg-white/[0.06] text-white"
+              ? "text-white"
               : "text-neutral-400 hover:text-white hover:bg-white/[0.04]"
           }
           ${isExpanded ? "px-3 py-2" : "justify-center py-2"}
@@ -50,9 +50,16 @@ function NavItem({
         title={!isExpanded ? label : undefined}
       >
         {isActive && (
-          <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-teal-400" />
+          <motion.span
+            layoutId="sidebar-active-pill"
+            transition={{ type: "spring", stiffness: 480, damping: 40 }}
+            className="absolute inset-0 rounded-lg bg-white/[0.07] ring-1 ring-inset ring-white/[0.06]"
+            aria-hidden
+          >
+            <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-teal-400" />
+          </motion.span>
         )}
-        <Icon size={18} className={isExpanded ? "mr-3 shrink-0" : "shrink-0"} />
+        <Icon size={18} className={`relative z-10 ${isExpanded ? "mr-3 shrink-0" : "shrink-0"}`} />
         <AnimatePresence>
           {isExpanded && (
             <motion.span
@@ -60,7 +67,7 @@ function NavItem({
               animate={{ opacity: 1, width: "auto" }}
               exit={{ opacity: 0, width: 0 }}
               transition={{ duration: 0.2 }}
-              className="text-sm font-medium whitespace-nowrap overflow-hidden"
+              className="relative z-10 text-sm font-medium whitespace-nowrap overflow-hidden"
             >
               {label}
             </motion.span>

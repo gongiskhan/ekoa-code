@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Lora } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { ApiProvider } from "@/components/providers/api-provider";
 import { UiProvider } from "@/components/providers/ui-provider";
@@ -10,10 +10,15 @@ const inter = Inter({
   variable: "--font-inter",
 });
 
-const lora = Lora({
+// Display face (page titles, hero, login headline). Consumed by the
+// --font-display token in globals.css via the --display-face variable, so
+// swapping the face is a one-import change. NOTE: the variable must NOT sit
+// inside the --font-display* namespace — a token that var()-references a
+// variable prefixed by its own name is dropped by the Tailwind v4 theme
+// compiler (the .font-display utility silently disappears).
+const displayFont = Space_Grotesk({
   subsets: ["latin"],
-  weight: ["500", "600"],
-  variable: "--font-lora",
+  variable: "--display-face",
 });
 
 // The app is a local-first, auth-gated client dashboard: every meaningful page
@@ -43,12 +48,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   // Font variables live on <html> so @theme tokens (--font-display) resolve at
-  // :root — declared on <body> they compute to empty there, and Lora silently
-  // falls back to the sans font in every font-display consumer.
+  // :root — declared on <body> they compute to empty there, and the display
+  // face silently falls back to the sans font in every font-display consumer.
   return (
     <html
       lang="pt-PT"
-      className={`${inter.variable} ${lora.variable}`}
+      className={`${inter.variable} ${displayFont.variable}`}
       suppressHydrationWarning
     >
       <body className="font-sans antialiased">

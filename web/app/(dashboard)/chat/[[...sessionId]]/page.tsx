@@ -1543,7 +1543,7 @@ export default function UnifiedChatPage() {
                           {dateStrip}
                         </div>
                       )}
-                      <AnimatedTagline className="text-2xl md:text-[28px] font-semibold text-neutral-900 leading-tight" />
+                      <AnimatedTagline className="font-display text-3xl md:text-4xl font-semibold tracking-tight text-neutral-900 leading-tight" />
                     </header>
 
                     <OnboardingCard />

@@ -1,50 +1,55 @@
 @import "tailwindcss";
 
 /* ============================================================
-   EKOA DESIGN TOKENS — calm legal-tech SaaS
-   Warm paper-white canvas, ink text, deep petrol-teal accent
-   used sparingly. Amber reserved for brand moments / warnings.
-   Borders carry structure; shadows only for floating layers.
+   EKOA DESIGN TOKENS v2 — "Atrium"
+   Modern editorial-precision system: cool porcelain canvas,
+   graphite ink, one deep petrol-teal accent used with intent.
+   Amber reserved for brand moments / warnings. Hairline borders
+   carry structure; soft layered shadows only for elevation.
 
    TYPE SCALE (apply as inline utilities, no semantic classes):
-     page title   -> font-display text-2xl font-semibold text-neutral-900 tracking-tight
+     page title   -> font-display text-3xl font-semibold text-neutral-900 tracking-tight
      section title-> text-sm font-semibold text-neutral-900
-     eyebrow      -> text-[11px] font-semibold uppercase tracking-wider text-neutral-400
+     eyebrow      -> text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500
      body         -> text-sm text-neutral-700
      meta         -> text-xs text-neutral-500
+     data/numbers -> tabular-nums
      badges       -> always text-xs
 
-   RADIUS: controls rounded-lg, cards rounded-xl,
+   RADIUS: controls rounded-lg, cards rounded-2xl,
            overlays rounded-2xl, pills rounded-full.
-   MOTION: 150-200ms ease-out fades only.
-   Inter everywhere; Lora (--font-display) ONLY for page titles
-   + the login headline.
+   MOTION: 150-250ms ease-out; springs only on overlays and
+           active-state indicators. Pressed elements scale 0.97.
+   Inter everywhere; Space Grotesk (--font-display) ONLY for
+   page titles, empty-state headlines + the login headline.
    ============================================================ */
 
 @theme {
-  --color-neutral-50:  oklch(0.985 0.002 80);
-  --color-neutral-100: oklch(0.963 0.003 80);
-  --color-neutral-200: oklch(0.918 0.004 78);
-  --color-neutral-300: oklch(0.862 0.005 75);
-  --color-neutral-400: oklch(0.706 0.006 70);
-  --color-neutral-500: oklch(0.552 0.006 60);
-  --color-neutral-600: oklch(0.446 0.006 55);
-  --color-neutral-700: oklch(0.372 0.006 50);
-  --color-neutral-800: oklch(0.268 0.005 45);
-  --color-neutral-900: oklch(0.205 0.005 45);
-  --color-neutral-950: oklch(0.145 0.004 45);
-  --color-teal-50:  oklch(0.976 0.013 190);
-  --color-teal-100: oklch(0.945 0.026 190);
-  --color-teal-200: oklch(0.885 0.048 191);
-  --color-teal-300: oklch(0.800 0.072 192);
-  --color-teal-400: oklch(0.712 0.088 193);
-  --color-teal-500: oklch(0.630 0.092 194);
-  --color-teal-600: oklch(0.520 0.080 195);
-  --color-teal-700: oklch(0.440 0.066 196);
-  --color-teal-800: oklch(0.372 0.054 197);
-  --color-teal-900: oklch(0.312 0.044 198);
-  --color-teal-950: oklch(0.235 0.034 199);
-  --color-brand-amber: oklch(0.72 0.13 70);
+  /* Graphite neutrals — cool, crisp, high-contrast ink */
+  --color-neutral-50:  oklch(0.984 0.002 250);
+  --color-neutral-100: oklch(0.962 0.003 250);
+  --color-neutral-200: oklch(0.916 0.004 252);
+  --color-neutral-300: oklch(0.860 0.005 254);
+  --color-neutral-400: oklch(0.700 0.008 256);
+  --color-neutral-500: oklch(0.545 0.010 258);
+  --color-neutral-600: oklch(0.438 0.011 260);
+  --color-neutral-700: oklch(0.362 0.011 262);
+  --color-neutral-800: oklch(0.258 0.010 264);
+  --color-neutral-900: oklch(0.195 0.009 266);
+  --color-neutral-950: oklch(0.135 0.008 268);
+  /* Petrol teal — deeper and more chromatic than v1 */
+  --color-teal-50:  oklch(0.977 0.014 192);
+  --color-teal-100: oklch(0.946 0.030 192);
+  --color-teal-200: oklch(0.887 0.056 192);
+  --color-teal-300: oklch(0.802 0.086 193);
+  --color-teal-400: oklch(0.712 0.104 194);
+  --color-teal-500: oklch(0.625 0.106 195);
+  --color-teal-600: oklch(0.510 0.092 196);
+  --color-teal-700: oklch(0.432 0.076 197);
+  --color-teal-800: oklch(0.362 0.060 198);
+  --color-teal-900: oklch(0.302 0.048 199);
+  --color-teal-950: oklch(0.225 0.038 200);
+  --color-brand-amber: oklch(0.74 0.135 72);
   --color-surface: #ffffff;
   --color-canvas: var(--color-neutral-50);
   --color-line: var(--color-neutral-200);
@@ -53,10 +58,14 @@
   --color-accent-strong: var(--color-teal-700);
   --color-accent-soft: var(--color-teal-50);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-lora), Georgia, serif;
-  --shadow-card: 0 1px 2px oklch(0.145 0.004 45 / 0.04);
-  --shadow-raised: 0 4px 12px -2px oklch(0.145 0.004 45 / 0.10), 0 2px 4px oklch(0.145 0.004 45 / 0.05);
-  --shadow-overlay: 0 24px 48px -12px oklch(0.145 0.004 45 / 0.20), 0 8px 16px oklch(0.145 0.004 45 / 0.06);
+  --font-display: var(--display-face), ui-sans-serif, system-ui, sans-serif;
+  /* Layered elevation — hairline ring + soft ambient + tight key light */
+  --shadow-card: 0 1px 2px oklch(0.135 0.008 268 / 0.05);
+  --shadow-raised: 0 1px 2px oklch(0.135 0.008 268 / 0.05), 0 8px 24px -8px oklch(0.135 0.008 268 / 0.12);
+  --shadow-overlay: 0 1px 2px oklch(0.135 0.008 268 / 0.06), 0 12px 24px -8px oklch(0.135 0.008 268 / 0.10), 0 32px 64px -16px oklch(0.135 0.008 268 / 0.22);
+  --shadow-accent-glow: 0 0 0 1px oklch(0.510 0.092 196 / 0.25), 0 4px 16px -4px oklch(0.510 0.092 196 / 0.35);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
   --animate-pulse-subtle: pulse-subtle 2s ease-in-out infinite;
 }
 
@@ -69,6 +78,32 @@
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
   }
+}
+
+/* Tactile press: interactive surfaces compress slightly on :active. */
+@utility pressable {
+  transition:
+    transform 0.15s var(--ease-out-quart),
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+}
+
+/* Frosted glass surface for sticky chrome (header, floating bars). */
+@utility glass {
+  background: oklch(1 0 0 / 0.82);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+}
+
+/* Quiet dot lattice for hero / empty-state backdrops. */
+@utility bg-dots {
+  background-image: radial-gradient(oklch(0.135 0.008 268 / 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 html, body {
@@ -91,18 +126,18 @@ input, textarea, select, button {
   background: transparent;
 }
 .scrollbar-dark::-webkit-scrollbar-thumb {
-  background: oklch(0.985 0.002 80 / 0.10);
+  background: oklch(0.984 0.002 250 / 0.10);
   border-radius: 3px;
 }
 .scrollbar-dark::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.985 0.002 80 / 0.18);
+  background: oklch(0.984 0.002 250 / 0.18);
 }
 .scrollbar-dark {
   scrollbar-width: thin;
-  scrollbar-color: oklch(0.985 0.002 80 / 0.10) transparent;
+  scrollbar-color: oklch(0.984 0.002 250 / 0.10) transparent;
 }
 
-/* Custom scrollbar - for the paper canvas (thumb tinted from the ink ramp) */
+/* Custom scrollbar - for the porcelain canvas (thumb tinted from the ink ramp) */
 .scrollbar-light::-webkit-scrollbar {
   width: 4px;
 }
@@ -110,15 +145,15 @@ input, textarea, select, button {
   background: transparent;
 }
 .scrollbar-light::-webkit-scrollbar-thumb {
-  background: oklch(0.145 0.004 45 / 0.10);
+  background: oklch(0.135 0.008 268 / 0.10);
   border-radius: 2px;
 }
 .scrollbar-light::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.145 0.004 45 / 0.18);
+  background: oklch(0.135 0.008 268 / 0.18);
 }
 .scrollbar-light {
   scrollbar-width: thin;
-  scrollbar-color: oklch(0.145 0.004 45 / 0.10) transparent;
+  scrollbar-color: oklch(0.135 0.008 268 / 0.10) transparent;
 }
 
 /* Bounce animation */
