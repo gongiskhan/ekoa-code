@@ -106,6 +106,17 @@
   background-size: 20px 20px;
 }
 
+/* OS mode (surface contract 2.3): container sizes mirroring the viewport
+   breakpoints exactly, so converting a surface is a mechanical rename
+   (md: -> @bp-md:). Shell roots declare @container (classic root is
+   viewport-wide -> parity); window bodies declare a nearer container. */
+@theme {
+  --container-bp-sm: 40rem;
+  --container-bp-md: 48rem;
+  --container-bp-lg: 64rem;
+  --container-bp-xl: 80rem;
+}
+
 html, body {
   margin: 0;
   padding: 0;
