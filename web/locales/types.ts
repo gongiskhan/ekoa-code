@@ -877,6 +877,14 @@ export interface Translations {
     searchPlaceholder: string;
     untitledArtifact: string;
     deleteArtifact: string;
+    cardMenu: {
+      moreActions: string;
+      open: string;
+      rename: string;
+      renamed: string;
+      duplicate: string;
+      duplicateDone: string;
+    };
     deleteArtifactAriaLabel: string;
     deleteConfirmation: (name: string) => string;
     cannotBeUndone: string;

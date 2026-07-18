@@ -33,7 +33,11 @@ export function ActionMenu<Ctx>({ items, ctx, position, onClose }: ActionMenuPro
   const panelRef = useRef<HTMLDivElement>(null);
   const [placed, setPlaced] = useState<ActionMenuPosition | null>(null);
 
-  const visible = items.filter((a) => (a.available ? a.available(ctx) : true));
+  // Availability only runs while the menu is open - a closed menu may have a
+  // null/absent ctx (the caller builds it per target on open).
+  const visible = position !== null
+    ? items.filter((a) => (a.available ? a.available(ctx) : true))
+    : [];
   const ordered = [...visible.filter((a) => !a.destructive), ...visible.filter((a) => a.destructive)];
   const open = position !== null && ordered.length > 0;
 

@@ -109,7 +109,12 @@ export default function DashboardLayout({
 
   return (
     <ChatRuntimeProvider>
-    <div className="flex h-dvh w-full bg-canvas text-neutral-900 font-sans overflow-hidden">
+    {/* `@container` = the shell-root container (surface contract 2.3.4): the
+        classic root is viewport-wide and body never scrolls, so @bp-* container
+        variants inside surfaces measure exactly what md:/lg: measured - classic
+        parity by construction. Window bodies in OS mode declare a NEARER
+        container, so the same surfaces measure the window there. */}
+    <div className="@container flex h-dvh w-full bg-canvas text-neutral-900 font-sans overflow-hidden">
       {/* Desktop sidebar */}
       {!isMobile && (
         <Sidebar

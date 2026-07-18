@@ -41,8 +41,11 @@ export function GlobalChatDock() {
   const setWidth = useOsStore((s) => s.setChatDockWidth);
 
   // Live width during a resize drag; committed to the store on pointerup so
-  // the persist middleware doesn't serialize on every pointermove.
+  // the persist middleware doesn't serialize on every pointermove. The ref
+  // mirrors the state so pointerup can commit without a side effect inside a
+  // setState updater (React forbids updates during render).
   const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const dragWidthRef = useRef<number | null>(null);
   const dragStartRef = useRef<{ x: number; width: number } | null>(null);
 
   const [sessionMenuPos, setSessionMenuPos] = useState<ActionMenuPosition | null>(null);
@@ -50,6 +53,7 @@ export function GlobalChatDock() {
   const onHandlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       dragStartRef.current = { x: e.clientX, width: prefs.width };
+      dragWidthRef.current = prefs.width;
       setDragWidth(prefs.width);
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -60,16 +64,17 @@ export function GlobalChatDock() {
     const start = dragStartRef.current;
     if (!start) return;
     // The dock sits on the right, so dragging left grows it.
-    setDragWidth(clampChatDockWidth(start.width + (start.x - e.clientX)));
+    const next = clampChatDockWidth(start.width + (start.x - e.clientX));
+    dragWidthRef.current = next;
+    setDragWidth(next);
   }, []);
 
   const onHandlePointerUp = useCallback(() => {
     if (dragStartRef.current === null) return;
     dragStartRef.current = null;
-    setDragWidth((w) => {
-      if (w != null) setWidth('classic', w);
-      return null;
-    });
+    if (dragWidthRef.current != null) setWidth('classic', dragWidthRef.current);
+    dragWidthRef.current = null;
+    setDragWidth(null);
   }, [setWidth]);
 
   // The dock never renders on /chat or on mobile. All hooks are above this
