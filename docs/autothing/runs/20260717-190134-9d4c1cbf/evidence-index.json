@@ -128,7 +128,7 @@
     }
   },
   "globalGate": {
-    "status": "in-progress",
+    "status": "completed-with-blockers",
     "builtinSecurityReview": {
       "status": "issues-fixed",
       "at": "2026-07-18T21:16:10Z"
@@ -157,7 +157,10 @@
           "effort": "high"
         }
       ]
-    }
+    },
+    "at": "2026-07-18T21:18:05Z",
+    "buildableRemaining": 0,
+    "landing": "docs/autothing/runs/20260717-190134-9d4c1cbf/LANDING.md"
   },
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-190134-9d4c1cbf/RUN_SPEC.md",
