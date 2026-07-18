@@ -155,7 +155,7 @@ describe('Part E gate (mega-run E5) — one dossiê, certidão + watcher event, 
       body: JSON.stringify({ source: 'certidao-comercial', accessCode: 'CODE-GATE-1', processoId: dossieId, subjectIds: ['500000000'] }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(PortalCertidaoResponse.safeParse(body).success).toBe(true);
     expect(body.ok).toBe(true);
     expect(body.record.nif).toBe('500000000');
@@ -183,7 +183,7 @@ describe('Part E gate (mega-run E5) — one dossiê, certidão + watcher event, 
       body: JSON.stringify({ processoId: dossieId }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(InsolvenciaPollResponse.safeParse(body).success).toBe(true);
     expect(body.ok).toBe(true);
     expect(body.newEvents).toHaveLength(1);
@@ -198,7 +198,7 @@ describe('Part E gate (mega-run E5) — one dossiê, certidão + watcher event, 
   it('reads back via GET /api/legal/portal: BOTH the certidão document AND the watcher event render on the SAME dossiê', async () => {
     const res = await api(`/api/legal/portal?processoId=${dossieId}`, 'dossie-a');
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as any;
     expect(PortalDossierRecordsResponse.safeParse(body).success).toBe(true);
 
     expect(body.documentos).toHaveLength(1);
