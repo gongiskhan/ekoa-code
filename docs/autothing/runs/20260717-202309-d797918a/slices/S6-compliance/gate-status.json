@@ -2,11 +2,14 @@
   "slice": "S6-compliance",
   "run": "20260717-202309-d797918a",
   "attempt": 1,
-  "status": "in_progress",
+  "status": "passed",
   "gates": {
     "test": {
       "status": "pass",
-      "exits": { "e2e": 0, "typecheck": 0 },
+      "exits": {
+        "e2e": 0,
+        "typecheck": 0
+      },
       "note": "Batch 1: 12/13 - the PORTED legal-rcbe journey failed at the calendario assertion ('Cumprida'): the journey is non-idempotent, its own prior green completion set the demo obligation to cumprida in the persistent spine. The app's demo-reset (EntidadesPage) only fires inside a tutorial-bridge tour (isDemoActive), never in a Playwright run. Fixed by an explicit frozen-spec amendment (decisions.md 2026-07-18 entry): idempotency preamble performing the app's own reset via the real /api/app-shared surface (PUT merge-upsert + DELETE); assertions untouched, no app code changed. Batch 2 (re-run): 13/13 in 4.1s exit 0 - and the re-run itself proves idempotency (obligation was cumprida going in, preamble reopened it, journey completed green again). typecheck 0. Unit layer: kyc-checksum 13/13 + ferias-engine 16/16 (also independently re-run by adv-review).",
       "at": "2026-07-18T04:20:00Z"
     },
@@ -77,7 +80,25 @@
       "at": "2026-07-18T03:05:00Z"
     },
     "walkthrough": {
-      "status": "pending"
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/video/s6-compliance-walkthrough.webm",
+      "durationSeconds": 40.8,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine) - honest substitute, self-verified by frame extraction",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames, 4 read back by vision)",
+        "checks": [
+          "KYC nova ficha stepper lived: Aplicabilidade step with Lei n.o 83/2017 citation and 'Sujeito aos deveres de diligencia' (art. 4.o) verdict visible in frame f1; recorder report captured the NIF check output on step Identificacao",
+          "NIF mod-11 honesty: report nifCheck = 'NIF com digito de controlo invalido: esperado 5, obtido 7' - the CORRECT rejection of the checksum-invalid synthetic fixture (per the synthetic-NIF policy), rendered honestly in the UI rather than faked green",
+          "KYC radar de conservacao: report radar = '1 ficha(s) em conservacao...' (honest 7-year Lei 83/2017 art. 51.o view)",
+          "RCBE lived: frame f3 shows the Beneficiario Efetivo carteira with Vinhos do Douro, Lda. NIPC 509876543, 2 beneficiarios, 'Em dia' badge; frame f4 shows the declaracao pre-preenchida (beneficiarios 60%/40%, calendario 'Cumprida' limite 05/07/2026, submissao assistida checklist with 'O RCBE nao tem API' honesty line); real PDF download captured: declaracao-rcbe-509876543-2026-07-18.pdf",
+          "Conflitos honest empty result: report conflitos = 'Sem correspondencias...' (art. 99.o EOA check with no false positives)",
+          "Recursos/ferias lived: frame f6 shows the mapa de ausencias (Julho de 2026, legend aprovada/pedida, Dra. Marilia ferias 27/07-31/07 Aprovada); real PDF download captured: mapa-ferias-2026-07-18.pdf",
+          "report errors: [] - zero console errors and zero pageerrors across the whole recording",
+          "PT-PT copy throughout, no emojis visible in any frame"
+        ]
+      },
+      "at": "2026-07-18T08:20:00Z"
     }
   }
 }

@@ -2,7 +2,7 @@
   "slice": "S5-records",
   "run": "20260717-202309-d797918a",
   "attempt": 1,
-  "status": "in_progress",
+  "status": "passed",
   "gates": {
     "test": {
       "status": "pass",
@@ -73,7 +73,24 @@
       "at": "2026-07-18T02:50:00Z"
     },
     "walkthrough": {
-      "status": "pending"
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/video/s5-records-walkthrough.webm",
+      "durationSeconds": 36,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine) - honest substitute, self-verified by frame extraction",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames, 4 read back by vision)",
+        "checks": [
+          "dossie: processo 1234/26.0T8LSB com KPIs (proximo prazo, honorarios por faturar 1026,00 EUR, 5 docs, 1 comunicacao) e separadores; PDF completo descarregado (dossie-1234-26.0T8LSB.pdf)",
+          "assinatura: ciclo completo vivido - envelope exemplo rascunho -> pronto -> em assinatura -> 2 signatarios simulados assinados -> Concluido",
+          "assinatura: certificado de auditoria + manifesto de impressoes digitais SHA-256 visivel (a1064445b98ffe6cdb957a714335ea4b50c768e3ec707be1cba222d77badebdc, igual ao capturado pelo recorder)",
+          "transcricao: trabalho aberto, motor simulado corrido, transporte + atalhos de teclado visiveis (report: 'transporte + atalhos visiveis')",
+          "correio: expediente com filtro de pesquisa e estado vazio honesto ('Nenhuma carta corresponde a este filtro')",
+          "recorder report errors: [] (zero pageerrors/console errors)",
+          "PT-PT em toda a UI, sem emojis"
+        ]
+      },
+      "at": "2026-07-18T09:35:00Z"
     }
   }
 }

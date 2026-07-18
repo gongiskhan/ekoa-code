@@ -1,7 +1,7 @@
 {
   "project": "ekoa-code legal artifacts",
   "runId": "20260717-202309-d797918a",
-  "updatedAt": "2026-07-18T05:05:00Z",
+  "updatedAt": "2026-07-18T10:01:00Z",
   "galleryUrl": null,
   "gatesConfig": {
     "test": true,
@@ -46,94 +46,122 @@
       "slice": "S3-money",
       "title": "calculos, honorarios, financas, cobrancas, injuncoes",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S3-money/gate-status.json",
       "commits": [
         "5ca41db",
         "ea734ce"
       ],
-      "landed": true
+      "landed": true,
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S3-money/video/s3-money-walkthrough.webm",
+      "videoVerified": true
     },
     {
       "slice": "S4-drafting",
       "title": "contratos, pecas, modelos, forms",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S4-drafting/gate-status.json",
       "commits": [
         "5a0c643"
       ],
-      "landed": true
+      "landed": true,
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S4-drafting/video/s4-drafting-walkthrough.webm",
+      "videoVerified": true
     },
     {
       "slice": "S5-records",
       "title": "dossie, assinatura, transcricao, correio",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/gate-status.json",
       "commits": [
         "59be909"
       ],
-      "landed": true
+      "landed": true,
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S5-records/video/s5-records-walkthrough.webm",
+      "videoVerified": true
     },
     {
       "slice": "S6-compliance",
       "title": "kyc, rcbe, conflitos, recursos",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/gate-status.json",
       "commits": [
         "79e6d25"
       ],
-      "landed": true
+      "landed": true,
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S6-compliance/video/s6-compliance-walkthrough.webm",
+      "videoVerified": true
     },
     {
       "slice": "S7-knowledge-portal",
       "title": "pesquisa, jurimetria, portal",
       "kind": "ui",
-      "status": "in_progress",
+      "status": "passed",
       "gateStatus": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/gate-status.json",
       "commits": [
         "fae2b9e"
       ],
-      "landed": true
+      "landed": true,
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/video/s7-knowledge-portal-walkthrough.webm",
+      "videoVerified": true
     }
   ],
   "globalGate": {
-    "status": "in_progress",
+    "status": "completed-with-blockers",
     "e2eAll": {
-      "cmd": "npm run e2e:server",
-      "exit": null
+      "cmd": "npm run e2e (scripts/suite-ledger-run.mjs --run) against the live stack (web :3000 / api :4111) + manual ensureDemosSpine mirror (api/assets/demos -> ekoa-data/demos, 29 specs) - npm run e2e:server impossible on this machine: it boots its own api on the same :4111 the protected live stack holds",
+      "exit": 1,
+      "counts": {
+        "total": 327,
+        "passed": 305,
+        "failed": 11,
+        "didNotRun": 10,
+        "skipped": 1
+      },
+      "log": "scratchpad e2e-full2.log (13.9m, 1 worker); drivers all green, web vitest 31 files / 172 tests green",
+      "verdict": "all-run-work-green; remaining reds are pre-existing documented estate debt",
+      "note": "Every red maps 1:1 to findings.md e2e-estate-baseline-13 (2026-07-11): the 7 failures + 10 did-not-run siblings are band2's deterministic beforeAll 404 on the retired /api/v1/action (artifact-backend-panel, artifacts-apps-section, onboarding x3, update-from-bundle, vertical-profile) plus the 3 documented integrations UI gaps (pages-manage search input, integrations-sections webhook rows, integrations-pipedream master toggle) plus simuladores-trabalho's app source missing from ../ekoa-data/apps. None touch this run's diffs. This run CLOSED 2 of the 13 documented reds: legal-shared-drift (S0 sync layer) + legal-rcbe journey (S6 idempotency amendment) - both green in this full run. All 98 legal specs, 29 demo tours, and every new slice spec green. Remediation of the remaining 11 stays owed per docs/e2e-harness-remediation-brief.md (spec-only; notes B/C need a director decision) - findings.md entry updated with the 2026-07-18 re-observation.",
+      "at": "2026-07-18T11:10:00Z"
     },
     "verifyApp": {
-      "via": "/verify",
-      "verdict": null
+      "verdict": "pass",
+      "basis": "8/8 walkthrough recordings completed with errors: [] (zero console errors + zero pageerrors across every recorded flow); design sweeps s0-s7 (49 pages at 1440x900) zero console/page errors; full-lane regression re-proved every legal app spec green on the live stack; /artifacts dashboard + all 29 served legal apps load clean (legal-apps-smoke 29/29)",
+      "at": "2026-07-18T11:10:00Z"
     },
     "build": {
-      "cmd": "npm run build",
-      "exit": null
+      "cmd": "NEXT_BUILD_DIST_DIR=.next-gate npm run build",
+      "exit": 0,
+      "note": "isolated dist dir per build-loop rule - live dev server .next untouched"
     },
     "typecheck": {
       "cmd": "npm run typecheck",
-      "exit": null
+      "exit": 0
     },
     "lint": {
       "cmd": "npm run lint",
-      "exit": null
+      "exit": 0,
+      "note": "0 errors, 247 pre-existing warnings"
     },
     "decorrelatedVerification": {
-      "reviewAllApproved": false,
-      "pwTestAllPassed": false
+      "reviewAllApproved": true,
+      "pwTestAllPassed": true,
+      "note": "all 8 slices: adversarialReview approve (6) or needs-work with landed+re-verified resolution (S4, S6 - both ledger-registration findings closed in the slice landing commits); adversarialTest pass (6) or findings fixed forward with pinned regression specs (S5, S6)"
     },
     "designAudit": {
-      "verdict": null
+      "verdict": "clean",
+      "note": "per-slice design audits all clean (S0-S7); issues found during audits were fixed in-slice (AO90 spellings, em-dash glyphs) and committed"
     },
-    "everySliceVideoVerified": false,
+    "everySliceVideoVerified": true,
     "codexCheckpoint": {
-      "status": null,
+      "status": "blocked",
       "scopes": [],
       "overrides": [],
-      "at": null
-    }
+      "reason": "external blocker: codex OAuth refresh token revoked (refresh token already used); interactive codex login required - cannot be performed autonomously. Preflight ping failed twice; no OPENAI_API_KEY fallback. Recorded in docs/decisions.md 2026-07-18. Never reported clean or silently skipped.",
+      "at": "2026-07-18T10:01:00Z"
+    },
+    "statusNote": "All 8 slices passed every enabled gate (test, review, adversarialReview, adversarialTest, design, walkthrough 8/8 verified). Downgraded from passed solely by the external codex-checkpoint blocker (OAuth refresh token revoked - see codexCheckpoint + docs/decisions.md 2026-07-18). Full-lane e2e: all run work green; 11 remaining reds are pre-existing documented estate debt (findings.md e2e-estate-baseline-13, 2 of 13 closed by this run)."
   }
 }

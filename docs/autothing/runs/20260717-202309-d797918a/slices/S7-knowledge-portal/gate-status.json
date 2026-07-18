@@ -2,11 +2,14 @@
   "slice": "S7-knowledge-portal",
   "run": "20260717-202309-d797918a",
   "attempt": 1,
-  "status": "in_progress",
+  "status": "passed",
   "gates": {
     "test": {
       "status": "pass",
-      "exits": { "e2e": 0, "typecheck": 0 },
+      "exits": {
+        "e2e": 0,
+        "typecheck": 0
+      },
       "note": "Batch 1: 6/7 - legal-x-jurimetria failed in ensureDemo: the Nucleo demo card renders 'Nao instalado' + the install button TRANSIENTLY while useSharedCollection loads (instalada = demoEstado.some(...) over an empty array); the spec read the badge in that window, the fetch resolved, the button unmounted, the click timed out on a detached element. SPEC BUG (latent race, bites under 2-worker load): fixed with a tolerant click (5s timeout + catch; the demo-banner is the proof either way) in legal-x-jurimetria AND legal-x-rcbe (same copied helper, S6 spec touched up in this commit). The ported legal-rcbe spec shares the pattern but has never flaked on it - left frozen. Batch 2: 9/9 in 3.7s exit 0 (3 S7 specs + legal-x-rcbe re-proven). typecheck 0. gate:ledger census GREEN after the 3 S7 registrations: specs 98/98, drivers 24/24, frontend-unit 31/31 (the script's 139 'due (unrun)' lines are its no---run mode, not a census failure; the full suite runs at the full-lane regression).",
       "at": "2026-07-18T04:55:00Z"
     },
@@ -71,7 +74,23 @@
       "at": "2026-07-18T02:16:00Z"
     },
     "walkthrough": {
-      "status": "pending"
+      "status": "verified",
+      "video": "docs/autothing/runs/20260717-202309-d797918a/slices/S7-knowledge-portal/video/s7-knowledge-portal-walkthrough.webm",
+      "durationSeconds": 30,
+      "method": "direct playwright-core recordVideo (walkthrough engine unavailable on this machine) - honest substitute, self-verified by frame extraction",
+      "selfVerification": {
+        "verdict": "verified",
+        "frames": "video/frames/ (6 frames, 4 read back by vision)",
+        "checks": [
+          "Pesquisa fundamentada lived: frame f1 shows the pesquisar page with DGSI/DRE source checkboxes, the honest grounding copy ('Cada fonte so e mostrada com a ligacao confirmada; nada e inventado') and the honest 'Ainda sem pesquisa' empty state; the recorded live search then rendered the HONEST empty-index note - report pesquisa = 'Base de conhecimento local vazia...' - which is exactly the anti-fabrication state the committed legal-x-pesquisa spec pins (zero result cards, zero fabricated 'verificada' badges)",
+          "Citacao na forma do foro lived: frame f3 shows the historico with the seeded row expanded - DRE chip 'Codigo de Processo Civil - artigo 569.o', 'Copiar citacao' button, 'diploma (DRE)' form label, processo ref 1234/26.0T8LSB, por-processo filter 'Todos os processos (1)'; report citacao captured the same text",
+          "Jurimetria lived: report jurimetria row = 'Civel / 6 / 22.3 meses / Amostra interna (n=6, fechos 2025-2026) / 32 meses / DGPJ - dados.justica.gov.pt/dataset/duracaomedia - 2024 (valor anual)' - fonte + periodo cited on the row for BOTH the internal sample and the public figure",
+          "Portal do advogado lived: frame f5 shows acessos (client list, Estado 'Sem acesso', per-client Convidar, honest 'nada fica visivel para o cliente ate ser partilhado' copy); frame f6 shows partilhas com o cliente (Construcoes Horizonte + processo 891/26.2T8BRG, explicit per-item Partilhar, honest banner 'ainda nao foi convidado para o portal... so a vera depois de aceitar o convite')",
+          "report errors: [] - zero console errors and zero pageerrors across the whole recording",
+          "PT-PT copy, no emojis in any frame. Observed in f3: the seeded row title 'Prazo de contestacao em accao declarativa comum' carries pre-AO90 'accao' - this is seed DATA (a lawyer's search phrasing) pinned byte-for-byte by the FROZEN ported spec legal-pesquisa.spec.ts:33 (SEEDED_PERGUNTA), dispositioned per the established seeded-user-content rule (same disposition as design-audit note on shared.js:642), not a UI-copy defect"
+        ]
+      },
+      "at": "2026-07-18T08:50:00Z"
     }
   }
 }

@@ -163,6 +163,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   gaps - legal-rcbe journey, legal-shared-drift (six scaffolds vs canonical layer), simuladores-
   trabalho exact CT figures. Each is closed by building the missing surface or by an explicit
   retire decision - never by editing the ported spec.
+  RE-OBSERVED 2026-07-18 (run 20260717-202309, full-lane regression, 305/327 passed): group (c)
+  is now 2/3 CLOSED by this run - legal-shared-drift green via scripts/sync-legal-shared.mjs +
+  the canonical api/assets/legal-shared/ layer (S0), legal-rcbe journey green via the sanctioned
+  idempotency preamble amendment (S6, decisions.md 2026-07-18). The remaining 11 reds (7 failed +
+  10 did-not-run siblings from band2's deterministic beforeAll 404 on the retired /api/v1/action,
+  plus pages-manage search input, integrations-sections webhook rows, integrations-pipedream
+  master toggle, simuladores-trabalho missing ../ekoa-data/apps source) re-confirmed with
+  identical signatures - none touch the run's diffs; remediation stays owed per
+  docs/e2e-harness-remediation-brief.md (notes B/C still need a director decision).
 
 - **`branding-tab-stale-after-research`** (minor, UI freshness). Right after a brand research
   completes, the Marca tab can render the PREVIOUS palette (local component state seeded at page
