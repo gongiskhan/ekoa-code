@@ -1,0 +1,4 @@
+{ "slice": "C6", "kind": "mixed", "status": "blocked", "at": "2026-07-18T12:28:47Z",
+  "blocker": { "cause": "external-credentials-absent", "missing": ["DEEPGRAM_API_KEY", "Google Cloud TTS ADC/service-account (project bazinga-491610 or replacement)", "ELEVENLABS_API_KEY (optional fallback)"],
+    "remediation": "operator provisions the vendor credentials (RUN-START human-action items 1-3), then C6 runs: live Nova-3 STT round-trip + keyterm dictionary + TTS bake-off (Google prior, ElevenLabs escalation) with the config-behind-contract provider swap", "codeReady": true },
+  "test": {"status": "blocked", "evidence": "stub-provider path proven green in C1-C5; live path needs keys"} }
