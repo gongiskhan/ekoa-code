@@ -128,7 +128,36 @@
     }
   },
   "globalGate": {
-    "status": "in-progress"
+    "status": "in-progress",
+    "builtinSecurityReview": {
+      "status": "issues-fixed",
+      "at": "2026-07-18T21:16:10Z"
+    },
+    "codexCheckpoint": {
+      "status": "issues-fixed",
+      "at": "2026-07-18T21:16:10Z",
+      "scopes": [
+        {
+          "scope": "transport-markers",
+          "verdict": "issues-fixed",
+          "by": "codex/gpt-5.5",
+          "effort": "high"
+        },
+        {
+          "scope": "voice-portal-billing-chat-boundaries",
+          "verdict": "clean-after-rebuttal",
+          "by": "codex/gpt-5.5",
+          "effort": "high",
+          "rebuttals": 3
+        },
+        {
+          "scope": "shared-contract-secrets",
+          "verdict": "clean",
+          "by": "codex/gpt-5.5",
+          "effort": "high"
+        }
+      ]
+    }
   },
   "runLog": "RUN_LOG.md",
   "runSpec": "docs/autothing/runs/20260717-190134-9d4c1cbf/RUN_SPEC.md",

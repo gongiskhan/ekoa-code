@@ -1,0 +1,21 @@
+verdict=issues-found
+
+findings:
+
+1. Voice WS auth/attribution: invariant holds.
+`api/src/voice/index.ts:94-105` authenticates before `handleUpgrade` dispatch, and provider attribution comes from token-derived session records at `api/src/voice/index.ts:162-169`, `api/src/voice/index.ts:204-209`, `api/src/voice/index.ts:295-300`, `api/src/voice/index.ts:385-389`.
+
+2. Usage counter single-writer: violation.
+`api/src/voice/index.ts:183-197` and `api/src/voice/index.ts:356-369` pass `voice_stt_ms` / `voice_tts_chars` into `logActivity` directly from the voice module. Exact attack: this creates a second persisted usage-counter path outside `billing/tracker.ts`’s org-scoped `usage_events` key, so per-turn audit rows can be counted or replayed separately from the session-close ledger written through `recordUsageCounters` at `api/src/voice/index.ts:447-453`.
+
+3. Portal connector external fetch/base URL: violation.
+`api/src/legal/portal-connectors.ts:110-112`, `api/src/legal/portal-connectors.ts:149-151`, `api/src/legal/portal-connectors.ts:171-172`, and `api/src/legal/portal-connectors.ts:203-206` allow caller-supplied `baseUrls`, despite the invariant requiring config-only base URLs. Exact attack: a caller that can influence those deps can redirect `codigoAcesso` retrieval to an attacker URL, exfiltrating the access code and injecting fake certidão HTML that is parsed and later attached.
+
+`api/src/legal/insolvencia-watch.ts:104-114`, `api/src/legal/insolvencia-watch.ts:149-151`, and `api/src/legal/insolvencia-watch.ts:205` have the same non-config `baseUrl` override for insolvency polling. Exact attack: caller-influenced base URL can redirect watched subject queries and inject forged Citius publication rows into the dossiê timeline.
+
+Portal access-code logging/persistence and attach/list isolation otherwise hold in the inspected files: access codes are only used to build the query (`api/src/legal/portal-connectors.ts:124-127`), attach calls assert owner org before writes (`api/src/legal/portal.ts:108-126`, `api/src/legal/portal.ts:160-180`), and retrieve/poll assert before side effects (`api/src/legal/portal-connectors.ts:230-264`, `api/src/legal/insolvencia-watch.ts:181-205`).
+
+4. Sheets/canonical-context owner scope: violation.
+`api/src/agents/context.ts:185-191` uses `input.sessionId` to read `sessionsStore.get`, `lastContext`, and `loadHistory` without comparing the session owner to `input.actor`. `api/src/agents/context.ts:77-87` then loads messages and sheets for that session. Exact attack: an attacker who can submit another user’s `sessionId` can inject that user’s prior `lastContext`, history, and latest sheet revisions into the model context, causing cross-user prompt/data disclosure.
+
+`deriveById` itself does reject a foreign session’s message id at `api/src/data/session-sheets.ts:100-105`, so that sub-invariant holds.

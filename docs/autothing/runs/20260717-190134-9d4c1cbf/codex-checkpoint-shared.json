@@ -1,0 +1,6 @@
+verdict=clean
+
+findings:
+- Import boundary holds: scoped files import only `zod` or relative shared modules; no `api/`, `web/`, or non-`zod` external package imports.
+- Secrets hygiene holds: no secret, credential, token, or API key literal appears in schemas/types/defaults. Field names like `accessCode` and `token` are schema fields, not hardcoded secret values.
+- Additive-only contract holds: run diff adds new `portal.ts`, `sheets.ts`, `voice.ts`; optional fields in `chat.ts`; additive union variants in `events.ts`; additive exports/endpoints in `index.ts`; `registo.ts` only adds comments. No removed, renamed, or narrowed existing exported fields found.
