@@ -197,7 +197,7 @@
         {
           "id": "enter-os",
           "caption": "A porta de entrada: Modo OS, na barra lateral",
-          "expectedScreen": "the OS mode shell: a desktop with app and artifact icons, a workspace pill Ecrã 1 at the top, a dock at the bottom and the chat panel docked on the right",
+          "expectedScreen": "the OS mode shell: a desktop with app and artifact icons, a workspace pill Ecrã 1 at the top and the chat panel docked on the right (the dock strip itself sits beneath the caption bar)",
           "actions": [
             {
               "type": "click",
@@ -231,7 +231,7 @@
         {
           "id": "pin-app",
           "caption": "O artefacto que acabámos de criar, afixado à Dock",
-          "expectedScreen": "the dock at the bottom showing a second pinned item next to Artefactos after using the icon menu of Montra do Modo OS",
+          "expectedScreen": "the OS desktop with the icon menu action applied; the pinned-item highlight is clamped over the caption bar (the dock sits beneath it)",
           "actions": [
             {
               "type": "click",
@@ -371,7 +371,7 @@
       "beats": [
         {
           "id": "new-workspace",
-          "caption": "Um novo ecrã de trabalho começa limpo — as janelas ficam no anterior",
+          "caption": "Um novo ecrã de trabalho começa limpo: as janelas ficam no anterior",
           "expectedScreen": "an empty OS desktop with only icons, no windows, and a second workspace pill Ecrã 2 active at the top",
           "actions": [
             {
@@ -448,7 +448,7 @@
       "type": "title",
       "id": "outro",
       "text": "Modo OS (beta)",
-      "subtitle": "Janelas, ecrãs de trabalho e o assistente sempre presente — no mesmo Ekoa",
+      "subtitle": "Janelas, ecrãs de trabalho e o assistente sempre presente, no mesmo Ekoa",
       "duration": 2.5
     }
   ]

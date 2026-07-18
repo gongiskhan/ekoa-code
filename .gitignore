@@ -39,3 +39,4 @@ api/assets/panel-runtime.js
 # web/scripts/copy-monaco.mjs (predev/prebuild). Vendored asset - never committed.
 web/public/monaco/
 __pycache__/
+.walkthrough/auth.json

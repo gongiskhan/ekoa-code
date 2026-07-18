@@ -812,3 +812,10 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
   strict console gate, 2026-07-13). `injected-context.ts:244` POSTs `/api/app-health`; through the
   dev proxy (:4111) it 502s and logs a console error on load. Likely a dev-proxy forwarding gap
   (relates to d55bd02). Prod path unverified. Allowlisted (documented) in the D2 e2e only.
+
+## F-2026-07-18-invalid-date-cards (open, cosmetic)
+Artifact cards on /artifacts render "Invalid Date" for dev-seeded artifacts whose createdAt is
+empty (visible in the OS-mode walkthrough, classic beats). Real user-created artifacts carry
+timestamps; the fix is either seeding createdAt in the dev fixtures or formatDate falling back
+to a dash for missing dates. Surfaced by the walkthrough vision pass; needs a deterministic
+close (unit on formatDate fallback) or a written dismissal.
