@@ -101,6 +101,10 @@
     "D1": {
       "status": "passed",
       "at": "2026-07-18T16:44:13Z"
+    },
+    "D2": {
+      "status": "passed",
+      "at": "2026-07-18T16:45:04Z"
     }
   },
   "globalGate": {
