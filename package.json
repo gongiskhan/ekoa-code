@@ -28,7 +28,10 @@
     "gate:audit": "npm audit --audit-level=high",
     "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} npm run build",
     "gate:ledger": "node scripts/suite-ledger-run.mjs",
-    "e2e:server": "node scripts/e2e-with-server.mjs"
+    "e2e:server": "node scripts/e2e-with-server.mjs",
+    "e2e:full": "node scripts/e2e-full.mjs",
+    "journeys:credless": "node scripts/journeys-run.mjs",
+    "journeys:credentialed": "node scripts/journeys-run.mjs --credentialed"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.15.0",

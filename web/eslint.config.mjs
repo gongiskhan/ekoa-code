@@ -44,6 +44,8 @@ const eslintConfig = defineConfig([
     // Default ignores of eslint-config-next:
     ".next/**",
     ".next-gate/**",
+    // Isolated dist dir of the committed e2e:full harness (scripts/e2e-full.mjs).
+    ".next-e2e/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

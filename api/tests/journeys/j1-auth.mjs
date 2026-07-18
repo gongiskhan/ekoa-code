@@ -13,7 +13,7 @@ async function main() {
   // (a) login admin → me 200
   const adminLogin = await api('POST', '/api/v1/auth/login', { body: { username: 'admin', password: 'tmp12345' } });
   ev.login = { status: adminLogin.status, isJson: adminLogin.isJson, body: adminLogin.body };
-  const token = adminLogin.body && adminLogin.body.token;
+  let token = adminLogin.body && adminLogin.body.token;
   if (adminLogin.status === 200 && token) PASS('J1a.login', 'admin login 200 with token', results);
   else FAIL('J1a.login', `expected 200+token, got ${adminLogin.status}`, results);
 
@@ -36,6 +36,14 @@ async function main() {
   if (meAfterLogout.status === 200) INFO('J1c.revocation', `token STILL VALID after logout (me -> 200) — no server-side revocation on logout`, results);
   else INFO('J1c.revocation', `token invalidated after logout (me -> ${meAfterLogout.status})`, results);
 
+  // Logout genuinely revokes server-side (J1c.revocation above), so the sections below
+  // need a fresh admin session — re-login rather than carrying the revoked token.
+  const relogin = await api('POST', '/api/v1/auth/login', { body: { username: 'admin', password: 'tmp12345' } });
+  ev.relogin = { status: relogin.status, isJson: relogin.isJson };
+  token = relogin.body && relogin.body.token;
+  if (relogin.status === 200 && token) PASS('J1c.relogin', 'admin re-login after logout 200 (revoke-then-reauth works)', results);
+  else FAIL('J1c.relogin', `expected 200+token on re-login after logout, got ${relogin.status}`, results);
+
   // (d) bad-cred + garbage bearer → 401 envelope UNAUTHENTICATED
   const badCred = await api('POST', '/api/v1/auth/login', { body: { username: 'admin', password: 'wrong-nope' } });
   ev.badCred = { status: badCred.status, body: badCred.body };
@@ -50,7 +58,7 @@ async function main() {
   if (garbage.status === 401 && garbageEnvelopeOk) PASS('J1d.garbage', `garbage bearer -> 401 ${garbageCode} (valid envelope)`, results);
   else FAIL('J1d.garbage', `expected 401 envelope, got ${garbage.status} envelope=${garbageEnvelopeOk}`, results);
 
-  // (e) create org ProbeA + builder pa-u1 in it; login pa-u1; me OK
+  // (e) create org ProbeA + regular user pa-u1 in it; login pa-u1; me OK
   const orgA = await api('POST', '/api/v1/orgs', { token, body: { name: 'ProbeA', displayName: 'Probe A' } });
   ev.orgCreate = { status: orgA.status, body: orgA.body };
   const orgAId = orgA.body && orgA.body.id;
@@ -58,10 +66,10 @@ async function main() {
   else FAIL('J1e.org', `expected 201, got ${orgA.status}`, results);
 
   const uname = 'pa-u1-' + Date.now();
-  const userCreate = await api('POST', '/api/v1/users', { token, body: { username: uname, password: 'pw123456', role: 'builder', orgId: orgAId } });
+  const userCreate = await api('POST', '/api/v1/users', { token, body: { username: uname, password: 'pw123456', role: 'user', orgId: orgAId } });
   ev.userCreate = { status: userCreate.status, body: userCreate.body };
   const userId = userCreate.body && userCreate.body.id;
-  if (userCreate.status === 201 && userId) PASS('J1e.user', `created builder ${uname} id=${userId} role=${userCreate.body.role}`, results);
+  if (userCreate.status === 201 && userId) PASS('J1e.user', `created user ${uname} id=${userId} role=${userCreate.body.role}`, results);
   else FAIL('J1e.user', `expected 201, got ${userCreate.status} body=${JSON.stringify(userCreate.body)}`, results);
 
   const paToken = userCreate.status === 201 ? await login(uname, 'pw123456') : null;
@@ -120,10 +128,23 @@ async function main() {
   const pwChange = await api('POST', '/api/v1/auth/password', { token, body: { currentPassword: 'tmp12345', newPassword: 'tmp12345x' } });
   ev.passwordChange = { status: pwChange.status, contentType: pwChange.contentType, isJson: pwChange.isJson, bodyHead: (pwChange.text || '').slice(0, 160) };
   INFO('J1h.password', `POST /auth/password -> ${pwChange.status} json=${pwChange.isJson} ct=${pwChange.contentType || 'none'}`, results);
-  // restore the admin password if it actually changed
+  // Restore the admin password if it actually changed. A successful change bumps the
+  // token epoch (the old `token` is revoked), so the restore must run on a FRESH
+  // session obtained with the NEW password — and it must be VERIFIED: a failed
+  // restore leaves admin=tmp12345x, which poisons every probe that runs after this
+  // one on the same api boot.
   if (pwChange.status >= 200 && pwChange.status < 300) {
-    await api('POST', '/api/v1/auth/password', { token, body: { currentPassword: 'tmp12345x', newPassword: 'tmp12345' } });
-    ev.passwordRestored = true;
+    const tmpLogin = await api('POST', '/api/v1/auth/login', { body: { username: 'admin', password: 'tmp12345x' } });
+    const tmpToken = tmpLogin.body && tmpLogin.body.token;
+    const restore = await api('POST', '/api/v1/auth/password', { token: tmpToken, body: { currentPassword: 'tmp12345x', newPassword: 'tmp12345' } });
+    const back = await api('POST', '/api/v1/auth/login', { body: { username: 'admin', password: 'tmp12345' } });
+    token = (back.body && back.body.token) || token;
+    ev.passwordRestored = { tmpLogin: tmpLogin.status, restore: restore.status, reloginWithOriginal: back.status };
+    if (restore.status >= 200 && restore.status < 300 && back.status === 200 && back.body && back.body.token) {
+      PASS('J1h.restore', 'admin password restored to tmp12345 (fresh-session restore, verified by login)', results);
+    } else {
+      FAIL('J1h.restore', `password restore FAILED (tmpLogin=${tmpLogin.status} restore=${restore.status} relogin=${back.status}) — admin may be left as tmp12345x, poisoning later probes`, results);
+    }
   }
 
   const device = await api('POST', '/api/v1/auth/device', { body: {} });
