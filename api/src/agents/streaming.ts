@@ -145,6 +145,18 @@ export function emitChatAnswer(userId: string, ev: { sessionId: string; sourceRu
   sseManager.emit('notifications', userId, 'chat_answer', payload);
 }
 
+/** Deliver a `reply_summary` on the notifications channel (Part B decision B.E): the FAST-tier
+ *  post-run {title, summary} for the sheet a completed chat turn produced. Per-user channel,
+ *  the chat_answer pattern - the run stream is already torn down when this fires. Emitted only
+ *  on success; a failed summarisation emits nothing (the client keeps its placeholder). */
+export function emitReplySummary(
+  userId: string,
+  ev: { sessionId: string; sheetId: string; revisionId: string; title: string; summary: string },
+): void {
+  const payload: NotificationEvent = { type: 'reply_summary', ...ev };
+  sseManager.emit('notifications', userId, 'reply_summary', payload);
+}
+
 /** A user filed a change request into an org-admin's queue (operator-run H4): push a live
  *  refetch signal onto that admin's per-user notifications channel. Fired once per org-admin of
  *  the target org — the queue is org-scoped, so only that org's admins are notified. */

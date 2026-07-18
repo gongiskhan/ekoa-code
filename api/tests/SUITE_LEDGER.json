@@ -411,6 +411,12 @@
         "count": 2,
         "targetGate": "G12",
         "note": "mega-run 20260717-190134 slice B1: tests/contract/sheets.test.ts (GET/PATCH/POST /sessions/:id/sheets* - derived list, rename, user revision; 2xx bodies vs the shared Sheet schemas + error envelopes + cross-user 404) and tests/agents/context-sheets.test.ts (applyLatestSheetRevisions + listSessionSheets derivation/materialisation + loadHistory canonicalisation; the traceId/memoriesUsed provenance writer is pinned in chat-thinking.test.ts). Green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
+        "group": "reply-summary B2 (post-run hook unit)",
+        "count": 1,
+        "targetGate": "G12",
+        "note": "mega-run 20260717-190134 slice B2: tests/agents/reply-summary.test.ts (the decision-B.E post-run hook in isolation over the fake chokepoint transport - fresh-sheet turn emits ONE FAST user_work reply-summary call + ONE schema-valid reply_summary notification; revision turn feeds the model the edit instruction + compact diff basis, never the whole reply; model failure / unparseable output emit NO event and never throw; compactDiffBasis caps). Pipeline threading (event ids == the persisted turn's derived sheet ids, notifications channel not the run stream) is pinned in chat-lifecycle.test.ts; the event schema representability in shared/src/contract.test.ts. Green in the per-PR vitest lane from landing; ratchet applies."
       }
     ]
   },

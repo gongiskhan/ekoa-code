@@ -110,6 +110,30 @@ describe('chat run pipeline + streaming contract', () => {
     expect((assistant[0] as unknown as { content: string }).content).toBe(full);
   });
 
+  it('a completed run fires the post-run reply_summary on NOTIFICATIONS with the persisted turn\'s derived sheet ids (B2, decision B.E)', async () => {
+    // The summary rides the per-user notifications channel, not the run stream (the client tears
+    // that down on `complete`), and its ids are THREADED from the persisted assistant doc: they
+    // must equal the derived ids the sheets read path serves for that message.
+    const runId = await runChat({ finalText: 'Resposta que vira folha.', oneShotText: '{"title":"Titulo da folha","summary":"Resumo curto da resposta."}' });
+    expect(chatEventsFor(runId).some((e) => e.type === 'complete')).toBe(true);
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.stream === 'notifications' && e.type === 'reply_summary')).toBe(true);
+    });
+    const notif = events.find((e) => e.stream === 'notifications' && e.type === 'reply_summary')!;
+    expect(NotificationEvent.safeParse(notif.data).success).toBe(true);
+    expect(notif.streamId).toBe('u1');
+    const assistant = (await messages.find({ sessionId: 's1', role: 'assistant' })) as unknown as Array<{ _id: string }>;
+    expect(assistant).toHaveLength(1);
+    expect(notif.data).toMatchObject({
+      type: 'reply_summary',
+      sessionId: 's1',
+      sheetId: `sheet-${assistant[0]!._id}`,
+      revisionId: `rev-${assistant[0]!._id}`,
+      title: 'Titulo da folha',
+      summary: 'Resumo curto da resposta.',
+    });
+  });
+
   it('a build marker at start-of-stream → build_intent on notifications + complete.delegate, with clean text (§5.7.2)', async () => {
     const runId = await runChat({ finalText: `${BUILD_MARKER} a todo list app` });
     const chat = chatEventsFor(runId);

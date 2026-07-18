@@ -12,7 +12,9 @@
  */
 
 /** user_work agent tags — the 14 carried sites (§6.4.1) plus the two Amendment 2 additions
- *  (`memory-extract` A1, `build-verify` A2). `artifact-backend:<entrypoint>` is a family: an
+ *  (`memory-extract` A1, `build-verify` A2) and the mega-run Part B addition (`reply-summary`,
+ *  decision B.E: one FAST post-run sheet-summary call per chat run, billed to the run's user -
+ *  the memory-extract pattern). `artifact-backend:<entrypoint>` is a family: an
  *  artifact backend's model capability, tagged with its entrypoint, billed to the artifact
  *  owner (site 14). */
 export type UserWorkAgentType =
@@ -32,6 +34,7 @@ export type UserWorkAgentType =
   | 'answer-about-ekoa'
   | 'memory-extract'
   | 'build-verify'
+  | 'reply-summary'
   | `artifact-backend:${string}`;
 
 /** classifier agent tags — the 6 sites (§6.4.2), each FAST with a deterministic fallback. */

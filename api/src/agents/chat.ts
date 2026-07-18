@@ -27,6 +27,8 @@ import { knowledgeToolSpecs, delegateToolSpec } from './sdk-tools.js';
 import { getLocalActivitySources, type DelegationToolResult } from './seams.js';
 import { assembleRunContext, renderPrompt, referencesContextLine } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
+import { scheduleReplySummary } from './reply-summary.js';
+import { derivedSheetId, derivedRevisionId } from '../data/session-sheets.js';
 
 export interface StartChatRunInput {
   actor: Actor;
@@ -273,18 +275,33 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
             : {}),
         }
       : undefined;
-    if (cleanText.trim()) {
-      await persistAssistantMessage(input.sessionId, cleanText, input.deps, {
-        traceId: runId,
-        memoriesUsed: assembled.memoriesUsed,
-        ...(thinkingMeta ?? {}),
-      });
-    }
+    const persisted = cleanText.trim()
+      ? await persistAssistantMessage(input.sessionId, cleanText, input.deps, {
+          traceId: runId,
+          memoriesUsed: assembled.memoriesUsed,
+          ...(thinkingMeta ?? {}),
+        })
+      : undefined;
     finishComplete(cleanText);
 
     // Post-run memory extraction scheduled OFF the terminal event (§5.8): the terminal already
     // fired above, so extraction never delays completion.
     void scheduleExtraction(input, runId, `${input.message}\n\n${cleanText}`);
+
+    // Post-run reply summary (B2, decision B.E): same off-the-terminal, fire-and-forget posture.
+    // The persisted assistant turn IS the sheet (B1's read path derives it), so the event carries
+    // exactly the ids the sheets endpoint serves - threaded from the persisted doc, never
+    // re-derived from content. Failure inside the hook emits nothing and never touches the run.
+    if (persisted) {
+      void scheduleReplySummary({
+        userId: input.actor.userId,
+        sessionId: input.sessionId,
+        runId,
+        sheetId: derivedSheetId(persisted._id),
+        revisionId: derivedRevisionId(persisted._id),
+        turn: { kind: 'fresh', replyText: cleanText },
+      });
+    }
   } catch (err) {
     finishError('ADAPTER_ERROR', err instanceof Error ? err.message : 'Erro na execução.');
   }

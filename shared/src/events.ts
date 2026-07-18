@@ -195,6 +195,20 @@ export const NotificationEvent = z.discriminatedUnion('type', [
   // Org branding changed (brand research applied) - clients refetch the company/branding
   // config so the header logo + theme update live instead of waiting for a page reload.
   z.object({ type: z.literal('branding_updated') }),
+  // Part B decision B.E (run 20260717-190134): the post-run {title, summary} for the sheet a
+  // completed chat turn produced. Rides THIS per-user channel (the chat_answer pattern), never
+  // the chat-run stream - the client tears that stream down on `complete`, so a post-run event
+  // there would land in a replay ring nobody reads. `sessionId` routes it client-side;
+  // `sheetId`/`revisionId` are the ids the sheets read path serves. Best-effort: when
+  // summarisation fails the server emits NOTHING and the client keeps its first-line placeholder.
+  z.object({
+    type: z.literal('reply_summary'),
+    sessionId: z.string(),
+    sheetId: z.string(),
+    revisionId: z.string(),
+    title: z.string(),
+    summary: z.string(),
+  }),
 ]);
 export type NotificationEvent = z.infer<typeof NotificationEvent>;
 

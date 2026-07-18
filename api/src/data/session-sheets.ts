@@ -21,6 +21,11 @@ const DERIVED_SHEET_PREFIX = 'sheet-';
 /** Deterministic id of the read-time derived sheet for one assistant message. */
 export const derivedSheetId = (messageId: string): string => `${DERIVED_SHEET_PREFIX}${messageId}`;
 
+/** Deterministic id of that derived sheet's single (agent) revision. Exported so the chat
+ *  pipeline's post-run reply-summary event (B2) carries exactly the ids the read path serves -
+ *  the id vocabulary lives here and only here. */
+export const derivedRevisionId = (messageId: string): string => `rev-${messageId}`;
+
 /** Derived sheet title: the first non-empty line of the markdown, heading markers stripped. */
 function sheetTitleFrom(content: string): string {
   const firstLine = content
@@ -40,7 +45,7 @@ function deriveSheet(m: MessageRow): SessionSheetDoc | null {
     createdFromMessageId: m._id,
     revisions: [
       {
-        revisionId: `rev-${m._id}`,
+        revisionId: derivedRevisionId(m._id),
         content: m.content,
         createdAt: m.timestamp ?? new Date(0).toISOString(),
         editSource: 'agent',

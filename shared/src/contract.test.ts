@@ -107,6 +107,23 @@ describe('shared contract', () => {
     expect(NotificationEvent.safeParse({ type: 'usage_updated' }).success).toBe(true);
   });
 
+  it('NotificationEvent can represent the post-run reply_summary (mega-run B2, decision B.E)', async () => {
+    const { NotificationEvent } = await import('./events.js');
+    expect(
+      NotificationEvent.safeParse({
+        type: 'reply_summary',
+        sessionId: 's1',
+        sheetId: 'sheet-m1',
+        revisionId: 'rev-m1',
+        title: 'Minuta de contrato',
+        summary: 'Estrutura de um contrato de arrendamento habitacional.',
+      }).success,
+    ).toBe(true);
+    // The routing/linkage fields are required - a summary that cannot be routed to its
+    // session/sheet/revision is not representable.
+    expect(NotificationEvent.safeParse({ type: 'reply_summary', title: 't', summary: 's' }).success).toBe(false);
+  });
+
   it('AutomationRunEvent step: parses both a thin legacy event and an enriched one (§3.6.3)', async () => {
     const { AutomationRunEvent } = await import('./events.js');
     // A pre-enrichment client emitted only the thin core — it must still validate (old clients stay valid).

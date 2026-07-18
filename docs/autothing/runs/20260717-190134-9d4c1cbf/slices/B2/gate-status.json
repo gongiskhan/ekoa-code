@@ -1,0 +1,8 @@
+{ "slice": "B2", "kind": "api", "status": "passed", "at": "2026-07-18T00:05:28Z",
+  "wall": {"tscApi": 0, "eslint": 0, "chokepoint": 0, "unit": "17/17 + 5/5 post-cap", "secrets": "staged gitleaks clean"},
+  "test": {"status": "passed", "evidence": "reply-summary suite 5 cases + chat-lifecycle threading + shared contract; SUITE_LEDGER B2 group; j2/j4 live green"},
+  "adversarialReview": {"status": "approve", "by": "fresh-context sync agent", "actualModel": "claude-fable-5"},
+  "adversarialTest": {"status": "deferred-batch", "reason": "api-kind batched run-level pass"},
+  "codexSliceReview": {"status": "approve", "actualModel": "gpt-5.5-high", "findings": "none"},
+  "design": {"status": "skipped", "reason": "kind-conditional (api)"},
+  "video": {"status": "skipped", "reason": "kind-conditional (api; B7 carries the walkthrough)"} }
