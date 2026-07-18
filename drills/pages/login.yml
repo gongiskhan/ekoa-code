@@ -1,0 +1,307 @@
+id: login
+title: Login
+path: /login
+mode: steps
+areas:
+  - 'n': 1
+    id: login#1
+    label: login-card
+    anchors:
+      testId: login-card
+      role: null
+      ariaLabel: null
+      text: >-
+        Iniciar sessãoInicie sessão para aceder ao painelNome de
+        utilizadorPalavra-passeManter sessão iniciadaEsqueceu-se da pal
+      tag: div
+      css: .shadow-overlay
+      cssMethod: finder
+      xpath: /html/body/div[2]/div[2]/div[1]
+    pct:
+      leftPct: 27.92494481236203
+      topPct: 3.10077519379845
+      widthPct: 44.150110375275936
+      heightPct: 90.31007751937985
+steps:
+  - id: page-loads-login-card
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      On a fresh unauthenticated visit to /login, a white rounded card with
+      data-testid="login-card" is centered on a dark teal backdrop, containing
+      the Ekoa logo, the PT-PT title "Iniciar sessão", and the subtitle "Inicie
+      sessão para aceder ao painel".
+    tags:
+      - branding
+    judgment: false
+  - id: html-lang-pt
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The root <html> element has lang="pt-PT" when /login is loaded, confirming
+      PT-PT is the default market/language for a fresh session.
+    tags:
+      - i18n
+    judgment: false
+  - id: heading-lora-font
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The h1 inside [data-testid="login-card"] reads "Iniciar sessão" and its
+      computed CSS font-family includes "Lora" (the shared S1 display serif).
+    tags:
+      - design-system
+    judgment: false
+  - id: form-fields-and-labels
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The form shows a required text username field labeled "Nome de utilizador"
+      with placeholder "Introduza o seu nome de utilizador", and a required
+      password field (id="login-password") labeled "Palavra-passe" with
+      placeholder "Introduza a sua palavra-passe".
+    tags: []
+    judgment: false
+  - id: password-visibility-toggle
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Clicking the eye icon button to the right of the password field toggles
+      the password input's type attribute between "password" and "text", and its
+      aria-label switches between "Mostrar palavra-passe" and "Ocultar
+      palavra-passe".
+    tags:
+      - a11y
+    judgment: false
+  - id: remember-me-default-checked
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The "Manter sessão iniciada" checkbox (role="checkbox") next to the submit
+      row is checked (aria-checked="true", teal-filled with a white check mark)
+      by default on page load, and toggles to unchecked when clicked.
+    tags: []
+    judgment: false
+  - id: forgot-password-link
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The "Esqueceu-se da palavra-passe?" link, positioned to the right of the
+      remember-me checkbox, navigates to /change-password when clicked.
+    tags:
+      - navigation
+    judgment: false
+  - id: submit-disabled-until-filled
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The "Entrar" submit button is disabled while either the username or
+      password field is empty, and becomes enabled once both fields contain
+      text.
+    tags: []
+    judgment: false
+  - id: wrong-password-shows-login-error
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: invalid-credentials
+    description: >-
+      After submitting the form with username "admin" and an incorrect password,
+      a red-bordered box with data-testid="login-error" appears above the form
+      containing the PT-PT message "Credenciais inválidas.", and the "Entrar"
+      button returns to its enabled, non-loading state (no stuck spinner).
+    tags:
+      - error-handling
+    judgment: false
+  - id: error-clears-on-retype
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: invalid-credentials
+    description: >-
+      With the data-testid="login-error" box visible after a failed login,
+      typing any additional character into either the username or the password
+      field immediately removes the login-error box from the page.
+    tags:
+      - error-handling
+    judgment: false
+  - id: successful-login-redirects-to-chat
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Submitting the form with username "admin" and password "tmp12345"
+      navigates the browser to a /chat URL and the chat composer (a visible
+      textarea) renders there.
+    tags: []
+    judgment: false
+  - id: no-dashboard-chrome-preauth
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      /login renders no left Sidebar, no dashboard Header (and therefore no
+      language-toggle button), and no BillingWarningBanner - the page is a
+      standalone centered auth card, not wrapped in the shared
+      PageShell/PageHeader used by authenticated dashboard routes.
+    tags:
+      - layout
+    judgment: false
+  - id: generic-vertical-tagline
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Below the white login card, small centered text reads the generic-vertical
+      tagline "Ekoa · Plataforma de trabalho com IA" (this is
+      pages.login.version, sourced from the localStorage ekoa_vertical mirror
+      since /login never fetches platform settings).
+    tags:
+      - vertical-skin
+    judgment: false
+  - id: mobile-card-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At the 375x812 mobile viewport, the login card keeps its padding and
+      rounded corners without overflowing the viewport width, no horizontal
+      scrollbar appears, and none of the logo, heading, form fields, or button
+      are clipped or overlapping.
+    tags:
+      - responsive
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /login and completing a full login (admin / tmp12345) through to
+      /chat produces zero browser console errors, aside from known-benign
+      favicon or React DevTools messages.
+    tags:
+      - console
+    judgment: false
+  - id: logo-renders
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The Ekoa logo image (alt="Ekoa", served from /ekoa_logo.png, roughly
+      48x48) renders as a visible loaded icon above the heading, not a
+      broken-image placeholder or blank box.
+    tags:
+      - branding
+    judgment: false
+    spec: tests/drills/login.spec.ts#logo-renders
+    assertion:
+      kind: visible
+      role: img
+  - id: backdrop-visual-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The teal-950 backdrop behind the card shows only a faint, large
+      hexagon-outline watermark (off-canvas to the right) and a soft amber
+      radial glow, with no visible grid pattern, no glassmorphism/blur panels,
+      and no dark-mode styling - the overall composition reads as deliberate and
+      polished rather than empty or cluttered.
+    tags:
+      - visual-polish
+    judgment: true
+  - id: s1784272105187-1
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      With username "admin" and password "tmp12345" filled in, pressing the
+      Enter key while focus is inside the password field submits the form and
+      navigates to /chat - identical to clicking "Entrar" (keyboard submission
+      must not be a dead end).
+    tags: []
+states:
+  - id: invalid-credentials
+    label: Invalid credentials error
+    reachPath:
+      - id: submit-wrong-password
+        description: >-
+          Fill the username field with "admin", fill the password field with an
+          incorrect password such as "wrongpass1", and click the submit button
+          matching /entrar|iniciar/i.

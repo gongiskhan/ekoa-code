@@ -1,0 +1,139 @@
+id: not-found
+title: Not found (404)
+path: /this-page-does-not-exist-xyz
+mode: steps
+areas: []
+steps:
+  - id: renders-404-copy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Navigating directly to an arbitrary unknown path
+      (/this-page-does-not-exist-xyz) renders the app's custom not-found page
+      rather than a Next.js dev error overlay or a blank/broken page: centered
+      text shows the heading "404", the message "Página não encontrada", and a
+      link reading "Ir para o Builder".
+    tags: []
+    judgment: false
+    spec: tests/drills/not-found.spec.ts#renders-404-copy
+    assertion:
+      kind: text-contains
+      text: Página não encontrada
+  - id: html-lang-pt
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The root <html> element has lang="pt-PT" when the unknown path is loaded,
+      confirming the not-found page renders in PT-PT (the default market
+      language) rather than falling back to English copy.
+    tags:
+      - i18n
+    judgment: false
+    spec: tests/drills/not-found.spec.ts#html-lang-pt
+    assertion:
+      kind: text-contains
+      text: Página não encontrada
+  - id: link-navigates-to-chat
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Clicking the "Ir para o Builder" link navigates the browser to "/", which
+      (for the already-authenticated session) redirects on to /chat where the
+      chat composer (a visible textarea) renders.
+    tags:
+      - navigation
+    judgment: false
+  - id: no-dashboard-chrome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The not-found page renders as a standalone centered panel on a plain white
+      background with no left Sidebar and no dashboard Header (and therefore no
+      language-toggle button) - confirming this global not-found boundary sits
+      outside the shared PageShell/dashboard layout used by every other
+      authenticated route.
+    tags:
+      - layout
+    judgment: false
+    spec: tests/drills/not-found.spec.ts#no-dashboard-chrome
+    assertion:
+      kind: count
+      role: navigation
+      op: eq
+      value: 0
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading the unknown path produces zero browser console errors, aside from
+      known-benign favicon or React DevTools messages.
+    tags:
+      - console
+    judgment: false
+    spec: tests/drills/not-found.spec.ts#no-console-errors
+    assertion:
+      kind: text-contains
+      text: Página não encontrada
+  - id: visual-polish-and-mobile-layout
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The 404 heading, message, and link are vertically centered with generous
+      whitespace and read as a deliberate, polished empty state (not a raw stack
+      trace, framework error page, or unstyled HTML); at the 375x812 mobile
+      viewport the same centered block remains fully visible with no horizontal
+      scrollbar and no clipped or overlapping text.
+    tags:
+      - visual-polish
+      - responsive
+    judgment: true
+    spec: tests/drills/not-found.spec.ts#visual-polish-and-mobile-layout
+  - id: obs-01KXQPG2GT48NJQNDAHB1TGBN5
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The 404 page (any unknown route, e.g. /this-page-does-not-exist-xyz)
+      renders its h1 ("404") without the Lora serif used by every other page
+      header - likely outside the shared PageShell/PageHeader. Minor, but it is
+      the only user-visible page off the design system.
+    tags:
+      - from-observation
+    spec: tests/drills/not-found.spec.ts#obs-01KXQPG2GT48NJQNDAHB1TGBN5
+    assertion:
+      kind: text-contains
+      text: '404'
+states: []

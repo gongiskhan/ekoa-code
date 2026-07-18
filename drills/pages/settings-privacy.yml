@@ -1,0 +1,187 @@
+id: settings-privacy
+title: Settings - Privacy and local bridge
+path: /settings/privacy
+mode: steps
+areas: []
+steps:
+  - id: page-shell-and-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page root has data-testid=\"settings-privacy-page\", and the PageHeader renders an h1 reading \"Privacidade e ponte local\" in the Lora serif font alongside a ShieldCheck icon, with the description text \"A ponte local, as autorizações de leitura e o registo de tudo o que sai deste computador.\" directly below it."
+    tags: []
+    judgment: false
+  - id: legal-onboarding-card-absent-default-vertical
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "For the current account (settings.general.vertical is not \"legal\"), no element with data-testid=\"legal-onboarding-card\" appears between the PageHeader and the first section (\"Descarregar e instalar a ponte local\"); the onboarding card is a legal-vertical-only addition and this account is not on it."
+    tags: [role-gating]
+    judgment: false
+  - id: seven-sections-stacked-in-order
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Below the header, exactly seven sections render top-to-bottom in this order with consistent vertical spacing (no overlapping or touching cards): \"Descarregar e instalar a ponte local\", \"Estado da ponte e emparelhamento\", \"Autorizações de leitura ativas\", \"Registo de leituras locais\", \"Atividade de mascaramento\", \"Comandos locais aprovados\", and \"Enquadramento e garantias\" - each with its own icon + title row (CardTitle) above a Card body."
+    tags: [visual]
+    judgment: true
+  - id: bridge-install-header-and-os-toggle
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The install section (data-testid=\"privacy-bridge-install\") shows title \"Descarregar e instalar a ponte local\" and description \"A ponte local é uma pequena aplicação que corre no seu computador...\", followed by a card containing an OS toggle (data-testid=\"bridge-os-toggle\", role=\"tablist\") with two tabs \"Mac\" (data-testid=\"bridge-os-mac\") and \"Windows\" (data-testid=\"bridge-os-windows\"); the toggle defaults to one tab selected (aria-selected=\"true\") based on the browser's user agent."
+    tags: []
+    judgment: false
+  - id: bridge-install-download-links-per-os
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking bridge-os-mac shows a \"Descarregar para Mac\" button (data-testid=\"bridge-download-mac\") whose href ends in \"Instalar-Ponte-Ekoa-Mac.zip\", plus a security note (data-testid=\"bridge-security-note\") mentioning duplo-clique and \"Abrir\"; clicking bridge-os-windows instead shows \"Descarregar para Windows\" (data-testid=\"bridge-download-win\") whose href ends in \"Windows.bat\", with a security note mentioning \"Executar mesmo assim\"."
+    tags: []
+    judgment: false
+  - id: bridge-install-four-steps
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Under the heading \"Como ligar a ponte, passo a passo\" (or simple-flow equivalent), an ordered list (data-testid=\"bridge-install-steps\") contains exactly 4 list items, each prefixed with a numbered teal circle badge (1-4), the first reading \"Descarregue o instalador para o seu sistema.\" and the last reading \"Pronto: a ponte fica ligada e já pode referenciar ficheiros.\""
+    tags: []
+    judgment: false
+  - id: bridge-install-advanced-collapsed-by-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A collapsible <details> element (data-testid=\"bridge-advanced\") with summary text \"Instalação avançada (com Node.js e Terminal)\" is collapsed by default (its inner content, including bridge-install-command, is not visible until the summary is clicked)."
+    tags: []
+    judgment: false
+  - id: bridge-install-advanced-expand-and-copy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking the bridge-advanced summary reveals a code block (data-testid=\"bridge-install-command\") whose text starts with \"curl -fsSL\" and contains \"| bash\", a copy button (data-testid=\"bridge-install-copy\") reading \"Copiar comando\" that switches to a checkmark + \"Copiado\" for about 2 seconds after being clicked, and a secondary download link (data-testid=\"bridge-download\") reading \"Descarregar o pacote (.tgz)\" whose href ends in \".tgz\"."
+    tags: []
+    judgment: false
+  - id: bridge-status-default-not-paired
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The status section (data-testid=\"privacy-bridge-status\") shows title \"Estado da ponte e emparelhamento\"; with no bridge daemon paired, a neutral-tone dotted Badge reads exactly \"Ponte não emparelhada\" with the helper text \"Nenhuma ponte está emparelhada com esta conta. Gere um código de emparelhamento e introduza-o na aplicação da ponte.\" beneath it, and a secondary button with a key icon reads \"Gerar código de emparelhamento\" (no revoke button is shown since no pairing code has been generated yet)."
+    tags: []
+    judgment: false
+  - id: bridge-status-generate-pairing-code
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking \"Gerar código de emparelhamento\" shows the button's label change to \"A gerar...\" while loading, then reveals a box (data-testid=\"pairing-code\") labelled \"Código de emparelhamento\" containing a monospace token string and a caption of the form \"Válido durante N minutos. Introduza-o na aplicação da ponte.\"; a new danger-styled \"Revogar emparelhamento\" button also appears next to the generate button."
+    tags: []
+    judgment: false
+  - id: bridge-status-revoke-pairing-confirms
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "After a pairing code has been generated, clicking \"Revogar emparelhamento\" opens a confirmation dialog titled \"Revogar emparelhamento da ponte\" with body text \"A ponte deixa de poder ligar-se a esta conta até voltar a emparelhar. As leituras em curso são interrompidas.\" and a danger-toned confirm button labelled \"Revogar emparelhamento\"; confirming closes the dialog and removes the pairing-code box from the page."
+    tags: []
+    judgment: false
+  - id: grants-section-offline-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The grants section (data-testid=\"privacy-grants\") shows title \"Autorizações de leitura ativas\" and description \"Pastas e ficheiros que o agente pode ler nesta sessão. Revogar tem efeito na leitura seguinte.\"; with the bridge not connected, its card body reads exactly \"A lista de autorizações é servida pela ponte local. Ligue a ponte para a ver.\" and no grants-list element is rendered."
+    tags: []
+    judgment: false
+  - id: ledger-section-offline-default-and-columns
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The ledger section (data-testid=\"privacy-ledger\") shows title \"Registo de leituras locais\" and its column header row always renders six labels - \"Momento\", \"Tipo\", \"Ficheiro\", \"Intervalo\", \"Dimensão\", \"Sessão\" - even while offline; with the bridge not connected there is no session-filter dropdown and the table body shows the centered text \"O registo é mantido e servido pela ponte local. Ligue a ponte para o consultar.\""
+    tags: []
+    judgment: false
+  - id: masking-summary-gated-description-and-pending-body
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The masking section (data-testid=\"privacy-masking-summary\") shows title \"Atividade de mascaramento\"; its description is replaced by an amber inline pill (data-testid=\"gated-claim\", data-claim-gated=\"true\") reading \"Verificação em curso\" with a clock icon, rather than the underlying claim sentence, because the masking claim is ship-gated; the card body shows either the pending text \"O resumo de mascaramento fica disponível quando a auditoria de anonimização estiver ativa nesta conta.\" (if this account has zero audited masking events) or a divided list of entity-class names with numeric counts (data-testid=\"masking-classes\") if it has some."
+    tags: []
+    judgment: false
+  - id: approved-commands-empty-or-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The approved-commands section (data-testid=\"privacy-approved-commands\") shows title \"Comandos locais aprovados\" and description \"A primeira utilização de cada novo comando local exige a sua aprovação...\"; after the brief \"A carregar...\" loading text clears, the card shows either the italic empty message \"Ainda não aprovou nenhum comando. Na primeira vez que uma automação tentar correr um comando local, verá aqui o pedido de consentimento.\" or a divided list of approved command rows, each with a monospace command shape and a red \"Revogar\" button - never a stuck loading spinner or an unhandled error message."
+    tags: []
+    judgment: false
+  - id: grounded-sections-collapsed-list
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The grounded section (data-testid=\"privacy-grounded\") shows title \"Enquadramento e garantias\" and a card containing exactly three collapsed rows in this order, each a full-width button with a chevron-down icon on the right reading \"saiba mais\": data-testid=\"grounded-segredo\" titled \"Como isto se relaciona com o seu dever de segredo profissional\", data-testid=\"grounded-authority\" titled \"O que acontece se recebermos um pedido de uma autoridade\", and data-testid=\"grounded-data-location\" titled \"Onde ficam os seus dados\"."
+    tags: []
+    judgment: false
+  - id: grounded-section-expand-shows-gated-claim
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking the grounded-segredo row toggles aria-expanded to \"true\", rotates its chevron 180 degrees, and reveals a dashed amber box (data-testid=\"gated-claim\") reading \"Verificação em curso\" in place of the underlying legal claim text, followed by a small citation line (\"EOA art. 92.º; arts. 75.º e 76.º do EOA; arts. 177.º, n.º 5, e 180.º do CPP.\") and the italic disclaimer \"Isto não é aconselhamento jurídico.\"; clicking the row again collapses it."
+    tags: []
+    judgment: false
+  - id: settings-bridge-redirects-here
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Navigating directly to /settings/bridge redirects the browser to /settings/privacy and renders the same data-testid=\"settings-privacy-page\" root with its \"Privacidade e ponte local\" header - the old bridge route is retired to a redirect, not a separate page."
+    tags: [redirect]
+    judgment: false
+  - id: mobile-layout-no-overflow
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width, every section's Card (including the six-column ledger header row and the install section's OS toggle + download button) stays within the viewport with no horizontal scrollbar on the page body, no truncated/overlapping text, and the ledger's grid columns either shrink/wrap sensibly or scroll within their own container rather than forcing the whole page wider."
+    tags: [responsive]
+    judgment: true
+  - id: zero-console-errors-default-load
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /settings/privacy fresh and, while there, generating and then revoking a pairing code, expanding the advanced install details, and expanding one grounded row, produces zero browser console errors (favicon/React DevTools messages excepted) - with no bridge daemon connected, the grants/ledger sections render their offline copy without issuing any daemon network requests at all."
+    tags: []
+    judgment: false
+states: []

@@ -1,0 +1,270 @@
+id: usage
+title: Usage
+path: /usage
+mode: steps
+areas: []
+steps:
+  - id: page-shell-renders
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The page container has data-testid "usage-page" and is visible, and the
+      PageHeader h1 (Lora serif font) matches /Usage/i with the description
+      "Per-user token consumption and hard cap management." below it, alongside
+      a Gauge icon.
+    tags:
+      - layout
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /usage as the admin/tmp12345 super-admin and letting the per-user
+      usage table and the origin breakdown table both render produces ZERO
+      browser console errors (this page previously crashed on
+      fmtTokens(undefined).toLocaleString when a row arrived without
+      tokensBase/tokensRemaining/percentage; confirm rows render even if some
+      fields are sparse/zero without throwing).
+    tags:
+      - console-errors
+      - regression
+    judgment: false
+  - id: super-admin-gate
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Navigating directly to /usage while logged in as the super-admin dev
+      account (admin/tmp12345) does NOT redirect away; the usage-page testid
+      becomes visible instead of the browser landing on /chat (this route is
+      hidden from the sidebar and self-gates non-super-admin callers back to
+      /chat, which cannot be exercised further since no non-admin login is
+      available).
+    tags:
+      - role-gating
+    judgment: false
+    spec: tests/drills/usage.spec.ts#super-admin-gate
+    assertion:
+      kind: url-matches
+      pattern: /usage
+      mode: contains
+  - id: per-user-table-columns
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The per-user usage table has exactly these column headers in order:
+      Username, Role, Used, Remaining, %, Last login, Reset - and each data row
+      (tr[data-username]) shows a non-empty formatted token count in the "Used"
+      column (data-column="used"), a non-empty "Remaining" count, and a
+      percentage Badge.
+    tags: []
+    judgment: false
+  - id: admin-row-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      At least one table row has data-username="admin" (the logged-in
+      super-admin itself is always included in the per-user usage list),
+      confirming the table is populated rather than stuck empty.
+    tags: []
+    judgment: false
+  - id: percentage-badge-tone
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Every row's "%" Badge and "Used" cell use a consistent color-coding rule:
+      rows at or above 100% render the Used cell in bold red (font-semibold
+      text-red-600) with a danger-tone Badge, rows from 85% up to (not
+      including) 100% render the Used cell in amber (text-amber-700) with a
+      warning-tone Badge, and rows below 85% render neutral gray text with a
+      neutral-tone Badge - no row shows a visually broken or uncolored badge.
+    tags: []
+    judgment: true
+  - id: reset-button-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Each usage row has a secondary-styled "Reset" button with a RotateCcw icon
+      (data-action="reset") in the rightmost "Reset" column, one per row.
+    tags: []
+    judgment: false
+  - id: reset-confirm-dialog
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: reset-dialog-open
+    description: >-
+      Clicking a row's Reset button opens a confirmation Dialog titled "Repor
+      consumo de <username>?" with the description "O contador de tokens deste
+      utilizador volta a zero.", a "Cancelar" secondary button, and a
+      danger-toned "Repor" primary button - the dialog is centered, legible, and
+      does not overlap the page content behind it.
+    tags:
+      - dialog
+    judgment: false
+  - id: reset-confirm-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: reset-dialog-open
+    description: >-
+      Clicking "Cancelar" in the reset-confirmation dialog closes it without
+      changing the row's Used/Remaining/% values or firing a reset request.
+    tags:
+      - dialog
+    judgment: false
+  - id: breakdown-section-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      A second section with data-testid "usage-breakdown" is present below the
+      per-user table (when the breakdown has at least one row), headed "Consumo
+      por origem" with the subtitle "Repartição do consumo do período atual por
+      origem.", containing a table with columns Origem, Tokens, %.
+    tags: []
+    judgment: false
+  - id: breakdown-pipedream-label
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      In the "Consumo por origem" breakdown table, any origin row whose
+      underlying agentType begins with "pipedream:" is collapsed and displayed
+      under the single label "Pipedream" (not the raw pipedream:<app>:<action>
+      string), while non-Pipedream origins show their agentType verbatim.
+    tags: []
+    judgment: true
+  - id: empty-state-no-users
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: empty
+    description: >-
+      If the per-user usage list is empty, an EmptyState is shown in place of
+      the table with a Gauge icon and the title "No users found." - it is
+      centered, uses generous vertical padding, and does not leave a
+      broken/empty table shell visible.
+    tags: []
+    judgment: true
+  - id: loading-state
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      On first load before the usage data arrives, a shared LoadingState
+      spinner/component is shown in place of the table (not a blank page, not a
+      layout jump once data arrives).
+    tags: []
+    judgment: true
+    spec: tests/drills/usage.spec.ts#loading-state
+  - id: mobile-layout-375
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width, the per-user usage table
+      (Username/Role/Used/Remaining/%/Last login/Reset columns) either scrolls
+      horizontally within its container or otherwise remains fully readable with
+      no column text clipped, overlapping, or pushed off-screen, and the
+      usage-page testid container is still visible with the sidebar collapsed
+      behind the header toggle.
+    tags:
+      - responsive
+    judgment: true
+  - id: last-login-formatting
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The "Last login" column renders a locale-formatted date/time string for
+      users who have logged in, and the literal text "never" for any user row
+      whose lastLoginAt is null - no row shows "Invalid Date" or a raw ISO
+      timestamp string.
+    tags: []
+    judgment: true
+  - id: obs-01KXQNV0CQEPM60CD3AQ037PRT
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The /usage page renders its PageHeader h1 as the ENGLISH word "Usage"
+      while every other dashboard page is PT-PT (Memória, Integrações,
+      Utilizadores e Equipas, Escritórios...). The Drill Book global rule pins
+      PT-PT as the product language on a fresh session. Reproduce: log in as
+      admin/tmp12345, open http://localhost:3000/usage - the title reads Usage
+      instead of a PT-PT title (e.g. Utilização). Screenshot-verifiable; all
+      sibling pages confirm the convention.
+    tags:
+      - from-observation
+states:
+  - id: reset-dialog-open
+    label: Reset-confirmation dialog open
+    reachPath:
+      - id: click-reset
+        description: >-
+          On the /usage page, click the "Reset" button (data-action="reset") in
+          any usage row's rightmost column to open the reset-confirmation
+          dialog.
+  - id: empty
+    label: No users found
+    reachPath:
+      - id: note-empty-state
+        description: >-
+          This state cannot be deliberately reached from the UI with the seeded
+          super-admin account, which always has at least itself as a usage row;
+          only check this state if the per-user usage list happens to render
+          empty on load.

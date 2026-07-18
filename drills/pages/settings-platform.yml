@@ -1,0 +1,260 @@
+id: settings-platform
+title: Settings - Platform
+path: /settings/platform
+mode: steps
+areas: []
+steps:
+  - id: header-lora-and-testid
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      The page root has data-testid "settings-platform-page"; inside it a PageHeader renders a Globe
+      icon, an h1 (Lora serif font) reading "Configurações da Plataforma", and a subtitle reading
+      "Configuração geral e opções avançadas" directly beneath the h1 - the header bar does not
+      duplicate this title elsewhere.
+    tags: [visual, i18n]
+    judgment: false
+
+  - id: general-section-heading
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      A section heading reads exactly "Geral" (PT-PT, never "General") with the sub-description
+      "Configuração básica da plataforma" beneath it, immediately below the PageHeader.
+    tags: [i18n]
+    judgment: false
+
+  - id: general-platform-name-debounced-save
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      In the "Geral" card, the first row is labeled "Nome da Plataforma" with description "O nome
+      apresentado nos cabeçalhos e na identidade da plataforma." and a text input with placeholder
+      "Ekoa"; typing into it and pausing for about a second triggers an autosave, after which a
+      "Guardado" label with a small check icon briefly appears next to the "Geral" heading, then
+      disappears again after roughly 1.5s.
+    tags: [autosave]
+    judgment: false
+
+  - id: general-timezone-select
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      The second row in the "Geral" card is labeled "Fuso Horário" (description "Usado em datas,
+      agendamentos e registos de atividade.") with a select dropdown offering timezone options
+      including "Europe/Lisbon (WET)", "UTC", "Europe/London (GMT/BST)" and others; changing the
+      selection persists (no error, no page reload).
+    tags: []
+    judgment: false
+
+  - id: general-language-toggle-flips-locale
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      The third row in the "Geral" card is labeled "Idioma" (description "Definir o idioma
+      predefinido para a interface da plataforma e conteúdo gerado.") with a two-button toggle
+      reading "Inglês" and "Português (Portugal)", the active option shown with a solid teal
+      background (aria-pressed=true); clicking the inactive option immediately re-renders ALL
+      visible copy on the page (section headings, labels, buttons) in that language - this control
+      drives the same app-wide language store as the header language toggle, not just a saved
+      preference value.
+    tags: [i18n]
+    judgment: false
+
+  - id: chat-section-switches
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      A "Chat" section heading (description "Comportamento da conversa e do assistente") follows,
+      whose card has two toggle rows: "Modo Guiado" (default ON) with description "O assistente faz
+      perguntas focadas, propõe opções e termina cada resposta com um próximo passo. Desative para
+      uma interação direta e sem orientação.", and "Mostrar Cartões de Exemplo" (default ON) with
+      description "Apresentar sugestões de comandos acima da caixa de mensagem."; clicking either
+      Switch flips its on/off state and briefly shows the "Guardado" indicator next to the "Chat"
+      heading.
+    tags: [autosave]
+    judgment: false
+
+  - id: chat-guidance-selector
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      Below the Chat card, under heading "Nível de orientação" (sub-copy "Como o orquestrador
+      conversa consigo durante a construção."), a data-testid="guidance-selector" grid holds three
+      selectable option cards: data-testid="guidance-guide-me" titled "Orientar-me", data-testid=
+      "guidance-standard" titled "Normal", and data-testid="guidance-just-build-it" titled "Mãos à
+      obra"; exactly one has aria-pressed="true" and a teal border/background at a time ("Orientar-me"
+      by default for a fresh account), and clicking another card moves the highlight to it.
+    tags: []
+    judgment: false
+
+  - id: chat-guidance-note-always-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      Beneath the three guidance cards, an italicized note reads "Perguntas críticas (integrações
+      em falta, intenção ambígua) aparecem sempre, qualquer que seja a sua escolha." and stays
+      visible regardless of which guidance card is selected.
+    tags: []
+    judgment: false
+
+  - id: user-preferences-section
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      A data-testid="settings-user-preferences" section follows the Chat section, headed
+      "Preferências pessoais" (with a small SlidersHorizontal icon) and sub-copy "Opções que se
+      aplicam apenas à sua conta."; its card has two switch rows: data-testid="toggle-verify-builds"
+      labeled "Verificar as construções" (default ON) with description "Testar cada aplicação
+      depois de a construir. Melhora a qualidade do resultado, mas torna a construção mais demorada
+      e com maior custo.", and data-testid="toggle-auto-extract" labeled "Extração automática de
+      memórias" (default ON) with description "Guardar automaticamente memórias a partir do seu
+      trabalho. As memórias criadas automaticamente ficam sempre privadas."; toggling either switch
+      briefly disables both switches while the change saves.
+    tags: []
+    judgment: false
+
+  - id: advanced-section-heading
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      A final section heading reads exactly "Avançado" (PT-PT, never "Advanced") with sub-description
+      "Configuração avançada da plataforma" beneath it.
+    tags: [i18n]
+    judgment: false
+
+  - id: advanced-data-directory-readonly
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      The "Avançado" card's first row is labeled "Diretoria de Dados" (description "Localização
+      onde os dados da plataforma são guardados em disco.") with a read-only, disabled text input
+      showing the fixed value "~/.ekoa/data/" that cannot be focused or edited.
+    tags: []
+    judgment: false
+
+  - id: advanced-reset-button
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      Below the data-directory row, a row labeled "Repor Todas as Configurações" (description
+      "Restaurar todas as configurações desta página para o valor predefinido.") has a red/danger
+      "Repor" button with a trash-can icon; clicking it opens a confirmation dialog instead of
+      resetting immediately.
+    tags: []
+    judgment: false
+
+  - id: reset-confirm-dialog-content
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: reset-confirm
+    description: >-
+      With the reset confirmation dialog open, it shows title "Repor Todas as Configurações",
+      description "Restaurar todas as configurações desta página para o valor predefinido.", a
+      secondary "Cancelar" button, and a red/danger "Confirmar Reposição" button.
+    tags: []
+    judgment: false
+
+  - id: reset-confirm-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: reset-confirm
+    description: >-
+      Clicking "Cancelar" in the open reset-confirmation dialog closes it without changing any
+      setting on the page (platform name, timezone, chat switches and guidance selection remain
+      exactly as they were before the dialog was opened).
+    tags: []
+    judgment: false
+
+  - id: reset-confirm-apply
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: reset-confirm
+    description: >-
+      Clicking "Confirmar Reposição" in the open dialog closes it and resets fields to their code
+      defaults: the "Nome da Plataforma" input clears to empty (showing the "Ekoa" placeholder),
+      the "Fuso Horário" select shows "UTC" selected, and the "Idioma" toggle's active pill switches
+      to "Inglês". Because this reset path writes the settings store directly (bypassing the same
+      handler the "Idioma" toggle itself uses), the rest of the page's copy stays in PT-PT (headings
+      still read "Geral" and "Avançado", not "General"/"Advanced") and no "Guardado" badge appears -
+      unlike a normal field edit.
+    tags: [edge-case]
+    judgment: false
+
+  - id: mobile-layout-375
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: >-
+      At 375px width, every SettingRow keeps its label/description on the left and its control
+      (input, select, switch or toggle) on the right without the control being clipped, overlapping
+      the text, or forced off-screen; the three "Nível de orientação" guidance cards stack into a
+      single column (rather than the desktop 3-column grid) and remain fully readable.
+    tags: [responsive]
+    judgment: false
+
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: >-
+      Loading /settings/platform and exercising its controls (General, Chat, guidance selector,
+      Preferências pessoais, Advanced) produces zero browser console errors, aside from the known-benign
+      favicon / React DevTools messages.
+    tags: [a11y]
+    judgment: false
+
+states:
+  - id: reset-confirm
+    label: Reset confirmation dialog open
+    reachPath:
+      - id: open-reset-dialog
+        description: >-
+          In the "Avançado" section, click the "Repor" button next to "Repor Todas as Configurações"
+          to open the reset confirmation dialog

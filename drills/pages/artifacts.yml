@@ -1,0 +1,182 @@
+id: artifacts
+title: Artifacts
+path: /artifacts
+mode: steps
+areas: []
+steps:
+  - id: page-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page renders inside a PageShell (data-testid 'artifacts-page') with a PageHeader whose h1 (class 'font-display', Lora serif) reads 'Artefactos' and whose subtitle line reports the count of owned artifacts; the header icon is a folder-kanban glyph. Loading the page produces zero browser console errors."
+    tags: [page-shell]
+    judgment: false
+
+  - id: header-actions
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The PageHeader actions row shows a secondary 'Importar artefacto' button (data-testid 'import-artifact-button') with a file-code icon, and a refresh icon button (title matches /atualizar|refresh/i) that re-fetches the list and spins its icon while loading."
+    tags: []
+    judgment: false
+
+  - id: filter-pills
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Below the header, seven rounded filter pills read (PT-PT) 'Todos', 'Em execução', 'Prontas', 'A construir', 'Rascunho', 'Falhou', 'Partilhadas'; the active pill (default 'Todos') has a solid dark background with white text while inactive pills are light gray; clicking a different pill immediately re-filters the owned-artifact grid below to only the matching statuses."
+    tags: []
+    judgment: false
+
+  - id: sort-menu
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A sort control to the right of the filter pills shows the current sort label ('Mais recentes' by default) with a chevron icon; clicking it opens a dropdown listing 'Mais recentes', 'Nome', 'Estado'; selecting an option closes the menu, updates the displayed label, and reorders the owned-artifact grid; clicking outside the open menu also closes it."
+    tags: []
+    judgment: false
+
+  - id: search-filter
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A SearchInput with a placeholder matching /pesquisar/i sits at the right of the filter row. Typing text that matches no owned-artifact title shows an empty-state panel (Search icon) whose action button reads 'Limpar filtros'; clicking it resets both the search text and the active filter pill back to 'Todos'."
+    tags: []
+    judgment: false
+
+  - id: starting-points-strip
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A section with data-testid 'starting-points-strip' renders below the header, headed 'Aplicações' with a subtitle line, containing a responsive grid of at least 20 cards with data-testid prefixed 'starting-point-card-'. Each card shows a thumbnail (or an empty placeholder block) and a title, and its footer has a primary 'Usar' link (data-testid prefixed 'starting-point-use-') plus a secondary 'Personalizar no chat' button (data-testid prefixed 'starting-point-customize-')."
+    tags: []
+    judgment: false
+
+  - id: starting-points-collapse
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking the Starting Points header row (data-testid 'starting-points-toggle') collapses the grid to zero height, and its pill (data-testid 'starting-points-toggle-pill') switches its label from 'Ocultar' to 'Mostrar <N>' with its chevron rotating 180 degrees; clicking the row again re-expands the grid back to its full height."
+    tags: []
+    judgment: false
+
+  - id: featured-card-navigate
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking anywhere on a Starting Points card body (not its 'Usar' or 'Personalizar no chat' buttons) navigates the browser to /chat?continue=<thatCard'sId>, opening the direct-edit chat for that featured app, and does NOT add a new card to the owned-artifacts grid on /artifacts (no fork is created)."
+    tags: []
+    judgment: false
+
+  - id: own-artifacts-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Below the Starting Points strip: if the account owns zero artifacts, an empty-state panel (folder-kanban icon) shows a title matching /sem artefactos|nenhum artefacto/i and a primary 'Ir para o Construtor' button linking to /chat; otherwise a responsive card grid renders, each card showing a type icon, a truncated title, a status badge, a template-type subtitle, a footer with the created date, and a primary 'Usar' button (data-testid prefixed 'artifact-use-') that is disabled until the artifact's status is running, ready, active or healthy."
+    tags: []
+    judgment: false
+
+  - id: mobile-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width the seven filter pills wrap onto multiple lines without overflowing the viewport horizontally, the Starting Points grid collapses to a single column, the search input remains fully visible and usable below the pills, and no card title, badge or button is clipped or overlapping another element."
+    tags: [responsive]
+    judgment: false
+
+  - id: demo-tour
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Navigating to /artifacts?demo=legal-prazos (a shipped ekoa-data demo id) shows a full-screen overlay (data-testid 'demo-overlay') with a 'Seguinte' next button (data-testid 'demo-next') and a served-app iframe (iframe[data-demo-frame]). Stepping through the tour (clicking Next, and performing any spotlighted action inside the iframe) advances the overlay's 'data-demo-step-index' attribute and eventually sets its 'data-demo-status' attribute to 'done', with zero page errors or demo/bridge console errors on either the host page or the served-app iframe."
+    tags: [demo-tour]
+    judgment: false
+
+  - id: detail-view-open
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "Clicking an owned-artifact card (not a Starting Points card) replaces the list view with the artifact detail view: a 'Voltar aos artefactos' back link with a left-arrow icon at the top, an inline-editable title (pencil icon) beside a status badge, a type subtitle, and an action-button row including Start/Stop (or Abrir), 'Pré-visualizar', 'Abrir noutro separador', 'Copiar link' (data-testid prefixed 'copy-run-link-'), 'Copiar link de construção' (data-testid prefixed 'copy-build-link-'), 'Transferir código' (data-testid prefixed 'download-code-'), 'Atualizar a partir de ficheiro' (data-testid prefixed 'upload-update-'), 'Editar no chat', a Share/Unshare toggle, and 'Eliminar artefacto' (data-testid prefixed 'delete-artifact-')."
+    tags: []
+    judgment: false
+
+  - id: download-code-dialog
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "Clicking 'Transferir código' in the detail view opens a Dialog (data-testid 'download-info-dialog') explaining that the code belongs to the user with no lock-in and can be re-imported later via 'Importar artefacto'. Its footer 'Cancelar' button closes the dialog with no download; its primary button (data-testid 'download-confirm', label 'Transferir .zip') triggers a .zip file download and closes the dialog on success."
+    tags: [dialogs]
+    judgment: false
+
+  - id: upload-update-affordance
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "The 'Atualizar a partir de ficheiro' button in the detail view is enabled and its title tooltip explains it updates the app from a .json or .zip file while keeping the id, URL and data; clicking it opens the native file picker, backed by a hidden file input (data-testid prefixed 'upload-update-input-') that accepts .json and .zip files."
+    tags: []
+    judgment: false
+
+  - id: detail-panels
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "The detail view's lower content area stacks, in order: a 'Detalhes' card listing id, slug, status badge, type, shared yes/no, and created/updated timestamps; a 'Histórico de versões' panel; a 'Dados e cópias de segurança' panel (data-testid 'data-backups-panel') with 'Criar cópia agora' and 'Descarregar os meus dados (JSON)' buttons; an artifact backend panel (data-testid 'artifact-backend-panel') showing either declared handlers with a status badge and an 'Executar simulação' action, or (for a frontend-only app) the 'backend-none' empty-state text matching /não tem código de servidor/i; and a backend trigger card (data-testid 'backend-trigger-card')."
+    tags: []
+    judgment: false
+
+  - id: visibility-control
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "Below the action-button row, a 'Visibilidade' label introduces a visibility toggle offering 'Privado' and 'Organização' options with a safety-note explanation of what org-visibility shares; switching the option updates the selected value without a full page reload."
+    tags: []
+    judgment: false
+
+  - id: delete-dialog-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: has-own-artifact
+    description: "Clicking 'Eliminar artefacto' (data-testid prefixed 'delete-artifact-') opens a confirmation dialog titled 'Eliminar artefacto' whose body names the artifact and warns the action cannot be undone. Its ghost-variant 'Cancelar' button dismisses the dialog without deleting anything, leaving the artifact's card intact in the grid."
+    tags: [dialogs]
+    judgment: false
+
+states:
+  - id: has-own-artifact
+    label: At least one owned artifact instance exists
+    reachPath:
+      - id: import-bundle
+        description: "Click the 'Importar artefacto' button in the page header, choose a valid ekoa app bundle file (.json or .zip) from disk in the native file picker, and wait for the success toast confirming the import; a new artifact card now appears in the owned-artifacts grid below the Starting Points strip."

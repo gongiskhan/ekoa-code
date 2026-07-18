@@ -1,0 +1,439 @@
+id: chat
+title: Chat
+path: /chat
+mode: steps
+areas:
+  - 'n': 1
+    id: chat#1
+    label: Composer
+  - 'n': 2
+    id: chat#2
+    label: Area 2
+    anchors:
+      testId: null
+      role: null
+      ariaLabel: null
+      text: null
+      tag: img
+      css: .object-contain
+      cssMethod: finder
+      xpath: /html/body/div[2]/div[2]/div[1]/div[1]/img[1]
+    pct:
+      leftPct: 48.125
+      topPct: 22.34375
+      widthPct: 3.75
+      heightPct: 6
+steps:
+  - id: s1
+    area: 1
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The composer textarea at the bottom of the chat page shows placeholder
+      copy ('Descreva o que precisa...' / 'Descreva a sua app...' depending on
+      session type) and its teal Send button (paper-plane icon) is visibly
+      disabled/dimmed and non-clickable whenever the textarea is empty.
+    tags:
+      - composer
+    judgment: false
+  - id: composer-send-message
+    area: 1
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Typing text into the composer textarea and pressing Enter (without Shift)
+      sends it: the textarea clears immediately and the text appears as a new
+      right-aligned dark bubble (bg-neutral-900, white text, rounded with a
+      squared top-right corner) at the bottom of the conversation.
+    tags:
+      - composer
+    judgment: false
+  - id: composer-shift-enter-newline
+    area: 1
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Pressing Shift+Enter while focused in the composer textarea inserts a
+      newline instead of sending the message; on desktop widths the composer
+      toolbar shows a small grey hint 'Shift+Enter para nova linha' near the
+      send button.
+    tags:
+      - composer
+    judgment: false
+  - id: composer-attach-menu
+    area: 1
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Clicking the 'Anexar' button (paperclip icon) in the composer toolbar
+      opens a popover with an 'Enviar' (upload) section noting 'Guarda uma cópia
+      nos nossos servidores.', and a separate teal-bordered 'Referenciar
+      (local)' block badged 'Recomendado para documentos sensíveis'.
+    tags:
+      - composer
+      - privacy
+    judgment: false
+  - id: composer-capture-and-url-buttons
+    area: 1
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Next to Anexar, the composer toolbar shows a 'Captura' button (camera
+      icon) and a 'Cola URL' button (link icon); clicking Cola URL opens a small
+      inline popover with a text input (placeholder 'Cola um URL...') and an
+      'Adicionar' button that stays disabled until text is typed.
+    tags:
+      - composer
+    judgment: false
+  - id: reference-attach-connection-state
+    area: 1
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Inside the attach menu's 'Referenciar (local)' block, the local-bridge
+      connection state renders either a connected affordance that opens an
+      in-app file browser on click, or - when no local bridge/daemon is paired
+      and live - an offline affordance exposing a settings link pointing to
+      /settings/privacy; it never silently falls back to the hosted upload path.
+    tags:
+      - composer
+      - privacy
+    judgment: false
+  - id: onboarding-card-affordance
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The empty chat state (no active session with content yet) shows a
+      full-width teal-tinted banner with a Compass icon, a title reading either
+      'Novo por aqui?' (fresh) or 'Retomar a orientação' (resume), a one-line
+      description, and a teal pill button ('Começar com orientação' or
+      'Retomar') with a trailing arrow icon.
+    tags:
+      - onboarding
+    judgment: false
+  - id: onboarding-welcome-chips
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: onboarding-empty
+    description: >-
+      A fresh onboarding session (reached by clicking the onboarding card)
+      renders an assistant-styled bubble with the greeting 'Olá! Que bom tê-lo
+      por aqui...' followed by the question 'Para lhe sugerir por onde
+      começar...', then exactly 3 pill-shaped quick-reply chips (two
+      vertical-flavoured prompts, e.g. 'Tenho um pequeno negócio' / 'Trabalho
+      por conta própria' for the generic vertical or lawyer-themed ones for the
+      legal vertical, plus one free-form 'Prefiro contar por palavras minhas'
+      chip); the browser URL is /chat/<sessionId> with no query string.
+    tags:
+      - onboarding
+    judgment: false
+  - id: onboarding-chip-send
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: onboarding-empty
+    description: >-
+      Clicking one of the two non-freeform quick-reply chips in the onboarding
+      welcome immediately posts that chip's exact text as a user message bubble,
+      the welcome bubble and its chips unmount, and the URL stays free of query
+      parameters.
+    tags:
+      - onboarding
+    judgment: false
+  - id: sessions-panel-list
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The left SessionsPanel lists every chat session sorted
+      most-recently-updated first; each row shows the session name, a
+      message-count figure next to a chat-bubble icon, and a relative
+      last-updated time ('Agora mesmo', 'Há Nm', etc.), and the currently active
+      session's row is highlighted with a dark (bg-neutral-900) background and a
+      small teal dot.
+    tags:
+      - sessions
+      - responsive
+    judgment: false
+  - id: sessions-switch-session
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: existing-session
+    description: >-
+      Clicking a different session's row in the SessionsPanel activates it: the
+      main chat column swaps to that session's message history and the browser
+      URL updates to /chat/<that session's id>.
+    tags:
+      - sessions
+    judgment: false
+  - id: sessions-collapse-toggle
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking the chevron-left icon in the SessionsPanel header collapses it
+      from a wide (~288px) named list into a slim (~64px) icon-only rail showing
+      only a plus button and session dot-icons; clicking the chevron-right icon
+      in the collapsed rail expands it back to the full named list.
+    tags:
+      - sessions
+      - responsive
+    judgment: false
+  - id: sessions-new-session-button
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking the '+' (Plus icon) button in the SessionsPanel header creates a
+      brand-new empty session, makes it the active session, and navigates the
+      URL back to the bare /chat route.
+    tags:
+      - sessions
+    judgment: false
+  - id: sessions-rename-delete-menu
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking the vertical three-dot ('more') icon on a session row opens a
+      small menu with 'Rename'-labelled and delete (trash icon) entries;
+      choosing rename turns that row's name into an editable text input (Enter
+      confirms, Escape cancels), and choosing delete removes that session from
+      the list.
+    tags:
+      - sessions
+    judgment: false
+  - id: mobile-sessions-drawer
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width, tapping the dark circular floating 'History' button
+      (bottom-right, clock icon) slides a full-height session-list drawer in
+      from the left over a dark backdrop, with its own search field, a '+'
+      new-session button, and an X close button; tapping the backdrop or the X
+      closes it.
+    tags:
+      - sessions
+      - responsive
+    judgment: false
+  - id: mobile-composer-usable
+    area: 1
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width the composer textarea and its Send button remain fully
+      visible, unobstructed, and reachable at the bottom of the screen, not
+      overlapped or cut off by the stacked floating action buttons (History and,
+      once a conversation exists, the side-panel toggle) anchored bottom-right.
+    tags:
+      - composer
+      - responsive
+    judgment: false
+  - id: thinking-indicator-live
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      After sending a chat message, while the assistant composes its reply a
+      collapsible 'thinking' section appears above the answer with a small
+      sparkle icon and a shimmering 'A pensar...' label, auto-expanded during
+      streaming; once the answer's text starts arriving it collapses into a
+      'Pensou durante Ns' row (aria-expanded false) that can be re-clicked to
+      re-expand, and at no point does the visible commentary or answer contain
+      the underlying model/engine name ('Claude', 'Anthropic', 'Sonnet', or
+      similar).
+    tags:
+      - thinking
+      - privacy
+    judgment: true
+  - id: trust-chip-mechanism
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      When a chat reply's turn touched a locally-referenced file
+      (local_activity), a small bordered chip (shield icon) renders directly
+      below that assistant bubble reading 'Leu <filename> (<range>)' plus a
+      bytes-out figure like 'X,X KB saíram desta máquina de forma transitória';
+      clicking its (i) info icon opens a custody panel titled 'Detalhes de
+      custódia' whose masked-entity-count clause and full custody sentence are
+      currently ship-gated, showing only a 'Verificação em curso' placeholder
+      rather than asserting the claim. This chip only appears on turns with real
+      local-file activity, so it may be legitimately absent in a plain
+      click-through with no local bridge connected.
+    tags:
+      - trust-chip
+      - privacy
+    judgment: true
+  - id: shortcuts-modal
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Pressing Cmd+/ (or Ctrl+/) opens a centered 'Atalhos do teclado' modal
+      dialog listing keybinding rows for Enter/Send, Shift+Enter/new line,
+      Esc/clear-composer, Cmd+K/history, and Cmd+//shortcuts, with an X close
+      button; pressing Escape or clicking outside the dialog closes it.
+    tags:
+      - shortcuts
+      - a11y
+    judgment: false
+  - id: escape-clears-composer
+    area: 1
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      With text typed into the empty-state composer and no modal or drawer open,
+      pressing Escape clears the composer's text content and removes keyboard
+      focus from the textarea.
+    tags:
+      - composer
+    judgment: false
+  - id: artifact-stripe-empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Below the onboarding card in the empty chat state, an optional
+      horizontally-scrollable strip of recent/featured artifact cards may render
+      (each with a name, relative last-updated time, and a thumbnail or icon);
+      when the account has nothing to show, the strip section is entirely absent
+      rather than showing an empty placeholder.
+    tags:
+      - visual
+    judgment: true
+  - id: zero-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /chat after login and interacting with the composer and the
+      session list produces zero browser console errors (ignoring benign
+      favicon-load and React DevTools messages).
+    tags:
+      - quality
+    judgment: false
+  - id: obs-01KXQPG2DMXMRSNP4ZD6P1JHB6
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The /chat page h1 does not use the Lora display serif (computed
+      font-family has no Lora) and its heading is an animated rotator whose
+      accessible text concatenates as "O que vamos automatizarconstruir". If
+      chat is meant to be exempt from the shared PageHeader rule, the Drill Book
+      chat page should say so; otherwise the hero should use the S1 serif and
+      expose a sane accessible name.
+    tags:
+      - from-observation
+  - id: thinking-state-bounded
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      No assistant message anywhere in the visible thread is stuck in the 'A
+      pensar...' thinking state with an elapsed-time counter above 5 minutes. A
+      thinking indicator must resolve into a reply or a surfaced error within
+      minutes; a multi-minute counter (e.g. '182m 59s') means the turn wedged
+      with no timeout, no error and no retry affordance - fail this step and
+      quote the counter.
+    tags:
+      - stuck-state-guard
+      - from-observation
+states:
+  - id: onboarding-empty
+    label: Onboarding welcome (fresh onboarding session, no messages sent yet)
+    reachPath:
+      - id: click-onboarding-card
+        description: >-
+          From the empty chat state, click the onboarding banner (title 'Novo
+          por aqui?' or 'Retomar a orientação').
+  - id: existing-session
+    label: An existing chat session opened from the sidebar
+    reachPath:
+      - id: open-existing-session
+        description: Open an existing chat session from the sidebar session list.
