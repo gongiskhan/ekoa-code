@@ -15,15 +15,20 @@ import { useTranslation } from "@/stores/i18n";
 import { useVerticalProfile } from "@/lib/verticals";
 
 // Petrol backdrop shared by the auth screens (login + change-password): a deep
-// teal-950 field, one oversized hexagon outline watermark (echoing the Ekoa
-// logo geometry, off-canvas right) and a single soft amber radial glow. No
-// grid, no orbs, no glassmorphism — the document card carries the light UI.
+// teal-950 field under a top-lit radial wash, one oversized hexagon outline
+// watermark (echoing the Ekoa logo geometry, off-canvas right) and a single
+// soft amber radial glow. No grid, no orbs, no glassmorphism — the document
+// card carries the light UI.
 function AuthBackdrop({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-teal-950 p-4">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_-10%,var(--color-teal-900),transparent_60%)]"
+      />
       <svg
         aria-hidden
-        className="pointer-events-none absolute -right-40 top-1/2 h-[820px] w-[820px] -translate-y-1/2 text-white/[0.04]"
+        className="pointer-events-none absolute -right-40 top-1/2 h-[820px] w-[820px] -translate-y-1/2 text-white/[0.05]"
         viewBox="0 0 100 100"
         fill="none"
       >
@@ -36,7 +41,7 @@ function AuthBackdrop({ children }: { children: React.ReactNode }) {
       <div
         aria-hidden
         className="pointer-events-none absolute left-1/2 top-1/3 h-[560px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-[140px]"
-        style={{ background: "var(--color-brand-amber)", opacity: 0.03 }}
+        style={{ background: "var(--color-brand-amber)", opacity: 0.04 }}
       />
       {children}
     </div>
@@ -181,7 +186,7 @@ function LoginForm() {
         {/* White document card */}
         <div
           data-testid="login-card"
-          className="bg-surface rounded-2xl shadow-overlay p-8"
+          className="bg-surface rounded-2xl shadow-overlay ring-1 ring-white/10 p-8"
         >
           {/* Header */}
           <div className="flex flex-col items-center text-center mb-6">
@@ -193,10 +198,7 @@ function LoginForm() {
               className="object-contain"
               priority
             />
-            <h1
-              className="mt-4 font-display text-2xl font-semibold tracking-tight text-neutral-900"
-              style={{ fontFamily: "var(--font-lora), Georgia, serif" }}
-            >
+            <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight text-neutral-900">
               {pages.login.title}
             </h1>
             <p className="mt-1.5 text-sm text-neutral-500">

@@ -27,8 +27,8 @@ export function Card({
   const Comp: React.ElementType = as;
   return (
     <Comp
-      className={`rounded-xl border border-line bg-surface ${paddingClasses[padding]} ${
-        hover ? 'shadow-card transition-colors hover:border-line-strong' : ''
+      className={`rounded-2xl border border-line bg-surface shadow-card ${paddingClasses[padding]} ${
+        hover ? 'transition-[border-color,box-shadow] duration-200 hover:border-line-strong hover:shadow-raised' : ''
       } ${className ?? ''}`}
       {...rest}
     >

@@ -89,6 +89,15 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 /**
+ * OS mode (beta) doorway. Deliberately NOT in NAV_ITEMS: the sidebar renders
+ * it as a visually distinct doorway (not another page row), and keeping it out
+ * leaves the nav census/tests untouched while the beta flag exists.
+ */
+export function isOsModeEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_OS_MODE === "1";
+}
+
+/**
  * Resolve which nav item is active for a pathname: exact/child href match
  * first, then the longest matching activePrefix.
  */

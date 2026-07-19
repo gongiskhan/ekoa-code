@@ -43,3 +43,6 @@ web/public/monaco/
 # node_modules by web/scripts/copy-voice-assets.mjs (predev/prebuild). Vendored - never
 # committed. web/public/voice/*.js (our own pcm-downsample worklet) IS committed.
 web/public/voice/vendor/
+
+__pycache__/
+.walkthrough/auth.json

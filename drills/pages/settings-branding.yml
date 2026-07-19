@@ -1,0 +1,229 @@
+id: settings-branding
+title: Settings - Branding
+path: /settings/branding
+mode: steps
+areas: []
+steps:
+  - id: page-header-renders
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page mounts with data-testid 'settings-branding-page' and renders a PageHeader with a Palette icon and a Lora-serif h1 reading exactly 'Marca'"
+    tags: []
+    judgment: false
+
+  - id: tabs-switch-content
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The header contains three role='tab' elements labeled 'Pesquisa', 'Marca' and 'Sistema de Design'; the page loads with 'Pesquisa' active by default, and clicking each of the other two swaps the panel below without a page navigation or console error"
+    tags: []
+    judgment: false
+
+  - id: header-actions-visibility
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A 'Repor' button (RotateCcw icon) is visible in the header on all three tabs; a 'Guardar' button (Save icon) appears in the header only while the 'Marca' tab is active and disappears on the other two tabs"
+    tags: []
+    judgment: false
+
+  - id: research-warning-banners
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Pesquisa' tab, below the URL input card, two amber warning banners are always visible: one titled 'Os resultados podem necessitar de revisao' and one titled 'A memória da empresa sera atualizada', each with its AlertTriangle icon and description text"
+    tags: []
+    judgment: false
+
+  - id: research-idle-empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Pesquisa' tab, when no research job has run yet in this session, a dashed-border empty-state box is shown below the warning banners with a centered Globe icon and the description text 'Introduza o URL de um website para extrair automaticamente as cores da marca, logotipo, fontes e informação da empresa.'"
+    tags: []
+    judgment: false
+
+  - id: research-search-button-disabled-when-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Pesquisa' tab, the 'Pesquisar Marca' button is disabled while the 'URL do Website' input is empty, and becomes enabled as soon as any text is typed into that input"
+    tags: []
+    judgment: false
+
+  - id: branding-colors-no-fabricated-defaults
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, the two font-mono hex text inputs (Cor Primária, Cor de Destaque) never display the exact strings #0d9488 or #1e293b; whenever the organization has no saved primaryColor/accentColor, the corresponding input is empty and shows the placeholder text 'Não definida' rather than any fabricated color value"
+    tags: [regression]
+    judgment: false
+
+  - id: color-picker-swatch-affordance
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Each of the two ColorPicker rows (Cor Primária, Cor de Destaque) shows a small square swatch to the left of its hex text input: a solid color square when a value is set, or a dashed-border neutral square containing a small grey X icon when unset; clicking the swatch opens the browser's native color picker"
+    tags: []
+    judgment: false
+
+  - id: logo-upload-flow
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, the 'Logo da Empresa' card shows a dashed drop-zone with an Upload icon and the hint text 'Enviar Logo' / 'PNG, SVG, JPG' while no logo is set; after selecting an image file, the drop-zone is replaced by a split preview showing the same logo on a light (bg-neutral-50) left half and a dark (bg-neutral-900) right half, with a hover-revealed X button in the top-right corner that clears the logo back to the empty drop-zone"
+    tags: []
+    judgment: false
+
+  - id: font-family-input
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, the 'Tipografia' card contains a text input labeled 'Família de Fonte' pre-filled with 'Inter' (or the organization's saved font name), freely editable"
+    tags: []
+    judgment: false
+
+  - id: design-notes-textarea
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, below the Tipografia card, an amber-tinted panel labeled 'Notas de Design' contains a 6-row textarea (id 'branding-design-notes') with guidance placeholder text about describing the site's palette and color choices; it is freely editable"
+    tags: []
+    judgment: false
+
+  - id: brand-preview-reflects-edits
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "In the right-column 'Pré-visualização' card on the 'Marca' tab, typing a new hex value into the Cor Primária input immediately updates the mini header bar background color and the primary button preview to that color, with no need to click Guardar first"
+    tags: []
+    judgment: false
+
+  - id: brand-preview-unset-neutral
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "When both Cor Primária and Cor de Destaque are unset, the 'Pré-visualização' panel renders its mini header bar and buttons in plain neutral greys, never a plausible brand-like color, so it visibly reads as 'no brand yet' rather than a successful result"
+    tags: []
+    judgment: false
+
+  - id: save-persists-color-and-toast
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, typing a hex value such as #2a3547 into the Cor Primária input and clicking the header's Guardar button shows a 'Guardado' confirmation; reloading /settings/branding afterwards still shows that exact value in the Cor Primária input, while an untouched Cor de Destaque remains unset rather than being fabricated"
+    tags: [regression]
+    judgment: false
+
+  - id: reset-reverts-unsaved-edit
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Marca' tab, editing the 'Nome da Empresa' (company name) input without saving, then clicking the header's Repor button, reverts that input back to the organization's last-saved display name"
+    tags: []
+    judgment: false
+
+  - id: design-system-empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "On the 'Sistema de Design' tab, when the organization has no extracted design system yet, a centered empty state with a Sparkles icon and the text 'Sistema de design ainda não extraido. Execute a pesquisa de marca para preencher este separador.' is shown instead of any data cards"
+    tags: []
+    judgment: false
+
+  - id: mobile-two-column-collapse
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width on the 'Marca' tab, the two-column desktop layout (form field cards on the left, the Pré-visualização panel on the right) stacks into a single vertical column with no horizontal scrolling, overlapping text, or cut-off cards"
+    tags: [responsive]
+    judgment: false
+
+  - id: console-clean-load
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /settings/branding, switching between all three tabs, and clicking Repor produces zero meaningful browser console errors (excluding favicon and React DevTools messages) and no non-asset HTTP 404 responses"
+    tags: []
+    judgment: false
+
+  - id: researching-progress-ui
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: researching
+    description: "While a brand research job is in flight on the 'Pesquisa' tab, a horizontal progress bar fills left-to-right, four phase cards ('A aceder ao website', 'A extrair identidade visual', 'A recolher informação', 'A compilar perfil') render with the current phase highlighted in teal and a spinning icon, and a ticking status message below changes every few seconds"
+    tags: []
+    judgment: false
+
+  - id: research-complete-design-system-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: research-complete
+    description: "After a brand research job completes for a real site, the 'Sistema de Design' tab shows data cards (at minimum a Paleta card with color swatches and confidence badges, and a Tipografia card with detected font families) instead of the empty state, plausibly reflecting whatever the extractor found for that specific site"
+    tags: []
+    judgment: true
+
+  - id: research-complete-banner-outcome
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: research-complete
+    description: "After a brand research job completes, the 'Pesquisa' tab shows exactly one outcome banner reflecting the real result for that site: a green banner with 'Pesquisa concluida! Os dados da marca foram guardados.' if a usable brand color was found, or an amber banner with the no-usable-color message if not - never both, never neither"
+    tags: []
+    judgment: true
+
+states:
+  - id: researching
+    label: Brand research job in progress
+    reachPath:
+      - id: start-research
+        description: "On the 'Pesquisa' tab, type a real website URL (e.g. https://stripe.com) into the 'URL do Website' input and click the 'Pesquisar Marca' button"
+  - id: research-complete
+    label: Brand research job finished (success or no-colors)
+    reachPath:
+      - id: start-research
+        description: "On the 'Pesquisa' tab, type a real website URL (e.g. https://stripe.com) into the 'URL do Website' input and click the 'Pesquisar Marca' button"
+      - id: wait-for-completion
+        description: "Wait for the phase progress indicator to finish and for either the green completion banner or the amber no-usable-color banner to appear, typically well under the 3-minute watchdog timeout"

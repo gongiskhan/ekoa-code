@@ -1,0 +1,170 @@
+id: orgs
+title: Organizations
+path: /orgs
+mode: steps
+areas: []
+steps:
+  - id: header-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page renders inside PageShell/PageHeader (testid \"orgs-page\") with the Building2 icon, an h1 reading exactly \"Escritórios\" in the Lora serif font, and the description paragraph \"Criar, listar e renomear escritórios da plataforma.\" beneath it; the header bar does not duplicate this title."
+    tags: []
+    judgment: false
+  - id: create-button-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A primary button with a Plus icon reading \"Criar escritório\" is visible in the PageHeader actions area on every load of /orgs (since the dev admin/tmp12345 login is super-admin, AdminGate always passes for this account)."
+    tags: [role-gating]
+    judgment: false
+  - id: table-populated
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "A table with data-testid=\"orgs-table\" renders with exactly four column headers in order - \"Nome de apresentação\", \"Nome\", \"ID\", \"Ação\" (right-aligned) - followed by one row per organisation, each row carrying data-testid=\"org-row-<id>\" matching that org's id."
+    tags: []
+    judgment: false
+  - id: table-row-content
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Each row shows the org's display name (falling back to its name when no display name is set) in bold dark text in column 1, the raw name in lighter gray text in column 2, the org id in small monospace gray text in column 3, and a ghost-style rename icon button right-aligned in column 4 - no ad-hoc table markup, only the shared Table/TR/TD primitives."
+    tags: []
+    judgment: false
+  - id: rename-button-per-row
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Every row in orgs-table has a pencil icon button with data-testid=\"rename-org-<id>\" (matching that row's org id) and aria-label \"Renomear\"."
+    tags: []
+    judgment: false
+  - id: rename-dialog-opens
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: rename-dialog
+    description: "Clicking a row's rename icon button opens a modal Dialog titled \"Renomear escritório\" containing a required \"Nome\" text input pre-filled with that org's current name, a \"Nome de apresentação\" text input pre-filled with its current display name, and \"Cancelar\"/\"Guardar\" footer buttons."
+    tags: []
+    judgment: false
+  - id: rename-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: rename-dialog
+    description: "Clicking \"Cancelar\" in the open rename dialog closes it and leaves the corresponding orgs-table row's Nome and Nome de apresentação values unchanged."
+    tags: []
+    judgment: false
+  - id: rename-required-name
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: rename-dialog
+    description: "Clearing the \"Nome\" field to empty text and clicking \"Guardar\" does not close the rename dialog and does not change the table row (the field is HTML-required and the submit handler no-ops on an empty/whitespace name)."
+    tags: []
+    judgment: false
+  - id: rename-submit-success
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: rename-dialog
+    description: "Editing the \"Nome de apresentação\" field to a new value and clicking \"Guardar\" (which shows a loading spinner on the button while the request is in flight) closes the dialog and updates that same row's first column in orgs-table to the new value, with no page reload."
+    tags: []
+    judgment: false
+  - id: create-dialog-opens
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: create-dialog
+    description: "Clicking the header \"Criar escritório\" button opens a modal Dialog titled \"Criar escritório\" containing a required \"Nome\" input (placeholder \"ex.: escritorio-lisboa\"), a \"Nome de apresentação\" input (placeholder \"ex.: Escritório de Lisboa\") with the hint text \"Mostrado aos utilizadores. Se ficar vazio, é usado o nome.\" beneath it, and \"Cancelar\"/\"Criar\" footer buttons."
+    tags: []
+    judgment: false
+  - id: create-cancel
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: create-dialog
+    description: "Clicking \"Cancelar\" in the open create dialog closes it without adding any new row to orgs-table."
+    tags: []
+    judgment: false
+  - id: create-required-name
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: create-dialog
+    description: "Leaving the \"Nome\" field empty and clicking \"Criar\" does not close the create dialog and does not add a row to orgs-table (the field is HTML-required and the submit handler no-ops on an empty/whitespace name)."
+    tags: []
+    judgment: false
+  - id: create-submit-success
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: create-dialog
+    description: "Filling \"Nome\" with a new unique value (and optionally \"Nome de apresentação\") and clicking \"Criar\" closes the dialog and adds exactly one new row to orgs-table showing the values just entered, with a fresh org id in column 3."
+    tags: []
+    judgment: false
+  - id: fetch-error-banner
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If the orgs list fails to load, a red-bordered Card appears above the table with an AlertTriangle icon and an error message in red text plus a \"Tentar novamente\" button that re-triggers the fetch; this banner is absent on a normal successful load."
+    tags: []
+    judgment: false
+  - id: loading-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Immediately after navigating to /orgs, while the org list has not yet arrived, a LoadingState with the label \"A carregar escritórios...\" is visible using the shared spinner primitive, and it is replaced by the table (or empty state) once data arrives - never left on screen alongside stale data."
+    tags: []
+    judgment: false
+  - id: mobile-table-scroll
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width the orgs-table scrolls horizontally within its own overflow-x-auto wrapper (no column is clipped or wrapped illegibly) while the PageHeader title and the \"Criar escritório\" button remain fully visible and unclipped, without the whole page gaining horizontal scroll."
+    tags: [responsive]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /orgs, opening and cancelling both the create and rename dialogs, and renaming an org produces zero browser console errors (favicon and React DevTools messages excepted)."
+    tags: [a11y]
+    judgment: false
+states:
+  - id: create-dialog
+    label: Create-org dialog open
+    reachPath:
+      - id: click-create
+        description: "Click the \"Criar escritório\" button in the page header."
+  - id: rename-dialog
+    label: Rename-org dialog open
+    reachPath:
+      - id: click-rename
+        description: "Click the pencil rename icon button on the first row of the orgs-table."

@@ -66,6 +66,7 @@ export function useTranslation() {
     sheetFeed: t('sheetFeed'),
     voice: t('voice'),
     chatPanel: t('chatPanel'),
+    chatDock: t('chatDock'),
     attachments: t('attachments'),
     status: t('status'),
     placeholder: t('placeholder'),

@@ -33,3 +33,12 @@ operator's live Claude session (same class as the 2026-07-09 boot-b flake). NOT 
 Remedy: use the DEDICATED account path — node api/tests/journeys/boot-b.mjs up (reads
 $EKOA_CLAUDE_CREDENTIALS / ~/.config/ekoa/claude-credentials.json) instead of driver.mjs up +
 provision-credential.mjs with a scavenged token.
+
+## coherence-locale: header EN flip fails only in large multi-spec batches (RESOLVED 2026-07-18)
+Root-caused the same day (was NOT a flake and was unrelated to language): the failing
+assertion was the zero-console-error gate catching a 404 DELETE /api/v1/sessions/<id>. The
+chat runtime (OS-mode run 1) initializes on every shell mount, so the surplus-empty-session
+sweep ran on every page load; a fast navigation re-listed a session whose fire-and-forget
+delete from the previous mount was still in flight, and the re-delete 404d in the console.
+Deterministic repro: chat-thinking then coherence-locale. Fixed in orchestration.ts by
+tracking swept session ids per tab (sessionStorage) so an id is only ever deleted once.

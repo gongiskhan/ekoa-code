@@ -138,7 +138,7 @@ export function DataBackupsPanel({ appId, appName }: { appId: string; appName?: 
   }, [appId, refresh, confirm]);
 
   return (
-    <section data-testid="data-backups-panel" className="rounded-xl border border-neutral-200 bg-white p-5">
+    <section data-testid="data-backups-panel" className="rounded-2xl border border-line bg-surface p-5 shadow-card">
       <header className="flex items-center gap-2 mb-3">
         <ShieldCheck className="h-5 w-5 text-teal-600" aria-hidden />
         <h3 className="text-base font-semibold text-neutral-900">Dados e cópias de segurança</h3>

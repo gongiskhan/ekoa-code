@@ -4,9 +4,9 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, AppWindow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { NAV_ITEMS, activeNavHref } from "@/lib/navigation";
+import { NAV_ITEMS, activeNavHref, isOsModeEnabled } from "@/lib/navigation";
 import { useSettingsStore } from "@/stores/settings";
 import { useOrchestrationStore } from "@/stores/orchestration";
 import { useAuthStore } from "@/stores/auth";
@@ -42,7 +42,7 @@ function NavItem({
           relative mx-2 flex items-center rounded-lg cursor-pointer transition-colors duration-150
           ${
             isActive
-              ? "bg-white/[0.06] text-white"
+              ? "text-white"
               : "text-neutral-400 hover:text-white hover:bg-white/[0.04]"
           }
           ${isExpanded ? "px-3 py-2" : "justify-center py-2"}
@@ -50,9 +50,16 @@ function NavItem({
         title={!isExpanded ? label : undefined}
       >
         {isActive && (
-          <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-teal-400" />
+          <motion.span
+            layoutId="sidebar-active-pill"
+            transition={{ type: "spring", stiffness: 480, damping: 40 }}
+            className="absolute inset-0 rounded-lg bg-white/[0.07] ring-1 ring-inset ring-white/[0.06]"
+            aria-hidden
+          >
+            <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-teal-400" />
+          </motion.span>
         )}
-        <Icon size={18} className={isExpanded ? "mr-3 shrink-0" : "shrink-0"} />
+        <Icon size={18} className={`relative z-10 ${isExpanded ? "mr-3 shrink-0" : "shrink-0"}`} />
         <AnimatePresence>
           {isExpanded && (
             <motion.span
@@ -60,7 +67,7 @@ function NavItem({
               animate={{ opacity: 1, width: "auto" }}
               exit={{ opacity: 0, width: 0 }}
               transition={{ duration: 0.2 }}
-              className="text-sm font-medium whitespace-nowrap overflow-hidden"
+              className="relative z-10 text-sm font-medium whitespace-nowrap overflow-hidden"
             >
               {label}
             </motion.span>
@@ -164,6 +171,41 @@ export default function Sidebar({ isExpanded, onToggle, onNavigate }: SidebarPro
             />
           ))}
         </div>
+
+        {/* OS mode doorway (beta): visually a DOORWAY, not another page row -
+            separated, accent-bordered, badged. Gated by NEXT_PUBLIC_OS_MODE. */}
+        {isOsModeEnabled() && (
+          <div className="mx-2 mt-4">
+            <Link href="/os" onClick={onNavigate} data-testid="os-mode-doorway">
+              <div
+                className={`group relative flex items-center overflow-hidden rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/15 via-teal-500/5 to-transparent transition-colors hover:border-teal-400/60 hover:from-teal-500/25 ${
+                  isExpanded ? "gap-3 px-3 py-2.5" : "justify-center py-2.5"
+                }`}
+                title={!isExpanded ? "Modo OS" : undefined}
+              >
+                <AppWindow size={18} className="shrink-0 text-teal-300 transition-colors group-hover:text-teal-200" />
+                <AnimatePresence>
+                  {isExpanded && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: "auto" }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden whitespace-nowrap"
+                    >
+                      <span className="text-sm font-medium text-teal-200 transition-colors group-hover:text-white">
+                        Modo OS
+                      </span>
+                      <span className="ml-auto rounded-full border border-teal-400/30 bg-teal-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-300">
+                        Beta
+                      </span>
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </div>
+            </Link>
+          </div>
+        )}
 
         {/* Bottom: Settings */}
         {bottomItems.length > 0 && (

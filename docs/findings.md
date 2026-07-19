@@ -257,6 +257,78 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-07-15 api runtime image defects (staging bring-up)
+
+Three defects in the shipped api image, all of the same class - **the image builds fine but the
+process fails at runtime** - all invisible to the dry-run deploy CI because that lane only *builds*
+the images, never *runs* them. The first two crash at boot and were caught by a local full-stack
+smoke (Caddy + api + web + mongo) before any VM spend; the third only surfaces on the first real
+model turn (needs a live credential) and was caught on staging.
+
+- **`api-phantom-dep-js-yaml`** (medium, packaging). The api imports `js-yaml` in three runtime paths
+  (`automation/manifest-parser.ts`, `apps/action-manifest.ts`, `apps/tour-writer.ts`) but it was
+  declared **nowhere** in `api/package.json` / root `package.json`. It only resolved because ESLint (a
+  devDep) transitively hoists `js-yaml@4.3.0` to the root `node_modules`; the runtime image
+  (`npm ci --omit=dev`) drops it, so `node api/dist/server.js` crashed with
+  `ERR_MODULE_NOT_FOUND: Cannot find package 'js-yaml'`. **Fix:** added `js-yaml@^4.3.0` to api deps +
+  `@types/js-yaml@^4.0.9` to api devDeps, and deleted the ambient shim `api/src/automation/vendor.d.ts`
+  (whose own comment prescribed exactly this). A scan of the built `api/dist` against the prod-only
+  dependency closure confirmed js-yaml was the **only** phantom dep.
+- **`api-image-native-build-skipped`** (medium, packaging). With js-yaml fixed the api then crashed in
+  `bootState` -> `backfillKnowledgeIndex` with `Could not locate the bindings file ... better_sqlite3.node`.
+  `Dockerfile.api` ran `npm ci --omit=dev --ignore-scripts`, and `--ignore-scripts` skips native
+  addons' install step; `better-sqlite3@12.11.1` ships **no prebuilt** for node 20 (so it must compile
+  via node-gyp, which the slim image has no toolchain for). **Fix:** restructured `Dockerfile.api` with
+  a dedicated `proddeps` stage that has `python3/make/g++`, installs prod deps `--ignore-scripts`, then
+  `npm rebuild better-sqlite3` (compiles it); the slim runtime `COPY --from=proddeps node_modules`, so
+  the toolchain never ships. Other native modules (`sharp`, `onnxruntime-node`, `@next/swc`) use
+  prebuilt platform packages and were unaffected. Verified: api boots, `/health` 200, real admin login
+  through the same-origin Caddy proxy, and `chromium.launch()` succeeds inside the container.
+- **`api-sdk-musl-binary-picked`** (medium, packaging; surfaced by the first live model turn on
+  staging). With the model credential armed, chat/build died with
+  `ADAPTER_ERROR: Claude Code native binary not found at .../claude-agent-sdk-linux-x64-musl/claude`.
+  `@anthropic-ai/claude-agent-sdk` ships its native `claude` binary as per-platform optional deps; npm
+  installs BOTH `linux-x64` (glibc) and `linux-x64-musl` on any linux-x64 host (it filters optionals by
+  os+cpu, not libc), and the SDK's resolver tries the **-musl variant first** - which cannot exec on the
+  glibc bookworm image. **Fix:** `Dockerfile.api` proddeps stage now `rm -rf`s the `*-musl` variant
+  packages so the resolver falls through to the working glibc binary. Verified on staging: a real chat
+  turn returns `status:complete` (`"OK."`, ~4.7s) through the OAuth subscription credential + egress
+  chokepoint. Note this class is invisible even to a boot smoke - a full check needs a live credential
+  and one model turn.
+
+Follow-up (recommended, not done here): add a container **boot smoke** to `deploy.yml` (run the api
+image against a throwaway mongo, assert `/health` 200) so this whole class - a runtime import or native
+binary absent from the shipped image - fails CI instead of first appearing on a server.
+
+## Recently fixed - 2026-07-16 staging edge-proxy path allowlist incomplete
+
+- **`staging-caddy-api-path-allowlist-incomplete`** (HIGH, deploy config; caught by the staging UI pass).
+  The staging Caddyfile `@api` matcher routed only `/api/* /health /hooks` to the api container and sent
+  **everything else** to Next (web). But the api owns a whole set of NON-`/api` browser-facing prefixes -
+  the served-app pipeline `/apps/*` (the live build-**preview** iframe) and its injected runtime scripts
+  `/__ekoa/*`, plus the static mounts `/artifact-screenshots/*`, `/artifact-pdfs/*`,
+  `/automation-screenshots/*`, `/brand-assets/*`, and the share-link `/build/*` (all enumerated in
+  `api/src/server.ts` buildApp). None were in the matcher, so each fell through to Next and returned a
+  Next **HTML 404**. User-visible impact: (1) every featured/artifact card thumbnail 404'd -> blank
+  cards on the home + `/artifacts` pages; (2) more seriously, `/apps/<id>/` app previews + `/__ekoa/`
+  runtime were unreachable through the public origin - the core "build an app and preview it" flow was
+  broken end-to-end via `staging.ekoa.io`. Loopback `http://127.0.0.1:4111` served all of these `200`,
+  proving a pure edge-routing gap (not an api, seeding, or image defect). **Why it slipped:** Phase-5
+  verification ran a chat turn (entirely under `/api/*`, which WAS routed) but never loaded a
+  thumbnail-bearing dashboard page or an app preview through the public origin; and the dry-run deploy CI
+  builds the images but never routes traffic through Caddy. **Fix:** extended `@api` to the full,
+  documented allowlist (`/apps`, `/__ekoa/*`, the four static mounts, `/build`) - the Caddyfile now
+  carries a source-of-truth comment mapping each prefix to its server.ts mount and stating the lockstep
+  invariant. **Operational trap hit while deploying:** the Caddyfile is a single-file bind mount, which
+  pins to an inode - editing it in place + `caddy reload` did NOT pick up the change (the container kept
+  serving the stale inode); a `docker compose restart caddy` was required (now documented in the runbook +
+  staging README). **Verified** via the public origin: all listed prefixes `200` (thumbnails `image/png`,
+  `/apps/<id>/` `text/html`, `/__ekoa/*.js` `application/javascript`), web routes still reach Next, the
+  `/api/v1` JSON envelope + `/health` intact, and a real-browser audit of `/` + `/artifacts` shows **0**
+  broken images (41/41 and 82/82 thumbnails render) with **0** page errors. This **supersedes** the
+  earlier working note that the blank thumbnails were "a fresh-staging seeding gap, not a deploy bug" -
+  it was a deploy bug (the screenshots were on disk and served fine on loopback the whole time).
+
 ## Recently fixed - 2026-07-14 operator UX round (scope steering, verify narration, console noise)
 
 - **`build-ambiguous-request-no-scoping`** (UX, operator 2026-07-14, live) - "faz uma app para
@@ -798,3 +870,10 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
   strict console gate, 2026-07-13). `injected-context.ts:244` POSTs `/api/app-health`; through the
   dev proxy (:4111) it 502s and logs a console error on load. Likely a dev-proxy forwarding gap
   (relates to d55bd02). Prod path unverified. Allowlisted (documented) in the D2 e2e only.
+
+## F-2026-07-18-invalid-date-cards (open, cosmetic)
+Artifact cards on /artifacts render "Invalid Date" for dev-seeded artifacts whose createdAt is
+empty (visible in the OS-mode walkthrough, classic beats). Real user-created artifacts carry
+timestamps; the fix is either seeding createdAt in the dev fixtures or formatDate falling back
+to a dash for missing dates. Surfaced by the walkthrough vision pass; needs a deterministic
+close (unit on formatDate fallback) or a written dismissal.

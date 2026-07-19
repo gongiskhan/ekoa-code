@@ -37,6 +37,24 @@ Three parts, one repo, npm workspaces:
 In production web and API are same-origin behind an edge proxy, so the API ships **no CORS middleware
 on purpose**. Dev needs a shim - see `docs/operations-runbook.md` (the run driver).
 
+### Web shell structure (OS mode, run 1)
+
+The dashboard has TWO shells over the SAME page components (strangler-fig; contract:
+`docs/os-mode/surface-contract.md`, diagram: `docs/diagrams/13-os-mode-shell.excalidraw`):
+
+- **Classic** (`web/app/(dashboard)/`, the default): sidebar + routed pages, plus the global
+  chat dock (`web/components/chat/global-chat-dock.tsx`).
+- **OS mode** (`web/app/(os)/os`, beta, `NEXT_PUBLIC_OS_MODE=1`): desktop + dock + workspaces +
+  a custom window manager (`web/components/os/`, pure tiling math in `web/lib/os/tiling.ts`),
+  with the same chat dock docked open.
+
+A **surface** = container-agnostic page component + co-located manifest, listed in the thin
+registry `web/lib/os/registry.ts`. Width-responsive styling inside surfaces uses `@bp-*`
+container variants; each shell root declares `@container` (classic = viewport-wide, so classic
+rendering is unchanged) and each window body declares a nearer one. The chat CONTROLLER lives
+in `web/components/chat/chat-runtime.tsx`, mounted once per shell; the `/chat` route keeps all
+URL coupling. OS layout state persists client-side in `web/stores/os.ts` (`ekoa_os`).
+
 ## Module map (`api/src/`)
 
 Direction is strictly downward (tier table below). "May import" lists in `spec/`-derived design are

@@ -1,0 +1,306 @@
+id: activate
+title: Activate - authorize a CLI/TUI device login
+path: /activate
+mode: steps
+areas:
+  - 'n': 1
+    id: activate#1
+    label: Authorize this deviceEko
+    anchors:
+      testId: null
+      role: null
+      ariaLabel: null
+      text: >-
+        Authorize this deviceEkoa Local (your terminal) is asking to sign in to
+        your Ekoa account.
+      tag: div
+      css: .border > .text-center
+      cssMethod: finder
+      xpath: /html/body/div[2]/div[4]/div[2]/div[1]
+    pct:
+      leftPct: 26.93156732891832
+      topPct: 20.857558139534884
+      widthPct: 46.13686534216336
+      heightPct: 35.27131782945737
+steps:
+  - id: card-heading-copy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Visiting /activate renders a centered card with a teal-tinted rounded icon
+      badge containing a Terminal (lucide) icon, the heading 'Authorize this
+      device', and the subtext 'Ekoa Local (your terminal) is asking to sign in
+      to your Ekoa account.' directly beneath it.
+    tags: []
+    judgment: false
+  - id: no-code-error-copy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      With no ?code= query parameter (the literal /activate path), the page
+      settles from its brief loading spinner into an error state showing an
+      AlertTriangle icon and the exact text 'No device code in the link. Re-run
+      the login from your terminal.' - this happens whether or not the visitor
+      is authenticated, since the missing-code check runs before the auth check
+      in the page's effect.
+    tags:
+      - edge-case
+    judgment: false
+  - id: no-code-no-actions-left
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      In the no-code error state there are no Approve/Deny buttons, no
+      device-code box, and no spinner left on screen - only the Ekoa logo, the
+      card header, the red-tinted error message, and the footer advisory line
+      are visible.
+    tags: []
+    judgment: false
+  - id: footer-advisory-line
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The line 'Only approve if you started this login. The code must match your
+      terminal.' renders in small muted text below the card and stays visible
+      regardless of which phase (loading, error, ready, working, approved,
+      denied) the page is in.
+    tags: []
+    judgment: false
+  - id: backdrop-visual-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The full-bleed dark backdrop (near-black navy base with soft teal/cyan
+      radial glows top-left and bottom-right) and the glassmorphic card
+      (translucent border, blurred background, rounded corners, drop shadow)
+      read as a deliberate, polished dark auth screen with no visible banding,
+      clipping, or misaligned blur edges at both desktop and mobile widths.
+    tags:
+      - responsive
+    judgment: true
+  - id: mobile-layout-fit
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375x812 the card (max-width roughly 420px) sits fully on screen with
+      side margins, the logo/heading/subtext/error text all wrap within the card
+      without being cut off or overlapping, and there is no horizontal
+      scrollbar.
+    tags:
+      - responsive
+    judgment: false
+  - id: zero-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Loading /activate with no code param produces zero browser console errors,
+      aside from known-benign favicon or React DevTools messages.
+    tags: []
+    judgment: false
+  - id: no-dashboard-chrome
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The page shows none of the standard dashboard chrome - no left Sidebar, no
+      Header with language toggle, and no serif-Lora PageHeader h1 - because
+      /activate sits outside the app's (dashboard) route group and is a
+      standalone auth-style screen, similar in spirit to /login, not a broken
+      dashboard page.
+    tags: []
+    judgment: false
+  - id: english-only-vs-settings-devices
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      All visible copy on this page ('Authorize this device', 'Deny', 'Approve',
+      'Device approved', 'Request denied', the no-code error, the footer
+      advisory) is hardcoded in English with no language toggle present, whereas
+      the sibling device-approval page at /settings/devices implements the exact
+      same approve/deny device-code feature entirely in PT-PT copy ('Aprovacao
+      de dispositivos', 'Aprovar', 'Recusar') inside the normal dashboard shell
+      - assess whether this English-only, differently-styled duplicate surface
+      is an intentional CLI-deep-link exception or a real
+      localization/consistency gap worth flagging to product.
+    tags:
+      - i18n
+      - consistency
+    judgment: true
+  - id: code-displayed-verbatim
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: device-ready
+    description: >-
+      When /activate is opened with a ?code=<value> query param while the
+      visitor is authenticated, the ready phase shows a monospace, letter-spaced
+      box literally containing that code value, above the caption 'Confirm this
+      matches the code shown in your terminal'.
+    tags: []
+    judgment: false
+  - id: signed-in-as-username
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: device-ready
+    description: >-
+      In the ready phase, the line 'Signing in as <username>' appears with the
+      username rendered in teal text matching the currently authenticated
+      account (admin for the dev login).
+    tags: []
+    judgment: false
+  - id: approve-deny-button-hierarchy
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: device-ready
+    description: >-
+      The Deny button (X icon, subdued/neutral background) and Approve button
+      (ShieldCheck icon, teal gradient background) sit side by side at equal
+      width, and Approve clearly reads as the primary/affirmative action versus
+      Deny as the secondary/declining one.
+    tags: []
+    judgment: true
+  - id: working-spinner-on-click
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: device-ready
+    description: >-
+      Clicking either Approve or Deny in the ready phase immediately replaces
+      the code box and buttons with a brief centered spinner (the working phase)
+      before the outcome phase renders.
+    tags: []
+    judgment: false
+  - id: invalid-code-server-error
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: device-error
+    description: >-
+      Clicking Approve (or Deny) from the ready phase with a code that was never
+      actually issued by a real device-start call results in an error phase
+      showing the AlertTriangle icon and the server's message 'Codigo de
+      dispositivo invalido ou expirado.' passed through verbatim from the API in
+      PT-PT - notably the one piece of PT-PT text that can appear on this
+      otherwise English-only page.
+    tags:
+      - i18n
+    judgment: false
+  - id: logged-out-code-redirects-to-login
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: logged-out-redirect
+    description: >-
+      When ?code= is present but the visitor is not authenticated, the page
+      briefly shows its loading spinner then performs a client-side redirect to
+      /login?next=%2Factivate%3Fcode%3D<the code>, landing on the normal PT-PT
+      login form rather than ever showing the device-ready view.
+    tags:
+      - edge-case
+    judgment: false
+  - id: login-then-return-to-device
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: logged-out-redirect
+    description: >-
+      Successfully logging in from that bounced /login?next=... form navigates
+      the browser back to the original /activate?code=<value> URL (not to
+      /chat), landing on the ready phase with the same code still displayed,
+      confirming the next= round-trip works for this route.
+    tags: []
+    judgment: false
+states:
+  - id: device-ready
+    label: Device code ready for review (authenticated, code present in URL)
+    reachPath:
+      - id: navigate-with-placeholder-code
+        description: >-
+          While logged in as admin/tmp12345 (log in via /login first if the
+          session was cleared), navigate directly to /activate?code=DRILL-TEST1
+          - the page never validates the code against the server until Approve
+          or Deny is clicked, so any non-empty placeholder string reliably
+          reaches this ready-to-review rendering.
+  - id: device-error
+    label: Invalid/expired device code error (after submitting a never-issued code)
+    reachPath:
+      - id: click-approve-with-placeholder
+        description: >-
+          From the device-ready state, click either the Approve or the Deny
+          button - since the placeholder code was never minted by a real
+          device-start call, the server rejects it and the page falls into its
+          error phase.
+  - id: logged-out-redirect
+    label: Unauthenticated visit with a code present bounces through /login
+    reachPath:
+      - id: logout-then-navigate-with-code
+        description: >-
+          Log out via the header's user-menu dropdown Logout item (or use a
+          session with no stored token), then navigate to
+          /activate?code=DRILL-TEST1.

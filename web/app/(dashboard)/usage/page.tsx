@@ -24,7 +24,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/stores/toast";
 
 function fmtDate(iso: string | null): string {
-  if (!iso) return "never";
+  if (!iso) return "nunca";
   try {
     return new Date(iso).toLocaleString();
   } catch {
@@ -99,25 +99,25 @@ export default function UsagePage() {
     <PageShell width="wide" testId="usage-page">
       <PageHeader
         icon={Gauge}
-        title="Usage"
-        description="Per-user token consumption and hard cap management."
+        title="Utilização"
+        description="Consumo de tokens por utilizador e gestão de limites."
       />
 
       {isLoading && !allUsage ? (
         <LoadingState />
       ) : !allUsage || allUsage.length === 0 ? (
-        <EmptyState icon={Gauge} title="No users found." />
+        <EmptyState icon={Gauge} title="Nenhum utilizador encontrado." />
       ) : (
         <Table>
           <THead>
             <TR>
-              <TH>Username</TH>
-              <TH>Role</TH>
-              <TH className="text-right">Used</TH>
-              <TH className="text-right">Remaining</TH>
+              <TH>Utilizador</TH>
+              <TH>Função</TH>
+              <TH className="text-right">Usado</TH>
+              <TH className="text-right">Restante</TH>
               <TH className="text-right">%</TH>
-              <TH>Last login</TH>
-              <TH className="text-right">Reset</TH>
+              <TH>Último início de sessão</TH>
+              <TH className="text-right">Repor</TH>
             </TR>
           </THead>
           <TBody>
@@ -151,7 +151,7 @@ export default function UsagePage() {
                       data-action="reset"
                       onClick={() => handleReset(row.userId, row.username)}
                     >
-                      Reset
+                      Repor
                     </Button>
                   </TD>
                 </TR>

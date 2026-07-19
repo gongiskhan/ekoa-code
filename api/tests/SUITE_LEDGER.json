@@ -94,7 +94,7 @@
     },
     "band4_gap_plan": {
       "targetGate": "G9",
-      "note": "New specs from the ch13 §13.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists. 2026-07-18 (C4): registered voice-modality - mega-run 20260717-190134 slice C4, the voice UI wiring floor vs the boot-b stack (mocked getUserMedia handing back a real silent MediaStream; everything downstream live: worklet asset, authenticated WS upgrade to the stub-provider relay, capturing state + PT-PT status, the insecure-context message path, and the ouvir footer action round-tripping the tts path). The full manual/talking turn journeys land at C7.",
+      "note": "New specs from the ch13 §13.6 coverage-gap plan; committed at the gate that lands the backend surface, due green when the UI exists. 2026-07-18 (C4): registered voice-modality - mega-run 20260717-190134 slice C4, the voice UI wiring floor vs the boot-b stack (mocked getUserMedia handing back a real silent MediaStream; everything downstream live: worklet asset, authenticated WS upgrade to the stub-provider relay, capturing state + PT-PT status, the insecure-context message path, and the ouvir footer action round-tripping the tts path). The full manual/talking turn journeys land at C7. 2026-07-18 (OS-mode run 1): registered os-mode - the OS-mode shell exit-gate spec (skips cleanly when NEXT_PUBLIC_OS_MODE is off).",
       "specs": [
         "automation-deterministic",
         "chat-thinking",
@@ -112,7 +112,8 @@
         "sheet-feed",
         "summary-cards-chip",
         "mobile-sheet-feed",
-        "voice-modality"
+        "voice-modality",
+        "os-mode"
       ]
     }
   },
@@ -163,7 +164,8 @@
       "voice/session-driver",
       "voice/use-voice-session-unmount",
       "voice/voice-socket-lifecycle",
-      "voice/latency-record"
+      "voice/latency-record",
+      "os-tiling"
     ],
     "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page — added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list — the census was red again). 2026-07-18: registered the voice/ trio (voice-machine, grace-window, speakable) - mega-run 20260717-190134 slice C3, the NEW pure voice reducer estate (Node, zero mocks per BRIEF §5); registered in the same change that lands the files, ratchet applies from landing. 2026-07-18 (C5): voice/speakable RELOCATED, not retired - the module moved to api/src/voice/text/speakable.ts (the TTS pipeline is api-side; FIXED-1 forbids either side importing the other and shared/ is contract-only - see docs/decisions.md) and its test moved VERBATIM to api/tests/voice/speakable.test.ts (ledgered under the C5 module group; the ratchet follows the assertions, which never went red). Registered the C5 playback pair voice/wav (WAV header parse + RIFF-length stream segmentation, iOS-strict) and voice/tts-playback (SentenceQueue ordering, sync-in-tap unlock machine, defensive resume, barge-in flush - hand-rolled fake AudioContext, zero mock libs). 2026-07-18 (C4): registered the capture-chain quartet - voice/pcm-worklet (drives THE ACTUAL public/voice/pcm-downsample.worklet.js asset with stubbed worklet globals: native-rate->16k resample, fractional carry across blocks, clamping, packing, RMS level, flush), voice/capture-support (secure-context gate + the mobile/desktop AGC constraints selector), voice/voice-wire (WS url/token framing, zod-validated parse/serialize both directions, locale->lang map, SentenceAssembler boundaries, SpeechChannel one-say-at-a-time serialization + barge-in flush), and voice/session-driver (the host driver end-to-end with injected fakes: full manual + talking turns, barge-in gated + short-burst immunity, standby + pending note, inactivity shutdown, disconnect honesty, the latency-mark trail). Registered in the same change that lands the files; ratchet applies from landing. 2026-07-18 (C4 review fixes): registered voice/use-voice-session-unmount (unmount closes the TTS socket + playback AudioContext, jsdom) and voice/voice-socket-lifecycle (stt drops late frames after a deliberate close; tts clear() during socket-opening cancels a stale say) - the codex-found lifecycle regressions, pinned in the same change. 2026-07-18 (C7): registered voice/latency-record - the client-side per-turn latency collector (lib/voice/latency-record.ts) that folds session-driver.ts's per-mark onLatencyMark stream into ONE record per turn (mirroring api/src/voice/session.ts's server-side per-turn stage clocks); full-turn close on tts_first_audio, next-audio_in close for manual/no-tts turns, barge_in self-tags the turn IT opens (the reducer only emits barge_in from 'speaking', i.e. after the interrupted turn already closed cleanly on its own tts_first_audio - so barge_in never retroactively mutates an already-logged record). Registered in the same change that lands the file; ratchet applies from landing.",
     "mock_update_needed": [

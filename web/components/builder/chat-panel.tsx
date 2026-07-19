@@ -197,11 +197,12 @@ interface ChatPanelProps {
   sessionId: string | null;
   isExecuting: boolean;
   isBuildSession: boolean;
-  // C7: an optional third-state source tag - 'voice' when the send originates from the mic
-  // (the voice send path below), absent for the ordinary composer.
-  onSendMessage: (message: string, source?: "voice") => void;
+  // C7: an optional send-options object carrying source:'voice' when the send originates from
+  // the mic (the voice send path below), absent for the ordinary composer. Shape-compatible
+  // with the runtime's SendMessageOptions so `onSendMessage={runtime.sendMessage}` wires directly.
+  onSendMessage: (message: string, opts?: { source?: "voice" }) => void;
   onCancel: () => void;
-  onFirstMessage: (message: string, source?: "voice") => void;
+  onFirstMessage: (message: string, opts?: { source?: "voice" }) => void;
   onResend?: () => void;
   onEdit?: () => void;
   /** C4 fix 6: fires when the voice bar appears/disappears so the page can move fixed
@@ -352,8 +353,8 @@ export default function ChatPanel({
     sendVoicePathRef.current = (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (essentialMessages.length === 0) onFirstMessage(trimmed, "voice");
-      else onSendMessage(trimmed, "voice");
+      if (essentialMessages.length === 0) onFirstMessage(trimmed, { source: "voice" });
+      else onSendMessage(trimmed, { source: "voice" });
     };
   });
   const voice = useVoiceSession({

@@ -894,7 +894,7 @@ function PreviewStatusBadge({
 // FILE TREE
 // ============================================
 
-function FileTreeView({ nodes, onFileClick }: { nodes: FileNode[]; onFileClick?: (path: string) => void }) {
+export function FileTreeView({ nodes, onFileClick }: { nodes: FileNode[]; onFileClick?: (path: string) => void }) {
   // Collect all folder paths from nodes
   const allFolderPaths = useMemo(() => {
     const paths = new Set<string>();

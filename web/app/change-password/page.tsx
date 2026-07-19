@@ -249,10 +249,7 @@ export default function ChangePasswordPage() {
           {/* Header */}
           <div className="flex flex-col items-center text-center mb-6">
             <ShieldCheck size={32} className="text-teal-600" />
-            <h1
-              className="mt-4 font-display text-2xl font-semibold tracking-tight text-neutral-900"
-              style={{ fontFamily: "var(--font-lora), Georgia, serif" }}
-            >
+            <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight text-neutral-900">
               {cp.title}
             </h1>
             {passwordChangeRequired ? (

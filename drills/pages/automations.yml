@@ -1,0 +1,222 @@
+id: automations
+title: Automations
+path: /automations
+mode: steps
+areas: []
+steps:
+  - id: list-header
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The page renders inside a data-testid=\"automations-page\" PageShell; the PageHeader h1 (Lora serif font) shows the exact PT-PT copy \"Automatizações\", matching the pages-core.spec.ts assertion that the first h1 matches /Automa/i."
+    tags: [design-system]
+    judgment: false
+
+  - id: list-rows-render
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "If at least one automation exists, the PageHeader description reads \"<N> no total\" and each automation renders as a hoverable Card row showing its truncated name, its truncated description (or the fallback \"Sem descrição\" when none is set), and a neutral step-count badge reading \"<n> passo\" (singular) or \"<n> passos\" (plural); if zero automations exist instead, the list is replaced by the AutomationEmptyState illustration with title \"Ainda não há automatizações\", its descriptive paragraph, and a primary \"Criar automatização\" button."
+    tags: []
+    judgment: false
+
+  - id: list-new-automation-button
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "The primary \"Nova automatização\" button (Plus icon) in the PageHeader actions routes to /automations/new, a separate page whose own checks live in the automations-new page file."
+    tags: []
+    judgment: false
+
+  - id: list-managed-chip-desktop
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: "Any listed automation that was materialized by an integration (identifiable, e.g., by the CITIUS-provisioned rows from Integrations > Plataforma) shows a neutral automation-managed-chip badge with a small Plug icon and the copy \"Gerida pela integração <integrationKey>\" (e.g. \"Gerida pela integração citius\") next to its step-count badge."
+    tags: [role-gating]
+    judgment: false
+
+  - id: list-managed-chip-hidden-mobile
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width the automation-managed-chip badge is NOT rendered for any row (it carries the Tailwind class \"hidden sm:inline-flex\", hidden below the 640px sm breakpoint) even for automations that show it at desktop width; only the step-count badge remains visible on that row."
+    tags: [responsive]
+    judgment: false
+
+  - id: list-row-open-action
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Each automation row has a secondary \"Abrir\" button (Play icon); clicking it, or clicking anywhere else on the row's card, navigates to /automations/<id> and loads that automation's editor / run-viewer page (data-testid automation-editor-page)."
+    tags: []
+    judgment: false
+
+  - id: list-row-delete-guard
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Clicking the trash icon button (aria-label \"Eliminar automatização\") on any automation row opens a danger-toned confirm dialog whose title reads \"Eliminar \\\"<name>\\\"?\"; dismissing/cancelling the dialog leaves the automation in the list untouched (do not confirm deletion of a pre-existing automation)."
+    tags: [destructive-guard]
+    judgment: false
+
+  - id: list-mobile-layout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: default
+    description: "At 375px width the automations list does not overflow horizontally: the PageHeader title, description and \"Nova automatização\" button stack cleanly, and each Card row's name/description/step-count badge/action buttons wrap or truncate rather than overlapping or clipping."
+    tags: [responsive]
+    judgment: false
+
+  - id: list-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: default
+    description: "Loading /automations produces zero browser console errors, excluding known-benign favicon / React DevTools messages, per the CLAUDE.md hard global rule."
+    tags: []
+    judgment: false
+
+  - id: detail-page-loads
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "Opening an automation lands on /automations/<id> with the data-testid automation-editor-page element visible; unlike other dashboard pages this route does NOT use the shared PageShell/PageHeader - instead a custom sticky header shows the automation name in an editable text input (placeholder \"Nome da automatização\"), a primary Save button (disabled until a field is dirty, showing \"Guardado\"/\"Guardar\"/\"A guardar...\"), a danger-ghost trash icon button, and below them \"Editor\"/\"Histórico de execuções\" pill tabs."
+    tags: [design-system-exception]
+    judgment: false
+
+  - id: detail-two-column-desktop
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: detail
+    description: "On the Editor tab at desktop width the content area renders as a two-column grid: the goal editor, trigger (\"Gatilho\") card and step list stack in the left column, and the run viewer panel (header \"Execução\") sits in the right column."
+    tags: [responsive]
+    judgment: false
+
+  - id: detail-stacked-mobile
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [mobile]
+    state: detail
+    description: "At 375px width the Editor tab's two columns collapse into a single stacked column (goal editor, trigger card and step list first, run viewer panel below), with no horizontal overflow or clipped content."
+    tags: [responsive]
+    judgment: false
+
+  - id: detail-goal-editor
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "The goal editor card shows the label \"Objetivo\", a textarea holding the automation's current goal text, the hint \"Edite e clique em Regenerar para recomeçar a lista de passos.\", and a \"Regenerar passos\" button that stays disabled unless the textarea both differs from the saved goal and has at least 5 trimmed characters."
+    tags: []
+    judgment: false
+
+  - id: detail-trigger-picker
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "The \"Gatilho\" card offers two radio options, \"Manual (executar quando pedido)\" and \"Quando algo acontece\"; selecting the latter reveals an integration select and a resulting event select, with a \"Criar gatilho\" button - none of the visible copy in this card ever uses the words \"webhook\", \"listener\" or \"processo\" (strict PT-PT copy contract), only \"gatilho\"."
+    tags: []
+    judgment: false
+
+  - id: detail-step-list
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "Each step renders as a card with a drag handle (aria-label \"Arrastar passo\") for reordering and a delete action; hovering the thin gap between two step cards reveals an \"Adicionar passo\" insert affordance; clicking a step's description opens an editable textarea (aria-label \"Descrição do passo\"), and pressing Escape closes it again without persisting any change."
+    tags: []
+    judgment: false
+
+  - id: detail-run-progression
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "Clicking the run viewer's \"Executar\" action (or \"Executar de novo\" on a re-run) starts a run: each step in the viewer's ordered list shows its PT-PT status badge progressing (\"pendente\" to \"em execução\" to \"concluído\" or \"falhou\"), the run status badge at the top of the run viewer updates accordingly, and the run settles into a terminal (non-\"em execução\") state rather than spinning forever, matching the automation-deterministic.spec.ts contract."
+    tags: []
+    judgment: false
+
+  - id: detail-fixer-patch-notice
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "IF a run's self-correction fixer touches a step (visible as a violet Wand2-icon panel in the run viewer or the sticky-header activity bar with a verb like \"Inseriu um passo antes deste\", \"Reescreveu este passo\" or \"Ignorou este passo\"), its accompanying reasoning text reads as a coherent, specific explanation of what was changed and why, not generic filler."
+    tags: []
+    judgment: true
+
+  - id: detail-managed-banner
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "IF the opened automation was materialized by an integration (shown by the managed chip in the list), a data-testid automation-managed-banner element renders below the header with a Plug icon, the copy \"Esta automatização serve a integração <key>...\", and an \"Abrir integrações\" link pointing to /integrations?tab=plataforma - while every step card underneath stays fully editable."
+    tags: [role-gating]
+    judgment: false
+
+  - id: detail-run-history-tab
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "Clicking the \"Histórico de execuções\" pill tab switches away from the Editor grid to a run-history list: each past run is a collapsible row (status badge, step/failure counts, start time) that expands to show a per-step breakdown, or, if the automation has never run, the message \"Ainda não há execuções. Execute a automatização para ver o histórico aqui.\" renders instead."
+    tags: []
+    judgment: false
+
+  - id: detail-delete-flow
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "On a freshly-created throwaway automation (not a pre-existing fixture), clicking the header's trash icon opens a confirm dialog titled \"Eliminar \\\"<name>\\\"?\"; confirming deletes the automation and navigates back to /automations."
+    tags: [destructive-guard]
+    judgment: false
+
+  - id: detail-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop, mobile]
+    state: detail
+    description: "Opening an automation's editor / run-viewer page and switching between its Editor and Histórico tabs produces zero browser console errors, excluding known-benign favicon / React DevTools messages."
+    tags: []
+    judgment: false
+
+states:
+  - id: detail
+    label: Automation detail / run viewer
+    reachPath:
+      - id: open-or-create-automation
+        description: "From /automations, either click an existing automation's \"Abrir\" button (or click its row) to land on /automations/<id> directly, or click \"Nova automatização\", type a short concrete goal (e.g. a two-step wait-only goal) and submit to land on the newly created automation's editor / run-viewer page."

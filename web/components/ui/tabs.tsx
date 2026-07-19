@@ -1,5 +1,6 @@
 'use client';
-import React, { useRef } from 'react';
+import React, { useId, useRef } from 'react';
+import { motion } from 'framer-motion';
 import type { LucideIcon } from 'lucide-react';
 import { Badge } from './badge';
 
@@ -19,8 +20,13 @@ interface TabsProps {
   className?: string;
 }
 
+// Spring shared by both active-indicator variants: fast, minimal overshoot.
+const indicatorSpring = { type: 'spring', stiffness: 500, damping: 40 } as const;
+
 export function Tabs({ items, value, onChange, variant = 'underline', className }: TabsProps) {
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  // Per-instance layoutId so two Tabs on one page never swap indicators.
+  const instanceId = useId();
 
   const focusTab = (index: number) => {
     const item = items[index];
@@ -51,14 +57,12 @@ export function Tabs({ items, value, onChange, variant = 'underline', className 
         const active = item.key === value;
         const Icon = item.icon;
         const buttonClass = isPills
-          ? `inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-ring ${
-              active
-                ? 'bg-surface text-neutral-900 shadow-card'
-                : 'text-neutral-500 hover:text-neutral-700'
+          ? `relative inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-ring ${
+              active ? 'text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'
             }`
-          : `inline-flex items-center gap-1.5 pb-2.5 text-sm transition-colors focus-ring ${
+          : `relative inline-flex items-center gap-1.5 pb-2.5 text-sm transition-colors focus-ring ${
               active
-                ? '-mb-px border-b-2 border-teal-600 font-medium text-teal-700'
+                ? 'font-medium text-teal-700'
                 : 'text-neutral-500 hover:text-neutral-700'
             }`;
         return (
@@ -76,9 +80,27 @@ export function Tabs({ items, value, onChange, variant = 'underline', className 
             onKeyDown={(e) => onKeyDown(e, index)}
             className={buttonClass}
           >
-            {Icon && <Icon className="h-4 w-4" aria-hidden />}
-            {item.label}
-            {typeof item.count === 'number' && <Badge tone="neutral">{item.count}</Badge>}
+            {active && isPills && (
+              <motion.span
+                layoutId={`tabs-pill-${instanceId}`}
+                transition={indicatorSpring}
+                className="absolute inset-0 rounded-md bg-surface shadow-card"
+                aria-hidden
+              />
+            )}
+            {active && !isPills && (
+              <motion.span
+                layoutId={`tabs-underline-${instanceId}`}
+                transition={indicatorSpring}
+                className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-teal-600"
+                aria-hidden
+              />
+            )}
+            <span className="relative z-10 inline-flex items-center gap-1.5">
+              {Icon && <Icon className="h-4 w-4" aria-hidden />}
+              {item.label}
+              {typeof item.count === 'number' && <Badge tone="neutral">{item.count}</Badge>}
+            </span>
           </button>
         );
       })}

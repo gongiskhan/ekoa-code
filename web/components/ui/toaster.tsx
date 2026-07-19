@@ -32,12 +32,12 @@ export function Toaster() {
               key={t.id}
               layout
               role="status"
-              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              initial={{ opacity: 0, y: 16, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: 'easeOut' }}
+              exit={{ opacity: 0, scale: 0.97 }}
+              transition={{ type: 'spring', stiffness: 480, damping: 36 }}
               data-testid={t.testId}
-              className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-xl bg-neutral-900 px-4 py-3 text-sm text-white shadow-overlay"
+              className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-xl bg-neutral-900 px-4 py-3 text-sm text-white shadow-overlay ring-1 ring-white/10"
             >
               <Icon className={`h-4 w-4 shrink-0 ${toneIconColor[t.tone]}`} aria-hidden />
               <span className="flex-1">{t.message}</span>

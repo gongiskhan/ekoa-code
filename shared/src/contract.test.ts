@@ -15,8 +15,7 @@ import {
 describe('shared contract', () => {
   it('loads all 28 domain descriptor maps', () => {
     // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4)
-    // + gatewayKeys (cortex-gateway S4a - landed without bumping this count; reconciled here)
-    // + sheets (mega-run B1, decision B.B).
+    // + gatewayKeys (cortex-gateway S4a, run 20260717) + sheets (mega-run B1, decision B.B).
     expect(Object.keys(ALL_ENDPOINTS).length).toBe(28);
   });
 

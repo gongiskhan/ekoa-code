@@ -1,0 +1,102 @@
+# ekoa-code STAGING stack (1 concurrent user). NOT production.
+#
+# Topology (P-02 two-container + a same-origin edge proxy, ch14 §14.4):
+#   Cloudflare DNS (staging.ekoa.io, DNS-only) -> VM :443/:80 -> caddy
+#     caddy  --(/api/*, /health, /hooks)-->  api  :4111   (Dockerfile.api)
+#     caddy  --(everything else)---------->  web  :3000   (Dockerfile.web, standalone)
+#     api    -------------------------->     mongo :27017  (standalone; no replica set -
+#                                                          api uses no transactions)
+#
+# Build contexts are the REPO ROOT (../../) so Dockerfile.api / Dockerfile.web resolve their
+# COPY paths. Secrets are injected at runtime from ./.env (gitignored, mode 600, VM-only) -
+# NEVER commit real values. The model credential is NOT an env var: it is provisioned once
+# after boot through the setCredential seam (see README + provision-credential.mjs).
+name: ekoa-staging
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The public hostname Caddy serves + auto-provisions a Let's Encrypt cert for.
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-staging.ekoa.io}
+      ACME_EMAIL: ${ACME_EMAIL:-goncalo@ekoa.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # ACME account + issued certs - MUST persist across restarts
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+    networks: [ekoa]
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.web
+      args:
+        # Inlined into the client bundle at build (Next bakes NEXT_PUBLIC_* at build time).
+        # The browser calls the same origin it was served from; Caddy path-routes /api to api.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_ORIGIN:-https://staging.ekoa.io}
+    restart: unless-stopped
+    expose: ["3000"]
+    networks: [ekoa]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    # ./.env supplies the runtime secrets (JWT_SECRET, ENCRYPTION_KEY, admin creds, MONGO_PASSWORD).
+    env_file: ./.env
+    environment:
+      PORT: "4111"
+      # Single source of truth for the DB password is MONGO_PASSWORD in ./.env; the URI is
+      # assembled here so the secret is written once. authSource=admin: the root user the
+      # mongo image seeds lives in the admin db.
+      MONGODB_URI: "mongodb://ekoa:${MONGO_PASSWORD:?set MONGO_PASSWORD in deploy/staging/.env}@mongo:27017/ekoa?authSource=admin"
+      # Runtime data root. The image runs as non-root `node` (home /home/node), so point the
+      # data/sandbox/featured-builds dirs under the node home where the api-data volume mounts.
+      EKOA_DATA_DIR: /home/node/.ekoa/data
+      SANDBOX_ROOT: /home/node/.ekoa/sandboxes
+      EKOA_FEATURED_BUILDS_DIR: /home/node/.ekoa/data/featured-builds
+      # Absolute public origin for trigger/webhook URLs + the streaming allow-list.
+      API_PUBLIC_URL: ${PUBLIC_ORIGIN:-https://staging.ekoa.io}
+      EKOA_STREAMING_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-https://staging.ekoa.io}
+      # No DISPLAY on a server: force the automation engine to launch Chromium headless.
+      EKOA_AUTOMATION_HEADLESS: "true"
+    expose: ["4111"]
+    # Loopback-only publish (NOT 0.0.0.0) so host-side tooling can reach the api for a one-time
+    # credential provision + health debugging. Public traffic still arrives only via Caddy.
+    ports:
+      - "127.0.0.1:4111:4111"
+    volumes:
+      - api-data:/home/node/.ekoa   # sandboxes + app-data + featured builds - persist
+    depends_on:
+      - mongo
+    networks: [ekoa]
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["--quiet"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ekoa
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD in deploy/staging/.env}
+    volumes:
+      - mongo-data:/data/db
+    expose: ["27017"]
+    networks: [ekoa]
+
+volumes:
+  caddy-data:
+  caddy-config:
+  mongo-data:
+  api-data:
+
+networks:
+  ekoa:
+    driver: bridge
