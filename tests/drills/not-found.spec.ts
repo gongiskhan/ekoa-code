@@ -1,5 +1,7 @@
 // AUTO-EMITTED by Drill (B8) from a passing vision run. Hand-edit at your
 // own risk — the next graduation of any step on this page rewrites this file.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
 import { drillJudge } from "./support/drill-judge";
 
@@ -57,5 +59,52 @@ test.describe("Not found (404)", () => {
     await page.goto("http://localhost:3000/this-page-does-not-exist-xyz", { timeout: 90000, waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
     await expect(page.locator("body")).toContainText("404");
+  });
+
+  test("link-navigates-to-chat: Clicking the \"Ir para o Builder\" link navigates the browser to \"/\", which (for the already-authenticated session) redirects on to /chat where the chat composer (a visible textarea) renders.", async ({ page }) => {
+    // Resolve the backend port from backend.port (the same source next.config.ts uses).
+    let apiBase = "http://localhost:4111";
+    try {
+      const port = readFileSync(resolve(__dirname, "../../backend.port"), "utf8").trim();
+      if (/^\d+$/.test(port)) apiBase = `http://localhost:${port}`;
+    } catch { /* fall through to default */ }
+
+    // Authenticate via the API directly (same pattern as web/e2e/branding-colors.spec.ts):
+    // login returns { token, user, ... } (api/src/auth/service.ts). The Drill vision run
+    // is anonymous, so clicking the link lands on /login, not /chat — this seeds a session.
+    const loginRes = await page.request.post(`${apiBase}/api/v1/auth/login`, {
+      data: { username: "admin", password: "tmp12345" },
+    });
+    const { token, user } = await loginRes.json() as { token: string; user: Record<string, unknown> };
+
+    // Loaded-machine wait (F9): a batch run shares the machine with other
+    // parallel work — a pure timeout here should widen this wait, not be
+    // treated as a step defect.
+    await page.goto("http://localhost:3000/this-page-does-not-exist-xyz", { timeout: 90000, waitUntil: "domcontentloaded" });
+
+    // Seed ekoa_token (token accessor, web/lib/api/token.ts) and ekoa_auth (the
+    // Zustand persist blob, web/stores/auth.ts) so the dashboard layout sees
+    // isAuthenticated:true on first hydration and "/" redirects on to /chat.
+    await page.evaluate(({ t, u }) => {
+      window.localStorage.setItem("ekoa_token", t);
+      window.localStorage.setItem("ekoa_auth", JSON.stringify({
+        state: { user: u, token: t, isAuthenticated: true, passwordChangeRequired: false },
+        version: 0,
+      }));
+    }, { t: token, u: user });
+
+    // Reload to pick up the seeded auth state before clicking the link.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
+
+    // Click the "Ir para o Builder" link (notFound.goToBuilder, href="/").
+    await page.getByRole("link", { name: "Ir para o Builder" }).click();
+
+    // "/" server-redirects to "/chat" (web/app/(dashboard)/page.tsx); the dashboard
+    // layout confirms auth and renders the chat composer.
+    await page.waitForURL(/\/chat/, { timeout: 30000 });
+
+    // The chat composer is a <textarea> — confirm it is visible.
+    await expect(page.locator("textarea").first()).toBeVisible({ timeout: 15000 });
   });
 });

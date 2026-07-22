@@ -58,6 +58,7 @@ steps:
     tags:
       - navigation
     judgment: false
+    spec: tests/drills/not-found.spec.ts#link-navigates-to-chat
   - id: no-dashboard-chrome
     area: 0
     mode: e2e
