@@ -79,6 +79,8 @@ const COVERED = new Set<string>([
   // batch1 F5 subset — the UI-called endpoints (memories.test.ts, f5-ui-endpoints.test.ts)
   'memories.bulkDelete', 'memories.submitSignal', 'memories.listTags', 'memories.stats',
   'knowledge.updateSource', 'knowledge.crawlSource', 'knowledge.crawlStatus', 'knowledge.refreshSchedule',
+  // S1 — machine-to-machine Meta Ad Library broker (ad-broker.test.ts)
+  'adBroker.search',
   'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
   // Local-bridge consumer run s1 — hosted presence (bridge-status.test.ts)
   'ekoaLocal.bridgeStatus',

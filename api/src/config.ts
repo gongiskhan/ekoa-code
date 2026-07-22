@@ -67,6 +67,10 @@ export interface Config {
   nodeEnv: 'development' | 'test' | 'production';
   llmChokepointBaseUrl: string;
   llm: LlmConfig;
+  /** Static x-api-key for the machine-to-machine ad-broker endpoint (S1). Optional: unset ⇒
+   *  undefined ⇒ the endpoint is fail-closed (every request 401). Optional on the interface so
+   *  the suite's many bare-`Config` literals stay valid; `loadConfig` always populates it. */
+  adBrokerApiKey?: string;
 }
 
 /** Parse a positive float env override, falling back to `dflt` on unset/invalid. */
@@ -178,6 +182,7 @@ export function loadConfig(): Config {
     nodeEnv,
     llmChokepointBaseUrl: process.env.LLM_CHOKEPOINT_BASE_URL ?? 'http://127.0.0.1:4111/api/v1/llm',
     llm: defaultLlmConfig(),
+    adBrokerApiKey: process.env.AD_BROKER_API_KEY || undefined,
   };
   return cached;
 }

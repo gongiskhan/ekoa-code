@@ -27,7 +27,8 @@
     "ADOBE_OAUTH_SHARD",
     "EKOA_APP_DATA_BACKEND",
     "EKOA_APP_DATA_MONGO_URI",
-    "EKOA_APP_DATA_MONGO_DB"
+    "EKOA_APP_DATA_MONGO_DB",
+    "AD_BROKER_API_KEY"
   ],
   "volumes": [
     "/opt/ekoa/api-data:/root/.ekoa"

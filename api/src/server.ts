@@ -35,6 +35,7 @@ import { llmHealth, registerGateway, loadCredential, setRulesetResolver } from '
 import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { knowledgeRouter } from './routes/knowledge.js';
+import { adBrokerRouter } from './routes/ad-broker.js';
 import { triggersRouter } from './routes/triggers.js';
 import { hooksRouter } from './routes/hooks.js';
 import { notificationsRouter } from './routes/notifications.js';
@@ -528,6 +529,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));
+  // S1 — machine-to-machine Meta Ad Library broker (x-api-key; stub data source, ad-broker/service.ts).
+  app.use('/api/v1/ad-broker', adBrokerRouter(deps));
   // G5 — push infrastructure + triggers.
   app.use('/api/v1/triggers', triggersRouter(deps));
   app.use('/api/v1/notifications', notificationsRouter());

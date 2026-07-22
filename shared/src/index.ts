@@ -21,6 +21,7 @@ import { triggersEndpoints } from './triggers.js';
 import { automationsEndpoints } from './automations.js';
 import { memoriesEndpoints } from './memories.js';
 import { knowledgeEndpoints } from './knowledge.js';
+import { adBrokerEndpoints } from './ad-broker.js';
 import { billingEndpoints } from './billing.js';
 import { credentialsEndpoints } from './credentials.js';
 import { uploadsEndpoints } from './uploads.js';
@@ -51,6 +52,7 @@ export * from './triggers.js';
 export * from './automations.js';
 export * from './memories.js';
 export * from './knowledge.js';
+export * from './ad-broker.js';
 export * from './billing.js';
 export * from './credentials.js';
 export * from './uploads.js';
@@ -80,6 +82,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   automations: automationsEndpoints,
   memories: memoriesEndpoints,
   knowledge: knowledgeEndpoints,
+  adBroker: adBrokerEndpoints,
   billing: billingEndpoints,
   credentials: credentialsEndpoints,
   uploads: uploadsEndpoints,

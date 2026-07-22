@@ -307,6 +307,10 @@
     {
      "id": "e_api_coll",
      "type": "arrow"
+    },
+    {
+     "id": "e_actor_api",
+     "type": "arrow"
     }
    ],
    "link": null,
@@ -2365,6 +2369,120 @@
    "locked": false,
    "containerId": null,
    "lineHeight": 1.25
+  },
+  {
+   "type": "rectangle",
+   "id": "ad_broker_actor",
+   "x": 60,
+   "y": 720,
+   "width": 320,
+   "height": 90,
+   "strokeColor": "#7c3aed",
+   "backgroundColor": "#f3e8ff",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "strokeStyle": "dashed",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 239110,
+   "version": 1,
+   "versionNonce": 730819,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": [
+    {
+     "id": "ad_broker_actor_t",
+     "type": "text"
+    },
+    {
+     "id": "e_actor_api",
+     "type": "arrow"
+    }
+   ],
+   "link": null,
+   "locked": false,
+   "roundness": {
+    "type": 3
+   }
+  },
+  {
+   "type": "text",
+   "id": "ad_broker_actor_t",
+   "x": 70,
+   "y": 742,
+   "width": 300,
+   "height": 48,
+   "text": "Apify actor (ad-broker)\nx-api-key machine client\nPOST /api/v1/ad-broker/search",
+   "originalText": "Apify actor (ad-broker)\nx-api-key machine client\nPOST /api/v1/ad-broker/search",
+   "fontSize": 13,
+   "fontFamily": 3,
+   "textAlign": "center",
+   "verticalAlign": "middle",
+   "strokeColor": "#4c1d95",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 1,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 329368,
+   "version": 1,
+   "versionNonce": 206148,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "containerId": "ad_broker_actor",
+   "lineHeight": 1.25
+  },
+  {
+   "type": "arrow",
+   "id": "e_actor_api",
+   "x": 380,
+   "y": 760,
+   "width": 70,
+   "height": 540,
+   "strokeColor": "#1e3a5f",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "strokeStyle": "dashed",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 511176,
+   "version": 1,
+   "versionNonce": 185496,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     70,
+     -540
+    ]
+   ],
+   "startBinding": {
+    "elementId": "ad_broker_actor",
+    "focus": 0,
+    "gap": 2
+   },
+   "endBinding": {
+    "elementId": "rest_api",
+    "focus": 0,
+    "gap": 2
+   },
+   "startArrowhead": null,
+   "endArrowhead": "arrow"
   }
  ]
 }
