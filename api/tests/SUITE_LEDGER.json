@@ -402,6 +402,12 @@
         "targetGate": "G5"
       },
       {
+        "group": "listener rail (2A-S1)",
+        "count": 4,
+        "targetGate": "G5",
+        "note": "2A-S1 (ekoa-dev port): the durable poll->enqueue listener runtime upstream of the existing event queue. tests/integrations/platform-poll.test.ts (M365 item-high-water $skip paging, Gmail poll-time pageToken, MAX_ITEMS_PER_TICK 500 stalled continuations, first-poll=now/no-backfill, cursor-advance-only-after-enqueue, UNIQUE dedup, partial-failure stall - the dev sync-sqlite deps async-adapted over the REAL event_queue + listener_state stores). tests/events/listener-supervisor.test.ts (deps-injected supervisor: empty-set start/stop no-op, platform poll enqueues across ticks, cancel-safe stop=no-work-after-stop, failing-listener isolation via bumpFailure without starving a healthy sibling). tests/integrations/odata-interpolation.test.ts ({{$top}} $-aware interpolation regression - the fix already lives in http-template.ts). tests/contract/triggers-schema.test.ts (shared Trigger gains kind:webhook|listener + pollConfig; triggerView emits a migration-free kind-absent=>webhook shape). Hermetic + LLM-free; runs green in the per-PR vitest lane from landing (module_tests are enforced by npm test, not this census runner). Ratchet applies. The dispatch-hydration + user-defined (IMAP) poll transport land in later 2A slices."
+      },
+      {
         "group": "crypto/jwt/git/device-auth",
         "count": 4,
         "targetGate": "G2"

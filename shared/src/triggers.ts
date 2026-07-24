@@ -3,6 +3,13 @@ import { z } from 'zod';
 import { Id, IsoTimestamp, itemsResponse, OkResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
+/** How a listener trigger polls its source (2A-S1). Present only on `kind: 'listener'` triggers. */
+export const TriggerPollConfig = z.object({
+  actionName: z.string(),
+  intervalMs: z.number(),
+});
+export type TriggerPollConfig = z.infer<typeof TriggerPollConfig>;
+
 export const Trigger = z
   .object({
     id: Id,
@@ -12,6 +19,11 @@ export const Trigger = z
     artifactId: Id.optional(),
     entrypoint: z.string().optional(),
     active: z.boolean().optional(),
+    // How the event is SOURCED (2A-S1): ABSENT ⇒ 'webhook' (migration-free — existing triggers keep
+    // working). 'listener' triggers are polled by the listener supervisor. `kind` is orthogonal to
+    // the delivery target. `pollConfig` accompanies a listener.
+    kind: z.enum(['webhook', 'listener']).optional(),
+    pollConfig: TriggerPollConfig.optional(),
     publicUrl: z.string(),
     createdAt: IsoTimestamp.optional(),
     updatedAt: IsoTimestamp.optional(),

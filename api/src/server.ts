@@ -16,7 +16,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
-import { users, integrationConfigs } from './data/stores.js';
+import { users, integrationConfigs, triggers } from './data/stores.js';
 import { CollectionsEngine, sharedScope, appScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
@@ -137,6 +137,15 @@ import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
 import { setDeliveryTargets } from './events/delivery.js';
+import {
+  configureListenerSupervisor,
+  startListenerSupervisor,
+  stopListenerSupervisor,
+  enqueueListenerEvent,
+  type SupervisorTrigger,
+} from './events/listener-supervisor.js';
+import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './events/listener-state.js';
+import type { TriggerDoc } from './events/service.js';
 import { decrypt, encrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
@@ -475,6 +484,37 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         return { ok: false, reason: err instanceof Error ? err.message : 'backend invoke failed' };
       }
     },
+  });
+
+  // G8/2A-S1 — listener supervisor: the durable poll→enqueue rail for `kind:'listener'` triggers.
+  // Injected across the seams here (ch02 §2.8: only the composition root wires collaborators):
+  // the listener-state cursor store, the SHARED event queue (via enqueueListenerEvent — never a
+  // second queue), and callPlatformIntegration bound to each trigger's org (OAuth refresh in core).
+  // The loop is STARTED post-listen (below) and stopped on shutdown.
+  configureListenerSupervisor({
+    listListeners: async () => {
+      const rows = (await triggers.find({ kind: 'listener' })) as TriggerDoc[];
+      return rows.filter((t) => !t.disabled) as SupervisorTrigger[];
+    },
+    readCursor: (triggerId) => readListenerCursor(triggerId),
+    writeCursor: (triggerId, cursor) => writeListenerCursor(triggerId, cursor, new Date(deps.now()).toISOString()),
+    bumpFailure: (triggerId, error) => bumpListenerFailure(triggerId, error, new Date(deps.now()).toISOString()),
+    enqueue: (input) => enqueueListenerEvent(input, new Date(deps.now()).toISOString()),
+    // Platform (M365/Google) poll call — OAuth refresh + token custody live in platform-oauth.ts;
+    // the poller supplies { integrationKey, actionName, args }, the trigger supplies the org.
+    callPlatform: (trigger, call) =>
+      callPlatformIntegration(
+        {
+          orgId: trigger.orgId,
+          integrationKey: (call.integrationKey as string) ?? trigger.integrationKey,
+          actionName: call.actionName as string,
+          args: (call.args as Record<string, unknown>) ?? {},
+        },
+        { now: deps.now, genId: deps.genId },
+      ),
+    // The user-defined (IMAP/generic) poll transport is wired in slice 2A-4; until then that branch
+    // throws and the supervisor's backoff absorbs it.
+    now: () => new Date(deps.now()).toISOString(),
   });
 
   // content/ audit write path (FIXED-8, ch08): the loader reaches data/ logActivity ONLY through
@@ -854,6 +894,9 @@ export function boot(): void {
         // starts only AFTER the HTTP server is listening, so re-entrant deliveries (a run
         // calling back into this server) find a live listener.
         void startDelivery();
+        // 2A-S1: the listener supervisor (durable poll→enqueue) also starts post-listen — its polls
+        // enqueue into the same queue the (now-running) delivery pipeline drains.
+        void startListenerSupervisor();
       });
       // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
       // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
@@ -880,7 +923,7 @@ export function boot(): void {
   // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers;
   // the delivery pipeline drains in-flight dispatches (the rest recovers next boot, §12.3).
   const shutdown = () => {
-    void Promise.allSettled([stopDelivery(), appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
+    void Promise.allSettled([stopListenerSupervisor(), stopDelivery(), appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

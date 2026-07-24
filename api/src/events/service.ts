@@ -10,9 +10,18 @@ import { decrypt, encrypt } from '../data/crypto.js';
 import { getDefinition, findConfigForOwner } from '../integrations/index.js';
 import { enqueue } from './queue.js';
 import { wakeDelivery } from './delivery.js';
+import { deleteListenerCursor } from './listener-state.js';
 import { verifyHmac, hubChallenge, safeEqual, type WebhookAlgorithm } from './webhook-verifiers.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
+
+/** How a listener trigger polls its source (2A-S1). Absent on webhook triggers. */
+export interface TriggerPollConfig {
+  /** The list-action the source polls (defaults to the provider's built-in poll action). */
+  actionName: string;
+  /** Poll cadence in ms. */
+  intervalMs: number;
+}
 
 export interface TriggerDoc extends Doc {
   ownerUserId: string;
@@ -26,6 +35,12 @@ export interface TriggerDoc extends Doc {
   secretCiphertext?: string;
   algorithm: WebhookAlgorithm;
   disabled: boolean;
+  /** How the event is SOURCED (2A-S1). ABSENT ⇒ 'webhook' (migration-free — existing rows keep
+   *  working). 'listener' triggers are polled by the listener supervisor instead of receiving
+   *  inbound webhooks; `kind` is orthogonal to `targetKind` (where the event is delivered). */
+  kind?: 'webhook' | 'listener';
+  /** Listener-only polling configuration (2A-S1). */
+  pollConfig?: TriggerPollConfig;
 }
 
 export type IngressOutcome = 'accepted' | 'duplicate' | 'rejected_signature' | 'rejected_unknown_trigger' | 'rejected_disabled' | 'rejected_other';
@@ -40,6 +55,10 @@ export function triggerView(t: TriggerDoc, publicUrlBase: string) {
     automationId: t.automationId,
     artifactId: t.artifactId,
     disabled: t.disabled,
+    // `kind` absent on a legacy row surfaces as 'webhook' (migration-free semantic, 2A-S1);
+    // pollConfig only appears for listeners. The publicUrl is meaningful for webhook triggers.
+    kind: t.kind ?? 'webhook',
+    ...(t.pollConfig ? { pollConfig: t.pollConfig } : {}),
     publicUrl: `${publicUrlBase}/hooks/${t._id}`, // secret stays redacted (landmine 3)
   };
 }
@@ -51,6 +70,7 @@ export async function listTriggers(actor: Actor): Promise<TriggerDoc[]> {
 export async function createTrigger(actor: Actor, input: {
   targetKind: 'automation' | 'artifact-backend'; integrationKey: string; eventName: string;
   automationId?: string; artifactId?: string; entrypoint?: string; secret?: string; algorithm?: WebhookAlgorithm;
+  kind?: 'webhook' | 'listener'; pollConfig?: TriggerPollConfig;
 }, deps: Deps): Promise<{ trigger: TriggerDoc; secret?: string }> {
   const id = deps.genId();
   const secret = input.secret ?? deps.genId();
@@ -67,6 +87,9 @@ export async function createTrigger(actor: Actor, input: {
     secretCiphertext: encrypt(secret), // encrypted at rest, decrypted only at verify time
     algorithm: input.algorithm ?? 'hmac-sha256-hex',
     disabled: false,
+    // `kind` absent ⇒ persist as webhook implicitly (leave the field off for migration-free parity
+    // with legacy rows); only stamp it for an explicit listener. 2A-S1.
+    ...(input.kind === 'listener' ? { kind: 'listener' as const, pollConfig: input.pollConfig } : {}),
   };
   await triggers.insert(doc as never);
   return { trigger: doc, secret }; // secret returned exactly once (landmine 2)
@@ -75,7 +98,11 @@ export async function createTrigger(actor: Actor, input: {
 export async function deleteTrigger(actor: Actor, id: string): Promise<boolean> {
   const t = (await triggers.get(id)) as TriggerDoc | null;
   if (!t || t.orgId !== actor.orgId) return false;
-  return triggers.delete(id);
+  const deleted = await triggers.delete(id);
+  // Drop any listener-state row so a deleted listener's cursor never lingers (2A-S1). No-op for
+  // webhook triggers (no row) and harmless if the supervisor already stopped the loop.
+  if (deleted) await deleteListenerCursor(id);
+  return deleted;
 }
 
 async function audit(triggerId: string, outcome: IngressOutcome, deps: Deps): Promise<void> {

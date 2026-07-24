@@ -208,3 +208,8 @@ export const anonymisationDenyLists = new Store<Doc>('anonymisation_deny_lists')
 export const bridgePairings = new Store<Doc>('bridge_pairings');
 export const eventQueue = new Store<Doc>('event_queue');
 export const webhookAudit = new Store<Doc>('webhook_audit');
+/** Per-listener poll state (2A-S1): one row per `kind:'listener'` trigger (`_id` = triggerId),
+ *  holding the durable poll cursor / high-water mark plus a failure counter. The generic listener
+ *  runtime (events/listener-state.ts) owns the typed accessors; the supervisor advances the cursor
+ *  ONLY after every polled item is durably enqueued, so a crash re-polls rather than drops. */
+export const listenerState = new Store<Doc>('listener_state');

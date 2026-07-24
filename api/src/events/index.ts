@@ -32,6 +32,20 @@ export {
   triggerView,
   hubChallenge,
   type TriggerDoc,
+  type TriggerPollConfig,
   type IngressResult,
   type IngressOutcome,
 } from './service.js';
+export {
+  readListenerCursor,
+  writeListenerCursor,
+  bumpListenerFailure,
+  deleteListenerCursor,
+  type ListenerStateDoc,
+} from './listener-state.js';
+export {
+  ListenerSupervisor,
+  enqueueListenerEvent,
+  type ListenerSupervisorDeps,
+  type SupervisorTrigger,
+} from './listener-supervisor.js';
