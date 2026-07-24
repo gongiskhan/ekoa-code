@@ -13,6 +13,15 @@
  *        c) re-fetch throws (fail-closed, e.g. the notConnected Adobe backend) → no advance.
  *   2. REPLAY IDEMPOTENCE — the SAME real completion delivered twice advances EXACTLY
  *      once (guarded on stage !== 'Assinada'); the second delivery is a no-op.
+ *   3. CONCURRENT DOUBLE-DELIVERY (the TOCTOU carry-forward, 2B-S6) — two genuinely
+ *      concurrent completion deliveries for the SAME request, forced into the worst-case
+ *      interleave (both read the pre-advance proposta before either writes), converge to the
+ *      correct terminal state ('Assinada' + conversionPending + eSignature SIGNED) with NO
+ *      corruption. The stage guard is a read-check-write, not a compare-and-swap, so the
+ *      worst-case interleave writes twice; but each advance is a FULL terminal overwrite of
+ *      the identical fields, so the proposta never lands in a torn/partial state (convergent
+ *      idempotence). Exactly-once holds only under serialized delivery (case 2); this case
+ *      pins that concurrency stays uncorrupting and the advance count is bounded.
  *
  * Covered for BOTH providers (Zoho is live on the SALOMAO ERP; Adobe is the facade the
  * migrated adobe_agreements rows route to).
@@ -127,6 +136,47 @@ describe('handleZohoWebhook — never trusts the payload for signature state', (
     const second = await handleZohoWebhook(zohoForgedPayload, deps);
     expect(second).toMatch(/already Assinada/);
     expect(updateProposta).toHaveBeenCalledTimes(1); // still exactly one advance
+  });
+
+  it('concurrent double-delivery (TOCTOU): two genuine completions converge to Assinada, uncorrupted', async () => {
+    // The 2B-S3 carry-forward: the stage guard is a read-check-write, not a compare-and-swap,
+    // so two genuinely-concurrent deliveries CAN both pass the guard. This pins that the
+    // worst-case interleave is still uncorrupting (the advance is a full terminal overwrite).
+    const proposta: Record<string, unknown> = { id: 'prop-1', stage: 'Enviada', client: 'José Cliente' };
+    let updateCalls = 0;
+    const updateProposta = vi.fn(async (_a: string, _i: string, patch: Record<string, unknown>) => {
+      Object.assign(proposta, patch);
+      updateCalls += 1;
+    });
+    // Force the worst-case interleave: BOTH deliveries read the pre-advance proposta before
+    // EITHER writes (a 2-party barrier on getProposta).
+    let entered = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    const getProposta = vi.fn(async () => {
+      const snap = { ...proposta };
+      entered += 1;
+      if (entered >= 2) release();
+      await barrier;
+      return snap;
+    });
+    const getRequest = vi.fn(async () => zohoSignedRequest);
+    const deps: ZohoWebhookDeps = { findAgreement: async () => zohoRef, getRequest, getProposta, updateProposta };
+
+    const [a, b] = await Promise.all([handleZohoWebhook(zohoForgedPayload, deps), handleZohoWebhook(zohoForgedPayload, deps)]);
+
+    expect(entered).toBe(2); // genuinely concurrent (both read pre-advance)
+    // Terminal state is correct + uncorrupted regardless of the interleave.
+    expect(proposta.stage).toBe('Assinada');
+    expect(proposta.conversionPending).toBe(true);
+    expect((proposta.eSignature as Record<string, unknown>).status).toBe('SIGNED');
+    // Convergent idempotence: the worst-case interleave may write twice, but both writes set
+    // the identical terminal fields (no torn/partial state). Bounded, never runaway.
+    expect(updateCalls).toBeGreaterThanOrEqual(1);
+    expect(updateCalls).toBeLessThanOrEqual(2);
+    for (const out of [a, b]) expect(out).toMatch(/advanced proposta prop-1|already Assinada/);
   });
 });
 
