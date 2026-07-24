@@ -28,7 +28,7 @@ import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './str
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
-import { knowledgeToolSpecs, loadContextToolSpec, delegateToolSpec } from './sdk-tools.js';
+import { knowledgeToolSpecs, loadContextToolSpec, delegateToolSpec, docxToolSpecs } from './sdk-tools.js';
 import { classifyInBuildIntent } from './guided-build.js';
 import {
   persistJob,
@@ -433,8 +433,19 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,
         // Builds mount the knowledge tools + the context-loading tool + the §5.4.8 local-bridge
-        // delegation tool as in-process MCP (§5.4.4; ch18 §18.2).
-        sdkTools: [...knowledgeToolSpecs(input.actor), loadContextToolSpec(input.actor, 'coding'), delegateToolSpec(input.actor, input.sessionId)],
+        // delegation tool as in-process MCP (§5.4.4; ch18 §18.2), plus the three ekoa-docx tools
+        // (2C-S5). The docx tools are ARTIFACT-BOUND: appId = artifactId, so the linked Word
+        // document they read/link/redline is the one on the artifact being built - never an id
+        // the model can name. Attribution ("<user> (Ekoa)" on every w:ins/w:del) and the path
+        // jail for `path` arguments (the run's projectDir) likewise bind HERE, from the run, not
+        // from tool arguments. Before the first build resolves an artifact, appId is undefined
+        // and the artifact-bound tools say so honestly.
+        sdkTools: [
+          ...knowledgeToolSpecs(input.actor),
+          loadContextToolSpec(input.actor, 'coding'),
+          delegateToolSpec(input.actor, input.sessionId),
+          ...docxToolSpecs({ appId: artifactId || undefined, userName: input.username, allowedDirs: projectDir ? [projectDir] : [] }),
+        ],
         cwd: projectDir || undefined,
         homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),

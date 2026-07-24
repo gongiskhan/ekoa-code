@@ -67,7 +67,11 @@ import {
   getCurrent as docxGetCurrent,
   getClean as docxGetClean,
   applyReview as docxApplyReview,
+  setSource as docxSetSource,
+  applyEdits as docxApplyEdits,
 } from './apps/document-source.js';
+import { projectDocx } from './services/docx-redline.js';
+import { createDocxFetcher } from './integrations/docx-fetch.js';
 import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
@@ -102,6 +106,7 @@ import {
   setLocalActivitySources,
   setVerifyRunner,
   setBuildMechanics,
+  setDocxToolSeams,
   setIntegrationPrefetch,
   setCatalog,
   sweepOrphans,
@@ -588,15 +593,37 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const workspaceNotConnected = (what: string) => async (): Promise<never> => {
     throw Object.assign(new Error(`${what} is not connected`), { code: 'not_connected' });
   };
+  /** The workspace cloud-storage credential seam, shared by the served-app cloud plane and the
+   *  docx link ingest: both report the same honest not-connected state until the platform-
+   *  integrations credential store lands - never a silent failure or a fake success. */
+  const workspaceCloudFiles = {
+    getStatus: async () => ({ google: { connected: false, needsReauth: false }, microsoft: { connected: false, needsReauth: false } }),
+    getAccessToken: workspaceNotConnected('Workspace cloud storage'),
+  };
+
+  // 2C-S5 - the three ekoa-docx agent tools (agents/sdk-tools.ts `docxToolSpecs`, mounted on
+  // build runs). agents/ owns no document logic: the per-artifact document lifecycle
+  // (apps/document-source.ts), the pure track-changes engine (services/docx-redline.ts) and the
+  // SSRF-guarded link/cloud ingest (integrations/docx-fetch.ts, over the workspace-credential
+  // seam above) reach it ONLY through this seam, wired here and nowhere else. The appId the tools
+  // act on binds from the RUN (build.ts: appId = artifactId), never from a tool argument.
+  const docxFetcher = createDocxFetcher(workspaceCloudFiles);
+  setDocxToolSeams({
+    projectBuffer: (buffer) => projectDocx(buffer),
+    getProjection: docxGetProjection,
+    setSource: async (appId, opts) => {
+      const status = await docxSetSource(appId, opts);
+      return { fileName: status.fileName ?? opts.fileName };
+    },
+    applyEdits: docxApplyEdits,
+    fetchFromUrl: (url) => docxFetcher.fetchDocxFromUrl(url),
+    fetchFromCloud: (provider, opts) => docxFetcher.fetchDocxFromCloud(provider, opts),
+  });
 
   // Raw-body served-app planes mount BEFORE the global JSON parser: their proxied/
   // uploaded bytes must arrive unconsumed (each carries its own per-route parsers).
   app.use('/api/m365', m365ProxyRouter({ resolveAppScope, getWorkspaceGraphToken: workspaceNotConnected('Microsoft workspace integration'), verifyToken }));
-  app.use('/api/app-cloud-files', appCloudFilesRouter({
-    resolveAppScope,
-    getStatus: async () => ({ google: { connected: false, needsReauth: false }, microsoft: { connected: false, needsReauth: false } }),
-    getAccessToken: workspaceNotConnected('Workspace cloud storage'),
-  }));
+  app.use('/api/app-cloud-files', appCloudFilesRouter({ resolveAppScope, ...workspaceCloudFiles }));
   app.use('/api/app-files', appFilesRouter());
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 

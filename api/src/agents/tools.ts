@@ -22,6 +22,16 @@ export const DELEGATION_TOOL = 'delegate_to_local';
 /** Read-only file tools for a text run that carries attachments (§5.4.4). */
 export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 
+/**
+ * The three ekoa-docx tools (2C-S5, ch07 document base v2): read the CriticMarkup projection of
+ * a Word document, link a source .docx to the artifact, and apply an atomic native-track-changes
+ * batch to it. BUILD RUNS ONLY - they are artifact-bound (appId = the artifact being built), so
+ * a hosted chat turn has nothing for them to operate on. The read-only `docx_read` subset for
+ * chat-with-attachments is DESCOPED (docs/decisions.md 2026-07-25): ekoa-code's text-attachments
+ * run class mounts no in-process tools and has no attachment-path plumbing today.
+ */
+export const DOCX_TOOLS = ['docx_read', 'docx_source_set', 'docx_apply_edits'] as const;
+
 export type RunToolClass = 'chat' | 'build' | 'text-attachments' | 'pure-text' | 'brand-research' | 'integration-builder';
 
 export interface ToolPolicy {
@@ -34,7 +44,7 @@ export interface ToolPolicy {
  * Resolve the tool policy for a run class. Chat is locked to the two knowledge tools plus the
  * §5.4.8 local-bridge delegation tool — never Bash/Write/Edit on the hosted machine (§5.4.4,
  * acceptance criterion 5; delegation runs on the USER's machine inside their grants, ch18).
- * Builds get the coding preset plus the knowledge + delegation tools. Brand research is
+ * Builds get the coding preset plus the knowledge + delegation + docx tools. Brand research is
  * deliberately tool-less so a prompt-injected page cannot launder server config back as "the
  * brand" (§5.6.4).
  */
@@ -44,7 +54,10 @@ export function toolPolicyFor(runClass: RunToolClass): ToolPolicy {
     case 'chat':
       return { allowedTools: [...KNOWLEDGE_TOOLS, DELEGATION_TOOL], maxTurns: cfg.maxTurnsText };
     case 'build':
-      return { allowedTools: [...CODING_PRESET, CONTEXT_LOADING_TOOL, ...KNOWLEDGE_TOOLS, DELEGATION_TOOL], maxTurns: cfg.maxTurnsBuild };
+      return {
+        allowedTools: [...CODING_PRESET, CONTEXT_LOADING_TOOL, ...KNOWLEDGE_TOOLS, DELEGATION_TOOL, ...DOCX_TOOLS],
+        maxTurns: cfg.maxTurnsBuild,
+      };
     case 'text-attachments':
       return { allowedTools: [...ATTACHMENT_TOOLS], maxTurns: cfg.maxTurnsText };
     case 'pure-text':

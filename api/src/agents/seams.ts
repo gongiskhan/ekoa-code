@@ -10,6 +10,8 @@
  * reports "not run". A missing collaborator degrades gracefully, never crashes a run.
  */
 import type { Actor } from '@ekoa/shared';
+import type { RedlineOp, RedlineReport } from '../services/docx-redline.js';
+import type { CloudProvider } from '../integrations/app-cloud-files.js';
 
 // --- Content loader (ch05 §5.5.1, ch08) --------------------------------------------------
 
@@ -245,6 +247,61 @@ export function getLocalActivitySources(): LocalActivitySources {
   return localActivitySources;
 }
 
+// --- Document (docx) agent tools (2C-S5; ch07 document base v2) ----------------------------
+
+/**
+ * The docx collaborators behind the three `docx_*` in-process tools (agents/sdk-tools.ts).
+ * `agents/` owns no document logic: the per-artifact document lifecycle lives in
+ * `apps/document-source.ts` (tier 5 - reached ONLY through this seam, never a sibling import),
+ * the pure track-changes engine in `services/docx-redline.ts`, and the link/cloud ingest in
+ * `integrations/docx-fetch.ts` (whose credential seam is constructed at the root). One seam
+ * for all three keeps the wiring in a single composition-root statement.
+ *
+ * `applyEdits` REJECTS a batch by throwing the engine's `RedlineBatchError` (per-op failures);
+ * the tool turns that into tool CONTENT so the model can self-correct - see sdk-tools.ts.
+ */
+export interface DocxToolSeams {
+  /** CriticMarkup projection of an arbitrary .docx buffer (services/docx-redline projectDocx). */
+  projectBuffer(buffer: Buffer): Promise<string>;
+  /** Projection of the artifact's linked document (apps/document-source getProjection). */
+  getProjection(appId: string): Promise<{ markdown: string; fileName: string }>;
+  /** Link a source .docx to the artifact (apps/document-source setSource - 25 MB choke inside). */
+  setSource(appId: string, opts: { buffer: Buffer; fileName: string; origin: string }): Promise<{ fileName: string }>;
+  /** Atomic tracked-changes batch on the artifact's linked document (apps/document-source). */
+  applyEdits(
+    appId: string,
+    ops: RedlineOp[],
+    opts: { author: string; dryRun?: boolean },
+  ): Promise<{ report: RedlineReport; projection: string; fileName: string }>;
+  /** Direct/share-link ingest (integrations/docx-fetch - SSRF-guarded, 25 MB triple-enforced). */
+  fetchFromUrl(url: string): Promise<{ buffer: Buffer; fileName: string; source: string }>;
+  /** Workspace cloud ingest by fileId/query (integrations/docx-fetch, honest cloud degrade). */
+  fetchFromCloud(
+    provider: CloudProvider,
+    opts: { fileId?: string; query?: string },
+  ): Promise<{ buffer: Buffer; fileName: string; source: string; chosenFrom?: { matches: number; name: string } }>;
+}
+
+/** Honest default: an unwired root has no document pipeline, so every operation says so. The
+ *  tools catch it and return the sentence as tool CONTENT - a missing collaborator degrades to
+ *  an honest "not available" the agent can report, never a crashed run and never a fake success. */
+const DOCX_UNAVAILABLE = 'Word document support is not wired in this deployment.';
+const defaultDocxToolSeams: DocxToolSeams = {
+  async projectBuffer() { throw new Error(DOCX_UNAVAILABLE); },
+  async getProjection() { throw new Error(DOCX_UNAVAILABLE); },
+  async setSource() { throw new Error(DOCX_UNAVAILABLE); },
+  async applyEdits() { throw new Error(DOCX_UNAVAILABLE); },
+  async fetchFromUrl() { throw new Error(DOCX_UNAVAILABLE); },
+  async fetchFromCloud() { throw new Error(DOCX_UNAVAILABLE); },
+};
+let docxToolSeams: DocxToolSeams = defaultDocxToolSeams;
+export function setDocxToolSeams(s: DocxToolSeams): void {
+  docxToolSeams = s;
+}
+export function getDocxToolSeams(): DocxToolSeams {
+  return docxToolSeams;
+}
+
 // --- Per-build verification runner (ch05 §5.6.2 step 5, ch07 §7.2.6) ----------------------
 
 export interface VerifyRunInput {
@@ -399,6 +456,7 @@ export function __resetAgentSeamsForTests(): void {
   catalogFn = defaultCatalog;
   delegateToLocalFn = defaultDelegateToLocal;
   localActivitySources = defaultLocalActivitySources;
+  docxToolSeams = defaultDocxToolSeams;
   verifyRunnerFn = defaultVerifyRunner;
   buildMechanics = noopBuildMechanics;
 }

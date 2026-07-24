@@ -30,6 +30,7 @@ export {
   setLocalActivitySources,
   setVerifyRunner,
   setBuildMechanics,
+  setDocxToolSeams,
   type AssembleAgentContext,
   type KnowledgeGroundingFn,
   type IngestBuildKnowledgeFn,
@@ -45,4 +46,5 @@ export {
   type LocalActivitySources,
   type VerifyRunnerFn,
   type BuildMechanics,
+  type DocxToolSeams,
 } from './seams.js';

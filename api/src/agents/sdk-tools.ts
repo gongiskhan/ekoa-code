@@ -11,11 +11,19 @@
  *
  * Schemas are zod/v4 (the SDK's in-process MCP server requires the v4 `_zod` marker; the
  * shared/ contract stays on v3 — see llm/sdk-tools.ts).
+ *
+ * The three docx tools (2C-S5) live here for the same reason: ekoa-dev shipped them as their own
+ * Agent SDK MCP server, which no module outside `llm/` may import (FIXED-3/13), so they are
+ * declared as plain specs over the `DocxToolSeams` seam and the chokepoint mounts them.
  */
+import { basename, resolve, sep } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod/v4';
 import type { SdkToolSpec } from '../llm/index.js';
-import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL } from './tools.js';
-import { knowledgeToolSearch, knowledgeToolRead, loadContextContent, delegateToLocalTool, type DelegationToolResult } from './seams.js';
+import { isCloudProvider } from '../integrations/app-cloud-files.js';
+import type { RedlineOp, RedlineOpFailure } from '../services/docx-redline.js';
+import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL, DOCX_TOOLS } from './tools.js';
+import { knowledgeToolSearch, knowledgeToolRead, loadContextContent, delegateToLocalTool, getDocxToolSeams, type DelegationToolResult } from './seams.js';
 
 /** The actor identity a tool run is bound to (a subset of the route Actor). */
 export interface ToolActor {
@@ -150,6 +158,261 @@ function formatDelegationResult(r: DelegationToolResult): string {
   if (r.patches?.length) lines.push(`Alterações:\n${r.patches.map((p) => `- ${p.path}: ${p.diff}`).join('\n')}`);
   if (r.ledgerRefs.length) lines.push(`Registos no ledger local: ${r.ledgerRefs.join(', ')}`);
   return lines.join('\n\n');
+}
+
+// --- The three ekoa-docx tools (2C-S5; ch07 document base v2) -----------------------------
+
+/**
+ * Ported from ekoa-dev cortex/src/adapters/docx-mcp.ts, which built its own SDK MCP server.
+ * It does NOT port as-is: only `api/src/llm/` may import the provider SDK (FIXED-3/13), so the
+ * three tools are re-expressed as ordinary `SdkToolSpec`s and the chokepoint mounts them on the
+ * one `ekoa` in-process MCP server like every other tool. Nothing else changes for the model:
+ * edits still land as NATIVE Word Track Changes (w:ins/w:del, attributed author + date) and
+ * NATIVE Word comments, preserving the original formatting - the lawyer opens the result in
+ * Word's review pane.
+ *
+ * CONTEXT-BOUND, like dev: the specs are built per run with the artifact appId (build.ts binds
+ * appId = artifactId), the acting user's name (revision attribution) and the directories a
+ * `path` argument may resolve into. The collaborators (document lifecycle, redline engine,
+ * link/cloud ingest) arrive through the `DocxToolSeams` seam wired at the composition root, so
+ * this module stays collaborator-free and the tools are testable without booting the stack.
+ */
+export interface DocxToolContext {
+  /** Artifact/app id whose linked document the no-path tools operate on. */
+  appId?: string;
+  /** Acting user's display name - revisions are attributed "<name> (Ekoa)". */
+  userName?: string;
+  /** Directories `path` arguments may resolve into (the run's projectDir; attachments once the
+   *  DESCOPED chat-attachment path lands). */
+  allowedDirs: string[];
+}
+
+/** VERBATIM from dev (prompt-engineering artifact: the model reads CriticMarkup through it). */
+const PROJECTION_LEGEND = [
+  'Legend: {++text++} = tracked insertion, {--text--} = tracked deletion (native Word Track Changes).',
+  '{>>[Chg:N] author<<} = pending tracked change N - accept/reject ops take N as target_id.',
+  '{>>[Com:N] author: text<<} = comment thread N - reply/resolve/unresolve ops take N as target_id.',
+  'A "(RESOLVED)" suffix after the date means that comment thread is already marked done in Word.',
+].join('\n');
+
+/** VERBATIM from dev (prompt-engineering artifact: it teaches the model how to insert paragraphs
+ *  without breaking the document's real numbering). */
+const MODIFY_GUIDANCE =
+  "modify: replacement text. '' = tracked delete. Equal to target_text (plus comment) = comment-only. " +
+  "To insert new paragraphs, keep target_text unchanged at the start of new_text and append '\\n' lines: " +
+  "plain lines continue the anchor paragraph's style INCLUDING clause numbering, a '# ' prefix makes a Heading 1. " +
+  "NEVER start an inserted line with a '1.' style marker - it breaks the document's real numbering.";
+
+/** Dev's `textResult`: the SDK tool-result contract is TEXT, so structured payloads ship as the
+ *  same pretty JSON string dev's MCP bridge produced (the model parses it identically). */
+function jsonResult(payload: unknown): string {
+  return JSON.stringify(payload, null, 2);
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Resolve a caller-supplied path strictly INSIDE one of the allowed dirs (dev's rule verbatim -
+ * the same containment check the SDK applies to additionalDirectories): traversal (`..`,
+ * absolute escapes) lands outside every allowed root and is rejected. Note it is a PATH
+ * containment check, not a filesystem-realpath one, exactly as the SDK's own rule is; for a
+ * build run that is not a privilege boundary anyway (the coding preset already carries
+ * Bash/Read over the machine), it keeps the model honest about which document it is reading.
+ */
+function resolveInAllowedDirs(ctx: DocxToolContext, rawPath: string): string {
+  const resolved = resolve(rawPath);
+  for (const dir of ctx.allowedDirs) {
+    const root = resolve(dir);
+    if (resolved === root || resolved.startsWith(root + sep)) return resolved;
+  }
+  throw new Error(`path is outside the allowed directories: ${rawPath}`);
+}
+
+const opSchema = z.object({
+  type: z.enum(['modify', 'accept', 'reject', 'reply', 'resolve', 'unresolve']).describe(
+    'modify = tracked text change/comment; accept/reject = settle a pending [Chg:N]; reply = answer a [Com:N] thread; ' +
+      "resolve/unresolve = mark a [Com:N] thread done or reopen it (Word's Resolve, whole thread).",
+  ),
+  target_text: z.string().optional().describe(
+    'modify: the EXACT text to change, copied verbatim from the projection - accents, spacing and punctuation included.',
+  ),
+  new_text: z.string().optional().describe(MODIFY_GUIDANCE),
+  comment: z.string().optional().describe('Optional Word comment attached to this change.'),
+  match_mode: z.enum(['strict', 'first', 'all']).optional().describe(
+    "modify: 'strict' (default) fails with an occurrence list when target_text is ambiguous; 'first'/'all' override deliberately.",
+  ),
+  target_id: z.string().optional().describe(
+    'accept/reject/reply/resolve/unresolve: the Chg/Com id (N) from the projection.',
+  ),
+  text: z.string().optional().describe('reply: the reply text for the comment thread.'),
+});
+
+/**
+ * A rejected redline batch, or null for any other error. Detected by the error's own name +
+ * shape (app-docx.ts's property-based precedent) so this module needs no runtime import of the
+ * engine - the real `RedlineBatchError` (services/docx-redline.ts) satisfies it by construction.
+ */
+function redlineFailures(err: unknown): RedlineOpFailure[] | null {
+  const e = err as { name?: unknown; failures?: unknown } | null;
+  if (e && e.name === 'RedlineBatchError' && Array.isArray(e.failures)) return e.failures as RedlineOpFailure[];
+  return null;
+}
+
+/**
+ * The three docx tools, context-bound (dev's `buildDocxTools`). Mounted on BUILD runs only
+ * (tools.ts `DOCX_TOOLS`), where `appId` is the artifact being built.
+ */
+export function docxToolSpecs(ctx: DocxToolContext): SdkToolSpec[] {
+  const [readName, sourceSetName, applyName] = DOCX_TOOLS;
+  return [
+    {
+      name: readName,
+      description:
+        'Read a Word document as a CriticMarkup markdown projection showing existing tracked changes and comments. ' +
+        "With `path`, reads that .docx file (e.g. a chat attachment); without arguments, reads the artifact's linked document. " +
+        'ALWAYS read the projection before editing and copy target_text values EXACTLY from it (accents included).',
+      inputSchema: {
+        path: z.string().optional().describe('Absolute path to a .docx file inside the allowed directories. Omit to read the linked document.'),
+      },
+      handler: async (args) => {
+        const docx = getDocxToolSeams();
+        try {
+          if (typeof args.path === 'string' && args.path.trim()) {
+            const filePath = resolveInAllowedDirs(ctx, args.path.trim());
+            const markdown = await docx.projectBuffer(await readFile(filePath));
+            return `${PROJECTION_LEGEND}\n\nFile: ${basename(filePath)}\n\n${markdown}`;
+          }
+          if (!ctx.appId) {
+            return jsonResult({ error: 'No document is linked to this session. Pass `path` to read a specific .docx file.' });
+          }
+          const { markdown, fileName } = await docx.getProjection(ctx.appId);
+          return `${PROJECTION_LEGEND}\n\nFile: ${fileName}\n\n${markdown}`;
+        } catch (err) {
+          return jsonResult({ error: errText(err) });
+        }
+      },
+    },
+    {
+      name: sourceSetName,
+      description:
+        'Link a source Word document (.docx) to this artifact - edits then apply to it with native Word Track Changes. ' +
+        'Provide EXACTLY ONE source: `path` (local file), `url` (direct link, OneDrive/SharePoint or Google Drive share link), ' +
+        'or `provider` + `fileId`/`query` (workspace cloud storage; `query` searches and picks the best match). ' +
+        'Returns the file name and the full projection.',
+      inputSchema: {
+        path: z.string().optional().describe('Absolute path to a .docx inside the allowed directories.'),
+        url: z.string().optional().describe('https link to the document (direct .docx, OneDrive/SharePoint or Google Drive).'),
+        provider: z.string().optional().describe("Cloud provider: 'google' or 'microsoft'. Use with fileId or query."),
+        fileId: z.string().optional().describe('Cloud file id from a previous listing.'),
+        query: z.string().optional().describe('Cloud search terms - the first .docx match is used.'),
+      },
+      handler: async (args) => {
+        const docx = getDocxToolSeams();
+        try {
+          if (!ctx.appId) {
+            return jsonResult({ error: 'No artifact app is bound to this session - the linked document lives on the artifact being built.' });
+          }
+          const path = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
+          const url = typeof args.url === 'string' && args.url.trim() ? args.url.trim() : undefined;
+          const provider = typeof args.provider === 'string' && args.provider.trim() ? args.provider.trim() : undefined;
+          const sourceCount = [path, url, provider].filter(Boolean).length;
+          if (sourceCount !== 1) {
+            return jsonResult({ error: 'Provide exactly one source: `path`, `url`, or `provider` with `fileId`/`query`.' });
+          }
+
+          let buffer: Buffer;
+          let fileName: string;
+          let origin: string;
+          let chosenNote = '';
+
+          if (path) {
+            const filePath = resolveInAllowedDirs(ctx, path);
+            buffer = await readFile(filePath);
+            fileName = basename(filePath);
+            origin = 'path';
+          } else if (url) {
+            const fetched = await docx.fetchFromUrl(url);
+            buffer = fetched.buffer;
+            fileName = fetched.fileName;
+            origin = fetched.source;
+          } else {
+            if (!provider || !isCloudProvider(provider)) {
+              return jsonResult({ error: "provider must be 'google' or 'microsoft'" });
+            }
+            const fileId = typeof args.fileId === 'string' && args.fileId.trim() ? args.fileId.trim() : undefined;
+            const query = typeof args.query === 'string' && args.query.trim() ? args.query.trim() : undefined;
+            if (!fileId && !query) {
+              return jsonResult({ error: 'With `provider`, pass `fileId` or `query`.' });
+            }
+            const fetched = await docx.fetchFromCloud(provider, { fileId, query });
+            buffer = fetched.buffer;
+            fileName = fetched.fileName;
+            origin = fetched.source;
+            if (fetched.chosenFrom) {
+              chosenNote = `Chosen from ${fetched.chosenFrom.matches} match(es): "${fetched.chosenFrom.name}".`;
+            }
+          }
+
+          const status = await docx.setSource(ctx.appId, { buffer, fileName, origin });
+          const { markdown } = await docx.getProjection(ctx.appId);
+          const header = [`Linked document: ${status.fileName}`, chosenNote].filter(Boolean).join('\n');
+          return `${header}\n\n${PROJECTION_LEGEND}\n\n${markdown}`;
+        } catch (err) {
+          return jsonResult({ error: errText(err) });
+        }
+      },
+    },
+    {
+      name: applyName,
+      description:
+        "Apply a batch of edits to the artifact's linked Word document as NATIVE tracked changes/comments. " +
+        'The batch is ATOMIC: everything applies or nothing does. Copy each target_text EXACTLY from the projection ' +
+        '(accents included), batch related edits together, and use dry_run first for risky batches. ' +
+        'On failure the per-op errors (with occurrence lists) are returned so you can fix the targets and retry.',
+      inputSchema: {
+        ops: z.array(opSchema).min(1).describe('The edit operations, applied as one atomic batch.'),
+        dry_run: z.boolean().optional().describe('Validate the whole batch without saving anything.'),
+      },
+      handler: async (args) => {
+        const docx = getDocxToolSeams();
+        if (!ctx.appId) {
+          return jsonResult({ error: 'No artifact app is bound to this session - link a document with docx_source_set first.' });
+        }
+        const author = ctx.userName ? `${ctx.userName} (Ekoa)` : 'Ekoa';
+        const dryRun = args.dry_run === true;
+        try {
+          const { report, projection, fileName } = await docx.applyEdits(
+            ctx.appId,
+            args.ops as RedlineOp[],
+            { author, dryRun },
+          );
+          return jsonResult({
+            status: dryRun ? 'dry_run_ok' : 'applied',
+            fileName,
+            edits_applied: report.edits_applied,
+            actions_applied: report.actions_applied,
+            occurrences_modified: report.occurrences_modified,
+            resolutions_applied: report.resolutions_applied ?? 0,
+            projection: `${PROJECTION_LEGEND}\n\n${projection}`,
+          });
+        } catch (err) {
+          const failures = redlineFailures(err);
+          if (failures) {
+            // Failures come back as TOOL OUTPUT, not a thrown error, so the
+            // agent can read adeu's occurrence guidance and self-correct.
+            return jsonResult({
+              status: 'rejected',
+              applied: false,
+              failures: failures.map((f) => ({ index: f.index, error: f.error })),
+            });
+          }
+          return jsonResult({ error: errText(err) });
+        }
+      },
+    },
+  ];
 }
 
 /** The build-run `load_context` tool (§5.4.4 build row): pull a named on-demand content
