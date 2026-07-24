@@ -17,7 +17,7 @@ import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
 import { users, integrationConfigs } from './data/stores.js';
-import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
+import { CollectionsEngine, sharedScope, appScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
@@ -64,8 +64,9 @@ import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
 import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
-import { adobeSignRouter } from './integrations/adobe-sign.js';
-import { zohoSignRouter, makeZohoSignBackend } from './integrations/zoho-sign.js';
+import { adobeSignRouter, handleAdobeWebhook, notConnectedBackend } from './integrations/adobe-sign.js';
+import { zohoSignRouter, makeZohoSignBackend, handleZohoWebhook } from './integrations/zoho-sign.js';
+import { recordZohoAgreement, findZohoAgreement, findAdobeAgreement } from './integrations/sign-agreements.js';
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
 import { CITIUS_WATCH_COLLECTION } from './legal/insolvencia-watch.js';
@@ -687,29 +688,65 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       },
     },
   }));
-  app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
-  // Zoho Sign served-app proxy (2B-S2): sibling of the Adobe proxy, but Zoho is the
+  // E-signature inbound-webhook advance (2B-S3), shared by both providers: a signature
+  // completion advances the owner's `propostas` record to 'Assinada' through the SAME
+  // collections engine the served app itself drives. `propostas` is PER-APP data (the
+  // /api/app-data plane's appScope), not the org-shared spine — so the advance keys on
+  // the canonical appId carried in the reverse-index row, never a client value. The
+  // handlers NEVER trust the payload: they re-fetch owner-scoped and re-confirm the client
+  // signed before this idempotent (stage !== 'Assinada') advance.
+  const getProposta = (appId: string, id: string) => legalEngine.get(appScope(appId), 'propostas', id);
+  const updateProposta = async (appId: string, id: string, patch: Record<string, unknown>): Promise<void> => {
+    await legalEngine.upsert(appScope(appId), 'propostas', id, patch);
+  };
+  // Adobe stays facade-only (notConnectedBackend): wiring the webhook deps + the
+  // adobe_agreements find makes migrated rows routable and the dispatch LIVE, but the
+  // owner-scoped re-fetch (getAgreement) fails closed → a forged/real event is a no-op
+  // until a live Adobe backend exists. The resolveApp gate + webhook echo are unchanged.
+  app.use('/', adobeSignRouter({
+    resolveApp: resolveAppScope,
+    backend: notConnectedBackend,
+    onWebhook: (payload) =>
+      handleAdobeWebhook(payload, {
+        findAgreement: findAdobeAgreement,
+        getAgreement: (ownerUserId, agreementId) => notConnectedBackend.getAgreement(ownerUserId, agreementId),
+        getProposta,
+        updateProposta,
+      }),
+  }));
+  // Zoho Sign served-app proxy (2B-S2/S3): sibling of the Adobe proxy, but Zoho is the
   // fully LIVE provider. Every external dep is injected from this composition root —
   // HTML→PDF (integrations/ may NOT import apps/), the owner→org lookup (ResolvedAppScope
   // has no orgId, the same users-store lambda the legal portal seam uses at L661 above),
-  // config custody (findConfigForOwner + decrypt), and credential persistence (re-encrypt
-  // + integrationConfigs CAS, mirroring the executor's persistProviderCredentialUpdates).
-  // The inbound-webhook business logic (agreement index + owner-scoped advance) lands in
-  // 2B-S3, wired via the onWebhook seam then; here the webhook route is the public ack only.
+  // config custody (findConfigForOwner + decrypt), credential persistence (re-encrypt +
+  // integrationConfigs CAS, mirroring the executor's persistProviderCredentialUpdates),
+  // and (2B-S3) the requestId→proposta reverse-index write at send time (recordAgreement).
+  const zohoBackend = makeZohoSignBackend({
+    getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
+    findConfigForOwner,
+    decrypt,
+    renderHtmlToPdf,
+    persistOwnerCredentialUpdates: async (configId, currentFields, updates) => {
+      const merged: Record<string, unknown> = { ...currentFields, ...updates };
+      delete merged.storageState;
+      const ciphertext = encrypt(JSON.stringify(merged));
+      await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
+    },
+    recordAgreement: recordZohoAgreement,
+  });
   app.use('/', zohoSignRouter({
     resolveApp: resolveAppScope,
-    backend: makeZohoSignBackend({
-      getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
-      findConfigForOwner,
-      decrypt,
-      renderHtmlToPdf,
-      persistOwnerCredentialUpdates: async (configId, currentFields, updates) => {
-        const merged: Record<string, unknown> = { ...currentFields, ...updates };
-        delete merged.storageState;
-        const ciphertext = encrypt(JSON.stringify(merged));
-        await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
-      },
-    }),
+    backend: zohoBackend,
+    // 2B-S3 inbound webhook: the owner-scoped re-fetch runs through the SAME live backend's
+    // getRequest (never the payload); a client-signed request idempotently advances the
+    // proposta exactly once (a replay is a no-op).
+    onWebhook: (payload) =>
+      handleZohoWebhook(payload, {
+        findAgreement: findZohoAgreement,
+        getRequest: (ownerUserId, requestId) => zohoBackend.getRequest(ownerUserId, requestId),
+        getProposta,
+        updateProposta,
+      }),
   }));
   app.get('/api/design-tokens.css', designTokensHandler());
   // Served-app document export (ch07 §7.12): window.__ekoa.exportPdf POSTs the serialized DOM

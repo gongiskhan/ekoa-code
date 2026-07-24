@@ -995,6 +995,133 @@ export const notConnectedZohoBackend: ZohoSignBackend = {
 };
 
 // ----------------------------------------------------------------------------
+// Inbound-webhook business logic (owner-scoped re-verify; replay-safe)
+//
+// Parity with adobe-sign.handleAdobeWebhook, now that Zoho replaced Adobe on the
+// SALOMAO ERP. SECURITY: the webhook route is PUBLIC + credential-free, so a
+// "completed" body could be forged. This handler NEVER trusts the payload for
+// signature STATE — it resolves the requestId to a known ERP record via the
+// owner-scoped reverse index, RE-FETCHES the request owner-scoped (injected
+// getRequest), and only then confirms the CLIENT specifically signed. A
+// forged/unknown/unverifiable/unsigned requestId is a fail-closed no-op. The advance
+// is idempotent (guarded on stage !== 'Assinada'), so a replay advances exactly once
+// and cannot race the still-running client-side portal poll into a double-advance.
+// ----------------------------------------------------------------------------
+
+/** Zoho action_status considered "signed". */
+function isZohoSignedActionStatus(s: unknown): boolean {
+  return String(s || '').toUpperCase() === 'SIGNED';
+}
+
+/**
+ * Has the given signer ("the client") signed this request? Server-side mirror of the
+ * ERP frontend's `zohoEmailSigned`: true if the WHOLE request is `completed`, OR the
+ * action matching `email` is in a `SIGNED` status. Feed this the raw request from
+ * `getRequest`/`fetchRequestRaw` so mid-flight (client signed, BSM pending) is detected
+ * even before the request itself completes. Mirrors adobeClientSigned.
+ */
+export function zohoClientSigned(request: unknown, email: string): boolean {
+  const r = (request || {}) as ZohoRequest;
+  if (String(r.request_status || '').toLowerCase() === 'completed') return true;
+  const want = String(email || '').toLowerCase();
+  const actions = Array.isArray(r.actions) ? r.actions : [];
+  return actions.some((a) => str(a.recipient_email).toLowerCase() === want && isZohoSignedActionStatus(a.action_status));
+}
+
+/** Injected collaborators for the inbound-webhook advance (wired at the composition
+ *  root; the store-backed find + the owner-scoped re-fetch + the propostas engine).
+ *  Mirrors AdobeWebhookDeps — integrations/ never reaches data/ or the backend directly
+ *  from the public webhook path. */
+export interface ZohoWebhookDeps {
+  /** Reverse index lookup (requestId -> ERP record). Root: sign-agreements.findZohoAgreement. */
+  findAgreement: (requestId: string) => Promise<ZohoAgreementRef | null>;
+  /** Owner-scoped re-fetch of the live request (NEVER the payload). Root: the live Zoho
+   *  backend's getRequest. */
+  getRequest: (ownerUserId: string, requestId: string) => Promise<unknown>;
+  /** Read the `propostas` record that owns the signature. Root: collections engine (app scope). */
+  getProposta: (appId: string, id: string) => Promise<Record<string, unknown> | null>;
+  /** Idempotent proposal advance. Root: collections engine upsert (app scope). */
+  updateProposta: (appId: string, id: string, patch: Record<string, unknown>) => Promise<void>;
+}
+
+/** Pull the requestId + a best-effort event label out of a Zoho webhook envelope. Zoho
+ *  wraps the payload under `notifications`/`requests` in different account configs; the
+ *  requestId is the only field we key on (the event label is diagnostic only). */
+function extractZohoWebhook(payload: Record<string, unknown>): { requestId: string; event: string } {
+  const notif = ((payload?.notifications ?? payload?.requests ?? payload) || {}) as Record<string, unknown>;
+  const event = String(
+    (payload?.event_type as string) || (notif?.operation_type as string) || (notif?.request_status as string) || '',
+  );
+  const requestId = str(notif?.request_id) || str(payload?.request_id);
+  return { requestId, event };
+}
+
+/**
+ * Process one Zoho Sign webhook notification. Best-effort and self-contained: swallows-
+ * and-logs every error so a malformed event can never crash the process or bubble back
+ * to Zoho (the route already replied 200). Durable STATE ADVANCE only (stage +
+ * eSignature + conversionPending); the heavy conversion still runs client-side off the
+ * `conversionPending` flag. Returns a short outcome string for logging/tests.
+ */
+export async function handleZohoWebhook(payload: Record<string, unknown>, deps: ZohoWebhookDeps): Promise<string> {
+  try {
+    const { requestId, event } = extractZohoWebhook(payload || {});
+    if (!requestId) return zwlog('ignored: no request_id in payload');
+
+    const ref = await deps.findAgreement(requestId);
+    // Unknown requestId = not one of our ERP requests (an account-scoped webhook fires
+    // for every request in the workspace). Silent no-op, no error.
+    if (!ref) return zwlog(`ignored: unknown request_id ${requestId}`);
+
+    // Authenticity + freshness gate: re-fetch owner-scoped, never trust the payload.
+    let request: unknown;
+    try {
+      request = await deps.getRequest(ref.ownerUserId, requestId);
+    } catch (e) {
+      // Fail-closed: do NOT advance on an unverifiable event. Zoho retries.
+      return zwlog(`skip: getRequest failed for ${requestId}: ${(e as Error)?.message}`);
+    }
+    if (!zohoClientSigned(request, ref.clientEmail)) {
+      return zwlog(`skip: client ${ref.clientEmail} not signed yet on ${requestId} (event ${event || 'unknown'})`);
+    }
+
+    // Idempotent advance in the app that owns the record.
+    let proposta: Record<string, unknown> | null = null;
+    try {
+      proposta = await deps.getProposta(ref.appId, ref.propostaId);
+    } catch {
+      proposta = null;
+    }
+    if (!proposta) return zwlog(`skip: proposta ${ref.propostaId} not found in ${ref.appId}`);
+    if (String(proposta.stage) === 'Assinada') return zwlog(`no-op: proposta ${ref.propostaId} already Assinada`);
+
+    const nowIso = new Date().toISOString();
+    const existingESig =
+      proposta.eSignature && typeof proposta.eSignature === 'object' ? (proposta.eSignature as Record<string, unknown>) : {};
+    const assinatura =
+      proposta.assinatura && typeof proposta.assinatura === 'object' ? (proposta.assinatura as Record<string, unknown>) : {};
+    const signatario = String(assinatura.nome || proposta.client || 'Cliente');
+
+    await deps.updateProposta(ref.appId, ref.propostaId, {
+      stage: 'Assinada',
+      // Spread the existing nested eSignature so we don't clobber requestId/participants.
+      eSignature: { ...existingESig, status: 'SIGNED', clientSignedAt: nowIso },
+      assinaturaCliente: { nome: signatario, data: nowIso },
+      assinadaEm: nowIso,
+      conversionPending: true,
+    });
+    return zwlog(`advanced proposta ${ref.propostaId} (${ref.appId}) -> Assinada + conversionPending (request ${requestId})`);
+  } catch (e) {
+    return zwlog(`error: ${(e as Error)?.message}`);
+  }
+}
+
+function zwlog(msg: string): string {
+  console.log('[zoho-sign] webhook', msg);
+  return msg;
+}
+
+// ----------------------------------------------------------------------------
 // Served-app router (mirrors adobeSignRouter — X-Ekoa-App-Id → owner → backend)
 // ----------------------------------------------------------------------------
 

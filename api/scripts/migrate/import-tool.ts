@@ -38,6 +38,7 @@ import {
   integrationConfigs,
   appSessions,
   adobeAgreements,
+  zohoAgreements,
   tokenEvents,
   billingAccounts,
   activityLogs,
@@ -518,6 +519,9 @@ export function buildPlan(source: LoadedSource): FamilyPlan[] {
     buildIntegrationConfigs(source.readArray('integration_configs.json')),
     buildPassthrough('app_sessions', 'app_sessions', source.readArray('app_sessions.json')),
     buildPassthrough('adobe_agreements', 'adobe_agreements', source.readArray('adobe_agreements.json')),
+    // Zoho replaced Adobe on the SALOMAO ERP (2B): the requestId->proposta reverse index
+    // carries verbatim, same tiny non-sensitive shape as adobe_agreements.
+    buildPassthrough('zoho_agreements', 'zoho_agreements', source.readArray('zoho_agreements.json')),
     intDefTyped,
     intDefProse,
     buildPassthrough('token_events', 'token_events', source.readArray('token_events.json')),
@@ -635,6 +639,7 @@ const STORE_BY_COLLECTION: Record<string, Store<Doc>> = {
   integration_configs: integrationConfigs as unknown as Store<Doc>,
   app_sessions: appSessions as unknown as Store<Doc>,
   adobe_agreements: adobeAgreements as unknown as Store<Doc>,
+  zoho_agreements: zohoAgreements as unknown as Store<Doc>,
   token_events: tokenEvents as unknown as Store<Doc>,
   billing_accounts: billingAccounts as unknown as Store<Doc>,
   activity_logs: activityLogs as unknown as Store<Doc>,

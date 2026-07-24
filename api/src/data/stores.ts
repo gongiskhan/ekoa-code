@@ -194,6 +194,14 @@ export const triggers = new Store<Doc>('triggers');
 export const appSessions = new Store<Doc>('app_sessions');
 export const appSsoPending = new Store<Doc>('app_sso_pending');
 export const adobeAgreements = new Store<Doc>('adobe_agreements');
+/** Reverse index: Zoho Sign requestId (`_id`) -> the ERP proposal (+ owning app/user)
+ *  that created it. Sibling of `adobe_agreements` (Zoho replaced Adobe on the SALOMAO
+ *  ERP). Written at send time, read by the inbound `/api/zoho-sign/webhook` handler to
+ *  route a signature event back to the exact app + `propostas` record and to pick the
+ *  owner-scoped credentials for the authenticity re-fetch. Tiny + non-sensitive (no
+ *  credentials); rides the ch10 migration passthrough (import-tool.ts) verbatim. The
+ *  typed record/find helpers live in integrations/sign-agreements.ts. */
+export const zohoAgreements = new Store<Doc>('zoho_agreements');
 export const knowledgeSources = new Store<Doc>('knowledge_sources');
 export const knowledgeUploads = new Store<Doc>('knowledge_uploads');
 export const anonymisationDenyLists = new Store<Doc>('anonymisation_deny_lists');

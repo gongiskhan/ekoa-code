@@ -78,6 +78,15 @@
       "sampled": false
     },
     {
+      "family": "zoho_agreements",
+      "targetCollection": "zoho_agreements",
+      "kind": "collection",
+      "sourceCount": 1,
+      "plannedCount": 1,
+      "checksum": "0716b385601443be682f3ddedc4d0dd5cb214ecd1718f6be3d7b6a41a016bbbe",
+      "sampled": false
+    },
+    {
       "family": "integration_definitions (typed)",
       "targetCollection": "integration_configs",
       "kind": "collection",

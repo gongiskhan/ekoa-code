@@ -414,6 +414,12 @@
         "note": "2B-S1 (ekoa-dev port): tests/integrations/zoho-sign-token.test.ts - Zoho Sign OAuth token core (grant-code exchange+burn via ctx.onCredentialUpdate, refresh+in-memory cache, N-concurrent singleflight, dc->host mapping com/eu, sanitized token errors) + the executor's PROVIDER_CREDENTIAL_RESOLVERS wiring (resolveProviderCredentials('zoho-sign') injecting api_base+access_token so the shipped api/assets/integrations/zoho-sign/config.json httpConfig resolves). Hermetic: in-process Zoho mock via ZOHO_ACCOUNTS_BASE_OVERRIDE/ZOHO_API_BASE_OVERRIDE; runs green in the per-PR vitest lane from landing (module_tests are enforced by npm test, not this census runner). Ratchet applies. The live send/status/sign-url/document proxy + webhook + swap e2e land in later 2B slices (operator-run gate)."
       },
       {
+        "group": "sign inbound-webhook trust model (zoho + adobe)",
+        "count": 1,
+        "targetGate": "G6",
+        "note": "2B-S3: tests/integrations/sign-webhooks.test.ts - the security-critical trust model of the PUBLIC, credential-free /api/{zoho,adobe}-sign/webhook routes, tested directly on the pure deps-injected handleZohoWebhook + handleAdobeWebhook (no mongo/express/real provider). Proves (1) FORGED-PAYLOAD NO-OP: a payload claiming completion never advances - unknown id is never re-fetched, an owner-scoped re-fetch that shows the client unsigned is ignored (payload lied), and a fail-closed re-fetch error (exactly the notConnected Adobe backend) does not advance; (2) REPLAY IDEMPOTENCE: the same real completion delivered twice advances the proposta to 'Assinada' exactly once (guarded on stage). Plus the zohoClientSigned/adobeClientSigned state oracles (whole-request/agreement complete OR the named client action/member signed; a different signer's SIGNED never counts). Green in the per-PR vitest lane from landing; ratchet applies. The live send->sign->webhook durability probe is the 2B-S6 operator-run gate."
+      },
+      {
         "group": "branding token gates",
         "count": 4,
         "targetGate": "G6"
