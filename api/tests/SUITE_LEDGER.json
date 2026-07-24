@@ -200,23 +200,23 @@
       },
       {
         "name": "erp-auth-ui",
-        "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER. Targets the brasilsalomão ERP TENANT FORK (default APP_ID a machine-local fork UUID; emails @brasilsalomao.pt) with app-sso email/password gating + CRM + KYC + ops. The ported featured erp-imobiliario is a simpler financial+clientes ERP with NO app-sso email login (uses an accessCode gate; passwordSignIn/whoami/input[type=email] absent), CRM, or KYC - that fork is NOT in the ported reference catalog (spec §14.1 reference-access) and is reconstituted at cutover (§14.4, OUTSIDE this run). The G9 green ran against a non-committed local fork (ERP_APP_ID override); no committed content can satisfy it. Retargeted G9->CUTOVER (a post-run milestone) at G12 when the fresh e2e:server surfaced it. See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "targetGate": "operator-run salomao",
+        "note": "was G6->G9->CUTOVER. Targets the brasilsalomão ERP TENANT FORK (default APP_ID a machine-local fork UUID; emails @brasilsalomao.pt) with app-sso email/password gating + CRM + KYC + ops. The ported featured erp-imobiliario is a simpler financial+clientes ERP with NO app-sso email login (uses an accessCode gate; passwordSignIn/whoami/input[type=email] absent), CRM, or KYC - that fork is NOT in the ported reference catalog (spec §14.1 reference-access) and is reconstituted at cutover (§14.4, OUTSIDE this run). The G9 green ran against a non-committed local fork (ERP_APP_ID override); no committed content can satisfy it. Retargeted G9->CUTOVER (a post-run milestone) at G12 when the fresh e2e:server surfaced it. See RUN_LOG DEVIATION (2026-07-08, Phase 12). 2B-S5 proven-import: retargeted CUTOVER -> operator-run salomao (NOT cutover; docs/decisions.md) — runs against the locally imported prod instance with EKOA_E2E_SALOMAO_ID set; skips cleanly (exit 0 + SKIP) when it/the api is absent, never a false green."
       },
       {
         "name": "erp-crm-persistence",
-        "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER; same brasilsalomão ERP tenant-fork gap (prospects/propostas CRM not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "targetGate": "operator-run salomao",
+        "note": "was G6->G9->CUTOVER; same brasilsalomão ERP tenant-fork gap (prospects/propostas CRM not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12). 2B-S5 proven-import: retargeted CUTOVER -> operator-run salomao (NOT cutover; docs/decisions.md) — runs against the locally imported prod instance with EKOA_E2E_SALOMAO_ID set; skips cleanly (exit 0 + SKIP) when it/the api is absent, never a false green."
       },
       {
         "name": "erp-kyc",
-        "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER; same gap (KYC dossier surface not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "targetGate": "operator-run salomao",
+        "note": "was G6->G9->CUTOVER; same gap (KYC dossier surface not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12). 2B-S5 proven-import: retargeted CUTOVER -> operator-run salomao (NOT cutover; docs/decisions.md) — runs against the locally imported prod instance with EKOA_E2E_SALOMAO_ID set; skips cleanly (exit 0 + SKIP) when it/the api is absent, never a false green."
       },
       {
         "name": "erp-ops-persistence",
-        "targetGate": "CUTOVER",
-        "note": "was G6->G9->CUTOVER; same gap (contratos/clausulas ops surface not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12)."
+        "targetGate": "operator-run salomao",
+        "note": "was G6->G9->CUTOVER; same gap (contratos/clausulas ops surface not in the featured erp-imobiliario; fork out of the ported catalog, reconstituted at cutover). See RUN_LOG DEVIATION (2026-07-08, Phase 12). 2B-S5 proven-import: retargeted CUTOVER -> operator-run salomao (NOT cutover; docs/decisions.md) — runs against the locally imported prod instance with EKOA_E2E_SALOMAO_ID set; skips cleanly (exit 0 + SKIP) when it/the api is absent, never a false green."
       },
       {
         "name": "ifthenpay",
@@ -315,6 +315,11 @@
         "name": "salomao-erp-zoho-swap",
         "targetGate": "operator-run salomao",
         "note": "2B-S4 (provider swap Adobe->Zoho): REST/env-adapted from cortex/tests/e2e/salomao-erp-zoho-swap.e2e.mjs (no prod id committed - the imported instance id comes from EKOA_E2E_APP_ID/EKOA_E2E_SALOMAO_ID). Two proof layers: (1) PLATFORM SWAP, provable against a bare running api - the /api/zoho-sign proxy + the pluggable /api/signature/send facade + the /api/adobe-sign router are all MOUNTED (each answers its own gate 400, not the terminal unmounted 404), i.e. Zoho is the live provider on the platform; (2) ERP-INSTANCE SWAP - the served SALOMAO bundle calls /api/zoho-sign and NEVER /api/adobe-sign, and the proxy drives a real create->submit->embedded-URL flow for the owner while Adobe stays facade-only (connected:false). Layer 2's halves SKIP cleanly (never a false green) until the SALOMAO instance import (2B-S5) + a connected zoho-sign config exist. Registered at operator-run salomao (AWAITING in the per-PR census lane; driven in the 2B-S6 verification run against the credentialed live stack with EKOA_E2E_APP_ID). Its per-PR-lane hermetic counterpart for the same facade-swap surface is the vitest contract test api/tests/contract/legal-plane.test.ts (signatureSend real schema + provider:'zoho-sign' routes to the live Zoho backend) + api/tests/legal/signature.test.ts. Ratchet applies from landing."
+      },
+      {
+        "name": "salomao-erp-import",
+        "targetGate": "operator-run salomao",
+        "note": "2B-S5 (SALOMAO import machinery): REST/env-adapted from cortex/tests/e2e/salomao-erp-import.e2e.mjs (no prod id committed - the imported instance id comes from EKOA_E2E_SALOMAO_ID; the retired /api/v1/action login + hard-coded id-prefix match are dropped for the open served-app + app-data planes). Proves the import over a running api: (1) the imported SALOMAO ERP is SERVED at /apps/<slug>/ as a real built app (HTML + bundle, not the Building placeholder); (2) BYTE-SAFETY - the featured erp-imobiliario is intact alongside it (the import never disturbs the featured app the 37 byte-compat specs use); (3) DATA LANDED - app-data seeded from the prod dump is readable under the imported id via GET /api/app-data/<coll> (X-Ekoa-App-Id=EKOA_E2E_SALOMAO_ID), which is the 2B-S5 importArtifact.data outcome and simultaneously proves the id is the imported instance (needs EKOA_E2E_SALOMAO_COLL; a clean SKIP otherwise, never a guess). Registered operator-run salomao (AWAITING in the per-PR census lane; driven in the 2B-S6 verification run with EKOA_E2E_SALOMAO_ID set). Its per-PR-lane hermetic counterparts for the same machinery are the vitest contract test api/tests/contract/artifact-family.test.ts (importArtifact applies bundle.data when present; unchanged when absent) + the converter unit test api/tests/migration/convert-dev-bundle.test.ts (prod envelope -> shared ArtifactBundle incl data; non-UTF-8 refusal). SKIPs cleanly (exit 0 + SKIP) when the api is unreachable, EKOA_E2E_SALOMAO_ID is unset, or the instance is not served - never a false green. Ratchet applies from landing."
       }
     ]
   },

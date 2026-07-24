@@ -57,7 +57,7 @@ const PORT = readFileSync(join(REPO_ROOT, 'backend.port'), 'utf-8').trim();
 const BASE = `http://localhost:${PORT}`;
 // Adapted for the rebuild (test-audit 5.1, helper-level only): the old default was a
 // machine-local fork UUID; the deterministic target is the seeded featured app id.
-const APP_ID = process.env.ERP_APP_ID || 'erp-imobiliario';
+const APP_ID = process.env.EKOA_E2E_SALOMAO_ID || process.env.ERP_APP_ID || 'erp-imobiliario';
 const COOKIE = `ekoa_app_sso_${APP_ID}`;
 const APP = `${BASE}/apps/${APP_ID}`;
 
@@ -151,6 +151,14 @@ function realError(text, url = '') {
 }
 
 async function main() {
+  // 2B-S5 (operator-run salomao): this driver targets the IMPORTED SALOMAO ERP fork
+  // (app-sso email login + CRM/KYC/ops), not the featured erp-imobiliario. With no
+  // imported instance it has nothing valid to run against — skip cleanly (never a
+  // false green). The real run is 2B-S6 with EKOA_E2E_SALOMAO_ID set.
+  if (!process.env.EKOA_E2E_SALOMAO_ID && !process.env.ERP_APP_ID) {
+    console.log('SKIP: EKOA_E2E_SALOMAO_ID / ERP_APP_ID unset — imported SALOMAO instance absent (2B-S6 operator run).');
+    process.exit(0);
+  }
   const health = await fetch(`${BASE}/health`).catch(() => null);
   if (!health || !health.ok) fail(`cortex not reachable at ${BASE}/health`);
 

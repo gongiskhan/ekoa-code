@@ -36,7 +36,7 @@ import { appRegistry } from './app-registry.js';
 import { commitSnapshot, type SnapshotAudit } from '../services/commit-guard.js';
 import { restoreVersion } from './versions.js';
 import { AppDataBackups } from './backups.js';
-import type { AppDataDeps } from './app-data-access.js';
+import { AppDataAccess, type AppDataDeps, type AppDataDump } from './app-data-access.js';
 
 const EXCLUDE_TOP = new Set(['dist', 'dist-backend', 'node_modules', '.git', 'app-data', '.sdk-session', '.versions']);
 const MAX_FILE_BYTES = 1_500_000;
@@ -119,6 +119,49 @@ async function writeBundleFiles(projectDir: string, bundle: ArtifactBundle): Pro
   return written;
 }
 
+/**
+ * Extract a canonical app-data dump (`{ collections }`) from a bundle's optional
+ * `data` field, or null when there is nothing to seed. ADDITIVE by construction:
+ * the shared `ArtifactBundle.data` is a free `Record<string, unknown>`, so we only
+ * treat it as app-data when it is unmistakably a collections dump — either the
+ * canonical `{ collections: {name: [...]} }` shape (what a prod export/converter
+ * emits, and what AppDataAccess.exportAll produces) or a bare `{ name: [...] }`
+ * collection map. Anything else (absent, or some other metadata bag) is ignored,
+ * so the pre-2B-S5 behavior of a data-less bundle is exactly preserved.
+ */
+function collectionsFromBundleData(data: ArtifactBundle['data']): Record<string, Array<Record<string, unknown>>> | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const candidate =
+    record.collections && typeof record.collections === 'object' && !Array.isArray(record.collections)
+      ? (record.collections as Record<string, unknown>)
+      : record;
+  const collections: Record<string, Array<Record<string, unknown>>> = {};
+  for (const [name, items] of Object.entries(candidate)) {
+    if (Array.isArray(items)) collections[name] = items as Array<Record<string, unknown>>;
+  }
+  return Object.keys(collections).length > 0 ? collections : null;
+}
+
+/**
+ * Seed a freshly-imported app's app-data from `bundle.data` (2B-S5). Best-effort
+ * and isolated: a seeding failure is logged and swallowed exactly like the
+ * post-import build, never breaking the import (the operator-run salomao-import
+ * driver verifies the data actually landed). Items keep their ids
+ * (CollectionsEngine.create preserves `item.id`).
+ */
+async function applyImportedAppData(appId: string, bundle: ArtifactBundle, deps: Deps): Promise<void> {
+  const collections = collectionsFromBundleData(bundle.data);
+  if (!collections) return; // no app-data in the bundle → current behavior unchanged.
+  try {
+    const dump: AppDataDump = { collections, counts: {}, totalItems: 0, at: new Date(deps.now()).toISOString() };
+    const written = await new AppDataAccess(deps).importDump(appId, dump);
+    console.info(`[import-artifact] seeded ${written} app-data item(s) for ${appId} from bundle.data`);
+  } catch (err) {
+    console.warn(`[import-artifact] app-data seeding failed for ${appId}:`, err instanceof Error ? err.message : err);
+  }
+}
+
 /** Ensure a valid manifest.json at the project root, stamped with id + name. */
 async function ensureManifest(projectDir: string, id: string, name: string): Promise<void> {
   const existing = await readManifest(projectDir).catch(() => null);
@@ -160,6 +203,10 @@ export async function importArtifact(
     updatedAt: now,
   } as ArtifactDoc;
   await artifacts.insert(doc as never);
+
+  // Seed app-data from bundle.data BEFORE the build so the served instance boots
+  // with its data (2B-S5, additive: no-op when the bundle carries no data).
+  await applyImportedAppData(newId, bundle, deps);
 
   // Build + register so the imported app is immediately viewable.
   try {

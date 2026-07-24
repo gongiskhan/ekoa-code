@@ -31,6 +31,7 @@ import { companySpaceRouter } from '../../src/routes/company-space.js';
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { appBuilder } from '../../src/apps/builder.js';
 import { AppDataAccess } from '../../src/apps/app-data-access.js';
+import { convertDevBundle } from '../../scripts/migrate/convert-dev-bundle.mjs';
 
 /**
  * Artifact family contract suite (ch03 §3.8.9-3.8.12). Mounts the artifacts +
@@ -174,6 +175,54 @@ describe('export / import / bundle-update (ch07 §7.10)', () => {
     const created = await imp.json();
     expectValid(Artifact, created);
     expect((created as { id: string }).id).not.toBe('exp1');
+  });
+
+  it('import applies bundle.data — app-data seeded under the new id (2B-S5), prod ids preserved', async () => {
+    const t = await tokenFor('owner1');
+    // Build the bundle the SAME way the operator will: a prod cortex export envelope
+    // (base64 scaffold + seedData) through convert-dev-bundle — the real data shape
+    // that flows through /import in production, not a hand-massaged fixture.
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const bundle = convertDevBundle({
+      schemaVersion: 1,
+      manifest: { id: 'prod-imp-1', name: 'Imported ERP', version: '1.0.0' },
+      scaffold: [{ path: 'index.html', contentB64: b64('<!doctype html><html><body>imported</body></html>') }],
+      seedData: {
+        utilizadores: [{ id: 'u1', email: 'a@brasilsalomao.pt' }, { id: 'u2', email: 'b@brasilsalomao.pt' }],
+        propostas: [{ id: 'p1', estado: 'rascunho' }],
+      },
+      exportedAt: '2026-07-24T10:00:00.000Z',
+    });
+    expect((bundle as { data?: unknown }).data).toBeDefined();
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const created = await imp.json();
+    expectValid(Artifact, created);
+    const newId = (created as { id: string }).id;
+    expect(newId).not.toBe('prod-imp-1');
+
+    // The app-data landed under the NEW id, with prod ids preserved.
+    const access = new AppDataAccess(deps);
+    const usersRows = await access.list(newId, 'utilizadores');
+    expect(usersRows.map((r) => r.id).sort()).toEqual(['u1', 'u2']);
+    expect((usersRows.find((r) => r.id === 'u1') as { email: string }).email).toBe('a@brasilsalomao.pt');
+    expect(await access.list(newId, 'propostas')).toHaveLength(1);
+  });
+
+  it('import WITHOUT bundle.data seeds no app-data (additive: existing behavior unchanged)', async () => {
+    await mkApp('exp-nodata', { userId: 'owner1', orgId: 'orgA' }, { files: { 'frontend/x.js': 'export const X = 1;\n' } });
+    const t = await tokenFor('owner1');
+    const exp = await jwtApi('/api/v1/artifacts/exp-nodata/export', t);
+    const bundle = await exp.json();
+    // ekoa-code's own export never emits data — the additive path must stay a strict no-op.
+    expect((bundle as { data?: unknown }).data).toBeUndefined();
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const newId = ((await imp.json()) as { id: string }).id;
+    const access = new AppDataAccess(deps);
+    expect(await access.listCollections(newId)).toEqual([]);
   });
 
   it('bundle-update refuses a mismatched manifest 409, then applies with force + returns the snapshot pair', async () => {
