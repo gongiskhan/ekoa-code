@@ -13,7 +13,7 @@ import type { Server } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { ErrorEnvelope, servedAppEndpoints } from '@ekoa/shared';
+import { ErrorEnvelope, servedAppEndpoints, SignatureSendRequest, SignatureSendResponse } from '@ekoa/shared';
 import { legalRouter, type ResolvedLegalApp } from '../../src/legal/index.js';
 import { adobeSignRouter } from '../../src/integrations/adobe-sign.js';
 import { designTokensHandler, type OrgBrand } from '../../src/services/design-tokens.js';
@@ -181,7 +181,29 @@ beforeAll(async () => {
       },
     }),
   );
-  app.use(adobeSignRouter({ resolveApp: async (h) => APPS[h] ?? null }));
+  // 2B-S4 swap: mount the pluggable /api/signature/send facade with BOTH backends. Adobe stays
+  // the default notConnectedBackend (facade-only), while a fake LIVE Zoho backend proves
+  // `provider:'zoho-sign'` routes to Zoho (connected only for the registered app's owner).
+  app.use(
+    adobeSignRouter({
+      resolveApp: async (h) => APPS[h] ?? null,
+      zohoBackend: {
+        isConnected: async (ownerUserId?: string) => ownerUserId === 'owner-active',
+        sendForSignature: async () => ({
+          success: true,
+          requestId: 'zreq-1',
+          status: 'inprogress',
+          signingUrls: [
+            { email: 'cliente@bsm.pt', signUrl: 'https://sign.zoho.eu/portal/zreq-1?locale=pt' },
+            { email: 'socio@bsm.pt', signUrl: null },
+          ],
+        }),
+        getRequest: async () => ({ request_id: 'zreq-1', request_status: 'inprogress' }),
+        getSignUrl: async () => 'https://sign.zoho.eu/portal/zreq-1?locale=pt',
+        getDocument: async () => ({ bytes: Buffer.from('%PDF'), contentType: 'application/pdf' }),
+      },
+    }),
+  );
   app.get('/api/design-tokens.css', designTokensHandler({ resolveOrgBrand: brandFor }));
   await new Promise<void>((r) => {
     server = app.listen(0, () => r());
@@ -572,6 +594,81 @@ describe('signature/send + adobe-sign gate (requireAdobeAppContext)', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('x-adobesign-clientid')).toBe('cid-123');
     expect(await res.json()).toEqual({ xAdobeSignClientId: 'cid-123' });
+  });
+});
+
+describe('signature/send — real signatureSend schema + Zoho provider swap (2B-S4)', () => {
+  // The signatureSend descriptor was z.unknown() before the swap; it now carries REAL zod
+  // schemas. These assertions PIN the byte-compat property (shrink-only): every payload the
+  // served-app plane sends/receives must still validate. If a future tightening rejects one of
+  // these, this test goes red instead of a served-app spec silently breaking.
+  it('request schema accepts every payload the served-app plane sends (shrink-only)', () => {
+    for (const body of [
+      {},
+      { recipients: [] },
+      { title: 'Doc', recipients: [{ email: 'a@b.pt' }] },
+      { provider: 'adobe-sign', title: 'Doc', documentPdfBase64: 'JVBERi0x', recipients: [{ email: 'a@b.pt' }] },
+      { provider: 'zoho-sign', title: 'Proposta', documentHtml: '<p>x</p>', recipients: [{ email: 'c@bsm.pt', name: 'C', role: 'SIGNER', order: 1 }] },
+      // Unknown keys pass through untouched (the route ignores them; byte-compat).
+      { title: 'Doc', recipients: [{ email: 'a@b.pt', metodo: 'cmd-orquestrado' }], extra: { foo: 1 } },
+    ]) {
+      expect(SignatureSendRequest.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    }
+  });
+
+  it('response schema represents the gate errors, the sanitized provider failure, and the success body', async () => {
+    // 400/404 app-context gate — flat { error } (accepted served-app flat-error precedent).
+    const missing = await api('/api/signature/send', { method: 'POST', body: '{}' });
+    expect(missing.status).toBe(400);
+    expect(SignatureSendResponse.safeParse(await missing.json()).success).toBe(true);
+
+    const unknown = await appApi('/api/signature/send', 'no-such-app', { method: 'POST', body: JSON.stringify({ recipients: [] }) });
+    expect(unknown.status).toBe(404);
+    expect(SignatureSendResponse.safeParse(await unknown.json()).success).toBe(true);
+
+    // 409 Adobe facade-only — the sanitized { ok:false, provider, code, error } result.
+    const notConn = await appApi('/api/signature/send', 'legal-calculos', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Doc', recipients: [{ email: 'a@b.pt' }] }),
+    });
+    expect(notConn.status).toBe(409);
+    const notConnBody = (await notConn.json()) as { code?: string; provider?: string };
+    expect(notConnBody.code).toBe('not_connected');
+    expect(notConnBody.provider).toBe('adobe-sign'); // default provider stays the Adobe facade
+    expect(SignatureSendResponse.safeParse(notConnBody).success).toBe(true);
+  });
+
+  it('provider:"zoho-sign" routes to the LIVE Zoho backend (the swap); adobe stays facade-only', async () => {
+    const res = await appApi('/api/signature/send', 'legal-calculos', {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: 'zoho-sign',
+        title: 'Proposta de Honorários',
+        documentHtml: '<html><body>Assine.</body></html>',
+        recipients: [{ email: 'cliente@bsm.pt', name: 'Cliente' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      provider: string;
+      agreementId?: string;
+      status?: string;
+      signingUrls?: Array<{ email: string; esignUrl: string }>;
+    };
+    expect(SignatureSendResponse.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ ok: true, provider: 'zoho-sign', agreementId: 'zreq-1', status: 'inprogress' });
+    // requestId -> agreementId mapping + email-only signer dropped (only the embedded URL survives).
+    expect(body.signingUrls).toEqual([{ email: 'cliente@bsm.pt', esignUrl: 'https://sign.zoho.eu/portal/zreq-1?locale=pt' }]);
+  });
+
+  it('an unknown provider key falls back to the Adobe facade (default), not Zoho', async () => {
+    const res = await appApi('/api/signature/send', 'legal-calculos', {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'bogus', title: 'Doc', recipients: [{ email: 'a@b.pt' }] }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { provider?: string }).provider).toBe('adobe-sign');
   });
 });
 

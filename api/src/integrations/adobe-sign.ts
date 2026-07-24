@@ -21,6 +21,10 @@
  */
 import { Buffer } from 'node:buffer';
 import { Router, type Request, type Response } from 'express';
+// Type-only: the Zoho live backend the facade routes `provider:'zoho-sign'` to (2B-S4
+// swap — Zoho is the live provider, Adobe stays facade-only). `import type` is erased at
+// runtime, so this creates NO module cycle (zoho-sign.ts never imports adobe-sign.ts).
+import type { ZohoSignBackend } from './zoho-sign.js';
 
 // ----------------------------------------------------------------------------
 // Types + errors (carried from cortex/src/services/adobe-sign.ts)
@@ -219,10 +223,82 @@ function makeAdobeSignatureProvider(backend: AdobeSignBackend): SignatureProvide
   };
 }
 
-/** Factory: `adobe-sign` (default/unknown key) or the inactive `cmd` seam. */
-export function getSignatureProvider(key: string, backend: AdobeSignBackend): SignatureProvider {
+/** Sanitized `{ code, error }` from a Zoho service error (parity with adobeErrorFields). */
+function zohoErrorFields(err: unknown): { code?: string; error: string } {
+  const e = err as { code?: string; message?: string };
+  return { code: e?.code, error: e?.message || 'Pedido de assinatura falhou.' };
+}
+
+/**
+ * Zoho Sign provider (2B-S4) — delegates to the injected Zoho backend (render HTML→PDF,
+ * two-step create+submit with a last-page signature field, embedded tokens). Never
+ * reimplements it. The generic `agreementId` maps to Zoho's `requestId`; only embedded
+ * signers carry a URL (email-only signers come back with `signUrl:null` and are dropped
+ * from the facade's `signingUrls`, exactly as the ekoa-dev signature-provider port did).
+ */
+export function makeZohoSignatureProvider(backend: ZohoSignBackend): SignatureProvider {
+  return {
+    key: 'zoho-sign',
+    async isAvailable(ownerUserId): Promise<boolean> {
+      return backend.isConnected(ownerUserId);
+    },
+    async send(input): Promise<SignatureSendResult> {
+      try {
+        const result = await backend.sendForSignature({
+          ownerUserId: input.ownerUserId,
+          documentName: input.title,
+          html: input.documentHtml,
+          pdfBase64: input.documentPdfBase64,
+          recipients: input.recipients,
+        });
+        return {
+          ok: true,
+          provider: 'zoho-sign',
+          agreementId: result.requestId,
+          status: result.status,
+          signingUrls: result.signingUrls
+            .filter((u): u is { email: string; signUrl: string } => typeof u.signUrl === 'string' && u.signUrl.length > 0)
+            .map((u) => ({ email: u.email, esignUrl: u.signUrl })),
+        };
+      } catch (err) {
+        return { ok: false, provider: 'zoho-sign', ...zohoErrorFields(err) };
+      }
+    },
+  };
+}
+
+/**
+ * Facade-level "Zoho not wired" provider — used ONLY when the composition root did not
+ * inject a Zoho backend (a bare unit/test context). In the BSM target state server.ts
+ * always wires the live Zoho backend, so a real `provider:'zoho-sign'` call reaches it.
+ */
+const zohoNotConnectedProvider: SignatureProvider = {
+  key: 'zoho-sign',
+  async isAvailable(): Promise<boolean> {
+    return false;
+  },
+  async send(): Promise<SignatureSendResult> {
+    return { ok: false, provider: 'zoho-sign', code: 'not_connected', error: 'Zoho Sign is not connected for this workspace.' };
+  },
+};
+
+/** The pluggable backends the facade routes across (composition root wires the live ones). */
+export interface SignatureBackends {
+  adobe: AdobeSignBackend;
+  zoho?: ZohoSignBackend;
+}
+
+/**
+ * Factory (2B-S4 swap): `zoho-sign` → the live Zoho backend, `cmd` → the inactive
+ * Autenticação.Gov seam, and `adobe`/default/unknown → the Adobe facade (notConnectedBackend
+ * in the target state). Backwards-tolerant: an `AdobeSignBackend` passed directly still
+ * resolves the Adobe/cmd branches (the zoho branch then reports not-connected).
+ */
+export function getSignatureProvider(key: string, backends: SignatureBackends | AdobeSignBackend): SignatureProvider {
+  const b: SignatureBackends = 'adobe' in backends ? backends : { adobe: backends };
+  if (key === 'zoho-sign') return b.zoho ? makeZohoSignatureProvider(b.zoho) : zohoNotConnectedProvider;
   if (key === 'cmd') return cmdSignatureProvider;
-  return makeAdobeSignatureProvider(backend);
+  return makeAdobeSignatureProvider(b.adobe);
 }
 
 // ----------------------------------------------------------------------------
@@ -323,6 +399,9 @@ export interface AdobeRouterDeps {
   resolveApp: (idOrSlug: string) => Promise<{ appId: string; ownerUserId: string } | null>;
   /** Live Adobe backend. Default: notConnectedBackend (isConnected=false, calls -> not_connected). */
   backend?: AdobeSignBackend;
+  /** Live Zoho backend for the pluggable `/api/signature/send` facade (2B-S4 swap: Zoho is
+   *  the live provider). Absent -> `provider:'zoho-sign'` reports not-connected. */
+  zohoBackend?: ZohoSignBackend;
   /** Platform Adobe clientId to compare the webhook `X-AdobeSign-ClientId` against (echo either way). */
   adobeClientId?: string;
   /** Inbound-webhook dispatch (fired async after the 200 echo). Default: no-op. */
@@ -471,7 +550,7 @@ export function adobeSignRouter(deps: AdobeRouterDeps): Router {
     if (!ctx) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const providerKey = body.provider != null ? String(body.provider) : 'adobe-sign';
-    const provider = getSignatureProvider(providerKey, backend);
+    const provider = getSignatureProvider(providerKey, { adobe: backend, zoho: deps.zohoBackend });
     try {
       const result = await provider.send({
         ownerUserId: ctx.ownerUserId,

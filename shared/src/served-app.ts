@@ -111,6 +111,66 @@ export type ZohoSignUrlResponse = z.infer<typeof ZohoSignUrlResponse>;
 export const ZohoRequestResponse = z.object({ request: z.record(z.unknown()) });
 export type ZohoRequestResponse = z.infer<typeof ZohoRequestResponse>;
 
+// ---------------------------------------------------------------------------
+// Pluggable e-signature facade (POST /api/signature/send, ch03 §2.6; 2B-S4). The one
+// credential-free route that picks a provider by `body.provider` — `zoho-sign` (live),
+// `cmd` (inactive Autenticação.Gov seam) or `adobe`/default (the Adobe facade). Both the
+// request and the response were `z.unknown()` before the swap; they are given REAL zod
+// schemas here. SHRINK-ONLY: `.passthrough()` + optional fields keep every existing served-app
+// payload valid (the route ignores unknown body keys and defaults `title`/`recipients`), so
+// tightening the descriptor cannot reject a byte-compat payload.
+// ---------------------------------------------------------------------------
+
+/** One recipient of a pluggable-facade send. `email` is the only load-bearing field; extra
+ *  keys pass through (the route forwards recipients to the chosen provider as-is). */
+export const SignatureSendRecipient = z
+  .object({
+    email: z.string(),
+    name: z.string().optional(),
+    /** SIGNER (default) | APPROVER | ACCEPTOR | CERTIFIED_RECIPIENT | FORM_FILLER. */
+    role: z.string().optional(),
+    /** 1-based signing position; equal orders sign in parallel. */
+    order: z.number().optional(),
+  })
+  .passthrough();
+export type SignatureSendRecipient = z.infer<typeof SignatureSendRecipient>;
+
+/** POST /api/signature/send body. `provider` picks the backend; `title` defaults server-side;
+ *  `recipients` defaults to `[]`. All optional + passthrough for byte-compat with existing apps. */
+export const SignatureSendRequest = z
+  .object({
+    provider: z.string().optional(),
+    title: z.string().optional(),
+    documentHtml: z.string().optional(),
+    documentPdfBase64: z.string().optional(),
+    recipients: z.array(SignatureSendRecipient).optional(),
+  })
+  .passthrough();
+export type SignatureSendRequest = z.infer<typeof SignatureSendRequest>;
+
+/** A per-recipient embedded signing URL surfaced by the facade (`esignUrl`, unlike the
+ *  Zoho-native `signUrl`; email-only signers are dropped rather than returned as null). */
+export const SignatureSigningUrl = z.object({ email: z.string(), esignUrl: z.string() }).passthrough();
+export type SignatureSigningUrl = z.infer<typeof SignatureSigningUrl>;
+
+/** POST /api/signature/send response. Covers the provider result (`{ ok, provider, ... }` at
+ *  2xx, or the sanitized `{ ok:false, code, error }` at 409/501/502) AND the app-context gate's
+ *  flat `{ error }` (400/404 — the accepted served-app flat-error precedent), so the one
+ *  descriptor represents every body the route emits. `ok`/`provider` are therefore optional and
+ *  `.passthrough()` keeps it byte-safe. */
+export const SignatureSendResponse = z
+  .object({
+    ok: z.boolean().optional(),
+    provider: z.string().optional(),
+    agreementId: z.string().optional(),
+    status: z.string().optional(),
+    signingUrls: z.array(SignatureSigningUrl).optional(),
+    code: z.string().optional(),
+    error: z.string().optional(),
+  })
+  .passthrough();
+export type SignatureSendResponse = z.infer<typeof SignatureSendResponse>;
+
 export const servedAppEndpoints = {
   // Per-app data CRUD (/api/app-data/:collection[/:id]), header-scoped, no JWT.
   appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: AppDataListEnvelope },
@@ -185,7 +245,7 @@ export const servedAppEndpoints = {
     request: InsolvenciaPollRequest,
     response: InsolvenciaPollResponse,
   },
-  signatureSend: { method: 'POST', path: '/api/signature/send', auth: 'header-scoped', request: z.unknown(), response: z.unknown() },
+  signatureSend: { method: 'POST', path: '/api/signature/send', auth: 'header-scoped', request: SignatureSendRequest, response: SignatureSendResponse },
 
   // Adobe Sign webhook (deliberately public; authenticity re-verified server-side).
   adobeSignWebhookGet: { method: 'GET', path: '/api/adobe-sign/webhook', auth: 'public', query: GenericQuery, response: z.unknown() },

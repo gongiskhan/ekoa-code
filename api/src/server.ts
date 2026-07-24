@@ -699,21 +699,6 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const updateProposta = async (appId: string, id: string, patch: Record<string, unknown>): Promise<void> => {
     await legalEngine.upsert(appScope(appId), 'propostas', id, patch);
   };
-  // Adobe stays facade-only (notConnectedBackend): wiring the webhook deps + the
-  // adobe_agreements find makes migrated rows routable and the dispatch LIVE, but the
-  // owner-scoped re-fetch (getAgreement) fails closed → a forged/real event is a no-op
-  // until a live Adobe backend exists. The resolveApp gate + webhook echo are unchanged.
-  app.use('/', adobeSignRouter({
-    resolveApp: resolveAppScope,
-    backend: notConnectedBackend,
-    onWebhook: (payload) =>
-      handleAdobeWebhook(payload, {
-        findAgreement: findAdobeAgreement,
-        getAgreement: (ownerUserId, agreementId) => notConnectedBackend.getAgreement(ownerUserId, agreementId),
-        getProposta,
-        updateProposta,
-      }),
-  }));
   // Zoho Sign served-app proxy (2B-S2/S3): sibling of the Adobe proxy, but Zoho is the
   // fully LIVE provider. Every external dep is injected from this composition root —
   // HTML→PDF (integrations/ may NOT import apps/), the owner→org lookup (ResolvedAppScope
@@ -721,6 +706,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // config custody (findConfigForOwner + decrypt), credential persistence (re-encrypt +
   // integrationConfigs CAS, mirroring the executor's persistProviderCredentialUpdates),
   // and (2B-S3) the requestId→proposta reverse-index write at send time (recordAgreement).
+  // Built BEFORE the Adobe router so the pluggable /api/signature/send facade can route
+  // `provider:'zoho-sign'` to this live backend (2B-S4 swap).
   const zohoBackend = makeZohoSignBackend({
     getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
     findConfigForOwner,
@@ -734,6 +721,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     },
     recordAgreement: recordZohoAgreement,
   });
+  // Adobe stays facade-only (notConnectedBackend): wiring the webhook deps + the
+  // adobe_agreements find makes migrated rows routable and the dispatch LIVE, but the
+  // owner-scoped re-fetch (getAgreement) fails closed → a forged/real event is a no-op
+  // until a live Adobe backend exists. The resolveApp gate + webhook echo are unchanged.
+  // 2B-S4: the shared pluggable /api/signature/send route lives on this router; it is given
+  // BOTH backends so `provider:'zoho-sign'` reaches live Zoho while default/'adobe' stays the
+  // facade and 'cmd' the inactive seam. (The ERP itself signs via /api/zoho-sign/* directly.)
+  app.use('/', adobeSignRouter({
+    resolveApp: resolveAppScope,
+    backend: notConnectedBackend,
+    zohoBackend,
+    onWebhook: (payload) =>
+      handleAdobeWebhook(payload, {
+        findAgreement: findAdobeAgreement,
+        getAgreement: (ownerUserId, agreementId) => notConnectedBackend.getAgreement(ownerUserId, agreementId),
+        getProposta,
+        updateProposta,
+      }),
+  }));
   app.use('/', zohoSignRouter({
     resolveApp: resolveAppScope,
     backend: zohoBackend,
