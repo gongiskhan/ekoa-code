@@ -10,6 +10,7 @@
  * touching the source HTML, and imposes no @page margin so full-bleed covers
  * survive. Chromium unavailability degrades explicitly (the route surfaces a 503).
  */
+import { Buffer } from 'node:buffer';
 import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -115,6 +116,30 @@ export async function renderArtifactPdf(
       preferCSSPageSize: true,
     });
     return { path: filePath, url: `/artifact-pdfs/${outName}.pdf` };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/**
+ * Render a self-contained HTML document to PDF BYTES (no file written). Used by the
+ * e-signature proxies (integrations/zoho-sign.ts), which need the rendered bytes in
+ * memory to upload to the provider. `integrations/` may NOT import `apps/` (module
+ * tiers, FIXED-1), so the composition root INJECTS this into the sign router. Mirrors
+ * `renderArtifactPdf` (print media + the vetted reset injected LAST so it wins),
+ * keeping a signed PDF paginated the same as the platform's other PDF pipeline.
+ * Rejects if the shared browser is unavailable (the caller surfaces the failure).
+ */
+export async function renderHtmlToPdf(html: string): Promise<Buffer> {
+  const browser = await getSharedBrowser();
+  const page = await browser.newPage({ viewport: VIEWPORT });
+  try {
+    await page.setContent(html, { waitUntil: 'networkidle', timeout: RENDER_TIMEOUT_MS });
+    await page.emulateMedia({ media: 'print' });
+    await page.addStyleTag({ content: PDF_PRINT_RESET_CSS });
+    await page.waitForTimeout(RENDER_SETTLE_MS);
+    const pdf = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
+    return Buffer.from(pdf);
   } finally {
     await page.close().catch(() => {});
   }

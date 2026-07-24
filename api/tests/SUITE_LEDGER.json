@@ -300,6 +300,16 @@
         "name": "gateway-claude-code",
         "targetGate": "OPERATOR-RUN",
         "note": "S6 (run 20260717): stock Claude Code end-to-end over the LLM gateway. Needs a credentialed live stack + the claude CLI (verified by hand during the run), so it reports awaiting OPERATOR-RUN like the operator-run drivers - never books a skip as a false green."
+      },
+      {
+        "name": "zoho-proxy",
+        "targetGate": "operator-run",
+        "note": "2B-S2 (Zoho served-app proxy): FULLY HERMETIC driver - self-launches an inline capturing mock Zoho (http.createServer, no shared mock helper in dev either), esbuild-bundles api/src/integrations/zoho-sign.ts under plain node (every external dep injected, express marked external), builds the backend with test-double deps, and asserts the real create->submit->status happy path + last-page (0-based) abs-only Signature field + embedded-URL minting + not_connected + error sanitization (no token/secret in a thrown message). Needs NO api/mongo/browser and passes standalone (node api/tests/e2e/zoho-proxy.e2e.mjs). Registered at operator-run (awaiting at G12) because the suite-ledger runner gates ALL due drivers on a reachable live-api base, which this self-contained driver does not need; the per-PR-lane hermetic proof of the same surface is the vitest contract test api/tests/contract/zoho-sign.test.ts. Ratchet applies from landing."
+      },
+      {
+        "name": "zoho-sign-integration",
+        "targetGate": "operator-run",
+        "note": "2B-S2: REST-adapted from the retired /api/v1/action intent driver (sanctioned per the ifthenpay/invoicexpress 'REST adaptation owed' precedent). Against a running api it logs in, asserts the zoho-sign DEFINITION loads (api_key + test_connection/list_requests/get_request + client_id/client_secret/grant_code/refresh_token/dc) and the AI-builder load rebuilds an editable package exposing test_connection; self-launches an inline mock Zoho on MOCK_PORT. DOCUMENTED SKIP: the builder Tests-tab path does not run the provider credential resolver (S1-scope gap), so the grant-code exchange the dev driver asserted at that step is proven instead on the executor path by tests/integrations/zoho-sign-token.test.ts + zoho-proxy.e2e.mjs; the driver reports a bonus PASS if the builder path is ever wired. SKIPs cleanly (exit 0 + SKIP) when the api is unreachable - never a false green. Ratchet applies from landing."
       }
     ]
   },

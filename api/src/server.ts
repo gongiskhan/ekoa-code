@@ -16,7 +16,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
-import { users } from './data/stores.js';
+import { users, integrationConfigs } from './data/stores.js';
 import { CollectionsEngine, sharedScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
@@ -65,12 +65,13 @@ import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
 import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
 import { adobeSignRouter } from './integrations/adobe-sign.js';
+import { zohoSignRouter, makeZohoSignBackend } from './integrations/zoho-sign.js';
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
 import { CITIUS_WATCH_COLLECTION } from './legal/insolvencia-watch.js';
 import { designTokensHandler } from './services/design-tokens.js';
 import { getArtifactScreenshotDir } from './services/artifact-screenshot.js';
-import { appPdfRouter, getArtifactPdfDir } from './apps/pdf.js';
+import { appPdfRouter, getArtifactPdfDir, renderHtmlToPdf } from './apps/pdf.js';
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
@@ -135,7 +136,7 @@ import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
 import { setDeliveryTargets } from './events/delivery.js';
-import { decrypt } from './data/crypto.js';
+import { decrypt, encrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -687,6 +688,29 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     },
   }));
   app.use('/', adobeSignRouter({ resolveApp: resolveAppScope }));
+  // Zoho Sign served-app proxy (2B-S2): sibling of the Adobe proxy, but Zoho is the
+  // fully LIVE provider. Every external dep is injected from this composition root —
+  // HTML→PDF (integrations/ may NOT import apps/), the owner→org lookup (ResolvedAppScope
+  // has no orgId, the same users-store lambda the legal portal seam uses at L661 above),
+  // config custody (findConfigForOwner + decrypt), and credential persistence (re-encrypt
+  // + integrationConfigs CAS, mirroring the executor's persistProviderCredentialUpdates).
+  // The inbound-webhook business logic (agreement index + owner-scoped advance) lands in
+  // 2B-S3, wired via the onWebhook seam then; here the webhook route is the public ack only.
+  app.use('/', zohoSignRouter({
+    resolveApp: resolveAppScope,
+    backend: makeZohoSignBackend({
+      getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
+      findConfigForOwner,
+      decrypt,
+      renderHtmlToPdf,
+      persistOwnerCredentialUpdates: async (configId, currentFields, updates) => {
+        const merged: Record<string, unknown> = { ...currentFields, ...updates };
+        delete merged.storageState;
+        const ciphertext = encrypt(JSON.stringify(merged));
+        await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
+      },
+    }),
+  }));
   app.get('/api/design-tokens.css', designTokensHandler());
   // Served-app document export (ch07 §7.12): window.__ekoa.exportPdf POSTs the serialized DOM
   // here; the rendered PDF is served from /artifact-pdfs below. Was never mounted in the port -

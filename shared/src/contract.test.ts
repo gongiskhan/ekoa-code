@@ -492,4 +492,49 @@ describe('shared contract - security ratchet (G12)', () => {
       expect(RegistoEntry.safeParse(row).success, JSON.stringify(row)).toBe(true);
     }
   });
+
+  it('Zoho Sign send/status/sign-url schemas represent the proxy wire shapes (2B-S2)', async () => {
+    const { ZohoSendRequest, ZohoSendResponse, ZohoStatusResponse, ZohoSignUrlResponse, ZohoRequestResponse } =
+      await import('./served-app.js');
+
+    // A minimal HTML send with one emailed signer + one embedded signer.
+    const req = {
+      documentName: 'Proposta de Honorários',
+      html: '<html><body>Assine.</body></html>',
+      message: 'Assine, por favor.',
+      redirectUrl: 'https://api.ekoa.io/apps/legal-case/#/portal?t=tok',
+      recipients: [
+        { email: 'cliente@example.com', name: 'José Cliente', embedded: true },
+        { email: 'socio@bsm.pt' },
+      ],
+      externalRef: { propostaId: 'p-1', clientEmail: 'cliente@example.com' },
+    };
+    expect(ZohoSendRequest.safeParse(req).success).toBe(true);
+    // recipients is required (a send with none is a 400 the router raises, not a shapeless body).
+    expect(ZohoSendRequest.safeParse({ documentName: 'X' }).success).toBe(false);
+    // documentName may be omitted (the router defaults it).
+    expect(ZohoSendRequest.safeParse({ recipients: [{ email: 'a@b.pt' }] }).success).toBe(true);
+
+    // The success body: an embedded signer carries a string URL, an emailed one carries null.
+    const res = {
+      success: true,
+      requestId: '90001',
+      status: 'inprogress',
+      signingUrls: [
+        { email: 'cliente@example.com', signUrl: 'https://sign.zoho.eu/portal/1?locale=pt' },
+        { email: 'socio@bsm.pt', signUrl: null },
+      ],
+    };
+    expect(ZohoSendResponse.safeParse(res).success).toBe(true);
+    // signUrl is string|null - never omitted (a missing key is a shape defect).
+    expect(ZohoSendResponse.safeParse({ ...res, signingUrls: [{ email: 'a@b.pt' }] }).success).toBe(false);
+    // success is the literal true (a failure never validates as a send success body).
+    expect(ZohoSendResponse.safeParse({ ...res, success: false }).success).toBe(false);
+
+    expect(ZohoStatusResponse.safeParse({ connected: true }).success).toBe(true);
+    expect(ZohoStatusResponse.safeParse({ connected: false }).success).toBe(true);
+    expect(ZohoSignUrlResponse.safeParse({ signUrl: null }).success).toBe(true);
+    expect(ZohoSignUrlResponse.safeParse({ signUrl: 'https://sign.zoho.eu/x?locale=pt' }).success).toBe(true);
+    expect(ZohoRequestResponse.safeParse({ request: { request_id: '90001', request_status: 'inprogress' } }).success).toBe(true);
+  });
 });

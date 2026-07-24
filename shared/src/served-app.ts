@@ -45,6 +45,72 @@ export type AppSsoSessionResponse = z.infer<typeof AppSsoSessionResponse>;
 export const DemoAvailabilityResponse = z.object({ available: z.boolean() });
 export type DemoAvailabilityResponse = z.infer<typeof DemoAvailabilityResponse>;
 
+// ---------------------------------------------------------------------------
+// Zoho Sign served-app proxy (/api/zoho-sign/*, ch03 §2.6 e-sign; 2B-S2). Like the
+// Adobe status/send/agreement reads, the send/status/sign-url/document routes stay
+// router-internal (mounted, undescribed — served-app /api/* paths are outside the
+// /api/v1 mount-coverage walker); ONLY the deliberately public webhook GET/POST + the
+// /return bounce are described below (schema-coverage COVERED). These request/response
+// schemas are the shared contract the router's responses validate against.
+// ---------------------------------------------------------------------------
+
+/** One recipient of a Zoho send request. */
+export const ZohoSignSendRecipient = z.object({
+  email: z.string(),
+  name: z.string().optional(),
+  /** Zoho action type; only SIGN is placed with a signature field. */
+  role: z.string().optional(),
+  /** 1-based signing position; distinct orders sign sequentially. */
+  order: z.number().optional(),
+  /** When true, mint an embedded (in-portal) signing URL; otherwise Zoho emails. */
+  embedded: z.boolean().optional(),
+});
+export type ZohoSignSendRecipient = z.infer<typeof ZohoSignSendRecipient>;
+
+/** POST /api/zoho-sign/send body. `documentName` defaults server-side; `externalRef.appId`
+ *  is server-trusted (taken from the app context, never the body). */
+export const ZohoSendRequest = z.object({
+  documentName: z.string().optional(),
+  fileName: z.string().optional(),
+  html: z.string().optional(),
+  pdfBase64: z.string().optional(),
+  recipients: z.array(ZohoSignSendRecipient),
+  message: z.string().optional(),
+  redirectUrl: z.string().optional(),
+  expirationDays: z.number().optional(),
+  isSequential: z.boolean().optional(),
+  language: z.string().optional(),
+  externalRef: z
+    .object({ appId: z.string().optional(), propostaId: z.string().optional(), clientEmail: z.string().optional() })
+    .optional(),
+});
+export type ZohoSendRequest = z.infer<typeof ZohoSendRequest>;
+
+/** A per-recipient signing URL (embedded one-time URL, or null when Zoho emails them). */
+export const ZohoSigningUrl = z.object({ email: z.string(), signUrl: z.string().nullable() });
+export type ZohoSigningUrl = z.infer<typeof ZohoSigningUrl>;
+
+/** POST /api/zoho-sign/send success body. */
+export const ZohoSendResponse = z.object({
+  success: z.literal(true),
+  requestId: z.string(),
+  status: z.string(),
+  signingUrls: z.array(ZohoSigningUrl),
+});
+export type ZohoSendResponse = z.infer<typeof ZohoSendResponse>;
+
+/** GET /api/zoho-sign/status body. */
+export const ZohoStatusResponse = z.object({ connected: z.boolean() });
+export type ZohoStatusResponse = z.infer<typeof ZohoStatusResponse>;
+
+/** GET /api/zoho-sign/requests/:id/sign-url body (null when the signer is email-only). */
+export const ZohoSignUrlResponse = z.object({ signUrl: z.string().nullable() });
+export type ZohoSignUrlResponse = z.infer<typeof ZohoSignUrlResponse>;
+
+/** GET /api/zoho-sign/requests/:id body — the raw Zoho request metadata (app-owned shape). */
+export const ZohoRequestResponse = z.object({ request: z.record(z.unknown()) });
+export type ZohoRequestResponse = z.infer<typeof ZohoRequestResponse>;
+
 export const servedAppEndpoints = {
   // Per-app data CRUD (/api/app-data/:collection[/:id]), header-scoped, no JWT.
   appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: AppDataListEnvelope },
@@ -124,6 +190,14 @@ export const servedAppEndpoints = {
   // Adobe Sign webhook (deliberately public; authenticity re-verified server-side).
   adobeSignWebhookGet: { method: 'GET', path: '/api/adobe-sign/webhook', auth: 'public', query: GenericQuery, response: z.unknown() },
   adobeSignWebhookPost: { method: 'POST', path: '/api/adobe-sign/webhook', auth: 'public', request: z.unknown(), response: z.unknown() },
+
+  // Zoho Sign webhook (deliberately public + credential-free; authenticity re-verified
+  // server-side in 2B-S3). The send/status/sign-url/document routes stay router-internal.
+  zohoSignWebhookGet: { method: 'GET', path: '/api/zoho-sign/webhook', auth: 'public', query: GenericQuery, response: OkResponse },
+  zohoSignWebhookPost: { method: 'POST', path: '/api/zoho-sign/webhook', auth: 'public', request: z.unknown(), response: OkResponse },
+  // Post-sign redirect bounce: Zoho redirect_pages rejects a bare '#', so we 302 to the
+  // hash route; the ekoa.io / configured-origin guard keeps it from being an open redirector.
+  zohoSignReturn: { method: 'GET', path: '/api/zoho-sign/return', auth: 'public', kind: 'redirect', query: GenericQuery, response: z.unknown() },
 
   // App health probe (injected into every served HTML; featured artifacts skipped).
   appHealth: { method: 'POST', path: '/api/app-health', auth: 'header-scoped', request: z.record(z.unknown()), response: OkResponse },

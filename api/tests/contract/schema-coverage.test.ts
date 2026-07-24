@@ -68,6 +68,12 @@ const COVERED = new Set<string>([
   // G6 — legal vertical services + e-sign (legal-plane.test.ts)
   'servedApp.legalCalculos', 'servedApp.legalTranscricao', 'servedApp.legalResearch', 'servedApp.trackingConsulta',
   'servedApp.citiusConsulta', 'servedApp.signatureSend', 'servedApp.adobeSignWebhookGet', 'servedApp.adobeSignWebhookPost',
+  // 2B-S2 (Zoho Sign served-app proxy) - the deliberately public webhook GET/POST + the
+  // /return bounce (zoho-sign.test.ts contract: router gate + webhook echo + return guard +
+  // schema representability). Additive endpoints on the existing servedApp domain: covering
+  // all three keeps EXPECTED_PENDING_COUNT unchanged (send/status/sign-url/document stay
+  // router-internal like Adobe's status/send/agreements).
+  'servedApp.zohoSignWebhookGet', 'servedApp.zohoSignWebhookPost', 'servedApp.zohoSignReturn',
   // G6 — serving plane + health + demos (served-app.test.ts)
   'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge', 'servedApp.demoAvailability',
   // G6 — integration definitions registry (integration-definitions.test.ts)
