@@ -148,6 +148,15 @@ owner + same-origin guard + `sharedData` opt-in) or behind the platform JWT / ap
 write/delete that app's `/api/app-data`, and the collection write-mode that was supposed to restrict
 this is unenforced. It is pre-existing and requires an operator decision - see the KNOWN GAP under
 the assertion layer below and `docs/findings.md` `served-app-data-unauthenticated-writes`.
+The same header-only posture covers `/api/app-files` and, since 2C-S4, `/api/app-docx/*`: the plane
+now also exposes the owner's SOURCE WORD DOCUMENT, so any holder of an app id can read its full text
+(`/projection`), download its bytes (`/current`, `/clean`) and PERSIST tracked changes and comments
+(`/edits`) - which `document-source.applyReview` attributes to the ARTIFACT OWNER's username, so an
+anonymous edit is recorded in a legal `.docx` as authored by the lawyer. Because `deleteArtifact`
+drops only the artifact row, a deleted app's id resolves to null, `artifactBacked` is false and the
+owner-activation gate is SKIPPED - the orphaned document stays readable to anyone with the id. Same
+root cause, same operator decision; pinned as a tripwire in
+`api/tests/security/app-docx-authz.test.ts`.
 
 **Security-block assertion layer (H5).** The access-control invariants above are held by committed,
 re-runnable gates so they cannot silently regress:

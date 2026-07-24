@@ -171,6 +171,71 @@ export const SignatureSendResponse = z
   .passthrough();
 export type SignatureSendResponse = z.infer<typeof SignatureSendResponse>;
 
+// ---------------------------------------------------------------------------
+// App DOCX served-app plane (/api/app-docx/*, ch07 document base v2; 2C-S4). The served
+// document-base app's window onto its linked Word document (source + redlines managed by
+// apps/document-source.ts over the services/docx-redline engine). Header-scoped like
+// app-files (X-Ekoa-App-Id, no JWT); admission mirrors app-files' admitApp INCLUDING the
+// owner-activation gate. status/projection/edits return JSON validated against these
+// schemas; current/clean stream the working/clean .docx bytes (kind:'binary', like the
+// app-files binary routes). Non-2xx bodies: the owner-activation gate emits the shared
+// ErrorEnvelope (403 ACCOUNT_DISABLED / 402 BILLING_LOCKED); the header/404/500/422 paths
+// use the accepted served-app flat { error } precedent (422 also carries per-op failures).
+// ---------------------------------------------------------------------------
+
+/** GET /api/app-docx/status — the linked-document status. `fileName`/`updatedAt` are present
+ *  only when a source is linked; an app with no document emits just `{ hasSource:false }`. */
+export const AppDocxStatusResponse = z.object({
+  hasSource: z.boolean(),
+  fileName: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type AppDocxStatusResponse = z.infer<typeof AppDocxStatusResponse>;
+
+/** GET /api/app-docx/projection — the CriticMarkup markdown projection of the working doc. */
+export const AppDocxProjectionResponse = z.object({
+  markdown: z.string(),
+  fileName: z.string(),
+});
+export type AppDocxProjectionResponse = z.infer<typeof AppDocxProjectionResponse>;
+
+/** The redline engine's per-batch report (apps/document-source.applyReview → services/
+ *  docx-redline). App-owned numeric/detail shape; `.passthrough()` keeps it byte-safe as the
+ *  engine's report grows (the route forwards the report as-is). */
+export const AppDocxReviewReport = z
+  .object({
+    actions_applied: z.number().optional(),
+    actions_skipped: z.number().optional(),
+    actions_already_resolved: z.number().optional(),
+    edits_applied: z.number().optional(),
+    edits_skipped: z.number().optional(),
+    occurrences_modified: z.number().optional(),
+    skipped_details: z.array(z.string()).optional(),
+    edits: z.array(z.record(z.unknown())).optional(),
+    engine: z.string().optional(),
+    version: z.string().optional(),
+    resolutions_applied: z.number().optional(),
+    resolutions_unchanged: z.number().optional(),
+    comment_anchors_repaired: z.number().optional(),
+    comments_dropped: z.number().optional(),
+  })
+  .passthrough();
+export type AppDocxReviewReport = z.infer<typeof AppDocxReviewReport>;
+
+/** POST /api/app-docx/edits body — the human review batch. Each op's `type` is one of
+ *  accept/reject/reply/modify/resolve/unresolve; the structural fields are validated by the
+ *  engine, so the shared shape stays permissive (record) here. */
+export const AppDocxEditsRequest = z.object({ ops: z.array(z.record(z.unknown())) });
+export type AppDocxEditsRequest = z.infer<typeof AppDocxEditsRequest>;
+
+/** POST /api/app-docx/edits success body — the fresh projection + the engine report. */
+export const AppDocxEditsResponse = z.object({
+  markdown: z.string(),
+  fileName: z.string(),
+  report: AppDocxReviewReport,
+});
+export type AppDocxEditsResponse = z.infer<typeof AppDocxEditsResponse>;
+
 export const servedAppEndpoints = {
   // Per-app data CRUD (/api/app-data/:collection[/:id]), header-scoped, no JWT.
   appDataList: { method: 'GET', path: '/api/app-data/:collection', auth: 'header-scoped', response: AppDataListEnvelope },
@@ -258,6 +323,15 @@ export const servedAppEndpoints = {
   // Post-sign redirect bounce: Zoho redirect_pages rejects a bare '#', so we 302 to the
   // hash route; the ekoa.io / configured-origin guard keeps it from being an open redirector.
   zohoSignReturn: { method: 'GET', path: '/api/zoho-sign/return', auth: 'public', kind: 'redirect', query: GenericQuery, response: z.unknown() },
+
+  // App DOCX (document base v2, 2C-S4): the served app's window onto its linked Word doc.
+  // Header-scoped like app-files; admission mirrors app-files' admitApp incl. the owner-
+  // activation gate. current/clean stream the working/clean .docx bytes (binary).
+  appDocxStatus: { method: 'GET', path: '/api/app-docx/status', auth: 'header-scoped', response: AppDocxStatusResponse },
+  appDocxProjection: { method: 'GET', path: '/api/app-docx/projection', auth: 'header-scoped', response: AppDocxProjectionResponse },
+  appDocxCurrent: { method: 'GET', path: '/api/app-docx/current', auth: 'header-scoped', kind: 'binary', response: z.unknown() },
+  appDocxClean: { method: 'POST', path: '/api/app-docx/clean', auth: 'header-scoped', kind: 'binary', response: z.unknown() },
+  appDocxEdits: { method: 'POST', path: '/api/app-docx/edits', auth: 'header-scoped', request: AppDocxEditsRequest, response: AppDocxEditsResponse },
 
   // App health probe (injected into every served HTML; featured artifacts skipped).
   appHealth: { method: 'POST', path: '/api/app-health', auth: 'header-scoped', request: z.record(z.unknown()), response: OkResponse },

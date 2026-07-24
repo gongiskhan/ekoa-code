@@ -171,6 +171,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   flips the test) + behaviorally green today in `api/tests/contract/served-app.test.ts`. Tracked in
   `docs/security.md`.
 
+  **Surface extension 2026-07-24 (2C-S4, `/api/app-docx/*`).** The same posture now also exposes the
+  owner's SOURCE WORD DOCUMENT. `api/src/apps/app-docx.ts` mirrors app-files' `admitApp` (mandated
+  for consistency), so it too authenticates NO caller - only a well-formed `X-Ekoa-App-Id` plus the
+  resolved OWNER's activation. Consequently any caller who knows an app id/slug can: read the full
+  document text via `GET /api/app-docx/projection`, download the raw bytes via `GET
+  /api/app-docx/current` and `POST /api/app-docx/clean`, and **persist mutations** via `POST
+  /api/app-docx/edits` (accept/reject/comment/reply/resolve). Aggravating factor specific to this
+  surface: `apps/document-source.ts` `applyReview` resolves the author SERVER-SIDE from the artifact
+  owner, so an anonymous outsider's tracked changes and comments are written into a legal `.docx`
+  **attributed to the lawyer** (the owner's username), with no record that the caller was not them.
+  Remanence: `deleteArtifact` (`api/src/apps/artifacts-service.ts`) removes only the artifact row and
+  not the app's data dir - afterwards `resolveApp` returns null, `artifactBacked` is false, the
+  owner-activation gate is SKIPPED entirely, and the orphaned document under
+  `<EKOA_DATA_DIR>/app-data/{appId}/docx` remains readable and mutable to anyone holding the id. Same
+  root cause and same operator decision as the parent entry (no separate fix timeline); a caller/
+  session check on the served-app planes closes both. Current state PINNED as a tripwire in
+  `api/tests/security/app-docx-authz.test.ts` so a future hardening flips it visibly.
+
 ### Gateway / egress
 
 - **`gateway-502-masks-401`** - CLOSED (local-bridge consumer run s7, 2026-07-11, merged from the

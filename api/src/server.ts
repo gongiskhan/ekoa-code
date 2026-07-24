@@ -60,6 +60,14 @@ import { seedFeaturedArtifacts } from './apps/featured-seeder.js';
 import { buildAndRegisterFeaturedArtifacts } from './apps/featured-builder.js';
 import { resolveApp } from './apps/registry.js';
 import { appFilesRouter, saveAppFileBlob } from './apps/app-files.js';
+import { appDocxRouter } from './apps/app-docx.js';
+import {
+  getStatus as docxGetStatus,
+  getProjection as docxGetProjection,
+  getCurrent as docxGetCurrent,
+  getClean as docxGetClean,
+  applyReview as docxApplyReview,
+} from './apps/document-source.js';
 import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
@@ -699,6 +707,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // Served-app assistant (operator-run D1): POST /api/app-assistant, header-scoped, runs under the
   // resolved artifact owner's org + billing through the llm/ chokepoint.
   app.use('/api', appAssistantRouter());
+  // App DOCX served-app plane (2C-S4): the document-base app's window onto its linked Word doc.
+  // Mounted AFTER the global JSON parser (its /edits + /clean bodies are JSON). Admission is
+  // app-files' admitApp incl. the owner-activation gate (inside the router); the document-source
+  // service functions are the injected seam - the composition root binds the real ones here.
+  app.use('/', appDocxRouter({
+    getStatus: docxGetStatus,
+    getProjection: docxGetProjection,
+    getCurrent: docxGetCurrent,
+    getClean: docxGetClean,
+    applyReview: docxApplyReview,
+  }));
   // Legal vertical services + e-signature (full paths carried inside the routers).
   // The owner-spine seams read/write the app owner's SHARED collections (usr.<owner>)
   // through the collections engine - the same spine the app itself drives via

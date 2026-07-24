@@ -74,6 +74,13 @@ const COVERED = new Set<string>([
   // all three keeps EXPECTED_PENDING_COUNT unchanged (send/status/sign-url/document stay
   // router-internal like Adobe's status/send/agreements).
   'servedApp.zohoSignWebhookGet', 'servedApp.zohoSignWebhookPost', 'servedApp.zohoSignReturn',
+  // 2C-S4 (App DOCX served-app plane) - status/projection/current/clean/edits, the served
+  // document-base app's window onto its linked Word doc (contract: tests/contract/app-docx.test.ts
+  // validates every 2xx body vs these schemas + the flat/envelope non-2xx precedent). Additive
+  // endpoints on the existing servedApp domain: covering all five keeps EXPECTED_PENDING_COUNT
+  // unchanged (they are outside /api/v1, so the mount-coverage walker auto-excludes them).
+  'servedApp.appDocxStatus', 'servedApp.appDocxProjection', 'servedApp.appDocxCurrent',
+  'servedApp.appDocxClean', 'servedApp.appDocxEdits',
   // G6 — serving plane + health + demos (served-app.test.ts)
   'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge', 'servedApp.demoAvailability',
   // G6 — integration definitions registry (integration-definitions.test.ts)
