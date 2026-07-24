@@ -19,7 +19,8 @@
 
 import { getDefinition, type IntegrationActionHttpConfig } from './definitions.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
-import { decrypt } from '../data/crypto.js';
+import { integrationConfigs } from '../data/stores.js';
+import { decrypt, encrypt } from '../data/crypto.js';
 import {
   interpolate,
   interpolateObj,
@@ -131,6 +132,30 @@ export async function executeUserIntegrationAction(
   }
   const credentialFields = decrypted;
 
+  // Provider credential resolver (e.g. Zoho Sign): mint EXTRA computed fields (a
+  // fresh access token + api_base) the versioned config's `{{...}}` templates
+  // interpolate, and persist any rotated credential (grant_code → refresh_token)
+  // back into the saved config's encrypted bundle. No-op for keys with no resolver.
+  let computedFields: Record<string, string>;
+  try {
+    computedFields = await resolveProviderCredentials(input.integrationKey, credentialFields, {
+      ownerUserId: input.ownerUserId,
+      superAdmin: false,
+      configId: config?._id,
+      onCredentialUpdate: config
+        ? (updates) => persistProviderCredentialUpdates(config, credentialFields, updates)
+        : undefined,
+    });
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    return {
+      success: false,
+      code: e?.code === 'not_connected' ? 'not_connected' : 'credential_invalid',
+      error: e?.message || 'Falha ao resolver as credenciais da integração.',
+    };
+  }
+  const resolvedFields = { ...credentialFields, ...computedFields };
+
   // automationBinding takes precedence over any httpConfig; delegate to the injected handler.
   if (action.automationBinding) {
     if (!deps.runAutomationBackedAction) {
@@ -139,18 +164,88 @@ export async function executeUserIntegrationAction(
     return deps.runAutomationBackedAction({
       binding: action.automationBinding,
       args: input.args,
-      credentialFields,
+      credentialFields: resolvedFields,
       orgId: input.orgId,
       ownerUserId: input.ownerUserId,
     });
   }
 
   const httpConfig = action.httpConfig!;
-  const { stringVars, rawVars } = buildVars(input.args, credentialFields);
-  // The decrypted credential VALUES — for value-based URL redaction in the failure summary.
-  const secretValues = Object.values(credentialFields)
+  const { stringVars, rawVars } = buildVars(input.args, resolvedFields);
+  // The credential VALUES (stored + resolver-minted, e.g. a fresh access_token) —
+  // for value-based redaction in the failure summary and the returned data.
+  const secretValues = Object.values(resolvedFields)
     .filter((v): v is string => typeof v === 'string' && v.length >= 4);
   return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues);
+}
+
+// ============================================================================
+// Provider credential resolvers (ch03 §3.8.15; ported from cortex
+// integration-action-executor.ts). A resolver maps a decrypted credential bundle
+// to EXTRA computed fields the versioned config's `{{...}}` templates interpolate
+// (a fresh Bearer / access token + host). Shared by the executor and the
+// integration-builder test path so both resolve credentials identically.
+// ============================================================================
+
+export interface ProviderResolverCtx {
+  ownerUserId?: string;
+  superAdmin?: boolean;
+  configId?: string;
+  onCredentialUpdate?: (updates: Record<string, string>) => Promise<void> | void;
+}
+
+export type ProviderCredentialResolver = (
+  credentialFields: Record<string, unknown>,
+  ctx: ProviderResolverCtx,
+) => Promise<Record<string, string>>;
+
+const PROVIDER_CREDENTIAL_RESOLVERS: Record<string, ProviderCredentialResolver> = {
+  // Zoho Sign (OAuth): mint `{{api_base}}` + `{{access_token}}` from the stored
+  // client_id/secret + refresh_token (or a one-time grant code, which the resolver
+  // exchanges and persists via ctx.onCredentialUpdate).
+  //
+  // NOTE: the 'adobe-acrobat-sign' resolver (a fresh Bearer via getAdobeBearer)
+  // lands only with the deferred Adobe OAuth slice — Adobe stays facade-only for
+  // now (RUN_LOG: BSM signs via Zoho; live Adobe backend has no consumer).
+  'zoho-sign': async (fields, ctx) => {
+    const { resolveZohoCredentials } = await import('./zoho-sign.js');
+    return resolveZohoCredentials(fields, ctx);
+  },
+};
+
+/**
+ * Run the registered resolver for an integration key (if any) and return the
+ * extra computed credential fields to merge in. Returning `{}` is a no-op.
+ */
+export async function resolveProviderCredentials(
+  integrationKey: string,
+  credentialFields: Record<string, unknown>,
+  ctx: ProviderResolverCtx,
+): Promise<Record<string, string>> {
+  const resolver = PROVIDER_CREDENTIAL_RESOLVERS[integrationKey];
+  if (!resolver) return {};
+  return resolver(credentialFields, ctx);
+}
+
+/**
+ * Persist rotated credential fields back into a saved config's encrypted bundle
+ * (e.g. Zoho's grant-code → refresh_token exchange). Re-encrypts the current
+ * decrypted bundle merged with the updates via the store's CAS mutator; never
+ * folds a captured browser session (`storageState`) into the credentials bundle.
+ */
+async function persistProviderCredentialUpdates(
+  config: IntegrationConfigDoc,
+  currentFields: Record<string, unknown>,
+  updates: Record<string, string>,
+): Promise<void> {
+  try {
+    const merged: Record<string, unknown> = { ...currentFields, ...updates };
+    delete merged.storageState;
+    const ciphertext = encrypt(JSON.stringify(merged));
+    await integrationConfigs.update(config._id, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
+  } catch (err) {
+    console.warn(`[action-executor] failed to persist rotated credentials for ${config.integrationKey}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 const DECRYPT_FAILED = Symbol('decrypt-failed');

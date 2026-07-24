@@ -1,0 +1,154 @@
+{
+  "version": "2.0",
+  "skillType": "integration",
+  "integrationKey": "zoho-sign",
+  "displayName": "Zoho Sign",
+  "description": "Send documents for e-signature with Zoho Sign, track request status, mint embedded signing links, list requests and recall (cancel) them. Document upload + request creation for served apps go through the platform's /api/zoho-sign proxy (it renders to PDF, uploads and auto-places signature fields server-side); these generic actions cover status, listing and recall.",
+  "authType": "api_key",
+  "provider": "Zoho",
+  "category": "document-signing",
+  "configSchema": [
+    {
+      "key": "client_id",
+      "label": "Client ID",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "helpText": "Client ID do Self Client criado em api-console.zoho.com (separador Client Secret)."
+    },
+    {
+      "key": "client_secret",
+      "label": "Client Secret",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Client Secret do Self Client em api-console.zoho.com."
+    },
+    {
+      "key": "grant_code",
+      "label": "Grant Code",
+      "type": "password",
+      "required": false,
+      "secret": true,
+      "helpText": "Codigo unico do separador 'Generate Code' do Self Client, com os scopes ZohoSign.documents.ALL,ZohoSign.account.READ. Expira em minutos - guarde e corra o test_connection de imediato. Deixe vazio se colar um Refresh Token."
+    },
+    {
+      "key": "refresh_token",
+      "label": "Refresh Token",
+      "type": "password",
+      "required": false,
+      "secret": true,
+      "helpText": "Alternativa opcional ao Grant Code: um refresh token ja trocado por si (POST {accounts}/oauth/v2/token com grant_type=authorization_code). Nao expira."
+    },
+    {
+      "key": "dc",
+      "label": "Data Center",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "helpText": "Data center Zoho da sua conta: com (US), eu, in, jp, au, ca ou sa. Leia-o no URL do Zoho Sign (sign.zoho.com -> com, sign.zoho.eu -> eu)."
+    }
+  ],
+  "actions": [
+    {
+      "actionName": "test_connection",
+      "description": "Verify the credentials by listing signature requests (also exchanges a freshly pasted grant code for the permanent refresh token — run this right after saving).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/v1/requests",
+        "headers": {
+          "Authorization": "Zoho-oauthtoken {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "list_requests",
+      "description": "List the signature requests visible to the connected Zoho Sign user.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/v1/requests",
+        "headers": {
+          "Authorization": "Zoho-oauthtoken {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "get_request",
+      "description": "Get a single signature request's metadata and current status (request_status: draft, inprogress, completed, declined, recalled, expired; per-recipient actions[].action_status: NOACTION, UNOPENED, VIEWED, SIGNED).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Zoho Sign request id (returned when the request was created)."
+          }
+        },
+        "required": [
+          "request_id"
+        ]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/v1/requests/{{request_id}}",
+        "headers": {
+          "Authorization": "Zoho-oauthtoken {{access_token}}"
+        }
+      }
+    },
+    {
+      "actionName": "recall_request",
+      "description": "Recall (cancel) an in-progress signature request. Recipients can no longer sign it.",
+      "mutates": true,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Zoho Sign request id."
+          }
+        },
+        "required": [
+          "request_id"
+        ]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "{{api_base}}",
+        "path": "/api/v1/requests/{{request_id}}/recall",
+        "headers": {
+          "Authorization": "Zoho-oauthtoken {{access_token}}"
+        }
+      }
+    }
+  ],
+  "proxyContract": {
+    "executeEndpoint": "/api/agent/integrations/execute",
+    "requiredInputs": ["integrationKey", "actionName", "args"]
+  }
+}

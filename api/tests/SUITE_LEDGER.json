@@ -398,6 +398,12 @@
         "note": "claude-auth-* with llm/ at G7; error-sanitizer at G5; base-loader at G6"
       },
       {
+        "group": "zoho-sign e-signature (BSM Adobe->Zoho swap)",
+        "count": 1,
+        "targetGate": "operator-run",
+        "note": "2B-S1 (ekoa-dev port): tests/integrations/zoho-sign-token.test.ts - Zoho Sign OAuth token core (grant-code exchange+burn via ctx.onCredentialUpdate, refresh+in-memory cache, N-concurrent singleflight, dc->host mapping com/eu, sanitized token errors) + the executor's PROVIDER_CREDENTIAL_RESOLVERS wiring (resolveProviderCredentials('zoho-sign') injecting api_base+access_token so the shipped api/assets/integrations/zoho-sign/config.json httpConfig resolves). Hermetic: in-process Zoho mock via ZOHO_ACCOUNTS_BASE_OVERRIDE/ZOHO_API_BASE_OVERRIDE; runs green in the per-PR vitest lane from landing (module_tests are enforced by npm test, not this census runner). Ratchet applies. The live send/status/sign-url/document proxy + webhook + swap e2e land in later 2B slices (operator-run gate)."
+      },
+      {
         "group": "branding token gates",
         "count": 4,
         "targetGate": "G6"
