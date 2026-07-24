@@ -145,6 +145,8 @@ import {
   type SupervisorTrigger,
 } from './events/listener-supervisor.js';
 import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './events/listener-state.js';
+import { buildArtifactBackendInput } from './integrations/event-sources/dispatch-input.js';
+import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
 import { decrypt, encrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
@@ -475,10 +477,32 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         return { ok: false, reason: 'artifact not in the trigger owner org', permanent: true };
       }
       try {
-        const result = await invokeArtifactBackend(artifactId, entrypoint, {
-          event: event.payload,
-          trigger: { id: event.trigger._id, eventName: event.trigger.eventName },
-        });
+        // Build the dispatch input (2A-S2). An email-source listener (M365/Google) hydrates the
+        // FULL message into the frozen EmailInput envelope — read_email via callPlatformIntegration
+        // bound to the TRIGGER'S org (OAuth refresh in core), so the artifact never touches
+        // Graph/OAuth. Every other source keeps the generic { event, trigger } envelope unchanged.
+        // A read failure THROWS out of hydrateEmailInput → caught below → non-permanent failure →
+        // the delivery pipeline retries (never a truncated preview body handed to the backend).
+        const input = await buildArtifactBackendInput(
+          { id: event.trigger._id, integrationKey: event.trigger.integrationKey, eventName: event.trigger.eventName },
+          event.payload,
+          {
+            hydrateEmail: (trigger, listItem) =>
+              hydrateEmailInput(trigger, listItem, {
+                call: (args) =>
+                  callPlatformIntegration(
+                    {
+                      orgId: event.trigger.orgId,
+                      integrationKey: (args.integrationKey as string) ?? trigger.integrationKey,
+                      actionName: args.actionName as string,
+                      args: (args.args as Record<string, unknown>) ?? {},
+                    },
+                    { now: deps.now, genId: deps.genId },
+                  ),
+              }),
+          },
+        );
+        const result = await invokeArtifactBackend(artifactId, entrypoint, input);
         return result.ok ? { ok: true } : { ok: false, reason: result.error ?? 'backend handler reported failure' };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : 'backend invoke failed' };
