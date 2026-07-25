@@ -154,6 +154,10 @@ export function hydrateWhatsAppMessages(payload: unknown): MessageInput[] {
  *     `[m1, m2]` collide with an already-seen `[m1]` and LOSE m2.
  *   - it is order-independent (ids sorted) and hashed, so the derived key is bounded (the queue's
  *     `_id` is `triggerId::dedupKey`) regardless of batch size.
+ *   - the canonical form is INJECTIVE: the sorted ids are JSON-serialised rather than joined on a
+ *     separator, so no id containing the separator can forge the canonical form of a different id
+ *     set (a delimiter join would let the single wamid "a\nb" hash identically to the set [a, b]).
+ *     JSON escapes the delimiters it uses, so distinct id sets always canonicalise distinctly.
  *
  * Returns null when the envelope carries no inbound messages (statuses-only, or malformed) — the
  * caller then falls back to the body hash so such a delivery is still deduped, never dropped.
@@ -161,7 +165,7 @@ export function hydrateWhatsAppMessages(payload: unknown): MessageInput[] {
 export function whatsAppDedupKey(payload: unknown): string | null {
   const ids = extractWhatsAppMessages(decodeEnvelopeSafe(payload)).map((m) => m.id);
   if (ids.length === 0) return null;
-  const canonical = [...ids].sort().join('\n');
+  const canonical = JSON.stringify([...ids].sort());
   return `wamid:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
 }
 

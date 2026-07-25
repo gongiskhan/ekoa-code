@@ -9,11 +9,13 @@
  *      challenge + secretSource.credentialField='app_secret' (skill shape).
  *   2. GET /hooks/:id hub.challenge handshake echoes hub.challenge when the verify
  *      token matches; a wrong token is refused.
- *   3. A POST envelope signed with the trigger secret (X-Hub-Signature-256) is
- *      accepted → 200 { accepted:true }.
- *   4. A replay of the SAME envelope (identical bytes+signature) is de-duplicated →
- *      200 { duplicate:true }.
- *   5. A POST with a BAD signature is rejected → 401 (proves HMAC verification).
+ *   3. A POST envelope signed with the owner's stored app_secret
+ *      (X-Hub-Signature-256) is accepted → 200 { accepted:true }.
+ *   4. A POST signed with the PER-TRIGGER secret is rejected → 401: under
+ *      secretSource.credentialField the trigger secret is NOT the webhook secret.
+ *   5. A POST signed with an unrelated secret is rejected → 401 (forged).
+ *   6. A replay of the accepted envelope is de-duplicated → 200 { duplicate:true },
+ *      byte-identical AND re-serialised (the dedup key is the wamid SET).
  *
  * REST adaptation (2026-07-07, G8, per spec/reference/test-audit.md §5.1): transport
  * swapped from the retired action envelope (POST /api/v1/action, ekoa.auth/
@@ -23,14 +25,20 @@
  *
  * BEHAVIOURAL DIFFERENCES vs the old cortex (see the report; these are the new
  * generic webhook model, ch09 invariant 9 — not regressions in this driver):
- *   - The webhook HMAC now keys off the PER-TRIGGER secret returned at trigger
- *     creation, not the integration config's app_secret. app_secret survives here
- *     only as a skill-definition assertion (step 1). The signed-ingress proof
- *     (steps 3-5) signs with the trigger secret.
+ *   - The webhook HMAC keys off the secret the INTEGRATION DEFINITION points at:
+ *     whatsapp declares webhookConfig.secretSource.credentialField='app_secret', so
+ *     ingress verifies against the OWNER's stored (decrypted) app_secret. Meta signs
+ *     every webhook with the app secret, so nothing else could ever verify. The
+ *     per-trigger secret returned at trigger creation is NOT the webhook secret for
+ *     this integration — step 4 proves it is refused. Resolution fails CLOSED (a
+ *     missing/undecryptable credential rejects; it never falls back to '' or to the
+ *     trigger secret).
  *   - The hub-challenge verify token is a GLOBAL env value (WEBHOOK_HUB_VERIFY_TOKEN,
  *     default ''), not the per-trigger secret; a mismatch returns 400 (not 403).
  *   - Accepted ingress returns { accepted:true } (was { eventId }); dedup keys off
- *     the signature, not a per-message wamid.
+ *     the SET of wamids in the envelope (sha256 → `wamid:<hex>`), not the raw body
+ *     and not the signature — so a Meta retry that re-serialises the same messages
+ *     still collapses, while a later batch [m1,m2] stays distinct from a seen [m1].
  *
  * DOCUMENTED SKIPs (no REST surface in the current build):
  *   - webhook_audit / event-queue rows were read from triggers.db; there is no REST
@@ -40,7 +48,7 @@
  *   - Dispatch into the legal-nucleo onMessage backend is a LATER slice (P3), and the
  *     integration-action executor (send_message outbound) is the deferred G8 execution
  *     stack; both remain SKIP (send_message is proven by the vitest suite
- *     tests/event-sourcing/whatsapp-webhook.test.ts against a mock Graph server).
+ *     tests/events/whatsapp-webhook.test.ts against a mock Graph server).
  *
  * Auth: login admin/tmp12345 via POST /api/v1/auth/login for a JWT.
  * Cleanup: the trigger + integration config are deleted (best-effort) before and after.
@@ -149,6 +157,9 @@ async function main() {
     ok('whatsapp definition loaded with meta_hub_challenge + secretSource:app_secret');
 
     // ---- Save credentials (graph_base_url → local mock) --------------------
+    // Best-effort pre-cleanup: a config left behind by an aborted run would shadow the one this
+    // driver stores, and the app_secret it holds is what ingress verifies against.
+    await restJson('DELETE', '/api/v1/integrations/whatsapp');
     const created = await restJson('POST', '/api/v1/integrations/configs', {
       integrationKey: 'whatsapp',
       configValues: {
@@ -194,36 +205,66 @@ async function main() {
     ok('GET hub.challenge rejects a wrong verify token with 400');
     note('hub-challenge verify token is a GLOBAL env value (WEBHOOK_HUB_VERIFY_TOKEN), not the per-trigger secret — the new generic webhook model (ch09).');
 
-    // ---- 2. Signed POST ingress (HMAC keyed off the trigger secret) --------
-    const raw = Buffer.from(JSON.stringify(envelope()));
+    // ---- 2. Rejected POSTs FIRST (nothing may be enqueued by a bad signature)
+    const env = envelope();
+    const raw = Buffer.from(JSON.stringify(env));
     const postSigned = (buf, sig) => fetch(hookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': sig },
       body: buf,
     });
 
-    const first = await postSigned(raw, sign(raw, secret));
-    const firstJson = await first.json().catch(() => ({}));
-    assert(first.status === 200, `signed POST expected 200, got ${first.status} (${JSON.stringify(firstJson).slice(0, 200)})`);
-    assert(firstJson.accepted === true, `signed POST expected { accepted:true }, got ${JSON.stringify(firstJson)}`);
-    ok('signed envelope accepted → 200 { accepted:true }');
+    // 2a. The PER-TRIGGER secret is NOT the webhook secret for an integration that declares
+    //     secretSource.credentialField — signing with it must be refused exactly like a forgery.
+    const triggerSigned = await postSigned(raw, sign(raw, secret));
+    const triggerSignedJson = await triggerSigned.json().catch(() => ({}));
+    assert(
+      triggerSigned.status === 401,
+      `POST signed with the per-trigger secret expected 401, got ${triggerSigned.status} (${JSON.stringify(triggerSignedJson).slice(0, 200)})`,
+    );
+    assert(
+      triggerSignedJson?.error?.code === 'UNAUTHENTICATED',
+      `trigger-secret POST expected the UNAUTHENTICATED error envelope, got ${JSON.stringify(triggerSignedJson).slice(0, 200)}`,
+    );
+    ok('POST signed with the PER-TRIGGER secret is rejected → 401 UNAUTHENTICATED (secretSource:app_secret, not the trigger secret)');
 
-    // ---- 3. Replay → duplicate (dedup by signature) -----------------------
-    const replay = await postSigned(raw, sign(raw, secret));
+    // 2b. A wholly unrelated secret (the classic forgery) is refused too.
+    const forged = await postSigned(raw, sign(raw, 'the-wrong-secret'));
+    assert(forged.status === 401, `forged-signature POST expected 401, got ${forged.status}`);
+    ok('POST signed with an unrelated secret is rejected → 401 (HMAC verification, ch09 invariant 9)');
+
+    // ---- 3. Signed POST ingress (HMAC keyed off the owner's app_secret) ----
+    const first = await postSigned(raw, sign(raw, APP_SECRET));
+    const firstJson = await first.json().catch(() => ({}));
+    assert(first.status === 200, `app_secret-signed POST expected 200, got ${first.status} (${JSON.stringify(firstJson).slice(0, 200)})`);
+    // accepted (not duplicate) also proves neither rejected POST above enqueued anything: they
+    // carried this exact envelope, so an enqueued forgery would make THIS delivery a duplicate.
+    assert(firstJson.accepted === true, `app_secret-signed POST expected { accepted:true }, got ${JSON.stringify(firstJson)}`);
+    ok('envelope signed with the owner app_secret is accepted → 200 { accepted:true } (and the two rejected POSTs enqueued nothing)');
+
+    // ---- 4. Replay → duplicate (dedup keyed on the wamid SET) -------------
+    const replay = await postSigned(raw, sign(raw, APP_SECRET));
     const replayJson = await replay.json().catch(() => ({}));
     assert(replay.status === 200 && replayJson.duplicate === true, `replay expected 200 { duplicate:true }, got ${replay.status} ${JSON.stringify(replayJson)}`);
     ok('replay of the identical envelope is de-duplicated → 200 { duplicate:true }');
 
-    // ---- 4. Bad signature → 401 -------------------------------------------
-    const forged = await postSigned(raw, sign(raw, 'the-wrong-secret'));
-    assert(forged.status === 401, `forged-signature POST expected 401, got ${forged.status}`);
-    ok('POST signed with the wrong secret is rejected → 401 (HMAC verification, ch09 invariant 9)');
-    note('webhook HMAC keys off the per-trigger secret (returned at create), not the integration app_secret; app_secret is asserted as a skill-definition field only.');
+    // 4b. A Meta retry that RE-SERIALISES the envelope (different bytes, same wamid) must still
+    //     dedupe — this is what the wamid-set key buys over a raw-body hash.
+    const rawReordered = Buffer.from(JSON.stringify({ entry: env.entry, object: env.object }));
+    assert(!rawReordered.equals(raw), 're-serialised envelope must differ byte-wise for this assertion to mean anything');
+    const reserialised = await postSigned(rawReordered, sign(rawReordered, APP_SECRET));
+    const reserialisedJson = await reserialised.json().catch(() => ({}));
+    assert(
+      reserialised.status === 200 && reserialisedJson.duplicate === true,
+      `re-serialised retry expected 200 { duplicate:true }, got ${reserialised.status} ${JSON.stringify(reserialisedJson)}`,
+    );
+    ok('re-serialised retry (different bytes, same wamid) is de-duplicated → 200 { duplicate:true }');
+    note(`webhook HMAC keys off the owner's stored app_secret (webhookConfig.secretSource.credentialField), not the per-trigger secret; dedup keys off the wamid set (${WAMID}).`);
 
     // ---- Deferred / out-of-surface observations ---------------------------
     note('SKIP webhook_audit/event-queue row introspection: no REST surface echoes them (MongoDB store); the ingress outcomes are proven by the response codes above.');
     note(`SKIP dispatch into ${ARTIFACT_ID}.${ENTRYPOINT}: the backend is a later slice (P3).`);
-    note('SKIP send_message outbound: needs the deferred G8 integration-action executor; proven over-the-wire by tests/event-sourcing/whatsapp-webhook.test.ts.');
+    note('SKIP send_message outbound: needs the deferred G8 integration-action executor; proven over-the-wire by tests/events/whatsapp-webhook.test.ts.');
   } finally {
     if (triggerId) {
       const d = await restJson('DELETE', `/api/v1/triggers/${triggerId}`);
@@ -238,7 +279,7 @@ async function main() {
 main().then(
   () => {
     if (process.exitCode) { console.error('\nE2E: FAILURES above.'); process.exit(process.exitCode); }
-    console.log('\nE2E PASS: WhatsApp definition + hub.challenge + signed HMAC ingress + dedup + bad-sig rejection verified.');
+    console.log('\nE2E PASS: WhatsApp definition + hub.challenge + app_secret-keyed HMAC ingress + wamid dedup + trigger-secret/forged rejection verified.');
     process.exit(0);
   },
   (err) => {

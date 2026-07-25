@@ -462,6 +462,10 @@ describe('WhatsApp envelope dedup (wamid-derived key)', () => {
     expect(one).not.toBe(two); // a first-message-id key would have collided here and lost m2
     expect(two).toBe(twoSwapped); // order-independent
     expect(one).toMatch(/^wamid:[0-9a-f]{64}$/); // bounded — the queue _id is triggerId::dedupKey
+    // …and the canonical form is INJECTIVE: a single id that CONTAINS the old '\n' join separator
+    // must not collapse onto the two-id set (a delimiter join made these two identical).
+    const separatorInjection = whatsAppDedupKey(textMessageEnvelope({ wamid: 'wamid.m1\nwamid.m2' }));
+    expect(separatorInjection).not.toBe(two);
   });
 
   it('falls back to the body hash when there is no wamid (statuses-only, malformed)', async () => {
