@@ -205,6 +205,291 @@ body {
 .note { margin-bottom: 1.5rem; }
 .note-heading { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.35rem; }
 
+/* -- Source-linked mode: banner + redline preview ------------------------- */
+
+.doc-source-banner {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.82rem;
+  color: var(--doc-ink-soft, #434852);
+  background: #f4f7fa;
+  border-bottom: 1px solid #dde3ea;
+  padding: 0.5rem 1.5rem;
+}
+
+.redline-status {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.9rem;
+  color: var(--doc-ink-soft, #434852);
+  text-align: center;
+  padding: 2.5rem 0;
+}
+
+.redline-ins {
+  color: #15803d;
+  text-decoration: underline;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.15em;
+}
+
+.redline-del {
+  color: #b91c1c;
+  text-decoration: line-through;
+}
+
+.redline-mark {
+  background: #fef3c7;
+  color: inherit;
+  padding: 0 0.12em;
+  border-radius: 2px;
+}
+
+/* Rectangle, NOT a pill: a 999px radius on a chip that wraps to several lines
+   draws a huge ellipse whose curve cuts across the text box, so the first and
+   last lines render outside the painted background. */
+.redline-chip {
+  display: inline-block;
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.66rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: #5b6472;
+  background: #eef1f5;
+  border: 1px solid #dde3ea;
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.5rem;
+  margin: 0 0.2rem;
+  vertical-align: 0.14em;
+  max-width: 28rem;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Comment thread card. Sits top-aligned in the line box (a multi-line card on
+   the text baseline would push the whole line down) and holds one
+   .redline-comment row per comment in the thread. */
+.redline-chip-comment {
+  color: #713f12;
+  background: #fefce8;
+  border-color: #fde68a;
+  max-width: 24rem;
+  padding: 0.35rem 0.55rem;
+  vertical-align: top;
+}
+
+.redline-chip-comment.resolved {
+  color: #57534e;
+  background: #f5f5f4;
+  border-color: #e7e5e4;
+}
+
+.redline-comment { display: block; }
+.redline-comment + .redline-comment {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid currentColor;
+  border-top-color: #fde68a;
+}
+.redline-chip-comment.resolved .redline-comment + .redline-comment { border-top-color: #e7e5e4; }
+
+.redline-comment-flag {
+  display: block;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+  color: #57534e;
+}
+
+.redline-chip-author { font-weight: 700; margin-right: 0.35rem; }
+
+.redline-heading { font-weight: 700; }
+.redline-h1 { font-size: 1.08rem; margin: 2rem 0 0.9rem; }
+.redline-h2, .redline-h3 { font-size: 1.02rem; margin: 1.5rem 0 0.7rem; }
+
+.redline-list { margin: 0 0 0.85rem 1.6rem; }
+.redline-list li { margin-bottom: 0.5rem; text-align: justify; }
+
+.redline-hr { border: none; border-top: 1px solid #dde3ea; margin: 1.5rem 0; }
+
+.redline-comment-body { white-space: pre-wrap; }
+
+/* -- Interactive human review (source-linked mode, screen only) ----------- */
+
+.redline-chip-action { position: relative; }
+
+.redline-chip-label {
+  cursor: pointer;
+  border-radius: 0.3rem;
+  outline: none;
+}
+.redline-chip-label:hover { text-decoration: underline; text-decoration-thickness: 1px; }
+.redline-chip-label:focus-visible { box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.45); }
+.redline-chip-action.open > .redline-chip-label { text-decoration: underline; }
+
+.redline-spinner {
+  display: inline-block;
+  width: 0.62rem;
+  height: 0.62rem;
+  margin-left: 0.3rem;
+  vertical-align: -0.05em;
+  border: 2px solid rgba(91, 100, 114, 0.35);
+  border-top-color: #5b6472;
+  border-radius: 50%;
+  animation: redline-spin 0.7s linear infinite;
+}
+@keyframes redline-spin { to { transform: rotate(360deg); } }
+
+.redline-actions {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.16);
+  white-space: nowrap;
+}
+
+.redline-act {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 0.28rem 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid #dde3ea;
+  background: #ffffff;
+  color: var(--doc-ink-soft, #434852);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.redline-act:hover:not(:disabled) { background: #f4f7fa; }
+.redline-act:disabled { opacity: 0.55; cursor: default; }
+
+.redline-act-accept { color: #15803d; border-color: #bbf7d0; background: #f0fdf4; }
+.redline-act-accept:hover:not(:disabled) { background: #dcfce7; }
+.redline-act-reject { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+.redline-act-reject:hover:not(:disabled) { background: #fee2e2; }
+
+/* Thread action row: Responder / Resolver, below the comments in the card. */
+.redline-comment-actions {
+  display: block;
+  margin-top: 0.4rem;
+}
+
+.redline-reply-trigger {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 0 0.2rem;
+  border: none;
+  background: transparent;
+  color: #92400e;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.redline-reply-trigger + .redline-reply-trigger { margin-left: 0.75rem; }
+.redline-reply-trigger:disabled { opacity: 0.55; cursor: default; text-decoration: none; }
+.redline-chip-comment.resolved .redline-reply-trigger { color: #57534e; }
+
+.redline-composer {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  vertical-align: top;
+  margin-left: 0.4rem;
+  padding: 0.4rem;
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  width: 17rem;
+  max-width: 90vw;
+}
+
+.redline-textarea {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--doc-ink, #16181d);
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #dde3ea;
+  border-radius: 0.3rem;
+  resize: vertical;
+}
+.redline-textarea:focus { outline: none; border-color: var(--color-primary, #0f766e); }
+
+.redline-composer-actions { display: flex; gap: 0.35rem; }
+
+/* Inside a comment card the composer is a block, not an inline sibling - it is
+   already inside the card's max-width, so it must not add a left offset. */
+.redline-chip-comment .redline-composer {
+  display: flex;
+  width: 100%;
+  margin-left: 0;
+  margin-top: 0.4rem;
+}
+
+.redline-commenter {
+  position: fixed;
+  z-index: 40;
+  transform: translate(-50%, calc(-100% - 0.5rem));
+}
+
+.redline-add-btn {
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.35rem;
+  border: 1px solid transparent;
+  background: var(--color-primary, #0f766e);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.22);
+}
+.redline-add-btn:hover { background: var(--color-primary-hover, #115e59); }
+
+.redline-composer-float { display: flex; }
+
+.redline-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  max-width: 34rem;
+  font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.45rem;
+  padding: 0.6rem 0.8rem;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+}
+.redline-toast-text { flex: 1; }
+.redline-toast-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
 /* -- Print / PDF ----------------------------------------------------------- */
 
 @page { size: A4; margin: 22mm 20mm; }
@@ -228,5 +513,8 @@ body {
   .doc-clause-title { break-after: avoid; }
   .doc-clause { break-inside: auto; }
   .doc-signatures { break-inside: avoid; }
+  .redline-heading { break-after: avoid; }
+  .redline-h1 { font-size: 12pt; }
+  .redline-chip { font-size: 7pt; }
   a { color: inherit; text-decoration: none; }
 }

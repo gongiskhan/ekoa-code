@@ -5,8 +5,16 @@
  * Only touch this shell for user-requested EXTRAS (e.g. fill-in form fields,
  * an additional tab). Never remove or restyle the toolbar, exports, or the
  * print layout; the Word/PDF output depends on them.
+ *
+ * Two modes, switched by documentData.sourceDocument:
+ *   - authored (default): `blocks` render the document and the .docx is
+ *     generated client-side from them.
+ *   - source-linked: the app works over an EXISTING Word file registered on
+ *     the platform (docx tools). The shell fetches the CriticMarkup
+ *     projection from /api/app-docx/projection and renders it as a redline
+ *     preview (tracked changes + comments); downloads serve the real file.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from 'react';
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageBreak,
 } from 'docx';
@@ -130,6 +138,509 @@ async function downloadBlob(blob, name) {
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 // ---------------------------------------------------------------------------
+// Source-linked mode - CriticMarkup redline preview
+//
+// The platform projection (/api/app-docx/projection) is markdown with
+// CriticMarkup spans: {++ins++}, {--del--}, {~~old~>new~~}, {==text==},
+// {>>[Chg:n kind] author<<} / {>>[Com:n] author @ date: text<<}. Meta spans
+// may contain newlines, so tokenize the whole string first and only split
+// blocks on newlines inside plain-text tokens.
+// ---------------------------------------------------------------------------
+
+const CRITIC_SPANS = [
+  { open: '{++', close: '++}', kind: 'ins' },
+  { open: '{--', close: '--}', kind: 'del' },
+  { open: '{~~', close: '~~}', kind: 'subst' },
+  { open: '{==', close: '==}', kind: 'mark' },
+  { open: '{>>', close: '<<}', kind: 'meta' },
+];
+
+function tokenizeCritic(src) {
+  const tokens = [];
+  let plain = '';
+  let i = 0;
+  while (i < src.length) {
+    let span = null;
+    if (src[i] === '{') {
+      for (const s of CRITIC_SPANS) {
+        if (src.startsWith(s.open, i)) {
+          const end = src.indexOf(s.close, i + s.open.length);
+          if (end !== -1) span = { kind: s.kind, text: src.slice(i + s.open.length, end), next: end + s.close.length };
+          break;
+        }
+      }
+    }
+    if (span) {
+      if (plain) { tokens.push({ kind: 'text', text: plain }); plain = ''; }
+      tokens.push({ kind: span.kind, text: span.text });
+      i = span.next;
+    } else {
+      plain += src[i];
+      i += 1;
+    }
+  }
+  if (plain) tokens.push({ kind: 'text', text: plain });
+  return tokens;
+}
+
+function splitCriticBlocks(tokens) {
+  const blocks = [[]];
+  for (const tok of tokens) {
+    if (tok.kind !== 'text' || !tok.text.includes('\n')) {
+      blocks[blocks.length - 1].push(tok);
+      continue;
+    }
+    tok.text.split('\n').forEach((part, idx) => {
+      if (idx > 0) blocks.push([]);
+      if (part) blocks[blocks.length - 1].push({ kind: 'text', text: part });
+    });
+  }
+  return blocks.filter((b) => b.some((t) => t.kind !== 'text' || t.text.trim() !== ''));
+}
+
+function stripLeadMarker(tokens, marker) {
+  const [first, ...rest] = tokens;
+  const remainder = first.text.slice(marker.length);
+  return remainder ? [{ kind: 'text', text: remainder }, ...rest] : rest;
+}
+
+function hasContent(tokens) {
+  return tokens.some((t) => t.kind !== 'text' || t.text.trim() !== '');
+}
+
+function classifyCriticBlock(tokens) {
+  const first = tokens[0];
+  if (first && first.kind === 'text') {
+    const heading = first.text.match(/^(#{1,6})\s+/);
+    if (heading) return { type: 'heading', level: heading[1].length, tokens: stripLeadMarker(tokens, heading[0]) };
+    if (tokens.length === 1 && /^-{3,}\s*$/.test(first.text)) return { type: 'hr', tokens: [] };
+    const ol = first.text.match(/^\d+[.)]\s+/);
+    if (ol) return { type: 'olitem', tokens: stripLeadMarker(tokens, ol[0]) };
+    const ul = first.text.match(/^[-*]\s+/);
+    if (ul) return { type: 'ulitem', tokens: stripLeadMarker(tokens, ul[0]) };
+  }
+  return { type: 'paragraph', tokens };
+}
+
+// Trailing empty "## Footnotes" / "## Endnotes" scaffolding the projection
+// always appends - drop it only when the sections carry no content.
+function stripEmptyTrailingSections(md) {
+  let out = md.replace(/\s+$/, '');
+  for (const name of ['Endnotes', 'Footnotes']) {
+    out = out.replace(new RegExp('\\n-{3,}\\s*\\n+#{1,6}\\s+' + name + '\\s*$'), '').replace(/\s+$/, '');
+  }
+  return out;
+}
+
+const INLINE_MD = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/g;
+
+function renderInlineMd(text, keyBase) {
+  return text.split(INLINE_MD).map((part, i) => {
+    if (!part) return null;
+    const key = `${keyBase}-${i}`;
+    if (/^\*\*[\s\S]*\*\*$/.test(part) || /^__[\s\S]*__$/.test(part)) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.length > 2 && (/^\*[\s\S]*\*$/.test(part) || /^_[\s\S]*_$/.test(part))) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+    return <span key={key}>{part}</span>;
+  });
+}
+
+const CHG_KIND_LABEL = { insert: 'inserção', delete: 'eliminação', format: 'formatação', move: 'movimentação' };
+
+// ---------------------------------------------------------------------------
+// Interactive human review (source-linked mode only).
+//
+// The meta chips carry the numeric ids the backend keys on: `[Chg:n]` for a
+// tracked change (target of accept/reject), `[Com:n]` for a comment thread
+// (target of reply and of resolve/unresolve - Word's "Resolve" is a THREAD
+// flag, reported by the projection as a "(RESOLVED)" suffix after the date).
+// Accept/reject/reply/resolve/add-comment POST to /api/app-docx/edits; the
+// returned markdown re-renders the preview. The
+// ReviewContext is only provided in source-linked mode, so authored mode never
+// activates any of this - the chips render read-only (review == null).
+// ---------------------------------------------------------------------------
+
+const ReviewContext = createContext(null);
+
+// "[Chg:6 delete] Author (pairs with Chg:7)" -> { id, kindLabel, author, ids }.
+// `ids` is the full set to act on: this change plus every paired change, so
+// accepting/rejecting one half of a del/ins replacement resolves the pair.
+function parseChgLine(line) {
+  const chg = line.match(/^\[Chg:(\d+)(?:\s+(\w+))?\]\s*(.*)$/);
+  if (!chg) return null;
+  const id = chg[1];
+  const kind = chg[2] || '';
+  const rest = chg[3] || '';
+  const pairs = [];
+  const re = /pairs with Chg:(\d+)/g;
+  let m;
+  while ((m = re.exec(rest))) pairs.push(m[1]);
+  const author = rest.replace(/\s*\(pairs with[^)]*\)\s*$/, '').trim();
+  return {
+    id,
+    kindLabel: kind ? CHG_KIND_LABEL[kind] || kind : '',
+    author,
+    ids: Array.from(new Set([id, ...pairs])),
+  };
+}
+
+function ChgReviewChip({ meta }) {
+  const review = useContext(ReviewContext);
+  const [open, setOpen] = useState(false);
+  const label = `Alt. ${meta.id}${meta.kindLabel ? ` (${meta.kindLabel})` : ''}${meta.author ? ` - ${meta.author}` : ''}`;
+  if (!review || !review.enabled) {
+    return <span className="redline-chip">{label}</span>;
+  }
+  const pendingKey = `chg:${meta.id}`;
+  const isPending = review.pendingKey === pendingKey;
+  const toggle = () => { if (!review.busy) setOpen((v) => !v); };
+  const act = (type) => {
+    const ops = meta.ids.map((tid) => ({ type, target_id: tid }));
+    review.submitOps(ops, pendingKey).then((ok) => { if (ok) setOpen(false); });
+  };
+  return (
+    <span className={`redline-chip redline-chip-action${open ? ' open' : ''}`}>
+      <span
+        className="redline-chip-label"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}
+      >
+        {label}
+        {isPending ? <span className="redline-spinner no-print" data-no-pdf="true" aria-label="A aplicar" /> : null}
+      </span>
+      {open && !isPending && (
+        <span className="redline-actions no-print" data-no-pdf="true">
+          <button type="button" className="redline-act redline-act-accept" disabled={review.busy} onClick={() => act('accept')}>Aceitar</button>
+          <button type="button" className="redline-act redline-act-reject" disabled={review.busy} onClick={() => act('reject')}>Rejeitar</button>
+        </span>
+      )}
+    </span>
+  );
+}
+
+// One {>>...<<} span carries SEVERAL entries, one per line, and mixes kinds:
+// the projection emits every [Chg:n] line for the anchor followed by every
+// [Com:n] line of the thread(s) anchored there. A comment body may itself span
+// lines, so a line that does not open a new marker continues the entry before
+// it.
+const META_ENTRY_START = /^\[(?:Chg|Com):\d+/;
+
+function splitMetaEntries(text) {
+  const entries = [];
+  for (const line of text.split('\n')) {
+    if (entries.length === 0 || META_ENTRY_START.test(line.trim())) entries.push(line);
+    else entries[entries.length - 1] += `\n${line}`;
+  }
+  return entries.map((e) => e.trim()).filter(Boolean);
+}
+
+// "[Com:n] Author @ ISO-date(RESOLVED): body" -> { id, author, date, resolved, body }.
+// The projection joins header and body with exactly ": " and an ISO date never
+// has a space after its colons, so the FIRST ": " is the split. "(RESOLVED)" is
+// appended straight after the date when the thread is marked done in Word.
+function parseComEntry(entry) {
+  const head = /^\[Com:(\d+)\]\s*([\s\S]*)$/.exec(entry);
+  if (!head) return null;
+  const rest = head[2];
+  const split = rest.indexOf(': ');
+  const meta = split === -1 ? rest : rest.slice(0, split);
+  const body = split === -1 ? '' : rest.slice(split + 2);
+  const resolved = /\(RESOLVED\)$/.test(meta);
+  const bare = resolved ? meta.slice(0, -'(RESOLVED)'.length) : meta;
+  const at = bare.lastIndexOf(' @ ');
+  return {
+    id: head[1],
+    author: (at === -1 ? bare : bare.slice(0, at)).trim(),
+    date: at === -1 ? '' : bare.slice(at + 3).trim(),
+    resolved,
+    body,
+  };
+}
+
+// A comment thread rendered as one card: the root plus its replies, with the
+// thread-level actions. Word treats resolution as a property of the THREAD, so
+// "Resolver" sends one op for the root id and the backend marks every member
+// (the projection then comes back with (RESOLVED) on each line).
+function ComThreadChip({ comments }) {
+  const review = useContext(ReviewContext);
+  const [replying, setReplying] = useState(false);
+  const [value, setValue] = useState('');
+
+  const root = comments[0];
+  const resolved = comments.every((c) => c.resolved);
+  const enabled = Boolean(review && review.enabled);
+  const replyKey = `com:${root.id}`;
+  const resolveKey = `resolve:${root.id}`;
+  const isReplying = enabled && review.pendingKey === replyKey;
+  const isResolving = enabled && review.pendingKey === resolveKey;
+
+  const submitReply = () => {
+    const text = value.trim();
+    if (!text || review.busy) return;
+    review.submitOps([{ type: 'reply', target_id: root.id, text }], replyKey).then((ok) => {
+      if (ok) { setValue(''); setReplying(false); }
+    });
+  };
+
+  const toggleResolved = () => {
+    if (review.busy) return;
+    review.submitOps(
+      [{ type: resolved ? 'unresolve' : 'resolve', target_id: root.id }],
+      resolveKey,
+    );
+  };
+
+  return (
+    <span className={`redline-chip redline-chip-comment${resolved ? ' resolved' : ''}`}>
+      {resolved && <span className="redline-comment-flag">Resolvido</span>}
+      {comments.map((c) => (
+        <span key={c.id} className="redline-comment" title={c.date}>
+          <span className="redline-chip-author">{c.author}</span>
+          <span className="redline-comment-body">{c.body}</span>
+        </span>
+      ))}
+      {enabled && (
+        <span className="redline-comment-actions no-print" data-no-pdf="true">
+          <button
+            type="button"
+            className="redline-reply-trigger"
+            disabled={review.busy && !isReplying}
+            onClick={() => setReplying((v) => !v)}
+          >
+            {isReplying ? 'A responder…' : 'Responder'}
+          </button>
+          <button
+            type="button"
+            className="redline-reply-trigger"
+            disabled={review.busy && !isResolving}
+            onClick={toggleResolved}
+          >
+            {isResolving
+              ? (resolved ? 'A reabrir…' : 'A resolver…')
+              : (resolved ? 'Reabrir' : 'Resolver')}
+          </button>
+        </span>
+      )}
+      {enabled && replying && !isReplying && (
+        <span className="redline-composer no-print" data-no-pdf="true">
+          <textarea
+            className="redline-textarea"
+            rows={2}
+            value={value}
+            placeholder="Escreva a sua resposta…"
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <span className="redline-composer-actions">
+            <button type="button" className="redline-act redline-act-accept" disabled={review.busy || !value.trim()} onClick={submitReply}>Enviar</button>
+            <button type="button" className="redline-act" disabled={review.busy} onClick={() => { setReplying(false); setValue(''); }}>Cancelar</button>
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+function MetaChips({ text }) {
+  const { changes, comments, unknown } = useMemo(() => {
+    const acc = { changes: [], comments: [], unknown: [] };
+    for (const entry of splitMetaEntries(text)) {
+      if (entry.startsWith('[Chg:')) {
+        // Change metadata: one "[Chg:n kind] Author (pairs with Chg:m)" per line
+        const meta = parseChgLine(entry.split('\n')[0].trim());
+        if (meta) acc.changes.push(meta);
+        else acc.unknown.push(entry);
+      } else if (entry.startsWith('[Com:')) {
+        const com = parseComEntry(entry);
+        if (com) acc.comments.push(com);
+        else acc.unknown.push(entry);
+      } else {
+        acc.unknown.push(entry);
+      }
+    }
+    return acc;
+  }, [text]);
+
+  if (!changes.length && !comments.length && !unknown.length) return null;
+  return (
+    <span className="redline-meta">
+      {changes.map((meta, i) => <ChgReviewChip key={`chg-${meta.id}-${i}`} meta={meta} />)}
+      {comments.length > 0 && <ComThreadChip key={`com-${comments[0].id}`} comments={comments} />}
+      {unknown.map((line, i) => <span key={`x-${i}`} className="redline-chip">{line}</span>)}
+    </span>
+  );
+}
+
+function splitSubst(inner) {
+  const idx = inner.indexOf('~>');
+  return idx === -1 ? [inner, ''] : [inner.slice(0, idx), inner.slice(idx + 2)];
+}
+
+function CriticInline({ tokens, keyBase }) {
+  return tokens.map((tok, i) => {
+    const key = `${keyBase}-${i}`;
+    switch (tok.kind) {
+      case 'ins':
+        return <ins key={key} className="redline-ins">{renderInlineMd(tok.text, key)}</ins>;
+      case 'del':
+        return <del key={key} className="redline-del">{renderInlineMd(tok.text, key)}</del>;
+      case 'subst': {
+        const [oldText, newText] = splitSubst(tok.text);
+        return (
+          <span key={key}>
+            <del className="redline-del">{renderInlineMd(oldText, `${key}o`)}</del>
+            <ins className="redline-ins">{renderInlineMd(newText, `${key}n`)}</ins>
+          </span>
+        );
+      }
+      case 'mark':
+        return <mark key={key} className="redline-mark">{renderInlineMd(tok.text, key)}</mark>;
+      case 'meta':
+        return <MetaChips key={key} text={tok.text} />;
+      default:
+        return <span key={key}>{renderInlineMd(tok.text, key)}</span>;
+    }
+  });
+}
+
+function RedlinePreview({ markdown }) {
+  const groups = useMemo(() => {
+    const blocks = splitCriticBlocks(tokenizeCritic(stripEmptyTrailingSections(markdown)))
+      .map(classifyCriticBlock)
+      // A marker-only line ("1. " / "# ") is an empty numbered paragraph or
+      // heading in the source docx. Keeping it would render a bare list bullet
+      // or a blank heading band on the sheet (and in the PDF).
+      .filter((block) => block.type === 'hr' || hasContent(block.tokens));
+    const grouped = [];
+    for (const block of blocks) {
+      const last = grouped[grouped.length - 1];
+      if ((block.type === 'olitem' || block.type === 'ulitem') && last && last.type === block.type) {
+        last.items.push(block.tokens);
+      } else if (block.type === 'olitem' || block.type === 'ulitem') {
+        grouped.push({ type: block.type, items: [block.tokens] });
+      } else {
+        grouped.push(block);
+      }
+    }
+    return grouped;
+  }, [markdown]);
+
+  return groups.map((group, i) => {
+    switch (group.type) {
+      case 'heading': {
+        const Tag = group.level === 1 ? 'h2' : 'h3';
+        return (
+          <Tag key={i} className={`redline-heading redline-h${Math.min(group.level, 3)}`}>
+            <CriticInline tokens={group.tokens} keyBase={`h${i}`} />
+          </Tag>
+        );
+      }
+      case 'olitem':
+      case 'ulitem': {
+        const ListTag = group.type === 'olitem' ? 'ol' : 'ul';
+        return (
+          <ListTag key={i} className="redline-list">
+            {group.items.map((item, j) => (
+              <li key={j}><CriticInline tokens={item} keyBase={`b${i}-${j}`} /></li>
+            ))}
+          </ListTag>
+        );
+      }
+      case 'hr':
+        return <hr key={i} className="redline-hr" />;
+      default:
+        return <p key={i} className="doc-p"><CriticInline tokens={group.tokens} keyBase={`b${i}`} /></p>;
+    }
+  });
+}
+
+// Floating "add comment on selection" surface (source-linked mode only). When
+// the user selects text inside the document sheet, a small button appears near
+// the selection; it opens an inline composer that POSTs a `modify` op wrapping
+// the exact selected plain text (new_text == target_text) with the comment.
+function SelectionCommenter({ sheetRef, review }) {
+  const [anchor, setAnchor] = useState(null); // { top, left, text }
+  const [composing, setComposing] = useState(false);
+  const [value, setValue] = useState('');
+  const enabled = Boolean(review && review.enabled);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const onSelect = (ev) => {
+      if (composing) return;
+      if (ev.target && ev.target.closest && ev.target.closest('[data-ekoa-commenter]')) return;
+      const selection = window.getSelection ? window.getSelection() : null;
+      const sheet = sheetRef.current;
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !sheet) { setAnchor(null); return; }
+      const text = selection.toString();
+      if (!text || !text.trim()) { setAnchor(null); return; }
+      const range = selection.getRangeAt(0);
+      if (!sheet.contains(range.commonAncestorContainer)) { setAnchor(null); return; }
+      const rect = range.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) { setAnchor(null); return; }
+      setAnchor({ top: rect.top, left: rect.left + rect.width / 2, text });
+    };
+    document.addEventListener('mouseup', onSelect);
+    document.addEventListener('keyup', onSelect);
+    return () => {
+      document.removeEventListener('mouseup', onSelect);
+      document.removeEventListener('keyup', onSelect);
+    };
+  }, [enabled, composing, sheetRef]);
+
+  if (!enabled || !anchor) return null;
+
+  const isPending = review.pendingKey === 'add-comment';
+  const close = () => { setComposing(false); setValue(''); setAnchor(null); };
+  const submit = () => {
+    const comment = value.trim();
+    if (!comment || review.busy) return;
+    review.submitOps(
+      [{ type: 'modify', target_text: anchor.text, new_text: anchor.text, comment }],
+      'add-comment',
+    ).then((ok) => { if (ok) close(); });
+  };
+
+  const style = { top: `${anchor.top}px`, left: `${anchor.left}px` };
+  return (
+    <div className="redline-commenter no-print" data-no-pdf="true" data-ekoa-commenter="true" style={style}>
+      {!composing ? (
+        <button
+          type="button"
+          className="redline-add-btn"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setComposing(true)}
+        >
+          Adicionar comentário
+        </button>
+      ) : (
+        <div className="redline-composer redline-composer-float" onMouseDown={(e) => { if (e.target.tagName !== 'TEXTAREA') e.preventDefault(); }}>
+          <textarea
+            className="redline-textarea"
+            rows={3}
+            autoFocus
+            value={value}
+            placeholder="Escreva o seu comentário…"
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <div className="redline-composer-actions">
+            <button type="button" className="redline-act redline-act-accept" disabled={review.busy || !value.trim()} onClick={submit}>
+              {isPending ? 'A adicionar…' : 'Comentar'}
+            </button>
+            <button type="button" className="redline-act" disabled={review.busy} onClick={close}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
 
@@ -166,11 +677,88 @@ function DocumentBlock({ block }) {
   }
 }
 
+const ensureDocx = (name) => (/\.docx$/i.test(name) ? name : `${name}.docx`);
+
+async function fetchDocxBytes(path, options) {
+  const res = await window.__ekoa.fetch(path, options);
+  if (!res.ok) throw new Error(`Pedido falhou (${res.status})`);
+  return res.blob();
+}
+
 export default function App() {
+  const sourceDocument = documentData.sourceDocument;
+  const isSourceLinked = Boolean(sourceDocument && sourceDocument.fileName);
+  const sourceFileName = isSourceLinked ? ensureDocx(sourceDocument.fileName) : null;
+  const sourceBaseName = sourceFileName ? sourceFileName.replace(/\.docx$/i, '') : null;
+  const pdfFileName = isSourceLinked ? sourceBaseName : documentData.fileName;
+
   const hasNotes = (documentData.notes || []).length > 0;
   const [tab, setTab] = useState('documento');
   const [cloud, setCloud] = useState(null);
   const [cloudState, setCloudState] = useState({ status: 'idle' }); // idle | saving | saved | error
+  const [projection, setProjection] = useState({ status: 'loading' }); // loading | ready | error
+  const [sourceError, setSourceError] = useState(null);
+
+  // Human review (source-linked only): single in-flight guard + which target is
+  // pending (for the per-chip spinner) + a quiet PT-PT error surface.
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [pendingKey, setPendingKey] = useState(null);
+  const [reviewError, setReviewError] = useState(null);
+  const reviewInFlight = useRef(false);
+  const sheetRef = useRef(null);
+
+  // Serializes review ops: rejects a second concurrent submit (the backend
+  // serializes per app too, but the UI must reflect it). On 200 the returned
+  // markdown re-renders the preview; on 422 the human-readable failure reason
+  // is surfaced in PT-PT. `key` scopes the pending/spinner to one control.
+  const submitOps = useCallback(async (ops, key) => {
+    if (reviewInFlight.current) return false;
+    if (!window.__ekoa?.fetch) {
+      setReviewError('Não foi possível contactar o servidor para aplicar a alteração.');
+      return false;
+    }
+    reviewInFlight.current = true;
+    setReviewBusy(true);
+    setPendingKey(key || null);
+    setReviewError(null);
+    try {
+      const res = await window.__ekoa.fetch('/api/app-docx/edits', {
+        method: 'POST',
+        body: JSON.stringify({ ops }),
+      });
+      let data = null;
+      try { data = await res.json(); } catch (_) { data = null; }
+      if (!res.ok) {
+        const failures = data && Array.isArray(data.failures) ? data.failures : [];
+        const reason = failures.map((f) => f && f.error).filter(Boolean).join(' ')
+          || (data && data.error)
+          || `Não foi possível aplicar a alteração (${res.status}).`;
+        setReviewError(reason);
+        return false;
+      }
+      if (data && typeof data.markdown === 'string') {
+        setProjection({ status: 'ready', markdown: data.markdown });
+      }
+      return true;
+    } catch (err) {
+      setReviewError(`Não foi possível aplicar a alteração. ${String(err && err.message ? err.message : err)}`);
+      return false;
+    } finally {
+      reviewInFlight.current = false;
+      setReviewBusy(false);
+      setPendingKey(null);
+    }
+  }, []);
+
+  const reviewCtx = useMemo(
+    () => (isSourceLinked ? { enabled: true, busy: reviewBusy, pendingKey, submitOps } : null),
+    [isSourceLinked, reviewBusy, pendingKey, submitOps],
+  );
+
+  // Source-linked: no PDF while the projection is loading/errored (it would
+  // capture a blank sheet). Authored mode is never gated.
+  const pdfUnavailable = isSourceLinked && projection.status !== 'ready';
+  const projectionEmpty = projection.status === 'ready' && !(projection.markdown || '').trim();
 
   useEffect(() => {
     if (window.__ekoa?.cloudFiles) {
@@ -178,16 +766,57 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!isSourceLinked) return undefined;
+    if (!window.__ekoa?.fetch) {
+      setProjection({ status: 'error' });
+      return undefined;
+    }
+    let cancelled = false;
+    window.__ekoa.fetch('/api/app-docx/projection')
+      .then((res) => {
+        if (!res.ok) throw new Error(`Pedido falhou (${res.status})`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) setProjection({ status: 'ready', markdown: data.markdown || '' });
+      })
+      .catch(() => {
+        if (!cancelled) setProjection({ status: 'error' });
+      });
+    return () => { cancelled = true; };
+  }, [isSourceLinked]);
+
   const downloadWord = useCallback(async () => {
     const blob = await Packer.toBlob(buildDocumentDocx());
     await downloadBlob(blob, `${documentData.fileName}.docx`);
   }, []);
 
+  const downloadTracked = useCallback(async () => {
+    setSourceError(null);
+    try {
+      const blob = await fetchDocxBytes('/api/app-docx/current');
+      await downloadBlob(blob, sourceFileName);
+    } catch (err) {
+      setSourceError(String(err && err.message ? err.message : err));
+    }
+  }, [sourceFileName]);
+
+  const downloadClean = useCallback(async () => {
+    setSourceError(null);
+    try {
+      const blob = await fetchDocxBytes('/api/app-docx/clean', { method: 'POST' });
+      await downloadBlob(blob, `${sourceBaseName}-final.docx`);
+    } catch (err) {
+      setSourceError(String(err && err.message ? err.message : err));
+    }
+  }, [sourceBaseName]);
+
   const downloadPdf = useCallback(async () => {
-    setTab('documento'); // the export captures the live DOM — only the document may be visible
+    setTab('documento'); // the export captures the live DOM - only the document may be visible
     await new Promise((resolve) => setTimeout(resolve, 200));
-    await window.__ekoa.exportPdf({ filename: documentData.fileName });
-  }, []);
+    await window.__ekoa.exportPdf({ filename: pdfFileName });
+  }, [pdfFileName]);
 
   const downloadNotes = useCallback(async () => {
     const blob = await Packer.toBlob(buildNotesDocx());
@@ -197,17 +826,21 @@ export default function App() {
   const saveToCloud = useCallback(async (provider) => {
     setCloudState({ status: 'saving', provider });
     try {
-      const blob = await Packer.toBlob(buildDocumentDocx());
+      // Source-linked: upload the REAL file (with its tracked changes), never
+      // a blocks-generated docx.
+      const blob = isSourceLinked
+        ? await fetchDocxBytes('/api/app-docx/current')
+        : await Packer.toBlob(buildDocumentDocx());
       const meta = await window.__ekoa.cloudFiles.upload(blob, {
         provider,
-        name: `${documentData.fileName}.docx`,
+        name: isSourceLinked ? sourceFileName : `${documentData.fileName}.docx`,
         type: DOCX_MIME,
       });
       setCloudState({ status: 'saved', provider, webUrl: meta.webUrl });
     } catch (err) {
       setCloudState({ status: 'error', provider, message: String(err && err.message ? err.message : err) });
     }
-  }, []);
+  }, [isSourceLinked, sourceFileName]);
 
   const providerLabel = { google: 'Google Drive', microsoft: 'OneDrive' };
 
@@ -218,8 +851,15 @@ export default function App() {
           <span className="doc-toolbar-name">{documentData.title}</span>
         </div>
         <div className="doc-toolbar-actions">
-          <button className="btn btn-primary" onClick={downloadWord}>Descarregar Word</button>
-          <button className="btn btn-outline" onClick={downloadPdf}>Descarregar PDF</button>
+          {isSourceLinked ? (
+            <>
+              <button className="btn btn-primary" onClick={downloadTracked}>Descarregar Word (alterações registadas)</button>
+              <button className="btn btn-outline" onClick={downloadClean}>Descarregar versão limpa</button>
+            </>
+          ) : (
+            <button className="btn btn-primary" onClick={downloadWord}>Descarregar Word</button>
+          )}
+          <button className="btn btn-outline" disabled={pdfUnavailable} onClick={downloadPdf}>Descarregar PDF</button>
           {cloud?.google?.connected && (
             <button className="btn btn-outline" disabled={cloudState.status === 'saving'} onClick={() => saveToCloud('google')}>
               {cloudState.status === 'saving' && cloudState.provider === 'google' ? 'A guardar…' : 'Guardar no Google Drive'}
@@ -244,7 +884,19 @@ export default function App() {
             <button className="doc-cloud-dismiss" onClick={() => setCloudState({ status: 'idle' })}>×</button>
           </div>
         )}
+        {sourceError && (
+          <div className="doc-cloud-status err">
+            Não foi possível descarregar o documento. {sourceError}
+            <button className="doc-cloud-dismiss" onClick={() => setSourceError(null)}>×</button>
+          </div>
+        )}
       </header>
+
+      {isSourceLinked && (
+        <div className="doc-source-banner no-print" data-no-pdf="true">
+          Documento original: {sourceFileName} - as alterações são registadas (registo de alterações do Word)
+        </div>
+      )}
 
       {hasNotes && (
         <nav className="doc-tabs no-print" data-no-pdf="true">
@@ -254,11 +906,36 @@ export default function App() {
       )}
 
       {tab === 'documento' ? (
-        <main className="sheet">
-          <h1 className="doc-title">{documentData.title}</h1>
-          {documentData.subtitle ? <p className="doc-subtitle">{documentData.subtitle}</p> : null}
-          {(documentData.blocks || []).map((block, i) => <DocumentBlock key={i} block={block} />)}
-        </main>
+        isSourceLinked ? (
+          <ReviewContext.Provider value={reviewCtx}>
+            <main className="sheet" ref={sheetRef}>
+              {projection.status === 'loading' && (
+                <p className="redline-status no-print" data-no-pdf="true">A carregar o documento original…</p>
+              )}
+              {projection.status === 'error' && (
+                <p className="redline-status no-print" data-no-pdf="true">
+                  Não foi possível apresentar a pré-visualização do documento original. Continua a poder descarregar o documento.
+                </p>
+              )}
+              {projection.status === 'ready' && (projectionEmpty ? (
+                <p className="redline-status no-print" data-no-pdf="true">
+                  Este documento ainda não tem conteúdo visível.
+                </p>
+              ) : (
+                <RedlinePreview markdown={projection.markdown} />
+              ))}
+            </main>
+            {projection.status === 'ready' && !projectionEmpty && (
+              <SelectionCommenter sheetRef={sheetRef} review={reviewCtx} />
+            )}
+          </ReviewContext.Provider>
+        ) : (
+          <main className="sheet">
+            <h1 className="doc-title">{documentData.title}</h1>
+            {documentData.subtitle ? <p className="doc-subtitle">{documentData.subtitle}</p> : null}
+            {(documentData.blocks || []).map((block, i) => <DocumentBlock key={i} block={block} />)}
+          </main>
+        )
       ) : (
         <main className="sheet notes-sheet no-print" data-no-pdf="true">
           <div className="notes-header">
@@ -272,6 +949,13 @@ export default function App() {
             </section>
           ))}
         </main>
+      )}
+
+      {isSourceLinked && reviewError && (
+        <div className="redline-toast no-print" data-no-pdf="true" role="alert">
+          <span className="redline-toast-text">{reviewError}</span>
+          <button type="button" className="redline-toast-dismiss" aria-label="Dispensar" onClick={() => setReviewError(null)}>×</button>
+        </div>
       )}
     </div>
   );

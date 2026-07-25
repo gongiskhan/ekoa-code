@@ -15,13 +15,54 @@ import { ArtifactType } from '@ekoa/shared';
 import { runOneShot, decideForTier } from '../llm/index.js';
 import type { BaseId } from './base-loader.js';
 
+/**
+ * Word's review vocabulary (document base v2, 2C-S6): a request to REVIEW an existing
+ * .docx lands on the document base, whose source-linked mode edits the real file with
+ * native tracked changes instead of re-authoring it.
+ *
+ * EVERY phrase here is ANCHORED - none of them counts on its own. NOT ONE of these is
+ * Word-only vocabulary:
+ *   - "registo/controlo de alterações", "registar/controlar alterações" and "alterações
+ *     registadas" are ordinary Portuguese for a CHANGE LOG - "registo de alterações no
+ *     meu CRM" and "registar alterações no inventário" are app features, not documents;
+ *   - "track changes" is equally version-control jargon ("track changes no código");
+ *   - even "marcas de revisão" / "redline" read as app vocabulary in the wrong sentence.
+ * So a phrase only fires when a document/Word noun sits NEAR it in the same clause
+ * (NEAR_BEFORE / NEAR_AFTER below). Unanchored it deliberately falls through to the
+ * classifier one-shot, whose prompt already answers `app` when in doubt - which matters
+ * because this type decides whether the operator assistant surface exists at all (see the
+ * module header), so a false `document` silently strips that surface from an app build.
+ * Pinned in tests/apps/artifact-type.test.ts by a misroute guard carrying the real
+ * CRM/kanban/inventário/tickets/morada phrasings - do NOT unanchor any of these.
+ */
+const DOC_NOUN =
+  '(?:documento|contrato|minuta|acordo|parecer|peti[çc][ãa]o|requerimento|of[íi]cio|carta|anexo|ficheiro|word|docx|document|contract)';
+
+/** Same-clause proximity: within 40 characters and never across sentence punctuation. */
+const NEAR_BEFORE = `(?<=${DOC_NOUN}\\b[^.;:!?]{0,40})`;
+const NEAR_AFTER = `(?=[^.;:!?]{0,40}${DOC_NOUN}\\b)`;
+
+const REVIEW_PHRASES = [
+  '(?:registo|controlo) de altera[çc][õo]es',
+  '(?:registar|controlar) altera[çc][õo]es',
+  'altera[çc][õo]es registadas',
+  'marcas de revis[ãa]o',
+  'redlines?',
+  'track(?:ed)? changes',
+];
+
+/** Each phrase twice: once with the document noun before it, once with it after. */
+const DOC_REVIEW_SIGNALS = REVIEW_PHRASES
+  .map((phrase) => `${NEAR_BEFORE}${phrase}|${phrase}${NEAR_AFTER}`)
+  .join('|');
+
 /** Strong deterministic signals, checked in order (first hit wins). The word
  *  lists are PT-PT-first (the product surface) with EN fallbacks. */
 const SIGNALS: Array<{ type: ArtifactType; rx: RegExp }> = [
   { type: 'presentation', rx: /\b(apresenta[çc][ãa]o|slides?|diapositivo|deck|pitch)\b/i },
   { type: 'landing', rx: /\b(landing|p[áa]gina de (marketing|captura|vendas)|site promocional|one[- ]?pager|static (page|site)|p[áa]gina est[áa]tica|site est[áa]tico)\b/i },
   { type: 'report', rx: /\b(relat[óo]rio|report)\b/i },
-  { type: 'document', rx: /\b(documento|contrato|parecer|minuta|carta|of[íi]cio|acordo|procura[çc][ãa]o|peti[çc][ãa]o|requerimento|flyer|folheto|impress[ãa]o|imprim[íi]vel|word|pdf)\b/i },
+  { type: 'document', rx: new RegExp(`\\b(documento|contrato|parecer|minuta|carta|of[íi]cio|acordo|procura[çc][ãa]o|peti[çc][ãa]o|requerimento|flyer|folheto|impress[ãa]o|imprim[íi]vel|word|pdf|${DOC_REVIEW_SIGNALS})\\b`, 'i') },
   { type: 'app', rx: /\b(app|aplica[çc][ãa]o|gestor|gest[ãa]o|dashboard|painel|calculadora|formul[áa]rio|lista de|tracker|crm|kanban|agenda)\b/i },
 ];
 

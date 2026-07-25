@@ -19,6 +19,14 @@
  * `notes` is the companion "Nota de alterações" (what changed and why) shown
  * in its own tab with its own separate download. It is NEVER included in the
  * document's Word/PDF exports.
+ *
+ * Optional `sourceDocument: { fileName: string }` - set it ONLY when the app
+ * works over an EXISTING Word file registered on the platform via the docx
+ * tools (docx_source_set / docx_apply_edits). The shell then switches to
+ * source-linked mode: it renders the tracked-changes preview fetched from
+ * /api/app-docx/projection and the download buttons serve the REAL file
+ * (native Word "registo de alterações"), ignoring `blocks` - keep `blocks`
+ * empty in that case. `notes` still works as the companion tab.
  */
 const documentData = {
   fileName: 'documento',
