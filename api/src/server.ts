@@ -159,7 +159,7 @@ import {
   type SupervisorTrigger,
 } from './events/listener-supervisor.js';
 import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './events/listener-state.js';
-import { buildArtifactBackendInput } from './integrations/event-sources/dispatch-input.js';
+import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
 import { decrypt, encrypt } from './data/crypto.js';
@@ -491,13 +491,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         return { ok: false, reason: 'artifact not in the trigger owner org', permanent: true };
       }
       try {
-        // Build the dispatch input (2A-S2). An email-source listener (M365/Google) hydrates the
-        // FULL message into the frozen EmailInput envelope — read_email via callPlatformIntegration
-        // bound to the TRIGGER'S org (OAuth refresh in core), so the artifact never touches
-        // Graph/OAuth. Every other source keeps the generic { event, trigger } envelope unchanged.
-        // A read failure THROWS out of hydrateEmailInput → caught below → non-permanent failure →
-        // the delivery pipeline retries (never a truncated preview body handed to the backend).
-        const input = await buildArtifactBackendInput(
+        // Build the dispatch input(s) (2A-S2, 2A-S3). An email-source listener (M365/Google)
+        // hydrates the FULL message into the frozen EmailInput envelope — read_email via
+        // callPlatformIntegration bound to the TRIGGER'S org (OAuth refresh in core), so the
+        // artifact never touches Graph/OAuth. A WhatsApp envelope FANS OUT to one MessageInput per
+        // inbound message (zero for a statuses-only notification → a dispatched no-op). Every other
+        // source keeps the generic { event, trigger } envelope unchanged. A read failure THROWS out
+        // of hydrateEmailInput → caught below → non-permanent failure → the delivery pipeline
+        // retries (never a truncated preview body handed to the backend).
+        const inputs = await buildArtifactBackendInputs(
           { id: event.trigger._id, integrationKey: event.trigger.integrationKey, eventName: event.trigger.eventName },
           event.payload,
           {
@@ -516,8 +518,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
               }),
           },
         );
-        const result = await invokeArtifactBackend(artifactId, entrypoint, input);
-        return result.ok ? { ok: true } : { ok: false, reason: result.error ?? 'backend handler reported failure' };
+        // One invocation per input. ZERO inputs (a WhatsApp statuses-only notification) is a
+        // successful no-op: nothing to hand the backend, and the event stays audited + delivered
+        // rather than burning the retry schedule. A mid-batch failure fails the WHOLE delivery, so
+        // the retry re-invokes the earlier messages too — the backend dedupes on the wamid.
+        for (const input of inputs) {
+          const result = await invokeArtifactBackend(artifactId, entrypoint, input);
+          if (!result.ok) return { ok: false, reason: result.error ?? 'backend handler reported failure' };
+        }
+        return { ok: true };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : 'backend invoke failed' };
       }

@@ -12,6 +12,7 @@ import { enqueue } from './queue.js';
 import { wakeDelivery } from './delivery.js';
 import { deleteListenerCursor } from './listener-state.js';
 import { verifyHmac, hubChallenge, safeEqual, type WebhookAlgorithm } from './webhook-verifiers.js';
+import { isWhatsAppSource, whatsAppDedupKey } from '../integrations/event-sources/whatsapp-hydrate.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 
@@ -115,6 +116,71 @@ export interface IngressResult {
   outcome: IngressOutcome;
 }
 
+/** How an integration declares WHERE the expected webhook secret comes from. `'trigger'` (or
+ *  absent) = the secret WE generated and handed the provider; `{credentialField}` = one of the
+ *  provider's OWN credentials the owner stored (Meta signs WhatsApp webhooks with the app secret). */
+type WebhookSecretSource = 'trigger' | { credentialField: string };
+
+/** The trigger's integration declaration of `webhookConfig.secretSource`, or undefined. */
+function secretSourceFor(integrationKey: string): WebhookSecretSource | undefined {
+  const src = getDefinition(integrationKey)?.webhookConfig?.secretSource;
+  if (src === 'trigger') return 'trigger';
+  if (src && typeof src === 'object' && typeof (src as { credentialField?: unknown }).credentialField === 'string') {
+    return { credentialField: (src as { credentialField: string }).credentialField };
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the CLEARTEXT secret a delivery must verify against (2A-S3). Returns null when it cannot
+ * be resolved — callers FAIL CLOSED (never verify against a fallback/empty secret).
+ *
+ * `{credentialField}` reads the OWNER's decrypted integration credential (e.g. WhatsApp's
+ * `app_secret`); anything else decrypts the trigger's own generated secret. The value is returned to
+ * the verifier and NEVER logged, audited or echoed in a response.
+ */
+async function resolveWebhookSecret(t: TriggerDoc, source: WebhookSecretSource | undefined): Promise<string | null> {
+  if (source && typeof source === 'object') {
+    const cfg = await findConfigForOwner(t.orgId, t.ownerUserId, t.integrationKey);
+    if (!cfg?.credentialsCiphertext) return null;
+    try {
+      const fields = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      const v = fields[source.credentialField];
+      return typeof v === 'string' && v !== '' ? v : null;
+    } catch {
+      return null;
+    }
+  }
+  if (!t.secretCiphertext) return null; // no secret on record ⇒ nothing can verify ⇒ fail closed
+  try {
+    return decrypt(t.secretCiphertext);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Per-delivery dedup key (`UNIQUE(triggerId, dedupKey)`).
+ *
+ * DEFAULT: the BODY HASH, not the signature header — a signature can carry cosmetic variation
+ * (prefix, case) that verifies but slips a header-keyed dedup, letting one captured delivery replay
+ * unboundedly. The body hash is the stable per-delivery identity (byte-identical retries dedup;
+ * distinct events differ) — the §12.3 body-hash fallback made the primary key.
+ *
+ * WHATSAPP (2A-S3): keyed on the SET of wamids the envelope carries, which is strictly stronger —
+ * a Meta retry that re-serialises the envelope (different bytes, same messages) still dedups, while
+ * a later batch [m1,m2] stays distinct from an already-seen [m1] so m2 is never lost. An envelope
+ * with no inbound messages (statuses-only) has no wamid and falls back to the body hash, so it is
+ * still enqueued exactly once rather than dropped.
+ */
+function deriveDedupKey(t: TriggerDoc, rawBody: Buffer): string {
+  if (isWhatsAppSource(t)) {
+    const k = whatsAppDedupKey(rawBody);
+    if (k) return k;
+  }
+  return createHash('sha256').update(rawBody).digest('hex');
+}
+
 /** The webhook ingress pipeline (invariant 9). `rawBody` is the UNMODIFIED request bytes. */
 export async function handleIngress(triggerId: string, rawBody: Buffer, signature: string | undefined, deps: Deps): Promise<IngressResult> {
   const t = (await triggers.get(triggerId)) as TriggerDoc | null;
@@ -122,8 +188,17 @@ export async function handleIngress(triggerId: string, rawBody: Buffer, signatur
     await audit(triggerId, 'rejected_unknown_trigger', deps);
     return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'Trigger não encontrado.' } }, outcome: 'rejected_unknown_trigger' };
   }
-  // 1. Signature FIRST (invariant 9 step 2 ordering).
-  const secret = t.secretCiphertext ? decrypt(t.secretCiphertext) : '';
+  // 1. Signature FIRST (invariant 9 step 2 ordering). The expected secret is the trigger's own
+  // generated secret UNLESS the integration declares `secretSource:{credentialField}` — Meta signs
+  // every WhatsApp webhook with the app secret, so the owner's stored `app_secret` is the ONLY
+  // secret that can verify it. An unresolvable secret fails CLOSED (500, nothing enqueued): we
+  // never fall back to the trigger secret or to an empty key, which would make forged deliveries
+  // verifiable. The message names no credential and carries no secret material.
+  const secret = await resolveWebhookSecret(t, secretSourceFor(t.integrationKey));
+  if (secret === null) {
+    await audit(triggerId, 'rejected_other', deps);
+    return { status: 500, body: { error: { code: 'INTERNAL', message: 'Segredo de verificação indisponível.' } }, outcome: 'rejected_other' };
+  }
   const sigOk = signature !== undefined && verifyHmac(t.algorithm, secret, rawBody, signature);
   if (!sigOk) {
     await audit(triggerId, 'rejected_signature', deps);
@@ -134,12 +209,8 @@ export async function handleIngress(triggerId: string, rawBody: Buffer, signatur
     await audit(triggerId, 'rejected_disabled', deps);
     return { status: 410, body: { error: { code: 'TRIGGER_DISABLED', message: 'Trigger desativado.' } }, outcome: 'rejected_disabled' };
   }
-  // 3. Dedup enqueue (UNIQUE(trigger_id, dedup_key)). Key on the BODY HASH, not the signature
-  // header: a signature can carry cosmetic variation (prefix, case) that verifies but slips a
-  // header-keyed dedup, letting one captured delivery replay unboundedly. The body hash is the
-  // stable per-delivery identity (byte-identical retries dedup; distinct events differ) — the
-  // §12.3 body-hash fallback made the primary key.
-  const dedupKey = createHash('sha256').update(rawBody).digest('hex');
+  // 3. Dedup enqueue (UNIQUE(trigger_id, dedup_key)) — see deriveDedupKey for the key policy.
+  const dedupKey = deriveDedupKey(t, rawBody);
   const enq = await enqueue(triggerId, dedupKey, rawBody.toString('utf8'), new Date(deps.now()).toISOString());
   if (enq.duplicate) {
     await audit(triggerId, 'duplicate', deps);
@@ -186,24 +257,11 @@ export async function handleGetCallbackIngress(
   const responseBody = cb.responseBody ?? 'OK';
 
   // Resolve the expected secret: a decrypted OWNER credential field, or the trigger's own secret.
-  let secret: string | undefined;
-  if (cb.secretSource && typeof cb.secretSource === 'object') {
-    const cfg = await findConfigForOwner(t.orgId, t.ownerUserId, t.integrationKey);
-    if (cfg?.credentialsCiphertext) {
-      try {
-        const fields = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
-        const v = fields[cb.secretSource.credentialField];
-        secret = typeof v === 'string' ? v : undefined;
-      } catch {
-        secret = undefined;
-      }
-    }
-    if (!secret) {
-      await audit(triggerId, 'rejected_other', deps);
-      return { status: 500, body: { error: { code: 'INTERNAL', message: 'Segredo do callback indisponível.' } }, outcome: 'rejected_other' };
-    }
-  } else {
-    secret = t.secretCiphertext ? decrypt(t.secretCiphertext) : '';
+  // ONE resolver shared with the POST path (2A-S3) so both ingresses fail closed identically.
+  const secret = await resolveWebhookSecret(t, cb.secretSource);
+  if (secret === null) {
+    await audit(triggerId, 'rejected_other', deps);
+    return { status: 500, body: { error: { code: 'INTERNAL', message: 'Segredo do callback indisponível.' } }, outcome: 'rejected_other' };
   }
 
   const presented = query[cb.keyParam];

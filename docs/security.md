@@ -41,7 +41,14 @@ named test suite).
    defined integration actions call arbitrary user endpoints by design and are not SSRF-gated.
 9. **Webhook HMAC + dedup + audit.** Raw-body HMAC (verifier sees unmodified bytes - boot self-test),
    disabled-check AFTER signature (410 signed / 401 unsigned), dedup on `UNIQUE(trigger_id,
-   dedup_key)` returning `{duplicate:true}`, and a `webhook_audit` row per outcome.
+   dedup_key)` returning `{duplicate:true}`, and a `webhook_audit` row per outcome. The expected
+   secret is the trigger's own generated secret UNLESS the integration declares
+   `webhookConfig.secretSource:{credentialField}` - some providers sign with one of THEIR
+   credentials (Meta signs every WhatsApp webhook with the app secret), so the owner's decrypted
+   credential field is then the ONLY secret that verifies. One resolver serves both the POST and the
+   GET-callback ingress and FAILS CLOSED: an unresolvable secret is a 500 with nothing enqueued -
+   never a fallback to the trigger secret or an empty key - and the secret never reaches a log,
+   an audit row or a response body.
 10. **Sandbox path confinement.** Every user-derived filesystem path resolves through the symlink-
     hardened `resolveWithinJail`/safe-path helper in `services/`, jailing it to the owner sandbox;
     traversal/absolute/symlink fixtures all fail with uniform not-found. Covers artifact files AND the
