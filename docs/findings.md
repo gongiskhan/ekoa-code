@@ -862,6 +862,20 @@ detokenizer + 13k-case security property), **F29** (automation plan-from-goal 50
 - **served-app per-app data plane open posture** (by-design). `/api/app-data` is unauthenticated app-
   global storage scoped only by `X-Ekoa-App-Id`, carried verbatim for byte-compatibility; private data
   belongs on the server-authenticated shared/JWT/SSO planes. Documented in `docs/security.md`.
+- **`docx-clean-drops-comments`** (accepted, kept deliberately; found by the 2C-S7 docx gate,
+  2026-07-25). `POST /api/app-docx/clean` (`document-source.getClean` ->
+  `docx-redline.acceptAllRevisions`) returns a document with NO comments: @adeu/core 1.28.0's
+  `accept_all_revisions` strips `word/comments.xml`, `commentsExtended.xml`, `commentsIds.xml`,
+  `commentsExtensible.xml` AND the in-document `commentRangeStart/End/Reference` anchors. **Word
+  itself keeps comments when you accept all changes**, and ekoa-dev's `word-track-changes.md`
+  asserted comments survive - that claim was never tested (dev's `acceptAllRevisions` is
+  byte-identical to ours and its test only checked for the absence of `w:ins`/`w:del`), so the port
+  inherited a false doc, not a regression. KEPT rather than worked around: the clean copy is the
+  "final version to send out", and shipping internal review notes to a counterparty is a real legal
+  risk. The WORKING copy (`GET /api/app-docx/current`) is unaffected and carries everything. Pinned
+  as a tripwire in `api/tests/apps/docx-word-gate.test.ts` (a future engine bump or a deliberate fix
+  turns it red, so the lawyer-facing download can never change silently) and documented in
+  `docs/word-track-changes.md` §2.4 + the `getClean` header.
 - **subprocess PATH home-path residual** (by-design). The agent subprocess inherits the operator's
   home on `PATH`; accepted residual from the F25 hardening (disposition doc committed).
 - **`sweepOrphans` boot-recovery gap** (accepted). Boot-time crash recovery flips orphaned jobs to

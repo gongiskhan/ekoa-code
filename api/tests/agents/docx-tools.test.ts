@@ -144,12 +144,13 @@ describe('ekoa-docx agent tools', () => {
     expect(escape.error).toContain('outside the allowed directories');
   });
 
-  it('docx_read without path returns the linked projection with the 3-line legend', async () => {
+  it('docx_read without path returns the linked projection with the 4-line legend', async () => {
     const { read } = tools(ctx);
     const out = await read.handler({});
     expect(out).toContain('{++text++}');
     expect(out).toContain('[Chg:N]');
     expect(out).toContain('[Com:N]');
+    expect(out).toContain('(RESOLVED)'); // the 4th legend line - resolution state
     expect(out).toContain('File: contrato.docx');
     expect(out).toContain('aviso pr'); // PT accents survive projection
   });

@@ -15,6 +15,7 @@ build-run spec and gate journal are retired (archive note below). Start with `ar
 | `governance.md` | Where decisions and findings live, the standing invariants, review policy, reference-access rule, and the spec/RUN_LOG archive note. |
 | `findings.md` | THE live findings ledger: open, recently fixed, accepted/by-design. |
 | `decisions.md` | The append-only decision journal (dated entries not derivable from code or git). |
+| `word-track-changes.md` | The Word track-changes + comments subsystem end to end: the `@adeu/core` engine wrapper and the bugs it works around, the per-artifact document lifecycle, `.docx` ingest, the `/api/app-docx` served-app plane, the `docx_*` agent tools, the document base's source mode, and THE DOCX GATE (what to run, and what is still a human step). |
 | `known-flakes.md` | Observed test flakes and their environmental causes; linked from the runbook. |
 | `diagrams/` | The 12 Excalidraw sources (`01`..`12`). First-class (FIXED-12): a structural change without its diagram update is incomplete, and review must reject it. |
 

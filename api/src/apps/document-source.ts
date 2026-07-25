@@ -22,8 +22,9 @@
  * (`collectionName.safeParse` + reject the reserved `usr.` scope), applied in
  * `docxDir()` - the SOLE place an app path is built, so it cannot be bypassed.
  * The pure track-changes engine lives in ../services/docx-redline.ts (2C-S1).
- * The ekoa-docx MCP tools (agent side) and the /api/app-docx routes
- * (served-app side) that drive this land in later 2C slices; both stay thin.
+ * Its two callers both stay thin: the docx_* agent tools (agents/sdk-tools.ts
+ * through the DocxToolSeams seam, 2C-S5) and the /api/app-docx routes
+ * (apps/app-docx.ts, 2C-S4). Overview: docs/word-track-changes.md.
  */
 
 import { join } from 'node:path';
@@ -64,10 +65,11 @@ export class NoDocumentSourceError extends Error {
 }
 
 /**
- * 25 MB ceiling for a linked source document. Defined here (ekoa-code has not
- * ported dev's docx-fetch module) so the choke sits at the setSource ingress:
- * every ingest branch (path / url / provider) lands there, so an oversized
- * buffer can never be linked even when a fetch-side check was bypassed.
+ * 25 MB ceiling for a linked source document. Declared here so the choke sits
+ * at the setSource ingress: every ingest branch (path / url / provider - the
+ * latter two through integrations/docx-fetch.ts, which enforces its own triple
+ * check) lands here, so an oversized buffer can never be linked even when a
+ * fetch-side check was bypassed.
  */
 export const DOCX_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -214,8 +216,18 @@ export async function getProjection(appId: string): Promise<{ markdown: string; 
 }
 
 /**
- * Clean version: every tracked change accepted (comments survive - they are
- * annotations, not revisions). Named `{base}-final.docx` for download.
+ * Clean version: every tracked change accepted. Named `{base}-final.docx` for
+ * download.
+ *
+ * NOTE (verified 2026-07-25, pinned by tests/apps/docx-word-gate.test.ts):
+ * @adeu/core 1.28.0's accept_all_revisions ALSO strips the comment family
+ * (word/comments.xml, commentsExtended/Ids/Extensible + the in-document
+ * anchors), so the clean copy carries no review thread - unlike Word, which
+ * keeps comments when you accept all changes. ekoa-dev's doc claimed comments
+ * survive; that claim was never tested and is false for this engine. The
+ * behavior is KEPT (a final copy leaving the firm should not carry internal
+ * review notes) and recorded in docs/findings.md `docx-clean-drops-comments` +
+ * docs/word-track-changes.md §2.4. The WORKING copy (getCurrent) is unaffected.
  */
 export async function getClean(appId: string): Promise<{ buffer: Buffer; fileName: string }> {
   const { buffer, fileName } = await getCurrent(appId);
