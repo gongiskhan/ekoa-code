@@ -67,6 +67,7 @@ import {
   getCurrent as docxGetCurrent,
   getClean as docxGetClean,
   applyReview as docxApplyReview,
+  restoreSource as docxRestoreSource,
   setSource as docxSetSource,
   applyEdits as docxApplyEdits,
 } from './apps/document-source.js';
@@ -744,6 +745,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     getCurrent: docxGetCurrent,
     getClean: docxGetClean,
     applyReview: docxApplyReview,
+    restoreSource: docxRestoreSource,
   }));
   // Legal vertical services + e-signature (full paths carried inside the routers).
   // The owner-spine seams read/write the app owner's SHARED collections (usr.<owner>)

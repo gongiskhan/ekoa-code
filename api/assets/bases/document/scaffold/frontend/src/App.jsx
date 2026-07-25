@@ -251,6 +251,51 @@ function renderInlineMd(text, keyBase) {
 const CHG_KIND_LABEL = { insert: 'inserção', delete: 'eliminação', format: 'formatação', move: 'movimentação' };
 
 // ---------------------------------------------------------------------------
+// Review failures, in the user's language.
+//
+// /api/app-docx/edits forwards the redline engine's per-op failures VERBATIM, and
+// the engine speaks English with internal ids ("Action 1 Failed: Target ID 9999 not
+// found."). That text must never reach the page: this is a PT-PT product and the
+// numbers refer to nothing the reader can see. Each known failure family maps to
+// one sentence that says what happened AND what to do; anything unrecognised falls
+// back to the generic sentence rather than leaking the raw message.
+// ---------------------------------------------------------------------------
+
+const REVIEW_FAILURE_RULES = [
+  [/duplicate action/i,
+    'Esta ação foi pedida duas vezes ao mesmo tempo. Tente novamente.'],
+  [/\b(?:target id|change id|comment id)\b[^.]*\bnot found\b|\balready (?:accepted|rejected|resolved|applied)\b/i,
+    'Esta alteração já não está pendente no documento. Atualize a página para ver a versão mais recente e tente novamente.'],
+  [/ambiguous|occurrence|match_mode|found \d+ times/i,
+    'O texto selecionado aparece mais do que uma vez no documento. Selecione um trecho maior, que seja único, e tente novamente.'],
+  [/not found|no match/i,
+    'Não foi possível localizar o texto selecionado no documento. Selecione novamente o trecho e tente outra vez.'],
+];
+
+const REVIEW_FAILURE_FALLBACK = 'Não foi possível aplicar a alteração ao documento. Tente novamente.';
+const REVIEW_FAILURE_OFFLINE = 'Não foi possível contactar o servidor. Verifique a ligação e tente novamente.';
+const REVIEW_FAILURE_NO_SOURCE = 'O documento original já não está associado a esta aplicação. Atualize a página.';
+
+/** One PT-PT sentence per DISTINCT failure family; never the backend's own text. */
+function reviewFailureMessage(data, status) {
+  if (status === 404) return REVIEW_FAILURE_NO_SOURCE;
+  const raw = [];
+  if (data && Array.isArray(data.failures)) {
+    for (const failure of data.failures) {
+      if (failure && typeof failure.error === 'string') raw.push(failure.error);
+    }
+  }
+  if (raw.length === 0 && data && typeof data.error === 'string') raw.push(data.error);
+  const messages = [];
+  for (const text of raw) {
+    const rule = REVIEW_FAILURE_RULES.find(([pattern]) => pattern.test(text));
+    const message = rule ? rule[1] : REVIEW_FAILURE_FALLBACK;
+    if (messages.indexOf(message) === -1) messages.push(message);
+  }
+  return messages.length > 0 ? messages.join(' ') : REVIEW_FAILURE_FALLBACK;
+}
+
+// ---------------------------------------------------------------------------
 // Interactive human review (source-linked mode only).
 //
 // The meta chips carry the numeric ids the backend keys on: `[Chg:n]` for a
@@ -564,10 +609,22 @@ function RedlinePreview({ markdown }) {
 // the selection; it opens an inline composer that POSTs a `modify` op wrapping
 // the exact selected plain text (new_text == target_text) with the comment.
 function SelectionCommenter({ sheetRef, review }) {
-  const [anchor, setAnchor] = useState(null); // { top, left, text }
+  const [anchor, setAnchor] = useState(null); // { top, left, text } - viewport coords
   const [composing, setComposing] = useState(false);
   const [value, setValue] = useState('');
+  // The live Range the anchor was measured from. Kept so the surface can be
+  // RE-measured later: it is position:fixed, so viewport coordinates captured once
+  // go stale the moment anything scrolls and the box would then point at a
+  // different clause than the one it is about to comment.
+  const rangeRef = useRef(null);
   const enabled = Boolean(review && review.enabled);
+
+  const close = useCallback(() => {
+    rangeRef.current = null;
+    setComposing(false);
+    setValue('');
+    setAnchor(null);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -583,6 +640,11 @@ function SelectionCommenter({ sheetRef, review }) {
       if (!sheet.contains(range.commonAncestorContainer)) { setAnchor(null); return; }
       const rect = range.getBoundingClientRect();
       if (!rect || (rect.width === 0 && rect.height === 0)) { setAnchor(null); return; }
+      // Same invariant the scroll handler enforces: the surface never points at text
+      // outside the viewport, where it would sit over an unrelated clause.
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (rect.bottom < 0 || rect.top > viewportHeight) { setAnchor(null); return; }
+      rangeRef.current = range.cloneRange();
       setAnchor({ top: rect.top, left: rect.left + rect.width / 2, text });
     };
     document.addEventListener('mouseup', onSelect);
@@ -593,10 +655,51 @@ function SelectionCommenter({ sheetRef, review }) {
     };
   }, [enabled, composing, sheetRef]);
 
+  // Track the selection. Scroll (including the page shift the mobile keyboard causes
+  // when the composer autofocuses), resize and visualViewport changes all move the
+  // anchor under a fixed-position box, so re-measure the SAME range and follow it;
+  // when the range is gone (the preview re-rendered) or has scrolled out of sight,
+  // close instead of leaving the surface pointing at the wrong text.
+  const anchored = anchor !== null;
+  useEffect(() => {
+    if (!enabled || !anchored) return undefined;
+    const reposition = () => {
+      const range = rangeRef.current;
+      if (!range) { close(); return; }
+      const rect = range.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (!rect || (rect.width === 0 && rect.height === 0) || rect.bottom < 0 || rect.top > viewportHeight) {
+        close();
+        return;
+      }
+      const top = rect.top;
+      const left = rect.left + rect.width / 2;
+      setAnchor((prev) => {
+        if (!prev) return prev;
+        if (Math.abs(prev.top - top) < 0.5 && Math.abs(prev.left - left) < 0.5) return prev;
+        return { ...prev, top, left };
+      });
+    };
+    window.addEventListener('scroll', reposition, true); // capture: the sheet may scroll, not the window
+    window.addEventListener('resize', reposition);
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', reposition);
+      vv.addEventListener('scroll', reposition);
+    }
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+      if (vv) {
+        vv.removeEventListener('resize', reposition);
+        vv.removeEventListener('scroll', reposition);
+      }
+    };
+  }, [enabled, anchored, close]);
+
   if (!enabled || !anchor) return null;
 
   const isPending = review.pendingKey === 'add-comment';
-  const close = () => { setComposing(false); setValue(''); setAnchor(null); };
   const submit = () => {
     const comment = value.trim();
     if (!comment || review.busy) return;
@@ -704,17 +807,19 @@ export default function App() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [pendingKey, setPendingKey] = useState(null);
   const [reviewError, setReviewError] = useState(null);
+  const [confirmRestore, setConfirmRestore] = useState(false);
   const reviewInFlight = useRef(false);
   const sheetRef = useRef(null);
 
-  // Serializes review ops: rejects a second concurrent submit (the backend
-  // serializes per app too, but the UI must reflect it). On 200 the returned
-  // markdown re-renders the preview; on 422 the human-readable failure reason
-  // is surfaced in PT-PT. `key` scopes the pending/spinner to one control.
-  const submitOps = useCallback(async (ops, key) => {
+  // Serializes every mutation of the document: rejects a second concurrent submit
+  // (the backend serializes per app too, but the UI must reflect it). Both routes
+  // answer with the fresh projection, so a 200 re-renders the preview; a failure is
+  // translated to PT-PT by reviewFailureMessage and never shown raw. `key` scopes
+  // the pending/spinner to one control.
+  const postReview = useCallback(async (path, payload, key) => {
     if (reviewInFlight.current) return false;
     if (!window.__ekoa?.fetch) {
-      setReviewError('Não foi possível contactar o servidor para aplicar a alteração.');
+      setReviewError(REVIEW_FAILURE_OFFLINE);
       return false;
     }
     reviewInFlight.current = true;
@@ -722,26 +827,22 @@ export default function App() {
     setPendingKey(key || null);
     setReviewError(null);
     try {
-      const res = await window.__ekoa.fetch('/api/app-docx/edits', {
+      const res = await window.__ekoa.fetch(path, {
         method: 'POST',
-        body: JSON.stringify({ ops }),
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
       });
       let data = null;
       try { data = await res.json(); } catch (_) { data = null; }
       if (!res.ok) {
-        const failures = data && Array.isArray(data.failures) ? data.failures : [];
-        const reason = failures.map((f) => f && f.error).filter(Boolean).join(' ')
-          || (data && data.error)
-          || `Não foi possível aplicar a alteração (${res.status}).`;
-        setReviewError(reason);
+        setReviewError(reviewFailureMessage(data, res.status));
         return false;
       }
       if (data && typeof data.markdown === 'string') {
         setProjection({ status: 'ready', markdown: data.markdown });
       }
       return true;
-    } catch (err) {
-      setReviewError(`Não foi possível aplicar a alteração. ${String(err && err.message ? err.message : err)}`);
+    } catch (_) {
+      setReviewError(REVIEW_FAILURE_OFFLINE);
       return false;
     } finally {
       reviewInFlight.current = false;
@@ -749,6 +850,18 @@ export default function App() {
       setPendingKey(null);
     }
   }, []);
+
+  const submitOps = useCallback((ops, key) => postReview('/api/app-docx/edits', { ops }, key), [postReview]);
+
+  // The recourse for accept/reject: they rewrite the real .docx in place and Word has
+  // no undo once a revision is resolved, so the pristine source blob the platform kept
+  // is the only way back. Destructive in its own right (it drops every applied
+  // decision), so the toolbar asks before calling it.
+  const restoreOriginal = useCallback(async () => {
+    const ok = await postReview('/api/app-docx/restore', null, 'restore');
+    if (ok) setConfirmRestore(false);
+    return ok;
+  }, [postReview]);
 
   const reviewCtx = useMemo(
     () => (isSourceLinked ? { enabled: true, busy: reviewBusy, pendingKey, submitOps } : null),
@@ -855,6 +968,13 @@ export default function App() {
             <>
               <button className="btn btn-primary" onClick={downloadTracked}>Descarregar Word (alterações registadas)</button>
               <button className="btn btn-outline" onClick={downloadClean}>Descarregar versão limpa</button>
+              <button
+                className="btn btn-outline"
+                disabled={reviewBusy || projection.status !== 'ready'}
+                onClick={() => setConfirmRestore(true)}
+              >
+                Repor original
+              </button>
             </>
           ) : (
             <button className="btn btn-primary" onClick={downloadWord}>Descarregar Word</button>
@@ -888,6 +1008,25 @@ export default function App() {
           <div className="doc-cloud-status err">
             Não foi possível descarregar o documento. {sourceError}
             <button className="doc-cloud-dismiss" onClick={() => setSourceError(null)}>×</button>
+          </div>
+        )}
+        {/* Aceitar/Rejeitar rewrite the real .docx and Word keeps no undo for a resolved
+            revision, so this is the way back. It discards the whole review in one step,
+            which is exactly why it asks first. */}
+        {confirmRestore && (
+          <div className="doc-restore-confirm" role="alertdialog" aria-label="Repor o documento original">
+            <span className="doc-restore-text">
+              Repor o documento original? Todas as alterações aceites, rejeitadas ou comentadas nesta
+              revisão são descartadas. O ficheiro original mantém-se intacto.
+            </span>
+            <span className="doc-restore-actions">
+              <button className="btn btn-primary" disabled={reviewBusy} onClick={restoreOriginal}>
+                {pendingKey === 'restore' ? 'A repor…' : 'Repor original'}
+              </button>
+              <button className="btn btn-outline" disabled={reviewBusy} onClick={() => setConfirmRestore(false)}>
+                Cancelar
+              </button>
+            </span>
           </div>
         )}
       </header>

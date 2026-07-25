@@ -34,10 +34,12 @@ import { cortexBase } from './helpers/legal';
  * directly - surviving w:ins/w:del (native track changes) and a word/comments.xml carrying
  * the reply and the selection comment. Zero console errors throughout (§ e2e discipline).
  *
- * The second test is the additive half of the same graft: the SAME shell with no
- * `sourceDocument` must behave exactly as it did before this feature - authored blocks
- * (ekoa-code's own pagebreak/signatures types included), plain toolbar, notes tab, and not
- * one call to /api/app-docx.
+ * Two more tests guard the halves that are easy to get wrong:
+ *  - the FAILURE path, driven for real (an ambiguous comment target, so a genuine 422 with
+ *    no stub): the reader must get PT-PT with a remedy, never the engine's own English;
+ *  - the ADDITIVE half of the graft: the SAME shell with no `sourceDocument` must behave
+ *    exactly as it did before this feature - authored blocks (ekoa-code's own
+ *    pagebreak/signatures types included), plain toolbar, notes tab, no /api/app-docx call.
  *
  * Runs against the api ALONE (the served-app plane), like the band3 byte-compat specs -
  * no dashboard, no login.
@@ -246,6 +248,7 @@ test('source-linked document: accept, comment, reply and resolve land as native 
     );
     const selection = window.getSelection();
     if (!target || !selection) throw new Error('selection anchor paragraph not found');
+    target.scrollIntoView({ block: 'center' }); // a user selects what they can see
     const range = document.createRange();
     range.selectNodeContents(target);
     selection.removeAllRanges();
@@ -305,7 +308,98 @@ test('source-linked document: accept, comment, reply and resolve land as native 
   await expect(sheet.locator('.redline-chip-comment.resolved')).toHaveCount(1);
   await expect(sheet.locator('.redline-chip-comment.resolved')).toContainText('Falta o prazo de sobrevivência');
 
+  // ------------------------------------------- recourse: "Repor original"
+  // Aceitar/Rejeitar rewrite the real .docx and Word keeps no undo for a resolved
+  // revision, so this toolbar action is the ONLY way back from a mis-click. It asks
+  // first, then re-derives the working copy from the pristine source blob.
+  await page.getByRole('button', { name: 'Repor original' }).first().click();
+  const confirm = page.locator('.doc-restore-confirm');
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toContainText('são descartadas');
+  await confirm.getByRole('button', { name: 'Repor original' }).click();
+
+  // The preview is the original review again: four pending change entries, one open thread.
+  await expect(sheet.locator('.redline-chip-action')).toHaveCount(4, { timeout: 20_000 });
+  await expect(sheet.locator('.redline-chip-comment')).toHaveCount(1);
+  await expect(sheet.locator('.redline-chip-comment.resolved')).toHaveCount(0);
+  await expect(honorarios.locator('del.redline-del')).toHaveText('4.500');
+  await expect(confirm).toHaveCount(0);
+
+  // ...and so is the FILE: the accepted change is a tracked change again, and the
+  // reply and the added comment are gone with it.
+  const restoredEntries = await currentDocxEntries();
+  expect(xmlOf(restoredEntries, 'word/document.xml')).toContain('4.500');
+  const restoredComments = xmlOf(restoredEntries, 'word/comments.xml');
+  expect(restoredComments).toContain('Falta o prazo de sobrevivência');
+  expect(restoredComments).not.toContain('Acrescentámos cinco anos após a cessação.');
+  expect(restoredComments).not.toContain('Confirmar se a renovação automática foi acordada.');
+
   expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+});
+
+/**
+ * The failure path, driven for real - no stub. Commenting on a selection sends a `modify`
+ * op whose target is the exact selected text, so selecting a phrase that occurs several
+ * times in the document makes the engine reject the batch (ambiguous target, 422). What the
+ * lawyer must then see is PT-PT with a remedy: the backend's own wording is English with
+ * internal ids ("Action 1 Failed: Target ID 9999 not found.") and must never reach the page.
+ */
+test('a rejected edit is explained in PT-PT, never in the engine\'s own words', async ({ page }) => {
+  const errors = trackConsoleErrors(page);
+  await page.goto(APP_URL, { waitUntil: 'networkidle' });
+  const sheet = page.locator('main.sheet');
+  await expect(sheet.locator('.redline-chip-action').first()).toBeVisible({ timeout: 20_000 });
+
+  // Select the single word "contrato", which appears in several clauses.
+  await page.evaluate(() => {
+    const paragraph = Array.from(document.querySelectorAll('main.sheet p')).find((el) =>
+      (el.textContent || '').includes('celebrado o presente contrato'),
+    );
+    const selection = window.getSelection();
+    if (!paragraph || !selection) throw new Error('anchor paragraph not found');
+    paragraph.scrollIntoView({ block: 'center' });
+    // The renderer wraps every inline run in its own <span>, so walk to the text node.
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    let node: Text | null = null;
+    while (walker.nextNode()) {
+      if ((walker.currentNode.textContent || '').includes('presente contrato')) {
+        node = walker.currentNode as Text;
+        break;
+      }
+    }
+    if (!node) throw new Error('anchor text node not found');
+    const start = (node.textContent || '').indexOf('contrato', (node.textContent || '').indexOf('presente'));
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + 'contrato'.length);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  });
+  await page.getByRole('button', { name: 'Adicionar comentário' }).click();
+  await page.locator('.redline-commenter textarea').fill('Definir o termo.');
+  await page.getByRole('button', { name: 'Comentar' }).click();
+
+  const toast = page.locator('.redline-toast');
+  await expect(toast).toBeVisible({ timeout: 20_000 });
+  await expect(toast).toContainText('aparece mais do que uma vez');
+  await expect(toast).toContainText('Selecione um trecho maior'); // says what to do next
+  const message = (await toast.locator('.redline-toast-text').textContent()) ?? '';
+  for (const leak of ['Action', 'Failed', 'Target ID', 'not found', 'duplicate']) {
+    expect(message, `raw engine text leaked: ${message}`).not.toContain(leak);
+  }
+  expect(message.startsWith('-'), 'no stray leading dash').toBe(false);
+  expect(message).not.toContain('—'); // em dash: house rule
+  expect(message).not.toMatch(/\d{2,}/); // no internal numeric ids
+
+  await toast.getByRole('button', { name: 'Dispensar' }).click();
+  await expect(toast).toHaveCount(0);
+
+  // The one 422 above is the point of this test; nothing else may be noisy.
+  const deliberate = errors.filter((e) => /^422 .*\/api\/app-docx\/edits$/.test(e));
+  expect(deliberate.length, 'the ambiguous target must really have been rejected').toBe(1);
+  const unexpected = errors.filter((e) => !/^422 .*\/api\/app-docx\/edits$/.test(e));
+  expect(unexpected, `console errors: ${unexpected.join(' | ')}`).toEqual([]);
 });
 
 /**
@@ -327,7 +421,7 @@ test('authored mode is unchanged by the graft: blocks, toolbar and notes tab, no
   await expect(page.getByRole('button', { name: 'Descarregar Word', exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('button', { name: 'Descarregar PDF' })).toBeEnabled();
   await expect(page.locator('.doc-source-banner')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /alterações registadas|versão limpa/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /alterações registadas|versão limpa|Repor original/ })).toHaveCount(0);
 
   // Every block type the shell renders, on the sheet.
   const sheet = page.locator('main.sheet');

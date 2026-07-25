@@ -33,6 +33,7 @@ import {
   getCurrent,
   getClean,
   applyReview,
+  restoreSource,
 } from '../../src/apps/document-source.js';
 import { makeContratoFixture } from '../services/docx/contrato-fixture.js';
 
@@ -81,7 +82,7 @@ beforeAll(async () => {
   // Mirror server.ts middleware order: global JSON parser, then the routes. ekoaFetch always
   // sends Content-Type: application/json with an empty body.
   app.use(express.json({ limit: '50mb' }));
-  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview }));
+  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview, restoreSource }));
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());
   });
@@ -291,6 +292,7 @@ describe('owner-activation admission gate (fail-closed, artifact-backed apps)', 
       ['/api/app-docx/current', {}],
       ['/api/app-docx/clean', { method: 'POST' }],
       ['/api/app-docx/edits', { method: 'POST', body: JSON.stringify({ ops: [{ type: 'accept', target_id: '1' }] }) }],
+      ['/api/app-docx/restore', { method: 'POST' }],
     ] as Array<[string, RequestInit]>) {
       const res = await get(path, ART_ID, init);
       expect(res.status, path).toBe(403);
@@ -309,5 +311,49 @@ describe('owner-activation admission gate (fail-closed, artifact-backed apps)', 
     setActivation(OWNER, { active: false, billingLocked: false });
     const res = await get('/api/app-docx/status', 'contrato-app');
     expect(res.status).toBe(403);
+  });
+});
+
+/**
+ * POST /api/app-docx/restore (2C-S6, ux-qa uxqa-1) - the recourse route behind the review
+ * surface: accept/reject rewrite the working .docx in place with no Word-level undo, so the
+ * app needs a way back to the pristine source. Same admission and the same error taxonomy as
+ * the rest of the plane.
+ */
+describe('POST /api/app-docx/restore', () => {
+  it('requires a valid X-Ekoa-App-Id header', async () => {
+    const res = await get('/api/app-docx/restore', null, { method: 'POST' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s when the app has no document', async () => {
+    const res = await get('/api/app-docx/restore', EMPTY_APP_ID, { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(typeof ((await res.json()) as { error: unknown }).error).toBe('string');
+  });
+
+  it('undoes an applied review batch and returns the pristine projection', async () => {
+    const appId = 'dev-doc-restore-route';
+    await setSource(appId, { buffer: await makeContratoFixture(), fileName: 'contrato.docx', origin: 'path' });
+    const before = (await get('/api/app-docx/projection', appId).then((r) => r.json())) as { markdown: string };
+
+    const edit = await get('/api/app-docx/edits', appId, {
+      method: 'POST',
+      body: JSON.stringify({
+        ops: [{ type: 'modify', target_text: 'aviso prévio de 30 dias', new_text: 'aviso prévio de 90 dias' }],
+      }),
+    });
+    expect(edit.status).toBe(200);
+    expect(((await edit.json()) as { markdown: string }).markdown).not.toBe(before.markdown);
+
+    const res = await get('/api/app-docx/restore', appId, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { markdown: string; fileName: string };
+    expect(body.fileName).toBe('contrato.docx');
+    expect(body.markdown).toBe(before.markdown);
+    // The bytes really went back: the working document carries no tracked insertion again.
+    const docx = await get('/api/app-docx/current', appId).then(async (r) => Buffer.from(await r.arrayBuffer()));
+    const xml = await (await JSZip.loadAsync(docx)).file('word/document.xml')!.async('string');
+    expect(xml).not.toContain('<w:ins ');
   });
 });

@@ -81,6 +81,9 @@ const COVERED = new Set<string>([
   // unchanged (they are outside /api/v1, so the mount-coverage walker auto-excludes them).
   'servedApp.appDocxStatus', 'servedApp.appDocxProjection', 'servedApp.appDocxCurrent',
   'servedApp.appDocxClean', 'servedApp.appDocxEdits',
+  // 2C-S6 (ux-qa uxqa-1): the restore route - the recourse behind accept/reject, which
+  // rewrite the working .docx in place with no Word-level undo.
+  'servedApp.appDocxRestore',
   // G6 — serving plane + health + demos (served-app.test.ts)
   'servedApp.appHealth', 'servedApp.serveApp', 'servedApp.demoBridge', 'servedApp.demoAvailability',
   // G6 — integration definitions registry (integration-definitions.test.ts)

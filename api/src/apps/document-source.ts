@@ -259,6 +259,40 @@ export async function applyReview(
 }
 
 /**
+ * Discard every applied redline and re-derive the working document from the
+ * PRISTINE source blob.
+ *
+ * This is the recourse behind the served app's "Repor original" action, and the
+ * reason the source blob is kept untouched at all: accept/reject rewrite the
+ * working copy in place and Word's own model has no undo once a revision is
+ * resolved, so without this a single mis-click permanently discards a tracked
+ * change from a contract. Runs under the same per-app write lock as every other
+ * mutation, so it can never interleave with an in-flight batch.
+ *
+ * Destructive in the other direction (it drops accepted/rejected decisions and
+ * comments added since the link), so the app confirms before calling it.
+ */
+export async function restoreSource(appId: string): Promise<{ projection: string; fileName: string }> {
+  const meta = await readMeta(appId);
+  if (!meta) throw new NoDocumentSourceError();
+  return withAppWriteLock(appId, async () => {
+    const dir = docxDir(appId);
+    let source: Buffer;
+    try {
+      source = await readFile(join(dir, SOURCE_BLOB));
+    } catch {
+      throw new NoDocumentSourceError();
+    }
+    await writeAtomic(join(dir, CURRENT_BLOB), source);
+    await writeAtomic(
+      join(dir, META_FILE),
+      JSON.stringify({ ...meta, updatedAt: new Date().toISOString() }, null, 2),
+    );
+    return { projection: await projectDocx(source), fileName: meta.fileName };
+  });
+}
+
+/**
  * Apply an atomic redline batch to the current document and persist the
  * result. `dryRun` runs the exact same atomic pipeline but discards the
  * buffer, so a clean dry run guarantees the identical commit will apply.

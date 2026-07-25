@@ -19,6 +19,7 @@ import {
   AppDocxStatusResponse,
   AppDocxProjectionResponse,
   AppDocxEditsResponse,
+  AppDocxRestoreResponse,
   ErrorEnvelope,
   servedAppEndpoints,
 } from '@ekoa/shared';
@@ -36,6 +37,7 @@ import {
   getCurrent,
   getClean,
   applyReview,
+  restoreSource,
 } from '../../src/apps/document-source.js';
 import { makeContratoFixture } from '../services/docx/contrato-fixture.js';
 
@@ -81,7 +83,7 @@ beforeAll(async () => {
 
   const app = express();
   app.use(express.json({ limit: '50mb' }));
-  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview }));
+  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview, restoreSource }));
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());
   });
@@ -139,6 +141,40 @@ describe('app-docx contract — 2xx bodies validate against their shared schemas
     } else {
       expect(res.status).toBe(422);
     }
+  });
+
+  // 2C-S6 (ux-qa uxqa-1): the recourse route. Accept/reject rewrite the working .docx in
+  // place, so the pristine source blob is the only way back — this asserts the contract of
+  // that way back, on its own app id so it cannot disturb the fixtures above.
+  it('POST /restore → AppDocxRestoreResponse, and the working document really is the source again', async () => {
+    const RESTORE_APP = 'ct-doc-restore';
+    await setSource(RESTORE_APP, { buffer: await makeContratoFixture(), fileName: 'contrato.docx', origin: 'path' });
+    const pristine = (await get('/api/app-docx/projection', RESTORE_APP).then((r) => r.json())) as { markdown: string };
+
+    await get('/api/app-docx/edits', RESTORE_APP, {
+      method: 'POST',
+      body: JSON.stringify({
+        ops: [{ type: 'modify', target_text: 'aviso prévio de 30 dias', new_text: 'aviso prévio de 90 dias' }],
+      }),
+    });
+    const edited = (await get('/api/app-docx/projection', RESTORE_APP).then((r) => r.json())) as { markdown: string };
+    expect(edited.markdown, 'the edit must actually have landed').not.toBe(pristine.markdown);
+
+    const res = await get('/api/app-docx/restore', RESTORE_APP, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(AppDocxRestoreResponse.safeParse(body).success).toBe(true);
+    expect(servedAppEndpoints.appDocxRestore.response!.safeParse(body).success).toBe(true);
+    expect((body as { markdown: string }).markdown).toBe(pristine.markdown);
+    // ...and it is PERSISTED, not just echoed back.
+    const after = (await get('/api/app-docx/projection', RESTORE_APP).then((r) => r.json())) as { markdown: string };
+    expect(after.markdown).toBe(pristine.markdown);
+  });
+
+  it('POST /restore with no linked document → 404 flat { error }', async () => {
+    const res = await get('/api/app-docx/restore', EMPTY_APP_ID, { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(typeof ((await res.json()) as { error: unknown }).error).toBe('string');
   });
 
   it('GET /current + POST /clean stream .docx bytes (binary descriptors)', async () => {

@@ -54,6 +54,7 @@ export interface AppDocxDeps {
     appId: string,
     ops: RedlineOp[],
   ) => Promise<{ report: RedlineReport; projection: string; fileName: string }>;
+  restoreSource: (appId: string) => Promise<{ projection: string; fileName: string }>;
 }
 
 /**
@@ -197,6 +198,22 @@ export function appDocxRouter(deps: AppDocxDeps): Router {
         res.status(422).json({ error: e.message, failures: e.failures });
         return;
       }
+      sendError(res, err);
+    }
+  });
+
+  // The recourse for the review surface. Accept/reject rewrite the working document in
+  // place and Word has no undo once a revision is resolved, so this re-derives it from the
+  // pristine source blob document-source.ts keeps untouched. Same admission and the same
+  // error taxonomy as every other route on this plane; the body is the fresh projection, so
+  // the app re-renders from the response exactly as it does after an edit batch.
+  r.post('/api/app-docx/restore', async (req, res) => {
+    const admitted = await admitApp(headerId(req), res);
+    if (!admitted) return;
+    try {
+      const { projection, fileName } = await deps.restoreSource(admitted.appId);
+      res.json({ markdown: projection, fileName });
+    } catch (err) {
       sendError(res, err);
     }
   });

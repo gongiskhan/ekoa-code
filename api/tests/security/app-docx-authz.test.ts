@@ -39,6 +39,7 @@ import {
   getCurrent,
   getClean,
   applyReview,
+  restoreSource,
 } from '../../src/apps/document-source.js';
 import { makeContratoFixture } from '../services/docx/contrato-fixture.js';
 
@@ -76,7 +77,7 @@ beforeAll(async () => {
 
   const app = express();
   app.use(express.json({ limit: '50mb' }));
-  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview }));
+  app.use(appDocxRouter({ getStatus, getProjection, getCurrent, getClean, applyReview, restoreSource }));
   await new Promise<void>((r) => { server = app.listen(0, '127.0.0.1', () => r()); });
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('no ephemeral port');
@@ -199,6 +200,7 @@ describe('the app-docx router is actually MOUNTED in the real server (buildApp)'
       ['/api/app-docx/current', 'GET'],
       ['/api/app-docx/clean', 'POST'],
       ['/api/app-docx/edits', 'POST'],
+      ['/api/app-docx/restore', 'POST'],
     ] as Array<[string, string]>) {
       const res = await fetch(`http://127.0.0.1:${realPort}${path}`, {
         method,

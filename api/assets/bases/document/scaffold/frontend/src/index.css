@@ -315,17 +315,35 @@ body {
 
 .redline-comment-body { white-space: pre-wrap; }
 
+/* A replacement must never read as one value: "4.500" + "5.000" rendered flush became
+   "4.5005.000", leaving strike-vs-underline as the only cue at 10-16px. */
+.redline-del + .redline-ins,
+.redline-ins + .redline-del { margin-left: 0.2em; }
+
 /* -- Interactive human review (source-linked mode, screen only) ----------- */
 
 .redline-chip-action { position: relative; }
 
+/* Hit areas. These controls decide whether a tracked change lives or dies in a
+   contract, so they clear the WCAG 2.2 (2.5.8) 24px floor and reach the 44px touch
+   comfort target under a coarse pointer - the vertical padding does it without
+   changing the text metrics, so a wrapped chip still reads as one block. */
 .redline-chip-label {
+  display: inline-block;
   cursor: pointer;
   border-radius: 0.3rem;
   outline: none;
+  padding: 0.3rem 0.2rem;
+  line-height: 1.45;
 }
 .redline-chip-label:hover { text-decoration: underline; text-decoration-thickness: 1px; }
-.redline-chip-label:focus-visible { box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.45); }
+/* Solid ring, no alpha: rgba(15,118,110,.45) composited to 1.90:1 over the chip, under
+   the 3:1 floor for UI components. #0f766e measures 4.85:1 on the chip, 5.50:1 on paper. */
+.redline-chip-label:focus-visible {
+  outline: 2px solid var(--color-primary, #0f766e);
+  outline-offset: 1px;
+  box-shadow: none;
+}
 .redline-chip-action.open > .redline-chip-label { text-decoration: underline; }
 
 .redline-spinner {
@@ -361,7 +379,8 @@ body {
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.2;
-  padding: 0.28rem 0.6rem;
+  min-height: 24px;
+  padding: 0.35rem 0.7rem;
   border-radius: 0.3rem;
   border: 1px solid #dde3ea;
   background: #ffffff;
@@ -387,7 +406,9 @@ body {
   font-family: var(--doc-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   font-size: 0.66rem;
   font-weight: 600;
-  padding: 0 0.2rem;
+  line-height: 1.45;
+  min-height: 24px;
+  padding: 0.3rem 0.2rem;
   border: none;
   background: transparent;
   color: #92400e;
@@ -479,6 +500,39 @@ body {
   padding: 0.6rem 0.8rem;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
 }
+/* Restore-from-source confirmation, in the toolbar band (same slot as the cloud
+   status). Accept/Reject are one click and irreversible in Word's model, so this is
+   the recourse - and it discards the whole review, so it asks first. */
+.doc-restore-confirm {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 0.375rem;
+  padding: 0.55rem 0.75rem;
+}
+.doc-restore-text { flex: 1 1 18rem; }
+.doc-restore-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* Touch devices: the review controls reach the 44px comfort target, and the composers
+   hit 16px so iOS Safari stops zooming the whole page when a textarea takes focus. */
+@media (pointer: coarse) {
+  .redline-chip-label,
+  .redline-reply-trigger {
+    padding-top: 0.9rem;
+    padding-bottom: 0.9rem;
+  }
+  .redline-reply-trigger { min-height: 44px; }
+  .redline-act { min-height: 44px; padding-top: 0.75rem; padding-bottom: 0.75rem; }
+  .redline-textarea { font-size: 16px; }
+}
+
 .redline-toast-text { flex: 1; }
 .redline-toast-dismiss {
   border: none;

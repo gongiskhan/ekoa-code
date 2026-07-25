@@ -228,6 +228,15 @@ export type AppDocxReviewReport = z.infer<typeof AppDocxReviewReport>;
 export const AppDocxEditsRequest = z.object({ ops: z.array(z.record(z.unknown())) });
 export type AppDocxEditsRequest = z.infer<typeof AppDocxEditsRequest>;
 
+/** POST /api/app-docx/restore success body — the working document re-derived from the
+ *  pristine source blob (the recourse behind accept/reject, which rewrite it in place).
+ *  Same shape as the projection: the app re-renders the preview from `markdown`. */
+export const AppDocxRestoreResponse = z.object({
+  markdown: z.string(),
+  fileName: z.string(),
+});
+export type AppDocxRestoreResponse = z.infer<typeof AppDocxRestoreResponse>;
+
 /** POST /api/app-docx/edits success body — the fresh projection + the engine report. */
 export const AppDocxEditsResponse = z.object({
   markdown: z.string(),
@@ -332,6 +341,7 @@ export const servedAppEndpoints = {
   appDocxCurrent: { method: 'GET', path: '/api/app-docx/current', auth: 'header-scoped', kind: 'binary', response: z.unknown() },
   appDocxClean: { method: 'POST', path: '/api/app-docx/clean', auth: 'header-scoped', kind: 'binary', response: z.unknown() },
   appDocxEdits: { method: 'POST', path: '/api/app-docx/edits', auth: 'header-scoped', request: AppDocxEditsRequest, response: AppDocxEditsResponse },
+  appDocxRestore: { method: 'POST', path: '/api/app-docx/restore', auth: 'header-scoped', response: AppDocxRestoreResponse },
 
   // App health probe (injected into every served HTML; featured artifacts skipped).
   appHealth: { method: 'POST', path: '/api/app-health', auth: 'header-scoped', request: z.record(z.unknown()), response: OkResponse },
