@@ -6,6 +6,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`redaction-masker-leak`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery gate R-6).
+  Two divergent private copies of the value-keyed masker existed, each leaking in a different way,
+  and BOTH silently skipped any secret shorter than four characters — the failure mode a masker must
+  never have, because a value that is quietly not masked reads exactly like one that was.
+  `integrations/http-template.ts`'s `maskValue` emitted `***…1234`, a persisted plaintext SUFFIX of
+  every credential the platform ever proxied; `automation/executors/api-call.ts` masked to
+  `<redacted>` with no leak but matched only the RAW literal, so a URL-encoded, base64 or
+  JSON-escaped occurrence walked straight into the persisted step record. FIXED by
+  `api/src/security/redaction.ts`: a run-scoped `SecretRegistry` substituting `[REDACTED:<handle>]`
+  (no plaintext fragment, no length hint) across raw / URL-encoded / base64 / base64url /
+  JSON-escaped forms, longest-value-first, case-folded above 8 chars. Both copies are now thin
+  callers. Sub-3-char values are still not substituted — doing so would destroy the surrounding
+  stream — but they are surfaced on `registry.unmaskable` instead of being dropped in silence.
+  Pinned by `api/tests/security/redaction.test.ts` (24 cases, one per regression).
 - **`citius-listener-blocked`** (OPEN, MEDIUM, correctness — 2A-S4 review). `citius` is the one
   SHIPPED user-defined listener source that is not deferred for a missing transport, and it still
   cannot poll. 2A-S4 fixed the part that belonged to the listener rail (the composition root now

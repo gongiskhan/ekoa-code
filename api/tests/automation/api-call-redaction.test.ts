@@ -90,7 +90,7 @@ describe('api_call credential redaction (§5.6.7)', () => {
     });
     const resolved = captured.resolvedAction as { url: string };
     expect(resolved.url).not.toContain(SECRET);
-    expect(resolved.url).toContain('<redacted>');
+    expect(resolved.url).toContain('[REDACTED:');
     // The REAL request used the un-redacted URL.
     expect(fetchSpy.mock.calls[0]![0]).toContain(SECRET);
   });
@@ -119,7 +119,7 @@ describe('api_call credential redaction (§5.6.7)', () => {
     });
     const resolved = captured.resolvedAction as { body?: string };
     expect(resolved.body).not.toContain(SECRET);
-    expect(resolved.body).toContain('<redacted>');
+    expect(resolved.body).toContain('[REDACTED:');
   });
 
   it('redacts the secret from error details when the call fails non-2xx', async () => {

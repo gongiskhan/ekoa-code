@@ -89,6 +89,8 @@ module.exports = {
                   './api/src/apps',
                   './api/src/automation',
                   './api/src/legal',
+                  './api/src/security',
+                  './api/src/cofre',
                 ],
                 from: ['./api/src/routes', './api/src/server.ts'],
                 message: 'Nothing may import api/src/routes/ or server.ts (ch02 §2.7 — they are leaves-in-reverse).',
