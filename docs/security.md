@@ -74,6 +74,17 @@ The pipeline is a submodule of the chokepoint (`llm/anonymise/`), invoked by `ll
 the payload is assembled and before any Anthropic request, and again on every response and streamed
 delta. Because the chokepoint is the only transport, a caller cannot skip it.
 
+**SCOPE — text, not pixels (corrected 2026-07-27, Cofre H-2).** This pipeline covers model-bound
+TEXT. It does not tokenize images: `runOneShot` anonymises `prompt` and `systemPrompt` and forwards
+`images` verbatim, because finding sensitive regions in a finished PNG is OCR-and-hope. The pixel
+plane is protected UPSTREAM instead, at the only layer that can do it correctly — the browser
+session masks credential-bearing regions by LOCATOR at capture time, so those pixels are never
+rendered into the buffer, and suppresses the capture entirely during a credential window
+(`automation/screenshot-masking.ts`). Stating the pipeline as covering "all model-bound text"
+without this paragraph was true and false-by-omission at the same time: a reader took it as
+covering everything model-bound. RESIDUAL, stated plainly: a screenshot still carries whatever
+non-credential content is on the page (a processo number, a client name) as pixels, untokenized.
+
 Per request: **collect** all model-bound text; **detect** sensitive spans on the delta only (never
 the tokenized prefix - preserves prompt caching); **tokenize** each span into a deterministic,
 format-preserving fake recorded in the session vault; **forward** tagged with a per-request

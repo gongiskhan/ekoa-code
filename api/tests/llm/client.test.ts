@@ -237,6 +237,16 @@ describe('runOneShot forwards vision images to the transport (§6.2.1 images plu
     // The brand-research visual-vibe pass (and automation vision) hand base64 PNGs to runOneShot.
     // This pins the OneShotOptions.images -> SdkCallParams.images plumbing at the chokepoint (the
     // default transport then turns them into a one-message streaming prompt for the SDK).
+    //
+    // COFRE H-2 — READ THIS BEFORE CITING THIS TEST AS A SECURITY PROPERTY. Verbatim forwarding is
+    // the PLUMBING contract, not a privacy one: unlike `prompt` and `systemPrompt`, images do NOT
+    // pass `anonymize()` here, and this test previously read as if that were intended. It is not.
+    // The pixel plane is protected UPSTREAM instead, at the only place that can do it correctly —
+    // `automation/screenshot-masking.ts` masks credential-bearing regions by LOCATOR at capture
+    // time (so the sensitive pixels are never rendered into the buffer) and suppresses the capture
+    // entirely during a credential window. A Cortex-side transform on a finished PNG would be
+    // OCR-and-hope. If image anonymisation is ever added at the chokepoint, this test changes;
+    // until then it asserts plumbing only.
     let seenImages: Array<{ mediaType: string; data: string }> | undefined;
     __setTransportForTests(fakeTransport({
       async oneShot(p) {

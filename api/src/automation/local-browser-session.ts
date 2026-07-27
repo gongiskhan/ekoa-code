@@ -16,6 +16,7 @@
  * production keeps the daemon model unchanged.
  */
 
+import { maskedScreenshot } from './screenshot-masking.js';
 import type { Page } from 'playwright';
 import type { BrowserSession } from './browser-session.js';
 import type { PlaywrightAction, PlaywrightAssertion, PageFingerprint } from './types.js';
@@ -188,17 +189,43 @@ export class LocalBrowserSession implements BrowserSession {
 
   accessibilitySnapshot(): string | undefined { return this.lastA11y; }
 
+  /**
+   * While true, `capture()` takes NO screenshot at all (Cofre H-3). Set for the duration of a
+   * credential window: during a fill, "mask the field" is a weaker guarantee than "take no
+   * picture", and the vision tier has nothing useful to do with that frame anyway.
+   */
+  private captureSuppressed = false;
+
+  /**
+   * Run `fn` with screenshot capture suppressed. Restores the previous value in a finally, so a
+   * throwing credential step cannot leave the session permanently blind.
+   */
+  async withCaptureSuppressed<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.captureSuppressed;
+    this.captureSuppressed = true;
+    try {
+      return await fn();
+    } finally {
+      this.captureSuppressed = previous;
+    }
+  }
+
   private async capture(page: Page): Promise<void> {
     try {
       let failure: unknown;
-      let shot = await page.screenshot({ type: 'png' }).catch((err) => { failure = err; return null; });
-      if (!shot) {
+      // Cofre H-2/H-3: credential-bearing regions are masked BROWSER-SIDE so the sensitive pixels
+      // are never rendered into the buffer, and the whole capture is SUPPRESSED during a credential
+      // window. `maskedScreenshot` returns null for both "suppressed" and "failed", which the
+      // existing null handling below already treats as "no screenshot this step" — so a masking
+      // failure can never silently degrade to an UNMASKED capture.
+      let shot = await maskedScreenshot(page, { suppressed: this.captureSuppressed });
+      if (!shot && !this.captureSuppressed) {
         // A screenshot can fail transiently mid-navigation ("page is navigating and
         // changing content"). Settle briefly and retry ONCE before giving up — an empty
         // capture would otherwise hand the vision tier a blank image.
         await page.waitForLoadState('domcontentloaded').catch(() => { /* best-effort */ });
         await page.waitForTimeout(250).catch(() => { /* best-effort */ });
-        shot = await page.screenshot({ type: 'png' }).catch((err) => { failure = err; return null; });
+        shot = await maskedScreenshot(page, { suppressed: this.captureSuppressed });
       }
       if (shot) {
         // Only overwrite the held screenshot with a NON-EMPTY capture, so a failed retry

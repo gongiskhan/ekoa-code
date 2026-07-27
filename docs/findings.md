@@ -48,6 +48,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`anonymisation-skips-the-pixel-plane`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre
+  discovery gate H-2). `api/src/llm/client.ts` anonymises `prompt` and `systemPrompt` at the egress
+  chokepoint (`:967-968`) and forwards `images: opts.images` VERBATIM (`:981`) — and
+  `api/tests/llm/client.test.ts` PINNED that forwarding as the contract, so the gap read as
+  intended behaviour. `docs/security.md` described the pipeline as covering "all model-bound text",
+  which is true and false-by-omission at once: a reader took it as covering everything model-bound.
+  For this product the pixels are screenshots of an AUTHENTICATED session on a court portal —
+  processo numbers, client NIFs, and during a login step the credential itself. FIXED BROWSER-SIDE,
+  because a Cortex-side transform on a finished PNG is OCR-and-hope: `automation/screenshot-masking.ts`
+  masks credential-bearing regions by LOCATOR at capture time (so the sensitive pixels are never
+  rendered into the buffer) with a SOLID mask colour, and `LocalBrowserSession` gains
+  `withCaptureSuppressed()` so a credential window takes NO picture at all — a stronger guarantee
+  than masking the field. The failure mode is the decisive property: a masking failure returns null,
+  which the existing capture path already treats as "no screenshot this step", so it can never
+  degrade to an unmasked capture. The pinning test is re-framed in place as plumbing-only and
+  `docs/security.md` now states the text/pixel split, including the RESIDUAL: a screenshot still
+  carries non-credential page content as untokenized pixels. Pinned by
+  `api/tests/security/screenshot-masking.test.ts` (12 cases).
 - **`envwhitelist-reads-cortex-env`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
   gate D4/J-4). `LocalCommandSpec.envWhitelist` was a list of environment variable NAMES accepted
   from the planner (a model) which `buildEnv` resolved against the CORTEX API SERVER's OWN
