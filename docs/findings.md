@@ -6,6 +6,27 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`page-values-to-log-and-memory`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
+  gate R-4 + R-5). Two leaks of the same class: values read off a LIVE PAGE of an authenticated
+  session. (R-4) `automation/engine.ts` merged verifier-extracted values into the shared `inputs`
+  map and logged them with `console.log(\`... ${k}="${v}" ...\`)` — cleartext in the process log,
+  and from `inputs` they are template-substituted into downstream `api_call` URLs/headers/bodies
+  whose RESOLVED form is persisted. FIXED: the log records the key and the LENGTH only, and a
+  secret-shaped KEY NAME (otp/token/password/senha/sessao/credential/pin/cvv, PT-PT included) is
+  refused outright so the value never joins `inputs` at all. The vocabulary is pinned in BOTH
+  directions — a false positive silently refuses an ordinary input, and a bare `/auth/` matched
+  `author`. (R-5) `automation/cache.ts` wrote the resolved action into ORGANIZATIONAL MEMORY at
+  tier `active` through the ordinary `createMemory` surface, and `memory/resolver.ts` `isInjectable`
+  excluded only `tier==='archive'` — so those rows were term-scored against the user's ordinary
+  chat prompt and injected under `# Memória`. `summariseAction` put the first 40 chars of any
+  `fill`, the FULL `navigate` URL and the FULL `select` value into the scored `content`, so a
+  magic-link or SSO-callback URL was replayed verbatim to the chat model on term overlap. FIXED by
+  a `nonMemorable` memory class that `isInjectable` now requires to be absent (structurally "not a
+  memory", distinct from `tier:'archive'` which is merely user-hidden), set on every action- and
+  assertion-cache row; plus de-valuing the summaries at the source — length for a `fill`, origin +
+  pathname for a `navigate` (the query string is where the tokens live), no literal for a `select`
+  or an assertion. The cache still works: the exact action lives structurally in `cachePayload`,
+  which was never term-scored. Pinned by `api/tests/security/page-value-leaks.test.ts` (44 cases).
 - **`credential-origin-unbound`** (FIXED 2026-07-27, CRITICAL, confidentiality — Cofre discovery
   gate R-2). Credential use had NO origin binding on either HTTP path, and the path where the MODEL
   authored the destination had the WEAKER egress control. `automation/executors/api-call.ts`

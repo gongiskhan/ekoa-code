@@ -85,6 +85,18 @@ import type {
  *   down only fires for triggeredBy === 'user' specifically because webhook/listener runs already
  *   have a server-trusted owner; they must skip the guard, not satisfy it.
  */
+/**
+ * Input names a verifier must never populate from page content (Cofre R-4, invariant I2). These are
+ * the names whose values are, by convention, exactly the material that must not enter the shared
+ * `inputs` map — from there they are template-substituted into downstream api_call URLs, headers
+ * and bodies whose RESOLVED form is persisted into the step record.
+ * PT-PT names are included because the planner writes Portuguese input names.
+ * Exported so the security suite can pin the vocabulary: a control that is not asserted is not a
+ * control (this repo's own verdict rule).
+ */
+export const SECRET_SHAPED_INPUT_NAME =
+  /(?:otp|mfa|2fa|totp|token|password|passwd|senha|palavra[-_]?passe|secret|segredo|apikey|api[-_]?key|authorization|auth[-_]?token|\bauth\b|bearer|cookie|session|sessao|sess[aã]o|credential|credencial|\bpin\b|cvv)/i;
+
 export interface RunContext {
   ownerUserId: string;
   /** The owner's org — threaded so the memory-backed cache and scoped-memory injection are
@@ -1615,10 +1627,24 @@ async function executeVerifyStep(args: BrowserVerifyContext): Promise<StepRecord
   // user-supplied value wins over a page-extracted one.
   if (result.extractedInputs) {
     for (const [k, v] of Object.entries(result.extractedInputs)) {
+      // CREDENTIAL BOUNDARY (Cofre R-4, invariant I2). A verifier-extracted value comes off a LIVE
+      // PAGE of an authenticated session, so it can be a one-time code, a session token or a
+      // password the page echoed. Two controls:
+      //   (a) a secret-shaped KEY NAME is refused outright — the extracted value then never joins
+      //       the shared `inputs` map, and so is never template-substituted into a downstream
+      //       api_call URL/header/body whose RESOLVED form is persisted;
+      //   (b) the log records the key and the LENGTH, never the value. It previously printed
+      //       `${k}="${v}"` in cleartext to the process log.
+      if (SECRET_SHAPED_INPUT_NAME.test(k)) {
+        console.log(`[automation] verifier extraction refused for secret-shaped input "${k}" on step ${step.id}`);
+        continue;
+      }
       const current = (args.inputs as Record<string, unknown>)[k];
       if (current == null || (typeof current === 'string' && current.trim().length === 0)) {
         (args.inputs as Record<string, unknown>)[k] = v;
-        console.log(`[automation] verifier extracted ${k}="${v}" from page on step ${step.id}`);
+        console.log(
+          `[automation] verifier extracted ${k} (${String(v ?? '').length} chars) from page on step ${step.id}`,
+        );
       }
     }
   }
