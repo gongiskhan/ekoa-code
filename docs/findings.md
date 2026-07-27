@@ -27,6 +27,48 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   pathname for a `navigate` (the query string is where the tokens live), no literal for a `select`
   or an assertion. The cache still works: the exact action lives structurally in `cachePayload`,
   which was never term-scored. Pinned by `api/tests/security/page-value-leaks.test.ts` (44 cases).
+- **`screenshot-plane-unauthenticated`** (FIXED 2026-07-27, HIGH, confidentiality + GDPR — Cofre
+  discovery gate R-3). `/automation-screenshots` was an `express.static` mount over
+  `<dataDir>/automation-runs` with NO auth middleware, NO tenant check and NO expiry. The recorded
+  rationale (`docs/decisions.md`, 2026-07-11) was that an `<img>` cannot carry an Authorization
+  header, so "the unguessable automationId/runId path IS the capability". Two problems: the PNGs
+  are screenshots of an AUTHENTICATED session on a client portal (for this product, processo
+  numbers and client NIFs rendered as pixels), and the run id is not treated as a secret anywhere
+  else — it travels in SSE frames, persisted step records, the run API and logs. FIXED without
+  trading the control away, using the pattern the repo already applies to the SSE stream for the
+  identical constraint: a short-lived platform JWT in the query string (`verifySseToken`), then a
+  run lookup that checks org and ownership before a byte is streamed. Cross-tenant reads answer
+  404, not 403, so existence is not an oracle; an unattributable legacy run (no `orgId`) is refused
+  rather than served; path segments go through the containment resolver; non-PNG files are refused.
+  The URL SHAPE is unchanged, so every persisted `screenshotUrl` keeps resolving — the web client
+  appends `?token=` via the existing `withPreviewToken` helper. RETENTION: nothing ever deleted
+  these PNGs (every reference in `api/src` was a write or a path builder), a GDPR erasure gap over
+  an unindexed tree, so a 7-day sweeper and a `deleteRunScreenshots` erasure path land in the same
+  change. Pinned by `api/tests/security/screenshot-plane.test.ts` (14 cases, including a
+  traversal-escape test on the erasure path) and a REWRITTEN
+  `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
+  read as the contract.
+- **`bridge-excerpts-no-denylist`** (FIXED 2026-07-27 in `ekoa-bridge`, MEDIUM, confidentiality —
+  Cofre discovery gate H-7). `ekoa-bridge/src/containment/resolver.ts` enforced only that the
+  realpath stays inside a granted root. Containment answers "may the daemon touch this location";
+  it cannot answer "should these BYTES cross Boundary 1", and they do — `engine.ts` `compose()`
+  concatenates file excerpts verbatim into the provider_request body (its own comment: "The
+  excerpts cross Boundary 1 here"). A user who granted a project directory containing `.env` or
+  `.ssh/` had not consented to shipping their keys to a model. FIXED with a credential-bearing
+  denylist applied to the REAL path, kept byte-identical to
+  `api/src/security/path-containment.ts`; the two copies should be shared through the release
+  artifact rather than by hand. Defence in depth only — containment remains the control.
+- **`bridge-ledger-records-secrets`** (FIXED 2026-07-27 in `ekoa-bridge`, MEDIUM, confidentiality —
+  Cofre discovery gate H-5). `AutomationLedgerRow.detail` was "the full bash command line, or the
+  browser navigation target — recorded in full" per ADR-002, on an append-only, fsynced ledger that
+  is forwarded to Cortex as trust-chip metadata. A secret passed as an argv literal
+  (`curl -H "Authorization: Bearer …"`) or a one-time code in a URL was written to disk in
+  cleartext, permanently, on the user's own machine — by the same component that must hold
+  delivered secrets RAM-only. The audit requirement is "which invocation happened, and can I
+  correlate two of them", not "what were the argument values", so rows now carry a SHAPE (program
+  name + argument count, or origin+pathname) plus `detailHash`, a stable non-reversible correlation
+  id. `detailHash` is optional in the schema so pre-H-5 ledger lines still parse instead of reading
+  as corrupt. Two existing tier2 assertions pinned the verbatim detail and were updated.
 - **`credential-origin-unbound`** (FIXED 2026-07-27, CRITICAL, confidentiality — Cofre discovery
   gate R-2). Credential use had NO origin binding on either HTTP path, and the path where the MODEL
   authored the destination had the WEAKER egress control. `automation/executors/api-call.ts`

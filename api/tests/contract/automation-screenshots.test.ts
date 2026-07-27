@@ -9,11 +9,19 @@ import { writeStepScreenshot, screenshotUrlFromPath } from '../../src/automation
 import { __resetAutomationConfigForTests } from '../../src/automation/config.js';
 
 /**
- * The `/automation-screenshots` static plane (ch12): per-step PNGs written under
- * <dataDir>/automation-runs/<automationId>/<runId>/step-N.png are served publicly as capability
- * URLs, so the run UI can render them via <img> (which cannot carry an Authorization header). This
- * exercises the REAL composition-root mount in buildApp against a fixture written by the real
- * `writeStepScreenshot`, and the disk-path → served-URL mapping the wire uses.
+ * The `/automation-screenshots` plane (ch12), through the REAL composition-root mount in buildApp.
+ *
+ * REWRITTEN for Cofre R-3. This test previously asserted the plane served a PNG to an
+ * UNAUTHENTICATED caller — it pinned the vulnerability as the contract. These are screenshots of an
+ * authenticated session on a client portal; the plane is now authenticated (a short-lived platform
+ * JWT in the query string, the same pattern the SSE stream uses because EventSource cannot set
+ * headers either) and tenant-scoped against the run.
+ *
+ * The URL SHAPE is unchanged, which is the part the wire depends on: `writeStepScreenshot` ->
+ * `screenshotUrlFromPath` still produces `/automation-screenshots/<automationId>/<runId>/step-N.png`
+ * and every persisted `screenshotUrl` keeps resolving. Authorization is exercised in depth by
+ * tests/security/screenshot-plane.test.ts; this file pins the mapping and the composition-root
+ * refusal.
  */
 let server: Server;
 let port: number;
@@ -48,19 +56,30 @@ afterAll(async () => {
 
 const get = (p: string) => fetch(`http://127.0.0.1:${port}${p}`);
 
-describe('automation step screenshots static plane (ch12)', () => {
-  it('serves a PNG written by writeStepScreenshot at its screenshotUrl, and 404s a missing one', async () => {
+describe('automation step screenshots plane (ch12; authenticated per Cofre R-3)', () => {
+  it('maps a written screenshot to its served URL shape (unchanged by R-3)', () => {
     const rel = writeStepScreenshot('auto-7', 'run-42', 0, PNG);
     expect(rel).toBe('automation-runs/auto-7/run-42/step-0.png');
-    const url = screenshotUrlFromPath(rel);
-    expect(url).toBe('/automation-screenshots/auto-7/run-42/step-0.png');
+    expect(screenshotUrlFromPath(rel)).toBe('/automation-screenshots/auto-7/run-42/step-0.png');
+  });
 
-    const ok = await get(url!);
-    expect(ok.status).toBe(200);
-    expect(ok.headers.get('content-type') ?? '').toContain('image/png');
-    expect(Buffer.from(await ok.arrayBuffer())).toEqual(PNG);
+  it('REFUSES an unauthenticated read of a real screenshot at the composition root', async () => {
+    const rel = writeStepScreenshot('auto-7', 'run-42', 0, PNG);
+    const url = screenshotUrlFromPath(rel)!;
+    const res = await get(url);
+    expect(res.status).toBe(401);
+    // The bytes must not appear in the refusal body.
+    expect(await res.text()).not.toContain('PNG');
+  });
 
+  it('REFUSES an unauthenticated read with a garbage token', async () => {
+    const rel = writeStepScreenshot('auto-7', 'run-42', 0, PNG);
+    const res = await get(`${screenshotUrlFromPath(rel)!}?token=not-a-jwt`);
+    expect(res.status).toBe(401);
+  });
+
+  it('still 401s (not 404s) for a missing file, so existence is not an oracle', async () => {
     const missing = await get('/automation-screenshots/auto-7/run-42/step-99.png');
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(401);
   });
 });

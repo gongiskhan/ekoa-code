@@ -131,14 +131,14 @@ function RunStepDetail({ steps }: { steps: StepRecord[] }) {
           )}
           {step.screenshotUrl && (
             <a
-              href={api.resolveUrl(step.screenshotUrl)}
+              href={api.withPreviewToken(api.resolveUrl(step.screenshotUrl))}
               target="_blank"
               rel="noopener noreferrer"
               className="block w-full max-w-xs"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={api.resolveUrl(step.screenshotUrl)}
+                src={api.withPreviewToken(api.resolveUrl(step.screenshotUrl))}
                 alt={t.screenshotAlt((step.index ?? i) + 1)}
                 className="max-h-40 w-auto object-contain rounded border border-neutral-200 hover:border-neutral-400 transition-colors"
                 loading="lazy"

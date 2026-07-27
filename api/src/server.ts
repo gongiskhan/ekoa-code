@@ -89,6 +89,7 @@ import { appPdfRouter, getArtifactPdfDir, renderHtmlToPdf } from './apps/pdf.js'
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
+import { verifySseToken } from './auth/middleware.js';
 import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { artifactsRouter } from './routes/artifacts.js';
@@ -136,6 +137,8 @@ import {
   formatCatalogForPrompt,
   automationStepEventPayload,
   automationRunsRoot,
+  screenshotPlaneRouter,
+  sweepExpiredScreenshots,
   type RunEventEmitter,
 } from './automation/index.js';
 import {
@@ -931,14 +934,30 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   mkdirSync(getArtifactScreenshotDir(), { recursive: true });
   app.use('/artifact-screenshots', express.static(getArtifactScreenshotDir(), { fallthrough: false }));
   // Per-step automation screenshots (ch12): PNGs written per run at <dataDir>/automation-runs/
-  // <automationId>/<runId>/step-N.png, served publicly as capability URLs (the unguessable
-  // automationId/runId path IS the capability — the run UI renders them via <img>, which cannot
-  // carry an Authorization header; decisions.md). Same fallthrough/caching posture as the
-  // artifact-thumbnail mount above (express.static's ETag + Last-Modified revalidation keeps a
-  // step whose screenshot was overwritten by a same-index retry fresh). Dir pre-created so a fresh
-  // data dir serves clean 404s instead of an ENOENT from static().
+  // <automationId>/<runId>/step-N.png.
+  //
+  // SUPERSEDES the `express.static` capability-URL mount (Cofre R-3). These are screenshots of an
+  // AUTHENTICATED session on a client portal — for this product, processo numbers and client NIFs
+  // rendered as pixels — and they were served with no auth middleware, no tenant check and no
+  // expiry. The recorded rationale was that an <img> cannot carry an Authorization header; the
+  // answer is the SAME short-lived-query-token pattern the SSE stream already uses for exactly
+  // that constraint, not trading the control away. The URL SHAPE is unchanged, so every persisted
+  // screenshotUrl keeps resolving; the client appends `?token=<jwt>`.
   mkdirSync(automationRunsRoot(), { recursive: true });
-  app.use('/automation-screenshots', express.static(automationRunsRoot(), { fallthrough: false }));
+  app.use(
+    '/automation-screenshots',
+    screenshotPlaneRouter({
+      verifyQueryToken: (token) => {
+        const v = verifySseToken(token);
+        return v.ok
+          ? { ok: true as const, claims: { sub: v.claims.sub, orgId: v.claims.orgId, role: v.claims.role } }
+          : { ok: false as const, status: v.status, code: v.code };
+      },
+      onDenied: ({ runId, actorUserId, actorOrg }) => {
+        console.warn(`[automation] screenshot access denied run=${runId} actor=${actorUserId} org=${actorOrg}`);
+      },
+    }),
+  );
   // Brand-research logos (ch05 §5.6.4): the pipeline downloads + validates the owner's logo and
   // stores it under <dataDir>/brand-assets; served publicly read-only like the artifact
   // thumbnails above (the dashboard renders `/brand-assets/<file>` via <img>). Dir pre-created so
@@ -982,6 +1001,15 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   await bootContentLoader();
   await backfillKnowledgeIndex();
   await sweepOrphans(deps.now);
+  // Cofre R-3: per-step screenshots had NO retention — every reference in api/src was a write or a
+  // path builder, so stale PNGs of authenticated client-portal sessions accumulated forever in an
+  // unindexed tree. That is a GDPR erasure gap, so the sweeper lands with the auth change rather
+  // than as a follow-up. Best-effort by construction: a sweep failure must never fail boot.
+  void sweepExpiredScreenshots({ now: deps.now })
+    .then(({ removed, scanned }) => {
+      if (removed > 0) console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs`);
+    })
+    .catch(() => {});
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;
