@@ -35,4 +35,12 @@ export {
   type CofreDeps,
 } from './items.js';
 
+export {
+  captureSessionToCofre,
+  originsFromStorageState,
+  sessionIsExpired,
+  DEFAULT_SESSION_TTL_MS,
+  type CaptureSessionInput,
+} from './sessions.js';
+
 export type { CofreItemDoc, CofreGrantDoc } from './types.js';
