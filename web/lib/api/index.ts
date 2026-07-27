@@ -50,6 +50,7 @@ import {
   servedAppEndpoints,
   ekoaLocalEndpoints,
   gatewayKeysEndpoints,
+  cofreEndpoints,
   notificationsEndpoints,
 } from '@ekoa/shared';
 import { request, type RequestArgs, type RequestOptions } from './core';
@@ -135,6 +136,7 @@ const domainMaps = {
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,
   gatewayKeys: gatewayKeysEndpoints,
+  cofre: cofreEndpoints,
   notifications: notificationsEndpoints,
 } satisfies Record<string, DomainDescriptorMap>;
 
