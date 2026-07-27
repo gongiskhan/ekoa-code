@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Actor, CofreItem, CofreItemType, GrantDuration } from '@ekoa/shared';
 import { assertGrantAllowedForItemType } from '@ekoa/shared';
-import { encrypt } from '../data/crypto.js';
+import { envelopeEncrypt } from '../data/crypto.js';
 import { cofreItems, cofreGrants } from './store.js';
 import { isGrantActive } from './service.js';
 import type { CofreItemDoc, CofreGrantDoc } from './types.js';
@@ -70,7 +70,7 @@ export async function mintCofreItem(
     type: input.type,
     label: input.label,
     boundOrigins,
-    valueCiphertext: encrypt(input.value),
+    valueCiphertext: await envelopeEncrypt(input.value, actor.orgId),
     createdAt: now,
     updatedAt: now,
     ...(input.identityPointer ? { identityPointer: input.identityPointer } : {}),

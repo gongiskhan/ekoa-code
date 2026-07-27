@@ -19,7 +19,7 @@
  * copy and must never be marketed otherwise.
  */
 import type { Actor, CofreItemType } from '@ekoa/shared';
-import { decrypt } from '../data/crypto.js';
+import { envelopeDecrypt } from '../data/crypto.js';
 import { assertOriginAllowed, CredentialOriginError } from '../security/origin-binding.js';
 import { cofreItems, cofreGrants } from './store.js';
 import type { CofreItemDoc, CofreGrantDoc } from './types.js';
@@ -120,8 +120,10 @@ export async function unwrap(
     });
   }
 
-  // 4. Only now does anything decrypt. WS-K replaces this line with the KMS envelope unwrap.
-  const value = decrypt(item.valueCiphertext);
+  // 4. Only now does anything decrypt — through the versioned envelope (K-1), keyed per ORG.
+  //    v1 rows decrypt unchanged, so this seam did not need a migration flag day; installing a
+  //    Cloud KMS wrapper at the composition root is the remaining step and touches nothing here.
+  const value = await envelopeDecrypt(item.valueCiphertext, item.orgId);
   return { itemId: item._id, type: item.type, value };
 }
 
