@@ -21,8 +21,13 @@ import { loadConfig, __resetConfigForTests } from '../../src/config.js';
  * for all of them.
  */
 beforeAll(() => {
-  process.env.ENCRYPTION_KEY = 'k';
-  process.env.JWT_SECRET = 's';
+  // `??=`, never `=`. Vitest workers share process.env across test FILES, so an unconditional
+  // assignment here changes the signing secret out from under any file that mints a token and
+  // verifies it later — observed as an intermittent failure in tests/apps/verify-runner.test.ts
+  // ("expires and rejects tampering") which mints and verifies a preview token around a config
+  // reset. This suite does not care WHICH secret is in play, only that it is stable.
+  process.env.ENCRYPTION_KEY ??= 'k';
+  process.env.JWT_SECRET ??= 's';
   __resetConfigForTests();
   loadConfig();
 });

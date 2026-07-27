@@ -62,6 +62,16 @@ export class StreamSession {
   private inputBatchCount = 0;
   private openedAt = Date.now();
   private inputAllowed = true;
+  /**
+   * CREDENTIAL WINDOW (Cofre F-2). While true the screencast is STOPPED and input is refused.
+   *
+   * `Page.startScreencast` has no mask option — Playwright's `mask` is a `screenshot()` feature —
+   * so the frame-level control available to the automation capture path does not exist here.
+   * Suppression is therefore the only correct answer for the media channel: during a typist fill
+   * the stream is torn down rather than masked, and no frame carrying the credential is ever
+   * encoded, let alone sent.
+   */
+  private credentialWindow = false;
   private pollTimer: NodeJS.Timeout | null = null;
   private lastFrameAt = 0;
   // Input backpressure (Codex G8): dispatch is serialized through one CDP chain and the number of
@@ -214,8 +224,42 @@ export class StreamSession {
     return this.framesInFlight;
   }
 
+  /**
+   * Suppress the stream for the duration of a credential fill, then resume. Returns a disposer
+   * rather than taking a callback so the typist can bracket exactly the fill window.
+   *
+   * The suppression is applied EAGERLY (stop first, await it) so the caller can rely on
+   * "resolved => no more frames". Resume is best-effort: a failure to restart the stream leaves
+   * the user with a dead canvas, which is an availability problem, not a disclosure one.
+   */
+  async beginCredentialWindow(): Promise<() => Promise<void>> {
+    if (this.closed) return async () => {};
+    this.credentialWindow = true;
+    this.inputAllowed = false;
+    if (this.cdp) await stopScreencast(this.cdp);
+    this.onLog('streaming.credential_window.begin', { traceId: this.traceId });
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      this.credentialWindow = false;
+      if (this.closed) return;
+      this.inputAllowed = true;
+      await this.startScreencastBest();
+      this.onLog('streaming.credential_window.end', { traceId: this.traceId });
+    };
+  }
+
+  /** True while a credential fill is in progress — the typist refuses to fill unless it can
+   *  confirm this is set on every attached session. */
+  inCredentialWindow(): boolean {
+    return this.credentialWindow;
+  }
+
   private async startScreencastBest(): Promise<void> {
     if (!this.cdp) return;
+    // Never resume into a credential window (a race between resume and a second fill).
+    if (this.credentialWindow) return;
     const everyNthFrame = Math.max(1, Math.round(60 / Math.max(1, FPS)));
     try {
       await startScreencast(this.cdp, {
@@ -232,6 +276,12 @@ export class StreamSession {
 
   private async handleFrame(frame: ScreencastFrame): Promise<void> {
     if (this.closed || !this.cdp) return;
+    // Belt and braces: a frame already in flight when the credential window opened must not be
+    // forwarded. `stopScreencast` is asynchronous, so this closes the gap between the two.
+    if (this.credentialWindow) {
+      await ackFrame(this.cdp, frame.sessionId).catch(() => {});
+      return;
+    }
     // CDP requires every frame to be ACKed even if dropped client-side,
     // otherwise screencast stalls.
     const ackPromise = ackFrame(this.cdp, frame.sessionId);
@@ -291,6 +341,11 @@ export class StreamSession {
     }
 
     if (payload.type === 'mouse' || payload.type === 'key') {
+      if (this.credentialWindow) {
+        // A viewer must not be able to type into a page while the typist holds a credential.
+        this.onLog('streaming.auth_failure', { reason: 'credential-window', traceId: this.traceId });
+        return;
+      }
       if (!this.inputAllowed) {
         this.onLog('streaming.auth_failure', { reason: 'state-not-paused', traceId: this.traceId });
         return;

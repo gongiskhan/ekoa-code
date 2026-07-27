@@ -42,3 +42,14 @@ sweep ran on every page load; a fast navigation re-listed a session whose fire-a
 delete from the previous mount was still in flight, and the re-delete 404d in the console.
 Deterministic repro: chat-thinking then coherence-locale. Fixed in orchestration.ts by
 tracking swept session ids per tab (sessionStorage) so an id is only ever deleted once.
+
+## RESOLVED (2026-07-27): `verify-runner.test.ts` "expires and rejects tampering" — NOT a flake, a cross-file env clobber
+Root-caused the same day rather than logged as environmental. `tests/security/canvas-token-class.test.ts`
+(added by the Cofre F-1 work) set `process.env.JWT_SECRET = 's'` UNCONDITIONALLY in `beforeAll`.
+Vitest workers share `process.env` across test FILES, so that assignment could change the signing
+secret out from under `verify-runner.test.ts` between its `mintPreviewToken` and
+`verifyPreviewToken` — which straddle a `__resetConfigForTests()` — making a valid token verify as
+tampered. Intermittent because it depended on file scheduling. Fixed by using `??=` there: the
+suite does not care WHICH secret is in play, only that it is stable. NOTE the wider hazard: several
+older contract tests also assign these vars unconditionally, so the same class of interference is
+latent elsewhere. Prefer `??=` in any new test that touches `JWT_SECRET` / `ENCRYPTION_KEY`.

@@ -235,3 +235,5 @@ export {
   extractTraceId as _extractTraceIdForTest,
   parseToken as _parseTokenForTest,
 };
+
+export { beginCredentialWindowForTrace, traceIsSuppressed } from './registry.js';

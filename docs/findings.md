@@ -48,6 +48,40 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`d8-oauth-custody-plane`** (AUDIT COMPLETE 2026-07-27 — the audit no discovery-gate pass
+  covered). The live OAuth credential-custody plane holds refresh tokens TODAY and had received no
+  verdict from any of D1-D7. Audited: `integrations/platform-oauth.ts`, `m365-proxy.ts`,
+  `prefetch.ts`, `app-sso-sessions.ts`, `pipedream.ts`.
+
+  **CONFORMS, and should be reused rather than replaced.** `platform-oauth.ts` encrypts the token
+  bundle at rest through the one crypto module, refreshes on expiry and re-persists, and — the part
+  worth calling out — uses a SINGLEFLIGHT per row so a rotating `refresh_token` can never be
+  double-spent by a lazy refresh racing a sweep. That is a genuinely hard property and it is already
+  correct. External I/O defaults to the SSRF-guarded fetcher. `connect` logs `{provider}` only.
+  `m365-proxy.ts` is the CLOSEST SHIPPED ANALOGUE OF THE I9 PRIMITIVE: it forwards the Graph path
+  verbatim while injecting a freshly-refreshed Bearer server-side, so the served artifact never sees
+  the token — exactly the "caller names a reference, a fixed primitive executes" shape the Cofre
+  needs, and WS-J should model on it. `pipedream.ts` keeps project keys in one org-scoped encrypted
+  row, decrypted just-in-time and never logged/thrown/returned, behind a master toggle and a billing
+  gate. `app-sso-sessions.ts` enforces artifact isolation server-side (`session.appId === canonical
+  id`, never by cookie path) and its pending-auth consume is atomic (`findOneAndDelete`), so the
+  no-replay property is LOCAL rather than relying on the IdP.
+
+  **DIVERGES — the gaps that matter for the Cofre.** (1) The whole plane is a PARALLEL custody
+  path: it never routes through `cofre/unwrap()`, so none of it has a grant, a lock, per-item origin
+  binding, or an "item used" Registo event. A user cannot see or revoke these credentials from the
+  Cofre, and "Bloquear tudo" does not touch them. (2) It uses the UNSCOPED `encrypt()`, so ciphertext
+  is not org-bound — the same finding already recorded against integration credentials, under the
+  same single global `ENCRYPTION_KEY`. (3) `prefetch.ts` injects OAuth-fetched email/calendar/file
+  CONTENT into the chat SYSTEM PROMPT (`agents/context.ts:170`), cached per org for 60s. That is
+  model-bound text and therefore IS covered by the anonymisation chokepoint (`client.ts:967-968`
+  anonymises `systemPrompt` as well as `prompt`) — so I1 holds, with the honest residual that the
+  coverage is only as good as the deny-list and the PT recognizers. Worth stating explicitly because
+  the gate never verdicted it and a reader could reasonably have assumed otherwise.
+
+  **CONSEQUENCE FOR B-4.** The migration should bring these rows under `unwrap()` — gaining grants,
+  lock-now/lock-all and the Registo events — WITHOUT rewriting the refresh machinery, whose
+  singleflight is the part that is hard to get right. `oauth_token` is already a Cofre item type.
 - **`canvas-token-is-a-platform-token`** (FIXED 2026-07-27, HIGH, authentication — Cofre F-1, the
   `api/src/streaming/` security pass). The canvas (screencast) token is signed with the SAME secret
   as platform session tokens and carried NO class marker: `sub` + `jti`, no `aud`. `auth/jwt.ts`'s
