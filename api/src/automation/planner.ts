@@ -638,8 +638,11 @@ export function crossValidatePlan(
     if (!(argv[0] === 'bash' || argv[0] === 'sh' || argv[0] === 'zsh') || argv[1] !== '-c') {
       for (let j = 1; j < argv.length; j++) {
         if (/[|<>;&]/.test(argv[j]!)) {
+          // H-6, same class: an argv element can carry a credential passed as a literal, and this
+          // message reaches the log, the retry prompt and the client. The POSITION is what the
+          // model needs to fix it; the content is not.
           violations.push(
-            `Step ${i + 1} (id="${step.id}") argv[${j}]="${argv[j]}" contains shell metacharacters (|<>;&). These are NOT interpreted by spawn(shell:false). Either remove the shell syntax, or wrap the whole script: argv=["bash","-c","<your script>"].`,
+            `Step ${i + 1} (id="${step.id}") argv[${j}] contains shell metacharacters (|<>;&). These are NOT interpreted by spawn(shell:false). Either remove the shell syntax, or wrap the whole script: argv=["bash","-c","<your script>"].`,
           );
           break;
         }
@@ -654,12 +657,16 @@ export function crossValidatePlan(
     const headers = step.apiRequest?.headers ?? {};
     for (const [k, v] of Object.entries(headers)) {
       const keyLower = k.toLowerCase();
-      const valuePreview = (v as string).slice(0, 50);
       const isAuthShaped = keyLower === 'authorization' || keyLower === 'x-api-key' || keyLower === 'x-auth-token';
       // Allow {{integration.<k>.<f>}} interpolation; reject literal Bearer/token values.
       if (isAuthShaped && !(v as string).includes('{{integration.')) {
+        // COFRE H-6: emit a CATEGORY, never the content. This message travels three ways — the
+        // process log, the RETRY PROMPT sent back to the model, and the `plan_failed` wire plan
+        // rendered to the user — and the thing being reported is, by definition, a literal
+        // credential the model just wrote. Echoing 50 characters of it copied the secret into all
+        // three. The header NAME is the actionable part; the value never was.
         violations.push(
-          `Step ${i + 1} (id="${step.id}") sets an auth-shaped header "${k}"="${valuePreview}…" directly. Auth MUST come from an integration: set apiRequest.authIntegrationKey="<key>" and reference credentials as "{{integration.<key>.<field>}}". Never put raw tokens in headers.`,
+          `Step ${i + 1} (id="${step.id}") sets an auth-shaped header "${k}" to a literal value. Auth MUST come from an integration: set apiRequest.authIntegrationKey="<key>" and reference credentials as "{{integration.<key>.<field>}}". Never put raw tokens in headers.`,
         );
       }
     }

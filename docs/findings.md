@@ -48,6 +48,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`planner-and-assertion-echo-page-content`** (FIXED 2026-07-27, MEDIUM, confidentiality — Cofre
+  discovery gate H-6 + the H-1 assertion leg). Two messages carried content into three destinations
+  each: the process log, the RETRY PROMPT sent back to the model, and the persisted record / SSE
+  stream rendered to the user. (H-6) `automation/planner.ts` built a 50-character preview of an
+  auth-shaped header's VALUE and interpolated it into a cross-validation violation — and the thing
+  being reported is by definition a literal credential the model just wrote, so the check designed
+  to stop raw tokens in headers was itself copying them into all three sinks. The sibling argv check
+  echoed the whole offending argv element. Both now report a CATEGORY: the header NAME, or the argv
+  POSITION. (H-1 assertion leg) `automation/executor.ts` `expect_text` echoed 200 raw characters of
+  `innerText` from a page of an AUTHENTICATED session, `expect_url` echoed the full URL including
+  the query string where magic-link tokens and SSO codes live, and `expect_title` echoed the title
+  whole. These are the ONE live in-process DOM-text path the gate identified as reaching the
+  rehearsal fixer's prompt. Now: the expectation plus a character COUNT, origin + pathname, and a
+  bounded title. Pinned in `api/tests/security/credential-boundaries.test.ts`.
+  NOT YET DONE, and explicitly still open: the rest of H-1 — `local_command` stdout/stderr,
+  `ekoa_action` results and `extractActionRunOutput` still need the run-scoped `SecretRegistry`
+  threaded through the engine, which is a structural change rather than a message fix.
 - **`anonymisation-skips-the-pixel-plane`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre
   discovery gate H-2). `api/src/llm/client.ts` anonymises `prompt` and `systemPrompt` at the egress
   chokepoint (`:967-968`) and forwards `images: opts.images` VERBATIM (`:981`) — and

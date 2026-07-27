@@ -131,3 +131,29 @@ describe('http-template redaction wrappers (now thin callers of security/redacti
     expect(maskValue(SECRET)).not.toContain('0001');
   });
 });
+
+describe('planner violations report a CATEGORY, never the offending content (H-6)', () => {
+  /**
+   * A cross-validation violation travels THREE ways: the process log, the RETRY PROMPT sent back
+   * to the model, and the `plan_failed` wire plan rendered to the user. The thing being reported
+   * is, by definition, a literal credential the model just wrote — so echoing a prefix of it
+   * copied the secret into all three.
+   */
+  it('an auth-shaped header violation names the header, not its value', async () => {
+    const src = await import('node:fs').then((fs) =>
+      fs.readFileSync(new URL('../../src/automation/planner.ts', import.meta.url), 'utf8'),
+    );
+    // The retired form built a 50-char preview of the header VALUE and interpolated it.
+    expect(src).not.toContain('valuePreview');
+    expect(src).not.toMatch(/sets an auth-shaped header "\$\{k\}"="/);
+    expect(src).toMatch(/sets an auth-shaped header "\$\{k\}" to a literal value/);
+  });
+
+  it('an argv violation names the POSITION, not the element', async () => {
+    const src = await import('node:fs').then((fs) =>
+      fs.readFileSync(new URL('../../src/automation/planner.ts', import.meta.url), 'utf8'),
+    );
+    expect(src).not.toMatch(/argv\[\$\{j\}\]="\$\{argv\[j\]\}"/);
+    expect(src).toMatch(/argv\[\$\{j\}\] contains shell metacharacters/);
+  });
+});
