@@ -400,7 +400,8 @@ function normaliseStep(value: unknown, index: number): Step {
         cwd: typeof ct.cwd === 'string' ? ct.cwd : undefined,
         timeoutMs: typeof ct.timeoutMs === 'number' ? ct.timeoutMs : undefined,
         stdin: typeof ct.stdin === 'string' ? ct.stdin : undefined,
-        envWhitelist: Array.isArray(ct.envWhitelist) ? (ct.envWhitelist as string[]).filter((v) => typeof v === 'string') : undefined,
+        // NO env passthrough (Cofre J-4 / I9). The planner is a MODEL, and the field it used to
+        // populate here resolved names against the Cortex server's own process.env.
       };
     }
   }

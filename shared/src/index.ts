@@ -70,6 +70,10 @@ export * from './portal.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';
+// Cofre vocabulary (WS-A). Schemas + the I7/I8 encodings only — NO descriptor-map entry yet, because
+// the routes land in WS-B/WS-D and the mount-coverage gate would (correctly) fail on a descriptor
+// with no mounted route.
+export * from './cofre.js';
 export * from './notifications.js';
 // Voice WS message contract (mega-run C1) - a WS carve-out like streaming/, so it has
 // schemas + path constants here but NO descriptor-map entry (not a REST endpoint).

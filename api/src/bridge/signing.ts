@@ -15,18 +15,28 @@ import type { DelegatedTask } from '@ekoa/shared';
 // The canonical binding lives in the FROZEN shared contract so the Cortex signer and the daemon
 // verifier compute byte-identical bytes without importing each other (§18.1 — single wire source).
 import { canonicalTaskBinding } from '@ekoa/shared';
-import { loadConfig } from '../config.js';
 
 export { canonicalTaskBinding };
 
-/** HMAC-SHA256 of the canonical binding, hex. */
-export function signDelegatedTask(task: Omit<DelegatedTask, 'sig'> & { sig?: string }): string {
-  return createHmac('sha256', loadConfig().jwtSecret).update(canonicalTaskBinding(task)).digest('hex');
+/**
+ * HMAC-SHA256 of the canonical binding, hex.
+ *
+ * Refuses an EMPTY secret loudly. `createHmac('sha256','')` succeeds, so an empty secret would
+ * silently produce a publicly-computable signature that verifies any forged task — failing loud at
+ * the SIGN site keeps a misconfiguration from becoming an auth bypass. (Carried verbatim from the
+ * daemon's vendored signer, which hardened this first.)
+ */
+export function signDelegatedTask(task: Omit<DelegatedTask, 'sig'> & { sig?: string }, secret: string): string {
+  if (secret.length === 0) {
+    throw new Error('signDelegatedTask: refusing an empty signing secret (misconfiguration)');
+  }
+  return createHmac('sha256', secret).update(canonicalTaskBinding(task)).digest('hex');
 }
 
 /** Constant-time verification of a task's `sig`. Returns false on any length/format/value drift. */
-export function verifyDelegatedTaskSig(task: DelegatedTask): boolean {
-  const expected = signDelegatedTask(task);
+export function verifyDelegatedTaskSig(task: DelegatedTask, secret: string): boolean {
+  if (secret.length === 0) return false;
+  const expected = signDelegatedTask(task, secret);
   let a: Buffer;
   let b: Buffer;
   try {

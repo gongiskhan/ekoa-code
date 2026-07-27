@@ -15,7 +15,10 @@
  */
 import type { WebSocket } from 'ws';
 import type { BridgeFrame } from '@ekoa/shared';
+import { randomBytes } from 'node:crypto';
 import { bridgePairings } from '../data/stores.js';
+import { encrypt, decrypt } from '../data/crypto.js';
+import { logActivity } from '../data/activity.js';
 import type { Doc } from '../data/store.js';
 
 /** The durable pairing row (§18.3.4). */
@@ -25,6 +28,20 @@ export interface PairingRow extends Doc {
   ownerUserId: string;
   createdAt: string;
   revokedAt: string | null;
+  /**
+   * PER-PAIRING task-signing secret, encrypted at rest (Cofre R-8).
+   *
+   * Delegated tasks used to be HMAC'd with `loadConfig().jwtSecret` — the platform-wide secret that
+   * signs every user's session token. Making delegation WORK therefore required copying that secret
+   * onto every paired laptop, where the daemon stores it in a plaintext `config.json`. One secret
+   * signing platform sessions, minting bridge tokens AND keying task HMACs means one compromised
+   * laptop compromises every session in the deployment. Minted here, per pairing, so the blast
+   * radius of a stolen daemon config is that one machine.
+   *
+   * Optional on the type because rows written before R-8 have none; `getPairingSigningSecret`
+   * returns null for those and the signer refuses rather than falling back to the JWT secret.
+   */
+  signingSecretCiphertext?: string;
 }
 
 /** A live daemon connection: the WS plus the identity it was admitted under. `registeredAt`
@@ -54,11 +71,16 @@ export async function registerPairing(
 ): Promise<PairingRow> {
   const nowIso = new Date(deps?.now?.() ?? Date.now()).toISOString();
   const existing = (await bridgePairings.get(input.pairingId)) as PairingRow | null;
+  // R-8: mint once per pairing and carry it forward. Rotating on redial would silently break a
+  // daemon that already holds the old secret (it would deny every task, fail-closed but opaque).
+  const signingSecretCiphertext =
+    existing?.signingSecretCiphertext ?? encrypt(randomBytes(32).toString('hex'));
   const row: PairingRow = {
     _id: input.pairingId,
     pairingId: input.pairingId,
     org: input.org,
     ownerUserId: input.ownerUserId,
+    signingSecretCiphertext,
     createdAt: existing?.createdAt ?? nowIso,
     // Preserve a revocation tombstone (§18.3.5, S4): a revoked pairingId stays revoked forever - a
     // reconnect must NEVER resurrect it (that would defeat the kill switch). Re-pairing is an
@@ -77,6 +99,21 @@ export async function getPairingById(pairingId: string, expectedOrg?: string): P
   if (!row) return null;
   if (expectedOrg !== undefined && row.org !== expectedOrg) return null;
   return row;
+}
+
+/**
+ * The pairing's decrypted task-signing secret, or null when the pairing is unknown, REVOKED, or
+ * predates R-8. Null makes the signer refuse — never a fallback to the platform JWT secret, which
+ * is the monoculture this replaces.
+ */
+export async function getPairingSigningSecret(pairingId: string, expectedOrg?: string): Promise<string | null> {
+  const row = await getPairingById(pairingId, expectedOrg);
+  if (!row || row.revokedAt !== null || !row.signingSecretCiphertext) return null;
+  try {
+    return decrypt(row.signingSecretCiphertext);
+  } catch {
+    return null;
+  }
 }
 
 /** Is the pairing durably revoked? A missing row counts as "not a live pairing" for the caller. */
@@ -213,6 +250,33 @@ export async function revokePairing(pairingId: string, deps?: { now?: () => numb
     }
   }
   return updated !== null || conn !== undefined;
+}
+
+/**
+ * Revoke + audit as one domain operation (Cofre R-9). The Registo write lives HERE, not in the
+ * route, because `routes/` may not import `data/` directly (ch02 §2.7 module direction) — the route
+ * calls a domain module and the domain module owns the side effects.
+ *
+ * The metadata is ids and an outcome flag ONLY: a Registo row never carries credential material,
+ * and this pairing's signing secret is exactly the sort of thing that must not leak into an audit
+ * trail that is rendered in the dashboard.
+ */
+export async function revokePairingAudited(
+  pairingId: string,
+  actor: { userId: string; orgId: string; username?: string },
+  ownerUserId: string,
+  deps?: { now?: () => number },
+): Promise<boolean> {
+  const revoked = await revokePairing(pairingId, deps);
+  await logActivity(
+    // `username` is required by ActivityActor; a token without one is still auditable by id.
+    { userId: actor.userId, orgId: actor.orgId, username: actor.username ?? actor.userId },
+    'security',
+    'bridge_pairing_revoked',
+    { now: deps?.now ?? (() => Date.now()) },
+    { pairingId, ownerUserId, byOwner: actor.userId === ownerUserId },
+  );
+  return revoked;
 }
 
 /** Test helper: drop every live connection (does not touch durable rows). */

@@ -17,7 +17,12 @@
 import { randomUUID } from 'node:crypto';
 import type { AllowanceRef, BridgeFrame, DelegatedTask, DelegationResult } from '@ekoa/shared';
 import { getActivation as defaultGetActivation } from '../data/activation.js';
-import { getConnectionByOwner as defaultGetConnectionByOwner, sendToPairing as defaultSend, type LiveConnection } from './registry.js';
+import {
+  getConnectionByOwner as defaultGetConnectionByOwner,
+  getPairingSigningSecret as defaultGetPairingSigningSecret,
+  sendToPairing as defaultSend,
+  type LiveConnection,
+} from './registry.js';
 import { signDelegatedTask } from './signing.js';
 
 /** How long a minted task stays valid; the daemon rejects a task past its `expiry` (S2). */
@@ -30,6 +35,13 @@ const DELEGATION_AWAIT_TIMEOUT_MS = 300_000;
 /** The delegating principal: the pairing owner + the hosted conversation id (the §18.4.3 vault key). */
 export interface DelegationActor {
   userId: string;
+  /**
+   * The caller's org (Cofre E-1). Previously absent, so `getConn(actor.userId)` ADOPTED whatever
+   * org the resolved connection carried instead of checking it. Org binding was structural on the
+   * connect/provider path and adopted-not-checked here — the one dispatch path that mints a signed
+   * task. Now passed as `expectedOrg`, so a connection from another org resolves to undefined.
+   */
+  orgId: string;
   sessionId: string;
 }
 
@@ -46,8 +58,9 @@ export interface DelegationDeps {
   genId?: () => string;
   genNonce?: () => string;
   getActivation?: (userId: string) => { active: boolean; billingLocked: boolean } | undefined;
-  getConnectionByOwner?: (ownerUserId: string) => LiveConnection | undefined;
+  getConnectionByOwner?: (ownerUserId: string, expectedOrg?: string) => LiveConnection | undefined;
   send?: (pairingId: string, frame: BridgeFrame) => boolean;
+  getPairingSigningSecret?: (pairingId: string, expectedOrg?: string) => Promise<string | null>;
   timeoutMs?: number;
 }
 
@@ -107,11 +120,13 @@ export async function delegateToLocal(
   const getActivation = deps.getActivation ?? defaultGetActivation;
   const getConn = deps.getConnectionByOwner ?? defaultGetConnectionByOwner;
   const send = deps.send ?? defaultSend;
+  const getSigningSecret = deps.getPairingSigningSecret ?? defaultGetPairingSigningSecret;
   const timeoutMs = deps.timeoutMs ?? DELEGATION_AWAIT_TIMEOUT_MS;
 
   // Offline is a first-class state — no live pairing means unreachable, never a silent upload
   // (§18.2.3, invariant I1, S5).
-  const conn = getConn(actor.userId);
+  // E-1: the org is CHECKED, not adopted. A pairing belonging to another org reads as no pairing.
+  const conn = getConn(actor.userId, actor.orgId);
   if (!conn) return terminalResult('unreachable');
 
   // Activation admission at delegation dispatch (§18.3.2): a deactivated / billing-locked owner's
@@ -134,7 +149,13 @@ export async function delegateToLocal(
     expiry: new Date(now() + DELEGATION_TASK_TTL_MS).toISOString(),
     nonce: genNonce(),
   };
-  const task: DelegatedTask = { ...base, sig: signDelegatedTask(base) };
+  // R-8: sign with the PAIRING's own secret. A pairing with no secret (revoked, or registered
+  // before R-8) is refused outright — never a fallback to the platform JWT secret, which is the
+  // key monoculture this replaces. `denied` rather than `unreachable`: the machine is reachable,
+  // the binding is not mintable.
+  const signingSecret = await getSigningSecret(conn.pairingId, conn.org);
+  if (!signingSecret) return terminalResult('denied');
+  const task: DelegatedTask = { ...base, sig: signDelegatedTask(base, signingSecret) };
 
   const result = new Promise<DelegationResult>((resolve) => {
     const timer = setTimeout(() => settle(task.taskId, terminalResult('unreachable')), timeoutMs);

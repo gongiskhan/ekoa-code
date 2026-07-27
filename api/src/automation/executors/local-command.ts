@@ -143,7 +143,10 @@ export async function executeLocalCommandStep(
         input: {
           argv: interpolatedArgv,
           cwd: interpolatedCwd,
-          env: buildEnv(spec.envWhitelist),
+          // Cofre J-4 (I9): a secret reaches a child process ONLY through
+          // cofre/process-injection.ts, from a declared name -> cofre: reference mapping resolved
+          // through unwrap(). Nothing here reads the Cortex server's own environment.
+          env: undefined,
           stdin: interpolatedStdin,
           timeoutMs,
         },
@@ -250,12 +253,3 @@ function makeResolved(argv: string[], cwd: string | undefined, shape: string, ti
   return { kind: 'local_command', argv, cwd, shape, timeoutMs, stdin };
 }
 
-function buildEnv(whitelist?: string[]): Record<string, string> | undefined {
-  if (!whitelist || whitelist.length === 0) return undefined;
-  const env: Record<string, string> = {};
-  for (const name of whitelist) {
-    const value = process.env[name];
-    if (typeof value === 'string') env[name] = value;
-  }
-  return env;
-}

@@ -48,6 +48,67 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`envwhitelist-reads-cortex-env`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
+  gate D4/J-4). `LocalCommandSpec.envWhitelist` was a list of environment variable NAMES accepted
+  from the planner (a model) which `buildEnv` resolved against the CORTEX API SERVER's OWN
+  `process.env` — provider keys, `ENCRYPTION_KEY`, `JWT_SECRET`, database credentials — and shipped
+  the resolved values to a user's machine. A model-authored `envWhitelist: ["JWT_SECRET"]` was a
+  complete platform compromise expressed as an ordinary step field. It never had a receiver
+  (`ekoa-bridge`'s bash tool hard-scrubs the child to seven names) and `local_command` is unreachable
+  end-to-end, so it was latent rather than live — but it would have gone live the moment
+  `setDaemonConnectionResolver` was wired. DELETED rather than hardened, in the same change that
+  adds the real primitive (`api/src/cofre/process-injection.ts`), because deletion cost nothing then
+  and becomes impossible later. Pinned by `api/tests/security/i9-env-injection.test.ts` (29 cases),
+  which includes a STATIC GUARD asserting the declaration and both use sites are gone.
+- **`cofre-absent`** (IN PROGRESS 2026-07-27, the Cofre build itself — Cofre WS-A/WS-B/WS-C). The
+  discovery gate found NO Cofre: no credential item model, no grants, no policy-lock seam, no origin
+  binding as a property of a credential, no relay typing, no session store. LANDED SO FAR: the
+  `shared/src/cofre.ts` vocabulary with I7 and I8 encoded as SCHEMA (a `certificate_identity` cannot
+  hold a TTL grant; a signature relay cannot be constructed without a document name + hash), and
+  `api/src/cofre/` with the single `unwrap()` seam — fail-closed on tenancy, an active grant, origin
+  binding and existence, all checked before anything decrypts. Owner-scoped, ciphertext-only at rest,
+  lock-now / lock-all, and an item view with no value field. Pinned by
+  `api/tests/security/cofre-policy-lock.test.ts` (28) and `shared/src/cofre.test.ts` (28).
+  STILL OPEN, in plan order: the routes and the product surfaces (WS-D, which must EXTEND the shipped
+  `/settings/privacy` grants+ledger area rather than create a parallel one), the typist (WS-F, blocked
+  on the `api/src/streaming/` security pass F-1), session-first storage (WS-G), the redaction pipeline's
+  remaining legs (WS-H, incl. the image-plane bypass at `llm/client.ts:981` that a TEST currently pins),
+  egress selection (WS-I), bridge protocol v2 + the I9 primitive (WS-J), and the KMS envelope (WS-K).
+  A D8 audit of the live OAuth credential-custody plane is owed BEFORE the item model is considered
+  fixed — `platform-oauth.ts`, `m365-proxy.ts`, `prefetch.ts`, `app-sso-sessions.ts` and
+  `pipedream.ts` hold refresh tokens today and no audit issued a verdict on any of them.
+- **`bridge-jwt-key-monoculture`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery gate
+  R-8). `api/src/bridge/signing.ts` keyed the DelegatedTask HMAC with `loadConfig().jwtSecret` — the
+  platform-wide secret that signs every user's session token — while `ekoa-bridge` stores
+  `signingSecret` in a plaintext `config.json` (0600) on every paired laptop. Making delegation WORK
+  therefore required placing the key behind every session in the deployment on every user's machine,
+  so one compromised laptop compromised every session. Worse, NOTHING on the daemon side ever WROTE
+  `signingSecret` (`pair.ts:72` only carried an existing value forward; `serve.ts:84` fell back to
+  `''`), so in practice the delegated path was unusable without an operator hand-copying
+  `JWT_SECRET` — the daemon's verifier refuses an empty key, so it denied every task: fail-closed,
+  but for an invisible reason. FIXED by minting a PER-PAIRING secret in `registerPairing`, encrypted
+  at rest, preserved across a redial (rotating would silently break a daemon holding the old one)
+  and delivered to the owner on the already-authenticated `/bridge/token` exchange. `signDelegatedTask`
+  / `verifyDelegatedTaskSig` take the secret as a parameter and refuse an empty one loudly — which
+  also CONVERGES this signer with `ekoa-bridge/src/wire/signing.ts`, whose vendored copy parameterised
+  the secret and added that guard back in 2026-07-10. A pairing with no secret is REFUSED (`denied`),
+  never a fallback. Pinned by `api/tests/security/bridge-key-split.test.ts` (11 cases).
+- **`bridge-revoke-unreachable`** (FIXED 2026-07-27, MEDIUM, availability of the kill switch — Cofre
+  discovery gate R-9). `revokePairing` (`api/src/bridge/registry.ts:203`) implements terminal
+  revocation with a tombstone that survives a redial and closes the live socket — and had NO
+  production caller. It was reachable only from `api/tests/*`; the daemon's own `unpair` is
+  local-only. A compromised machine could not be cut off except by deactivating the whole account.
+  FIXED by mounting `DELETE /api/v1/bridge/pairings/:pairingId` (owner or org-admin — a compromised
+  machine is exactly when the org's admin may need to act without the owner), answering 404 rather
+  than 403 outside the caller's scope so the route is not an existence oracle, and emitting a
+  metadata-only `security::bridge_pairing_revoked` Registo row.
+- **`bridge-delegation-org-adopted`** (FIXED 2026-07-27, MEDIUM, tenant isolation — Cofre discovery
+  gate E-1). `delegateToLocal` called `getConn(actor.userId)` with NO `expectedOrg`, and
+  `DelegationActor` had no `orgId` field, so the task's org was ADOPTED from whatever connection
+  resolved rather than checked. Org binding was structural on the connect and provider paths and
+  adopted-not-checked on the one dispatch path that mints a SIGNED task. FIXED by carrying `orgId`
+  on `DelegationActor` (bound from the run's actor, never a request body) and passing it as
+  `expectedOrg`, so a pairing in another org reads as no pairing.
 - **`bridge-excerpts-no-denylist`** (FIXED 2026-07-27 in `ekoa-bridge`, MEDIUM, confidentiality —
   Cofre discovery gate H-7). `ekoa-bridge/src/containment/resolver.ts` enforced only that the
   realpath stays inside a granted root. Containment answers "may the daemon touch this location";

@@ -10,7 +10,7 @@ import { setActivation, __resetActivationForTests } from '../../src/data/activat
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
 import { mintBridgeToken } from '../../src/bridge/token.js';
 import { attachBridgeServer, type BridgeServerHandle } from '../../src/bridge/server.js';
-import { registerPairing, revokePairing, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
+import { registerPairing, revokePairing, getPairingSigningSecret, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
 import { delegateToLocal, __resetPendingDelegationsForTests } from '../../src/bridge/delegation.js';
 import { FakeDaemonClient } from '../../test/fake-daemon/ws-client.js';
 import type { Grant } from '../../test/fake-daemon/daemon.js';
@@ -68,10 +68,13 @@ afterEach(async () => { rmSync(fixtureRoot, { recursive: true, force: true }); }
 async function dialDaemon(pairingId: string, ownerUserId: string): Promise<FakeDaemonClient> {
   setActivation(ownerUserId, { active: true, billingLocked: false });
   await registerPairing({ pairingId, org: 'orgA', ownerUserId });
+  // Cofre R-8: Cortex signs delegated tasks with the PAIRING's own secret, not the platform JWT
+  // secret, so the daemon verifies with the secret the registry minted for this pairing.
+  const signingSecret = (await getPairingSigningSecret(pairingId)) ?? '';
   const { token } = mintBridgeToken({ sub: ownerUserId }, pairingId);
   const grants: Grant[] = [{ grantRef: 'g1', root: grantRoot, session: 'sess-1' }];
   const client = new FakeDaemonClient({
-    pairingId, org: 'orgA', signingSecret: loadConfig().jwtSecret, grants,
+    pairingId, org: 'orgA', signingSecret, grants,
     wsBase: `ws://127.0.0.1:${port}`, bridgeToken: token,
     script: { read: { grantRef: 'g1', relPath: 'contrato.txt' }, answer: 'A secção 3.1 limita as indemnizações a 12 meses; parte nomeada: ACME Lda.', citations: [{ path: 'contrato.txt', range: '0-80' }] },
   });
@@ -85,8 +88,7 @@ describe('delegation round trip over the bridge (§18.8)', () => {
   it('delegateToLocal → daemon reads within the grant, ledgers it, returns DERIVED OUTPUT ONLY', async () => {
     const client = await dialDaemon('p1', 'u1');
     try {
-      const result = await delegateToLocal(
-        { userId: 'u1', sessionId: 'sess-1' },
+      const result = await delegateToLocal({ userId: 'u1', orgId: 'orgA', sessionId: 'sess-1' },
         { task: 'resume a secção 3.1', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u1' } } },
       );
       expect(result.status).toBe('ok');
@@ -110,14 +112,14 @@ describe('delegation round trip over the bridge (§18.8)', () => {
     const client = await dialDaemon('p2', 'u2');
     try {
       // First delegation works.
-      const ok = await delegateToLocal({ userId: 'u2', sessionId: 'sess-1' }, { task: 't', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u2' } } });
+      const ok = await delegateToLocal({ userId: 'u2', orgId: 'orgA', sessionId: 'sess-1' }, { task: 't', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u2' } } });
       expect(ok.status).toBe('ok');
       // Revoke the pairing — the live socket is disconnected immediately (§18.3.5).
       await revokePairing('p2');
       await new Promise((r) => setTimeout(r, 60));
       expect(client.isOpen()).toBe(false);
       // A subsequent delegation finds no live pairing → unreachable, NEVER a silent upload (S5).
-      const after = await delegateToLocal({ userId: 'u2', sessionId: 'sess-1' }, { task: 't2', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u2' } } });
+      const after = await delegateToLocal({ userId: 'u2', orgId: 'orgA', sessionId: 'sess-1' }, { task: 't2', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u2' } } });
       expect(after.status).toBe('unreachable');
     } finally {
       client.close();
@@ -125,7 +127,7 @@ describe('delegation round trip over the bridge (§18.8)', () => {
   });
 
   it('a delegation to an owner with NO paired daemon is unreachable (offline is honest, §18.2.3)', async () => {
-    const result = await delegateToLocal({ userId: 'nobody', sessionId: 'sess-1' }, { task: 't', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'nobody' } } });
+    const result = await delegateToLocal({ userId: 'nobody', orgId: 'orgA', sessionId: 'sess-1' }, { task: 't', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'nobody' } } });
     expect(result.status).toBe('unreachable');
   });
 });

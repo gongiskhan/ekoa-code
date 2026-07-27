@@ -45,6 +45,15 @@ export type AgentFaceCancelResponse = z.infer<typeof AgentFaceCancelResponse>;
 export const BridgeTokenResponse = z.object({
   token: z.string(),
   expiresIn: z.number(),
+  /**
+   * The pairing's PER-PAIRING task-signing secret (Cofre R-8). Present only for the OWNER of a
+   * live, non-revoked pairing. Delegated tasks were previously HMAC'd with the platform-wide JWT
+   * secret, so making delegation work required copying the key that signs every user's session
+   * onto every paired laptop; this is minted per pairing and delivered on the daemon's own
+   * authenticated pre-dial exchange. Optional so a revoked/unknown pairing simply omits it and the
+   * daemon fails closed rather than falling back to anything.
+   */
+  signingSecret: z.string().optional(),
 });
 export type BridgeTokenResponse = z.infer<typeof BridgeTokenResponse>;
 

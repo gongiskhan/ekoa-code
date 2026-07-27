@@ -131,7 +131,7 @@ export function delegateToolSpec(
       const grantRefs = Array.isArray(args.grantRefs) ? args.grantRefs.map((g) => String(g)) : [];
       const egressBytes = typeof args.egressBytes === 'number' ? args.egressBytes : DELEGATION_DEFAULT_EGRESS_BYTES;
       const result = await delegateToLocalTool(
-        { userId: actor.userId, sessionId },
+        { userId: actor.userId, orgId: actor.orgId, sessionId },
         { task, grantRefs, budget: { egressBytes, modelSpend: { userId: actor.userId } } },
       );
       onResult?.(result);

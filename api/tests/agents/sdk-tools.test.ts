@@ -84,8 +84,11 @@ describe('delegateToolSpec (§5.4.8 local-bridge delegation tool)', () => {
       grantRefs: ['g-1'],
       userId: 'attacker', // injected args must not re-address the delegation
       sessionId: 'other-session',
+      orgId: 'attacker-org', // Cofre E-1: nor re-address its TENANT
     });
-    expect(seen[0]!.actor).toEqual({ userId: 'u1', sessionId: 'sess-1' });
+    // E-1: orgId joins the bound identity, so the dispatch path can CHECK the org against the
+    // resolved pairing instead of adopting whatever org that connection happened to carry.
+    expect(seen[0]!.actor).toEqual({ userId: 'u1', orgId: 'org-A', sessionId: 'sess-1' });
     expect(seen[0]!.req.grantRefs).toEqual(['g-1']);
     expect(seen[0]!.req.budget).toEqual({ egressBytes: 262_144, modelSpend: { userId: 'u1' } });
     expect(text).toContain('resumo derivado');

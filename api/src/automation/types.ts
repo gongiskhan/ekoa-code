@@ -185,12 +185,22 @@ export interface LocalCommandSpec {
   timeoutMs?: number;
   /** Piped to the process's stdin then closed. */
   stdin?: string;
-  /**
-   * Environment variables to forward to the subprocess. Never leaks the
-   * full daemon/Cortex env. Each name must be a literal string here; we
-   * read the corresponding value from `process.env` at spawn time.
+  /*
+   * DELETED 2026-07-27 (Cofre J-4, invariant I9): `envWhitelist?: string[]`.
+   *
+   * It was a list of variable NAMES accepted from the planner — i.e. from a model — which
+   * `buildEnv` resolved against the CORTEX API SERVER's OWN `process.env`, holding the provider
+   * keys, ENCRYPTION_KEY, JWT_SECRET and the database credentials, and shipped the values to a
+   * user's machine. `envWhitelist: ["JWT_SECRET"]` was a complete platform compromise expressed as
+   * an ordinary step field. It was the exact INVERSE of the I9 primitive.
+   *
+   * Secrets now reach a non-browser step ONLY through `cofre/process-injection.ts`, which takes a
+   * name -> `cofre:` REFERENCE mapping and resolves each reference through the Cofre's `unwrap()`
+   * seam (so the grant, the tenancy and the lock all apply). Deleted rather than hardened because
+   * `local_command` is unreachable end-to-end today — `setDaemonConnectionResolver` stays on its
+   * honest default at the composition root — so deletion cost nothing then and becomes impossible
+   * once the path is wired.
    */
-  envWhitelist?: string[];
 }
 
 // ============================================================================
