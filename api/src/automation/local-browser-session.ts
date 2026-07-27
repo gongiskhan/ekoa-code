@@ -6,8 +6,9 @@
  * PlaywrightActions to the external ekoa-local daemon. When no daemon is dialed
  * in, the engine would otherwise halt every browser step in `awaiting_daemon`.
  * This session implements the SAME BrowserSession interface against a local
- * Playwright page (the persistent per-owner stealth context from
- * automation-browser.ts), running actions through the intact page-level runner
+ * Playwright page in a FRESH per-session context (see ensurePage — the composition
+ * root hands back `browser.newContext()`, so no cookie jar is shared across runs
+ * or owners), running actions through the intact page-level runner
  * `executor.ts` and capturing the post-action observation (screenshot +
  * fingerprint + a11y) exactly like the daemon's observation envelope — so cached
  * actions resolve identically whether they run here or on the daemon.
@@ -17,7 +18,7 @@
  */
 
 import { maskedScreenshot } from './screenshot-masking.js';
-import type { Page } from 'playwright';
+import type { Page, BrowserContext } from 'playwright';
 import type { BrowserSession } from './browser-session.js';
 import type { PlaywrightAction, PlaywrightAssertion, PageFingerprint } from './types.js';
 import { executePlaywrightAction, executePlaywrightAssertion } from './executor.js';
@@ -86,6 +87,8 @@ export class LocalBrowserSession implements BrowserSession {
   private readonly sessionState: unknown;
   private sessionInjectAttempted = false;
   private page: Page | null = null;
+  /** The run's browser context, retained ONLY so dispose() can close it (Cofre G-3). */
+  private context: BrowserContext | null = null;
   // Single-flight page creation so concurrent first-use can't open (and leak) two.
   private pagePromise: Promise<Page> | null = null;
   private lastScreenshotB64 = '';
@@ -99,15 +102,26 @@ export class LocalBrowserSession implements BrowserSession {
     this.sessionState = opts.sessionState;
   }
 
-  // One page PER SESSION (per run), opened in the owner's persistent context.
-  // Concurrent runs for the same owner each get their own page (Playwright
-  // contexts hold many pages) — they share cookies/consent but never the page,
-  // so their navigation/actions can't interleave. Closed in dispose().
+  /**
+   * One page PER SESSION (per run), in a context obtained from the injected provider.
+   *
+   * COFRE G-3 — WHAT THIS ACTUALLY DOES, corrected 2026-07-27. The comment here used to describe
+   * "the owner's PERSISTENT context", with concurrent runs for one owner sharing cookies. The
+   * composition root has never done that: it hands back `browser.newContext()`, ignoring the owner,
+   * so every session gets a FRESH, EMPTY, isolated context. That divergence is safe in the direction
+   * that matters — no cookie jar is reused across runs or across owners — but the docblock claimed a
+   * sharing model the code does not implement, and reading it instead of the composition root has
+   * already produced wrong audit conclusions. The behaviour is now described as built.
+   *
+   * The context is retained so `dispose()` can CLOSE it: it previously closed only the page, so
+   * every run leaked its context (and cookie jar) for the lifetime of the process.
+   */
   private async ensurePage(): Promise<Page> {
     if (this.page && !this.page.isClosed()) return this.page;
     if (!this.pagePromise) {
       this.pagePromise = (async () => {
         const ctx = await getAutomationBrowserContext(this.ownerUserId);
+        this.context = ctx;
         // Cookies must land BEFORE the page opens / the first navigation, so
         // the very first request already carries the captured session.
         await this.injectSessionState(ctx);
@@ -147,11 +161,20 @@ export class LocalBrowserSession implements BrowserSession {
     }
   }
 
+  /**
+   * Close the run's page AND its context (Cofre G-3). Closing only the page left the context — and
+   * with it the whole cookie jar of an authenticated session — alive for the process lifetime, on
+   * every run. Both closes are best-effort: teardown must never fail a completed run.
+   */
   async dispose(): Promise<void> {
     const page = this.page;
+    const context = this.context;
     this.page = null;
+    this.context = null;
     this.pagePromise = null;
     if (page && !page.isClosed()) await page.close().catch(() => { /* best-effort */ });
+    // The context owns the cookie jar; closing the page alone does not discard it.
+    if (context) await context.close().catch(() => { /* best-effort */ });
   }
 
   async act(action: PlaywrightAction): Promise<void> {

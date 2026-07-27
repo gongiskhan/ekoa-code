@@ -48,6 +48,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`browser-context-leak-and-docblock-drift`** (FIXED 2026-07-27, MEDIUM, resource + accuracy —
+  Cofre discovery gate G-3). `LocalBrowserSession.dispose()` closed only the PAGE, so every run
+  leaked its browser context — and with it the entire cookie jar of an authenticated session — for
+  the lifetime of the process. FIXED by retaining the context and closing it in `dispose()`, both
+  closes best-effort so teardown never fails a completed run. SEPARATELY, the module's docblock and
+  `ensurePage`'s comment described "the owner's PERSISTENT context" with concurrent runs for one
+  owner sharing cookies; the composition root has always handed back `browser.newContext()`,
+  ignoring the owner entirely. The divergence is safe in the direction that matters — a fresh
+  isolated context per session means no cookie jar is reused across runs OR owners, which is
+  stricter than the documented model — but reading the docblock instead of the composition root
+  produced wrong conclusions twice during the discovery gate. The comments now describe the code as
+  built, and the behaviour is pinned by test rather than asserted by comment. Pinned by
+  `api/tests/security/browser-context-lifecycle.test.ts` (5 cases).
 - **`planner-and-assertion-echo-page-content`** (FIXED 2026-07-27, MEDIUM, confidentiality — Cofre
   discovery gate H-6 + the H-1 assertion leg). Two messages carried content into three destinations
   each: the process log, the RETRY PROMPT sent back to the model, and the persisted record / SSE
