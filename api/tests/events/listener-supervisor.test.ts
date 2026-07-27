@@ -9,11 +9,17 @@
  *     halts all further work (cancel-safe: no enqueue after stop);
  *   - ISOLATION: a listener whose poll always fails backs off (bumpFailure) without throwing to the
  *     caller and without starving a healthy sibling, which keeps enqueuing.
+ *   - ROUTING (2A-S4): a NON-platform listener goes down the user-defined branch — the
+ *     `callUserIntegration` seam, driven by the SHIPPED integration package's listenerConfig (the
+ *     real `imap` one: fetch_messages / messages / uid / next_uid), first tick initialising the
+ *     cursor without backfilling. The generic poller's own contract has its own suite
+ *     (tests/integrations/user-defined-poll.test.ts, over the real executor + stores).
  */
 
 import { describe, it, expect } from 'vitest';
 import { ListenerSupervisor, type SupervisorTrigger } from '../../src/events/listener-supervisor.js';
 import type { EnqueueInput, EnqueueResult, PlatformCallResult } from '../../src/integrations/event-sources/platform-poll.js';
+import type { UserIntegrationCallResult } from '../../src/integrations/event-sources/user-defined-poll.js';
 
 const NOW = '2026-06-19T09:00:00Z';
 
@@ -35,7 +41,11 @@ function mkTrigger(id: string, over: Partial<SupervisorTrigger> = {}): Superviso
 }
 
 /** In-memory injected stores shared by a test. */
-function harness(listeners: SupervisorTrigger[], callPlatform: (t: SupervisorTrigger, call: Record<string, unknown>) => Promise<PlatformCallResult>) {
+function harness(
+  listeners: SupervisorTrigger[],
+  callPlatform: (t: SupervisorTrigger, call: Record<string, unknown>) => Promise<PlatformCallResult>,
+  callUserIntegration?: (t: SupervisorTrigger, call: { integrationKey: string; actionName: string; args: Record<string, unknown> }) => Promise<UserIntegrationCallResult>,
+) {
   const cursors = new Map<string, unknown>();
   const inserted = new Map<string, EnqueueInput>(); // key = triggerId::dedupKey (UNIQUE dedup)
   const failures: Array<{ id: string; error: string }> = [];
@@ -52,6 +62,12 @@ function harness(listeners: SupervisorTrigger[], callPlatform: (t: SupervisorTri
     bumpFailure: async (id, error) => { failures.push({ id, error }); },
     enqueue,
     callPlatform,
+    // Unless a test supplies one, every trigger here is a PLATFORM listener and the user-defined
+    // branch must never be reached: a call is a ROUTING bug, so it fails loudly rather than
+    // returning a benign empty result.
+    callUserIntegration: callUserIntegration ?? (async () => {
+      throw new Error('callUserIntegration must not be reached for a platform listener');
+    }),
     now: () => NOW,
     reconcileIntervalMs: 10_000, // large: reconcile must not interfere with the timing assertions
   });
@@ -90,6 +106,37 @@ describe('listener supervisor — platform poll enqueues + cancel-safety', () =>
     // No work after stop: give the loop ample time to (not) fire again.
     await new Promise((r) => setTimeout(r, 120));
     expect(inserted.size).toBe(sizeAtStop);
+  });
+});
+
+describe('listener supervisor — user-defined branch routing (2A-S4)', () => {
+  it('routes a non-platform listener through callUserIntegration using the SHIPPED package listenerConfig', async () => {
+    const calls: Array<{ actionName: string; args: Record<string, unknown> }> = [];
+    // The real `imap` package's listenerConfig drives the field paths; only the transport-less
+    // executor call is stubbed here (its honest refusal is proven in user-defined-poll.test.ts).
+    const callUser = async (_t: SupervisorTrigger, call: { integrationKey: string; actionName: string; args: Record<string, unknown> }): Promise<UserIntegrationCallResult> => {
+      calls.push({ actionName: call.actionName, args: call.args });
+      return { success: true, status: 200, data: { messages: [{ uid: '77', subject: 'olá' }], next_uid: '78' } };
+    };
+    const trigger = mkTrigger('trg-ud', {
+      integrationKey: 'imap',
+      eventName: 'message.received',
+      pollConfig: { actionName: 'fetch_messages', intervalMs: 15 },
+    });
+    const { sup, cursors, inserted } = harness([trigger], async () => {
+      throw new Error('callPlatform must not be reached for a user-defined listener');
+    }, callUser);
+
+    await sup.start();
+    // Tick 1 initialises the cursor from next_uid WITHOUT backfilling; tick 2 enqueues.
+    expect(await waitUntil(() => inserted.has('trg-ud::77'))).toBe(true);
+    await sup.stop();
+
+    expect(cursors.get('trg-ud')).toBe('78');
+    expect(calls[0]).toEqual({ actionName: 'fetch_messages', args: {} });          // no `since` yet
+    expect(calls[1]).toEqual({ actionName: 'fetch_messages', args: { since: '78' } });
+    // The enqueued body is the item as JSON text (what the queue actually persists).
+    expect(JSON.parse(inserted.get('trg-ud::77')!.rawBody.toString('utf8'))).toEqual({ uid: '77', subject: 'olá' });
   });
 });
 

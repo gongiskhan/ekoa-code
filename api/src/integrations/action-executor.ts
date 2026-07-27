@@ -54,6 +54,7 @@ export type IntegrationErrorCode =
   | 'credential_missing_scope'
   | 'credential_invalid'
   | 'unsupported_auth_type'
+  | 'unsupported_transport'
   | 'invalid_base_url'
   | 'transient_5xx'
   | 'client_4xx'
@@ -113,6 +114,22 @@ export async function executeUserIntegrationAction(
   if (!action) {
     const available = def.actions.map((a) => a.actionName).join(', ');
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}. Available: ${available}` };
+  }
+  // TRANSPORT GATE (2A-S4). This executor runs exactly two kinds of action: HTTP-backed
+  // (`httpConfig`) and automation-backed (`automationBinding`). A package may legitimately declare
+  // an action that needs a different wire protocol (the shipped `imap` package's poll action
+  // declares `transport: "imap"`). Refuse it here — before any credential is decrypted — with a
+  // clear, coded error. The alternative the ekoa-dev scaffold used, a placeholder
+  // http://127.0.0.1:0 URL, fails with an unrelated connect error and reads like a network blip; a
+  // listener driving this action must fail with the truth ("not available in this version"), never
+  // a fabricated empty result.
+  const transport = action.transport ?? 'http';
+  if (transport !== 'http') {
+    return {
+      success: false,
+      code: 'unsupported_transport',
+      error: `action "${input.actionName}" on ${input.integrationKey} needs the "${transport}" transport, which is not available in this version — this executor runs HTTP-backed and automation-backed actions only`,
+    };
   }
   if (!action.httpConfig && !action.automationBinding) {
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };

@@ -139,6 +139,7 @@ import {
 } from './automation/index.js';
 import {
   executeUserIntegrationAction,
+  type AutomationBackedHandler,
   callPlatformIntegration,
   findConfigForOwner,
   integrationPrefetch,
@@ -351,6 +352,22 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //    callback seam onto the AutomationRunEvent wire union, replayable via Last-Event-ID.
   setRunEventEmitterFactory((runId) => makeRunSseEmitter(runId));
   // 2. Integration action execution (user-defined skills; §5.6.7 integration steps).
+  //    integração-por-automação (carried B25): an `automationBinding` action runs the bound
+  //    automation under the verified owner; integrations/ never imports automation/ (tiers). This
+  //    handler is bound ONCE and handed to EVERY caller of the executor — the automation engine's
+  //    `integration` step below AND the listener supervisor's user-defined poll (2A-S4). An
+  //    executor call site that omits it silently breaks every automation-backed action of that
+  //    integration (e.g. citius, whose poll action is automation-backed), so there is exactly one.
+  const runAutomationBackedAction: AutomationBackedHandler = async (b) => {
+    const out = await runAutomationForAction({
+      binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
+      args: b.args,
+      credentialFields: b.credentialFields,
+      orgId: b.orgId,
+      ownerUserId: b.ownerUserId,
+    });
+    return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
+  };
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     const r = await executeUserIntegrationAction(
@@ -361,20 +378,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         actionName: call.actionName,
         args: call.args,
       },
-      {
-        // integração-por-automação (carried B25): an automationBinding action runs the bound
-        // automation under the verified owner; integrations/ never imports automation/ (tiers).
-        runAutomationBackedAction: async (b) => {
-          const out = await runAutomationForAction({
-            binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
-            args: b.args,
-            credentialFields: b.credentialFields,
-            orgId: b.orgId,
-            ownerUserId: b.ownerUserId,
-          });
-          return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
-        },
-      },
+      { runAutomationBackedAction },
     );
     return { success: r.success, data: r.data, error: r.error, details: r.code };
   });
@@ -533,10 +537,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     },
   });
 
-  // G8/2A-S1 — listener supervisor: the durable poll→enqueue rail for `kind:'listener'` triggers.
+  // G8/2A-S1+S4 — listener supervisor: the durable poll→enqueue rail for `kind:'listener'` triggers.
   // Injected across the seams here (ch02 §2.8: only the composition root wires collaborators):
   // the listener-state cursor store, the SHARED event queue (via enqueueListenerEvent — never a
-  // second queue), and callPlatformIntegration bound to each trigger's org (OAuth refresh in core).
+  // second queue), callPlatformIntegration bound to each trigger's org (OAuth refresh in core) for
+  // the M365/Google branch, and executeUserIntegrationAction bound to each trigger's org + owner for
+  // every other (user-defined) integration.
   // The loop is STARTED post-listen (below) and stopped on shutdown.
   configureListenerSupervisor({
     listListeners: async () => {
@@ -559,8 +565,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         },
         { now: deps.now, genId: deps.genId },
       ),
-    // The user-defined (IMAP/generic) poll transport is wired in slice 2A-4; until then that branch
-    // throws and the supervisor's backoff absorbs it.
+    // User-defined (non-platform) poll call (2A-S4) — the SAME executor the automation `integration`
+    // step uses, with the SAME automation-backed handler, bound to the trigger's own org + owner so
+    // the poll runs under the owner's stored credentials and never a caller's. The automation seam
+    // is NOT optional here: citius — the one shipped non-deferred user-defined listener source —
+    // polls via an `automationBinding` action (consultar_notificacoes), so omitting it would leave
+    // that listener permanently failing with `automation_required`. Actions whose package declares a
+    // transport the executor does not implement (the imap package) come back as an
+    // `unsupported_transport` failure, which the poll turns into a throw → backoff + audit row.
+    callUserIntegration: (trigger, call) =>
+      executeUserIntegrationAction(
+        {
+          orgId: trigger.orgId,
+          ownerUserId: trigger.ownerUserId,
+          integrationKey: call.integrationKey,
+          actionName: call.actionName,
+          args: call.args,
+        },
+        { runAutomationBackedAction },
+      ),
     now: () => new Date(deps.now()).toISOString(),
   });
 

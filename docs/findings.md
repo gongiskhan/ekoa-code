@@ -6,6 +6,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`citius-listener-blocked`** (OPEN, MEDIUM, correctness — 2A-S4 review). `citius` is the one
+  SHIPPED user-defined listener source that is not deferred for a missing transport, and it still
+  cannot poll. 2A-S4 fixed the part that belonged to the listener rail (the composition root now
+  injects the automation seam into the executor the supervisor uses, guarded by a static test, and
+  the poll unwraps the automation run envelope so the package's `listenerConfig` paths resolve
+  against the action's own output). TWO blockers remain, neither of them the rail's and neither
+  silent — the listener fails loudly on every tick with the exact reason on its failure counter:
+  (1) `automationBinding.automationId` is the template placeholder `citius-<template>-template`,
+  which no lookup resolves; ekoa-dev rewrote that id to the per-owner provisioned id inside the
+  USER SANDBOX COPY of the package (integration-storage.ts), and ekoa-code deliberately descoped
+  per-user sandbox packages, so the shipped binding never matches the org's provisioned automation
+  (`managedAutomationId(key, templateKey)` = `citius-<template>`). The failure surfaces as
+  `unknown_automation: citius-notificacoes-template`. This equally breaks the automation
+  `integration` step, i.e. it is NOT specific to the listener rail; two committed assertions
+  currently pin the placeholder value (`api/tests/contract/integration-definitions.test.ts`,
+  `api/tests/e2e/citius-integration.e2e.mjs`), so the fix (resolve the bound id via the
+  deterministic managed id, or re-point the shipped package and both assertions) is a deliberate
+  separate change. (2) The CITIUS captured browser session does not exist yet — `session-capture.ts`
+  is track 2A slice 6 — so even a resolvable automation cannot authenticate to the Portal dos
+  Mandatários. Close with 2A-S6 plus the id fix.
+- **`event-array-field-shape-drift`** (OPEN, LOW, correctness — 2A-S4 review note). Both poll
+  sources treat a non-array `eventArrayField` as an empty batch (`asArray` returns `[]`), so a
+  provider that changes the shape of that field advances the cursor over items that were never
+  read. Identical in `platform-poll.ts` (approved at 2A-S1) and in ekoa-dev, so it is recorded here
+  rather than changed inside a slice: the honest fix is to distinguish "absent/array" (a real empty
+  batch) from "present but not an array" (a shape change ⇒ stall the cursor and report it).
+
 - **`insolvencia-watch-at-least-once`** (OPEN, LOW, quality — run 20260717-190134 E4). The Citius
   insolvência polling watcher persists a seen-ref after each durable watch.hit emit, but the
   emit-then-persist is at-least-once not atomic: if `updateWatch` itself fails after the event

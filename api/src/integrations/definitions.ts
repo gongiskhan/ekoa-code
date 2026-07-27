@@ -66,6 +66,14 @@ export interface IntegrationAction {
   returnSchema?: Record<string, unknown>;
   httpConfig?: IntegrationActionHttpConfig;
   automationBinding?: IntegrationActionAutomationBinding;
+  /**
+   * Wire protocol the action needs. ABSENT ⇒ `'http'` (every shipped action today), so this is
+   * additive and migration-free. A package may declare a protocol the executor does not implement
+   * (the `imap` package declares `'imap'`); `executeUserIntegrationAction` then refuses the action
+   * with the coded `unsupported_transport` failure instead of dialling a placeholder URL or
+   * returning a fabricated empty result (2A-S4).
+   */
+  transport?: string;
 }
 
 export interface IntegrationEvent {
