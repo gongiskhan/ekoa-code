@@ -92,6 +92,7 @@ import { verifyToken } from './auth/jwt.js';
 import { verifySseToken } from './auth/middleware.js';
 import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
+import { cofreRouter } from './routes/cofre.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -756,6 +757,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   registerGateway(app, { verifyToken, verifyGatewayKey });
   // S4a — per-user gateway API keys: mint (show-once) / list / revoke, self-service.
   app.use('/api/v1/gateway-keys', gatewayKeysRouter(deps));
+  // Cofre (WS-B B-3): credential custody. Every authorization decision lives in api/src/cofre/,
+  // not the router — one place to audit, and one place for WS-K's KMS envelope to install behind.
+  app.use('/api/v1/cofre', cofreRouter(deps));
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).

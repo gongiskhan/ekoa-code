@@ -24,8 +24,11 @@ export {
   type UnwrappedCredential,
 } from './service.js';
 
+export { recordCofreEvent } from './audit.js';
+
 export {
   mintCofreItem,
+  deleteCofreItem,
   issueGrant,
   listCofreItems,
   type MintCofreItemInput,

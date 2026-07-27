@@ -163,3 +163,14 @@ export async function listCofreItems(actor: Actor, now = Date.now()): Promise<Co
     } satisfies CofreItem;
   });
 }
+
+/** Delete an item and every grant on it. Returns false when the item is not the actor's. */
+export async function deleteCofreItem(actor: Actor, itemId: string): Promise<boolean> {
+  const item = await cofreItems.getVisible(actor, itemId);
+  if (!item) return false;
+  for (const g of await cofreGrants.listVisible(actor, { itemId })) {
+    await cofreGrants.raw.delete(g._id);
+  }
+  await cofreItems.raw.delete(itemId);
+  return true;
+}

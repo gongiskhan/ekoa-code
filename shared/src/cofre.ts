@@ -18,6 +18,7 @@
  * regex rejects anything value-shaped.
  */
 import { z } from 'zod';
+import type { DomainDescriptorMap } from './descriptor.js';
 
 // ---------------------------------------------------------------------------
 // Items
@@ -329,3 +330,80 @@ export const SessionMetadata = z.object({
   healthy: z.boolean(),
 });
 export type SessionMetadata = z.infer<typeof SessionMetadata>;
+
+// ---------------------------------------------------------------------------
+// Wire shapes + descriptors (WS-B B-3)
+// ---------------------------------------------------------------------------
+
+/** Mint an item. The VALUE is write-only: it is accepted here and never returned by any endpoint. */
+export const CofreItemCreateRequest = z.object({
+  type: CofreItemType,
+  label: z.string().min(1).max(120),
+  value: z.string().min(1),
+  boundOrigins: z.array(BoundOrigin).default([]),
+  identityPointer: z.string().max(200).optional(),
+  expiresAt: z.string().optional(),
+});
+export type CofreItemCreateRequest = z.infer<typeof CofreItemCreateRequest>;
+
+export const CofreItemListResponse = z.object({ items: z.array(CofreItem) });
+export type CofreItemListResponse = z.infer<typeof CofreItemListResponse>;
+
+/** The mint response is the ITEM VIEW — there is no show-once secret, because unlike a gateway key
+ *  the user already HAS this credential; the Cofre is storing it, not generating it. */
+export const CofreItemCreateResponse = CofreItem;
+export type CofreItemCreateResponse = z.infer<typeof CofreItemCreateResponse>;
+
+export const CofreGrantResponse = z.object({
+  ok: z.literal(true),
+  scope: GrantScope,
+  expiresAt: z.string().optional(),
+});
+export type CofreGrantResponse = z.infer<typeof CofreGrantResponse>;
+
+export const CofreLockResponse = z.object({ ok: z.literal(true), revoked: z.number().int().nonnegative() });
+export type CofreLockResponse = z.infer<typeof CofreLockResponse>;
+
+export const CofreDeleteResponse = z.object({ ok: z.literal(true) });
+export type CofreDeleteResponse = z.infer<typeof CofreDeleteResponse>;
+
+export const cofreEndpoints = {
+  cofreItemsList: {
+    method: 'GET',
+    path: '/api/v1/cofre/items',
+    auth: 'user',
+    response: CofreItemListResponse,
+  },
+  cofreItemsCreate: {
+    method: 'POST',
+    path: '/api/v1/cofre/items',
+    auth: 'user',
+    request: CofreItemCreateRequest,
+    response: CofreItemCreateResponse,
+  },
+  cofreItemsDelete: {
+    method: 'DELETE',
+    path: '/api/v1/cofre/items/:id',
+    auth: 'user',
+    response: CofreDeleteResponse,
+  },
+  cofreItemGrant: {
+    method: 'POST',
+    path: '/api/v1/cofre/items/:id/grants',
+    auth: 'user',
+    request: GrantRequest,
+    response: CofreGrantResponse,
+  },
+  cofreItemLock: {
+    method: 'POST',
+    path: '/api/v1/cofre/items/:id/lock',
+    auth: 'user',
+    response: CofreLockResponse,
+  },
+  cofreLockAll: {
+    method: 'POST',
+    path: '/api/v1/cofre/lock-all',
+    auth: 'user',
+    response: CofreLockResponse,
+  },
+} as const satisfies DomainDescriptorMap;

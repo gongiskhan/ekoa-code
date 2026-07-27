@@ -24,6 +24,12 @@ import { ALL_ENDPOINTS, allEndpointsFlat } from '@ekoa/shared';
 // Endpoints with a committed contract/e2e test now (G2 auth + G3 CRUD domains).
 const COVERED = new Set<string>([
   'auth.login', 'auth.me',
+  // Cofre (WS-B B-3) — exercised end-to-end by tests/contract/cofre.test.ts: every wire shape
+  // validated through the REAL app, the VALUE proven write-only across the whole surface, and the
+  // I6/I7 refusals asserted as proper 4xx envelopes rather than 500s.
+  'cofre.cofreItemsList', 'cofre.cofreItemsCreate', 'cofre.cofreItemsDelete',
+  'cofre.cofreItemGrant', 'cofre.cofreItemLock', 'cofre.cofreLockAll',
+
   // batch1 F1 — auth lifecycle (auth.test.ts)
   'auth.refresh', 'auth.logout', 'auth.changePassword', 'auth.deviceStart', 'auth.devicePoll', 'auth.deviceApprove',
   'users.list', 'users.create', 'users.update', 'users.remove', 'users.resetPassword',

@@ -31,6 +31,7 @@ import { appAssistantEndpoints } from './app-assistant.js';
 import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
 import { gatewayKeysEndpoints } from './gateway-keys.js';
+import { cofreEndpoints } from './cofre.js';
 import { notificationsEndpoints } from './notifications.js';
 
 export * from './descriptor.js';
@@ -70,9 +71,7 @@ export * from './portal.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';
-// Cofre vocabulary (WS-A). Schemas + the I7/I8 encodings only — NO descriptor-map entry yet, because
-// the routes land in WS-B/WS-D and the mount-coverage gate would (correctly) fail on a descriptor
-// with no mounted route.
+// Cofre vocabulary (WS-A) + its endpoints (WS-B B-3). The I7/I8 encodings live in this module.
 export * from './cofre.js';
 export * from './notifications.js';
 // Voice WS message contract (mega-run C1) - a WS carve-out like streaming/, so it has
@@ -109,6 +108,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,
   gatewayKeys: gatewayKeysEndpoints,
+  cofre: cofreEndpoints,
   notifications: notificationsEndpoints,
 };
 
