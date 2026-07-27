@@ -46,6 +46,7 @@ import {
   type ResolveActionOutput,
 } from './vision.js';
 import { applyArgsTemplate } from './template-vars.js';
+import { SecretRegistry } from '../security/redaction.js';
 import { automationStore, automationRunStore, writeStepScreenshot, screenshotUrlFromPath } from './persistence.js';
 import {
   lookupActionCache,
@@ -97,6 +98,50 @@ import type {
 export const SECRET_SHAPED_INPUT_NAME =
   /(?:otp|mfa|2fa|totp|token|password|passwd|senha|palavra[-_]?passe|secret|segredo|apikey|api[-_]?key|authorization|auth[-_]?token|\bauth\b|bearer|cookie|session|sessao|sess[aã]o|credential|credencial|\bpin\b|cvv)/i;
 
+/**
+ * Register every string in a decrypted credential bag (Cofre H-1). The bag is
+ * `{ [field]: value }` or a nested `{ [key]: { [field]: value } }`; both shapes appear depending on
+ * whether the credentials came from an integration action or a captured session.
+ */
+function registerCredentialBag(registry: SecretRegistry, bag: unknown): void {
+  if (!bag || typeof bag !== 'object') return;
+  for (const v of Object.values(bag as Record<string, unknown>)) {
+    if (typeof v === 'string') registry.register(v);
+    else if (v && typeof v === 'object') registerCredentialBag(registry, v);
+  }
+}
+
+/**
+ * Filter a step record before it leaves the engine (Cofre H-1).
+ *
+ * The record goes THREE places at once — the SSE stream, the persisted run row, and (on a failure)
+ * the rehearsal fixer's prompt. Filtering here rather than at each sink is deliberate: a new sink
+ * added later inherits the filter instead of having to remember it.
+ */
+function redactStepRecord(record: StepRecord, secrets: SecretRegistry | undefined): StepRecord {
+  if (!secrets || secrets.size === 0) return record;
+  return {
+    ...record,
+    ...(record.error
+      ? {
+          error: {
+            ...record.error,
+            message: secrets.redact(record.error.message),
+            ...(record.error.details !== undefined
+              ? { details: secrets.redactDeep(record.error.details) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(record.output !== undefined
+      ? { output: secrets.redactDeep(record.output) as StepRecord['output'] }
+      : {}),
+    ...(record.resolvedAction !== undefined
+      ? { resolvedAction: secrets.redactDeep(record.resolvedAction) as StepRecord['resolvedAction'] }
+      : {}),
+  };
+}
+
 export interface RunContext {
   ownerUserId: string;
   /** The owner's org — threaded so the memory-backed cache and scoped-memory injection are
@@ -120,6 +165,17 @@ export interface RunContext {
   parentRunId?: string;
   /** Used for SSE event correlation. */
   traceId: string;
+  /**
+   * RUN-SCOPED SECRET REGISTRY (Cofre H-1). Every credential value the run resolves is registered
+   * here, and every byte stream the run produces toward a model, a log, an SSE frame or a persisted
+   * record passes through it.
+   *
+   * Scoped to the RUN, never process-wide: a process-wide registry would outlive the use window and
+   * quietly redact one tenant's output using another tenant's values. Created by `startRun` so
+   * every step of a run shares one, and populated lazily as credentials are loaded — a run that
+   * touches no credential has an empty registry, which is a genuine no-op rather than a cost.
+   */
+  secrets?: SecretRegistry;
   /** Optional cancellation signal from the handler / UI. */
   cancellation?: { isCancelled: () => boolean };
   /**
@@ -313,6 +369,12 @@ async function runOrRehearse(
   // substitution). It must NEVER reach the persisted run record — `GET /automations/runs/:id`
   // returns `inputs` to the owner AND org admins, so a persisted credential is a cross-actor leak.
   const persistedInputs = scrubCredentials(inputs);
+
+  // H-1: one registry per RUN. Seeded from `inputs.credentials` (the decrypted bag the browser
+  // session consumes) so the values are known BEFORE the first step produces any output. Steps
+  // that resolve further credentials register them as they go.
+  ctx.secrets ??= new SecretRegistry();
+  registerCredentialBag(ctx.secrets, inputs.credentials);
 
   const initialRecord: RunRecord = {
     id: runId,
@@ -517,7 +579,7 @@ async function runOrRehearse(
             })
           : undefined,
       });
-      emit?.stepUpdate(record, runId);
+      emit?.stepUpdate(redactStepRecord(record, ctx.secrets), runId);
 
       if (record.status === 'failed') {
         // Awaiting-integration pause path is shared between modes.

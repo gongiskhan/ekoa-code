@@ -5,7 +5,7 @@
  * (shared to the org); else owner-only (Amendment 2 Part 4).
  */
 import { integrationConfigs } from '../data/stores.js';
-import { encrypt } from '../data/crypto.js';
+import { envelopeEncrypt } from '../data/crypto.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 
@@ -77,7 +77,10 @@ export async function createConfig(actor: Actor, input: { integrationKey: string
     integrationKey: input.integrationKey,
     name: input.name ?? input.integrationKey,
     enabled: true,
-    credentialsCiphertext: encrypt(JSON.stringify(input.configValues)), // encrypted at rest
+    // Cofre B-4: the ORG-BOUND versioned envelope (K-1), not the flat global key. Previously this
+    // used the UNSCOPED `encrypt()`, so an integration's ciphertext was not even org-bound — a row
+    // copied between tenants decrypted fine. v1 rows still read, so this needed no flag day.
+    credentialsCiphertext: await envelopeEncrypt(JSON.stringify(input.configValues), actor.orgId),
   };
   await integrationConfigs.insert(doc as never);
   return doc;
@@ -107,10 +110,15 @@ export async function updateConfig(actor: Actor, id: string, patch: { enabled?: 
   const c = (await integrationConfigs.get(id)) as IntegrationConfigDoc | null;
   if (!c || c.orgId !== actor.orgId) return { verdict: 'notfound' };
   if (!canWriteConfig(actor, c)) return { verdict: 'forbidden' };
+  // Encrypt BEFORE the update callback: `update` takes a synchronous mutator, and the envelope is
+  // async because the key wrapper may be a remote KMS call.
+  const nextCiphertext = patch.configValues
+    ? await envelopeEncrypt(JSON.stringify(patch.configValues), actor.orgId)
+    : undefined;
   const config = (await integrationConfigs.update(id, (cur) => ({
     ...cur,
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-    ...(patch.configValues ? { credentialsCiphertext: encrypt(JSON.stringify(patch.configValues)) } : {}),
+    ...(nextCiphertext ? { credentialsCiphertext: nextCiphertext } : {}),
   }))) as IntegrationConfigDoc;
   return { verdict: 'ok', config };
 }

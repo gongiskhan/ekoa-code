@@ -21,7 +21,7 @@ import { getDefinition, type IntegrationActionHttpConfig } from './definitions.j
 import { guardedFetch } from '../services/url-fetcher.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
 import { integrationConfigs } from '../data/stores.js';
-import { decrypt, encrypt } from '../data/crypto.js';
+import { encrypt, envelopeDecrypt } from '../data/crypto.js';
 import {
   interpolate,
   interpolateObj,
@@ -144,7 +144,7 @@ export async function executeUserIntegrationAction(
     return { success: false, code: 'disabled', error: `integration ${input.integrationKey} is disabled` };
   }
 
-  const decrypted = decryptCredentialFields(config);
+  const decrypted = await decryptCredentialFields(config);
   if (decrypted === DECRYPT_FAILED) {
     return { success: false, code: 'credential_decrypt_failed', error: 'failed to decrypt credentials' };
   }
@@ -268,11 +268,17 @@ async function persistProviderCredentialUpdates(
 
 const DECRYPT_FAILED = Symbol('decrypt-failed');
 
-/** Decrypt the config's credential blob into a field map, or DECRYPT_FAILED. No config → {}. */
-function decryptCredentialFields(config: IntegrationConfigDoc | null): Record<string, unknown> | typeof DECRYPT_FAILED {
+/**
+ * Decrypt the config's credential blob into a field map, or DECRYPT_FAILED. No config → {}.
+ *
+ * Cofre B-4: reads through the ORG-BOUND versioned envelope. A v1 row (written before K-1) still
+ * decrypts, so adoption needed no flag day; a v2 row is bound to the config's own org, so a row
+ * copied between tenants no longer decrypts — which the flat global key permitted.
+ */
+async function decryptCredentialFields(config: IntegrationConfigDoc | null): Promise<Record<string, unknown> | typeof DECRYPT_FAILED> {
   if (!config || !config.credentialsCiphertext) return {};
   try {
-    const plaintext = decrypt(config.credentialsCiphertext);
+    const plaintext = await envelopeDecrypt(config.credentialsCiphertext, config.orgId);
     try {
       return JSON.parse(plaintext) as Record<string, unknown>;
     } catch {

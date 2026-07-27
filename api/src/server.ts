@@ -169,7 +169,7 @@ import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './
 import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
-import { decrypt, encrypt } from './data/crypto.js';
+import { decrypt, encrypt, envelopeDecrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -404,7 +404,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const cfg = await findConfigForOwner(owner.orgId, ownerUserId, integrationKey);
     if (!cfg?.credentialsCiphertext) return null;
     try {
-      const values = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      // Cofre B-4: org-bound v2 envelope; v1 rows still read (no flag day).
+      const values = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
       return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
     } catch {
       return null;

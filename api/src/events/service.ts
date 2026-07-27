@@ -6,7 +6,7 @@
  */
 import { createHash } from 'node:crypto';
 import { triggers, webhookAudit } from '../data/stores.js';
-import { decrypt, encrypt } from '../data/crypto.js';
+import { envelopeDecrypt, decrypt, encrypt } from '../data/crypto.js';
 import { getDefinition, findConfigForOwner } from '../integrations/index.js';
 import { enqueue } from './queue.js';
 import { wakeDelivery } from './delivery.js';
@@ -144,7 +144,8 @@ async function resolveWebhookSecret(t: TriggerDoc, source: WebhookSecretSource |
     const cfg = await findConfigForOwner(t.orgId, t.ownerUserId, t.integrationKey);
     if (!cfg?.credentialsCiphertext) return null;
     try {
-      const fields = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      // Cofre B-4: the integration credential blob is org-bound v2 now; v1 rows still read.
+      const fields = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
       const v = fields[source.credentialField];
       return typeof v === 'string' && v !== '' ? v : null;
     } catch {

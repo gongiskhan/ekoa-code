@@ -24,3 +24,7 @@ export const cofreItems = new OwnerVisibilityScoped<CofreItemDoc>(itemsStore as 
 
 /** Grants, owner-scoped by the same rule — a grant is as sensitive as the item it opens. */
 export const cofreGrants = new OwnerVisibilityScoped<CofreGrantDoc>(grantsStore as never);
+
+/** Exposed ONLY for the K-4 ciphertext migration, which must reach rows across every owner.
+ *  Nothing else may import these — the eslint rule in the module docblock stands. */
+export { itemsStore as __cofreItemsStoreForMigration };

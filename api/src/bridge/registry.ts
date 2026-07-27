@@ -29,6 +29,18 @@ export interface PairingRow extends Doc {
   createdAt: string;
   revokedAt: string | null;
   /**
+   * Capabilities this machine advertises (Cofre WS-I / I-2). Closed vocabulary from
+   * `shared/src/cofre.ts` `BridgeCapability`. Absent on a pairing registered before capability
+   * advertisement, which reads as "advertises nothing" — the fail-closed direction.
+   */
+  capabilities?: string[];
+  /**
+   * The machine's tailnet address, advertised in its `hello` frame, used as the proxy target when
+   * a run declares residential egress. NEVER a request-body value: it is recorded from the
+   * authenticated registration, like org and owner.
+   */
+  egressEndpoint?: string;
+  /**
    * PER-PAIRING task-signing secret, encrypted at rest (Cofre R-8).
    *
    * Delegated tasks used to be HMAC'd with `loadConfig().jwtSecret` — the platform-wide secret that
@@ -66,7 +78,15 @@ const live = new Map<string, LiveConnection>();
 /** Register (or re-register) a pairing durably. On redial the row is preserved but un-revoked and
  *  its createdAt kept; a first pairing creates the row. Returns the stored row. */
 export async function registerPairing(
-  input: { pairingId: string; org: string; ownerUserId: string },
+  input: {
+    pairingId: string;
+    org: string;
+    ownerUserId: string;
+    /** Advertised at registration (I-1). Replaces the prior list wholesale — a machine that stops
+     *  offering a capability must stop being selected for it. */
+    capabilities?: string[];
+    egressEndpoint?: string;
+  },
   deps?: { now?: () => number },
 ): Promise<PairingRow> {
   const nowIso = new Date(deps?.now?.() ?? Date.now()).toISOString();
@@ -80,6 +100,10 @@ export async function registerPairing(
     pairingId: input.pairingId,
     org: input.org,
     ownerUserId: input.ownerUserId,
+    // Advertisement REPLACES rather than merges: a machine that stops offering a capability must
+    // stop being selected for it, and a merge would make revocation impossible.
+    ...(input.capabilities ? { capabilities: input.capabilities } : existing?.capabilities ? { capabilities: existing.capabilities } : {}),
+    ...(input.egressEndpoint ? { egressEndpoint: input.egressEndpoint } : existing?.egressEndpoint ? { egressEndpoint: existing.egressEndpoint } : {}),
     signingSecretCiphertext,
     createdAt: existing?.createdAt ?? nowIso,
     // Preserve a revocation tombstone (§18.3.5, S4): a revoked pairingId stays revoked forever - a
@@ -290,4 +314,22 @@ export function __resetLiveConnectionsForTests(): void {
   }
   live.clear();
   registrationSeq = 0;
+}
+
+/**
+ * Egress candidates for an org (Cofre WS-I / I-2). Org-scoped by construction — a run can never be
+ * routed through another tenant's home connection, because a foreign machine is not a candidate at
+ * all rather than a candidate that is later filtered.
+ */
+export async function egressCandidatesForOrg(org: string): Promise<
+  Array<{ pairingId: string; org: string; capabilities: string[]; egressEndpoint?: string; live: boolean }>
+> {
+  const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
+  return rows.map((row) => ({
+    pairingId: row.pairingId,
+    org: row.org,
+    capabilities: row.capabilities ?? [],
+    ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
+    live: isLive(row.pairingId),
+  }));
 }
