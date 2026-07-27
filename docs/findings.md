@@ -48,6 +48,31 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   traversal-escape test on the erasure path) and a REWRITTEN
   `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
   read as the contract.
+- **`canvas-token-is-a-platform-token`** (FIXED 2026-07-27, HIGH, authentication — Cofre F-1, the
+  `api/src/streaming/` security pass). The canvas (screencast) token is signed with the SAME secret
+  as platform session tokens and carried NO class marker: `sub` + `jti`, no `aud`. `auth/jwt.ts`'s
+  token-class guard only knew about `ekoa-bridge`, so `verifyToken` ACCEPTED a canvas token and
+  returned claims with a valid `sub`/`jti` and `role`/`orgId` undefined. `requireAuth` then passed
+  it end-to-end: the jti exists, it is not revoked, `getActivation(sub)` resolves for a real user,
+  and `iat` is fresh. VERIFIED EMPIRICALLY with a throwaway probe before being written up, not
+  inferred from a read. The consequence is not theoretical — every route that authorizes on
+  `req.user.sub` ALONE never reads `role` or `orgId`, so a leaked 600-second canvas token was a
+  platform bearer token for gateway-key MINT (which returns a long-lived API key), the bridge token
+  endpoint, and the Cofre item routes. FIXED with the same mechanism the bridge token already used:
+  `aud: 'ekoa-canvas'` minted and required on the media channel, and refused by the platform
+  verifier. The guard checks `traceId` as well as `aud`, so a token minted before the audience
+  landed gets no grandfathered window. Pinned by `api/tests/security/canvas-token-class.test.ts`
+  (8 cases, including a validly-signed pre-audience token that exercises the traceId branch rather
+  than merely failing a signature check).
+- **`streaming-screencast-has-no-credential-suppression`** (OPEN, HIGH, confidentiality — Cofre F-1;
+  BLOCKS F-2 and D-5). The CDP screencast in `api/src/streaming/session.ts` is a continuous JPEG
+  stream of the LIVE page, and it is a SEPARATE path from the automation screenshot that H-2/H-3
+  masks. `Page.startScreencast` has no mask option — Playwright's `mask` is a `screenshot()` feature
+  only — so masking is not available here and SUPPRESSION is the only correct control: the
+  screencast must be stopped for the duration of a typist credential window, and the typist must
+  refuse to run at all if it cannot confirm the screencast is stopped. Until that lands, WS-F's
+  typist must not fill a credential while a canvas session is attached. This is the specific reason
+  the plan blocks F-2 on F-1, and it is now a named finding rather than a scheduling note.
 - **`browser-context-leak-and-docblock-drift`** (FIXED 2026-07-27, MEDIUM, resource + accuracy —
   Cofre discovery gate G-3). `LocalBrowserSession.dispose()` closed only the PAGE, so every run
   leaked its browser context — and with it the entire cookie jar of an authenticated session — for

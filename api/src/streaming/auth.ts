@@ -13,6 +13,20 @@ import { loadConfig } from '../config.js';
 
 const TOKEN_TTL_SECONDS = parseInt(process.env.EKOA_STREAMING_TOKEN_TTL_SECONDS || '600', 10);
 
+/**
+ * TOKEN-CLASS SEPARATION (Cofre F-1). The canvas token is signed with the SAME secret as platform
+ * session tokens, and before this marker existed it carried nothing to distinguish it: `sub` and
+ * `jti` were present, `aud` was absent, so `auth/jwt.ts` `verifyToken` — whose class guard only
+ * knew about `ekoa-bridge` — ACCEPTED it. A leaked 600-second canvas token was therefore a platform
+ * bearer token for every route that authorizes on `req.user.sub` alone (gateway-key mint, the
+ * bridge token endpoint, the Cofre item routes), because `role`/`orgId` come back undefined and
+ * those routes never consult them. Verified empirically before this was written, not inferred.
+ *
+ * The audience makes the class explicit in both directions: minted here, required here, and
+ * REFUSED by the platform verifier.
+ */
+export const CANVAS_AUDIENCE = 'ekoa-canvas';
+
 export interface StreamTokenClaims {
   sub: string;
   traceId: string;
@@ -22,7 +36,7 @@ export interface StreamTokenClaims {
 }
 
 export function signStreamToken(payload: { userId: string; traceId: string }): string {
-  const opts: SignOptions = { expiresIn: TOKEN_TTL_SECONDS, jwtid: randomUUID() };
+  const opts: SignOptions = { expiresIn: TOKEN_TTL_SECONDS, jwtid: randomUUID(), audience: CANVAS_AUDIENCE };
   return jwt.sign(
     { sub: payload.userId, traceId: payload.traceId },
     loadConfig().jwtSecret,
@@ -64,7 +78,10 @@ export function verifyStreamToken(token: string | undefined, expectedTraceId: st
   if (!token) return { ok: false, reason: 'jwt-missing' };
   let decoded: jwt.JwtPayload;
   try {
-    const result = jwt.verify(token, loadConfig().jwtSecret);
+    // `audience` makes jwt.verify reject any token that is not canvas-class — so a platform
+    // session token presented on the media channel fails here, the mirror of the platform
+    // verifier's refusal of this one.
+    const result = jwt.verify(token, loadConfig().jwtSecret, { audience: CANVAS_AUDIENCE });
     if (typeof result === 'string') return { ok: false, reason: 'jwt-invalid' };
     decoded = result;
   } catch {
