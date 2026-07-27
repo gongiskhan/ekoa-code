@@ -123,6 +123,7 @@ import {
   setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,
@@ -151,6 +152,7 @@ import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
+import { originFromBaseUrl } from './security/origin-binding.js';
 import { setDeliveryTargets } from './events/delivery.js';
 import {
   configureListenerSupervisor,
@@ -403,6 +405,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     } catch {
       return null;
     }
+  });
+  // 4b. Bound origins for that credential (Cofre R-2, invariant I6). The api_call step writes its
+  // URL from a MODEL-authored template, so the destination and the credential have independent
+  // provenance; the integration's own declared base URL is the interim binding until Cofre items
+  // carry per-item `boundOrigins` (WS-C). An integration with no usable declared host resolves to
+  // an EMPTY list, and the seam refuses on empty — unbound never means unrestricted.
+  setIntegrationOriginResolver(async (integrationKey) => {
+    const def = getDefinition(integrationKey);
+    if (!def) return [];
+    const origins = new Set<string>();
+    for (const action of Object.values(def.actions ?? {})) {
+      const baseUrl = (action as { httpConfig?: { baseUrl?: string } }).httpConfig?.baseUrl;
+      if (!baseUrl) continue;
+      // A templated host (`{{region}}.api.example.com`) cannot be pinned at this layer; skip it
+      // rather than binding to a pattern that would match more than it should.
+      const host = originFromBaseUrl(baseUrl);
+      if (host) origins.add(host);
+    }
+    return [...origins];
   });
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {

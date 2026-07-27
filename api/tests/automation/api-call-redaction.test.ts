@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { executeApiCallStep } from '../../src/automation/executors/api-call.js';
-import { setIntegrationCredentialLoader, __resetAutomationSeamsForTests } from '../../src/automation/seams.js';
+import {
+  setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
+  __resetAutomationSeamsForTests,
+} from '../../src/automation/seams.js';
 import type { Step, StepRecord, Automation } from '../../src/automation/types.js';
 import type { RunContext } from '../../src/automation/engine.js';
 
@@ -56,6 +60,9 @@ let fetchSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   setIntegrationCredentialLoader(async () => ({ apiKey: SECRET }));
+  // Cofre R-2: a credential-bearing api_call must declare the hosts it may reach. These specs all
+  // target api.example.com, so that is this integration's binding.
+  setIntegrationOriginResolver(async () => ['api.example.com']);
   // A 200 so the executor persists resolvedAction on the success path.
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }),

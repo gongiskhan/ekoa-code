@@ -122,6 +122,7 @@ export {
   setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,

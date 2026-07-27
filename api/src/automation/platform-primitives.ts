@@ -14,8 +14,12 @@ import { getAppDataStore, executeIntegrationAction, callPlatformIntegration } fr
 import { interpolate } from './template-vars.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+// Cofre R-1: file.read/file.write used to honour any absolute path on the API host. They are now
+// contained to a per-owner workspace by the same resolver semantics the daemon has had since
+// ADR-001 (real-path checked, symlink-escape proof, write-safe for not-yet-created leaves).
+import { resolveContained, PathContainmentError } from '../security/path-containment.js';
+import { loadAutomationConfig } from './config.js';
 
 export type TemplateRef = string; // "{{inputs.email}}" or "{{captured.clientId}}"
 
@@ -205,14 +209,14 @@ async function executePrimitive(p: PlatformPrimitive, ctx: EkoaActionContext): P
         return;
       }
       case 'file.read': {
-        const path = resolveUserPath(renderRef(p.path, ctx) as string, ctx.userId);
+        const path = resolveUserPath(renderRef(p.path, ctx) as string, ctx.orgId, ctx.userId);
         const content = readFileSync(path, 'utf8');
         ctx.captured[p.returnAs] = content;
         ctx.trace.push({ op: p.op, summary: `file.read ${path} → ${content.length} bytes`, durationMs: Date.now() - opStart, status: 'ok' });
         return;
       }
       case 'file.write': {
-        const path = resolveUserPath(renderRef(p.path, ctx) as string, ctx.userId);
+        const path = resolveUserPath(renderRef(p.path, ctx) as string, ctx.orgId, ctx.userId);
         const content = renderRef(p.content, ctx) as string;
         if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content, 'utf8');
@@ -321,12 +325,43 @@ function validateRule(rule: ValidateRule, value: unknown): boolean {
   }
 }
 
-function resolveUserPath(path: string, _userId: string): string {
-  // Expand ~ to home dir; reject absolute paths outside the user's sandbox? For now: trust user-issued paths via Ekoa actions, since manifests are authored by the coding agent under our control.
-  if (path.startsWith('~/')) return resolve(homedir(), path.slice(2));
-  if (path === '~') return homedir();
-  if (isAbsolute(path)) return path;
-  return resolve(homedir(), path);
+/**
+ * The per-owner action workspace: `<dataDir>/action-workspace/<orgId>/<userId>`. Created on demand
+ * so the containment resolver always has a real directory to realpath.
+ *
+ * This replaces a `homedir()`-rooted resolver that honoured absolute paths verbatim — i.e. gave a
+ * MODEL-authored recipe unrestricted read/write over the API host (Cofre R-1, invariants I5/I1/I2/
+ * I4). Recipes never legitimately needed the host's home directory; they need a scratch space.
+ */
+function actionWorkspaceRoot(orgId: string, userId: string): string {
+  const root = join(loadAutomationConfig().dataDir, 'action-workspace', safeSegment(orgId), safeSegment(userId));
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
+/** An id is an opaque token from our own store, but it forms a path segment here — refuse anything
+ *  that could climb out of the workspace even before containment runs. */
+function safeSegment(id: string): string {
+  if (!id || id.includes('/') || id.includes('\\') || id.includes('\0') || id === '.' || id === '..') {
+    throw new EkoaActionFailure(`unsafe identifier for a workspace path: ${JSON.stringify(id)}`);
+  }
+  return id;
+}
+
+/**
+ * Resolve a recipe-supplied path inside the caller's workspace. `~` is no longer the host's home
+ * directory: it means the workspace root, so an existing recipe written as `~/notes.json` keeps
+ * working while `~/.ssh/id_rsa` resolves inside the workspace and is then refused by the denylist.
+ */
+function resolveUserPath(path: string, orgId: string, userId: string): string {
+  const root = actionWorkspaceRoot(orgId, userId);
+  const requested = path === '~' ? '.' : path.startsWith('~/') ? path.slice(2) : path;
+  try {
+    return resolveContained(root, requested).real;
+  } catch (err) {
+    if (err instanceof PathContainmentError) throw new EkoaActionFailure(err.reason);
+    throw err;
+  }
 }
 
 // Pluggable hook so the executor can wire artifact.invoke without a

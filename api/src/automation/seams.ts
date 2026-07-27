@@ -153,6 +153,28 @@ export function loadIntegrationCredentialFields(
   return credentialLoader(integrationKey, ownerUserId);
 }
 
+// ---- Bound origins for a credential (Cofre R-2, invariant I6) --------------
+//
+// The api_call step interpolates a decrypted credential into a URL the MODEL wrote, so the
+// destination and the credential have independent provenance. The integration's own declared base
+// URL is the interim binding (the Cofre's per-item `boundOrigins` replaces this in WS-C without
+// moving the enforcement point). `automation/` does not import `integrations/`, hence the seam.
+
+export type IntegrationOriginResolver = (integrationKey: string) => Promise<string[]>;
+
+/** DEFAULT IS REFUSE. An unbound credential must not fall back to "any public host" — that is
+ *  precisely the hole R-2 closes, and a permissive default would reopen it for every caller that
+ *  forgets to bind the seam. */
+const defaultOriginResolver: IntegrationOriginResolver = async () => [];
+let originResolver: IntegrationOriginResolver = defaultOriginResolver;
+export function setIntegrationOriginResolver(fn: IntegrationOriginResolver): void {
+  originResolver = fn;
+}
+/** Hosts the named integration's credential may be sent to. Empty → the api_call step refuses. */
+export function loadIntegrationBoundOrigins(integrationKey: string): Promise<string[]> {
+  return originResolver(integrationKey);
+}
+
 // ============================================================================
 // Scoped memory grounding (ch02 `memory/`) — the engine may import memory/ per
 // §2.7, but the entity-scoped resolver with a snippet cap is not on memory/'s
@@ -366,6 +388,7 @@ export function __resetAutomationSeamsForTests(): void {
   integrationExecutor = defaultIntegrationExecutor;
   platformCaller = defaultPlatformCaller;
   credentialLoader = defaultCredentialLoader;
+  originResolver = defaultOriginResolver;
   scopedMemoryResolver = defaultScopedMemoryResolver;
   appDataStore = defaultAppDataStore;
   artifactResolver = defaultArtifactResolver;

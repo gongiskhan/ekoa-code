@@ -19,7 +19,11 @@ import type {
 } from '../types.js';
 import type { RunContext } from '../engine.js';
 import { interpolate } from '../template-vars.js';
-import { loadIntegrationCredentialFields as loadDecryptedCredentialFields } from '../seams.js';
+import {
+  loadIntegrationCredentialFields as loadDecryptedCredentialFields,
+  loadIntegrationBoundOrigins,
+} from '../seams.js';
+import { assertOriginAllowed, CredentialOriginError } from '../../security/origin-binding.js';
 import { guardedFetch } from '../../services/url-fetcher.js';
 import { SsrfError } from '../../services/url-safety.js';
 // Cofre R-6: one value-keyed masker for the whole repo. The private copy that used to live in this
@@ -99,6 +103,27 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   }
   const resolvedBody = spec.body ? interpolate(spec.body, inputs, undefined, integrationFields) : undefined;
   const bodyKind = spec.bodyKind ?? (resolvedBody ? 'json' : 'none');
+
+  // ORIGIN BINDING (Cofre R-2, invariant I6). `spec.url` is MODEL-authored and, since rehearsal.ts
+  // lets the mid-run fixer rewrite it, is not covered by the planner's checks. A decrypted
+  // credential may therefore only leave for a host the integration itself declares. Checked AFTER
+  // interpolation (the binding is about where the bytes actually go) and BEFORE the request.
+  if (spec.authIntegrationKey) {
+    try {
+      const allowedOrigins = await loadIntegrationBoundOrigins(spec.authIntegrationKey);
+      assertOriginAllowed(resolvedUrl, { allowedOrigins, credentialLabel: spec.authIntegrationKey });
+    } catch (err) {
+      if (err instanceof CredentialOriginError) {
+        return finishRecord(baseRecord, 'failed', stepStart, {
+          tier: 'cache',
+          // The URL is NOT echoed: a refused destination is attacker-chosen text and this record is
+          // persisted and surfaced. The host and the binding are in the error's own message.
+          error: { message: err.message, recoverable: false },
+        });
+      }
+      throw err;
+    }
+  }
 
   // Default content-type by bodyKind when caller didn't set it
   if (resolvedBody && !findHeader(resolvedHeaders, 'content-type')) {
