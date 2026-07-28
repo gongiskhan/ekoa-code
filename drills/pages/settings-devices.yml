@@ -1,0 +1,103 @@
+id: settings-devices
+title: Aprovação de dispositivos
+path: /settings/devices
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Aprovação de dispositivos" heading with its subtitle explaining that a new device (such as the local bridge) is authorised by entering the code it displays.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Aprovação de dispositivos" }
+    assertionSource: authored
+  - id: code-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Código do dispositivo" input is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Código do dispositivo" }
+    assertionSource: authored
+  - id: code-format-hinted
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The input shows the expected code shape as a placeholder ("XXXX-XXXX").
+    tags: [ux]
+    judgment: false
+    assertion: { kind: visible, placeholder: "XXXX-XXXX" }
+    assertionSource: authored
+  - id: approve-and-deny-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Both the "Aprovar" and "Recusar" actions are offered.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Recusar" }
+    assertionSource: authored
+  - id: approve-disabled-when-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With no code entered, the "Aprovar" button is disabled - a device cannot be authorised by an empty submission.
+    tags: [functionality, security, validation]
+    judgment: false
+    assertion: { kind: attribute-equals, role: button, name: "Aprovar", attribute: disabled, value: "" }
+    assertionSource: authored
+  - id: invalid-code-rejected-clearly
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, submitting a well-formed but non-existent code shows a clear error explaining the code is invalid or expired - it must not silently succeed, and it must not leave the user staring at an unchanged form.
+    actions:
+      - fill the "Código do dispositivo" field with "ZZZZ-ZZZZ"
+      - click the "Aprovar" button
+    tags: [functionality, security, error-handling]
+    judgment: false
+  - id: malformed-code-handled
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, entering a code that does not match the XXXX-XXXX shape either keeps the Aprovar button disabled or produces a clear format error - it does not send a malformed code and fail obscurely.
+    actions:
+      - fill the "Código do dispositivo" field with "abc"
+      - click the "Aprovar" button
+    tags: [functionality, validation]
+    judgment: false
+  - id: expiry-communicated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The helper text under the field tells the user the code's format and that it is valid for 10 minutes, so an expired-code failure is understandable rather than mysterious.
+    tags: [ux]
+    judgment: false
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The single-card layout is balanced - the card is not stretched full-width for one short input, the primary Aprovar and the destructive-looking Recusar are visually distinguished by weight and colour, and the helper text sits close under its field.
+    tags: [visual, polish]
+    judgment: true

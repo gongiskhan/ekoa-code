@@ -1,0 +1,125 @@
+id: knowledge
+title: O que a Ekoa sabe (knowledge base)
+path: /knowledge
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "O que a Ekoa sabe" heading with its subtitle about sourced, citable documents.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "O que a Ekoa sabe" }
+    assertionSource: authored
+  - id: learned-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "O que a Ekoa aprendeu" button is present in the page header.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "O que a Ekoa aprendeu" }
+    assertionSource: authored
+  - id: explainer-banner-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The explainer banner "Os agentes da Ekoa usam esta base primeiro." is shown above the tabs.
+    tags: [functionality, ux]
+    judgment: false
+    assertion: { kind: text-contains, text: "Os agentes da Ekoa usam esta base primeiro." }
+    assertionSource: authored
+  - id: tabs-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The tab row offers Fornecido, Fontes and Documentos.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: text-contains, text: "Fontes" }
+    assertionSource: authored
+  - id: fornecido-empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: On the default "Fornecido" tab with no documents, the page shows the centred empty state "Ainda não há documentos nesta base." with the hint pointing at «Documentos» and «Fontes», plus the "Todas" filter chip - not a blank panel.
+    tags: [functionality, ux]
+    judgment: false
+  - id: fontes-tab-shows-add-source-form
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Fontes" tab is selected and its "Adicionar fonte" form is shown with Nome, Coleção and URL fields, the "Níveis de links", "Âmbito" and "Máx. páginas" controls, and the "Renderizar com navegador (JS/SPA)" checkbox.
+    actions:
+      - click the "Fontes" tab
+    tags: [functionality, navigation]
+    judgment: false
+  - id: documentos-tab-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Documentos" tab is selected and shows its document-upload interface (or a clear empty state) - never a blank panel or a panel still showing the Fontes form.
+    actions:
+      - click the "Documentos" tab
+    tags: [functionality, navigation]
+    judgment: false
+  - id: add-source-validates-url
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions - opening Fontes and submitting the add-source form with a name but no URL - the form does not silently accept it; it either blocks submission with visible validation feedback on the URL field or keeps the submit control disabled.
+    actions:
+      - click the "Fontes" tab
+      - fill the "Nome" field with "Fonte de teste"
+      - click the "Adicionar fonte" submit control
+    tags: [functionality, validation]
+    judgment: false
+  - id: learned-panel-opens
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "O que a Ekoa aprendeu" control opens a panel or view showing what the agents have learned - it does not leave the page unchanged or produce an error.
+    actions:
+      - click the "O que a Ekoa aprendeu" button
+    tags: [functionality]
+    judgment: false
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page is visually coherent - the tinted explainer banner is clearly a callout distinct from body copy, the tab row with its icons is evenly spaced and the active tab is unmistakably marked, and the content area below keeps the same left margin as the header.
+    tags: [visual, polish]
+    judgment: true
+  - id: source-form-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: On the Fontes tab the add-source form is well laid out - the Nome/Coleção pair and the Níveis de links / Âmbito / Máx. páginas trio align on shared rows, helper text sits under its own field, and no field or its hint text overflows the card.
+    actions:
+      - click the "Fontes" tab
+    tags: [visual, polish]
+    judgment: true

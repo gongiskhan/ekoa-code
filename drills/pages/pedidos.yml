@@ -1,0 +1,136 @@
+id: pedidos
+title: Pedidos (change requests)
+path: /pedidos
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The page shows the "Pedidos" heading with its subtitle about change
+      requests sent by users from the apps.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: text-contains
+      text: Pedidos
+  - id: state-filter-defaults-open
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: The "Estado" filter defaults to "Abertos" (open requests).
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: text-contains
+      text: Abertos
+  - id: empty-state-message
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      With no change requests, the page shows the "Sem pedidos de alteração."
+      empty state.
+    tags:
+      - functionality
+      - ux
+    judgment: false
+    assertion:
+      kind: text-contains
+      text: Sem pedidos de alteração.
+  - id: office-filter-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The office scope filter ("Todos os escritórios") is present in the filter
+      bar.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: text-contains
+      text: Todos os escritórios
+  - id: state-filter-switches-view
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, switching the "Estado" filter away from "Abertos"
+      reloads the list for the newly selected state - the content area updates
+      (a different set of requests or a matching empty message) rather than
+      staying frozen on the previous result.
+    actions:
+      - select a different option in the "Estado" dropdown
+    tags:
+      - functionality
+      - filtering
+    judgment: false
+  - id: empty-state-polish
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The empty state is centred with its icon above the message and reads as
+      deliberate design rather than a page that failed to load; the filter bar
+      above it spans the same width as the page header.
+    tags:
+      - visual
+      - polish
+    judgment: true
+    spec: tests/drills/pedidos.spec.ts#empty-state-polish
+  - id: request-row-actions
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: populated
+    description: >-
+      With at least one change request present, each entry shows who sent it,
+      which app it came from and when, plus the two actions the page description
+      promises - converting it into a review and dismissing it.
+    tags:
+      - functionality
+    judgment: true
+states:
+  - id: populated
+    label: At least one change request exists
+    reachPath:
+      - id: submit-request
+        description: >-
+          submit a change request from one of the served apps so that it appears
+          in this list; if no such request can be created in this environment,
+          skip the state
+spotter:
+  stability:
+    phash:
+      decision: drop
+      runs: 1
+      lastRunId: 01KYNADECP6S8AMQSNM0360AZP
+      annotation: >-
+        /pedidos loaded — same visual state as frame-0024 which is more
+        definitive (step-end); drop the earlier phash duplicate.
+  rules: []

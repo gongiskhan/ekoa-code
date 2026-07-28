@@ -1,0 +1,135 @@
+id: settings-api-keys
+title: Chaves de API
+path: /settings/api-keys
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Chaves de API" heading with its subtitle explaining that keys connect Anthropic-compatible tools and that consumption is billed to the account.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Chaves de API" }
+    assertionSource: authored
+  - id: name-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Nome da chave" input is present in the create-key card.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Nome da chave" }
+    assertionSource: authored
+  - id: create-disabled-when-unnamed
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With no key name entered, the "Criar chave" button is disabled.
+    tags: [functionality, validation]
+    judgment: false
+    assertion: { kind: attribute-equals, role: button, name: "Criar chave", attribute: disabled, value: "" }
+    assertionSource: authored
+  - id: keys-section-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "As suas chaves" section listing existing keys is present below the create form.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "As suas chaves" }
+    assertionSource: authored
+  - id: create-reveals-key-once
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the new key is revealed exactly once in a highlighted "Guarde a sua chave agora" panel that warns "Esta chave não volta a ser mostrada", shows the full ekoa_gk_ token in a selectable field with a "Copiar chave" button, and offers a "Já guardei a chave" dismiss control.
+    actions:
+      - fill the "Nome da chave" field with "Chave de teste drill"
+      - click the "Criar chave" button
+    tags: [functionality, security]
+    judgment: false
+  - id: client-config-snippet-shown
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the reveal panel includes a "Configuração do cliente" snippet giving both ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN, and the base URL points at this platform's own LLM gateway path (/api/v1/llm) rather than at api.anthropic.com directly.
+    actions:
+      - fill the "Nome da chave" field with "Chave de teste drill"
+      - click the "Criar chave" button
+    tags: [functionality, security]
+    judgment: false
+  - id: key-masked-in-list
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: In the "As suas chaves" table the key value is masked (an ekoa_gk_ prefix, an ellipsis and only a short suffix) - the full secret is never shown again after the one-time reveal.
+    tags: [security]
+    judgment: false
+  - id: key-row-metadata-correct
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: A newly created key's row shows its name, a real CRIADA date (today's date, not a dash or "Invalid Date"), "Nunca usada" under ÚLTIMA UTILIZAÇÃO, and an "Ativa" status pill.
+    tags: [functionality, data]
+    judgment: false
+  - id: revoke-confirms-first
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: After the action, revoking a key asks for confirmation before it takes effect - clicking the red revoke icon must not irreversibly kill the key with no prompt; once confirmed, the row's status stops reading "Ativa".
+    actions:
+      - click the red revoke icon at the end of the key's row
+    tags: [functionality, safety]
+    judgment: false
+  - id: dismiss-hides-reveal-panel
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, pressing "Já guardei a chave" removes the reveal panel and the plaintext key is no longer anywhere on the page, while the key itself remains listed (masked) in "As suas chaves".
+    actions:
+      - fill the "Nome da chave" field with "Chave de teste drill"
+      - click the "Criar chave" button
+      - click the "Já guardei a chave" button
+    tags: [functionality, security]
+    judgment: false
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page is well composed - the create-key card, the reveal panel and the key table share the same width and left edge, the warning line about the key not being shown again is unmistakably urgent without being garish, and the config snippet uses a legible monospace block.
+    tags: [visual, polish]
+    judgment: true
+states:
+  - id: populated
+    label: At least one API key exists
+    reachPath:
+      - id: name-key
+        description: fill the "Nome da chave" field with "Chave de teste drill"
+      - id: create-key
+        description: click the "Criar chave" button
+      - id: dismiss-reveal
+        description: click the "Já guardei a chave" button so the key list is visible

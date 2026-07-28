@@ -1,0 +1,119 @@
+id: automations
+title: Automatizações (list)
+path: /automations
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: The page shows the "Automatizações" heading.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: text-contains
+      text: Automatizações
+  - id: create-cta-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: The "Criar automatização" call-to-action button is present.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: visible
+      role: button
+      name: Criar automatização
+  - id: on-automations-url
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: The browser stays on the /automations route.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: url-matches
+      pattern: /automations
+  - id: content-renders-not-stuck-loading
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The page settles into real content - either the empty state ("Ainda não há
+      automatizações" with its explanatory copy) or a list of automation
+      entries. It is never a blank page or a spinner that stays on "A carregar
+      automatizações...".
+    tags:
+      - functionality
+    judgment: false
+    spec: tests/drills/automations.spec.ts#content-renders-not-stuck-loading
+    assertion:
+      kind: text-contains
+      text: Ainda não há automatizações
+  - id: create-cta-navigates-to-new
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the browser is on /automations/new and the "Nova
+      automatização" form is shown.
+    actions:
+      - id: __act-0
+        description: click the "Criar automatização" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar automatização
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/automations.spec.ts#create-cta-navigates-to-new
+    assertion:
+      kind: url-matches
+      pattern: /automations/new
+      mode: contains
+  - id: empty-state-polish
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The page content is centred and balanced - the icon, heading, explanatory
+      paragraph and CTA form one coherent, readable block (or, when automations
+      exist, the entries form a tidy, consistently spaced list); nothing is
+      misaligned, clipped or floating oddly in the whitespace.
+    tags:
+      - visual
+      - polish
+    judgment: true
+    spec: tests/drills/automations.spec.ts#empty-state-polish
+spotter:
+  stability:
+    step-end:
+      decision: drop
+      runs: 1
+      lastRunId: 01KYNADECP6S8AMQSNM0360AZP
+      annotation: Identical to frame-0001; redundant duplicate of the loaded empty state.
+  rules: []

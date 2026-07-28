@@ -1,0 +1,188 @@
+id: chat
+title: Chat (assistant workspace)
+path: /chat
+mode: steps
+areas: []
+steps:
+  - id: composer-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The message composer is present with its placeholder "Escreva a sua mensagem...".
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, placeholder: "Escreva a sua mensagem..." }
+    assertionSource: authored
+  - id: send-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Enviar mensagem" send button is present in the composer.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Enviar mensagem" }
+    assertionSource: authored
+  - id: attach-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Anexar ficheiro" attach button is present in the composer.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Anexar ficheiro" }
+    assertionSource: authored
+  - id: voice-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The voice dictation button is present in the composer.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Ditar por voz. Mantenha premido para o modo mãos-livres." }
+    assertionSource: authored
+  - id: topbar-controls-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The user menu button is present in the top bar.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Menu do utilizador" }
+    assertionSource: authored
+  - id: language-switcher-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Mudar idioma" language switcher is present in the top bar.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Mudar idioma" }
+    assertionSource: authored
+  - id: token-meter-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The top bar shows the token usage meter (the word "Tokens" with a quota readout).
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Tokens" }
+    assertionSource: authored
+  - id: lands-on-chat-url
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /chat keeps the user on a chat URL (it may redirect to a concrete session id under /chat/).
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/chat" }
+    assertionSource: authored
+  - id: sessions-panel-opens
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the sessions panel is open, it shows the "SESSÕES" header, a "Pesquisar sessões..." search box, and a "Nova Sessão" button.
+    actions:
+      - click the "Expandir Sessões" button
+    tags: [functionality]
+    judgment: false
+  - id: new-session-starts-empty-chat
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, a fresh chat session is active - the message transcript area is empty (no prior user or agent messages) and the composer is ready for input.
+    actions:
+      - click the "Expandir Sessões" button
+      - click the "Nova Sessão" button
+    tags: [functionality]
+    judgment: false
+  - id: typed-message-appears-in-transcript
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the typed text "Olá, teste de drill" appears as a user message bubble in the chat transcript (an agent error reply is acceptable - only the user bubble is being checked).
+    actions:
+      - type "Olá, teste de drill" into the "Escreva a sua mensagem..." composer
+      - click the "Enviar mensagem" button
+    tags: [functionality]
+    judgment: false
+  - id: sidebar-expands-with-labels
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the left navigation sidebar is expanded and shows the labelled links Chat, Automatizações, Artefactos, Integrações, Memória, O que a Ekoa sabe, Marca, Utilizadores, Registo, Pedidos and Escritórios, plus Privacidade e ponte local, Chaves de API and Configurações at the bottom.
+    actions:
+      - click the "Alternar barra lateral" button
+    tags: [functionality, navigation]
+    judgment: false
+  - id: user-menu-shows-account-and-logout
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the user menu is open and shows the account name "admin", the role "super-admin" and a "Terminar Sessao" logout entry.
+    actions:
+      - click the "Menu do utilizador" button
+    tags: [functionality]
+    judgment: false
+  - id: output-panel-hides
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the right-hand "Folhas" output panel is collapsed/hidden and the chat transcript column widens to use the freed space.
+    actions:
+      - click the "Ocultar painel" button
+    tags: [functionality]
+    judgment: false
+  - id: chat-layout-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The chat workspace looks polished - the icon sidebar, transcript column and "Folhas" output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.
+    tags: [visual, polish]
+    judgment: true
+  - id: transcript-readability
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated-session
+    description: In a session with messages, user messages render as dark right-aligned bubbles and agent replies as left-aligned entries with the "Agente EKOA" label, avatar and timestamp - the two sides are visually distinct at a glance and timestamps are legible.
+    tags: [visual, ux]
+    judgment: true
+states:
+  - id: populated-session
+    label: A chat session that already contains user and agent messages
+    reachPath:
+      - id: open-sessions
+        description: click the "Expandir Sessões" button to open the sessions panel
+      - id: pick-session
+        description: click the first session card in the sessions list; if the list is empty, first send the message "Olá" from the composer and wait for the reply to appear, then this session is the populated one

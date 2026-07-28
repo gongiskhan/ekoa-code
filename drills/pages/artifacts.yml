@@ -1,0 +1,112 @@
+id: artifacts
+title: Os Meus Artefactos (artifact gallery)
+path: /artifacts
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Os Meus Artefactos" heading with the built-artifact count subtitle.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Os Meus Artefactos" }
+    assertionSource: authored
+  - id: import-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Importar artefacto" button is present in the page header.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Importar artefacto" }
+    assertionSource: authored
+  - id: search-box-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Pesquisar artefactos..." search box is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, placeholder: "Pesquisar artefactos..." }
+    assertionSource: authored
+  - id: filter-chips-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The status filter chip row is present (at least the "Todos" and "Em Execução" chips).
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Todos" }
+    assertionSource: authored
+  - id: cards-render
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Multiple artifact cards render, each with a "Usar" action (at least 4 on the default view).
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: count, role: button, name: "Usar", op: gte, value: 4 }
+    assertionSource: authored
+  - id: customize-action-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Artifact cards offer the secondary "Personalizar no chat" action.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Personalizar no chat" }
+    assertionSource: authored
+  - id: search-filters-grid
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the grid narrows to matching artifacts only - a single "Helpdesk" card remains visible (the other cards are filtered out).
+    actions:
+      - type "Helpdesk" into the "Pesquisar artefactos..." search box
+    tags: [functionality, search]
+    judgment: false
+  - id: status-chip-filters
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Prontos" chip is visibly selected (active styling replaces "Todos") and the grid updates to show only artifacts in that status - or a clear "no results" style message if none match. The grid never errors or goes blank.
+    actions:
+      - click the "Prontos" filter chip
+    tags: [functionality]
+    judgment: false
+  - id: thumbnails-render
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Every visible artifact card shows a rendered preview thumbnail - no broken-image icons, no permanently empty grey placeholders. (At authoring time the page logged four 404 network errors on load; if a card's preview is missing this check should fail.)
+    tags: [functionality, visual]
+    judgment: true
+  - id: gallery-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The gallery reads as a tidy grid - cards are equal width, aligned in rows, titles do not overflow, the chip row and search box sit on one header line, and the "Aplicações" section header with its description is clearly separated from the cards.
+    tags: [visual, polish]
+    judgment: true

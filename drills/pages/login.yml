@@ -1,0 +1,201 @@
+id: login
+title: Iniciar sessão (login)
+path: /login
+mode: steps
+# This page's default state is the SIGNED-OUT login form. The app redirects /login to /chat
+# whenever a session is active, so a runner holding a cached session must sign out (user menu ->
+# "Terminar Sessao") before judging these checks; landing on /chat means the page was never reached.
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The login card shows the "Iniciar sessão" heading with its "Inicie sessão para aceder ao painel" subtitle.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Iniciar sessão" }
+    assertionSource: authored
+  - id: username-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Nome de utilizador" field is present - this product signs in by username, not by email address.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Nome de utilizador" }
+    assertionSource: authored
+  - id: password-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Palavra-passe" field is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Palavra-passe" }
+    assertionSource: authored
+  - id: submit-disabled-when-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With both fields empty, the "Entrar" button is disabled.
+    tags: [functionality, validation]
+    judgment: false
+    assertion: { kind: attribute-equals, role: button, name: "Entrar", attribute: disabled, value: "" }
+    assertionSource: authored
+  - id: forgot-password-link-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Esqueceu-se da palavra-passe?" recovery link is offered.
+    tags: [functionality, ux]
+    judgment: false
+    assertion: { kind: visible, role: link, name: "Esqueceu-se da palavra-passe?" }
+    assertionSource: authored
+  - id: remember-me-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Manter sessão iniciada" option is offered next to the password field.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Manter sessão iniciada" }
+    assertionSource: authored
+  - id: stays-on-login-when-signed-out
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /login while signed out leaves the browser on /login rather than bouncing elsewhere.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/login" }
+    assertionSource: authored
+  - id: wrong-password-shows-generic-error
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, signing in with a valid username and a wrong password shows the generic error "Credenciais inválidas." in the card and leaves the user on the login page. The message must NOT reveal which of the two was wrong or whether the account exists.
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "senhaerrada999"
+      - click the "Entrar" button
+    tags: [security, error-handling]
+    judgment: false
+  - id: unknown-user-error-identical
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, signing in with a username that does not exist produces the same generic "Credenciais inválidas." message as a wrong password does - no account enumeration through differing copy or differing response time.
+    actions:
+      - fill the "Nome de utilizador" field with "utilizadorinexistente"
+      - fill the "Palavra-passe" field with "seja-o-que-for"
+      - click the "Entrar" button
+    tags: [security]
+    judgment: false
+  - id: successful-login-lands-on-chat
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the correct credentials sign the user in and the browser lands on the chat workspace - the dashboard chrome (icon sidebar, top bar with the token meter and user menu) is visible and no login form remains.
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "tmp12345"
+      - click the "Entrar" button
+    tags: [functionality, auth]
+    judgment: false
+  - id: submit-shows-pending-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, while the sign-in request is in flight the "Entrar" button shows a pending state (spinner / disabled) so the user cannot double-submit and knows something is happening.
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "tmp12345"
+      - click the "Entrar" button
+    tags: [ux]
+    judgment: false
+  - id: password-reveal-toggle-works
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the eye toggle switches the password field from dots to readable plaintext and back.
+    actions:
+      - fill the "Palavra-passe" field with "tmp12345"
+      - click the "Mostrar palavra-passe" toggle
+    tags: [ux]
+    judgment: false
+  - id: forgot-password-goes-somewhere-real
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Esqueceu-se da palavra-passe?" link leads to a real recovery route or a clear explanation of how to recover access - it is not a dead link that leaves the page unchanged or lands on a 404.
+    actions:
+      - click the "Esqueceu-se da palavra-passe?" link
+    tags: [functionality, navigation]
+    judgment: false
+  - id: no-console-errors-on-load
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Loading the login page produces no browser console errors and no failed network requests - this is the app's first impression and the QA bar for it is zero console errors.
+    tags: [quality]
+    judgment: false
+  - id: remember-me-label-not-wrapped
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Manter sessão iniciada" label and the "Esqueceu-se da palavra-passe?" link each sit on a single line on the desktop card. Both wrapping to two lines inside a card this wide is a layout defect. (Observed at authoring time - both wrap.)
+    tags: [visual, polish]
+    judgment: false
+  - id: card-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The login screen is polished - the card is optically centred on the dark branded background, the Ekoa mark, heading and subtitle stack with even rhythm, the two fields share width and their leading icons align, and the primary "Entrar" button spans the card width with the footer wordmark clear beneath.
+    tags: [visual, polish]
+    judgment: true
+  - id: error-banner-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the error banner is well integrated - it appears inside the card above the fields with a soft red tint, it pushes the form down without making the card jump or overflow, and its text is legible against its background.
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "senhaerrada999"
+      - click the "Entrar" button
+    tags: [visual, polish]
+    judgment: true

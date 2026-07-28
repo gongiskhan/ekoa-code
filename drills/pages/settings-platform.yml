@@ -1,0 +1,136 @@
+id: settings-platform
+title: Configurações da Plataforma
+path: /settings/platform
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Configurações da Plataforma" heading with its "Configuração geral e opções avançadas" subtitle.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Configurações da Plataforma" }
+    assertionSource: authored
+  - id: platform-name-setting-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Nome da Plataforma" setting is present in the Geral section.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Nome da Plataforma" }
+    assertionSource: authored
+  - id: timezone-setting-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Fuso Horário" setting is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Fuso Horário" }
+    assertionSource: authored
+  - id: language-setting-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The Idioma setting offers "Português (Portugal)" alongside English.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Português (Portugal)" }
+    assertionSource: authored
+  - id: chat-settings-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The Chat section exposes the "Modo Guiado" toggle governing assistant behaviour.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Modo Guiado" }
+    assertionSource: authored
+  - id: guidance-level-section-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Nível de orientação" section is present further down the page.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Nível de orientação" }
+    assertionSource: authored
+  - id: language-selection-matches-ui
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The Idioma control's highlighted option agrees with the language the app is actually rendering and with the top bar's language indicator. Since the whole interface renders in Portuguese and the top bar reads "PT", "Inglês" must not be the selected option. (Observed defect at authoring time - "Inglês" was highlighted on a fully Portuguese UI.)
+    tags: [functionality, i18n]
+    judgment: false
+  - id: platform-name-persists
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, changing the platform name and reloading the page keeps the new value in the field - the setting is saved, not lost on navigation. If saving requires an explicit save button, that button must be visible rather than assumed.
+    actions:
+      - fill the "Nome da Plataforma" field with "Ekoa QA"
+      - press Tab to blur the field
+      - reload the page
+    tags: [functionality, persistence]
+    judgment: false
+  - id: language-switch-changes-ui
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, selecting "Português (Portugal)" leaves the interface fully in Portuguese with no untranslated English strings appearing in the navigation or section headers.
+    actions:
+      - click the "Português (Portugal)" language option
+    tags: [functionality, i18n]
+    judgment: false
+  - id: guided-mode-toggle-responds
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, toggling "Modo Guiado" visibly flips the switch and the change is acknowledged (saved indicator or persisted state) - it does not spring back to its original position.
+    actions:
+      - click the "Modo Guiado" toggle switch
+    tags: [functionality]
+    judgment: false
+  - id: timezone-dropdown-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Fuso Horário" dropdown opens with a real list of selectable timezones - not an empty list or a single hardcoded entry.
+    actions:
+      - click the "Fuso Horário" dropdown
+    tags: [functionality]
+    judgment: false
+  - id: settings-rows-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Every settings row follows one pattern - label and description on the left, control right-aligned on the same baseline, rows separated by hairline dividers within a card, and sections introduced by a small title plus grey caption. No control is orphaned or vertically misaligned with its label.
+    tags: [visual, polish]
+    judgment: true

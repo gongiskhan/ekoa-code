@@ -1,0 +1,124 @@
+id: registo
+title: Registo (audit log)
+path: /registo
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Registo" heading with its subtitle explaining that only metadata and artifacts are logged, never conversations.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Registo" }
+    assertionSource: authored
+  - id: filter-bar-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The filter bar offers the office scope filter ("Todos os escritórios") alongside user, action-type and date-range filters.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Todos os escritórios" }
+    assertionSource: authored
+  - id: action-type-filter-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: 'The "Tipo de ação" filter input is present with its "ex.: build" placeholder.'
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, placeholder: "ex.: build" }
+    assertionSource: authored
+  - id: apply-button-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Aplicar" button that submits the filter selection is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Aplicar" }
+    assertionSource: authored
+  - id: activity-table-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "ATIVIDADE" section renders with its entry count and the log table below it.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "ATIVIDADE" }
+    assertionSource: authored
+  - id: login-event-recorded
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The audit log records the sign-in that this run performed - an "auth.login" entry is present.
+    tags: [functionality, audit]
+    judgment: false
+    assertion: { kind: text-contains, text: "auth.login" }
+    assertionSource: authored
+  - id: action-filter-narrows-log
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, the activity table shows only rows whose AÇÃO badge starts with "session" - the entry count above the table updates to match, and unrelated actions such as auth.login are gone.
+    actions:
+      - type "session" into the "Tipo de ação" filter field
+      - click the "Aplicar" button
+    tags: [functionality, filtering]
+    judgment: false
+  - id: no-conversation-content-leaked
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Consistent with the page's own promise ("Apenas metadados e artefactos - nunca conversas"), no row exposes chat message text or prompt content - the ARTEFACTOS column holds only identifiers, never prose the user typed into the assistant.
+    tags: [privacy, security]
+    judgment: true
+  - id: timestamps-well-formed
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Every DATA E HORA cell shows a properly formatted date and time - no "Invalid Date", no raw epoch numbers, no empty cells.
+    tags: [functionality, data]
+    judgment: false
+  - id: date-range-filter-works
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, applying a date range that ends before any activity existed leaves the table with no rows and a clear empty indication rather than silently showing the unfiltered log.
+    actions:
+      - fill the "De" date field with "01/01/2020"
+      - fill the "Até" date field with "01/02/2020"
+      - click the "Aplicar" button
+    tags: [functionality, filtering]
+    judgment: false
+  - id: table-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The log reads cleanly at a glance - action names render as consistently styled badges, the long artifact UUIDs use a monospace treatment and do not push other columns out of alignment, and rows have enough vertical rhythm to scan without eye strain.
+    tags: [visual, polish]
+    judgment: true

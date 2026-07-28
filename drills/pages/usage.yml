@@ -1,0 +1,99 @@
+id: usage
+title: Utilização (token consumption)
+path: /usage
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Utilização" heading with its subtitle about per-user token consumption and limit management.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Utilização" }
+    assertionSource: authored
+  - id: table-headers-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The usage table renders its column headers, including UTILIZADOR.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "UTILIZADOR" }
+    assertionSource: authored
+  - id: last-login-column-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The table includes the "ÚLTIMO INÍCIO DE SESSÃO" column.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "ÚLTIMO INÍCIO DE SESSÃO" }
+    assertionSource: authored
+  - id: reset-action-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Each user row offers a "Repor" (reset quota) action.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Repor" }
+    assertionSource: authored
+  - id: current-user-row-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The signed-in admin account appears as a row in the usage table.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "admin" }
+    assertionSource: authored
+  - id: last-login-reflects-session
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "ÚLTIMO INÍCIO DE SESSÃO" cell for the signed-in admin shows a real timestamp, since this very run logged in as that account. It must not read "nunca". (Observed defect at authoring time - the column read "nunca" while the session was active.)
+    tags: [functionality, data]
+    judgment: false
+  - id: quota-figures-consistent
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: For each row the USADO, RESTANTE and % values are mutually consistent - the percentage matches used against the total quota, and the remaining figure equals the quota minus what was used.
+    tags: [functionality, data]
+    judgment: true
+  - id: reset-confirms-before-acting
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, pressing "Repor" does not silently wipe the quota - it either asks for confirmation first or gives clear visible feedback that the quota was reset (and the row's USADO / % update accordingly).
+    actions:
+      - click the "Repor" button on the admin row
+    tags: [functionality, ux]
+    judgment: false
+  - id: table-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The usage table looks clean - numeric columns are right-aligned, the percentage badge is consistently styled, the header row is visually distinct from the body, and the table card does not stretch awkwardly wide relative to its content.
+    tags: [visual, polish]
+    judgment: true

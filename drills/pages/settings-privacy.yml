@@ -1,0 +1,143 @@
+id: settings-privacy
+title: Privacidade e ponte local
+path: /settings/privacy
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Privacidade e ponte local" heading with its subtitle about the local bridge, read permissions and the log of everything leaving this computer.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Privacidade e ponte local" }
+    assertionSource: authored
+  - id: simple-install-section
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Instalação simples" card is present with the platform download control.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Instalação simples" }
+    assertionSource: authored
+  - id: platform-toggle-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The Mac/Windows platform toggle is present, with Windows offered as an alternative to the default.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Windows" }
+    assertionSource: authored
+  - id: step-by-step-guide-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Como ligar a ponte, passo a passo" numbered guide is present.
+    tags: [functionality, ux]
+    judgment: false
+    assertion: { kind: text-contains, text: "Como ligar a ponte, passo a passo" }
+    assertionSource: authored
+  - id: pairing-section-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Estado da ponte e emparelhamento" section is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Estado da ponte e emparelhamento" }
+    assertionSource: authored
+  - id: unpaired-status-shown
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With no bridge paired, the status reads "Ponte não emparelhada".
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Ponte não emparelhada" }
+    assertionSource: authored
+  - id: pairing-button-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Gerar código de emparelhamento" button is present in the pairing section.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Gerar código de emparelhamento" }
+    assertionSource: authored
+  - id: platform-toggle-switches-download
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, selecting Windows updates the download control to offer the Windows installer (its label stops saying "para Mac") and the accompanying unpack instructions change to the Windows wording.
+    actions:
+      - click the "Windows" toggle option
+    tags: [functionality]
+    judgment: false
+  - id: pairing-code-generated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, a pairing code is displayed for the user to enter in the bridge app - a visible code (with an expiry or copy affordance), not an unchanged page or an error.
+    actions:
+      - click the "Gerar código de emparelhamento" button
+    tags: [functionality]
+    judgment: false
+  - id: advanced-install-expands
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Instalação avançada (com Node.js e Terminal)" disclosure expands to reveal the terminal-based instructions.
+    actions:
+      - click the "Instalação avançada (com Node.js e Terminal)" disclosure
+    tags: [functionality]
+    judgment: false
+  - id: egress-log-reachable
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page delivers on the part of its subtitle about "o registo de tudo o que sai deste computador" - scrolling down reveals the read-permission controls and the egress log (or an explicit link to it), not just bridge installation instructions.
+    tags: [functionality, privacy]
+    judgment: true
+  - id: instructions-readable
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The step-by-step instructions are genuinely followable by a non-technical user - each numbered step is a single concrete action, the numbered badges align with their text, and the Node.js caveat is visibly de-emphasised as a footnote rather than competing with the main steps.
+    tags: [ux, polish]
+    judgment: true
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page reads as consistently structured sections - each has an icon-led title, a one-line explanation and a card below; the cards share a width and the pairing status pill is clearly a status rather than a button.
+    tags: [visual, polish]
+    judgment: true

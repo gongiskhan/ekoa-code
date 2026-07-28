@@ -1,0 +1,92 @@
+id: automations-new
+title: Nova automatização (create form)
+path: /automations/new
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Nova automatização" heading with its explanatory subtitle.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Nova automatização" }
+    assertionSource: authored
+  - id: objective-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The required "Objetivo (obrigatório)" textarea is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Objetivo (obrigatório)" }
+    assertionSource: authored
+  - id: name-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The optional "Nome (opcional)" input is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, label: "Nome (opcional)" }
+    assertionSource: authored
+  - id: cancel-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Cancelar" button is present.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Cancelar" }
+    assertionSource: authored
+  - id: draft-disabled-when-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With the objective empty, the "Esboçar passos" submit button is disabled.
+    tags: [functionality, validation]
+    judgment: false
+    assertion: { kind: attribute-equals, role: button, name: "Esboçar passos", attribute: disabled, value: "" }
+    assertionSource: authored
+  - id: draft-enables-after-objective
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Esboçar passos" button is enabled (no longer greyed out / disabled).
+    actions:
+      - fill the "Objetivo (obrigatório)" field with "Abrir o site da empresa e tirar um screenshot"
+    tags: [functionality, validation]
+    judgment: false
+  - id: cancel-returns-to-list
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the browser is back on /automations showing the automations list page.
+    actions:
+      - click the "Cancelar" button
+    tags: [functionality, navigation]
+    judgment: false
+  - id: form-layout-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The form reads as a tidy single column - labels sit directly above their fields, the placeholder example text in the objective textarea is legible, and the Cancelar / Esboçar passos buttons are right-aligned on one row without wrapping or misalignment.
+    tags: [visual, polish]
+    judgment: true

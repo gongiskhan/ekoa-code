@@ -1,0 +1,93 @@
+id: orgs
+title: Escritórios (offices / tenants)
+path: /orgs
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Escritórios" heading with its subtitle about creating, listing and renaming platform offices.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Escritórios" }
+    assertionSource: authored
+  - id: create-office-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Criar escritório" button is present in the page header.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Criar escritório" }
+    assertionSource: authored
+  - id: table-headers-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The offices table renders its columns, including NOME DE APRESENTAÇÃO.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "NOME DE APRESENTAÇÃO" }
+    assertionSource: authored
+  - id: default-office-listed
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The default "Founder" office is listed in the table.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Founder" }
+    assertionSource: authored
+  - id: create-office-dialog-opens
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, a create-office dialog or inline form opens with a name field and explicit save / cancel controls.
+    actions:
+      - click the "Criar escritório" button
+    tags: [functionality]
+    judgment: false
+  - id: rename-action-opens-editor
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the row's pencil action opens a rename editor pre-filled with the office's current name, offering a way to confirm and a way to cancel.
+    actions:
+      - click the pencil edit icon in the AÇÃO column of the "Founder" row
+    tags: [functionality]
+    judgment: false
+  - id: create-office-validates-name
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions - opening the create-office form and confirming with the name left blank - the office is not created; the form either blocks submission with visible validation feedback or keeps the confirm control disabled.
+    actions:
+      - click the "Criar escritório" button
+      - click the confirm/save button in the create-office form without entering a name
+    tags: [functionality, validation]
+    judgment: false
+  - id: table-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The table reads cleanly - the ID column uses a monospace, de-emphasised treatment that does not compete with the office name, the AÇÃO icon column is right-aligned, and the single-row table does not leave the card looking broken or stretched.
+    tags: [visual, polish]
+    judgment: true

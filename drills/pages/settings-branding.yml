@@ -1,0 +1,135 @@
+id: settings-branding
+title: Marca (brand research and design system)
+path: /settings/branding
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Marca" heading.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Marca" }
+    assertionSource: authored
+  - id: reset-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Repor" reset button is present in the page header.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Repor" }
+    assertionSource: authored
+  - id: tabs-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The tab row offers Pesquisa, Marca and "Sistema de Design".
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: text-contains, text: "Sistema de Design" }
+    assertionSource: authored
+  - id: url-field-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "URL do Website" input is present with its https://exemplo.com placeholder.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, placeholder: "https://exemplo.com" }
+    assertionSource: authored
+  - id: research-disabled-when-empty
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With no URL entered, the "Pesquisar Marca" button is disabled.
+    tags: [functionality, validation]
+    judgment: false
+    assertion: { kind: attribute-equals, role: button, name: "Pesquisar Marca", attribute: disabled, value: "" }
+    assertionSource: authored
+  - id: ai-and-memory-warnings-shown
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Both advisory callouts are shown before any research runs - "Os resultados podem necessitar de revisao" (AI-extracted results need checking) and "A memória da empresa sera atualizada" (saving replaces existing company-identity memories). These set expectations for a destructive, AI-driven action and must not be hidden behind a click.
+    tags: [ux, safety]
+    judgment: false
+  - id: research-enables-with-url
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Pesquisar Marca" button becomes enabled (no longer greyed out) once a website URL has been entered.
+    actions:
+      - fill the "URL do Website" field with "https://www.anthropic.com"
+    tags: [functionality, validation]
+    judgment: false
+  - id: invalid-url-rejected
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the actions, submitting a string that is not a URL does not start a silent failing research run - the page either blocks it with visible validation feedback on the field or surfaces a clear error message.
+    actions:
+      - fill the "URL do Website" field with "isto nao e um url"
+      - click the "Pesquisar Marca" button
+    tags: [functionality, validation]
+    judgment: false
+  - id: brand-tab-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Marca" tab is selected and shows the brand identity fields (such as colours, logo and company details) or a clear empty state - never a blank panel.
+    actions:
+      - click the "Marca" tab
+    tags: [functionality, navigation]
+    judgment: false
+  - id: design-system-tab-renders
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, the "Sistema de Design" tab is selected and shows the design-system settings (tokens, typography, palette) or a clear empty state - never a blank panel.
+    actions:
+      - click the "Sistema de Design" tab
+    tags: [functionality, navigation]
+    judgment: false
+  - id: reset-asks-before-discarding
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, "Repor" does not silently discard the stored brand - it asks for confirmation or clearly reports what it reset.
+    actions:
+      - click the "Repor" button
+    tags: [functionality, safety]
+    judgment: false
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page is visually coherent - the two amber warning callouts are clearly warnings without shouting, the URL field and its button sit on one aligned row, and the dashed placeholder panel below reads as an intentional empty state rather than a rendering failure.
+    tags: [visual, polish]
+    judgment: true

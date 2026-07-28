@@ -1,0 +1,15 @@
+id: automation-detail-unknown
+title: Automatização (detail, unknown id)
+path: /automations/00000000-0000-0000-0000-000000000000
+mode: steps
+areas: []
+steps:
+  - id: unknown-id-handled-gracefully
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to an automation id that does not exist settles on a clear not-found or error message (with a way back to the automations list). It must NOT hang forever on the "A carregar..." spinner. (Known defect at authoring time - the page spins indefinitely and logs 404 network errors; this check pins the desired behaviour.)
+    tags: [functionality, error-handling]
+    judgment: false

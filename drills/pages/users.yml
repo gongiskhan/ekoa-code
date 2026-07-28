@@ -1,0 +1,123 @@
+id: users
+title: Utilizadores e Equipas
+path: /users
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Utilizadores e Equipas" heading with its "Gerir utilizadores e equipas" subtitle.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Utilizadores e Equipas" }
+    assertionSource: authored
+  - id: add-user-button-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Adicionar Utilizador" button is present in the page header.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Adicionar Utilizador" }
+    assertionSource: authored
+  - id: search-box-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Pesquisar utilizadores." search box is present above the table.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: visible, placeholder: "Pesquisar utilizadores." }
+    assertionSource: authored
+  - id: table-headers-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The users table renders its column headers, including NOME DE UTILIZADOR.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "NOME DE UTILIZADOR" }
+    assertionSource: authored
+  - id: role-badge-rendered
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The admin row shows its role as a "Super Administrador" badge rather than a raw role key.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Super Administrador" }
+    assertionSource: authored
+  - id: add-user-dialog-opens
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, a create-user dialog or form opens with the fields needed to add a user (at minimum a username and a role selector) and explicit save / cancel controls.
+    actions:
+      - click the "Adicionar Utilizador" button
+    tags: [functionality]
+    judgment: false
+  - id: search-filters-table
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, typing a string that matches no user leaves the table with no matching rows and a clear "no results" indication - it does not keep showing every user, and it does not blank out into an error.
+    actions:
+      - type "zzzznotauser" into the "Pesquisar utilizadores." search box
+    tags: [functionality, search]
+    judgment: false
+  - id: active-toggle-feedback
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the action, toggling a user's ATIVO switch visibly changes the row state (the switch and its "Ativo" label update) and gives feedback that the change was saved - it never leaves the switch mid-state with no confirmation.
+    actions:
+      - click the ATIVO toggle switch on the admin row
+    tags: [functionality]
+    judgment: false
+  - id: created-and-last-login-populated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The CRIADO and ULTIMO LOGIN cells show real dates for an account that exists and has just signed in. Empty dash placeholders in both columns for the signed-in admin are a failure. (Observed at authoring time - both columns rendered as dashes.)
+    tags: [functionality, data]
+    judgment: false
+  - id: row-actions-labelled
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The AÇÃO column's icon-only buttons are identifiable - each has a visible tooltip or accessible label on hover so the user can tell what it does before clicking.
+    actions:
+      - hover over the first icon button in the AÇÃO column of the admin row
+    tags: [ux, accessibility]
+    judgment: true
+  - id: table-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page reads cleanly - the "Visão geral" summary bar, the UTILIZADORES section header with its search box, and the table below share consistent horizontal margins; the avatar, role badge and token-usage pill are vertically centred within their row.
+    tags: [visual, polish]
+    judgment: true

@@ -1,0 +1,81 @@
+id: activate
+title: Authorize this device (CLI device activation)
+path: /activate
+mode: steps
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page shows the "Authorize this device" heading explaining that Ekoa Local (the terminal) is asking to sign in to the account.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Authorize this device" }
+    assertionSource: authored
+  - id: missing-code-error-shown
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Opening the page without a device code in the link shows the explicit error "No device code in the link. Re-run the login from your terminal." rather than a blank or spinning page.
+    tags: [functionality, error-handling]
+    judgment: false
+    assertion: { kind: text-contains, text: "No device code in the link. Re-run the login from your terminal." }
+    assertionSource: authored
+  - id: phishing-warning-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The safety warning "Only approve if you started this login. The code must match your terminal." is shown - this is the page's defence against a user approving someone else's device.
+    tags: [security, ux]
+    judgment: false
+    assertion: { kind: text-contains, text: "Only approve if you started this login. The code must match your terminal." }
+    assertionSource: authored
+  - id: no-approve-control-without-code
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: With no device code in the link, the page offers no approve action at all - there is no clickable "Approve"/"Authorize" button that could authorise an unknown device.
+    tags: [security]
+    judgment: false
+  - id: invalid-code-rejected
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: bad-code
+    description: With a made-up device code in the URL, the page reports that the code is invalid or expired and offers no way to approve it. It must never present an approve button for a code the server did not issue.
+    tags: [security, error-handling]
+    judgment: false
+  - id: page-language-matches-app
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: This page's copy is in the same language as the rest of the product. The whole app renders in Portuguese, so an entirely English page here ("Authorize this device", "No device code in the link...") is an untranslated-page failure. (Observed defect at authoring time - the page is fully English.)
+    tags: [i18n, ux]
+    judgment: false
+  - id: card-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The dark centred card is well composed - the Ekoa mark above it, the terminal glyph, heading and explanation stack with even rhythm, the red error badge reads clearly against the dark surface without vibrating, and the footer caution line is legible rather than lost in the background.
+    tags: [visual, polish]
+    judgment: true
+states:
+  - id: bad-code
+    label: The activation link carries a device code the server never issued
+    reachPath:
+      - id: open-with-bad-code
+        description: navigate to /activate?code=ZZZZ-ZZZZ so the page loads with an unrecognised device code
