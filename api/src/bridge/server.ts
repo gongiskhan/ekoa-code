@@ -36,7 +36,9 @@ import {
   sendToPairing,
   markAlive,
   markStale,
+  allLiveConnections,
 } from './registry.js';
+import { spendConnectNonce } from './connect-nonce.js';
 import { resolveDelegationResult, resolveDenial, failDelegationsForPairing } from './delegation.js';
 import { createProviderHandler, type ProviderHandler } from './provider.js';
 
@@ -47,7 +49,9 @@ export interface BridgeServerDeps {
   now?: () => number;
   /** userId -> org for the registry row. Default: the users store. */
   resolveUserOrg?: (userId: string) => Promise<string | undefined>;
-  getActivation?: (userId: string) => { active: boolean; billingLocked: boolean } | undefined;
+  /** `tokenEpoch` is optional so a stub may omit it; absent reads as 0 (the same default
+   *  `loadActivation` applies), which admits every token rather than none. */
+  getActivation?: (userId: string) => { active: boolean; billingLocked: boolean; tokenEpoch?: number } | undefined;
   /** Optional resolved-owner check (§18.3.2). Default: the existing pairing row's owner. */
   resolveOwner?: (pairingId: string) => Promise<string | undefined>;
   /** The provider-request handler (§18.4). Default: the real chokepoint-backed handler. */
@@ -66,6 +70,8 @@ interface ConnCtx {
   pairingId: string;
   org: string;
   ownerUserId: string;
+  /** `iat` of the admitting bridge token, carried so the heartbeat can re-judge admission (J-2). */
+  admittedIat?: number;
 }
 
 const STATUS_TEXT: Record<number, string> = {
@@ -90,14 +96,24 @@ function refuse(socket: Duplex, status: number, code: string, message: string, r
   socket.destroy();
 }
 
-function extractToken(req: IncomingMessage, url: URL): string | undefined {
+/**
+ * The bridge connect token comes from the Authorization header, and ONLY from there (J-2).
+ *
+ * The `?token=` query fallback was removed rather than deprecated. A URL-borne bearer token is
+ * written to every access log, proxy log and browser-history-equivalent along the path, which for
+ * a credential that can evict the live daemon (see connect-nonce.ts) is not a transition risk
+ * worth carrying. Safe to remove outright: the shipped daemon dials with
+ * `headers: { authorization: 'Bearer ' + token }` (`../ekoa-bridge/src/transport/bridge-socket.ts`)
+ * and nothing in this repo ever used the query form on the bridge path. Other planes (canvas,
+ * voice, SSE) keep their own `?token=` conventions — this is the bridge connect path only.
+ */
+function extractToken(req: IncomingMessage): string | undefined {
   const header = req.headers['authorization'];
   if (typeof header === 'string') {
     const m = /^Bearer\s+(.+)$/i.exec(header);
     if (m) return m[1];
   }
-  // ?token= is accepted only as a transition fallback (URL tokens leak into proxy logs, §18.3.2).
-  return url.searchParams.get('token') ?? undefined;
+  return undefined;
 }
 
 /**
@@ -129,7 +145,7 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     const pairingId = decodeURIComponent(m[1] as string);
 
     void (async () => {
-      const token = extractToken(req, url);
+      const token = extractToken(req);
       if (!token) return refuse(socket, 401, 'UNAUTHENTICATED', 'Token de ponte em falta.');
 
       // 1 + 2. Verify the bridge token AND bind it to the path pairing (`connection-mismatch`).
@@ -139,6 +155,13 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       } catch (e) {
         const reason = e instanceof BridgeAuthError ? e.reason : 'invalid-token';
         return refuse(socket, 401, 'UNAUTHENTICATED', 'Token de ponte inválido.', reason);
+      }
+
+      // 2b. Spend the token (J-2). A bridge token authorises exactly ONE connect. This has to run
+      // before the socket is accepted, because a successful upgrade RETIRES the incumbent daemon —
+      // so a replay that got as far as `handleUpgrade` would already have done its damage.
+      if (!spendConnectNonce(claims.jti, claims.exp, Math.floor(now() / 1000))) {
+        return refuse(socket, 401, 'UNAUTHENTICATED', 'Token de ponte já utilizado.', 'token-replayed');
       }
 
       // 3. Resolved owner must agree with the token subject (`ownership-mismatch`). The default
@@ -152,6 +175,14 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       const act = getActivation(claims.sub);
       if (!act || !act.active) return refuse(socket, 403, 'ACCOUNT_DISABLED', 'A sua conta está bloqueada. Contacte o suporte.');
       if (act.billingLocked) return refuse(socket, 402, 'BILLING_LOCKED', 'A sua conta tem um problema de faturação. Contacte o suporte.');
+      // 4b. Token-epoch admission (J-2), the same rule `auth/middleware.ts` applies to platform
+      // tokens: a token minted before the user's current epoch is stale. "Terminar todas as
+      // sessões" bumps the epoch, and without this a bridge token minted seconds earlier still
+      // bought a fresh 600-second socket — so the one control a user reaches for after a suspected
+      // compromise did not cover the plane that runs commands on their machine.
+      if (claims.iat !== undefined && claims.iat < (act.tokenEpoch ?? 0)) {
+        return refuse(socket, 401, 'UNAUTHENTICATED', 'Sessão terminada. Emparelhe de novo.', 'token-epoch-stale');
+      }
 
       // Establish the org scope for the durable row (§18.3.4). A user with no resolvable org cannot
       // be scoped — refuse rather than register an unscoped pairing.
@@ -183,12 +214,12 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         return refuse(socket, 401, 'UNAUTHENTICATED', 'Este emparelhamento foi revogado. Emparelhe de novo.', 'pairing-revoked');
       }
 
-      wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, { pairingId, org, ownerUserId: claims.sub }));
+      wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, { pairingId, org, ownerUserId: claims.sub, admittedIat: claims.iat }));
     })();
   };
 
   function onConnection(ws: WebSocket, ctx: ConnCtx): void {
-    attachLiveConnection({ pairingId: ctx.pairingId, org: ctx.org, ownerUserId: ctx.ownerUserId, ws });
+    attachLiveConnection({ pairingId: ctx.pairingId, org: ctx.org, ownerUserId: ctx.ownerUserId, ws, admittedIat: ctx.admittedIat });
     managed.set(ws, ctx.pairingId);
 
     ws.on('pong', () => markAlive(ctx.pairingId));
@@ -260,9 +291,39 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     }
   }
 
+  /**
+   * Re-judge admission for every live socket (J-2). A WebSocket is authorised ONCE, at upgrade,
+   * and then lives for hours — so every connect-time admission plane (activation, billing lock,
+   * token epoch) silently stops applying the moment the socket is open. A request-scoped API has
+   * no such gap because `auth/middleware.ts` re-runs per request; the long-lived socket needs the
+   * check re-run on a timer to get the same property.
+   *
+   * Runs on the heartbeat tick, so the worst-case exposure after "terminar todas as sessões" is
+   * one heartbeat interval rather than the remaining life of the connection. Deliberately covers
+   * deactivation and billing lock too, not just the epoch: all three are admission facts that can
+   * change under a live socket, and re-checking one of them would be an odd place to stop.
+   */
+  function sweepAdmission(): void {
+    for (const conn of allLiveConnections()) {
+      const act = getActivation(conn.ownerUserId);
+      const stale = conn.admittedIat !== undefined && act !== undefined && conn.admittedIat < (act.tokenEpoch ?? 0);
+      if (act && act.active && !act.billingLocked && !stale) continue;
+      try {
+        // A normal close with a reason the daemon can read. `revoked` is reserved for the terminal
+        // pairing tombstone — this is a session-level eviction and the daemon SHOULD redial (with
+        // a fresh token, which will then be judged against the new epoch and refused if the user
+        // really is locked out).
+        conn.ws.close(1000, 'reauthenticate');
+      } catch {
+        /* a close on an already-dead socket is fine */
+      }
+    }
+  }
+
   // Presence heartbeat (§18.3.3): a pairing's live/offline state IS its heartbeat state. Terminate a
   // socket that missed the previous ping's pong; otherwise mark it stale and ping again.
   const heartbeat = setInterval(() => {
+    sweepAdmission();
     for (const [ws, pairingId] of managed) {
       const conn = getLiveConnection(pairingId);
       if (!conn || conn.ws !== ws) {

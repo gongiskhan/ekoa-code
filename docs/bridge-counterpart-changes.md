@@ -63,3 +63,50 @@ A `provider_response` carrying an error body currently degrades to an empty comp
 The daemon should map typed provider errors (the CONV-2 codes the ekoa-code provider
 endpoint emits after its diagnostics-honesty slice) to an honest PT-PT note in the
 `delegation_result` instead of `answer: ''`.
+
+---
+
+# Second flag round — Cofre J-2 (2026-07-28)
+
+> **STATUS: OPEN.** Flagged from ekoa-code's Cofre run; NOT implemented in `../ekoa-bridge`. The
+> Cortex side of J-2 landed without needing any of this, and a current daemon keeps working
+> unchanged — C6 is verified compatible, C7 is the part that needs the counterpart.
+
+## C6 — No change needed, recorded so the next daemon change does not break it
+
+Bridge connect tokens are now **single-use**: each carries a `jti` and the connect path spends it
+exactly once (`api/src/bridge/connect-nonce.ts`). A replay is refused `token-replayed` and, most
+importantly, does **not** evict the live socket.
+
+The shipped daemon is already compatible and this was verified by reading it, not assumed:
+`src/transport/bridge-socket.ts` calls `getToken()` immediately before **every** (re)dial and
+`src/auth/bridge-token.ts` mints over HTTP with **no caching**. Recorded here because the
+compatibility is a property of that behaviour: **a daemon that starts caching its bridge token
+for the token's 600s life would connect once and then fail every redial with `token-replayed`.**
+Mint-per-dial is now load-bearing, not an implementation detail.
+
+Also: the `?token=` query-string fallback on `/api/v1/bridge/connect/:pairingId` is **removed**.
+The daemon already uses the `Authorization: Bearer` header, so nothing changes for it; any
+out-of-tree tooling still using the query form breaks deliberately (a URL-borne token is written
+to every proxy and access log along the path).
+
+## C7 — Connect-token proof-of-possession (the remaining half of J-2)
+
+Single-use narrows the replay window from "the token's full 600s" to "a race the attacker must
+win against the real daemon's own dial". That is a large reduction and **not** a closure: an
+attacker positioned to capture the token in transit (a compromised proxy terminating TLS) can
+still race and win, and the prize is the daemon's socket.
+
+Closing it needs the daemon to prove possession of something the token alone does not carry, which
+is a two-repo change and therefore flagged rather than built:
+
+- the daemon generates a keypair at pair time and registers the public key (it already stores a
+  per-pairing signing secret from R-8 — `config.json` today, OS keychain under J-8, which should
+  land first so the new private key is not written to disk in cleartext);
+- `POST /api/v1/bridge/token` accepts a client nonce/public-key binding and Cortex embeds the
+  binding in the token's claims;
+- the WS upgrade carries a signature over `(jti, pairingId, timestamp)` that Cortex verifies
+  against the registered key before spending the nonce.
+
+Until C7 lands, the honest statement of the property is: a captured bridge token is single-use and
+must beat the legitimate daemon to the socket, rather than being freely replayable for ten minutes.

@@ -67,6 +67,15 @@ export interface LiveConnection {
   alive: boolean;
   /** ISO stamp of the last heartbeat proof (attach or pong) — the FC-405 "last seen". */
   lastSeenAt: string;
+  /**
+   * The `iat` of the bridge token this socket was admitted under (J-2). Retained so admission can
+   * be RE-checked while the socket is open: a WebSocket is admitted once and then lives for hours,
+   * so a connect-time-only epoch check would let "terminar todas as sessões" leave the offending
+   * socket running until it happened to redial. Undefined only for a token with no `iat`, which
+   * the epoch rule then cannot judge (matching `auth/middleware.ts`, which also skips the
+   * comparison when `iat` is absent).
+   */
+  admittedIat?: number;
 }
 
 /** Monotonic sequence so redials register strictly after their predecessor even within one ms. */
@@ -163,7 +172,7 @@ export async function getPairingsByOwner(ownerUserId: string): Promise<PairingRo
  * the stale socket with a normal close before the new one takes its slot (multi-device is by
  * DISTINCT pairingId, not a second socket on one id). Returns the stored LiveConnection.
  */
-export function attachLiveConnection(input: { pairingId: string; org: string; ownerUserId: string; ws: WebSocket }): LiveConnection {
+export function attachLiveConnection(input: { pairingId: string; org: string; ownerUserId: string; ws: WebSocket; admittedIat?: number }): LiveConnection {
   const stale = live.get(input.pairingId);
   if (stale && stale.ws !== input.ws) {
     try {
@@ -180,9 +189,16 @@ export function attachLiveConnection(input: { pairingId: string; org: string; ow
     registeredAt: ++registrationSeq,
     alive: true,
     lastSeenAt: new Date().toISOString(),
+    ...(input.admittedIat !== undefined ? { admittedIat: input.admittedIat } : {}),
   };
   live.set(input.pairingId, conn);
   return conn;
+}
+
+/** Every live connection, for sweeps that must judge all of them (the heartbeat's admission
+ *  re-check). Returned as an array so a caller may close sockets while iterating. */
+export function allLiveConnections(): LiveConnection[] {
+  return [...live.values()];
 }
 
 /** Remove a live connection on socket close — but only if the map still points at THIS socket (a
