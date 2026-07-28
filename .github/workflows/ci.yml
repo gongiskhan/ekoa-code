@@ -19,7 +19,15 @@ jobs:
       - run: npm run gate:chokepoint
       - run: npm run gate:encryption-key
       - run: npm run gate:garrison
-      # 2. typecheck shared/api/web
+      # 2. typecheck shared/api/web.
+      #
+      # `shared` MUST be built first. api/ and web/ resolve `@ekoa/shared` through its package
+      # `types` field (shared/dist/index.d.ts), which only exists after a build — so on a fresh
+      # `npm ci` checkout the api and web typechecks fail with 87 x TS2307 "Cannot find module
+      # '@ekoa/shared'". That is what this lane did on every run: the step failed for a missing
+      # artifact rather than a type error, so REAL type errors on main were never surfaced by CI.
+      # A local tree hides it, because shared/dist is left over from an earlier build.
+      - run: npm run build --workspace shared
       - run: npm run typecheck
       # 3. unit + module tests (api vitest runs tests/contract too, once the suite exists)
       - run: npm test

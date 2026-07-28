@@ -128,7 +128,7 @@ describe('correlation-id join + bridge payload-capture (§18.5 S6, §18.7.3)', (
     await new Promise((r) => setTimeout(r, 50));
     try {
       const result = await delegateToLocal(
-        { userId: 'u1', sessionId: 'sess-1' },
+        { userId: 'u1', orgId: 'orgA', sessionId: 'sess-1' },
         { task: 'resume', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u1' } } },
       );
       expect(result.status).toBe('ok');

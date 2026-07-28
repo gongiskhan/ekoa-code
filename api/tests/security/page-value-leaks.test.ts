@@ -110,19 +110,20 @@ describe('the action cache writes no page VALUES into its injectable content (R-
   };
 
   it('marks the row nonMemorable', async () => {
-    const row = await writeAndRead({ kind: 'click', locator: { strategy: 'css', value: '#go' } } as PlaywrightAction);
+    const row = await writeAndRead({ kind: 'click', locator: { strategy: 'css', selector: '#go' } } as PlaywrightAction);
     expect(row.nonMemorable).toBe(true);
   });
 
   it('does not persist a fill VALUE (it persisted the first 40 chars)', async () => {
     const row = await writeAndRead({
       kind: 'fill',
-      locator: { strategy: 'css', value: '#pw' },
+      locator: { strategy: 'css', selector: '#pw' },
       value: 'hunter2-SUPER-SECRET-PASSWORD',
     } as PlaywrightAction);
     expect(row.content).not.toContain('hunter2');
     expect(row.content).not.toContain('SUPER-SECRET');
     expect(row.content).toContain('chars'); // length only
+    expect(row.content).toContain('#pw'); // the SELECTOR is shape, and is kept — only the value goes
   });
 
   it('strips the query string from a navigate URL (it persisted the FULL url)', async () => {
@@ -138,7 +139,7 @@ describe('the action cache writes no page VALUES into its injectable content (R-
   it('does not persist a select VALUE (it persisted it in full)', async () => {
     const row = await writeAndRead({
       kind: 'select',
-      locator: { strategy: 'css', value: '#acct' },
+      locator: { strategy: 'css', selector: '#acct' },
       value: 'ACCOUNT-1234-5678',
     } as PlaywrightAction);
     expect(row.content).not.toContain('ACCOUNT-1234-5678');

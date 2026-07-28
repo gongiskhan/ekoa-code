@@ -20,6 +20,13 @@ import {
  * rendered into the buffer. These cases pin the mask list and, most importantly, the FAILURE MODE.
  */
 
+/** The subset of Playwright's screenshot options these cases assert on. Declaring it on the mock
+ *  (rather than casting `mock.calls[0][0]` afterwards) is what makes the recorded argument typed:
+ *  a zero-arg `vi.fn` records a `[]` tuple, so indexing it is an error and the cast was a lie. */
+type ScreenshotOpts = { mask?: unknown[]; maskColor?: string; type?: string };
+
+const screenshotMock = () => vi.fn(async (_opts?: ScreenshotOpts) => Buffer.from('PNG'));
+
 function fakePage(overrides: Partial<Page> = {}): Page {
   return {
     locator: (sel: string) => ({ __sel: sel }) as never,
@@ -30,11 +37,11 @@ function fakePage(overrides: Partial<Page> = {}): Page {
 
 describe('maskedScreenshot', () => {
   it('passes a mask list and a solid mask colour to Playwright', async () => {
-    const screenshot = vi.fn(async () => Buffer.from('PNG'));
+    const screenshot = screenshotMock();
     const page = fakePage({ screenshot: screenshot as never });
     const out = await maskedScreenshot(page);
     expect(out?.toString()).toBe('PNG');
-    const opts = screenshot.mock.calls[0]![0] as { mask?: unknown[]; maskColor?: string; type?: string };
+    const opts = screenshot.mock.calls[0]![0]!;
     expect(opts.type).toBe('png');
     expect(Array.isArray(opts.mask)).toBe(true);
     expect((opts.mask as unknown[]).length).toBe(CREDENTIAL_FIELD_SELECTORS.length);

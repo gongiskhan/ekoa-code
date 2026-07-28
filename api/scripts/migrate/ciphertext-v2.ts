@@ -8,7 +8,12 @@
  * Idempotent and resumable: a row already at v2 is skipped, so a partial run can simply be re-run.
  * Reports counts so `gate:crypto-version` has something to assert after the cutover window.
  */
-import { integrationConfigs, cofreItems } from '../../src/data/stores.js';
+import { integrationConfigs } from '../../src/data/stores.js';
+// The UNSCOPED handle, exported by cofre/store.ts under a deliberately ugly name for exactly this
+// caller. A migration rewrites every tenant's rows, so it cannot go through the owner-scoped
+// repository that every product read must use — and naming it this way keeps that exception
+// greppable instead of letting a second unscoped path look ordinary.
+import { __cofreItemsStoreForMigration } from '../../src/cofre/store.js';
 import { ciphertextVersion, envelopeEncrypt, envelopeDecrypt } from '../../src/data/crypto.js';
 
 export interface MigrationReport {
@@ -50,7 +55,7 @@ async function migrateCollection(
 export async function migrateCiphertextToV2(): Promise<Record<string, MigrationReport>> {
   return {
     integrationConfigs: await migrateCollection(integrationConfigs as never, 'credentialsCiphertext'),
-    cofreItems: await migrateCollection(cofreItems.raw as never, 'valueCiphertext'),
+    cofreItems: await migrateCollection(__cofreItemsStoreForMigration as never, 'valueCiphertext'),
   };
 }
 

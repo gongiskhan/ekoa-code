@@ -1,0 +1,13 @@
+{
+  // Tests are excluded from tsconfig.json because that config EMITS the published dist/ and tests
+  // are not part of the published surface. They still have to be typechecked, so this config adds
+  // them back with noEmit — the same split api/ uses (api/tsconfig.test.json). Without it,
+  // excluding tests from the build would silently stop typechecking them altogether.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts"]
+}

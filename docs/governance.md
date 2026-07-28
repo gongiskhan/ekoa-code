@@ -43,8 +43,10 @@ handling) are the intended scope of the cross-model security checkpoint.
 
 `../ekoa-dev` and `../ekoa-deploy` are **READ-ONLY references** - the old codebase and deploy assets.
 Read them to understand carried behavior or wire formats; never copy a secret value out of them into
-this repo or its env files. Secrets come from the managed store (GCP Secret Manager in prod, a
-bootstrap-generated key in dev).
+this repo or its env files. SERVICE secrets come from the managed store (GCP Secret Manager in prod,
+a bootstrap-generated key in dev); TENANT credential material lives in the Cofre under a per-tenant
+DEK, never in a managed secret - the two planes and why they are separate are in `docs/security.md`
+"Secure development" and `docs/decisions.md` 2026-07-28 (A-8).
 
 ## Archive
 

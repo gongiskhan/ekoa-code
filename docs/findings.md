@@ -6,6 +6,78 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`ci-typecheck-never-ran`** (FIXED 2026-07-28, HIGH, process — found while fixing the red
+  typecheck baseline for A-8). **The per-PR CI lane has never successfully typechecked `api/` or
+  `web/`.** `.github/workflows/ci.yml` ran `npm run typecheck` with no prior build of `shared`, but
+  `api/` and `web/` resolve `@ekoa/shared` through its package `types` field
+  (`shared/dist/index.d.ts`), which is gitignored and only exists after `npm run build --workspace
+  shared`. On a fresh `npm ci` checkout the step therefore died with **87 x TS2307 "Cannot find
+  module '@ekoa/shared'"** — reproduced locally by moving `shared/dist` aside — so the step failed
+  for a MISSING ARTIFACT, never reaching a single real type error. A local tree hides it completely,
+  because `shared/dist` survives from an earlier build. Two consequences, and the second is the
+  reason this is HIGH rather than a chore: (1) `ci` has been red on `main` for at least the last
+  eight runs and the redness carried no information, which is how a lane stops being read; (2) real
+  type errors accumulated on `main` unnoticed — 9 of them at the time of writing, listed below —
+  because nothing anywhere was checking. FIXED by building `shared` before the typecheck step.
+  Verification is the next CI run on push; the local equivalent (`rm -rf shared/dist && npm run
+  build --workspace shared && npm run typecheck`) is green.
+- **`main-typecheck-red-9-errors`** (FIXED 2026-07-28, MEDIUM, correctness — the errors
+  `ci-typecheck-never-ran` was hiding). Nine `tsc` errors on clean `main` at `619277b`, all landed
+  by recent Cofre work: (a) `scripts/migrate/ciphertext-v2.ts` imported a non-existent export — see
+  `k4-migration-dead-on-arrival`, which is the more serious half; (b) `tests/bridge/revoke.test.ts`
+  (x2) and `tests/fake-daemon/correlation-join.test.ts` passed a `DelegationActor` without the
+  `orgId` that E-1 made REQUIRED — `integration.test.ts` was updated in that change and these two
+  were missed; (c) `tests/security/page-value-leaks.test.ts` (x3) built css locators as
+  `{strategy:'css', value}` where the `Locator` union requires `{strategy:'css', selector}`, so
+  `describeLocator` read `undefined` and the cache content under test was `css="undefined"` — the
+  assertions passed while never exercising a well-formed locator, so this was a green test proving
+  less than it claimed (now also asserts the selector IS retained, since shape is what the summary
+  is allowed to keep); (d) `tests/security/screenshot-masking.test.ts` (x2) indexed
+  `mock.calls[0][0]` on a zero-arg `vi.fn`, whose recorded tuple type is `[]` — the `as {...}` cast
+  was papering over an argument the mock's type said could not exist. All fixed; `npm run
+  typecheck` is green across the three workspaces and `npm test` is 130 shared / 2555 api / 359 web.
+- **`shared-suite-counted-twice`** (FIXED 2026-07-28, MEDIUM, test-integrity — found while
+  verifying the `ci-typecheck-never-ran` fix). The `shared` suite collected every test TWICE — once
+  from `src/`, once from the compiled `dist/` copy — so its reported size was a function of a BUILD
+  ARTIFACT, not of the tests. Observed in one sitting: **5 files/130 tests** on a stale dist,
+  **6/144** after a rebuild, **3/72** on a clean checkout. The true count is 3 files / 72 tests, so
+  every "shared 130" in the recent commit messages was inflated by a factor of ~1.8 and the number
+  moved whenever someone happened to build. Two causes, both fixed: `shared/tsconfig.json` compiled
+  `src/**/*.test.ts` into the published `dist/` (tests were shipped to consumers as well as
+  double-collected) — now excluded; and `shared` had no vitest config, while **Vitest 4 narrowed
+  its default `exclude` to `node_modules` and `.git` only**, dropping the dist glob that older
+  versions excluded — now `shared/vitest.config.ts` pins `include: src/**/*.test.ts` and restores
+  the dist exclusion. `api/` and `web/` were never affected: their builds emit no test files.
+  Verified stable at 3/72 across a clean build, a rebuild and a full-lane run. Worth noting for
+  anyone auditing the ledger: a census that quotes counts is only as trustworthy as the collection
+  behind it, and this one silently changed under a minor-version default.
+- **`k4-migration-dead-on-arrival`** (OPEN 2026-07-28, MEDIUM, correctness/governance — found by
+  the A-8 typecheck sweep). `api/scripts/migrate/ciphertext-v2.ts` is journaled as landed (commit
+  `f993d06`, `docs/decisions.md` 2026-07-28 K-4) but **had never compiled and has never run**. It
+  imported `cofreItems` from `src/data/stores.js`, which does not export it — the Cofre item store
+  lives in `src/cofre/store.ts`, which exports `__cofreItemsStoreForMigration` for exactly this
+  caller. FIXED here only to the extent the red baseline demanded: the import is corrected and the
+  file now typechecks. Still OPEN, and this is the part that matters — the migration is **not
+  wired and not proven**: (a) nothing registers it in `api/scripts/migrate/cli.ts`, so there is no
+  way to invoke it; (b) the `gate:crypto-version` script the decision entry names does not exist in
+  `package.json`; (c) it has no test, so `module_tests` never covered it. The consequence is that
+  the v1 weakness the entry claims K-4 removes — a v1 row is under the flat global key and decrypts
+  under ANY tenant argument — is still fully present in any deployed database, and the journal says
+  otherwise. Close by wiring the CLI entry, adding the gate script, and adding a hermetic test that
+  seeds v1 rows, migrates, and asserts `noV1CiphertextRemains()`. Note while doing so that
+  `noV1CiphertextRemains()` currently CALLS `migrateCiphertextToV2()`, so the "check" mutates the
+  database — safe because the migration is idempotent, but a gate that writes is the wrong shape
+  and should be split into a read-only scan.
+- **`cofre-raw-store-lint-rule-missing`** (OPEN 2026-07-28, LOW, defence-in-depth — found by the
+  A-8 sweep). Plan item B-1 specified "an eslint rule forbidding any import of the raw `cofre_items`
+  store handle outside `api/src/cofre/`, and forbidding re-derivation of the scoping predicate".
+  No such rule exists in `.eslintrc.cjs` — the module-direction zone array lists `./api/src/cofre`
+  only as a TARGET that may not import `routes/`/`server.ts`. So the scoped-repository chokepoint
+  that makes the Cofre the third `OwnerVisibilityScoped` consumer rests on convention alone, and
+  `__cofreItemsStoreForMigration` (a deliberately ugly name, now imported by the migration script)
+  is greppable but not enforced. Not exploitable today — the only importer is the migration — but
+  the whole point of B-1's chokepoint is that it cannot be bypassed by a future caller who has not
+  read the plan. Close with the rule plus an allowance for `api/scripts/migrate/`.
 - **`page-values-to-log-and-memory`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
   gate R-4 + R-5). Two leaks of the same class: values read off a LIVE PAGE of an authenticated
   session. (R-4) `automation/engine.ts` merged verifier-extracted values into the shared `inputs`
