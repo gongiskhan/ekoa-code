@@ -15,7 +15,7 @@
  * (§18.3.5, S4).
  */
 import { randomUUID } from 'node:crypto';
-import type { AllowanceRef, BridgeFrame, DelegatedTask, DelegationResult } from '@ekoa/shared';
+import type { AllowanceRef, BridgeFrame, BridgeRegistoEvent, DelegatedTask, DelegationResult } from '@ekoa/shared';
 import { getActivation as defaultGetActivation } from '../data/activation.js';
 import {
   getConnectionByOwner as defaultGetConnectionByOwner,
@@ -25,6 +25,7 @@ import {
 } from './registry.js';
 import { signDelegatedTask } from './signing.js';
 import { assertWritesApproved, WriteNotApprovedError } from './write-approval.js';
+import { recordBridgeEvent, toolsUsedIn } from './audit.js';
 
 /** How long a minted task stays valid; the daemon rejects a task past its `expiry` (S2). */
 const DELEGATION_TASK_TTL_MS = 300_000;
@@ -44,6 +45,13 @@ export interface DelegationActor {
    */
   orgId: string;
   sessionId: string;
+  /**
+   * Display name for the Registo row (J-6). Optional because the delegating call sites do not all
+   * have one in hand, and an audit row keyed on userId + orgId is complete without it — blank
+   * means "not supplied here", which is honest, where substituting the userId would render a
+   * plausible-looking name that is not the user's.
+   */
+  username?: string;
 }
 
 /** The tool arguments (§18.2.1). `grantRefs` are opaque — Cortex passes them through, never
@@ -72,6 +80,25 @@ interface PendingDelegation {
 }
 
 const pending = new Map<string, PendingDelegation>();
+
+/**
+ * Write a bridge Registo row (J-6) without ever being able to affect the delegation.
+ *
+ * Fire-and-forget WITH the rejection swallowed: an audit write is bookkeeping, and a delegation
+ * that failed because its audit row could not be written would be a worse outcome than a missing
+ * row. (The inverse — dropping the row silently on a working database — does not happen: the write
+ * either lands or the store itself is down, which is a louder failure elsewhere.)
+ */
+function audit(actor: DelegationActor, event: BridgeRegistoEvent, metadata: Record<string, unknown>): void {
+  void recordBridgeEvent(
+    { userId: actor.userId, orgId: actor.orgId, username: actor.username ?? '' },
+    event,
+    metadata,
+    { now: Date.now },
+  ).catch(
+    () => undefined,
+  );
+}
 
 /** Empty derived result for an offline/denied outcome (never carries file bytes, §18.2.2). */
 function terminalResult(status: DelegationResult['status']): DelegationResult {
@@ -143,6 +170,13 @@ export async function delegateToLocal(
     assertWritesApproved({ userId: actor.userId, pairingId: conn.pairingId, taskJson: req.task });
   } catch (e) {
     if (!(e instanceof WriteNotApprovedError)) throw e;
+    // J-6: a REFUSED dispatch is as much a fact worth keeping as a successful one — arguably more,
+    // since a run of them is what an attempted bypass looks like from the outside.
+    void audit(actor, 'bridge_delegation_dispatched', {
+      pairingId: conn.pairingId,
+      refusal: 'write_not_approved',
+      tools: toolsUsedIn(req.task),
+    });
     return {
       ...terminalResult('denied'),
       // The model gets an honest reason it can relay, instead of a bare `denied` it will guess at.
@@ -180,12 +214,30 @@ export async function delegateToLocal(
     pending.set(task.taskId, { pairingId: task.pairingId, resolve, timer });
   });
 
+  void audit(actor, 'bridge_delegation_dispatched', {
+    pairingId: conn.pairingId,
+    taskId: task.taskId,
+    tools: toolsUsedIn(req.task),
+    grantRefCount: req.grantRefs.length,
+  });
+
   // Dispatch. A failed send (socket died between resolve and send) is an honest unreachable.
   if (!send(task.pairingId, { type: 'delegate', task })) {
     settle(task.taskId, terminalResult('unreachable'));
   }
 
-  return result;
+  const settled = await result;
+  // The OUTCOME is a separate row from the dispatch, deliberately: a dispatch with no matching
+  // settlement is exactly what a machine that went dark mid-task looks like, and collapsing the two
+  // into one row written at the end would erase that distinction.
+  void audit(actor, 'bridge_delegation_settled', {
+    pairingId: conn.pairingId,
+    taskId: task.taskId,
+    outcome: settled.status,
+    egressBytes: settled.telemetry.egressBytes,
+    citationCount: settled.citations.length,
+  });
+  return settled;
 }
 
 /** Test helper: clear the pending-delegation table (resolves nothing; drops timers). */

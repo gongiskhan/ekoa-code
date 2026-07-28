@@ -131,3 +131,34 @@ user confirmation cannot be constructed by anything, not merely by anything well
 
 Note for whoever implements it: keep the daemon's first-write rule as-is until the token exists.
 Removing the boolean check before the replacement lands would widen the hole rather than close it.
+
+## C9 — Grant issuance/revocation is unaudited on both sides (J-6, daemon half)
+
+ekoa-code now writes durable Registo rows for every bridge invocation it can observe — dispatch,
+settlement, refusal, secret delivery, pairing register/revoke — under a `bridge` category with a
+`.strict()` metadata schema that has **no path field** (see below).
+
+What Cortex **cannot** audit is what it never sees. Grants are minted and served daemon-side
+(`GET /grants`, `POST /grants/revoke` on the loopback surface) and the `EgressLedgerRow` union has
+no grant kind, so the moment a user hands a folder to Ekoa — the single most consequential act in
+the whole local plane — nothing anywhere records it. Needed: a `grant` kind on the ledger row (or a
+sibling frame) carrying `{grantRef, scope, createdAt}` and its revocation, streamed up like other
+rows. Cortex will persist the FACT and the ref; it must not persist the path (below).
+
+**Standing constraint for anything added here:** `EgressLedgerRow.path` stays un-persisted
+hosted-side (§18.2 / FC-407). A path is itself sensitive — client names live in folder names, and
+for a legal practice a directory listing is privileged. Send counts, refs, kinds and outcomes; do
+not send, and do not expect Cortex to store, the path itself.
+
+## C10 — Credentials still live in a plaintext `config.json` (J-8)
+
+R-8 split the task-signing secret so each pairing has its own, which bounds the blast radius of a
+stolen daemon config to that one machine. It did **not** change where the daemon keeps it:
+`config.json` on disk, in cleartext. J-8 is the other half — move the pairing signing secret and
+the platform credential into the OS keychain (Keychain / Credential Manager / libsecret), leaving
+`config.json` with non-secret settings only.
+
+Entirely daemon-side; there is no ekoa-code change that can substitute for it, so it is flagged
+rather than half-built here. Its acceptance test is also daemon-side: after `ekoa-bridge pair`,
+`config.json` contains no token material. Worth doing **before** C7, since C7 introduces a client
+private key that must not land in the same cleartext file.

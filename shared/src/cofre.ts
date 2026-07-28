@@ -271,6 +271,59 @@ export const CofreRegistoMetadata = z
   .strict();
 export type CofreRegistoMetadata = z.infer<typeof CofreRegistoMetadata>;
 
+/**
+ * Durable Registo events for bridge INVOCATIONS (J-6).
+ *
+ * Cortex previously persisted nothing about the bridge plane: only `kind==='read'` ledger rows left
+ * the machine at all, into a 15-minute in-memory Map. So "what did my computer do for Ekoa last
+ * week" had no answer, and the plane with the most physical access to the user's data was the one
+ * with the least durable record.
+ *
+ * These sit alongside `CofreRegistoEvent` rather than inside it because they describe the TRANSPORT
+ * (a task went to a machine and came back), not the custody of a credential.
+ */
+export const BridgeRegistoEvent = z.enum([
+  'bridge_pairing_registered',
+  'bridge_pairing_revoked',
+  'bridge_delegation_dispatched',
+  'bridge_delegation_settled',
+  'bridge_secret_delivered',
+  'bridge_attended_requested',
+  'bridge_session_pushed',
+]);
+export type BridgeRegistoEvent = z.infer<typeof BridgeRegistoEvent>;
+
+/**
+ * The ONLY metadata a bridge Registo row may carry — and the omission is the point.
+ *
+ * There is NO path field, and there must never be one. `EgressLedgerRow` carries `path`, and the
+ * standing §18.2 / FC-407 invariant is that those rows are never persisted hosted-side because a
+ * path is itself sensitive (client names live in folder names, and a legal practice's directory
+ * listing is privileged information). J-6 makes the FACT of an invocation durable — which machine,
+ * which task, what outcome, how many bytes — while leaving WHAT WAS READ exactly as un-persisted as
+ * it was before. `.strict()` is what keeps a well-meaning future caller from adding `path` back.
+ */
+export const BridgeRegistoMetadata = z
+  .object({
+    pairingId: z.string().max(120).optional(),
+    taskId: z.string().max(120).optional(),
+    /** Terminal status of a delegation — the DelegationResult status vocabulary. */
+    outcome: z.enum(['ok', 'unreachable', 'cap_reached', 'denied']).optional(),
+    /** Counts only: how much left the machine, never what. */
+    egressBytes: z.number().int().nonnegative().optional(),
+    citationCount: z.number().int().nonnegative().optional(),
+    /** Capability/tool families touched, from a closed vocabulary — never a free-text argument. */
+    tools: z.array(z.string().max(40)).max(20).optional(),
+    grantRefCount: z.number().int().nonnegative().optional(),
+    itemCount: z.number().int().nonnegative().optional(),
+    targetOrigin: z.string().max(253).optional(),
+    attendedKind: z.enum(['card_login', 'relay_code']).optional(),
+    /** Why a dispatch was refused, from a closed set — never an error string that could echo input. */
+    refusal: z.enum(['write_not_approved', 'no_signing_secret', 'offline', 'not_admitted']).optional(),
+  })
+  .strict();
+export type BridgeRegistoMetadata = z.infer<typeof BridgeRegistoMetadata>;
+
 // ---------------------------------------------------------------------------
 // Capabilities + step declarations (A-4 / A-5 vocabulary)
 // ---------------------------------------------------------------------------
