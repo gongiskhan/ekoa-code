@@ -39,6 +39,7 @@ import {
   allLiveConnections,
 } from './registry.js';
 import { spendConnectNonce } from './connect-nonce.js';
+import { acceptSessionPush, AttendedError } from './attended.js';
 import { resolveDelegationResult, resolveDenial, failDelegationsForPairing } from './delegation.js';
 import { createProviderHandler, type ProviderHandler } from './provider.js';
 
@@ -278,6 +279,28 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       case 'ledger_row':
         deps.onLedgerRow?.(frame.taskId, frame.row);
         break;
+      case 'session.push': {
+        // J-5: the result of an attended ceremony. Bound to the socket it arrived on — the pairing
+        // is taken from THIS connection, never from the frame, so a machine cannot answer for
+        // another one. A refusal is logged and dropped rather than replied to: the daemon has no
+        // error channel for a push, and inventing one to tell a possibly-hostile sender exactly why
+        // it was rejected would be an oracle for nothing.
+        try {
+          await acceptSessionPush({
+            requestId: frame.requestId,
+            pairingId,
+            origin: frame.origin,
+            storageState: frame.storageState,
+          });
+        } catch (e) {
+          console.warn(
+            `[bridge][attended] session push refused: pairing=${pairingId} reason=${
+              e instanceof AttendedError ? e.message : 'store-failure'
+            }`,
+          );
+        }
+        break;
+      }
       case 'ping':
         sendToPairing(pairingId, { type: 'pong' });
         break;
