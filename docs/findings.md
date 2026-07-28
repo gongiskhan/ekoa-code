@@ -6,6 +6,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`bridge-ingress-freetext-header-residual`** (OPEN by design 2026-07-29, LOW, confidentiality —
+  found while building H-4). The ingress filter has two legs: value-keyed (exact, for values Cortex
+  delivered) and name-pattern (`redactBodyByName`, for credentials Cortex never held). The name leg
+  understands JSON keys and `key=value` pairs. A colon-separated header line in free-text stdout —
+  `Authorization: Bearer sk-live-...` — matches neither shape and survives it, so such a value is
+  removed only when Cortex DELIVERED it and the value leg recognises it. NOT closed, deliberately:
+  widening the name leg to colon-separated pairs would fire on ordinary prose, including any
+  `word: value` line in a document excerpt, and a filter that mangles legitimate output is one
+  people route around. Pinned in BOTH directions by
+  `api/tests/security/bridge-ingress-redaction.test.ts` (the leak asserted as surviving, and the
+  delivered-value mitigation asserted as working), so if it is ever closed the expectation flips
+  and the test says so rather than the behaviour drifting silently.
 - **`ci-typecheck-never-ran`** (FIXED 2026-07-28, HIGH, process — found while fixing the red
   typecheck baseline for A-8). **The per-PR CI lane has never successfully typechecked `api/` or
   `web/`.** `.github/workflows/ci.yml` ran `npm run typecheck` with no prior build of `shared`, but

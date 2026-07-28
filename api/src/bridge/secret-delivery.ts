@@ -28,6 +28,7 @@ import type { Actor } from '@ekoa/shared';
 import { resolveEnvInjection, recordEnvInjectionUse, type EnvInjectionMap } from '../cofre/process-injection.js';
 import type { SecretRegistry } from '../security/redaction.js';
 import { sendToPairing } from './registry.js';
+import { registerDeliveredSecrets } from './ingress-redaction.js';
 
 /** How long an unredeemed delivery stays pending before it is swept (ms). A delivery that has not
  *  been sent within this window is a run that never got going; keeping it wastes nothing but it
@@ -115,6 +116,10 @@ export async function deliverSecrets(
   const { env, secrets, itemIds } = await resolveEnvInjection(actor, input.mapping, {
     processLabel: input.processLabel ?? 'local_command',
   });
+
+  // H-4: arm the ingress filter BEFORE the value is on the wire. Registering after the send would
+  // leave a window in which a fast machine could echo the secret back into an unfiltered frame.
+  registerDeliveredSecrets(input.pairingId, Object.values(env));
 
   const sent = sendToPairing(input.pairingId, {
     type: 'secret.deliver',

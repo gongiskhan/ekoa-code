@@ -40,6 +40,7 @@ import {
 } from './registry.js';
 import { spendConnectNonce } from './connect-nonce.js';
 import { acceptSessionPush, AttendedError } from './attended.js';
+import { redactInboundFrame, releasePairingSecrets } from './ingress-redaction.js';
 import { resolveDelegationResult, resolveDenial, failDelegationsForPairing } from './delegation.js';
 import { createProviderHandler, type ProviderHandler } from './provider.js';
 
@@ -230,6 +231,8 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     ws.on('close', () => {
       managed.delete(ws);
       removeLiveConnection(ctx.pairingId, ws);
+      // H-4: the machine can no longer echo anything, so stop holding its delivered values.
+      releasePairingSecrets(ctx.pairingId);
       // A closed / revoked socket fails every in-flight delegation cleanly (§18.3.5, S4).
       failDelegationsForPairing(ctx.pairingId);
     });
@@ -247,7 +250,11 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     }
     const res = BridgeFrame.safeParse(parsed);
     if (!res.success) return; // drop invalid frames (§18.3.1)
-    const frame = res.data;
+    // H-4: redact at INGRESS, before dispatch. A bash step on the machine can echo a credential
+    // Cortex delivered to it seconds earlier (`env | grep`, a failing curl printing its own argv),
+    // and every handler below either persists, streams or forwards what it is given. Filtering the
+    // frame here means no handler can be the one that forgot.
+    const frame = redactInboundFrame(pairingId, res.data);
 
     // Liveness guard (§18.3.5, S4): drop any inbound frame that did NOT come from the pairing's
     // CURRENT live socket - one that was revoked or REPLACED by a redial. Checking isLive(pairingId)
