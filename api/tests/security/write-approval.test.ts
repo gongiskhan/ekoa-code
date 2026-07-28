@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import type { BridgeFrame } from '@ekoa/shared';
 import { delegateToLocal, type DelegationDeps, __resetPendingDelegationsForTests } from '../../src/bridge/delegation.js';
+import { drainBridgeAudit } from '../../src/bridge/audit.js';
 import { computeCommandShape, isLegacyWildcardShape } from '../../src/automation/command-shape.js';
 import {
   approveWrite,
@@ -37,6 +38,11 @@ beforeEach(() => {
   __resetWriteApprovalsForTests();
   __resetPendingDelegationsForTests();
 });
+
+// This suite drives delegateToLocal, which fires audit writes it does not await. It runs without a
+// mongo instance, so those writes reject and are swallowed — draining keeps them from settling
+// during whichever file vitest runs next.
+afterAll(async () => { await drainBridgeAudit(); });
 
 const task = (steps: unknown[]) => JSON.stringify({ v: 1, steps });
 

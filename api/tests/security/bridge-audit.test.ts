@@ -4,7 +4,7 @@ import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { activityLogs } from '../../src/data/stores.js';
 import { delegateToLocal, type DelegationDeps, __resetPendingDelegationsForTests } from '../../src/bridge/delegation.js';
-import { recordBridgeEvent, toolsUsedIn, BRIDGE_REGISTO_CATEGORY } from '../../src/bridge/audit.js';
+import { recordBridgeEvent, toolsUsedIn, drainBridgeAudit, BRIDGE_REGISTO_CATEGORY } from '../../src/bridge/audit.js';
 import { approveWrite, __resetWriteApprovalsForTests } from '../../src/bridge/write-approval.js';
 
 /**
@@ -34,6 +34,9 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  // Drain BEFORE closing mongo: these rows are written fire-and-forget, and a write that lands
+  // after teardown is the exact shape of the lane failure docs/known-flakes.md records.
+  await drainBridgeAudit();
   await closeMongo();
   await mem.stop();
 });

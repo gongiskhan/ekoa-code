@@ -33,7 +33,34 @@ export async function recordBridgeEvent(
   deps: LogActivityDeps,
 ): Promise<void> {
   const parsed = BridgeRegistoMetadata.safeParse(metadata);
-  await logActivity(actor, BRIDGE_REGISTO_CATEGORY, event, deps, parsed.success ? parsed.data : undefined);
+  const write = logActivity(actor, BRIDGE_REGISTO_CATEGORY, event, deps, parsed.success ? parsed.data : undefined);
+  inFlight.add(write);
+  try {
+    await write;
+  } finally {
+    inFlight.delete(write);
+  }
+}
+
+/**
+ * In-flight audit writes, so a caller that fired one and moved on can still be waited for.
+ *
+ * WHY THIS EXISTS. These rows are written fire-and-forget from `delegation.ts` — a delegation must
+ * not fail because a bookkeeping row could not be written. The hazard that creates is documented in
+ * this repo's own `docs/known-flakes.md`: a fire-and-forget pipeline whose write lands AFTER a test
+ * has closed mongo previously produced a whole batch of "every test passed but the lane exited 1".
+ * A write that outlives its test file can also land in the next file's collection, and several
+ * suites assert on `activityLogs` contents.
+ *
+ * So the async work is trackable rather than untracked. Production never needs to drain it; test
+ * teardown and shutdown do.
+ */
+const inFlight = new Set<Promise<unknown>>();
+
+/** Wait for every in-flight audit write to settle. Rejections are absorbed — the point is to know
+ *  the write is DONE (so teardown cannot race it), not to re-surface a failure already swallowed. */
+export async function drainBridgeAudit(): Promise<void> {
+  await Promise.allSettled([...inFlight]);
 }
 
 /**
