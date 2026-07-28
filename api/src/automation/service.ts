@@ -467,7 +467,7 @@ export async function resolveConsent(
   const awaitingConsent = run.status === 'awaiting_consent';
   let persisted = false;
   if (input.decision === 'always' && awaitingConsent) {
-    await approveCommandShape(ownerUserId, input.shape);
+    await approveCommandShape({ userId: ownerUserId, orgId: run.orgId ?? actor.orgId, pairingId: null }, input.shape);
     persisted = true;
   }
   const resumed = !!sig;
@@ -546,7 +546,7 @@ export async function listApprovedCommands(actor: Actor): Promise<WireApprovedCo
 }
 
 export async function revokeApprovedCommand(actor: Actor, input: { shape: string }): Promise<WireRevokeResponse> {
-  const revoked = await revokeCommandShape(actor.userId, input.shape);
+  const revoked = await revokeCommandShape({ userId: actor.userId, orgId: actor.orgId }, input.shape);
   const remaining = (await listApprovedShapes(actor.userId)).length;
   return { revoked, remaining };
 }

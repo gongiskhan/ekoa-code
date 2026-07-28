@@ -24,6 +24,7 @@ import {
   type LiveConnection,
 } from './registry.js';
 import { signDelegatedTask } from './signing.js';
+import { assertWritesApproved, WriteNotApprovedError } from './write-approval.js';
 
 /** How long a minted task stays valid; the daemon rejects a task past its `expiry` (S2). */
 const DELEGATION_TASK_TTL_MS = 300_000;
@@ -134,6 +135,22 @@ export async function delegateToLocal(
   // to a clean `denied` (the connect + provider planes surface ACCOUNT_DISABLED / BILLING_LOCKED).
   const act = getActivation(conn.ownerUserId);
   if (!act || !act.active || act.billingLocked) return terminalResult('denied');
+
+  // J-7: the write confirmation is not the model's to assert. Checked BEFORE signing, because the
+  // signature is exactly what turns a model's `confirmed: true` into an authorisation the daemon
+  // trusts — sign it and the hole is already open, whatever happens afterwards.
+  try {
+    assertWritesApproved({ userId: actor.userId, pairingId: conn.pairingId, taskJson: req.task });
+  } catch (e) {
+    if (!(e instanceof WriteNotApprovedError)) throw e;
+    return {
+      ...terminalResult('denied'),
+      // The model gets an honest reason it can relay, instead of a bare `denied` it will guess at.
+      answer:
+        `A escrita em "${e.relPath}" precisa da confirmação do utilizador. ` +
+        'A confirmação é dada por quem é dono do computador, não pelo assistente.',
+    };
+  }
 
   // Mint the S2 binding. org + pairingId come from the registry-resolved connection, NEVER a
   // request body (§18.4.4); a fresh nonce and a future expiry bind replay + staleness (S2).

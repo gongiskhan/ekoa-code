@@ -110,3 +110,24 @@ is a two-repo change and therefore flagged rather than built:
 
 Until C7 lands, the honest statement of the property is: a captured bridge token is single-use and
 must beat the legitimate daemon to the socket, rather than being freely replayable for ten minutes.
+
+## C8 — `confirmed` should stop being a boolean the sender can set (J-7)
+
+`src/tools/write.ts` step 2 gates a first write on `pre.confirmed === true`, and the file's header
+says the user assents Cortex-side. Nothing Cortex-side checked it, and ekoa-code's tool description
+**instructed the model to set it** — so, because Cortex signs the model's TaskProgram verbatim, the
+signature laundered a model self-assertion into an authorisation the daemon trusts.
+
+**Closed from the ekoa-code side, and the daemon needs no change to be safe today**: Cortex now
+refuses to sign any task whose `write` step carries `confirmed: true` without a matching owner
+approval (`api/src/bridge/write-approval.ts`), and the model is told the field is not its to write.
+Since Cortex is the only signer of delegated tasks, that is sufficient.
+
+**Flagged as defence in depth**: the daemon currently trusts a boolean in a message it received.
+Preferred shape is a Cortex-issued, per-file approval token — signed with the pairing secret
+(already present since R-8), naming `{grantRef, relPath, sha256Before, expiry, nonce}` — that the
+daemon verifies instead of reading `confirmed`. Then a task that reaches the daemon without a real
+user confirmation cannot be constructed by anything, not merely by anything well-behaved.
+
+Note for whoever implements it: keep the daemon's first-write rule as-is until the token exists.
+Removing the boolean check before the replacement lands would widen the hole rather than close it.

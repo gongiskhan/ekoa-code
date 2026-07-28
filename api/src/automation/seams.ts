@@ -47,6 +47,14 @@ export interface DaemonStepRequest {
  *  `BridgeConnection.runStep` (carryover-audit B16); the concrete WS transport lands in `bridge/`. */
 export interface DaemonConnection {
   runStep(req: DaemonStepRequest, opts?: { onProgress?: (chunk: string) => void }): Promise<ResultEnvelope>;
+  /**
+   * The pairing this connection belongs to (Cofre J-7). Optional because the seam predates it and
+   * a test double need not supply one — but when the composition root wires the real bridge it
+   * MUST, because it is what binds a local-command approval to the machine the user approved it
+   * for. Absent means "no specific machine", which is a distinct approval scope that never matches
+   * a pairing-bound row rather than a wildcard that matches every one.
+   */
+  readonly pairingId?: string;
 }
 
 export type DaemonConnectionResolver = (ownerUserId: string) => DaemonConnection | null;

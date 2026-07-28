@@ -22,7 +22,7 @@ import type { RunEventEmitter } from '../../src/automation/engine.js';
 import type { StepRecord } from '../../src/automation/types.js';
 import { __resetAutomationConfigForTests } from '../../src/automation/config.js';
 import { writeActionCache, lookupActionCache } from '../../src/automation/cache.js';
-import { isCommandShapeApproved } from '../../src/automation/consent.js';
+import { isCommandShapeApproved, approveCommandShape } from '../../src/automation/consent.js';
 import { fingerprintFromParts } from '../../src/automation/fingerprint.js';
 import { automations, automationRuns, approvedCommands, memories } from '../../src/data/stores.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport } from '../agents/_setup.js';
@@ -187,10 +187,10 @@ describe('automation service surface (§3.8.18)', () => {
     const { runId } = await svc.startRun(builder, 'cauto');
     await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'awaiting_consent');
 
-    const consent = await svc.resolveConsent(builder, runId, { decision: 'always', shape: 'ls -la <DIR>' });
+    const consent = await svc.resolveConsent(builder, runId, { decision: 'always', shape: 'ls -la /tmp' });
     expect(ConsentResultSchema.safeParse(consent).success).toBe(true);
     expect(consent).toMatchObject({ decision: 'always', resumed: true, persisted: true });
-    expect(await isCommandShapeApproved('u1', 'ls -la <DIR>')).toBe(true);
+    expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: null }, 'ls -la /tmp')).toBe(true);
 
     await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
   });
@@ -244,14 +244,31 @@ describe('automation service surface (§3.8.18)', () => {
   });
 
   it('listApprovedCommands + revokeApprovedCommand round-trip', async () => {
-    await approvedCommands.insert({ _id: 'u1::cat <FILE>', userId: 'u1', shape: 'cat <FILE>', createdAt: '2026-01-01T00:00:00Z' } as never);
+    const shape = 'cat /Users/g/notes.txt';
+    await approveCommandShape({ userId: 'u1', orgId: 'o1', pairingId: null }, shape);
     const list = await svc.listApprovedCommands(builder);
     expect(ApprovedCommandSchema.array().safeParse(list).success).toBe(true);
-    expect(list.map((c) => c.shape)).toContain('cat <FILE>');
+    expect(list.map((c) => c.shape)).toContain(shape);
 
-    const revoked = await svc.revokeApprovedCommand(builder, { shape: 'cat <FILE>' });
+    const revoked = await svc.revokeApprovedCommand(builder, { shape });
     expect(RevokeSchema.safeParse(revoked).success).toBe(true);
     expect(revoked).toEqual({ revoked: true, remaining: 0 });
+  });
+
+  it('a pre-J-7 wildcard approval is neither listed nor honoured', async () => {
+    // `cat <FILE>` used to be a real stored approval that matched EVERY file the granted roots
+    // reach — ~/.ssh/id_rsa included. Rows in that form survive in existing databases, so they are
+    // filtered from the list (showing one would tell the user they hold a permission they do not)
+    // and can never satisfy a lookup.
+    await approvedCommands.insert({
+      _id: 'u1::cat <FILE>', userId: 'u1', shape: 'cat <FILE>', createdAt: '2026-01-01T00:00:00Z',
+    } as never);
+
+    const list = await svc.listApprovedCommands(builder);
+    expect(list.map((c) => c.shape)).not.toContain('cat <FILE>');
+    expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: null }, 'cat <FILE>')).toBe(false);
+    // And the real command it used to cover now needs its own approval.
+    expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: null }, 'cat /Users/g/.ssh/id_rsa')).toBe(false);
   });
 
   // ---- run event emitter wiring (§3.6.3) ---------------------------------
