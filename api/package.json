@@ -13,7 +13,9 @@
     "tool:migrate": "node --loader ts-node/esm scripts/migrate/cli.ts",
     "tool:knowledge-import": "node --loader ts-node/esm scripts/migrate/knowledge/cli.ts",
     "tool:billing-replay": "node --loader ts-node/esm scripts/billing-replay/cli.ts",
-    "tool:parity-workload": "node --loader ts-node/esm scripts/parity-workload/cli.ts"
+    "tool:parity-workload": "node --loader ts-node/esm scripts/parity-workload/cli.ts",
+    "migrate:ciphertext-v2": "node --loader ts-node/esm scripts/migrate/ciphertext-v2-cli.ts",
+    "gate:crypto-version": "node --loader ts-node/esm scripts/migrate/ciphertext-v2-cli.ts"
   },
   "dependencies": {
     "@adeu/core": "1.28.0",

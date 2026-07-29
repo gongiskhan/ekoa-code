@@ -155,7 +155,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   Verified stable at 3/72 across a clean build, a rebuild and a full-lane run. Worth noting for
   anyone auditing the ledger: a census that quotes counts is only as trustworthy as the collection
   behind it, and this one silently changed under a minor-version default.
-- **`k4-migration-dead-on-arrival`** (OPEN 2026-07-28, MEDIUM, correctness/governance — found by
+- **`k4-migration-dead-on-arrival`** (FIXED 2026-07-29, MEDIUM, correctness/governance — found by
   the A-8 typecheck sweep). `api/scripts/migrate/ciphertext-v2.ts` is journaled as landed (commit
   `f993d06`, `docs/decisions.md` 2026-07-28 K-4) but **had never compiled and has never run**. It
   imported `cofreItems` from `src/data/stores.js`, which does not export it — the Cofre item store
@@ -171,7 +171,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   seeds v1 rows, migrates, and asserts `noV1CiphertextRemains()`. Note while doing so that
   `noV1CiphertextRemains()` currently CALLS `migrateCiphertextToV2()`, so the "check" mutates the
   database — safe because the migration is idempotent, but a gate that writes is the wrong shape
-  and should be split into a read-only scan.
+  and should be split into a read-only scan. **CLOSED 2026-07-29**: scan and migrate are now
+  separate (`scanCiphertextVersions()` is read-only, so the post-cutover gate can be pointed at
+  production to ask a question); `api/scripts/migrate/ciphertext-v2-cli.ts` is the entry point,
+  dry-run by default with `--execute` required to write (ch10 §10.3 rule 3); `migrate:ciphertext-v2`
+  and `gate:crypto-version` are wired in `api/package.json`, the latter exiting non-zero while any
+  v1 row remains so it can gate CI after the cutover window. Proven by
+  `api/tests/security/ciphertext-v2-migration.test.ts` (9 cases, both plants red) AND by driving the
+  real CLI against an ephemeral mongo: gate exit 1 with a seeded v1 row -> `--execute` reports
+  COMPLETE -> gate exit 0. The decisive test is not "the row changed shape" but "the row can no
+  longer be decrypted under the WRONG tenant", which is the property K-1 only gave to new writes.
 - **`cofre-raw-store-lint-rule-missing`** (FIXED 2026-07-29, LOW, defence-in-depth — found by the
   A-8 sweep). Plan item B-1 specified "an eslint rule forbidding any import of the raw `cofre_items`
   store handle outside `api/src/cofre/`, and forbidding re-derivation of the scoping predicate".
