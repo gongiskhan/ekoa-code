@@ -59,23 +59,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   at a time as `archive.file(absolutePath, { name: relPath })` from our own directory walk;
   `archive.glob()` and `archive.directory()` are never called. Accepted in `scripts/audit-gate.mjs`
   with that reasoning. Do the migration the next time `app-archive.ts` is opened for other reasons.
-- **`e2e-estate-15-red-first-honest-measurement`** (OPEN 2026-07-29, MEDIUM, test-coverage — the
-  first time the ported e2e estate has ever run to completion anywhere). With the CSP/CORS bring-up
-  fixed (`ci-e2e-step-could-never-pass`), the ledger run goes from **134 passed / 97 failed** to
-  **212 passed / 15 failed / 5 skipped**, and wall-clock from 46.4 to 14.4 minutes — the earlier
-  number was almost entirely `page.waitForURL` timeouts on a login that could never complete, not
-  product failures. The remaining 15 are REAL and were masked by those timeouts:
-  `artifact-backend-panel`, `artifacts-apps-section`, `integrations-pipedream`,
-  `integrations-sections`, `legal-rcbe`, `legal-shared-drift`, `onboarding` (x3), `pages-core`,
-  `pages-manage`, `regressions-dashboard`, `simuladores-trabalho`, `update-from-bundle`,
-  `vertical-profile`. Causes cluster into: 3 x "backend login returned a JWT" assertions, 4 x plain
-  equality mismatches, 2 x missing element/locator, 1 x `sync-legal-shared --check` drift, 1 x
-  `simuladores` build failure, and **2 x `Cannot find module scripts/sync-legal-shared.mjs` — a
-  script `web/e2e/legal-shared-drift.spec.ts` invokes that does not exist anywhere in the repo or
-  its history** (its only reference is that spec, so this is a spec ported without its tool, not a
-  deletion). CI's e2e step therefore stays RED after the bring-up fix, and that is the honest state:
-  it now runs the estate and reports real defects instead of failing before the first browser
-  launched. Close them individually; do not treat the count as one item.
+- **`e2e-estate-15-red-first-honest-measurement`** (PARTIALLY FIXED 2026-07-29 — 9 of 15 closed).
+  With the CSP/CORS bring-up repaired, the estate ran to completion for the first time and reported
+  15 real failures. They were never one problem. **FIXED (9):** five specs drove
+  `POST /api/v1/action`, the old Cortex RPC dispatcher, which this repo does not implement and which
+  is absent from `shared/` entirely — repointed to REST (`web/e2e/helpers/backend-rest.ts`), fixing
+  onboarding (x3) and vertical-profile; two order dependencies (onboarding never set the LEGAL
+  vertical its chips need; pages-manage's bare `getByRole('tab')` now spans page tabs AND filter
+  pills, so `.nth(1)` navigated off the panel holding the search box); two stale ENGLISH selectors in
+  a PT-PT product (`/Usage/i` vs "Utilização"; `iframe[title*="Preview"]` vs "Pré-visualização"); and
+  two REAL PRODUCT BUGS with their own entries — `pipedream-master-switch-inert` and
+  `trigger-null-target-blanks-the-webhooks-list`. **STILL OPEN (6),** each needing a decision rather
+  than a fix:
+  - `artifacts-apps-section`, `update-from-bundle`, `artifact-backend-panel` — need `ekoa.templates`
+    / `ekoa.artifact-backend`, surfaces with **no route and no `shared/` module** in the rebuild.
+    Either that functionality is still wanted (build it) or the specs are stale (retire them
+    explicitly, per the QA process). Not a call to make silently from a test file.
+  - `legal-shared-drift` — invokes `scripts/sync-legal-shared.mjs`, which exists nowhere in the repo
+    or its history, against a canonical `ekoa-data/legal-shared/` that also does not exist. The
+    invariant is real (six scaffolds must not drift from a shared layer); the tool was never ported.
+  - `simuladores-trabalho` — needs `ekoa-data/apps/simuladores-trabalho/build.mjs`, a user-app build
+    artifact not in the repo. The underlying logic IS ported and unit-tested
+    (`api/src/legal/simuladores.ts`, `api/tests/legal/simuladores.test.ts`).
+  - `legal-rcbe` — NOT idempotent: it completes the demo obligation and re-running finds it already
+    `cumprida`, so it asserts "atraso|Pendente" against fulfilled state. The scaffold has a reset,
+    but it is gated on `isDemoActive()` (an injected tour runtime the spec cannot trigger) and the
+    data lives in served-app shared storage that survives runs. Needs a deterministic reset hook.
+
 - **`ci-e2e-step-could-never-pass`** (FIXED 2026-07-29, MEDIUM, process — surfaced when the lane
   first reached the e2e step). With typecheck, `npm test` and `npm run build` all green for the
   first time, `npm run e2e` failed for two structural reasons, neither a test defect: (1) Playwright's

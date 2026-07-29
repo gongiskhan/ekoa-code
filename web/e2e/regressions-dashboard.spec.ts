@@ -111,7 +111,10 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
     // The overlay's iframe points at the api's /apps/* plane — cross-origin from the
     // dashboard. Pre-fix the api answered frame-ancestors 'self' + XFO SAMEORIGIN and the
     // browser refused the frame; now /apps/* allowlists the dashboard origin.
-    const frame = page.frameLocator('iframe[title*="Preview"]');
+    // PT-PT: the overlay's iframe is titled "Pré-visualização". `title*="Preview"` was an English
+    // selector that never matched the shipped UI, so this failed on a missing element rather than
+    // on the framing behaviour it exists to protect. Substring avoids the accent.
+    const frame = page.frameLocator('iframe[title*="visualiza"]');
     await expect(frame.locator('body')).not.toBeEmpty({ timeout: 30_000 });
 
     expect(errors, `console errors on /artifacts preview:\n${errors.join('\n')}`).toEqual([]);
