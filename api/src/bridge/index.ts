@@ -59,3 +59,6 @@ export {
   type DelegationRequest,
   type DelegationDeps,
 } from './delegation.js';
+
+// Cofre J-1 wiring: the awaitable half of the tool.invoke / tool.result frame pair.
+export { invokeTool, ToolInvocationRefused, type ToolResult } from './tool-invocation.js';

@@ -46,7 +46,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -131,6 +131,7 @@ import {
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  setDaemonConnectionResolver,
   setAutomationContentSections,
   startRunForTrigger,
   runAutomationForAction,
@@ -488,7 +489,46 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const browser = await getSharedBrowser();
     return browser.newContext();
   });
-  // (setDaemonConnectionResolver stays on its honest default — the bridge lands at G8A.)
+  // 10. THE DAEMON SEAM (Cofre J-1 wiring). This is a SECURITY EVENT, not plumbing: the moment it
+  // is wired, `local_command` and daemon-driven browser steps become reachable end to end, and
+  // every latent I5/I9 defect in that path goes live. The plan gates it explicitly — "J-1 must not
+  // land before H-1, H-4, J-4 and J-7" — and all four are in:
+  //   H-1  value-keyed redaction on every model-bound and log-bound stream
+  //   H-4  ingress redaction, so a step echoing a delivered credential is filtered before it
+  //        reaches the run record, the SSE stream or the model
+  //   J-4  the I9 primitive; `envWhitelist` DELETED, so nothing reads this server's own env
+  //   J-7  the write flag is no longer the model's to assert, and command shapes bind to the exact
+  //        command rather than a wildcard class
+  //
+  // What is deliberately NOT granted here: the resolver hands back a connection only when the ORG
+  // has granted that machine the capability (I-3, re-read per invocation), so wiring the seam does
+  // not by itself authorise anything. A fleet with no capability grants stays exactly as inert as
+  // it was before this line existed — the difference is that granting one now works.
+  setDaemonConnectionResolver((ownerUserId: string) => {
+    const conn = getConnectionByOwner(ownerUserId);
+    if (!conn) return null;
+    return {
+      pairingId: conn.pairingId,
+      async runStep(req: { capability: 'browser' | 'bash'; input: unknown; stepId?: string; runId: string }, opts?: unknown) {
+        void opts; // streamed progress arrives as its own frames; not part of the invoke contract
+        const capability = req.capability === 'bash' ? 'local.bash' : 'local.filesystem';
+        const res = await invokeTool({
+          pairingId: conn.pairingId,
+          orgId: conn.org,
+          capability,
+          payload: { capability: req.capability, input: req.input, stepId: req.stepId, runId: req.runId },
+        });
+        // Shape the bridge's result into the envelope the automation engine expects. A refusal is
+        // an ordinary failed observation, not a thrown error, because the engine's step record is
+        // where a user-visible failure belongs.
+        return {
+          ok: res.ok,
+          ...(res.error ? { error: res.error } : {}),
+          observation: { data: (res.output ?? {}) as Record<string, unknown> },
+        } as never;
+      },
+    };
+  });
 
   // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).
   setDeliveryTargets({

@@ -41,6 +41,7 @@ import {
 import { spendConnectNonce } from './connect-nonce.js';
 import { acceptSessionPush, AttendedError } from './attended.js';
 import { redactInboundFrame, releasePairingSecrets } from './ingress-redaction.js';
+import { resolveToolResult, failInvocationsForPairing } from './tool-invocation.js';
 import { resolveDelegationResult, resolveDenial, failDelegationsForPairing } from './delegation.js';
 import { createProviderHandler, type ProviderHandler } from './provider.js';
 
@@ -233,8 +234,11 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       removeLiveConnection(ctx.pairingId, ws);
       // H-4: the machine can no longer echo anything, so stop holding its delivered values.
       releasePairingSecrets(ctx.pairingId);
-      // A closed / revoked socket fails every in-flight delegation cleanly (§18.3.5, S4).
+      // A closed / revoked socket fails every in-flight delegation cleanly (§18.3.5, S4) — and
+      // every in-flight tool invocation with it, or an automation step would hang on a machine
+      // that is already gone.
       failDelegationsForPairing(ctx.pairingId);
+      failInvocationsForPairing(ctx.pairingId);
     });
     ws.on('error', () => {
       /* the 'close' event that follows runs the cleanup */
@@ -285,6 +289,12 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         break;
       case 'ledger_row':
         deps.onLedgerRow?.(frame.taskId, frame.row);
+        break;
+      case 'tool.result':
+        // The awaiting half of J-1's frame pair. The frame arrived on THIS pairing's live socket
+        // (the liveness guard above already bound it), and it has been through ingress redaction,
+        // so any credential this process delivered is already filtered out of `output`/`error`.
+        resolveToolResult(frame.invocationId, { ok: frame.ok, output: frame.output, error: frame.error });
         break;
       case 'session.push': {
         // J-5: the result of an attended ceremony. Bound to the socket it arrived on — the pairing
