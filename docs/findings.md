@@ -6,6 +6,38 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`e2e-estate-15-red-first-honest-measurement`** (OPEN 2026-07-29, MEDIUM, test-coverage — the
+  first time the ported e2e estate has ever run to completion anywhere). With the CSP/CORS bring-up
+  fixed (`ci-e2e-step-could-never-pass`), the ledger run goes from **134 passed / 97 failed** to
+  **212 passed / 15 failed / 5 skipped**, and wall-clock from 46.4 to 14.4 minutes — the earlier
+  number was almost entirely `page.waitForURL` timeouts on a login that could never complete, not
+  product failures. The remaining 15 are REAL and were masked by those timeouts:
+  `artifact-backend-panel`, `artifacts-apps-section`, `integrations-pipedream`,
+  `integrations-sections`, `legal-rcbe`, `legal-shared-drift`, `onboarding` (x3), `pages-core`,
+  `pages-manage`, `regressions-dashboard`, `simuladores-trabalho`, `update-from-bundle`,
+  `vertical-profile`. Causes cluster into: 3 x "backend login returned a JWT" assertions, 4 x plain
+  equality mismatches, 2 x missing element/locator, 1 x `sync-legal-shared --check` drift, 1 x
+  `simuladores` build failure, and **2 x `Cannot find module scripts/sync-legal-shared.mjs` — a
+  script `web/e2e/legal-shared-drift.spec.ts` invokes that does not exist anywhere in the repo or
+  its history** (its only reference is that spec, so this is a spec ported without its tool, not a
+  deletion). CI's e2e step therefore stays RED after the bring-up fix, and that is the honest state:
+  it now runs the estate and reports real defects instead of failing before the first browser
+  launched. Close them individually; do not treat the count as one item.
+- **`ci-e2e-step-could-never-pass`** (FIXED 2026-07-29, MEDIUM, process — surfaced when the lane
+  first reached the e2e step). With typecheck, `npm test` and `npm run build` all green for the
+  first time, `npm run e2e` failed for two structural reasons, neither a test defect: (1) Playwright's
+  browsers were never installed on the runner, so the first `chromium.launch()` died with
+  "Executable doesn't exist at ~/.cache/ms-playwright/..." — `Dockerfile.api` already installs them
+  for exactly this reason; (2) the step ran the BARE ledger runner, which needs a live api on :4111
+  and reports "10 due driver(s) require a live dev API — an unreachable-server skip is NOT green".
+  The repo already contains the fix: `scripts/e2e-with-server.mjs` (`npm run e2e:server`) boots
+  dev-api on an ephemeral memory-mongo, waits for READY plus the featured prebuild, runs the ledger
+  and tears down — and its own docblock says "CI sets EKOA_SCREENSHOTS_DISABLED", i.e. it was
+  written for this lane, which then never called it. FIXED by installing chromium and calling
+  `e2e:server`; it needs `npm run build` output, which the preceding step already produces. Same
+  class as `ci-typecheck-never-ran` and `subprocess-isolation-test-could-never-pass-on-ci`: a step
+  that had never once executed its actual work, invisible for as long as an earlier step failed
+  first.
 - **`subprocess-isolation-test-could-never-pass-on-ci`** (FIXED 2026-07-29, MEDIUM, test-integrity
   — surfaced the moment CI first reached `npm test`). `api/tests/llm/subprocess-isolation.test.ts`
   asserted that the literal string `ekoa-code` appears nowhere in the SDK subprocess spawn contract,

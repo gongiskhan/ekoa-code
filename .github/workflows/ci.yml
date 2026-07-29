@@ -37,7 +37,23 @@ jobs:
       # ported specs/drivers run at the current gate (from the latest gate-* tag). Not-yet-due
       # artifacts report `skipped (awaiting G<N>)`; due artifacts run and must be green; the
       # census (55 specs / 14 drivers) and the ratchet are enforced here (ch14 §14.2.5).
-      - run: npm run e2e
+      #
+      # Two reasons this step could never pass before, both structural and both invisible while the
+      # lane was dying at typecheck:
+      #
+      #   1. Playwright's browsers were never installed on the runner, so the first `chromium.launch()`
+      #      died with "Executable doesn't exist at ~/.cache/ms-playwright/...". Dockerfile.api already
+      #      does this for the same reason.
+      #   2. The step ran the BARE ledger runner, which needs a live api on :4111 and reports
+      #      "10 due driver(s) require a live dev API — an unreachable-server skip is NOT green".
+      #      `scripts/e2e-with-server.mjs` exists precisely for this: it boots dev-api on an ephemeral
+      #      memory-mongo, waits for READY plus the featured prebuild, runs the ledger, and tears down.
+      #      Its own docblock says "CI sets EKOA_SCREENSHOTS_DISABLED" — it was written for this lane
+      #      and the lane never called it. It needs `npm run build` output, which step 5 above produces.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:server
+        env:
+          EKOA_SCREENSHOTS_DISABLED: '1'
       - run: npm run gate:ledger
 
   # Security CI gates (security addendum D.4): Semgrep SAST, gitleaks, npm audit.
