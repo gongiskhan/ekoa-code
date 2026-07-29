@@ -6,6 +6,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`trigger-null-target-blanks-the-webhooks-list`** (FIXED 2026-07-29, MEDIUM, correctness — found
+  by repairing the e2e estate). `GET /api/v1/triggers` emitted `automationId: null` for a trigger
+  created against an ARTIFACT (and `artifactId: null` for the reverse). `shared/` types both as
+  `Id.optional()`, and zod's `.optional()` accepts `undefined` but **rejects `null`** — so
+  `TriggerListResponse` failed to parse client-side, `tryCall` reported not-ok, and the webhooks
+  store kept an empty array. The user saw **"Ainda não existem webhooks" over a populated
+  database**, with no error surfaced anywhere: creating a webhook returned 201, the row never
+  appeared, and nothing said why. FIXED in `triggerView` by omitting absent optionals instead of
+  passing null — the same field-by-field discipline `sessionView` already uses. Worth recording why
+  this survived a surface the schema-coverage gate marks COVERED: every existing fixture set one
+  target or the other, so `null` never appeared in a test. The new cases construct the real
+  database shape (an explicit `null`) and go red against the old mapper.
 - **`pipedream-master-switch-inert`** (FIXED 2026-07-29, HIGH, security — found by repairing the e2e
   estate, not by reading code). The Pipedream master toggle **could not be turned off**.
   `PATCH /api/v1/settings` persists via `patchOrgSettings`, which writes the ORG document

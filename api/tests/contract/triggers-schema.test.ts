@@ -51,6 +51,32 @@ describe('Trigger schema — listener kind + pollConfig (2A-S1)', () => {
     expect(parsed.success && parsed.data.kind).toBe('webhook');
   });
 
+  it('a NULL automationId is omitted, not emitted — zod .optional() rejects null', () => {
+    // The shape a real row actually has: created against an ARTIFACT, so the automation target is
+    // stored null rather than absent. `Id.optional()` accepts undefined and REJECTS null, so
+    // passing it through failed TriggerListResponse on the client, tryCall reported not-ok, and the
+    // webhooks store kept an empty array — the user saw "Ainda não existem webhooks" over a
+    // populated database, with no error shown anywhere.
+    //
+    // Every fixture here previously set one target or the other, which is why a surface marked
+    // COVERED in the schema-coverage gate still shipped this.
+    const withNulls = doc({ integrationKey: 'whatsapp', eventName: 'message.received' }) as unknown as Record<string, unknown>;
+    withNulls.automationId = null;
+    const view = triggerView(withNulls as unknown as Parameters<typeof triggerView>[0], BASE);
+
+    expect('automationId' in view).toBe(false);
+    expect(Trigger.safeParse(view).success).toBe(true);
+    expect(TriggerListResponse.safeParse({ items: [view] }).success).toBe(true);
+  });
+
+  it('a NULL artifactId is likewise omitted', () => {
+    const withNulls = doc({ targetKind: 'automation', automationId: 'auto-1' }) as unknown as Record<string, unknown>;
+    withNulls.artifactId = null;
+    const view = triggerView(withNulls as unknown as Parameters<typeof triggerView>[0], BASE);
+    expect('artifactId' in view).toBe(false);
+    expect(Trigger.safeParse(view).success).toBe(true);
+  });
+
   it('a mixed list of listener + webhook views validates against TriggerListResponse', () => {
     const items = [
       triggerView(doc({ kind: 'listener', pollConfig: { actionName: 'list_emails', intervalMs: 30_000 } }), BASE),
