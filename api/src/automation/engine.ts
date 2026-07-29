@@ -35,6 +35,7 @@ import {
 } from './seams.js';
 import { LocalBrowserSession } from './local-browser-session.js';
 import { rebaseSelfUrl } from './self-url.js';
+import { isCredentialAdjacentFailure } from './human-action-routing.js';
 import {
   DaemonBrowserSession,
   type BrowserSession,
@@ -2103,6 +2104,12 @@ function classifyFailure(record: StepRecord, step: Step): FailureKind {
  */
 function shouldAttemptFix(record: StepRecord, step: Step): boolean {
   if (record.error?.recoverable === false) return false;
+  // F-4: a CREDENTIAL-ADJACENT failure never reaches the fixer. When the typist cannot find the
+  // form it expects, handing the page to an LLM to work out which field is the password is exactly
+  // what invariant I5 forbids — the next action in that sequence types a decrypted credential into
+  // whatever the model picked. An unfamiliar login form is a case for a human (relay or attended),
+  // not for a guess. Checked FIRST so no step-type branch below can re-enable it.
+  if (isCredentialAdjacentFailure(record.error)) return false;
   switch (step.type) {
     case 'browser':
     case 'verify':

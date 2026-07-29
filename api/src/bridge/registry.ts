@@ -236,6 +236,59 @@ export function getConnectionByOwner(ownerUserId: string, expectedOrg?: string):
   return best;
 }
 
+/**
+ * Select a live connection for a step's DECLARATION rather than "newest socket for this owner"
+ * (Cofre E-4).
+ *
+ * Three placements, and the difference between them is the point:
+ *   - `cloud`   — not a machine at all; the caller handles it, so this returns undefined.
+ *   - `pinned`  — exactly that pairing or nothing. A pinned step that falls back to a different
+ *                 machine is not a pinned step; the run declared a specific computer for a reason
+ *                 (its card reader, its VPN, its residential line).
+ *   - `any`     — the router picks, but only from machines the ORG GRANTED for the capability.
+ *
+ * `usable` is the intersection of advertised and granted (I-3), passed in rather than read here so
+ * the async grant lookup stays at the caller and this stays a pure, synchronous choice over the
+ * live map. Org is checked on every branch: a machine in another tenant is never a candidate, not
+ * a candidate filtered afterwards.
+ *
+ * Returns undefined when nothing matches — the caller then applies the step's OFFLINE POLICY, which
+ * is a property of the run, not of the fleet. Never a silent fallback to some other machine.
+ */
+export function selectConnectionForStep(input: {
+  ownerUserId: string;
+  org: string;
+  target: { kind: 'cloud' } | { kind: 'pinned'; pairingId: string } | { kind: 'any'; capability: string };
+  /** pairingId -> capabilities that machine may actually be used for (advertised ∩ granted). */
+  usable: Map<string, readonly string[]>;
+  requiredCapabilities?: readonly string[];
+}): LiveConnection | undefined {
+  const { ownerUserId, org, target, usable, requiredCapabilities = [] } = input;
+  if (target.kind === 'cloud') return undefined;
+
+  const hasAll = (pairingId: string, caps: readonly string[]): boolean => {
+    const granted = usable.get(pairingId) ?? [];
+    return caps.every((c) => granted.includes(c));
+  };
+
+  if (target.kind === 'pinned') {
+    const conn = live.get(target.pairingId);
+    if (!conn || conn.org !== org || conn.ownerUserId !== ownerUserId) return undefined;
+    return hasAll(conn.pairingId, requiredCapabilities) ? conn : undefined;
+  }
+
+  // `any:<capability>`: the declared capability is required IN ADDITION to requiredCapabilities —
+  // naming it in the target is a request, not a substitute for declaring what the step needs.
+  const needed = [...new Set([...requiredCapabilities, target.capability])];
+  let best: LiveConnection | undefined;
+  for (const conn of live.values()) {
+    if (conn.ownerUserId !== ownerUserId || conn.org !== org) continue;
+    if (!hasAll(conn.pairingId, needed)) continue;
+    if (!best || conn.registeredAt > best.registeredAt) best = conn;
+  }
+  return best;
+}
+
 /** Send a frame to a pairing's live socket (§18.3.8). Returns false when offline or the send fails. */
 export function sendToPairing(pairingId: string, frame: BridgeFrame): boolean {
   const conn = live.get(pairingId);

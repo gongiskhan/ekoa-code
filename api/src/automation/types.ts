@@ -14,6 +14,8 @@
  * zero imports, so it re-homes into ekoa-code/automation/ unchanged.
  */
 
+import { StepDeclaration } from '@ekoa/shared';
+
 // ============================================================================
 // Cache layer — Locators
 // ============================================================================
@@ -279,6 +281,36 @@ export interface Step {
    * short-circuit).
    */
   cachedAssertion?: PlaywrightAssertion;  // verify
+
+  /**
+   * WHERE and HOW this step may run (Cofre E-2; contract in `shared/` as `StepDeclaration`).
+   *
+   * Optional on the type because every automation authored before this existed has none, and a
+   * missing declaration must keep working. It does NOT mean "unrestricted": `resolveStepDeclaration`
+   * fills the absent fields with the contract's defaults, which are the CLOSED ones — no required
+   * capabilities, `cloud` target, not attended, no credential refs, and `offlinePolicy: 'fail'`.
+   * A step that declares nothing therefore asks for nothing and stops rather than degrading.
+   *
+   * The four fields the router needs are deliberately separate concerns: `requiredCapabilities` is
+   * what the machine must be able to do, `target` is which machine, `attended` is whether a human
+   * must be present, and `credentialRefs` names the Cofre items the step consumes — REFERENCES
+   * only, never values (I5/I9). `offlinePolicy` is the run's answer to "and if that is not
+   * available?", which is a property of the run, not of the fleet.
+   */
+  declaration?: Partial<StepDeclaration>;
+}
+
+/**
+ * Fill an absent or partial step declaration from the contract's defaults.
+ *
+ * ONE PLACE, deliberately. Every consumer (the engine's placement, the capability match in
+ * `delegateToLocal`, the offline-policy branch) must see the same resolved shape, and a second
+ * inline `?? 'fail'` somewhere is how a default drifts open. Parsing through the zod schema rather
+ * than spreading literals means the defaults live in `shared/` — where the contract test asserts
+ * `offlinePolicy` is `fail` and that a raw secret in `credentialRefs` is refused.
+ */
+export function resolveStepDeclaration(step: Pick<Step, 'declaration'>): StepDeclaration {
+  return StepDeclaration.parse(step.declaration ?? {});
 }
 
 export interface AutomationInputField {
@@ -399,7 +431,18 @@ export interface EkoaActionTraceEntry {
   error?: string;
 }
 
-export type HumanActionKind = 'captcha' | 'mfa' | 'payment' | 'identity' | 'login' | 'other';
+export type HumanActionKind =
+  | 'captcha'
+  | 'mfa'
+  | 'payment'
+  | 'identity'
+  | 'login'
+  /** F-4/I8: a SIGNATURE ceremony is not a login. Signing is an act of legal authorship by a named
+   *  person, bound to the card in the reader in front of them, so "the user completed a ceremony"
+   *  is not interchangeable evidence for it. Kept apart at classification so everything downstream
+   *  inherits the distinction instead of re-deriving it. */
+  | 'signature'
+  | 'other';
 
 export interface HumanActionRequired {
   kind: HumanActionKind;

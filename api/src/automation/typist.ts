@@ -27,6 +27,7 @@ import type { Page } from 'playwright';
 import type { Actor } from '@ekoa/shared';
 import { unwrap, recordUse, type UnwrappedCredential } from '../cofre/index.js';
 import { SecretRegistry } from '../security/redaction.js';
+import { recipeForHost } from './login-recipes.js';
 import { dispatchKeyEvent, newCdpSession } from '../streaming/cdp.js';
 
 /** A login form the generic pattern could not drive. Fails to relay/attended, never to the model. */
@@ -161,6 +162,14 @@ export async function typistLogin(input: TypistLoginInput, deps: TypistDeps): Pr
   // 1. ORIGIN FIRST — before any unwrap. A wrong-origin page must not cause a decrypt.
   const origin = new URL(page.url()).hostname;
 
+  // F-3: a per-site recipe is FIXED DATA from api/assets/login-recipes/, looked up by host. An
+  // explicitly-passed recipe still wins (tests and the caller may pin one), but nothing here is
+  // model-authored: the registry validates every entry as a plain CSS selector on load, and a
+  // recipe can only point the FIXED sequence below at different elements — never change what it
+  // does. That is the I5 line: the typist is the one primitive that handles a decrypted credential
+  // against a live page, so anything steering it sits inside the credential's trust boundary.
+  const recipe = input.recipe ?? recipeForHost(origin);
+
   // 2. Suppress every observation channel for the fill window, and REFUSE if we cannot.
   const resume = await deps.beginCredentialWindow(traceId);
   try {
@@ -188,22 +197,22 @@ export async function typistLogin(input: TypistLoginInput, deps: TypistDeps): Pr
 
       // 4. Locate the form. An unknown shape fails to relay, never to improvisation.
       const passwordSel =
-        input.recipe?.passwordSelector ?? (await firstVisible(page, PASSWORD_SELECTORS));
+        recipe?.passwordSelector ?? (await firstVisible(page, PASSWORD_SELECTORS));
       if (!passwordSel) {
         // Multi-step (email -> next -> password): try the generic reveal once.
-        const nextSel = input.recipe?.nextSelector ?? null;
+        const nextSel = recipe?.nextSelector ?? null;
         if (nextSel) {
           await page.locator(nextSel).first().click({ timeout: 5_000 }).catch(() => {});
         }
       }
       const resolvedPasswordSel =
-        input.recipe?.passwordSelector ?? (await firstVisible(page, PASSWORD_SELECTORS));
+        recipe?.passwordSelector ?? (await firstVisible(page, PASSWORD_SELECTORS));
       if (!resolvedPasswordSel) {
         throw new TypistUnknownPattern('no password field found — pausing for the relay');
       }
 
       if (input.username) {
-        const userSel = input.recipe?.usernameSelector ?? (await firstVisible(page, USERNAME_SELECTORS));
+        const userSel = recipe?.usernameSelector ?? (await firstVisible(page, USERNAME_SELECTORS));
         if (userSel) await typeOutOfBand(page, userSel, input.username);
       }
 
@@ -211,7 +220,7 @@ export async function typistLogin(input: TypistLoginInput, deps: TypistDeps): Pr
       //    field on the page, which is what makes read-back impossible by construction.
       await typeOutOfBand(page, resolvedPasswordSel, credential.value);
 
-      const submitSel = input.recipe?.submitSelector ?? (await firstVisible(page, SUBMIT_SELECTORS));
+      const submitSel = recipe?.submitSelector ?? (await firstVisible(page, SUBMIT_SELECTORS));
       let submittedVia: 'button' | 'enter';
       const navigation = page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
       if (submitSel) {

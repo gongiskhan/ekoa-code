@@ -6,6 +6,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`typist-emits-no-registo-row`** (OPEN 2026-07-29, LOW, auditability — found while pinning F-5).
+  `typistLogin` records credential use on the ITEM (`lastUsedAt`/`lastUsedBy` via `recordUse`) but
+  emits no Registo row, although the A-6 vocabulary defines `cofre_item_used` for exactly this. So a
+  user reading their Registo sees the unlock and the grant but not the login that consumed it. Not a
+  leak — the item row is metadata-only and carries no value — but an audit gap on the one primitive
+  that handles a decrypted credential against a live page. Asserted in
+  `api/tests/security/typist-non-memorable.test.ts` in the NEGATIVE direction so it is visible
+  rather than assumed; flip that assertion when the row is emitted.
 - **`trigger-null-target-blanks-the-webhooks-list`** (FIXED 2026-07-29, MEDIUM, correctness — found
   by repairing the e2e estate). `GET /api/v1/triggers` emitted `automationId: null` for a trigger
   created against an ARTIFACT (and `artifactId: null` for the reverse). `shared/` types both as
