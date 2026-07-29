@@ -6,6 +6,31 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`npm-audit-gate-unsatisfiable-and-unread`** (FIXED 2026-07-29, MEDIUM, process/security). The
+  `security-gates` job had been failing at `npm audit --audit-level=high` (17 vulnerabilities, 10
+  high). The gate was UNSATISFIABLE as written and therefore unread: two of its highs have no fixed
+  version at all, so the only ways to green were to drop the threshold (stop seeing highs) or wait
+  forever. Meanwhile the genuinely actionable production advisories sat unnoticed behind the noise.
+  FIXED in two parts. **Upgrades** (production highs 9 -> 0 unaccepted): `next` 16.2.10 -> 16.2.12,
+  `dembrandt` 0.23.1 -> 0.25.1, `react-router-dom` -> 7.18.2, plus root `overrides` forcing
+  `postcss` 8.5.24, `sharp` 0.35.3, `adm-zip` 0.6.0, `fast-uri` 3.1.4. **A real gate**
+  (`scripts/audit-gate.mjs`) replacing the blunt flag: it blocks on any unaccepted high/critical in
+  the PRODUCTION tree (`--omit=dev` — those ship), reports dev-tree highs without blocking (a DoS in
+  the linter's glob matcher is not a path to tenant data), and accepts only explicitly documented
+  advisories, each stating why it is unreachable and what would close it. Acceptance propagates
+  transitively to a fixpoint, so a six-deep chain resolves from its root advisory. Verified
+  non-vacuous: a planted unlisted critical fails, and a package that gains its OWN advisory cannot
+  launder it through an accepted dependency.
+- **`archiver-8-removed-the-factory-api`** (OPEN by design 2026-07-29, LOW, dependency). `archiver@8`
+  clears the entire archiver advisory chain, and was tried and REVERTED. v8 is pure ESM exporting
+  classes (`Archiver`, `ZipArchive`, ...) with no default and nothing callable, so
+  `archiver('zip', ...)` in `api/src/services/app-archive.ts` becomes `TypeError: archiver is not a
+  function` and the artifact download 500s (caught by `app-archive.test.ts` +
+  `artifact-family.test.ts`). Migrating is a rewrite of a user-facing download path, not a shim, and
+  the advisory it closes is a glob-expansion DoS that this code cannot reach — entries are added one
+  at a time as `archive.file(absolutePath, { name: relPath })` from our own directory walk;
+  `archive.glob()` and `archive.directory()` are never called. Accepted in `scripts/audit-gate.mjs`
+  with that reasoning. Do the migration the next time `app-archive.ts` is opened for other reasons.
 - **`e2e-estate-15-red-first-honest-measurement`** (OPEN 2026-07-29, MEDIUM, test-coverage — the
   first time the ported e2e estate has ever run to completion anywhere). With the CSP/CORS bring-up
   fixed (`ci-e2e-step-could-never-pass`), the ledger run goes from **134 passed / 97 failed** to
