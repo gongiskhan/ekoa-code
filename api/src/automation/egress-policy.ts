@@ -43,6 +43,17 @@ export const DEFAULT_EGRESS: EgressDeclaration = {
 export interface EgressCandidate {
   pairingId: string;
   org: string;
+  /**
+   * The capabilities this machine may actually be used for — the INTERSECTION of what it advertises
+   * and what the org GRANTED (Cofre I-3, `bridge/capability-grants.ts`).
+   *
+   * This used to be the advertised list alone, which made a self-assertion by the machine into an
+   * authorisation: a daemon that was compromised, misconfigured, or simply running a newer build
+   * than its owner expected could widen its own privileges by claiming more, and a tenant's traffic
+   * would be routed through it. Advertisement answers "what can this machine do"; it was never an
+   * answer to "what may this tenant's work be routed through it for". Callers MUST pass the
+   * intersection — `usableCapabilities()` computes it — never the raw `PairingRow.capabilities`.
+   */
   capabilities: readonly string[];
   /** The machine's tailnet address, advertised in its `hello` frame. Absent until it advertises. */
   egressEndpoint?: string;

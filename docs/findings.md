@@ -6,6 +6,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`subprocess-isolation-test-could-never-pass-on-ci`** (FIXED 2026-07-29, MEDIUM, test-integrity
+  — surfaced the moment CI first reached `npm test`). `api/tests/llm/subprocess-isolation.test.ts`
+  asserted that the literal string `ekoa-code` appears nowhere in the SDK subprocess spawn contract,
+  using the repo's directory NAME as a proxy for "a host path leaked". On GitHub Actions the repo is
+  *named* `ekoa-code`, so GitHub's own injected metadata (`GITHUB_REPOSITORY`,
+  `GITHUB_WORKFLOW_REF`) and npm's workspace-PARENT bin entry
+  (`/home/runner/work/ekoa-code/node_modules/.bin` — NOT under the checkout root, so correctly kept
+  by the F25 `underPathRoot` filter) all contain it. **The test was green locally and structurally
+  red on CI, and could never have passed there.** Nobody saw it because the lane died at typecheck
+  before reaching `npm test` (`ci-typecheck-never-ran`) — fixing CI is what exposed it. FIXED by
+  asserting the invariant the code actually implements: the sandbox is neither the server cwd nor
+  the operator home, `env.HOME` is the sandbox, no NON-PATH value carries the checkout or the
+  operator home, and PATH carries no segment under the checkout root. PATH is exempt from the
+  home-check BY DESIGN and by written disposition (the accepted `subprocess PATH home-path residual`
+  below): node and the toolchain live under `$HOME` on nvm/fnm/volta/asdf hosts and the SDK spawns a
+  bare `node` against this PATH, so filtering `$HOME` out of it ENOENTs every model subprocess.
+  Verified three ways: passes under the simulated CI vars, the old assertion provably fails under
+  the same vars, and it still goes red when the PATH-root filter is removed.
 - **`gitleaks-red-on-synthetic-fixtures`** (FIXED 2026-07-29, MEDIUM, process — found when the
   first push finally reached CI). The `security-gates` job had been RED since 2026-07-27, failing at
   the gitleaks step on five `generic-api-key` hits. All five are synthetic credential fixtures in

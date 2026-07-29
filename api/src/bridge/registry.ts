@@ -16,7 +16,7 @@
 import type { WebSocket } from 'ws';
 import type { BridgeFrame } from '@ekoa/shared';
 import { randomBytes } from 'node:crypto';
-import { bridgePairings } from '../data/stores.js';
+import { bridgePairings, bridgeCapabilityGrants } from '../data/stores.js';
 import { encrypt, decrypt } from '../data/crypto.js';
 import { logActivity } from '../data/activity.js';
 import type { Doc } from '../data/store.js';
@@ -341,11 +341,41 @@ export async function egressCandidatesForOrg(org: string): Promise<
   Array<{ pairingId: string; org: string; capabilities: string[]; egressEndpoint?: string; live: boolean }>
 > {
   const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
-  return rows.map((row) => ({
-    pairingId: row.pairingId,
-    org: row.org,
-    capabilities: row.capabilities ?? [],
-    ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
-    live: isLive(row.pairingId),
-  }));
+  // I-3: what a machine ADVERTISES is a self-assertion; what the org GRANTED is the authorisation.
+  // The candidate carries the INTERSECTION, so a daemon cannot widen its own privileges by claiming
+  // more, and a grant for a capability the machine no longer offers cannot make it selectable.
+  // Default deny falls out of this: a machine with no grants contributes an empty list and is never
+  // chosen for anything.
+  //
+  // One query for the org's grants rather than one per machine — the intersection is cheap in
+  // memory and a fleet listing should not be N+1 against the store.
+  const grants = (await bridgeCapabilityGrants.find({ orgId: org, revokedAt: null })) as unknown as Array<{
+    pairingId: string;
+    capability: string;
+  }>;
+  const grantedBy = new Map<string, Set<string>>();
+  for (const g of grants) {
+    const set = grantedBy.get(g.pairingId) ?? new Set<string>();
+    set.add(g.capability);
+    grantedBy.set(g.pairingId, set);
+  }
+
+  return rows.map((row) => {
+    const granted = grantedBy.get(row.pairingId) ?? new Set<string>();
+    return {
+      pairingId: row.pairingId,
+      org: row.org,
+      capabilities: (row.capabilities ?? []).filter((c) => granted.has(c)),
+      ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
+      live: isLive(row.pairingId),
+    };
+  });
+}
+
+/** The raw ADVERTISED list, for an admin surface that must show what a machine offers versus what
+ *  it has been granted. Never feed this to selection — that is what `egressCandidatesForOrg` is
+ *  for, and the difference between the two is the whole of I-3. */
+export async function advertisedCapabilitiesForOrg(org: string): Promise<Array<{ pairingId: string; advertised: string[] }>> {
+  const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
+  return rows.map((row) => ({ pairingId: row.pairingId, advertised: row.capabilities ?? [] }));
 }
