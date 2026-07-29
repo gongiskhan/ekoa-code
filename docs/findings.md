@@ -6,6 +6,22 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`pipedream-master-switch-inert`** (FIXED 2026-07-29, HIGH, security — found by repairing the e2e
+  estate, not by reading code). The Pipedream master toggle **could not be turned off**.
+  `PATCH /api/v1/settings` persists via `patchOrgSettings`, which writes the ORG document
+  (`orgs[orgId].settings`); the enforcement read `isPipedreamEnabled()` went to
+  `settings.get('default')` — a different collection, and a document nothing ever writes. It
+  therefore always read null, and on null returned `undefined !== false` → **true**. Two independent
+  defects compounding: the wrong store, and a FAIL-OPEN default on a third-party egress integration.
+  Symptoms an operator would see: turning it off returns 200, `GET /settings` reports
+  `pipedreamEnabled:false`, and the UI toggle snaps back to on — because the toggle renders
+  `status.enabled` (the broken read) while writing to settings. `runPipedreamAction`'s `disabled`
+  guard never fired once. FIXED: the read now uses the org document the write lands in, and defaults
+  to DENY, matching `mergedSettings` (what the API and UI report). Pinned by
+  `api/tests/security/pipedream-master-switch.test.ts` (8 cases; 7 go red against the original).
+  Note for auditors: two pre-existing tests in `tests/integrations/pipedream.test.ts` "disabled" the
+  feature by writing `settings['default']` — they passed by exercising the bug's own plumbing, which
+  is why the defect survived a suite that appeared to cover it.
 - **`npm-audit-gate-unsatisfiable-and-unread`** (FIXED 2026-07-29, MEDIUM, process/security). The
   `security-gates` job had been failing at `npm audit --audit-level=high` (17 vulnerabilities, 10
   high). The gate was UNSATISFIABLE as written and therefore unread: two of its highs have no fixed

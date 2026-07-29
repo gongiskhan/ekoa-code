@@ -3,7 +3,8 @@ import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 // @ts-expect-error - JS mock helper, no d.ts
 import { startMockPipedream } from '../helpers/mock-pipedream-server.mjs';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { integrationConfigs, settings, billingAccounts, tokenEvents } from '../../src/data/stores.js';
+import { integrationConfigs, settings, billingAccounts, tokenEvents, orgs } from '../../src/data/stores.js';
+import { patchOrgSettings } from '../../src/services/platform-crud.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import {
   savePipedreamConfig,
@@ -58,7 +59,12 @@ afterAll(async () => {
 beforeEach(async () => {
   resetPipedreamCaches();
   mock.reset();
-  for (const s of [integrationConfigs, settings, billingAccounts, tokenEvents]) await s.deleteMany({});
+  for (const s of [integrationConfigs, settings, billingAccounts, tokenEvents, orgs]) await s.deleteMany({});
+  // The master switch is DEFAULT-DENY (it used to fail OPEN, reading a store nothing wrote — see
+  // tests/security/pipedream-master-switch.test.ts). These cases exercise the enabled paths, so the
+  // precondition is now stated instead of inherited from a permissive default.
+  await orgs.insert({ _id: 'orgA', name: 'Org A' } as never);
+  await patchOrgSettings('orgA', { integration: { pipedreamEnabled: true } });
 });
 
 describe('Pipedream config + status (ch03 §3.8.16)', () => {
@@ -89,7 +95,7 @@ describe('Pipedream config + status (ch03 §3.8.16)', () => {
 
   it('reports enabled:false when the master toggle is off', async () => {
     await configure();
-    await settings.put({ _id: 'default', integration: { pipedreamEnabled: false } } as never);
+    await patchOrgSettings('orgA', { integration: { pipedreamEnabled: false } });
     expect((await getPipedreamStatus(user, mockDeps())).enabled).toBe(false);
   });
 });
@@ -135,7 +141,7 @@ describe('Pipedream action run — gating + metering', () => {
 
   it('refuses (disabled) when the master toggle is off — no external call', async () => {
     await configure();
-    await settings.put({ _id: 'default', integration: { pipedreamEnabled: false } } as never);
+    await patchOrgSettings('orgA', { integration: { pipedreamEnabled: false } });
     const res = await runPipedreamAction({ actor: user, app: 'slack', actionKey: 'send', args: {} }, mockDeps());
     expect(res).toMatchObject({ success: false, code: 'disabled' });
     expect(mock.stats.runCalls).toBe(0);

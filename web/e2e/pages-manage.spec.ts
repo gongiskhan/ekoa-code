@@ -48,17 +48,21 @@ test.describe('pages-manage (S5)', () => {
     // The Lora page title lives in the PageHeader h1 (PT-PT, never English).
     await expect(page.locator('h1').first()).toHaveText(/Integraç/i, { timeout: 15_000 });
 
-    // Filter pills are the Tabs `pills` primitive (role=tab). The "Todas"
-    // (All) filter must be present and clickable — the page stays mounted.
-    const tabs = page.getByRole('tab');
-    await expect(tabs.first()).toBeVisible();
-    const todas = page.getByRole('tab', { name: /Todas/i });
-    await expect(todas).toBeVisible();
-    await tabs.nth(1).click();
+    // Filter pills are the Tabs `pills` primitive (role=tab) — but so are the PAGE-level tabs now,
+    // so a bare `getByRole('tab')` spans both sets and `.nth(1)` lands on whichever the DOM orders
+    // second. That navigated AWAY from the Plataforma panel, taking the search box (which only
+    // renders there) with it. Scope to the panel so the query means what it says.
+    const platform = page.getByTestId('platform-integrations-section');
+    await expect(platform).toBeVisible({ timeout: 15_000 });
+
+    const filterPills = platform.getByRole('tab');
+    await expect(filterPills.first()).toBeVisible();
+    await expect(platform.getByRole('tab', { name: /Todas/i })).toBeVisible();
+    await filterPills.nth(1).click();
     await expect(page.getByTestId('integrations-page')).toBeVisible();
 
     // Localized search placeholder (no hardcoded English).
-    await expect(page.getByPlaceholder(/Pesquisar integraç/i)).toBeVisible();
+    await expect(platform.getByPlaceholder(/Pesquisar integraç/i)).toBeVisible();
 
     await page.setViewportSize(MOBILE);
     await expect(page.getByTestId('integrations-page')).toBeVisible();

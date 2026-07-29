@@ -16,7 +16,7 @@
  *     transport (the guarded fetcher would block a 127.0.0.1 mock, by design).
  */
 
-import { integrationConfigs, settings } from '../data/stores.js';
+import { integrationConfigs, orgs } from '../data/stores.js';
 import { encrypt, decrypt } from '../data/crypto.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { SsrfError } from '../services/url-safety.js';
@@ -117,19 +117,37 @@ async function loadPipedreamConfig(orgId: string): Promise<PipedreamConfig | nul
 
 /** Platform master toggle from the global settings singleton (like billing.globalOverageEnabled).
  *  undefined/true = ON; explicit false = OFF. Fails ON when settings are unreadable. */
-async function isPipedreamEnabled(): Promise<boolean> {
+/**
+ * Is Pipedream enabled FOR THIS ORG?
+ *
+ * TWO BUGS FIXED HERE, and together they meant the master switch did nothing at all.
+ *
+ * 1. WRONG STORE. `PATCH /api/v1/settings` writes through `patchOrgSettings`, which lands on the
+ *    ORG document (`orgs[orgId].settings`). This read went to `settings.get('default')` — a
+ *    different collection, and a document nothing writes. It therefore always came back null.
+ * 2. FAIL-OPEN DEFAULT. On that null it returned `undefined !== false` → TRUE. So an admin who
+ *    turned Pipedream off got a 200, saw the API report `pipedreamEnabled: false`, and the
+ *    enforcement kept answering "enabled" — the toggle could never be switched off, and the
+ *    `disabled` guard in `runPipedreamAction` never fired once.
+ *
+ * Now it reads the same place the write lands, and defaults to FALSE — matching `mergedSettings`,
+ * which is what the API and the UI report. For a third-party egress integration the default has to
+ * be off: a config read that fails should not enable an outbound path nobody asked for.
+ */
+async function isPipedreamEnabled(orgId: string): Promise<boolean> {
   try {
-    const s = (await settings.get('default')) as { integration?: { pipedreamEnabled?: boolean } } | null;
-    return s?.integration?.pipedreamEnabled !== false;
+    const org = await orgs.get(orgId);
+    const orgSettings = (org?.settings ?? {}) as { integration?: { pipedreamEnabled?: boolean } };
+    return orgSettings.integration?.pipedreamEnabled === true;
   } catch {
-    return true;
+    return false;
   }
 }
 
 export async function getPipedreamStatus(actor: Actor, deps: PipedreamDeps = {}): Promise<PipedreamStatus> {
   const cfg = await loadPipedreamConfig(actor.orgId);
   const configured = !!cfg;
-  const enabled = await isPipedreamEnabled();
+  const enabled = await isPipedreamEnabled(actor.orgId);
   let accountCount = 0;
   if (configured && enabled) {
     try {
@@ -233,7 +251,7 @@ export interface RunPipedreamActionInput {
 }
 
 export async function runPipedreamAction(input: RunPipedreamActionInput, deps: PipedreamDeps = {}): Promise<PipedreamRunResult> {
-  if (!(await isPipedreamEnabled())) return { success: false, code: 'disabled', error: MSG_DISABLED };
+  if (!(await isPipedreamEnabled(input.actor.orgId))) return { success: false, code: 'disabled', error: MSG_DISABLED };
 
   const allowance = await checkAllowance(input.actor.userId, deps.now?.());
   if (!allowance.ok) return { success: false, code: 'billing_capped', error: MSG_CAPPED };
