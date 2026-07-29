@@ -6,6 +6,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`gitleaks-red-on-synthetic-fixtures`** (FIXED 2026-07-29, MEDIUM, process — found when the
+  first push finally reached CI). The `security-gates` job had been RED since 2026-07-27, failing at
+  the gitleaks step on five `generic-api-key` hits. All five are synthetic credential fixtures in
+  the Cofre security suite (`sk-live-COFRE-TEST-0001`, `sk-live-EXFILTRATE-ME-0001`,
+  `sk-live-BOUNDARY-TEST-0001`, `sk-live-abcdef123456`, and — added by this session's J-3 —
+  `deliver-me-J3-SECRET-9911`). They are deliberately secret-SHAPED, because the suites they belong
+  to test that a secret-shaped value is redacted, refused or never echoed, and a fixture that did
+  not look like a credential would prove nothing. Two consequences of the redness are the reason
+  this is MEDIUM rather than cosmetic: a red gate carries no signal, and it had been red long enough
+  that a REAL leak would have arrived into an already-failing check. FIXED by allowlisting the five
+  VALUES in `scripts/gitleaks.toml` — deliberately not by path: an
+  `api/tests/security/**` path allowlist is one line instead of five and would blind the scanner to
+  a real token pasted into a test file, which is a normal way credentials escape. Renaming the
+  fixtures was not an option: `gitleaks detect` scans git HISTORY, so the original literal stays
+  reachable in the commit that introduced it. Going forward a new fixture should carry
+  `EKOA-SYNTHETIC-`, covered generically. Verified precise: a real-looking `sk-live-...` in the same
+  directory still fails the scan.
 - **`bridge-ingress-freetext-header-residual`** (OPEN by design 2026-07-29, LOW, confidentiality —
   found while building H-4). The ingress filter has two legs: value-keyed (exact, for values Cortex
   delivered) and name-pattern (`redactBodyByName`, for credentials Cortex never held). The name leg
@@ -80,7 +97,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `noV1CiphertextRemains()` currently CALLS `migrateCiphertextToV2()`, so the "check" mutates the
   database — safe because the migration is idempotent, but a gate that writes is the wrong shape
   and should be split into a read-only scan.
-- **`cofre-raw-store-lint-rule-missing`** (OPEN 2026-07-28, LOW, defence-in-depth — found by the
+- **`cofre-raw-store-lint-rule-missing`** (FIXED 2026-07-29, LOW, defence-in-depth — found by the
   A-8 sweep). Plan item B-1 specified "an eslint rule forbidding any import of the raw `cofre_items`
   store handle outside `api/src/cofre/`, and forbidding re-derivation of the scoping predicate".
   No such rule exists in `.eslintrc.cjs` — the module-direction zone array lists `./api/src/cofre`
@@ -89,7 +106,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `__cofreItemsStoreForMigration` (a deliberately ugly name, now imported by the migration script)
   is greppable but not enforced. Not exploitable today — the only importer is the migration — but
   the whole point of B-1's chokepoint is that it cannot be bypassed by a future caller who has not
-  read the plan. Close with the rule plus an allowance for `api/scripts/migrate/`.
+  read the plan. FIXED: `.eslintrc.cjs` bans `**/cofre/store` outside `api/src/cofre/**`, with
+  `api/scripts/migrate/**` legitimately outside the rule's file set (a migration rewrites every
+  tenant's rows and so cannot go through an owner-scoped repository). Worth recording HOW it was
+  nearly got wrong: the first attempt added a second `no-restricted-imports` override for
+  `api/src/**`, and because ESLint REPLACES rather than merges that rule per file, it silently wiped
+  the `@anthropic-ai` egress ban (FIXED-3/8/13) for every non-llm file while appearing to add a
+  rule — a lint config that looked stricter and was materially weaker. Both bans now live in one
+  override per file set, and the llm/ and cofre/ exemptions RESTATE the ban they keep instead of
+  switching the rule off. All four directions verified against planted imports.
 - **`page-values-to-log-and-memory`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
   gate R-4 + R-5). Two leaks of the same class: values read off a LIVE PAGE of an authenticated
   session. (R-4) `automation/engine.ts` merged verifier-extracted values into the shared `inputs`

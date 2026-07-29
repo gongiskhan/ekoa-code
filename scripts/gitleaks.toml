@@ -19,3 +19,32 @@ paths = [
   '''.*\.example\..*''',
   '''api/test/fake-daemon/fixtures/.*''',
 ]
+
+# Synthetic credential fixtures in the security suite (Cofre R-*/WS-*).
+#
+# These are deliberately secret-SHAPED: the suites they live in test that a secret-shaped value is
+# redacted, refused, or never echoed, and a fixture that did not look like a credential would prove
+# nothing. They tripped `generic-api-key` and had `security-gates` red from 2026-07-27.
+#
+# Allowlisted by VALUE rather than by path, deliberately. A path allowlist over
+# `api/tests/security/**` would be one line instead of five — and would blind the scanner to a REAL
+# token pasted into a test file, which is a normal way credentials escape. Enumerating the values
+# keeps the gate sharp: a genuine `sk-live-<real>` anywhere, including in these same files, still
+# fails the build.
+#
+# They cannot simply be renamed to something innocuous: `gitleaks detect` scans git HISTORY, so the
+# original literal stays reachable in the commit that introduced it. Editing the working tree would
+# leave the gate red and the entry still required.
+#
+# CONVENTION for new fixtures: prefer a value carrying `EKOA-SYNTHETIC-`, which the last regex
+# below covers generically, so a new secret-shaped fixture needs no new entry here. Adding a
+# one-off value to this list is a deliberate act — the question it forces ("is this really
+# synthetic?") is the point.
+regexes = [
+  '''sk-live-BOUNDARY-TEST-0001''',
+  '''sk-live-COFRE-TEST-0001''',
+  '''sk-live-EXFILTRATE-ME-0001''',
+  '''sk-live-abcdef123456''',
+  '''deliver-me-J3-SECRET-9911''',
+  '''EKOA-SYNTHETIC-[A-Za-z0-9_-]+''',
+]

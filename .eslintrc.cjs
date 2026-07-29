@@ -6,6 +6,17 @@
  */
 const path = require('path');
 
+const ANTHROPIC_BAN = {
+  group: ['@anthropic-ai/*'],
+  message: 'Only api/src/llm/ may import an Anthropic SDK (FIXED-3/8/13 — the egress chokepoint).',
+};
+
+const COFRE_STORE_BAN = {
+  group: ['**/cofre/store', '**/cofre/store.js'],
+  message:
+    'The Cofre item/grant stores are reachable only through api/src/cofre/ (B-1). Use the module entry — unwrap(), mintCofreItem(), issueGrant() — never the raw store handle.',
+};
+
 module.exports = {
   root: true,
   parser: '@typescript-eslint/parser',
@@ -107,19 +118,43 @@ module.exports = {
     },
     // Rule 2 — egress chokepoint (FIXED-3/8/13): ban @anthropic-ai/* everywhere in api/src
     // (.ts AND .tsx; the grep gate additionally covers .js/.mjs and split-string evasion)…
+    //
+    // Rule 4 — the Cofre store is reachable ONLY through api/src/cofre/ (Cofre B-1). The Cofre is
+    // the third consumer of the scoped repository, and unlike the ~52 hand-written filter sites it
+    // must be reachable only through it: `cofre/store.ts` wraps the raw handles in
+    // `OwnerVisibilityScoped` and every product read goes through `unwrap()`. A second importer
+    // reaching past that — even a well-meaning one re-deriving the scoping predicate — turns one
+    // auditable chokepoint into two, which is the drift `apps/app-paths.ts` already demonstrates
+    // elsewhere in this repo. B-1 specified this rule and it was never added (found by the A-8
+    // sweep, logged as `cofre-raw-store-lint-rule-missing`).
+    //
+    // BOTH bans live in ONE override per file set, deliberately. `no-restricted-imports` can be
+    // configured only once for a given file — a second override targeting the same files REPLACES
+    // the first rather than merging, so expressing these as two independent overrides silently
+    // disabled whichever lost. (That is exactly what the first attempt at Rule 4 did: it wiped the
+    // @anthropic-ai ban for every non-llm api/src file while appearing to add a rule.) The two
+    // exemptions below therefore RESTATE the ban they keep instead of switching the rule off.
     {
       files: ['api/src/**/*.ts', 'api/src/**/*.tsx'],
       rules: {
-        'no-restricted-imports': [
-          'error',
-          { patterns: ['@anthropic-ai/*'] },
-        ],
+        'no-restricted-imports': ['error', { patterns: [ANTHROPIC_BAN, COFRE_STORE_BAN] }],
       },
     },
-    // …with a single override lifting the ban for api/src/llm/**.
+    // …lifting the ANTHROPIC ban for api/src/llm/** (the one module that may hold the client),
+    // while keeping the Cofre-store ban: llm/ has no business reaching the credential store either.
     {
       files: ['api/src/llm/**/*.ts', 'api/src/llm/**/*.tsx'],
-      rules: { 'no-restricted-imports': 'off' },
+      rules: { 'no-restricted-imports': ['error', { patterns: [COFRE_STORE_BAN] }] },
     },
+    // …and lifting the COFRE-STORE ban inside api/src/cofre/** (the module that owns it), while
+    // keeping the anthropic ban.
+    {
+      files: ['api/src/cofre/**/*.ts', 'api/src/cofre/**/*.tsx'],
+      rules: { 'no-restricted-imports': ['error', { patterns: [ANTHROPIC_BAN] }] },
+    },
+    // api/scripts/** is outside the api/src file sets above, so a migration — which rewrites every
+    // tenant's rows and therefore cannot go through an owner-scoped repository — reaches the raw
+    // handle legitimately. It is exported under a deliberately ugly name so that exception stays
+    // greppable rather than looking ordinary.
   ],
 };
