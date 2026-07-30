@@ -59,7 +59,7 @@ beforeAll(async () => {
     res.json({
       actor: actorOf(req as AuthedRequest),
       principal: res.locals.apiKeyPrincipal ?? null,
-      username: (req as AuthedRequest).user.username,
+      username: (req as AuthedRequest).user!.username, // set by the admitting middleware (same assert as actorOf)
     });
   };
   app.get('/probe', requireUserOrApiKey, handler);
