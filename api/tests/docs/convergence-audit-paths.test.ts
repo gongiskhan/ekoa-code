@@ -18,7 +18,7 @@ const GARRISON_PREFIX = 'garrison:';
 
 function citedTokens(): string[] {
   const text = readFileSync(auditPath, 'utf8');
-  const tokens = [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
+  const tokens = [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1] ?? '');
   // strip :line[-range] suffixes and trailing slashes before existence checks
   return tokens.map((t) => t.replace(/:\d+[\d,:-]*$/, '').replace(/\/+$/, ''));
 }
