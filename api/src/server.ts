@@ -744,6 +744,22 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     sendError(res, 'NOT_FOUND', 'Não encontrado.');
   });
 
+  // TERMINAL ERROR ENVELOPE for the platform API. Sibling of the F6 404 above and mounted right
+  // after it — i.e. AFTER every /api/v1 router — so a throw that escapes a handler cannot reach
+  // Express's default error handler, which answers text/html carrying the stack trace and
+  // ABSOLUTE SERVER PATHS. (Found by the E2 review as F1: a contract-valid memvault write whose
+  // permalink exceeded the filesystem's 255-byte component limit did exactly that. The 4-arg
+  // handler near the top of this file is mounted BEFORE the routers and only sees body-parser
+  // failures.) Scoped to /api/v1 for the same reason the 404 is: the served-app byte-compat
+  // plane owns its own error behavior and its ported specs pin it.
+  app.use('/api/v1', (err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    // Nothing to shape once bytes are on the wire (a streaming/binary route): let Express's
+    // default handler destroy the connection rather than append JSON to a partial body.
+    if (res.headersSent) return next(err);
+    console.error('[api-error]', err);
+    sendError(res, 'INTERNAL', 'Erro interno.');
+  });
+
   app.use('/api', servedDataRouter(deps));
   // Served-app assistant (operator-run D1): POST /api/app-assistant, header-scoped, runs under the
   // resolved artifact owner's org + billing through the llm/ chokepoint.

@@ -143,6 +143,15 @@ const COVERED = new Set<string>([
   // tests/security/memvault-isolation.test.ts: traversal/symlink/cross-tenant). Covering all
   // four keeps EXPECTED_PENDING_COUNT unchanged.
   'memvault.writeNote', 'memvault.readNote', 'memvault.listNotes', 'memvault.deleteNote',
+  // slice E3 - memvault search + export on the SAME domain (memvault.test.ts contract: the
+  // search round trip safeParsed against NoteSearchResponse, plus a tar whose entries are
+  // decoded by a hand-rolled ustar reader and matched byte-for-byte against the files on disk;
+  // tests/security/memvault-isolation.test.ts: per-tenant index files, cross-tenant search
+  // blindness, export tenancy, and rebuild-from-markdown after a deleted/corrupt index).
+  // exportVault is kind:'binary' - the tar body has no JSON schema, so the contract test
+  // asserts the media type + the decoded entries instead of a safeParse. Covering both keeps
+  // EXPECTED_PENDING_COUNT unchanged.
+  'memvault.searchNotes', 'memvault.exportVault',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

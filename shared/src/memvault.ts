@@ -9,9 +9,9 @@
  * path param: permalinks are multi-segment and express `:params` do not match '/'. (No repo
  * precedent mounts a wildcard path for this; recorded as the E2 design choice.)
  *
- * Ops here: write/read/list/delete. Search + export are the NEXT slice (E3) — they will add
- * their own endpoints to this map; the on-disk format (plain markdown + YAML frontmatter,
- * stock `basic-memory sync`-indexable) is the seam they build on.
+ * Ops: write/read/list/delete (E2) + search/export (E3). Both E3 ops are per-caller by
+ * construction rather than by parameter — neither takes a tenant/owner argument, because the
+ * only tenant either can address is the verified principal's own partition.
  */
 import { z } from 'zod';
 import { IsoTimestamp } from './common.js';
@@ -19,8 +19,22 @@ import type { DomainDescriptorMap } from './descriptor.js';
 
 /** Permalink grammar: slug segments of [a-z0-9-_] (first char alphanumeric) joined by '/'.
  *  No '.', no '\', no spaces, no leading '/', nothing empty — traversal is unrepresentable. */
-export const NOTE_PERMALINK_RE = /^[a-z0-9][a-z0-9-_]*(\/[a-z0-9][a-z0-9-_]*)*$/;
 export const NOTE_PERMALINK_MAX = 512;
+
+/**
+ * Per-SEGMENT ceiling, and it is a filesystem fact, not a taste call: every segment becomes one
+ * path component on disk (`<segment>/` or `<segment>.md`, plus the write's `.<12 hex>.tmp`
+ * suffix), and the common Linux/macOS limit is 255 BYTES per component. Without this the
+ * contract admitted a 512-char single segment, the write hit ENAMETOOLONG deep inside the store,
+ * and a contract-VALID request became an HTTP 500 (E2 review finding F1). 200 leaves the
+ * temp-name suffix room: 200 + '.md' + '.' + 12 + '.tmp' = 220 < 255.
+ */
+export const NOTE_PERMALINK_SEGMENT_MAX = 200;
+
+const SEGMENT_SRC = `[a-z0-9][a-z0-9-_]{0,${NOTE_PERMALINK_SEGMENT_MAX - 1}}`;
+/** Built from the constant so the two can never drift. Linear-time: the segment character class
+ *  excludes '/', so there is no ambiguity for a backtracking engine to explode on. */
+export const NOTE_PERMALINK_RE = new RegExp(`^${SEGMENT_SRC}(\\/${SEGMENT_SRC})*$`);
 
 export const NotePermalink = z.string().min(1).max(NOTE_PERMALINK_MAX).regex(NOTE_PERMALINK_RE);
 export type NotePermalink = z.infer<typeof NotePermalink>;
@@ -87,6 +101,28 @@ export type NoteListResponse = z.infer<typeof NoteListResponse>;
 export const DeleteNoteResponse = z.object({ ok: z.literal(true) });
 export type DeleteNoteResponse = z.infer<typeof DeleteNoteResponse>;
 
+/** Full-text search over the CALLER'S OWN notes (E3). There is no tenant/owner field: the
+ *  server searches the verified principal's partition and nothing else exists to ask for. */
+export const NoteSearchRequest = z.object({
+  query: z.string().min(1).max(1_000),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+});
+export type NoteSearchRequest = z.infer<typeof NoteSearchRequest>;
+
+/** A hit names the note and (optionally) shows why it matched. `snippet` is a highlight
+ *  fragment of the matching column; `score` is larger-is-better relevance. Both are optional:
+ *  they are index-derived presentation, never something a client should key logic on. */
+export const NoteSearchHit = z.object({
+  permalink: NotePermalink,
+  title: z.string(),
+  snippet: z.string().optional(),
+  score: z.number().optional(),
+});
+export type NoteSearchHit = z.infer<typeof NoteSearchHit>;
+
+export const NoteSearchResponse = z.object({ hits: z.array(NoteSearchHit) });
+export type NoteSearchResponse = z.infer<typeof NoteSearchResponse>;
+
 export const memvaultEndpoints = {
   writeNote: {
     method: 'POST',
@@ -115,5 +151,22 @@ export const memvaultEndpoints = {
     auth: 'user-or-key',
     query: NotePermalinkQuery,
     response: DeleteNoteResponse,
+  },
+  searchNotes: {
+    method: 'POST',
+    path: '/api/v1/memvault/search',
+    auth: 'user-or-key',
+    request: NoteSearchRequest,
+    response: NoteSearchResponse,
+  },
+  /** Streams a tar of the caller's MARKDOWN — the derived per-user search index is never in
+   *  it. `kind: 'binary'` marks the body as opaque bytes (the servedApp/uploads precedent):
+   *  there is no JSON response schema to validate, so `response` is z.unknown(). */
+  exportVault: {
+    method: 'GET',
+    path: '/api/v1/memvault/export',
+    auth: 'user-or-key',
+    kind: 'binary',
+    response: z.unknown(),
   },
 } as const satisfies DomainDescriptorMap;
