@@ -120,8 +120,14 @@ export function memvaultRouter(deps: { now: () => number; genId: () => string })
 
   // exportVault — GET /api/v1/memvault/export (tar of the caller's markdown, no .index/)
   r.get('/export', async (req: AuthedRequest, res: Response) => {
+    // The commit point is the SINK OPENING, not `res.headersSent`: setHeader stages the tar
+    // content-type without flushing anything, so a failure in between would have answered a
+    // JSON envelope under `content-type: application/x-tar`. Once this flips, the only honest
+    // ending is a destroyed connection — a truncated transfer the client can detect.
+    let committed = false;
     try {
       const out = await memvault.exportVault(ctxOf(req, res), () => {
+        committed = true;
         res.status(200);
         res.setHeader('content-type', 'application/x-tar');
         // A constant filename: it must not carry the userId (or anything else) into a header.
@@ -131,9 +137,7 @@ export function memvaultRouter(deps: { now: () => number; genId: () => string })
       });
       if (!out.ok) return refuse(res, out.code);
     } catch (e) {
-      // Past the headers there is no envelope to send: kill the connection so the client sees a
-      // truncated transfer instead of a tar with JSON glued to the end.
-      if (res.headersSent) {
+      if (committed || res.headersSent) {
         res.destroy();
         return;
       }

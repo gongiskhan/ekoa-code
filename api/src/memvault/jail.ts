@@ -22,10 +22,12 @@
  *      requires local filesystem write access.
  *
  * Every traversal of a user's tree goes through this file: reads and writes via notePath, the
- * recursive walk via resolvedUserRoot, the derived index via ensureIndexDir. A store function
- * that touched `userRoot()` directly would be checking nothing (F2's second half).
+ * recursive walk via resolvedUserRoot, the derived index via indexDbFile. A caller that touched
+ * `userRoot()` or `indexDbPath()` directly would be checking nothing — both are validated joins
+ * with no fs contact, and both gaps were real breaches (F2, and the E3 review's finding 1).
+ * Containment is checked at FILE granularity, not just for the directory above the file.
  */
-import { mkdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { NOTE_PERMALINK_MAX, NOTE_PERMALINK_RE } from '@ekoa/shared';
 import { memvaultConfig } from '../config.js';
@@ -68,21 +70,54 @@ function memvaultRoot(): string {
   return resolve(memvaultConfig().root);
 }
 
-/** Realpath of the deepest EXISTING ancestor of `p`, plus the not-yet-existing remainder.
- *  The reconstructed `realpath(ancestor)/remainder` is where the kernel would actually land. */
+/**
+ * Realpath of the deepest EXISTING ancestor of `p`, plus the not-yet-existing remainder. The
+ * reconstructed `realpath(ancestor)/remainder` is where the kernel would actually land.
+ *
+ * DANGLING LINKS FAIL CLOSED. `realpath` fails on a symlink whose target does not exist, and
+ * simply walking up to the parent then reconstructs the path as if the component were absent —
+ * which reports it as safely inside the tenant. It is not: `open(..., O_CREAT)` follows the
+ * link and creates the file AT THE TARGET. That is a write primitive pointing anywhere the
+ * process can write, and it is exactly how a planted `.index/notes.db -> /tmp/elsewhere.db`
+ * escaped the E3 fix for the *resolvable* case. So when realpath fails on a component that lstat
+ * reports as a SYMLINK, we cannot prove where a later open would land, and refuse instead of
+ * guessing. The test is `isSymbolicLink()` specifically, not mere existence: concurrent writers
+ * mkdir shared folders constantly, so a component that appears between our realpath and our
+ * lstat is routine — treating that as an escape turned ordinary two-tenant concurrency into
+ * spurious 404s (caught by the E2 concurrency spec). A non-link cannot redirect anywhere.
+ */
 async function realTargetOf(p: string): Promise<string> {
   let cur = p;
   let remainder = '';
+  let rechecks = 0;
   for (;;) {
     try {
       const real = await realpath(cur);
       return remainder ? join(real, remainder) : real;
     } catch {
+      const state = await entryStateOf(cur);
+      // A symlink realpath could not follow: dangling, or a loop. Fail closed.
+      if (state === 'symlink') throw new JailViolationError('memvault jail: unresolvable link in path');
+      // Present but NOT a link, yet realpath just failed — it materialised between our two
+      // syscalls (concurrent writers mkdir the same folder constantly). Re-resolve rather than
+      // treat it as absent; a real directory cannot redirect anywhere, so the bounded retry is
+      // purely to get an accurate answer, and falling through after it is still safe.
+      if (state === 'present' && rechecks++ < 8) continue;
       const parent = dirname(cur);
       if (parent === cur) throw new JailViolationError('memvault jail: unresolvable path');
       remainder = remainder ? join(basename(cur), remainder) : basename(cur);
       cur = parent;
     }
+  }
+}
+
+/** What is at `p`, given realpath could not resolve it: a symlink (dangling or looping), some
+ *  other entry that exists, or nothing at all. */
+async function entryStateOf(p: string): Promise<'symlink' | 'present' | 'absent'> {
+  try {
+    return (await lstat(p)).isSymbolicLink() ? 'symlink' : 'present';
+  } catch {
+    return 'absent';
   }
 }
 
@@ -169,20 +204,43 @@ export interface JailedIndexPath {
 
 /**
  * The user's derived FTS index db — ONE FILE PER USER, never a shared table. Validated join
- * only (no fs touch), so it is safe to call on a hot path; {@link ensureIndexDir} does the
- * mkdir + containment check before anything opens the file.
+ * ONLY: no fs touch, and therefore NO containment check. Never hand this to anything that
+ * opens the file — use {@link indexDbFile}, which is to the index what {@link notePath} is to
+ * a note.
  */
 export function indexDbPath(userId: string): JailedIndexPath {
   const dir = join(userRoot(userId), INDEX_DIR_NAME);
   return { dir, file: join(dir, 'notes.db') };
 }
 
-/** Create (if needed) and containment-check the user's index directory — a pre-planted
- *  `.index` symlink pointing at another tenant's tree fails closed, exactly like a note path. */
+/** Create (if needed) and containment-check the user's index DIRECTORY. Checking the directory
+ *  is not enough on its own — see {@link indexDbFile}. */
 export async function ensureIndexDir(userId: string): Promise<string> {
   await ensureUserRoot(userId);
   const { dir } = indexDbPath(userId);
   await mkdir(dir, { recursive: true });
   await assertContained(dir, userId);
   return dir;
+}
+
+/** The SQLite sidecars that live beside the db and are opened/created by name, not by fd. */
+const DB_SIDECAR_SUFFIXES = ['', '-wal', '-shm', '-journal'] as const;
+
+/**
+ * Resolve the user's index database to a jailed, openable path: ensure the directory, then
+ * containment-check the db FILE and each of its SQLite sidecars at file granularity — the same
+ * treatment {@link notePath} gives a note file.
+ *
+ * A directory check alone is NOT sufficient, and that gap was a live cross-tenant breach (E3
+ * review): with `<userRoot>/.index` a perfectly ordinary directory, a pre-planted
+ * `<userRoot>/.index/notes.db` symlinked at ANOTHER tenant's database passed every check, so
+ * one tenant's search read the other's rows (audited `ok`) and one tenant's write injected rows
+ * into the other's database. The sidecars are covered too: SQLite opens `<db>-wal`/`-shm` by
+ * PATH, so a symlink there is a write primitive pointing outside the tenant just the same.
+ */
+export async function indexDbFile(userId: string): Promise<string> {
+  await ensureIndexDir(userId);
+  const { file } = indexDbPath(userId);
+  for (const suffix of DB_SIDECAR_SUFFIXES) await assertContained(`${file}${suffix}`, userId);
+  return file;
 }

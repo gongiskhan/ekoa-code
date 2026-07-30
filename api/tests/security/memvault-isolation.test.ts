@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,9 +13,27 @@ import { __resetCapabilityRateForTests } from '../../src/auth/api-key-rate.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
-import { closeAllIndexes } from '../../src/memvault/fts.js';
+import { closeAllIndexes, rebuild } from '../../src/memvault/fts.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import { ErrorEnvelope } from '@ekoa/shared';
+
+/**
+ * Fault injection for the E3-review finding 3 probes. "An index update failed" is the premise
+ * of that defect, and provoking it through the filesystem means chmod games that behave
+ * differently as root — so the failure is injected at the module boundary instead, which is
+ * exactly the contract under test. Both wrappers delegate verbatim while their flag is off.
+ */
+const faults = vi.hoisted(() => ({ indexThrows: false, invalidateThrows: false }));
+vi.mock('../../src/memvault/fts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/memvault/fts.js')>();
+  return {
+    ...actual,
+    indexNote: (...args: Parameters<typeof actual.indexNote>) =>
+      faults.indexThrows ? Promise.reject(new Error('falha simulada ao indexar')) : actual.indexNote(...args),
+    invalidate: (...args: Parameters<typeof actual.invalidate>) =>
+      faults.invalidateThrows ? Promise.reject(new Error('falha simulada ao descartar o indice')) : actual.invalidate(...args),
+  };
+});
 
 /**
  * memvault ISOLATION suite (slices E2 + E3). Tenancy isolation is the capability's whole point,
@@ -77,6 +95,9 @@ afterAll(async () => {
   delete process.env.EKOA_MEMVAULT_ROOT;
 });
 beforeEach(async () => {
+  faults.indexThrows = false;
+  faults.invalidateThrows = false;
+  closeAllIndexes();
   __resetActivationForTests();
   __resetRevocationsForTests();
   __resetCapabilityRateForTests();
@@ -391,8 +412,8 @@ describe('memvault isolation (slices E2 + E3)', () => {
   // ---------------------------------------------------------------------------------------
 
   const dbFileFor = (user: string) => join(vaultRoot, user, '.index', 'notes.db');
-  const searchAs = (t: string, query: string) =>
-    authed('/api/v1/memvault/search', t, { method: 'POST', body: JSON.stringify({ query }) });
+  const searchAs = (t: string, query: string, limit?: number) =>
+    authed('/api/v1/memvault/search', t, { method: 'POST', body: JSON.stringify({ query, ...(limit ? { limit } : {}) }) });
   const hitsOf = async (res: Response) => ((await res.json()) as { hits: Array<{ permalink: string; title: string }> }).hits;
 
   /** Two tenants whose notes deliberately share vocabulary, each with one unique token. */
@@ -483,6 +504,98 @@ describe('memvault isolation (slices E2 + E3)', () => {
     expect((await hitsOf(await searchAs(tB, 'bbbunicob'))).length).toBe(2);
   });
 
+  // ---------------------------------------------------------------------------------------
+  // E3 fresh-context review, finding 1 (HIGH, reproduced end-to-end): F2 was only half closed.
+  // ensureIndexDir containment-checked the .index DIRECTORY, but nothing checked the DATABASE
+  // FILE inside it, so a planted `<userRoot>/.index/notes.db` symlink pointed one tenant's
+  // index at another's — A's search returned B's rows (audited "ok"), and A's next write
+  // injected rows into B's database. The jail now checks the db file and its SQLite sidecars at
+  // file granularity, exactly like notePath.
+  // ---------------------------------------------------------------------------------------
+
+  it('E3 review 1: a notes.db SYMLINKED at another tenant\'s index fails closed on SEARCH - no read leak', async () => {
+    const tA = await tokenFor('usrA');
+    const tB = await tokenFor('usrB');
+    await seedOverlappingTenants(tA, tB);
+    // Materialise B's real index, then point A's db path straight at it.
+    expect((await searchAs(tB, 'comum')).status).toBe(200);
+    expect(existsSync(dbFileFor('usrB'))).toBe(true);
+    rmSync(join(vaultRoot, 'usrA', '.index'), { recursive: true, force: true });
+    mkdirSync(join(vaultRoot, 'usrA', '.index'), { recursive: true });
+    symlinkSync(dbFileFor('usrB'), dbFileFor('usrA'));
+
+    // A's search fails closed — it does NOT return B's rows.
+    const res = await searchAs(tA, 'comum');
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(body).toBe(MISSING_404);
+    expect(body).not.toContain('BBBUNICOB');
+    expect(body).not.toContain('Projeto Comum B');
+    // B's unique token stays invisible to A through the planted link.
+    const targeted = await searchAs(tA, 'bbbunicob');
+    expect(targeted.status).toBe(404);
+    expect(await targeted.text()).toBe(MISSING_404);
+
+    // The audit names it an escape, not an ok search and not a mere index hiccup.
+    const rows = await activityLogs.find({ category: 'memvault' } as never);
+    const aSearches = rows
+      .map((r) => r as unknown as { userId: string; metadata: { op: string; verdict: string } })
+      .filter((r) => r.userId === 'usrA' && r.metadata.op === 'search');
+    expect(aSearches).toHaveLength(2);
+    for (const r of aSearches) expect(r.metadata.verdict).toBe('jail_violation');
+    // B is untouched and still owns its own rows.
+    expect((await hitsOf(await searchAs(tB, 'bbbunicob'))).length).toBe(2);
+  });
+
+  it('E3 review 1: a notes.db SYMLINKED at another tenant\'s index fails closed on WRITE - no index poisoning', async () => {
+    const tA = await tokenFor('usrA');
+    const tB = await tokenFor('usrB');
+    await seedOverlappingTenants(tA, tB);
+    expect((await searchAs(tB, 'comum')).status).toBe(200);
+    rmSync(join(vaultRoot, 'usrA', '.index'), { recursive: true, force: true });
+    mkdirSync(join(vaultRoot, 'usrA', '.index'), { recursive: true });
+    symlinkSync(dbFileFor('usrB'), dbFileFor('usrA'));
+
+    // A writes a note carrying a marker. The MARKDOWN is A's own and must land (200) — only the
+    // derived index is under attack.
+    const wrote = await writeNote(tA, { permalink: 'ataque/nota', title: 'Ataque', contentMd: 'VENENO_DE_A' });
+    expect(wrote.status).toBe(200);
+    expect(existsSync(join(vaultRoot, 'usrA', 'ataque', 'nota.md'))).toBe(true);
+
+    // B's index must NOT have been poisoned: B cannot see A's marker, and B's own rows survive.
+    expect(await hitsOf(await searchAs(tB, 'veneno'))).toEqual([]);
+    expect(await hitsOf(await searchAs(tB, 'ataque'))).toEqual([]);
+    expect((await hitsOf(await searchAs(tB, 'comum'))).map((h) => h.permalink)).toEqual(['partilhado/nota']);
+    expect((await hitsOf(await searchAs(tB, 'bbbunicob'))).length).toBe(2);
+
+    // The refused index update is audited as an escape (verdict jail_violation on the index op),
+    // while the write itself stays ok — the note is legitimately A's.
+    const rows = await activityLogs.find({ category: 'memvault' } as never);
+    const aRows = rows
+      .map((r) => r as unknown as { userId: string; metadata: { op: string; verdict: string; permalink?: string } })
+      .filter((r) => r.userId === 'usrA' && r.metadata.permalink === 'ataque/nota');
+    expect(aRows.map((r) => `${r.metadata.op}:${r.metadata.verdict}`).sort()).toEqual(['index:jail_violation', 'write:ok']);
+  });
+
+  it('E3 review 1: a notes.db symlinked OUTSIDE the vault root fails closed and is never written', async () => {
+    const tA = await tokenFor('usrA');
+    const outside = join(tmpdir(), `ekoa-memvault-outside-${process.pid}.db`);
+    rmSync(outside, { force: true });
+    expect((await writeNote(tA, { permalink: 'so-do-a/nota', title: 'A', contentMd: 'conteudo de A' })).status).toBe(200);
+    rmSync(join(vaultRoot, 'usrA', '.index'), { recursive: true, force: true });
+    mkdirSync(join(vaultRoot, 'usrA', '.index'), { recursive: true });
+    symlinkSync(outside, dbFileFor('usrA'));
+
+    const res = await searchAs(tA, 'conteudo');
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(MISSING_404);
+    // Nothing was created at the escape target — not the db, not its sidecars.
+    for (const suffix of ['', '-wal', '-shm', '-journal']) expect(existsSync(`${outside}${suffix}`), suffix).toBe(false);
+    // A's markdown is untouched: reads and list still work, only the index path is refused.
+    expect((await authed('/api/v1/memvault/note?permalink=so-do-a/nota', tA)).status).toBe(200);
+    rmSync(outside, { force: true });
+  });
+
   it('E3 index recovery: a CORRUPT db file is quarantined and rebuilt - no crash, no leak', async () => {
     const tA = await tokenFor('usrA');
     const tB = await tokenFor('usrB');
@@ -513,6 +626,148 @@ describe('memvault isolation (slices E2 + E3)', () => {
       expect(readFileSync(dbFileFor('usrA')).subarray(0, 15).toString()).toBe('SQLite format 3');
     }
     // B is unaffected throughout.
+    expect((await hitsOf(await searchAs(tB, 'bbbunicob'))).length).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // E3 fresh-context review, finding 2 (MEDIUM, reproduced under ordinary load): the bounded
+  // handle cache evicted by calling db.close() on the OLDEST entry, while useIndex held that
+  // same handle across an await. With more concurrent tenants than the bound, 8 of 40
+  // LEGITIMATE own-vault searches answered HTTP 500 ("The database connection is not open").
+  // Handles are now reference-counted and only idle entries are ever evicted.
+  // ---------------------------------------------------------------------------------------
+
+  it('E3 review 2: concurrent cold searches ACROSS MORE TENANTS THAN THE HANDLE CACHE BOUND all succeed', async () => {
+    const TENANTS = 40; // > MAX_OPEN (32) in fts.ts, so eviction is guaranteed to run
+    const NOTES = 25; // the fill must still be IN FLIGHT when a later tenant triggers eviction
+    const ids = Array.from({ length: TENANTS }, (_, i) => `usrC${String(i).padStart(2, '0')}`);
+    const passwordHash = await hashPassword('pw123456'); // hashed ONCE: 40 bcrypts would dominate
+    for (const id of ids) {
+      await users.insert({ _id: id, username: id, passwordHash, role: 'user', orgId: 'orgA', active: true } as never);
+      setActivation(id, { active: true, billingLocked: false });
+      await userSettings.put({ _id: id, memory: { autoExtract: false }, build: { verifyBuilds: false } } as never);
+    }
+    const tokens = await Promise.all(ids.map((id) => tokenFor(id)));
+
+    // Build one tenant's corpus over HTTP, then COPY the markdown to the other 39 — 1000 real
+    // writes would make this a minutes-long test without making it a better probe. Each tenant
+    // then adds one note over HTTP carrying a marker unique to it.
+    const first = tokens[0] as string;
+    for (let n = 0; n < NOTES; n++) {
+      expect((await writeNote(first, { permalink: `carga/n${String(n).padStart(2, '0')}`, title: `Carga ${n}`, contentMd: `documento partilhado numero ${n}` })).status).toBe(200);
+    }
+    for (const id of ids.slice(1)) {
+      cpSync(join(vaultRoot, ids[0] as string), join(vaultRoot, id), { recursive: true });
+      rmSync(join(vaultRoot, id, '.index'), { recursive: true, force: true });
+    }
+    await Promise.all(
+      tokens.map(async (t, i) => {
+        expect((await writeNote(t, { permalink: 'carga/marca', title: `Marca ${i}`, contentMd: `documento com marca UNICO${i}` })).status).toBe(200);
+      }),
+    );
+
+    // COLD: drop every cached handle AND every on-disk index, so all 40 searches race through
+    // acquire + a 26-note fill together — the window the eviction bug lived in.
+    closeAllIndexes();
+    for (const id of ids) rmSync(join(vaultRoot, id, '.index'), { recursive: true, force: true });
+    await activityLogs.deleteMany({});
+
+    const results = await Promise.all(tokens.map((t) => searchAs(t, 'documento', 100)));
+    expect(results.map((r) => r.status).filter((s) => s !== 200)).toEqual([]); // ZERO 500s - the point
+    const bodies = await Promise.all(results.map((r) => hitsOf(r)));
+    bodies.forEach((hits, i) => {
+      expect(hits.length, ids[i]).toBe(NOTES + 1); // every tenant sees its OWN complete vault
+    });
+    // ...and only its own marker.
+    const mine = await hitsOf(await searchAs(first, 'unico0'));
+    expect(mine.map((h) => h.permalink)).toEqual(['carga/marca']);
+    expect(await hitsOf(await searchAs(first, 'unico17'))).toEqual([]);
+
+    // No search was degraded into an index failure or an error.
+    const rows = await activityLogs.find({ category: 'memvault' } as never);
+    const verdicts = rows.map((r) => (r as unknown as { metadata: { verdict: string } }).metadata.verdict);
+    expect(verdicts.filter((v) => v !== 'ok')).toEqual([]);
+  }, 180_000);
+
+  // ---------------------------------------------------------------------------------------
+  // E3 fresh-context review, finding 3 (MEDIUM, reproduced): a failed index update was
+  // swallowed into an index_failed row whose docstring promised "the next search repairs the
+  // drift" - it did not. acquire only refilled a MISSING/empty/corrupt db, so a valid-but-stale
+  // one was never rebuilt and every later search under-reported the user's own vault, across
+  // restarts. Two mechanisms now close it: invalidate (discard on failure) and a row-count
+  // reconcile against the markdown on every cache miss.
+  // ---------------------------------------------------------------------------------------
+
+  it('E3 review 3: after a FAILED index write, a later search returns the COMPLETE set', async () => {
+    const tA = await tokenFor('usrA');
+    expect((await writeNote(tA, { permalink: 'notas/uma', title: 'Uma', contentMd: 'documento um' })).status).toBe(200);
+    expect((await writeNote(tA, { permalink: 'notas/duas', title: 'Duas', contentMd: 'documento dois' })).status).toBe(200);
+    expect((await hitsOf(await searchAs(tA, 'documento'))).length).toBe(2);
+    await activityLogs.deleteMany({});
+
+    // The index update for the third note fails. The MARKDOWN must still land and the call must
+    // still be a 200 - that part was always right.
+    faults.indexThrows = true;
+    const wrote = await writeNote(tA, { permalink: 'notas/tres', title: 'Tres', contentMd: 'documento tres' });
+    faults.indexThrows = false;
+    expect(wrote.status).toBe(200);
+    expect(existsSync(join(vaultRoot, 'usrA', 'notas', 'tres.md'))).toBe(true);
+
+    // Exactly one index_failed row, and the write itself stayed ok.
+    const rows = await activityLogs.find({ category: 'memvault' } as never);
+    const metas = rows.map((r) => (r as unknown as { metadata: { op: string; verdict: string } }).metadata);
+    expect(metas.filter((m) => m.verdict === 'index_failed')).toHaveLength(1);
+    expect(metas.filter((m) => m.op === 'write' && m.verdict === 'ok')).toHaveLength(1);
+
+    // THE DEFECT: this used to return 2 forever. The next search must see all three.
+    const hits = await hitsOf(await searchAs(tA, 'documento'));
+    expect(hits.map((h) => h.permalink).sort()).toEqual(['notas/duas', 'notas/tres', 'notas/uma']);
+    // ...and the note is individually findable, not merely counted.
+    expect((await hitsOf(await searchAs(tA, 'tres'))).map((h) => h.permalink)).toEqual(['notas/tres']);
+  });
+
+  it('E3 review 3: staleness heals across a RESTART even when the index could not be discarded', async () => {
+    const tA = await tokenFor('usrA');
+    const tB = await tokenFor('usrB');
+    expect((await writeNote(tB, { permalink: 'de-b/nota', title: 'B', contentMd: 'documento de B' })).status).toBe(200);
+    for (const n of ['uma', 'duas']) {
+      expect((await writeNote(tA, { permalink: `notas/${n}`, title: n, contentMd: `documento ${n}` })).status).toBe(200);
+    }
+    expect((await hitsOf(await searchAs(tA, 'documento'))).length).toBe(2);
+
+    // A failed index write where the DISCARD also fails (a read-only .index, a vanished mount):
+    // the stale database survives on disk, valid and non-empty.
+    faults.indexThrows = true;
+    faults.invalidateThrows = true;
+    expect((await writeNote(tA, { permalink: 'notas/tres', title: 'tres', contentMd: 'documento tres' })).status).toBe(200);
+    faults.indexThrows = false;
+    faults.invalidateThrows = false;
+    expect(existsSync(dbFileFor('usrA'))).toBe(true);
+    expect(readFileSync(dbFileFor('usrA')).subarray(0, 15).toString()).toBe('SQLite format 3');
+
+    // Simulate a process restart: every handle gone, nothing in memory to remember the failure.
+    closeAllIndexes();
+
+    // The row-count reconcile against the markdown catches it with no marker of any kind.
+    const hits = await hitsOf(await searchAs(tA, 'documento'));
+    expect(hits.map((h) => h.permalink).sort()).toEqual(['notas/duas', 'notas/tres', 'notas/uma']);
+    // The rebuild read A's tree and only A's tree.
+    expect(await hitsOf(await searchAs(tA, 'de-b'))).toEqual([]);
+    expect((await hitsOf(await searchAs(tB, 'documento'))).map((h) => h.permalink)).toEqual(['de-b/nota']);
+  });
+
+  it('E3: rebuild() re-indexes one tenant from the markdown and touches no other', async () => {
+    const tA = await tokenFor('usrA');
+    const tB = await tokenFor('usrB');
+    await seedOverlappingTenants(tA, tB);
+    expect((await searchAs(tA, 'comum')).status).toBe(200);
+    expect((await searchAs(tB, 'comum')).status).toBe(200);
+
+    expect(await rebuild('usrA')).toBe(2); // A's two notes, counted from the files
+    expect(await rebuild('usrB')).toBe(2);
+    // Still strictly partitioned after an explicit rebuild of both.
+    expect(await hitsOf(await searchAs(tA, 'bbbunicob'))).toEqual([]);
+    expect((await hitsOf(await searchAs(tA, 'aaaunicoa'))).map((h) => h.permalink)).toEqual(['partilhado/nota']);
     expect((await hitsOf(await searchAs(tB, 'bbbunicob'))).length).toBe(2);
   });
 });

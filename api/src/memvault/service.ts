@@ -95,16 +95,36 @@ export async function auditDenied(ctx: CallContext, op: string, attempt: string 
 
 /**
  * Best-effort index maintenance. The markdown is already durable at this point, so a failure
- * here is NOT a failed call: it gets its own audit row + console line (`index_failed`, timed
- * from the index step, not the whole op) and nothing else. The rebuild-from-markdown path in
- * fts.ts is what makes that safe — the next search repairs the drift.
+ * here is NOT a failed call: it gets its own audit row + console line, and the op stays ok.
+ *
+ * But "best effort" is only honest if the drift actually heals, and simply swallowing the error
+ * did NOT heal it (E3 review): a valid-but-stale index opens cleanly and probes non-empty, so
+ * every later search under-reported the user's OWN vault, forever, across restarts. So a failed
+ * maintain now DISCARDS the index (fts.invalidate deletes the file); the next search rebuilds
+ * from the markdown. Trading one rebuild for a permanently wrong answer is the right side of
+ * that deal for a derived cache.
+ *
+ * A jail refusal is audited as `jail_violation`, not `index_failed` — a database symlinked at
+ * another tenant's index is a security event, not an index hiccup — and nothing is deleted,
+ * because the file it names is not ours.
  */
 async function maintainIndex(ctx: CallContext, op: 'index' | 'unindex', permalink: string, run: () => Promise<void>): Promise<void> {
   const t0 = Date.now();
   try {
     await run();
-  } catch {
+  } catch (e) {
+    if (e instanceof JailViolationError) {
+      await audit(ctx, op, permalink, 'jail_violation', t0);
+      return;
+    }
     await audit(ctx, op, permalink, 'index_failed', t0);
+    try {
+      await fts.invalidate(ctx.actor.userId);
+    } catch {
+      // Even the discard failed (or was refused by the jail). The index file is then whatever
+      // it was; the ONLY promise still standing is the one that matters — the markdown is
+      // correct — and fts.acquire re-checks corruption/emptiness on every cache miss.
+    }
   }
 }
 
