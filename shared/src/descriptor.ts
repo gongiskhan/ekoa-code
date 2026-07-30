@@ -8,6 +8,7 @@ import type { ZodTypeAny } from 'zod';
 export type AuthClass =
   | 'public'
   | 'user'
+  | 'user-or-key'
   | 'org-admin'
   | 'super-admin'
   | 'token-query'
