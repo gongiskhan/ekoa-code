@@ -8,7 +8,7 @@ Routing index (area skills under `.claude/skills/`):
 - **ekoa-governance** — decision journal, findings ledger, review policy, reference-access rules. Load before logging a decision or touching ../ekoa-dev / ../ekoa-deploy.
 - **run-ekoa-code** — boot the full stack locally (handles the CSP/CORS dev traps + credential provisioning).
 
-Canonical docs (`docs/`): architecture → `architecture.md` + `diagrams/`; contract conventions → `api-contract.md`; security → `security.md`; testing → `testing.md`; governance → `governance.md`; operations → `operations-runbook.md`; decisions → `decisions.md` (append-only); live defect ledger → `findings.md`.
+Canonical docs (`docs/`): architecture → `architecture.md` + `diagrams/`; contract conventions → `api-contract.md`; security → `security.md`; testing → `testing.md`; governance → `governance.md`; operations → `operations-runbook.md`; decisions → `decisions.md` (append-only); live defect ledger → `findings.md`; capability contract (what Cortex exposes to outside clients, and the gate behind each rule) → `CAPABILITY_CONTRACT.md` + its factual base `CONVERGENCE_AUDIT.md`.
 
 ## Import boundaries (FIXED-1) — lint-enforced
 

@@ -10,7 +10,7 @@ Capabilities are implemented once, in Cortex, and exposed as public, versioned, 
 Consumers use them as ordinary API clients: fittings become views over the contract, hooks call the API,
 in-session agents reach capabilities through a thin CLI generated from the same spec. (Target state: as of
 2026-07-30 the spec, the generated client, and the CLI are not built yet - the descriptor maps in `shared/` are
-the contract, and rule 7 names that gap. The rest of the pattern is live.) Every call carries a
+the contract, and rule 7 names that gap. The PROVIDER half of the pattern is live; no fitting consumes a capability API yet.) Every call carries a
 user-scoped API key, so tenancy and authorization live where they already exist, inside Cortex. Garrison is the
 daily proving ground: capabilities earn their Ekoa customer UI only after surviving real use through the
 Garrison views. The two sides stay decoupled; the only coupling is the contract.
@@ -30,7 +30,7 @@ public contract. No second copy anywhere, no per-consumer variant.
 *Gate:* `api/tests/contract/mount-coverage.test.ts` proves the ROUTER behind each declared `/api/v1` path is
 mounted (its exclusion list only carries written reasons). Read its stated limit before trusting it: because a
 router mounts behind `requireAuth`, every path beneath it answers 401 unauthenticated, so a missing sub-route is
-shadowed by a sibling and still looks mounted. Path-level drift is caught only by the per-domain contract suites.
+shadowed by a sibling and still looks mounted. Sub-route drift is caught only by the per-domain contract suites (whole-router and distinct-path drift this gate does catch).
 Whether a consumer *stays* on the public surface is enforced consumer-side; from here it is not mechanically
 enforced.
 
