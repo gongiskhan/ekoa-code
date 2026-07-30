@@ -20,6 +20,18 @@ Canonical docs (`docs/`): architecture → `architecture.md` + `diagrams/`; cont
 
 No file outside `api/src/llm/` may import `@anthropic-ai/*` (including `@anthropic-ai/claude-agent-sdk`) or reference `api.anthropic.com`. `api/src/llm/` is the single egress module with three concerns — attribution + metering, the anonymisation pipeline, and provider routing config. Agent SDK subprocess spawns are pointed at the chokepoint via `ANTHROPIC_BASE_URL`; no spawn may carry a provider base URL other than the chokepoint's.
 
+## Cortex Capability Contract - hard rules
+
+Capabilities are implemented once here and exposed as public, versioned APIs; consumers are ordinary API clients carrying a user-scoped key. Full text, with the enforcing gate named per rule (and the gaps named as gaps): `docs/CAPABILITY_CONTRACT.md`.
+
+- **Rule 1 - one implementation, here.** A capability is written once in `api/src/` behind a versioned public contract: no second copy, no per-consumer variant. Review rule recorded in `docs/decisions.md`; not lint-enforced.
+- **Rule 3 - no consumer special-casing.** No consumer-specific endpoints, headers, or branches. A client-origin header (`x-client`) is trace-only: read into the audit principal, never branched on. Gate: `scripts/garrison-grep.sh` (`npm run gate:garrison`, in CI).
+- **Rule 4 - every call identifies a user.** Capability routes are AuthClass `user-or-key` (`shared/src/descriptor.ts`) and mount `requireUserOrApiKey` (`api/src/auth/api-key-middleware.ts`): a platform JWT delegates to `requireAuth`, a gateway key fails closed (uniform 401, 402 billing-locked, 429 per-key window). No shared or ambient identity; no unauthenticated capability endpoint. Suite: `api/tests/auth/api-key-middleware.test.ts`.
+- **Rule 5 - tenancy is enforced here, never in the consumer.** Per-user scoped storage behind a single path jail (`api/src/memvault/jail.ts`); a capability that holds state ships an isolation suite of the class of `api/tests/security/memvault-isolation.test.ts`.
+- **Rule 7 - contracts evolve additively.** Additive change lands silently; a breaking change needs a version bump plus explicit migration of every consumer. Gates: `api/tests/contract/schema-coverage.test.ts` (COVERED allowlist + pinned `EXPECTED_PENDING_COUNT`) and `api/tests/contract/mount-coverage.test.ts`; the OpenAPI drift test lands with the spec slice.
+- **Rule 8 - the provider stays boring.** Authenticate, meter, route, log. Never interpret prompt content, inject context, or execute side effects for the caller. No server-side egress bypass (the chokepoint above plus `scripts/chokepoint-grep.sh`); the direct-provider fallback is client-side provider re-selection.
+- **Rule 10 - state migrations end.** Shadow, compare, cutover-or-remove, with the review date fixed at the start in `docs/decisions.md`. No permanent parallel implementations, no flags that become furniture.
+
 ## Lint and CI enforcement
 
 1. **Repo boundaries (FIXED-1).** ESLint `import/no-restricted-paths` with three zones: `web/**` may not import from `api/**`; `api/**` may not import from `web/**`; `shared/**` may not import from either. CI fails on violation.
