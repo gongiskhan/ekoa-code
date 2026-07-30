@@ -53,7 +53,7 @@ async function admitApiKey(secret: string, req: AuthedRequest, res: Response, ne
     role: owner.role,
     scope: 'user',
     orgId: owner.orgId,
-    username: verdict.username,
+    username: owner.username,
     // Synthetic — there is no token to revoke on this path; revocation is the key doc itself.
     jti: `gk:${verdict.keyId}`,
   };
