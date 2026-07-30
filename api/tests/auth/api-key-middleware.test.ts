@@ -56,7 +56,11 @@ beforeAll(async () => {
   app.use(express.json());
   // Identical handlers so the JWT path can be asserted BYTE-identical to plain requireAuth.
   const handler = (req: express.Request, res: express.Response): void => {
-    res.json({ actor: actorOf(req as AuthedRequest), principal: res.locals.apiKeyPrincipal ?? null });
+    res.json({
+      actor: actorOf(req as AuthedRequest),
+      principal: res.locals.apiKeyPrincipal ?? null,
+      username: (req as AuthedRequest).user.username,
+    });
   };
   app.get('/probe', requireUserOrApiKey, handler);
   app.get('/probe-jwt', requireAuth, handler);
@@ -86,12 +90,15 @@ describe('gateway-key admission (fail-closed)', () => {
     expect(body.actor).toEqual({ userId: 'owner1', orgId: 'o1', role: 'user' });
     expect(body.principal).toEqual({ keyId: minted.id, xClient: 'claude-code' });
 
-    // Role flips in the store are effective on the NEXT call — no re-mint, no re-login.
-    await users.update('owner1', (d) => ({ ...d, role: 'org-admin' }));
-    const promoted = (await (await keyCall(minted.key)).json()) as { actor: { role: string }; principal: Record<string, string> };
+    // Role AND username flips in the store are effective on the NEXT call — the LIVE doc is
+    // authoritative over the key doc's mint-time snapshot (a renamed/recycled username must
+    // never misattribute audit lines).
+    await users.update('owner1', (d) => ({ ...d, role: 'org-admin', username: 'owner1-renamed' }));
+    const promoted = (await (await keyCall(minted.key)).json()) as { actor: { role: string }; principal: Record<string, string>; username: string };
     expect(promoted.actor.role).toBe('org-admin');
+    expect(promoted.username).toBe('owner1-renamed');
     expect(promoted.principal).toEqual({ keyId: minted.id }); // no X-Client header → no xClient field
-    await users.update('owner1', (d) => ({ ...d, role: 'user' }));
+    await users.update('owner1', (d) => ({ ...d, role: 'user', username: 'owner1' }));
   });
 
   it('unknown key → 401 envelope', async () => {
