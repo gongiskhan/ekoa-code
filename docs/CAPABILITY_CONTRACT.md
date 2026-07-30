@@ -8,7 +8,9 @@ the Garrison checkout at `docs/CAPABILITY_CONTRACT.md` (`~/dev/garrison`); the f
 
 Capabilities are implemented once, in Cortex, and exposed as public, versioned, OpenAPI-documented APIs.
 Consumers use them as ordinary API clients: fittings become views over the contract, hooks call the API,
-in-session agents reach capabilities through a thin CLI generated from the same spec. Every call carries a
+in-session agents reach capabilities through a thin CLI generated from the same spec. (Target state: as of
+2026-07-30 the spec, the generated client, and the CLI are not built yet - the descriptor maps in `shared/` are
+the contract, and rule 7 names that gap. The rest of the pattern is live.) Every call carries a
 user-scoped API key, so tenancy and authorization live where they already exist, inside Cortex. Garrison is the
 daily proving ground: capabilities earn their Ekoa customer UI only after surviving real use through the
 Garrison views. The two sides stay decoupled; the only coupling is the contract.
@@ -25,9 +27,12 @@ public contract. No second copy anywhere, no per-consumer variant.
 
 **2. The public contract is the entire supported surface.** Everything a consumer needs is a descriptor in
 `shared/` and a mounted `/api/v1` route. No private endpoint is ever handed to a consumer as a workaround.
-*Gate:* `api/tests/contract/mount-coverage.test.ts` proves every declared `/api/v1` path is really mounted (no
-phantom contract, and its exclusion list only carries written reasons). Whether a consumer *stays* on the public
-surface is enforced consumer-side; from here it is not mechanically enforced.
+*Gate:* `api/tests/contract/mount-coverage.test.ts` proves the ROUTER behind each declared `/api/v1` path is
+mounted (its exclusion list only carries written reasons). Read its stated limit before trusting it: because a
+router mounts behind `requireAuth`, every path beneath it answers 401 unauthenticated, so a missing sub-route is
+shadowed by a sibling and still looks mounted. Path-level drift is caught only by the per-domain contract suites.
+Whether a consumer *stays* on the public surface is enforced consumer-side; from here it is not mechanically
+enforced.
 
 **3. Cortex never special-cases a consumer.** No consumer-specific endpoints, headers, or code branches. A
 client-origin header is trace only.
@@ -63,8 +68,11 @@ Cortex, never make a Cortex key the price of a working default, never ship a con
 **7. Contracts evolve additively.** Additive change lands silently; a breaking change needs a version bump and an
 explicit migration of every consumer.
 *Gate:* `api/tests/contract/schema-coverage.test.ts` - every descriptor endpoint must be COVERED or accounted
-PENDING against a pinned `EXPECTED_PENDING_COUNT` (49 as of 2026-07-30), so a new `shared/` endpoint cannot slip
-in uncovered - plus `api/tests/contract/mount-coverage.test.ts`. The OpenAPI document and its
+PENDING against a pinned `EXPECTED_PENDING_COUNT` (49 as of 2026-07-30), so a new `shared/` endpoint cannot land
+unaccounted. Read that as accounting, not proof: COVERED is a hand-maintained CLAIM, and a key added with no test
+passes the gate (a 2026-07-10 audit found 27 of 154 COVERED keys unexercised; two real bugs shipped through it).
+Only the per-domain contract suites verify that a body matches its schema - plus
+`api/tests/contract/mount-coverage.test.ts` for mounting. The OpenAPI document and its
 spec-versus-descriptor drift test do not exist yet; they land with the spec slice of this run, and until then the
 descriptor maps are the contract (see [api-contract.md](./api-contract.md)).
 
