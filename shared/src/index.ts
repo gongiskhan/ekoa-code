@@ -32,6 +32,7 @@ import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
 import { gatewayKeysEndpoints } from './gateway-keys.js';
 import { notificationsEndpoints } from './notifications.js';
+import { memvaultEndpoints } from './memvault.js';
 
 export * from './descriptor.js';
 export * from './common.js';
@@ -71,6 +72,8 @@ export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';
 export * from './notifications.js';
+// memvault (slice E2) - the per-user markdown-notes capability ("cortex memory").
+export * from './memvault.js';
 // Voice WS message contract (mega-run C1) - a WS carve-out like streaming/, so it has
 // schemas + path constants here but NO descriptor-map entry (not a REST endpoint).
 export * from './voice.js';
@@ -106,6 +109,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   ekoaLocal: ekoaLocalEndpoints,
   gatewayKeys: gatewayKeysEndpoints,
   notifications: notificationsEndpoints,
+  memvault: memvaultEndpoints,
 };
 
 /** Flat list of every endpoint descriptor across all domains. */

@@ -7,6 +7,8 @@
  * fail closed. This is the stub for G0; the full store/backend config lands at G2.
  */
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 /** Per-tier model routing config (ch06 §6.2.3). Model ids + billing weights live here,
  *  env-overridable, and NOWHERE else outside api/src/llm/. Tier configs carry `effort`
@@ -241,6 +243,23 @@ export function loadPortalConnectorsConfig(): PortalConnectorsConfig {
 }
 export function __resetPortalConnectorsConfigForTests(): void {
   cachedPortalConnectors = undefined;
+}
+
+/**
+ * memvault root (slice E2): the per-user markdown-notes tree, `<root>/<userId>/<permalink>.md`.
+ * Mirrors the knowledge data-root convention (api/src/knowledge/paths.ts): everything derives
+ * from EKOA_DATA_DIR (default ~/.ekoa/data, NEVER a path inside the repo), with a dedicated
+ * EKOA_MEMVAULT_ROOT override winning outright. Read LIVE (not memoized) so tests can point
+ * either env var at a temp dir per suite. ONLY api/src/memvault/jail.ts may consume this —
+ * the jail is the single path-resolution point (enforced by a grep test in the E2 suite).
+ */
+export interface MemvaultConfig {
+  root: string;
+}
+
+export function memvaultConfig(): MemvaultConfig {
+  const dataDir = process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data');
+  return { root: process.env.EKOA_MEMVAULT_ROOT || join(dataDir, 'memvault') };
 }
 
 class ConfigError extends Error {}

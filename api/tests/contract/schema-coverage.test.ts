@@ -138,6 +138,11 @@ const COVERED = new Set<string>([
   // insolvencia-watch.test.ts: fetch/parse + poll unit coverage). Additive endpoint on the
   // existing servedApp domain: covering it keeps EXPECTED_PENDING_COUNT unchanged.
   'servedApp.legalPortalInsolvencyPoll',
+  // slice E2 - memvault ("cortex memory"), a NEW domain (memvault.test.ts contract: JWT +
+  // real-minted-gateway-key round trips, safeParse on every body, 404 uniformity;
+  // tests/security/memvault-isolation.test.ts: traversal/symlink/cross-tenant). Covering all
+  // four keeps EXPECTED_PENDING_COUNT unchanged.
+  'memvault.writeNote', 'memvault.readNote', 'memvault.listNotes', 'memvault.deleteNote',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

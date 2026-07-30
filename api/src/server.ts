@@ -91,6 +91,7 @@ import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
 import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
+import { memvaultRouter } from './routes/memvault.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -709,6 +710,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   registerGateway(app, { verifyToken, verifyGatewayKey });
   // S4a — per-user gateway API keys: mint (show-once) / list / revoke, self-service.
   app.use('/api/v1/gateway-keys', gatewayKeysRouter(deps));
+  // E2 — memvault ("cortex memory"): per-user markdown notes, JWT or gateway-key admission
+  // (requireUserOrApiKey inside the router); state is per-user files behind the path jail.
+  app.use('/api/v1/memvault', memvaultRouter(deps));
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
