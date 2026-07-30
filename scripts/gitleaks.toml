@@ -46,5 +46,13 @@ regexes = [
   '''sk-live-EXFILTRATE-ME-0001''',
   '''sk-live-abcdef123456''',
   '''deliver-me-J3-SECRET-9911''',
+  # The typist non-memorability fixture (F-5, `api/tests/security/typist-non-memorable.test.ts`).
+  # `typistLogin` must write ZERO memory rows, so the suite needs a password-shaped value to prove
+  # none of it is retained; binding it to a const named SECRET is what tripped `generic-api-key`.
+  # It postdates the EKOA-SYNTHETIC- convention above but did not follow it, and cannot adopt it
+  # retroactively: the literal is reachable in the commit that introduced it, and history is what
+  # gitleaks scans. Answering the question this list forces: yes, synthetic - it is a local string
+  # typed into a mock login form, never a credential for anything.
+  '''pw-F5-NONMEMORABLE-0001''',
   '''EKOA-SYNTHETIC-[A-Za-z0-9_-]+''',
 ]
