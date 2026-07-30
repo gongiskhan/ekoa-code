@@ -73,3 +73,26 @@ with no mongo at all, so its audit writes reject and are swallowed.
 teardown of both suites that fire them. Production never drains; teardown does. If an api-suite
 flake recurs, check for a NEW untracked async write before assuming mongo-memory-server teardown —
 same advice as the 2026-07-10 entry, now with a drain helper to hang it on.
+
+## RESOLVED (2026-07-30): the platform-poll burst spec was quadratic, not unlucky
+
+`tests/integrations/platform-poll.test.ts` > "drains a >cap same-timestamp burst across consecutive
+ticks (no starvation)" timed out at the 30 s per-test cap on a full-suite run, then passed 3/3 in
+isolation. That profile - green alone, red under load - is normally logged here as environmental and
+watched. It was not environmental, and the entry above ("unreproduced failure on the post-rebase
+run", 2026-07-29) may well have been this same test.
+
+Root cause: the spec's `claimAllDedupKeys` helper drained the queue one row at a time to answer
+"were all 700 messages enqueued?". `events/queue.ts` `claimNext` re-runs `find({status:'pending'})`
+and sorts the whole result on EVERY call, so draining a 700-row burst is quadratic - roughly 245k
+document reads plus 700 updates against mongodb-memory-server. On a quiet machine that fits inside
+30 s; sharing CPU with the rest of the suite it does not.
+
+Fixed at the cause rather than by raising the timeout: the assertion is about what is IN the queue,
+not about the claim protocol (which a separate test exercises directly, on two rows), so the helper
+now does ONE read. Test body time went 8.05 s -> 2.44 s.
+
+Worth knowing for the next one: `claimNext` is the production dispatcher path and carries the same
+full-scan-and-sort per claim. It is not a defect at current queue depths and is deliberately simple,
+but any test that drains a large queue through it will be slow for the same reason, and a deep
+production queue would pay it too.

@@ -210,10 +210,10 @@ export function anonymizeRequestBody(
 
   const outcome: TokenizeOutcome = { text: '', classes, entityCount, nerAvailable, mandatoryOk, denyAccessCount };
   if (!mandatoryOk) {
-    auditFor(ctx, correlationId, parts.join(' '), outcome, true);
+    auditFor(ctx, correlationId, parts.join('\u0000'), outcome, true);
     throw new AnonymisationRefusedError();
   }
-  auditFor(ctx, correlationId, parts.join(' '), outcome);
+  auditFor(ctx, correlationId, parts.join('\u0000'), outcome);
   return { body: nextBody, handle, correlationId };
 }
 
