@@ -13,7 +13,7 @@ const repoRoot = resolve(__dirname, '..', '..', '..');
 const auditPath = join(repoRoot, 'docs', 'CONVERGENCE_AUDIT.md');
 const garrisonRoot = join(homedir(), 'dev', 'garrison');
 
-const EKOA_PATH = /^(api|web|shared|docs|scripts|clients|drills)\/[\w()./@-]+$/;
+const EKOA_PATH = /^(api|web|shared|docs|scripts|clients|drills|tests)\/[\w()./@-]+$/;
 const GARRISON_PREFIX = 'garrison:';
 
 function citedTokens(): string[] {
