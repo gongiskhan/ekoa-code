@@ -375,6 +375,30 @@ describe('memvault isolation (slices E2 + E3)', () => {
     expect(byUserA.map((r) => r.metadata.op).sort()).toEqual(['delete', 'export', 'list', 'read', 'search', 'write']);
   });
 
+  it('E3 review nit 1: a DANGLING symlink at the user root answers the uniform 404, not a 500', async () => {
+    // The containment check runs BEFORE mkdir precisely so this shape classifies as a jail
+    // refusal. With mkdir first it threw ENOENT and escaped as INTERNAL (audited `error`),
+    // breaking the uniform-404 invariant and mislabelling a jail-relevant event in the audit.
+    const tA = await tokenFor('usrA');
+    mkdirSync(vaultRoot, { recursive: true });
+    expect(existsSync(join(vaultRoot, 'usrA'))).toBe(false);
+    symlinkSync(join(vaultRoot, 'nao-existe-alvo'), join(vaultRoot, 'usrA')); // dangling
+
+    for (const attempt of [
+      () => authed('/api/v1/memvault/note?permalink=qualquer', tA),
+      () => authed('/api/v1/memvault/notes', tA),
+      () => writeNote(tA, { permalink: 'injetado', title: 'x', contentMd: 'x' }),
+      () => authed('/api/v1/memvault/search', tA, { method: 'POST', body: JSON.stringify({ query: 'x' }) }),
+      () => authed('/api/v1/memvault/export', tA),
+    ]) {
+      const res = await attempt();
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe(MISSING_404);
+    }
+    // The dangling target was never created - open(O_CREAT) never got to follow the link.
+    expect(existsSync(join(vaultRoot, 'nao-existe-alvo'))).toBe(false);
+  });
+
   it('E2 review F2: a user root symlinked at /etc fails closed on read, list and delete - and writes nothing there', async () => {
     const tA = await tokenFor('usrA');
     mkdirSync(vaultRoot, { recursive: true }); // beforeEach wipes it; nothing has written yet

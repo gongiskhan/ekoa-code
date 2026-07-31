@@ -150,6 +150,11 @@ export function userRoot(userId: string): string {
 /** Create (if needed) and containment-check the user's vault root. */
 export async function ensureUserRoot(userId: string): Promise<string> {
   const root = userRoot(userId);
+  // Containment BEFORE mkdir: a dangling symlink at the root makes mkdir throw ENOENT, which
+  // would escape as a plain Error (500, audited `error`) instead of the uniform 404 +
+  // jail_violation every other refusal answers. Nothing leaks either way; the classification is
+  // the point. The check runs again after mkdir because the path can change underneath it.
+  await assertContained(root, userId);
   await mkdir(root, { recursive: true });
   await assertContained(root, userId);
   return root;
@@ -218,6 +223,7 @@ export function indexDbPath(userId: string): JailedIndexPath {
 export async function ensureIndexDir(userId: string): Promise<string> {
   await ensureUserRoot(userId);
   const { dir } = indexDbPath(userId);
+  await assertContained(dir, userId); // before mkdir, for the same reason as ensureUserRoot
   await mkdir(dir, { recursive: true });
   await assertContained(dir, userId);
   return dir;

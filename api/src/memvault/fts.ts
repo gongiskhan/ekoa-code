@@ -257,9 +257,11 @@ function openProbed(file: string): { db: Database.Database; empty: boolean } {
  *
  * KNOWN LIMIT, stated rather than hidden: counting cannot see a same-count difference — an
  * OVERWRITE whose index update failed leaves the row count intact with stale content. That case
- * is covered in-process by {@link invalidate}, which condemns the handle (forcing this very
- * cache miss) and deletes the file. It is only if BOTH the delete fails AND the process
- * restarts that a stale row can survive; the next write to that note repairs it.
+ * is covered by {@link invalidate}, which condemns the handle (forcing this very cache miss) and
+ * deletes the file. A DELETE THAT FAILS (a read-only index dir) is therefore sufficient on its
+ * own for a stale row to survive - restarting changes nothing, because recovery reads only
+ * on-disk state. Blast radius is one note's body in search; list/read/export are unaffected,
+ * and the next write to that note repairs it.
  */
 async function isStale(db: Database.Database, userId: string): Promise<boolean> {
   const rows = (db.prepare('SELECT COUNT(*) AS n FROM notes_fts').get() as { n: number }).n;
