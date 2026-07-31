@@ -36,6 +36,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   readiness poll the former — setting only one silently checks the wrong app). Recorded rather than
   fixed because the real fix is to make the proxy port configurable end-to-end, which means the
   inlined origin in `next.config.ts`, and that is its own change.
+  **`EKOA_WEB_PORT` only rescues you when the other server is in a DIFFERENT directory.** Point the
+  harness at a free port while a `next dev` is already running against the SAME `web/`, and Next's
+  own single-instance guard refuses before the port is ever used: *"Another next dev server is
+  already running"*, with the PID and directory. So the workaround holds from a second worktree and
+  does NOT hold in the checkout that already has a dev server up — there, the only options are to
+  stop that server or to verify from a worktree. Learnt the second way, after the first fix looked
+  like it had worked.
 - **`consent-once-re-prompts-forever`** (OPEN 2026-07-31, MEDIUM, correctness — found while merging
   the capability-contract and Cofre lines of work). `resolveConsent`'s `once` decision persists
   nothing (correctly) and sets the run's resume flag — but the engine's resume path re-runs the same

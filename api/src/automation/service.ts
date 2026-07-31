@@ -203,7 +203,14 @@ async function loadAutomationForRead(actor: Actor, id: string): Promise<StoredAu
 // In-memory run signal registry (§5.3.1 owner-scoped idempotent cancel/resume)
 // ============================================================================
 
-interface RunSignals { ownerUserId: string; orgId: string; cancelled: boolean; resumeFlag: boolean }
+interface RunSignals {
+  ownerUserId: string;
+  orgId: string;
+  cancelled: boolean;
+  resumeFlag: boolean;
+  /** Shapes approved for THIS run only ("permitir uma vez"). Never persisted — see RunContext. */
+  runApprovedShapes: Set<string>;
+}
 const signals = new Map<string, RunSignals>();
 
 function makeCtx(runId: string, sig: RunSignals, extra: Partial<RunContext> = {}): RunContext {
@@ -215,6 +222,10 @@ function makeCtx(runId: string, sig: RunSignals, extra: Partial<RunContext> = {}
     traceId: runId,
     cancellation: { isCancelled: () => sig.cancelled },
     resumeSignal: { shouldResume: () => sig.resumeFlag, clear: () => { sig.resumeFlag = false; } },
+    runApprovedShapes: {
+      has: (shape) => sig.runApprovedShapes.has(shape),
+      add: (shape) => { sig.runApprovedShapes.add(shape); },
+    },
     ...extra,
   };
 }
@@ -410,7 +421,13 @@ async function startRunInternal(
   // The id may be pre-minted by the caller (the idempotent create records the mapping BEFORE the
   // run exists, so it must know the id first). Absent → mint here, exactly as before.
   const runId = opts.runId ?? randomUUID();
-  const sig: RunSignals = { ownerUserId: owner.userId, orgId: owner.orgId, cancelled: false, resumeFlag: false };
+  const sig: RunSignals = {
+    ownerUserId: owner.userId,
+    orgId: owner.orgId,
+    cancelled: false,
+    resumeFlag: false,
+    runApprovedShapes: new Set<string>(),
+  };
   signals.set(runId, sig);
 
   const initial: StoredRun = {
@@ -684,13 +701,23 @@ export async function resolveConsent(
   const pendingShape = run.consentRequest?.shape;
   const awaitingConsent = run.status === 'awaiting_consent' && !!pendingShape;
   let persisted = false;
+  // The shape check binds BOTH surviving answers, not just the durable one — `stop` already
+  // returned above. A mismatched `once` is the same caller-supplied shape with a shorter blast
+  // radius, and letting it through would leave the cheaper half of the hole open.
+  if (awaitingConsent && input.shape !== pendingShape) {
+    throw new AutomationServiceError(
+      'FORBIDDEN',
+      'consent shape does not match the shape this run is awaiting',
+    );
+  }
+  // "Permitir uma vez": approve for THIS RUN and nothing more. It persists nothing (that is the
+  // point) but it must still be RECORDED somewhere the re-run can see, or the step re-checks the
+  // durable store, finds nothing, and asks again — the loop this closes. The record dies with the
+  // run, so a restart re-asks, which is the safe direction to fail.
+  if (input.decision === 'once' && awaitingConsent && sig) {
+    sig.runApprovedShapes.add(input.shape);
+  }
   if (input.decision === 'always' && awaitingConsent) {
-    if (input.shape !== pendingShape) {
-      throw new AutomationServiceError(
-        'FORBIDDEN',
-        'consent shape does not match the shape this run is awaiting',
-      );
-    }
     // Bank it in the scope the RUN recorded when it asked — not one re-derived here. J-7 keys an
     // approval on owner + org + machine, and the executor looks it up with the connected daemon's
     // real `pairingId`; writing `pairingId: null` from this side stored a row that lookup could

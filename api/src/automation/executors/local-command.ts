@@ -97,7 +97,13 @@ export async function executeLocalCommandStep(
     orgId: ctx.orgId,
     pairingId: getDaemonConnection(ctx.ownerUserId)?.pairingId ?? null,
   };
-  const isApproved = await isCommandShapeApproved(scope, shape);
+  // "Permitir uma vez" lives on the run, not in the store, and is checked FIRST so a one-off answer
+  // never touches the durable approvals — that is the whole distinction between `once` and
+  // `sempre`. Before this existed, `once` set the resume flag, the step re-ran, this lookup found
+  // nothing (correctly, since `once` persists nothing) and the same dialog returned: a loop whose
+  // only exits were the two answers the user had just declined to give.
+  const isApproved =
+    ctx.runApprovedShapes?.has(shape) === true || (await isCommandShapeApproved(scope, shape));
 
   if (!isApproved) {
     // Mark step as awaiting consent; engine's caller will surface

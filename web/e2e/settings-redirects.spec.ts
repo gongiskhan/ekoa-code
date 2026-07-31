@@ -38,8 +38,13 @@ test.describe('legacy admin routes redirect into the settings tab group', () => 
   for (const { from, to, label } of REDIRECTS) {
     test(`${from} lands on ${to} (${label})`, async ({ page }) => {
       await login(page);
-      await page.goto(from);
-      await expect(page).toHaveURL(new RegExp(`${to}$`));
+      await page.goto(from, { waitUntil: 'domcontentloaded' });
+      // The default 5s is not enough and the reason is the harness, not the product: the estate
+      // runs against `next dev`, which compiles a route on FIRST hit. The very first spec to touch
+      // one of these paths pays that cost, so a tight assertion here fails on a cold server and
+      // passes on a warm one — which is how a green suite starts lying. The rest of this estate
+      // uses the same wide waits for the same reason.
+      await expect(page).toHaveURL(new RegExp(`${to}$`), { timeout: 60_000 });
     });
   }
 
@@ -48,10 +53,10 @@ test.describe('legacy admin routes redirect into the settings tab group', () => 
     // where they already are — `redirect()` in a server component replaces rather than pushes, and
     // a change to a client-side `router.push` would break this without breaking the tests above.
     await login(page);
-    await page.goto('/knowledge');
-    await page.goto('/users');
-    await expect(page).toHaveURL(/\/settings\/users$/);
+    await page.goto('/knowledge', { waitUntil: 'domcontentloaded' });
+    await page.goto('/users', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/settings\/users$/, { timeout: 60_000 });
     await page.goBack();
-    await expect(page).toHaveURL(/\/knowledge$/);
+    await expect(page).toHaveURL(/\/knowledge$/, { timeout: 60_000 });
   });
 });

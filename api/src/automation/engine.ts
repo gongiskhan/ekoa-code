@@ -201,6 +201,20 @@ export interface RunContext {
    * returns true. Set by the handler's resume-run intent.
    */
   resumeSignal?: { shouldResume: () => boolean; clear: () => void };
+  /**
+   * Command shapes the owner approved for THIS RUN ONLY ("permitir uma vez").
+   *
+   * Without it, `once` could not mean what the dialog says it means. `resolveConsent` deliberately
+   * persists nothing for `once` — correct — and sets the resume flag; the engine then re-runs the
+   * step, `local-command.ts` re-reads the DURABLE approvals store, still finds nothing, and asks
+   * the same question again. The user was in a loop with no exit but "sempre" or "parar", which is
+   * precisely the choice `once` exists to avoid.
+   *
+   * Run-scoped, in memory, and never written down: an answer about one execution must not outlive
+   * it. It is a Set on the signal record the handler already owns, so it dies with the run — a
+   * restart loses it, and losing it means the user is asked again, which is the safe direction.
+   */
+  runApprovedShapes?: { has: (shape: string) => boolean; add: (shape: string) => void };
 }
 
 export interface RunEventEmitter {

