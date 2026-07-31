@@ -22,6 +22,7 @@ import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
 import { migrateBuilderRole } from './auth/users-service.js';
+import { ERROR_STATUS, type ErrorCode } from '@ekoa/shared';
 import { sendError } from './routes/helpers.js';
 import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
@@ -212,6 +213,28 @@ function makeRunSseEmitter(runId: string): RunEventEmitter {
 }
 
 const defaultDeps: RuntimeDeps = { now: () => Date.now(), genId: () => randomUUID() };
+
+/**
+ * The CLIENT-FAULT status a thrown error is claiming, or undefined when it is not claiming one
+ * (E5 review F3). `http-errors` — and Express's own internals, which use it — put the code on
+ * `status` and mirror it on `statusCode`. Only 4xx counts: a thrown 5xx is a server fault and goes
+ * down the INTERNAL path with a full error log, exactly as before.
+ */
+function statusOfError(err: unknown): number | undefined {
+  const e = err as { status?: unknown; statusCode?: unknown } | null;
+  for (const raw of [e?.status, e?.statusCode]) {
+    if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw < 500) return raw;
+  }
+  return undefined;
+}
+
+/** The shared ErrorCode whose canonical status is `status`, derived FROM the contract table so the
+ *  two cannot drift. An unmapped 4xx (405, 406, …) degrades to VALIDATION_FAILED rather than being
+ *  answered as a server error — a client fault stays a client fault. */
+function errorCodeForStatus(status: number): ErrorCode {
+  const match = (Object.entries(ERROR_STATUS) as Array<[ErrorCode, number]>).find(([, s]) => s === status);
+  return match ? match[0] : 'VALIDATION_FAILED';
+}
 
 /** The usage push (§6.7): a bare `usage_updated` poke on the billee's notifications channel,
  *  fired once per ledger write (ch03 §3.6.4). Best-effort — a push failure NEVER fails the
@@ -756,6 +779,18 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     // Nothing to shape once bytes are on the wire (a streaming/binary route): let Express's
     // default handler destroy the connection rather than append JSON to a partial body.
     if (res.headersSent) return next(err);
+    // A CLIENT-FAULT throw carries its own 4xx status and must keep it (E5 review F3). The one
+    // that actually reaches here is Express's own `decode_param`: a malformed percent-escape in a
+    // path segment (`/…/%zz/x`, `/…/%e0%a4`) throws a URIError with status 400, which this handler
+    // used to flatten into 500 INTERNAL — a server-fault code, and an `[api-error]` line writing
+    // the attacker's raw segment into the log, for a request the client simply got wrong. The
+    // pre-router body-parser shaper already honours err.status; it never sees router errors.
+    const status = statusOfError(err);
+    if (status !== undefined) {
+      // Client fault: log at WARN, and log only the SHAPE — never the attacker-controlled path.
+      console.warn('[api-error] client fault', status, err instanceof Error ? err.name : typeof err);
+      return sendError(res, errorCodeForStatus(status), 'Pedido inválido.');
+    }
     console.error('[api-error]', err);
     sendError(res, 'INTERNAL', 'Erro interno.');
   });

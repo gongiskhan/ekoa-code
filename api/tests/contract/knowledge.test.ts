@@ -403,6 +403,86 @@ describe('E5 read one document (GET /api/v1/knowledge/documents/:collection/:doc
     }
   });
 
+  /**
+   * E5 review F2 (reproduced): a `_shared` document whose createdAt is not RFC-3339 answered 200
+   * with a body that FAILED its own KnowledgeDocumentResponse (IsoTimestamp is
+   * z.string().datetime({offset:true})). Not theoretical — the offline importer preserves the
+   * SOURCE's stamp verbatim, so a legal corpus with date-only stamps ships straight to the wire.
+   */
+  it('E5 review F2: a non-RFC-3339 corpus stamp still answers a CONTRACT-VALID body', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+
+    for (const [docId, stamp] of [
+      ['odd', '2020-01-01'], // date-only: the shape a real legal corpus actually carries
+      ['garbage', 'ontem à tarde'], // free text
+      ['naive', '2020-01-01T10:00:00'], // no offset — the exact thing {offset:true} rejects
+      ['numeric', '1577880000'], // an epoch the importer might have copied
+    ] as Array<[string, string]>) {
+      const dest = join(dir, 'knowledge', 'vault', SHARED_ORG_ID, 'legacy');
+      await mkdir(dest, { recursive: true });
+      await writeFile(join(dest, `${docId}.md`), `---\ntitle: ${JSON.stringify(docId)}\ncreatedAt: ${JSON.stringify(stamp)}\n---\n\ncorpo ${docId}\n`, 'utf8');
+      await backfillKnowledgeIndex({ force: true });
+
+      const res = await api(`/api/v1/knowledge/documents/legacy/${docId}`, t);
+      expect(res.status, stamp).toBe(200);
+      const body: unknown = await res.json();
+      // THE DEFECT: this used to fail safeParse while the server answered 200.
+      expect(KnowledgeDocumentResponse.safeParse(body), `${stamp}: ${JSON.stringify(body)}`).toMatchObject({ success: true });
+      const doc = body as { createdAt?: string; createdAtRaw?: string; contentMd: string; scope: string };
+      expect(doc.createdAt, stamp).toBeUndefined(); // never emitted as a valid timestamp...
+      expect(doc.createdAtRaw, stamp).toBe(stamp); // ...and never silently dropped either
+      expect(doc.scope).toBe('shared');
+      expect(doc.contentMd).toContain(`corpo ${docId}`);
+    }
+
+    // A VALID stamp still lands in createdAt, and never in the raw field (both directions).
+    const id = await ingest(t, 'propria', 'Boa data', 'documento com data válida');
+    const ok = (await (await api(`/api/v1/knowledge/documents/propria/${id}`, t)).json()) as { createdAt?: string; createdAtRaw?: string };
+    expect(ok.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+    expect(ok.createdAtRaw).toBeUndefined();
+
+    // A document with NO stamp at all carries neither field, and still validates.
+    const dest = join(dir, 'knowledge', 'vault', SHARED_ORG_ID, 'legacy');
+    await writeFile(join(dest, 'nostamp.md'), '---\ntitle: "Sem data"\n---\n\nsem carimbo\n', 'utf8');
+    await backfillKnowledgeIndex({ force: true });
+    const none = await api('/api/v1/knowledge/documents/legacy/nostamp', t);
+    expect(none.status).toBe(200);
+    const noneBody: unknown = await none.json();
+    expect(KnowledgeDocumentResponse.safeParse(noneBody), JSON.stringify(noneBody)).toMatchObject({ success: true });
+    expect(noneBody).not.toHaveProperty('createdAt');
+    expect(noneBody).not.toHaveProperty('createdAtRaw');
+  });
+
+  /**
+   * E5 review F3 (pre-existing, platform-wide, made reachable by this slice's two-segment path):
+   * a malformed percent-escape makes Express's own decode_param throw a URIError carrying
+   * status 400, and the terminal /api/v1 handler flattened every throw into 500 INTERNAL — a
+   * server-fault code for a client-fault request, plus an `[api-error]` line writing the
+   * attacker's raw segment into the log.
+   */
+  it('E5 review F3: a malformed percent-escape is a 4xx envelope, never a 500', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    for (const path of [
+      '/api/v1/knowledge/documents/%zz/x',
+      '/api/v1/knowledge/documents/c/%zz',
+      '/api/v1/knowledge/documents/%c0%ae%c0%ae/id',
+      '/api/v1/knowledge/documents/%e0%a4/id',
+      '/api/v1/knowledge/documents/c/%',
+    ]) {
+      const res = await rawGet(path, t);
+      expect(res.status, path).toBe(400);
+      const body: unknown = JSON.parse(res.body);
+      expect(ErrorEnvelope.safeParse(body).success, path).toBe(true);
+      expect((body as { error: { code: string } }).error.code, path).toBe('VALIDATION_FAILED');
+      expect(res.body, path).not.toContain(dir); // no absolute server path on the wire
+    }
+    // A genuine SERVER fault is untouched by the change: still 500 INTERNAL. (The uniform 404 for
+    // a well-formed but unknown document also still holds.)
+    expect((await rawGet('/api/v1/knowledge/documents/c/nao-existe', t)).status).toBe(404);
+  });
+
   it('each call leaves ONE knowledge activity row with op, verdict and duration', async () => {
     await mkUser('u1', 'orgA', 'user');
     const t = await tokenFor('u1');
@@ -502,10 +582,11 @@ describe('E5 gateway-key admission (the second half of `user-or-key`)', () => {
     expect(KnowledgeDocumentResponse.safeParse(rbody).success).toBe(true);
     expect((rbody as { contentMd: string }).contentMd).toContain('CHAVEUNICA');
 
-    // The audited calls (search + read) name the key and the trace-only client tag.
+    // EVERY key-admitted call is audited — browse included (E5 review F1) — and each names the key
+    // plus the trace-only client tag.
     const rows = await activityLogs.find({ category: 'knowledge' } as never);
     const metas = rows.map((r) => (r as unknown as { userId: string; orgId: string; metadata: Record<string, unknown> }));
-    expect(metas).toHaveLength(2);
+    expect(metas.map((m) => m.metadata.op).sort()).toEqual(['collections', 'list', 'read', 'search']);
     for (const m of metas) {
       expect(m.metadata.keyId).toBe(minted.id);
       expect(m.metadata.xClient).toBe('claude-code');
@@ -513,33 +594,110 @@ describe('E5 gateway-key admission (the second half of `user-or-key`)', () => {
       expect(m.userId).toBe('u1');
       expect(m.orgId).toBe('orgA');
     }
+    // The titles the browse call returned are NOT in the trail; the paging SHAPE is.
+    expect(JSON.stringify(metas)).not.toContain('Via chave');
+    expect(metas.find((m) => m.metadata.op === 'list')?.metadata.total).toBe(1);
+    expect(metas.find((m) => m.metadata.op === 'collections')?.metadata.count).toBe(1);
   });
 
-  it('a key is refused on every WRITE/admin route — this slice opens no ingestion surface', async () => {
+  /**
+   * E5 review F1 (MEDIUM, reproduced): the two flipped BROWSE routes were left unaudited on the
+   * argument that they pre-dated the capability surface. They do not any more: a leaked gateway key
+   * could page GET /documents?limit=500&offset=N and harvest every document title, collection and
+   * size in the org while writing ZERO activity_logs rows, so incident response could not say which
+   * key did it or that it happened. The row is now gated on the KEY principal, which is what keeps
+   * the dashboard (JWT) writing nothing at all.
+   */
+  it('E5 review F1: browse is audited for a KEY and silent for a JWT — both directions', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    const minted = await mintKeyFor(t, 'harvest');
+    for (const n of ['Insolvência Cliente X', 'Penhora Cliente Y', 'Contrato Cliente Z']) await ingest(t, 'processos', n, `corpo de ${n}`);
+    await activityLogs.deleteMany({});
+
+    // A JWT paging the whole vault: still zero rows (the dashboard does this on every page load).
+    for (let offset = 0; offset < 3; offset++) {
+      expect((await api(`/api/v1/knowledge/documents?limit=1&offset=${offset}`, t)).status).toBe(200);
+    }
+    expect((await api('/api/v1/knowledge/collections', t)).status).toBe(200);
+    expect(await activityLogs.find({ category: 'knowledge' } as never)).toHaveLength(0);
+
+    // The SAME harvest under a key: one attributed row per call, carrying the paging shape.
+    const keyed = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { headers: { authorization: `Bearer ${minted.key}`, 'x-client': 'cortex-cli' } });
+    for (let offset = 0; offset < 3; offset++) {
+      expect((await keyed(`/api/v1/knowledge/documents?limit=1&offset=${offset}`)).status).toBe(200);
+    }
+    expect((await keyed('/api/v1/knowledge/collections')).status).toBe(200);
+
+    const rows = (await activityLogs.find({ category: 'knowledge' } as never))
+      .map((r) => r as unknown as { type: string; userId: string; orgId: string; metadata: Record<string, unknown> });
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.metadata.op).sort()).toEqual(['collections', 'list', 'list', 'list']);
+    for (const r of rows) {
+      expect(r.metadata.keyId).toBe(minted.id);
+      expect(r.metadata.xClient).toBe('cortex-cli');
+      expect(r.userId).toBe('u1');
+      expect(r.orgId).toBe('orgA');
+      expect(r.metadata.verdict).toBe('ok');
+      expect(typeof r.metadata.ms).toBe('number');
+    }
+    // The harvest is RECONSTRUCTIBLE from the trail: every page, and the size of the whole vault.
+    const lists = rows.filter((r) => r.metadata.op === 'list');
+    expect(lists.map((r) => r.metadata.offset).sort()).toEqual([0, 1, 2]);
+    for (const r of lists) {
+      expect(r.metadata.limit).toBe(1);
+      expect(r.metadata.total).toBe(3); // how much the caller learned was there
+      expect(r.metadata.count).toBe(1);
+    }
+    // ...but the confidential titles themselves never reach the durable store.
+    const dump = JSON.stringify(rows);
+    for (const n of ['Insolvência', 'Cliente X', 'Cliente Y', 'Cliente Z']) expect(dump, n).not.toContain(n);
+  });
+
+  /**
+   * ALL FOURTEEN write/admin routes, not a sample (E5 review F8): the whole point of the two-tier
+   * router is that tier 2 is closed to keys, so moving ONE route above `r.use(requireAuth)` must
+   * fail a test. Every descriptor whose auth is `user`/`org-admin` appears here.
+   */
+  it('a key is refused on ALL 14 WRITE/admin routes — this slice opens no ingestion surface', async () => {
     await mkUser('adm', 'orgA', 'org-admin');
     const t = await tokenFor('adm');
     const minted = await mintKeyFor(t, 'write-attempt');
     const keyed = (p: string, init: RequestInit = {}) =>
       fetch(`http://127.0.0.1:${port}${p}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${minted.key}`, ...(init.headers ?? {}) } });
 
-    for (const [path, init] of [
-      ['/api/v1/knowledge/documents', { method: 'POST', body: JSON.stringify({ collection: 'c', title: 'T', text: 'x' }) }],
-      ['/api/v1/knowledge/collections/c/documents/x', { method: 'DELETE' }],
-      ['/api/v1/knowledge/sources', { method: 'GET' }],
-      ['/api/v1/knowledge/sources', { method: 'POST', body: JSON.stringify({ url: 'https://exemplo.pt' }) }],
-      ['/api/v1/knowledge/uploads', { method: 'GET' }],
+    const probes: Array<[keyof typeof knowledgeEndpoints, string, RequestInit]> = [
+      ['createDocument', '/api/v1/knowledge/documents', { method: 'POST', body: JSON.stringify({ collection: 'c', title: 'T', text: 'x' }) }],
+      ['deleteDocument', '/api/v1/knowledge/collections/c/documents/x', { method: 'DELETE' }],
+      ['listSources', '/api/v1/knowledge/sources', { method: 'GET' }],
+      ['createSource', '/api/v1/knowledge/sources', { method: 'POST', body: JSON.stringify({ url: 'https://exemplo.pt' }) }],
+      ['updateSource', '/api/v1/knowledge/sources/x', { method: 'PATCH', body: JSON.stringify({ url: 'https://exemplo.pt' }) }],
+      ['deleteSource', '/api/v1/knowledge/sources/x', { method: 'DELETE' }],
+      ['crawlSource', '/api/v1/knowledge/sources/x/crawl', { method: 'POST' }],
+      ['crawlStatus', '/api/v1/knowledge/sources/x/crawl', { method: 'GET' }],
+      ['refreshSchedule', '/api/v1/knowledge/refresh-schedule', { method: 'GET' }],
+      ['listUploads', '/api/v1/knowledge/uploads', { method: 'GET' }],
       // content-type text/markdown on purpose: the global JSON parser would otherwise reject the
       // body BEFORE the router and answer 400, hiding the admission refusal this probe is about.
-      ['/api/v1/knowledge/uploads', { method: 'POST', headers: { 'content-type': 'text/markdown', 'x-filename': 'a.md' }, body: 'x' }],
-      ['/api/v1/knowledge/reindex', { method: 'POST' }],
-      ['/api/v1/knowledge/index-status', { method: 'GET' }],
-    ] as Array<[string, RequestInit]>) {
+      ['createUpload', '/api/v1/knowledge/uploads', { method: 'POST', headers: { 'content-type': 'text/markdown', 'x-filename': 'a.md' }, body: 'x' }],
+      ['deleteUpload', '/api/v1/knowledge/uploads/x', { method: 'DELETE' }],
+      ['reindex', '/api/v1/knowledge/reindex', { method: 'POST' }],
+      ['indexStatus', '/api/v1/knowledge/index-status', { method: 'GET' }],
+    ];
+    // The probe list IS the tier-2 descriptor set — no route can be flipped without editing here.
+    const tier2 = Object.entries(knowledgeEndpoints).filter(([, d]) => d.auth !== 'user-or-key').map(([n]) => n).sort();
+    expect(probes.map(([n]) => n).sort()).toEqual(tier2);
+    expect(probes).toHaveLength(14);
+
+    for (const [name, path, init] of probes) {
       const res = await keyed(path, init);
-      expect(res.status, `${init.method} ${path}`).toBe(401);
-      expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
+      expect(res.status, `${name}: ${init.method} ${path}`).toBe(401);
+      expect(ErrorEnvelope.safeParse(await res.json()).success, name).toBe(true);
     }
-    // ...and nothing was created by the attempts.
+    // ...and nothing was created, uploaded or indexed by the attempts.
     expect((await (await api('/api/v1/knowledge/documents', t)).json() as { total: number }).total).toBe(0);
+    expect((await (await api('/api/v1/knowledge/uploads', t)).json() as { items: unknown[] }).items).toHaveLength(0);
+    expect((await (await api('/api/v1/knowledge/sources', t)).json() as { items: unknown[] }).items).toHaveLength(0);
   });
 
   it('unauthenticated and unknown-key calls on both new endpoints are 401 envelopes', async () => {

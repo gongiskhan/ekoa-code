@@ -20,7 +20,7 @@
 import { knowledgeSources, knowledgeUploads } from '../data/stores.js';
 import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 import { assertSafeUrl, SsrfError } from '../services/url-safety.js';
-import type { Actor } from '@ekoa/shared';
+import { IsoTimestamp, type Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 import * as vault from './vault.js';
 import * as index from './index-store.js';
@@ -71,8 +71,14 @@ export class KnowledgeError extends Error {
  * is lost — every org's search already consults `_shared` and every org can read a `_shared`
  * document, so the corpus stays fully readable; what is refused is a caller CLAIMING to be it.
  */
+/**
+ * ONE message for every refusal of a `_shared` actor, and it names the actual reason (E5 review
+ * F6): the first cut said "é só de leitura", which is true of the corpus but wrong as the answer to
+ * a READ — a caller refused on GET would read it as "this document is read-only" rather than "your
+ * organisation identity is not a valid one". The invariant being enforced is about WHO is calling.
+ */
 function sharedActorRefusal(): KnowledgeError {
-  return new KnowledgeError('FORBIDDEN', 403, 'A coleção partilhada é só de leitura.');
+  return new KnowledgeError('FORBIDDEN', 403, 'A coleção partilhada não pode ser a organização do pedido.');
 }
 
 function assertNotSharedOrg(orgId: string): void {
@@ -333,14 +339,46 @@ export async function auditKnowledgeDenied(ctx: KnowledgeCallContext, op: string
   await auditKnowledge(ctx, op, 'denied', Date.now(), attempt ? { attempt: attempt.slice(0, 128) } : {});
 }
 
+/**
+ * Audit a BROWSE read (list collections / list documents) — but ONLY when a gateway key made the
+ * call. E5 review F1: the first cut left these two silent, and a leaked key could then page
+ * `GET /documents?limit=500&offset=N` and harvest every document TITLE, collection and size for
+ * the whole org with ZERO rows in activity_logs. Incident response could not say which key did it,
+ * or that it happened at all. In a legal vault a title ("Insolvência — Cliente X") carries the same
+ * confidentiality as the search string this module deliberately refuses to log, so an enumeration
+ * of all of them is exactly the event the trail must hold.
+ *
+ * The key gate is what makes it affordable rather than a per-page-load write: a browser session
+ * (JWT, no principal) is not audited here, so the dashboard's behaviour is byte-for-byte what it
+ * was, while every non-browser client this slice newly admitted is fully attributed. The gate lives
+ * HERE, once, so the routes cannot each re-decide it.
+ *
+ * `count`/`total`/`offset`/`limit` are recorded because the SHAPE of the paging is the harvest
+ * signal; the titles themselves never are.
+ */
+export async function auditKnowledgeBrowse(
+  ctx: KnowledgeCallContext,
+  op: 'collections' | 'list',
+  t0: number,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  if (!ctx.principal) return;
+  await auditKnowledge(ctx, op, 'ok', t0, extra);
+}
+
 /** Default page size for a capability search when the caller does not ask for one. */
 export const SEARCH_DEFAULT_LIMIT = 10;
 /**
  * A collection filter is applied AFTER the index query, because the FTS query has no collection
  * predicate and adding one would change the shape the agent tools already depend on. So a filtered
- * search over-fetches and narrows. The consequence is stated rather than hidden: for an org whose
- * matches for a term are dominated by other collections, a filtered search can under-report — it
- * is a relevance-ordered narrowing, not a `WHERE collection = ?` scan.
+ * search over-fetches and narrows. The consequence is stated rather than hidden — and it is stated
+ * in the CONTRACT too (shared/src/knowledge.ts, KnowledgeSearchRequest.collection), because it
+ * changes what a client gets back: for an org whose matches are dominated by other collections, a
+ * filtered search can UNDER-REPORT. It is a relevance-ordered narrowing, not a `WHERE` scan.
+ *
+ * COST NOTE: `index.search` itself over-fetches by 4x internally before its authority re-rank, so
+ * the ceiling below is rows ASKED FOR, not rows scanned — 500 here means up to 2000 rows with a
+ * snippet() computed on each. That 4x is why the ceiling is 500 and not larger.
  */
 const COLLECTION_OVERFETCH = 20;
 const COLLECTION_OVERFETCH_MAX = 500;
@@ -387,6 +425,8 @@ export interface KnowledgeDocumentView {
   sourceType?: string;
   language?: string;
   createdAt?: string;
+  /** The corpus's verbatim stamp when it is NOT RFC-3339 (see {@link createdAtFields}). */
+  createdAtRaw?: string;
   scope: 'org' | 'shared';
   contentMd: string;
 }
@@ -430,12 +470,29 @@ export async function readDocument(
     ...(doc.fm.sourceUrl ? { sourceUrl: doc.fm.sourceUrl } : {}),
     ...(doc.fm.sourceType ? { sourceType: doc.fm.sourceType } : {}),
     ...(doc.fm.language ? { language: doc.fm.language } : {}),
-    // A vault file written by any path this service owns always carries createdAt; a hand-placed
-    // or legacy corpus file may not, and the contract's IsoTimestamp would reject an empty string.
-    ...(doc.fm.createdAt ? { createdAt: doc.fm.createdAt } : {}),
+    ...createdAtFields(doc.fm.createdAt),
     scope: doc.scope,
     contentMd: doc.body,
   };
+}
+
+/**
+ * Split a vault frontmatter stamp into the contract's fields (E5 review F2). Every document this
+ * service writes carries an RFC-3339 `createdAt`, but the `_shared` corpus does NOT come from
+ * here: the offline importer preserves the SOURCE's stamp verbatim (api/scripts/migrate/knowledge/
+ * importer.ts), filling from mtime only when it is absent — so a legal corpus with date-only
+ * stamps ("2020-01-01") reaches this function unchanged. Passing that through produced an HTTP 200
+ * whose body FAILED its own KnowledgeDocumentResponse: `IsoTimestamp` is
+ * `z.string().datetime({ offset: true })`, which a date-only value does not satisfy.
+ *
+ * The guard is the CONTRACT SCHEMA ITSELF rather than a hand-rolled regex, so the two cannot drift.
+ * A stamp that does not validate is not silently dropped either — it moves to `createdAtRaw`, which
+ * the contract declares as a plain string for exactly this case. The client gets a body that always
+ * validates AND still sees what the corpus actually says.
+ */
+function createdAtFields(raw: string | undefined): { createdAt?: string; createdAtRaw?: string } {
+  if (!raw) return {};
+  return IsoTimestamp.safeParse(raw).success ? { createdAt: raw } : { createdAtRaw: raw.slice(0, 128) };
 }
 
 // --- Uploads (this slice) -------------------------------------------------------------------

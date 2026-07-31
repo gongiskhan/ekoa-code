@@ -173,8 +173,25 @@ export type KnowledgeSegment = z.infer<typeof KnowledgeSegment>;
  *  nothing else. No tenant field: there is no other partition to ask for. */
 export const KnowledgeSearchRequest = z.object({
   query: z.string().min(1).max(1_000),
+  /** Maximum hits RETURNED. With `collection` set it also bounds recall — see below. */
   limit: z.coerce.number().int().positive().max(50).optional(),
-  /** Narrow to one collection. Same segment grammar as the vault directory it names. */
+  /**
+   * Narrow to one collection. Same segment grammar as the vault directory it names.
+   *
+   * HONEST BEHAVIOUR, because it changes what you get back and a client cannot see it otherwise:
+   * this is a POST-FILTER over a relevance-ranked page, NOT a `WHERE collection = ?` scan. The
+   * lexical index has no collection predicate, and giving it one would change the shape the
+   * in-process agent tools already depend on. So the server fetches a bounded window of the
+   * best-scoring matches for `query` ACROSS the caller's collections and then keeps the ones in
+   * `collection`.
+   *
+   * The consequence: a collection whose matches are outranked by other collections can be
+   * UNDER-REPORTED, and `limit` is part of that bound. A document that loses to 40 competitors
+   * elsewhere returns 0 hits at `limit: 1` and 1 hit at `limit: 50`. Treat a filtered search as
+   * "the best matches for this query, restricted to this collection" — never as "every document in
+   * this collection matching this query". To enumerate a collection exhaustively, page
+   * `GET /api/v1/knowledge/documents?collection=…`, which IS a full scan.
+   */
   collection: KnowledgeSegment.optional(),
 });
 export type KnowledgeSearchRequest = z.infer<typeof KnowledgeSearchRequest>;
@@ -203,11 +220,21 @@ export type KnowledgeSearchResponse = z.infer<typeof KnowledgeSearchResponse>;
 export const KnowledgeDocParams = z.object({ collection: KnowledgeSegment, docId: KnowledgeSegment });
 export type KnowledgeDocParams = z.infer<typeof KnowledgeDocParams>;
 
-/** One document: the list summary a client already knows, plus the markdown body and the
- *  partition it was served from. */
+/**
+ * One document: the list summary a client already knows, plus the markdown body and the partition
+ * it was served from.
+ *
+ * `createdAtRaw` carries a creation stamp that is NOT RFC-3339, and it exists because the reserved
+ * `_shared` corpus is imported offline with the SOURCE's stamp preserved verbatim — a legal corpus
+ * routinely carries date-only values like "2020-01-01". `createdAt` (IsoTimestamp) is emitted only
+ * when the stamp actually validates; otherwise the verbatim text lands here instead, so the body a
+ * client validates is always contract-valid and nothing is silently dropped. Exactly one of the two
+ * is present when the document has a stamp at all.
+ */
 export const KnowledgeDocumentResponse = KnowledgeDocSummary.extend({
   contentMd: z.string(),
   scope: z.enum(['org', 'shared']),
+  createdAtRaw: z.string().max(128).optional(),
 });
 export type KnowledgeDocumentResponse = z.infer<typeof KnowledgeDocumentResponse>;
 
@@ -240,6 +267,9 @@ export const knowledgeEndpoints = {
     method: 'GET',
     path: '/api/v1/knowledge/documents/:collection/:docId',
     auth: 'user-or-key',
+    /** The route safeParses `req.params` against this and answers 400 on a miss, so the segment
+     *  grammar and the 400 are both contract facts rather than route-only ones (E6 review F3). */
+    params: KnowledgeDocParams,
     response: KnowledgeDocumentResponse,
   },
   createDocument: {

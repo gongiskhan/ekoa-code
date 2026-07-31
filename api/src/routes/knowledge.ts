@@ -36,7 +36,7 @@ import {
   listSources, addSource, deleteSource, updateSource, getVisibleSource, sourceView, KnowledgeError,
   ingestDocument, listDocuments, listCollections, deleteDocument,
   createUpload, listUploads, deleteUpload, reindexOrg, indexStatus,
-  searchDocuments, readDocument, auditKnowledgeDenied, type KnowledgeCallContext,
+  searchDocuments, readDocument, auditKnowledgeDenied, auditKnowledgeBrowse, type KnowledgeCallContext,
 } from '../knowledge/service.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 
@@ -83,9 +83,18 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
   // requireAuth below; everything after it is platform-session-only.
   // =============================================================================================
 
+  /**
+   * The two BROWSE reads. They are audited only for a KEY-admitted caller (auditKnowledgeBrowse
+   * owns that rule): a leaked key paging `/documents?limit=500&offset=N` harvests every document
+   * title and collection in the org, and that must not be invisible to incident response — while a
+   * dashboard page load, which is the same call under a JWT, must not write a row (E5 review F1).
+   */
   r.get('/collections', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const t0 = Date.now();
     try {
-      res.json({ items: await listCollections(actorOf(req)) });
+      const items = await listCollections(actorOf(req));
+      await auditKnowledgeBrowse(ctxOf(req, res), 'collections', t0, { count: items.length });
+      res.json({ items });
     } catch (e) {
       if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
       throw e;
@@ -93,10 +102,20 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
   });
 
   r.get('/documents', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const t0 = Date.now();
     const q = DocumentsQuery.safeParse(req.query);
     if (!q.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: q.error.issues });
     try {
-      res.json(await listDocuments(actorOf(req), q.data));
+      const page = await listDocuments(actorOf(req), q.data);
+      // The paging SHAPE is the harvest signal; the titles it returned are never recorded.
+      await auditKnowledgeBrowse(ctxOf(req, res), 'list', t0, {
+        count: page.items.length,
+        total: page.total,
+        ...(q.data.offset !== undefined ? { offset: q.data.offset } : {}),
+        ...(q.data.limit !== undefined ? { limit: q.data.limit } : {}),
+        ...(q.data.collection ? { collection: q.data.collection.slice(0, 128) } : {}),
+      });
+      res.json(page);
     } catch (e) {
       if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
       throw e;
@@ -108,9 +127,8 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
    * service; `orgId` is not a field of KnowledgeSearchRequest, and zod strips unknown keys, so a
    * body/query/header naming one changes nothing about which partition is searched.
    *
-   * These two routes (unlike the two browse routes above, which pre-date the capability surface
-   * and are unchanged apart from their admission) carry the per-call audit: one activity row and
-   * one structured console line, refusals included.
+   * Audited on EVERY call regardless of credential (one activity row + one structured console
+   * line, refusals included) — unlike the two browse routes above, whose row is key-gated.
    */
   r.post('/search', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
     const body = KnowledgeSearchRequest.safeParse(req.body);

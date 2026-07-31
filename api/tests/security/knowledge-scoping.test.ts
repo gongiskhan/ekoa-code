@@ -52,7 +52,9 @@ const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` 
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 
 const MISSING_404 = JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Não encontrado.' } });
-const SHARED_403 = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'A coleção partilhada é só de leitura.' } });
+// E5 review F6: the message names the actual invariant (WHO is calling), so it reads correctly on
+// a refused READ as well as on a refused write — "é só de leitura" did not.
+const SHARED_403 = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'A coleção partilhada não pode ser a organização do pedido.' } });
 
 const api = (p: string, t: string, init: RequestInit = {}) =>
   fetch(`http://127.0.0.1:${port}${p}`, { ...init, headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json', ...(init.headers ?? {}) } });
@@ -338,7 +340,7 @@ describe('knowledge scoping (slice E5)', () => {
     await ingest(tA, 'processos', 'Só do A', 'SEGREDO_DE_A token AAAUNICOA');
 
     // Contract-level refusal on search…
-    for (const collection of ['../orgA/processos', '..', '.', 'a/b', '/etc', 'a b', 'x'.repeat(101)]) {
+    for (const collection of ['../orgA/processos', '..', '.', 'a/b', '/etc', 'a\u0000b', 'x'.repeat(101)]) {
       const res = await search(tB, { query: 'aaaunicoa', collection });
       expect(res.status, collection).toBe(400);
       expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
