@@ -208,6 +208,13 @@ export const automationRuns = new Store<Doc>('automation_runs');
  * after the reap starts a SECOND run. Any future reaper must therefore key on `at` with a window
  * comfortably longer than a client would keep retrying (days, not hours) and must be introduced
  * with that risk stated, not as a silent cleanup job.
+ *
+ * The SYMMETRIC warning, for whoever takes up RUN retention: the wire contract tells a client
+ * that a 404 from the GET after a 200 replay means "POST again with the same key". That loop
+ * terminates only because nothing deletes runs today (there is no automationRuns delete path in
+ * api/src). Add a run reaper or a delete endpoint and the mapping outlives the run it names, so
+ * every retry returns the same dead runId and the documented loop never converges. Reaping runs
+ * therefore requires reaping their mappings in the same sweep, or changing that contract line.
  */
 export interface RunIdempotencyDoc extends Doc {
   /** The run the FIRST accepted call minted for this key. */
