@@ -45,16 +45,25 @@ export const processIo: Io = {
  * exit code is what the shell reports. Any other stream error is left to blow up, because it is a
  * real fault and hiding it would be the same mistake in the other direction.
  *
+ * The two streams are NOT symmetric, and treating them as such is a data-loss bug. STDOUT carries
+ * the result, so a reader that closed early already got what it asked for and EXIT_OK is honest.
+ * STDERR is only written on the FAILURE path, so exiting 0 there reports a failed command as a
+ * success - and the spool drain deletes a capture on exit 0, so `cortex memory write ... 2>&1 |
+ * head` would discard a note that never landed. A stderr EPIPE therefore swallows the error and
+ * leaves whatever exit code the run already determined untouched.
+ *
  * Installed from the binary entry point only - importing this module must not attach handlers to
  * a host process's streams.
  */
 export function installPipeGuard(exit: (code: number) => never = process.exit.bind(process)): void {
-  for (const stream of [process.stdout, process.stderr]) {
-    stream.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EPIPE') exit(EXIT_OK);
-      else throw error;
-    });
-  }
+  process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EPIPE') exit(EXIT_OK);
+    else throw error;
+  });
+  process.stderr.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EPIPE') throw error;
+    // Swallow only: the command's own outcome still decides the exit code.
+  });
 }
 
 /** The success document every `--json` invocation prints. */
