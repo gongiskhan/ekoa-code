@@ -130,6 +130,88 @@ describe('exit codes', () => {
     expect(await main([], { io: bare.io, env: {} })).toBe(2);
     expect(bare.out).toEqual([]);
   });
+
+  /**
+   * E7 review F4: exit 2 promises "nothing was sent". `memory export` used to issue the request and
+   * only then refuse, so a pure argv contradiction cost a full vault export - served, audited and
+   * charged against the key's rate window - under a code claiming no call was made.
+   */
+  it('F4: every exit-2 refusal happens BEFORE the request, export included', async () => {
+    const cases: string[][] = [
+      ['memory', 'export'], // no --out
+      ['memory', 'export', '--out', '-', '--json'], // argv contradiction: raw bytes vs one JSON doc
+      ['memory', 'export', '--out', join(dir, 'no-such-dir', 'x.tar'), '--json'], // knowable up front
+    ];
+    for (const argv of cases) {
+      const cap = capture();
+      const { calls, fetchImpl } = stub({});
+      expect(await main(argv, { io: cap.io, env: ENV, fetchImpl }), argv.join(' ')).toBe(2);
+      expect(calls, `${argv.join(' ')} must not reach the server`).toHaveLength(0);
+    }
+  });
+
+  it('F4: an export that ARRIVED and could not be written is exit 1, not a "nothing was sent" 2', async () => {
+    // The directory exists (so the pre-check passes) but the target is a directory: the export is
+    // served and only the local write fails. That is a runtime failure, and the message says so.
+    const cap = capture();
+    const tar = Buffer.from('ustar-ish');
+    const fetchImpl = (async () => new Response(tar, { status: 200, headers: { 'content-type': 'application/x-tar' } })) as unknown as typeof fetch;
+    const code = await main(['memory', 'export', '--out', dir, '--json'], { io: cap.io, env: ENV, fetchImpl });
+    expect(code).toBe(1);
+    const doc = JSON.parse(cap.err.join('\n')) as { error: { code: string; message: string } };
+    expect(doc.error.code).toBe('WRITE_FAILED');
+    expect(doc.error.message).toContain('was exported');
+  });
+});
+
+/**
+ * E7 review F6 + F7: two ways the CLI could answer a DIFFERENT question than it was asked and
+ * still exit 0 - unparseable stdout under `--json`, and a global flag eaten out of the caller's
+ * data after the end-of-options marker.
+ */
+describe('argv and output contracts', () => {
+  it('F6: --json help is a JSON document on stdout, on every help path', async () => {
+    for (const argv of [['--help', '--json'], ['help', '--json'], ['memory', '--help', '--json'], ['--version', '--json']]) {
+      const cap = capture();
+      expect(await main(argv, { io: cap.io, env: {} }), argv.join(' ')).toBe(0);
+      expect(cap.out, argv.join(' ')).toHaveLength(1);
+      const doc = JSON.parse(cap.out[0] as string) as { ok: boolean; command: string; help?: string; version?: string };
+      expect(doc.ok).toBe(true);
+      expect(doc.help ?? doc.version).toBeTruthy();
+    }
+    // Human mode is unchanged: plain text, not JSON.
+    const human = capture();
+    await main(['memory', '--help'], { io: human.io, env: {} });
+    expect(() => JSON.parse(human.out[0] as string)).toThrow();
+  });
+
+  it('F7: `--` ends option parsing, so a flag-shaped VALUE is data, not a global flag', async () => {
+    // Before the fix this printed group help and exited 0 having searched for nothing.
+    const dashH = capture();
+    const searched = stub({ hits: [] });
+    expect(await main(['memory', 'search', '--', '-h'], { io: dashH.io, env: ENV, fetchImpl: searched.fetchImpl })).toBe(0);
+    expect(searched.calls, 'the search must actually run').toHaveLength(1);
+    expect(JSON.parse(searched.calls[0]?.init.body as string)).toEqual({ query: '-h' });
+    expect(dashH.out.join('\n')).not.toContain('cortex memory <command>');
+
+    // The same for --json and --help as literal search terms.
+    for (const term of ['--json', '--help']) {
+      const cap = capture();
+      const run = stub({ hits: [] });
+      expect(await main(['memory', 'search', '--', term], { io: cap.io, env: ENV, fetchImpl: run.fetchImpl }), term).toBe(0);
+      expect(run.calls, term).toHaveLength(1);
+      expect(JSON.parse(run.calls[0]?.init.body as string)).toEqual({ query: term });
+      // `--json` after `--` is DATA, so the output stays human-readable.
+      expect(cap.out.join('\n')).toBe('no matches');
+    }
+
+    // A global flag BEFORE the marker still works, in any position.
+    const before = capture();
+    const flagged = stub({ hits: [] });
+    expect(await main(['memory', 'search', '--json', '--', '-h'], { io: before.io, env: ENV, fetchImpl: flagged.fetchImpl })).toBe(0);
+    expect(JSON.parse(before.out[0] as string)).toMatchObject({ ok: true, command: 'memory search' });
+    expect(JSON.parse(flagged.calls[0]?.init.body as string)).toEqual({ query: '-h' });
+  });
 });
 
 describe('--json output', () => {

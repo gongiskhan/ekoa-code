@@ -4,11 +4,7 @@
  * a missing value or a repeated single-valued flag is a USAGE failure (exit 2).
  */
 
-/** Raised for anything the caller got wrong. Always exit code 2. */
-export class UsageError extends Error {
-  override readonly name = 'UsageError';
-  readonly code = 'USAGE';
-}
+import { UsageError } from './errors.js';
 
 export interface FlagSpec {
   /** Flags that take no value. */

@@ -3,9 +3,10 @@
  *
  * Every call goes through `client.call(<operationId>, slots)`. There is no HTTP in this file.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import { intOption, noExtraPositionals, parseArgs, UsageError, valueOrPositional, type ParsedArgs } from '../args.js';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+import { intOption, noExtraPositionals, parseArgs, valueOrPositional, type ParsedArgs } from '../args.js';
+import { RuntimeFailure, UsageError } from '../errors.js';
 import type { CommandGroup, Ctx } from '../context.js';
 import { pad, printJson, shortTime } from '../output.js';
 
@@ -164,19 +165,35 @@ async function search(ctx: Ctx, args: ParsedArgs): Promise<void> {
 async function exportVault(ctx: Ctx, args: ParsedArgs): Promise<void> {
   noExtraPositionals(args, 0);
   const out = args.values.get('out');
+
+  // EVERY usage refusal is decided HERE, before the request. Exit 2 promises "nothing was sent",
+  // and an export is not a free call: the server builds the whole vault, audits it, and spends the
+  // key's rate window. A pure argv contradiction must never cost that.
   if (out === undefined) throw new UsageError('memory export needs --out <path> (or --out - for stdout)');
+  if (out === '-' && ctx.json) {
+    throw new UsageError('--out - streams raw tar bytes and cannot be combined with --json');
+  }
+  if (out !== '-' && !existsSync(dirname(resolve(out)))) {
+    throw new UsageError(`cannot write --out ${out}: the directory does not exist`);
+  }
+
   const res = await ctx.client.call('memvault.exportVault', {});
   const bytes = res.data;
 
   if (out === '-') {
-    if (ctx.json) throw new UsageError('--out - streams raw tar bytes and cannot be combined with --json');
     ctx.io.outBytes(bytes);
     return;
   }
   try {
     writeFileSync(out, bytes);
   } catch (cause) {
-    throw new UsageError(`cannot write --out ${out}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    // The export HAPPENED - it was served, audited and metered - and only the local write failed.
+    // Calling that a usage error would claim nothing was sent, which is a lie about the server's
+    // state, so it is an ordinary runtime failure: exit 1.
+    throw new RuntimeFailure(
+      'WRITE_FAILED',
+      `the vault was exported (${bytes.length} bytes) but could not be written to ${out}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
   }
   if (ctx.json) {
     printJson(ctx.io, { ok: true, command: 'memory export', status: res.status, out, bytes: bytes.length });

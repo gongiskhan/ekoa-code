@@ -10,8 +10,23 @@
  * in order, media type, timeout - come from `generated/operations.ts`. Both are generated from
  * `docs/openapi/cortex.v1.json` and diffed by the drift gate, so this file can never drift from
  * the contract without the build failing.
+ *
+ * TWO DELIBERATE ASYMMETRIES, stated so neither reads as an oversight:
+ *
+ *  - FAILURE bodies are validated against the shared `ErrorEnvelope` zod schema; SUCCESS bodies
+ *    are NOT validated against their schema, they are parsed and returned under the generated
+ *    type. The envelope is one small shape every route shares and the client must interpret
+ *    (code/message/details), so validating it is cheap and load-bearing; a success body would need
+ *    all 54 components carried as runtime zod, which `shared/` exports but which would make this
+ *    client a second copy of the contract rather than a reader of it. The consequence is honest:
+ *    a server that answered a success status with a wrong-shaped body would surface as a
+ *    downstream TypeError, not as a clean protocol error here.
+ *  - Every message this file constructs is SCRUBBED of the caller's key (see redact.ts); the
+ *    `cause` it attaches to a network error is NOT - it is the raw underlying error, kept for
+ *    programmatic inspection and never printed by the CLI.
  */
 import { ErrorEnvelope } from '@ekoa/shared';
+import { makeRedactor, redactValue } from './redact.js';
 import type { operations as Ops } from './generated/cortex-v1.js';
 import { OPERATIONS, type OperationId, type OperationSpec } from './generated/operations.js';
 
@@ -138,16 +153,24 @@ export class CortexTimeoutError extends Error {
   }
 }
 
-/** The request never produced a response (DNS, connection refused, TLS, socket reset). */
+/**
+ * The request never produced a response (DNS, connection refused, TLS, socket reset, a header the
+ * transport refused).
+ *
+ * `detail` is the underlying failure's text ALREADY SCRUBBED by the wrapper - undici quotes a
+ * rejected header VALUE in its message, so an unscrubbed detail can carry the caller's key. The
+ * raw `cause` is kept for programmatic inspection and must not be printed.
+ */
 export class CortexNetworkError extends Error {
   override readonly name = 'CortexNetworkError';
   readonly code = 'NETWORK';
   constructor(
     readonly operationId: string,
     readonly url: string,
-    override readonly cause: unknown,
+    readonly detail: string,
+    override readonly cause?: unknown,
   ) {
-    super(`${operationId}: request to ${url} failed: ${describe(cause)}`);
+    super(`${operationId}: request to ${url} failed: ${detail}`);
   }
 }
 
@@ -176,13 +199,17 @@ const ERROR_BODY_EXCERPT_MAX = 300;
 
 export class CortexClient {
   private readonly baseUrl: string;
-  private readonly apiKey: string;
+  /** `#`-private, not TS-private: TS privacy is erased and `util.inspect` would print the key. */
+  readonly #apiKey: string;
+  /** Scrubs the key out of every message this client constructs. */
+  readonly #redact: (text: string) => string;
   private readonly clientTag: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: CortexClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
-    this.apiKey = opts.apiKey;
+    this.#apiKey = opts.apiKey;
+    this.#redact = makeRedactor(opts.apiKey);
     this.clientTag = opts.clientTag;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   }
@@ -204,11 +231,13 @@ export class CortexClient {
     };
     const url = this.baseUrl + buildPath(spec.path, slots.path) + buildQuery(slots.query);
 
+    // Caller headers FIRST: the credential, the trace tag and the contract-derived accept are
+    // written over them, so no per-call header can replace the authorization this client sends.
     const headers: Record<string, string> = {
-      authorization: `Bearer ${this.apiKey}`,
+      ...(slots.headers ?? {}),
+      authorization: `Bearer ${this.#apiKey}`,
       'x-client': this.clientTag,
       accept: spec.mediaType,
-      ...(slots.headers ?? {}),
     };
     if (slots.body !== undefined) headers['content-type'] = 'application/json';
 
@@ -236,7 +265,9 @@ export class CortexClient {
     } catch (cause) {
       if (timedOut) throw new CortexTimeoutError(id, timeoutMs);
       if (slots.signal?.aborted) throw new CortexTimeoutError(id, timeoutMs);
-      throw new CortexNetworkError(id, url, cause);
+      // The transport's own message can quote a rejected header value verbatim - scrub before it
+      // becomes an error message, i.e. before anything can print it.
+      throw new CortexNetworkError(id, this.#redact(url), this.#redact(describe(cause)), cause);
     } finally {
       clearTimeout(timer);
       slots.signal?.removeEventListener('abort', onCallerAbort);
@@ -264,7 +295,10 @@ export class CortexClient {
    * anything else is reported as a protocol violation rather than silently re-shaped.
    */
   private async refusal(id: OperationId, res: Response): Promise<CortexApiError> {
-    const text = await res.text().catch(() => '');
+    // SCRUB BEFORE EXCERPTING, in that order: truncating first could cut the key in half and leave
+    // a usable prefix in the log, and a body that reflects our request headers is exactly the case
+    // this guards. An origin is caller-supplied and unverified - treat its bytes as hostile.
+    const text = this.#redact(await res.text().catch(() => ''));
     let parsed: unknown;
     try {
       parsed = JSON.parse(text) as unknown;
@@ -290,8 +324,8 @@ export class CortexClient {
     return new CortexApiError(
       res.status,
       envelope.data.error.code,
-      envelope.data.error.message,
-      envelope.data.error.details,
+      this.#redact(envelope.data.error.message),
+      redactValue(this.#redact, envelope.data.error.details),
       id,
     );
   }
@@ -304,7 +338,7 @@ export class CortexClient {
       throw new CortexApiError(
         res.status,
         'INVALID_RESPONSE',
-        `HTTP ${res.status} success body was not JSON: ${excerpt(text)}`,
+        `HTTP ${res.status} success body was not JSON: ${excerpt(this.#redact(text))}`,
         undefined,
         id,
       );

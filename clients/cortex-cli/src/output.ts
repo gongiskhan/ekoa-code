@@ -33,6 +33,30 @@ export const processIo: Io = {
   },
 };
 
+/**
+ * Survive a reader that walks away.
+ *
+ * `cortex memory export --out - | tar -tf -` and `... --json | head` are documented patterns, and
+ * both close the read end early. Without this, the write raises EPIPE on a stream with no `error`
+ * listener, which is an uncaught exception: a raw Node stack on stderr and an exit code that never
+ * came from `main()` - the exact thing the three-code contract above promises cannot happen.
+ *
+ * The conventional shape for a CLI is to stop quietly: the reader got what it wanted, and its own
+ * exit code is what the shell reports. Any other stream error is left to blow up, because it is a
+ * real fault and hiding it would be the same mistake in the other direction.
+ *
+ * Installed from the binary entry point only - importing this module must not attach handlers to
+ * a host process's streams.
+ */
+export function installPipeGuard(exit: (code: number) => never = process.exit.bind(process)): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EPIPE') exit(EXIT_OK);
+      else throw error;
+    });
+  }
+}
+
 /** The success document every `--json` invocation prints. */
 export interface JsonSuccess {
   ok: true;

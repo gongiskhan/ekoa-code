@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import type { Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +80,38 @@ function cortex(args: string[], opts: { env?: Record<string, string | undefined>
     });
     if (opts.stdin !== undefined) child.stdin.write(opts.stdin);
     child.stdin.end();
+  });
+}
+
+/**
+ * Run the real binary under `sh -c`, so a real SHELL PIPELINE can be exercised. Resolves with the
+ * shell's own exit code plus whatever the child wrote to the shared stderr.
+ */
+function shell(script: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, CORTEX_BASE_URL: baseUrl, CORTEX_API_KEY: apiKey };
+    const child = spawn('sh', ['-c', script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on('data', (c: Buffer) => out.push(c));
+    child.stderr.on('data', (c: Buffer) => err.push(c));
+    child.on('error', reject);
+    child.on('close', (code) =>
+      resolve({ code: code ?? -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }),
+    );
+  });
+}
+
+/** Spawn the binary and CLOSE THE READ END immediately - a reader that walks away, deterministically. */
+function cortexWithClosedStdout(args: string[]): Promise<{ code: number; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, CORTEX_BASE_URL: baseUrl, CORTEX_API_KEY: apiKey };
+    const child = spawn(process.execPath, [BIN, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const err: Buffer[] = [];
+    child.stderr.on('data', (c: Buffer) => err.push(c));
+    child.stdout.destroy(); // before the child has even finished booting
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? -1, stderr: Buffer.concat(err).toString('utf8') }));
   });
 }
 
@@ -336,6 +368,110 @@ describe('credentials, exit codes and the audit trail', () => {
       const res = await cortex(argv);
       expect(res.code, argv.join(' ')).toBe(2);
     }
+  });
+
+  /**
+   * E7 review F1, through the process boundary and against a HOSTILE ORIGIN. `CORTEX_BASE_URL` is
+   * caller-supplied and deliberately unvalidated, so a typo'd or malicious origin receives the
+   * `Authorization: Bearer <key>` header on the FIRST call and can echo it straight back; the CLI
+   * used to quote that body into an error message and print it on stderr.
+   */
+  it('F1: an origin that reflects the auth header never gets the key printed back out', async () => {
+    const reflector = createServer((req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'upstream exploded', youSent: req.headers }));
+    });
+    await new Promise<void>((r) => reflector.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(reflector.address() as { port: number }).port}`;
+    try {
+      for (const argv of [
+        ['memory', 'list', '--json'],
+        ['memory', 'list'],
+      ]) {
+        const res = await cortex(argv, { env: { CORTEX_BASE_URL: origin } });
+        expect(res.code, argv.join(' ')).toBe(1);
+        const printed = `${res.stdout}${res.stderr}`;
+        expect(printed, argv.join(' ')).not.toContain(apiKey);
+        expect(printed, argv.join(' ')).not.toContain(apiKey.slice(8, 24));
+        expect(res.stderr).toContain('<redacted>'); // the reflection is reported, just defused
+      }
+    } finally {
+      await new Promise<void>((r) => reflector.close(() => r()));
+    }
+  });
+
+  /**
+   * E7 review F2, against the REAL transport: undici's header validation quotes the value it
+   * rejected, so a key carrying an interior newline (a line-wrapped secret, a CRLF from a
+   * Windows-authored env file) printed verbatim. `requiredEnv` only trims the ends, by design.
+   */
+  it('F2: a key with an interior newline is refused WITHOUT printing the key', async () => {
+    const wrapped = 'ekoa_gk_SUPERSECRET\nVALUE123';
+    for (const argv of [
+      ['memory', 'list', '--json'],
+      ['memory', 'list'],
+    ]) {
+      const res = await cortex(argv, { env: { CORTEX_API_KEY: wrapped } });
+      expect(res.code, argv.join(' ')).toBe(1);
+      expect(res.stderr, argv.join(' ')).not.toContain('SUPERSECRET');
+      expect(res.stdout).not.toContain('SUPERSECRET');
+      expect(res.stderr).toContain('<redacted>');
+    }
+  });
+
+  /**
+   * E7 review F3: the pipe patterns SKILL.md documents. An early-closing reader used to raise EPIPE
+   * on a stream with no error listener - an uncaught exception, i.e. a raw Node stack on stderr and
+   * an exit code that never came from main(), bypassing the three-code contract entirely.
+   */
+  it('F3: a reader that closes early ends the process quietly, with no stack trace', async () => {
+    const bin = JSON.stringify(BIN);
+    const node = JSON.stringify(process.execPath);
+
+    // The exact pipeline SKILL.md documents, on the binary (tar) path.
+    const tarPipe = await shell(`${node} ${bin} memory export --out - | head -c 10`);
+    expect(tarPipe.stderr).not.toMatch(/EPIPE|Error:|at .*\(/);
+    expect(tarPipe.code).toBe(0);
+
+    // …and on the --json path, which pipes into head just as often.
+    const jsonPipe = await shell(`${node} ${bin} memory list --json | head -c 20`);
+    expect(jsonPipe.stderr).not.toMatch(/EPIPE|Error:|at .*\(/);
+    expect(jsonPipe.code).toBe(0);
+
+    // Deterministic version of the same failure: the read end is gone before the first write.
+    for (const argv of [
+      ['memory', 'export', '--out', '-'],
+      ['memory', 'list', '--json'],
+      ['memory', 'list'],
+    ]) {
+      const closed = await cortexWithClosedStdout(argv);
+      expect(closed.stderr, argv.join(' ')).not.toMatch(/EPIPE|Error:|at .*\(/);
+      expect(closed.code, argv.join(' ')).toBe(0);
+    }
+  });
+
+  /** E7 review F4, against the real server: exit 2 means the vault was never exported. */
+  it('F4: export refuses a contradictory invocation before spending a real export', async () => {
+    const before = await activityLogs.find({ category: 'memvault' } as never);
+    const exportsBefore = before.filter((r) => (r as unknown as { type: string }).type === 'memvault_export').length;
+
+    for (const argv of [
+      ['memory', 'export'],
+      ['memory', 'export', '--out', '-', '--json'],
+      ['memory', 'export', '--out', join(workDir, 'nope', 'x.tar'), '--json'],
+    ]) {
+      const res = await cortex(argv);
+      expect(res.code, argv.join(' ')).toBe(2);
+    }
+
+    const after = await activityLogs.find({ category: 'memvault' } as never);
+    const exportsAfter = after.filter((r) => (r as unknown as { type: string }).type === 'memvault_export').length;
+    expect(exportsAfter, 'no export may have been served for a usage refusal').toBe(exportsBefore);
+
+    // And the write-failure case really did reach the server, and is classified as exit 1.
+    const onDir = await cortex(['memory', 'export', '--out', workDir, '--json']);
+    expect(onDir.code).toBe(1);
+    expect(JSON.parse(onDir.stderr)).toMatchObject({ ok: false, error: { code: 'WRITE_FAILED' } });
   });
 
   it('every call is attributed to the KEY and tagged with the trace-only X-Client header', async () => {

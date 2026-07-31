@@ -7,13 +7,14 @@
  * this repo.
  */
 import { readFileSync } from 'node:fs';
-import { UsageError } from './args.js';
 import { CortexApiError, CortexClient, CortexNetworkError, CortexTimeoutError } from './client.js';
-import { WatchTimeout, automationsCommand } from './commands/automations.js';
+import { automationsCommand } from './commands/automations.js';
 import { knowledgeCommand } from './commands/knowledge.js';
 import { memoryCommand } from './commands/memory.js';
 import type { CommandGroup } from './context.js';
-import { EXIT_API_ERROR, EXIT_OK, EXIT_USAGE, printJsonError, processIo, type Io } from './output.js';
+import { RuntimeFailure, UsageError } from './errors.js';
+import { EXIT_API_ERROR, EXIT_OK, EXIT_USAGE, printJson, printJsonError, processIo, type Io } from './output.js';
+import { makeRedactor, redactValue } from './redact.js';
 
 const GROUPS: readonly CommandGroup[] = [memoryCommand, knowledgeCommand, automationsCommand];
 
@@ -61,27 +62,40 @@ export interface MainOptions {
 export async function main(argv: readonly string[], opts: MainOptions = {}): Promise<number> {
   const io = opts.io ?? processIo;
   const env = opts.env ?? process.env;
-  const json = argv.includes('--json');
-  const rest = argv.filter((a) => a !== '--json');
-  const wantsHelp = rest.includes('--help') || rest.includes('-h');
-  const [groupName, ...groupArgv] = rest.filter((a) => a !== '--help' && a !== '-h');
+
+  // Global flags are recognised anywhere - EXCEPT after `--`. Everything from the end-of-options
+  // marker onwards belongs to the command as data (`cortex memory search -- -h` searches for the
+  // literal "-h"), so it is sliced off before the scan and handed through untouched; stripping a
+  // flag out of it would answer a different question under a success code.
+  const cut = argv.indexOf('--');
+  const head = cut === -1 ? [...argv] : argv.slice(0, cut);
+  const tail = cut === -1 ? [] : argv.slice(cut);
+
+  const json = head.includes('--json');
+  const wantsHelp = head.includes('--help') || head.includes('-h');
+  const [groupName, ...groupArgv] = [
+    ...head.filter((a) => a !== '--json' && a !== '--help' && a !== '-h'),
+    ...tail,
+  ];
+
+  /** Help is OUTPUT, so under --json it must be a JSON document like everything else on stdout. */
+  const emitHelp = (command: string, text: string): number => {
+    if (json) printJson(io, { ok: true, command, help: text });
+    else io.out(text);
+    return EXIT_OK;
+  };
 
   if (groupName === undefined) {
-    if (wantsHelp) {
-      io.out(helpText());
-      return EXIT_OK;
-    }
-    // Help on STDERR: a bare invocation is a usage failure, and stdout stays parseable.
+    if (wantsHelp) return emitHelp('help', helpText());
+    // A bare invocation is a usage failure: help goes to stderr so stdout stays parseable.
     if (json) printJsonError(io, 'cortex', { code: 'USAGE', message: 'no group given; see cortex --help' });
     else io.err(helpText());
     return EXIT_USAGE;
   }
-  if (groupName === 'help') {
-    io.out(helpText());
-    return EXIT_OK;
-  }
+  if (groupName === 'help') return emitHelp('help', helpText());
   if (groupName === '--version' || groupName === 'version') {
-    io.out(json ? JSON.stringify({ ok: true, command: 'version', version: version() }, null, 2) : version());
+    if (json) printJson(io, { ok: true, command: 'version', version: version() });
+    else io.out(version());
     return EXIT_OK;
   }
 
@@ -94,12 +108,14 @@ export async function main(argv: readonly string[], opts: MainOptions = {}): Pro
     }
     return EXIT_USAGE;
   }
-  if (wantsHelp) {
-    io.out(group.usage);
-    return EXIT_OK;
-  }
+  if (wantsHelp) return emitHelp(`${group.name} help`, group.usage);
 
   const command = `${group.name} ${groupArgv[0] ?? ''}`.trim();
+  // The LAST line of defence for the credential: everything this invocation prints on failure goes
+  // through report(), so the scrubber is built here, from the configured key, and applied to every
+  // message regardless of which layer raised it (client.ts scrubs its own too - two independent
+  // passes, because one missed message is one leaked key).
+  const redact = makeRedactor(env.CORTEX_API_KEY);
   try {
     const client = new CortexClient({
       baseUrl: requiredEnv(env, 'CORTEX_BASE_URL'),
@@ -110,7 +126,7 @@ export async function main(argv: readonly string[], opts: MainOptions = {}): Pro
     await group.run({ client, json, io }, groupArgv);
     return EXIT_OK;
   } catch (error) {
-    return report(io, json, command, error, group);
+    return report(io, json, command, error, group, redact);
   }
 }
 
@@ -122,12 +138,19 @@ function requiredEnv(env: NodeJS.ProcessEnv, name: string): string {
   return value.trim();
 }
 
-/** One place where every failure becomes an exit code + a message on stderr. */
-function report(io: Io, json: boolean, command: string, error: unknown, group: CommandGroup): number {
+/** One place where every failure becomes an exit code + a scrubbed message on stderr. */
+function report(
+  io: Io,
+  json: boolean,
+  command: string,
+  error: unknown,
+  group: CommandGroup,
+  redact: (text: string) => string,
+): number {
   if (error instanceof UsageError) {
-    if (json) printJsonError(io, command, { code: error.code, message: error.message });
+    if (json) printJsonError(io, command, { code: error.code, message: redact(error.message) });
     else {
-      io.err(`error: ${error.message}`);
+      io.err(`error: ${redact(error.message)}`);
       io.err('');
       io.err(group.usage);
     }
@@ -137,22 +160,22 @@ function report(io: Io, json: boolean, command: string, error: unknown, group: C
     if (json) {
       printJsonError(io, command, {
         code: error.code,
-        message: error.message,
+        message: redact(error.message),
         status: error.status,
-        ...(error.details === undefined ? {} : { details: error.details }),
+        ...(error.details === undefined ? {} : { details: redactValue(redact, error.details) }),
       });
     } else {
-      io.err(`error: ${error.code} (HTTP ${error.status}): ${error.message}`);
+      io.err(`error: ${error.code} (HTTP ${error.status}): ${redact(error.message)}`);
     }
     return EXIT_API_ERROR;
   }
-  if (error instanceof CortexTimeoutError || error instanceof CortexNetworkError || error instanceof WatchTimeout) {
-    if (json) printJsonError(io, command, { code: error.code, message: error.message });
-    else io.err(`error: ${error.code}: ${error.message}`);
+  if (error instanceof CortexTimeoutError || error instanceof CortexNetworkError || error instanceof RuntimeFailure) {
+    if (json) printJsonError(io, command, { code: error.code, message: redact(error.message) });
+    else io.err(`error: ${error.code}: ${redact(error.message)}`);
     return EXIT_API_ERROR;
   }
   const message = error instanceof Error ? error.message : String(error);
-  if (json) printJsonError(io, command, { code: 'UNEXPECTED', message });
-  else io.err(`error: ${message}`);
+  if (json) printJsonError(io, command, { code: 'UNEXPECTED', message: redact(message) });
+  else io.err(`error: ${redact(message)}`);
   return EXIT_API_ERROR;
 }

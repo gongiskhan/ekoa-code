@@ -18,6 +18,7 @@ const eslintConfig = defineConfig([
           // deep escapes (../../../api/src/x) at any depth without false-positiving on `@/lib/api`.
           patterns: [
             { group: ["**/api/src", "**/api/src/**", "**/api/dist", "**/api/dist/**", "@ekoa/api", "@ekoa/api/**"], message: "web/ must not import from api/ (FIXED-1)." },
+            { group: ["**/clients/*/src/**", "**/clients/*/dist/**", "**/clients/*/bin/**", "@ekoa/cortex-cli", "@ekoa/cortex-cli/**"], message: "web/ must not import from clients/ — the dashboard is not a consumer of the CLI (the root .eslintrc.cjs owns the other three edges; web/ self-lints, so this edge can only be enforced here)." },
           ],
         },
       ],

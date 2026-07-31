@@ -3,7 +3,8 @@
  * document, browse collections and documents. Ingestion is deliberately not on the key-reachable
  * surface, so there is no write subcommand to write.
  */
-import { intOption, noExtraPositionals, parseArgs, positional, UsageError, valueOrPositional, type ParsedArgs } from '../args.js';
+import { intOption, noExtraPositionals, parseArgs, positional, valueOrPositional, type ParsedArgs } from '../args.js';
+import { UsageError } from '../errors.js';
 import type { CommandGroup, Ctx } from '../context.js';
 import { pad, printJson } from '../output.js';
 

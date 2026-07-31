@@ -22,6 +22,12 @@ module.exports = {
     '**/*.js',
     '**/*.cjs',
     '**/*.mjs',
+    // …EXCEPT the consumer packages' shipped .mjs: clients/*/bin holds the executable shim and
+    // clients/*/scripts the client generator + drift gate. They are ordinary source, and the
+    // consumer boundary zone below must be able to fire on them - an ignored file makes a zone
+    // that names it dead configuration, which is worse than no zone at all.
+    '!clients/*/bin/*.mjs',
+    '!clients/*/scripts/*.mjs',
     // web/ is a Next.js app with its own flat config (web/eslint.config.mjs: next + react-hooks
     // plugins this legacy-eslintrc config does not load). It self-lints via `npm run lint
     // --workspace web` (root `lint` script), which also enforces the web->api FIXED-1 boundary
@@ -49,9 +55,11 @@ module.exports = {
         'no-undef': 'off',
       },
     },
-    // Rule 1 + 3: repo boundary + module-direction zones.
+    // Rule 1 + 3: repo boundary + module-direction zones. Applied to the consumer packages'
+    // .mjs (bin/ shim, scripts/ generator) as well as TypeScript, so the clients/ zones below
+    // cover every shipped file rather than only the ones that happen to end in .ts.
     {
-      files: ['**/*.ts', '**/*.tsx'],
+      files: ['**/*.ts', '**/*.tsx', 'clients/*/bin/*.mjs', 'clients/*/scripts/*.mjs'],
       rules: {
         'import/no-restricted-paths': [
           'error',
@@ -67,13 +75,13 @@ module.exports = {
               // client, and NOTHING else in this repo. Reaching into api/ would make the CLI a
               // second implementation of a capability instead of a caller of one (Capability
               // Contract rule 1), and would silently couple a shipped binary to server internals.
-              // Targeted at the SHIPPED source (src/ + bin/): clients/*/tests is a dev-only
-              // harness that boots the provider in-process, the same carve-out that lets
-              // api/tests import server.ts under the module-direction zone below.
-              { target: './clients/*/src/**', from: './api', message: 'clients/ must not import from api/ — a consumer is an API client, not a second implementation (Capability Contract rule 1).' },
-              { target: './clients/*/src/**', from: './web', message: 'clients/ must not import from web/ — a consumer talks to the public API, not to the dashboard.' },
-              { target: './clients/*/bin/**', from: './api', message: 'clients/ must not import from api/ (Capability Contract rule 1).' },
-              { target: './clients/*/bin/**', from: './web', message: 'clients/ must not import from web/.' },
+              // Targeted at everything SHIPPED - src/ (TypeScript), bin/ (the executable shim) and
+              // scripts/ (the client generator + drift gate), the last two being .mjs and
+              // un-ignored above precisely so these zones can fire on them. clients/*/tests is the
+              // one carve-out: a dev-only harness that boots the provider in-process, the same
+              // shape that lets api/tests import server.ts under the module-direction zone below.
+              { target: ['./clients/*/src/**', './clients/*/bin/**', './clients/*/scripts/**'], from: './api', message: 'clients/ must not import from api/ — a consumer is an API client, not a second implementation (Capability Contract rule 1).' },
+              { target: ['./clients/*/src/**', './clients/*/bin/**', './clients/*/scripts/**'], from: './web', message: 'clients/ must not import from web/ — a consumer talks to the public API, not to the dashboard.' },
               // …and nothing in the platform may depend on a consumer.
               { target: './api', from: './clients', message: 'api/ must not import from clients/ — the dependency runs one way, provider to contract to consumer.' },
               { target: './web', from: './clients', message: 'web/ must not import from clients/ — the dashboard is not a consumer of the CLI.' },

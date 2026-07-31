@@ -31,8 +31,12 @@ passing someone else's id is not a thing the API models.
 | code | meaning |
 |---|---|
 | 0 | the call succeeded |
-| 1 | Cortex refused it (401/402/403/404/429/500), or the request timed out / could not connect |
+| 1 | the work did not complete: Cortex refused it (401/402/403/404/429/500), the request timed out or could not connect, a `watch` gave up (`WATCH_TIMEOUT`), or an export arrived but could not be written (`WRITE_FAILED`) |
 | 2 | you got the invocation wrong, or a required env var is missing - **nothing was sent** |
+
+Exit 2 means exactly that: **no request was made**. Every argv and configuration refusal is decided
+before the first byte goes out, so a mistyped invocation never costs a call, an audit row or a slot
+in the key's rate window.
 
 `--json` works on every command and prints **exactly one** JSON document on stdout:
 
@@ -46,7 +50,20 @@ On failure stdout stays EMPTY and the error document goes to stderr:
 { "ok": false, "command": "memory read", "error": { "code": "NOT_FOUND", "message": "...", "status": 404 } }
 ```
 
-So `cortex ... --json > out.json` is always either a valid success document or an empty file.
+So `cortex ... --json > out.json` is always either a valid success document or an empty file. Help
+is a document too (`cortex --help --json` -> `{ "ok": true, "command": "help", "help": "..." }`), so
+nothing a `--json` invocation writes to stdout is ever unparseable.
+
+Two more argv facts worth knowing:
+
+- `--` ends option parsing. A search term that looks like a flag is data after it:
+  `cortex memory search -- --json` searches for the literal string `--json`.
+- Piping is safe. `cortex memory export --out - | tar -tf -` and `... --json | head` end quietly
+  when the reader closes early - no stack trace, no stray exit code.
+
+Your key is never printed. A reflected error body or a transport complaint that quotes the
+`Authorization` header is scrubbed to `<redacted>` before anything reaches stderr, so a CLI failure
+is safe to paste into a log, a transcript or an issue.
 
 ## memory - the per-user note vault
 

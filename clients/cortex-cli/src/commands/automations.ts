@@ -5,7 +5,8 @@
  * is a platform-session endpoint), so a key holder observes a run exactly the way this command
  * does: `getRun` plus `getRunLogs`, on an interval. There is no hidden stream to prefer.
  */
-import { intOption, noExtraPositionals, parseArgs, UsageError, valueOrPositional, type ParsedArgs } from '../args.js';
+import { intOption, noExtraPositionals, parseArgs, valueOrPositional, type ParsedArgs } from '../args.js';
+import { RuntimeFailure, UsageError } from '../errors.js';
 import type { CommandGroup, Ctx } from '../context.js';
 import { pad, printJson, shortTime } from '../output.js';
 
@@ -189,16 +190,12 @@ async function watch(ctx: Ctx, args: ParsedArgs): Promise<void> {
       return;
     }
     if (Date.now() + intervalMs > deadline) {
-      throw new WatchTimeout(`run ${id} was still "${record.status}" after ${timeoutMs} ms`);
+      // Ran out of patience: the invocation was fine and the work did not settle, so this is a
+      // runtime failure (exit 1), never usage.
+      throw new RuntimeFailure('WATCH_TIMEOUT', `run ${id} was still "${record.status}" after ${timeoutMs} ms`);
     }
     await sleep(intervalMs);
   }
-}
-
-/** A watch that ran out of patience. Reported as an api-class failure (exit 1), never as usage. */
-export class WatchTimeout extends Error {
-  override readonly name = 'WatchTimeout';
-  readonly code = 'WATCH_TIMEOUT';
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
