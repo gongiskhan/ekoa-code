@@ -199,9 +199,14 @@ export interface LocalCommandSpec {
    * Secrets now reach a non-browser step ONLY through `cofre/process-injection.ts`, which takes a
    * name -> `cofre:` REFERENCE mapping and resolves each reference through the Cofre's `unwrap()`
    * seam (so the grant, the tenancy and the lock all apply). Deleted rather than hardened because
-   * `local_command` is unreachable end-to-end today — `setDaemonConnectionResolver` stays on its
-   * honest default at the composition root — so deletion cost nothing then and becomes impossible
-   * once the path is wired.
+   * at the time `local_command` was unreachable end-to-end — `setDaemonConnectionResolver` was
+   * still on its honest default at the composition root — so deletion cost nothing then and would
+   * have become impossible once the path was wired.
+   *
+   * IT IS WIRED NOW: `server.ts` binds the resolver to the live bridge registry, and each
+   * invocation is grant-checked in `invokeTool` (I-3, default deny). The window closed exactly as
+   * predicted, which is the point of recording it: this field cannot come back, and the deletion
+   * is why.
    */
 }
 

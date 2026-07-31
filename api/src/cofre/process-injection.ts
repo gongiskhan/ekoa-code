@@ -14,9 +14,12 @@
  * machine. A model-authored `envWhitelist: ["JWT_SECRET"]` was a complete platform compromise
  * expressed as a normal step field.
  *
- * It was never reachable end-to-end (`setDaemonConnectionResolver` stays on its honest default at
- * `server.ts`), so deleting it cost nothing at the time and would have been impossible later. It is
- * deleted, not extended, in the same change that adds this.
+ * It was not reachable end-to-end at the time (`setDaemonConnectionResolver` was still on its
+ * honest default at `server.ts`), so deleting it cost nothing then and would have been impossible
+ * later. It is deleted, not extended, in the same change that adds this. THAT WINDOW HAS SINCE
+ * CLOSED: `server.ts` wires the resolver to the live bridge registry, and each invocation is
+ * grant-checked in `invokeTool` (I-3, default deny). Read the sentence above as history — not as a
+ * claim that the path this primitive guards is still inert.
  *
  * THE SHAPE. A step declares `credentialRefs` plus a NAME MAPPING from env variable to reference.
  * Cortex resolves each reference through `unwrap({kind:'process'})` — so the grant, the tenancy and
