@@ -55,6 +55,11 @@ function sendServiceError(res: Response, err: unknown): void {
   if (err instanceof AutomationServiceError) {
     if (err.code === 'NOT_FOUND') return sendError(res, 'NOT_FOUND', 'Automação não encontrada.');
     if (err.code === 'FORBIDDEN') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    // The dedupe store contradicted itself; the caller did nothing wrong and the SAME key is safe
+    // to retry, so this is a 500 (a server fault) and never a 4xx (a client fault).
+    if (err.code === 'IDEMPOTENCY_UNRESOLVED') {
+      return sendError(res, 'INTERNAL', 'Não foi possível iniciar a execução. Tente novamente com a mesma chave.');
+    }
     return sendError(res, 'VALIDATION_FAILED', err.message);
   }
   throw err;
@@ -69,10 +74,23 @@ function callContextOf(req: AuthedRequest, res: Response): RunCreateCallContext 
   };
 }
 
+/** How many times a header name appears on the wire. `req.header()` cannot answer this: Node has
+ *  already collapsed repeats into one comma-joined value by then, so the raw pairs are the only
+ *  place a duplicate is still visible. */
+function countRawHeader(req: AuthedRequest, name: string): number {
+  const raw = req.rawHeaders;
+  if (!Array.isArray(raw)) return 0;
+  let n = 0;
+  for (let i = 0; i < raw.length; i += 2) {
+    if (typeof raw[i] === 'string' && raw[i]!.toLowerCase() === name) n += 1;
+  }
+  return n;
+}
+
 /**
  * The run-create idempotency key, from the body field or the conventional `Idempotency-Key`
- * header. Returns `{ ok: false }` AFTER answering the envelope when the two disagree or the header
- * value is not a legal key.
+ * header. Returns `{ ok: false }` AFTER answering the envelope when the header repeats, the two
+ * disagree, or the value is not a legal key.
  *
  * A body/header CONFLICT is refused rather than resolved. Picking a winner would mean a client
  * whose HTTP layer sets the header while its payload carries a different key silently gets the
@@ -84,6 +102,14 @@ function idempotencyKeyOf(
   res: Response,
   body: { idempotencyKey?: string },
 ): { ok: true; key?: string } | { ok: false } {
+  // REPEATED headers are refused, not combined. Node joins duplicate header lines with ', ', so
+  // `Idempotency-Key: aa` + `Idempotency-Key: bb` would silently become the key `aa, bb` — a proxy
+  // appending the header moves the caller into a different key namespace without anyone noticing.
+  // Same class of bug as the body/header conflict below (E4 review, hardening 4).
+  if (countRawHeader(req, 'idempotency-key') > 1) {
+    sendError(res, 'VALIDATION_FAILED', 'O cabeçalho Idempotency-Key foi enviado mais do que uma vez.');
+    return { ok: false };
+  }
   // An EMPTY header is treated as absent (a client that always sets the header but has no key must
   // behave exactly like one that never sets it). The value itself is opaque and never normalised.
   const raw = req.header('idempotency-key');

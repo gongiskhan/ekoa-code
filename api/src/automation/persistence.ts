@@ -196,6 +196,32 @@ export interface RunLogStepEntry {
 }
 
 /**
+ * Reconcile the two views a streamed step leaves behind. They are NOT copies of each other:
+ *
+ *  - `tail` is what the daemon's progress channel emitted — "a single undiscriminated chunk"
+ *    surfaced as stdout (executors/local-command.ts), bounded to 16 KB by the accumulator;
+ *  - `stdout` is the AUTHORITATIVE capture from the final observation, up to 5 MB.
+ *
+ * Preferring the tail whenever it was non-empty silently threw the authoritative capture away and
+ * still reported `truncated: false` — a 200 KB stdout answered as a one-line log claiming nothing
+ * was dropped (E4 review finding 1). So: keep the LONGER of the two, and if the other one carried
+ * text the kept side does not already contain, say so with `truncated`. The containment check is
+ * what keeps the flag honest in BOTH directions — the ordinary case where the daemon streamed
+ * exactly what stdout ends up holding must not cry wolf either.
+ *
+ * `dropped` is bounded by the step cap in both branches (a dropped tail is ≤ 16 KB by
+ * construction; a dropped stdout is shorter than the tail), so the containment scan is cheap.
+ */
+function reconcileStdout(tail: string, stdout: string): { text: string; lost: boolean } {
+  if (!tail) return { text: stdout, lost: false };
+  if (!stdout) return { text: tail, lost: false };
+  const keepStdout = stdout.length >= tail.length;
+  const text = keepStdout ? stdout : tail;
+  const dropped = keepStdout ? tail : stdout;
+  return { text, lost: !text.includes(dropped) };
+}
+
+/**
  * What a single step contributes to the logs, from the two sources a step record can carry:
  *
  *  - `logTail` — the bounded tail of what the step STREAMED (the daemon's progress channel, which
@@ -203,28 +229,29 @@ export interface RunLogStepEntry {
  *  - `output` — the step's captured StepOutput, written by the step executors: a local_command's
  *    authoritative stdout/stderr split, an api_call's response body, an ekoa_action's trace.
  *
- * They are complementary, not alternatives: for a local_command the tail already holds the
- * streamed stdout, so only the final `stderr` is appended to it; without a tail (older records, a
- * dispatch failure, a run with no streaming) the stored stdout is used instead.
+ * For a local_command the two stdout views are reconciled (above) and the final `stderr` — which
+ * the progress channel never carries — is appended. Other kinds do not stream today, so their tail
+ * (if a future step type grows one) simply precedes the captured output.
  */
 function stepLogSource(step: StepRecord): { text: string; truncated: boolean } | undefined {
   const parts: string[] = [];
   let truncated = false;
   const tail = step.logTail;
-  if (tail && typeof tail.text === 'string') {
-    if (tail.text.length > 0) parts.push(tail.text);
-    truncated = truncated || tail.truncated === true;
-  }
+  const tailText = tail && typeof tail.text === 'string' ? tail.text : '';
+  if (tail) truncated = truncated || tail.truncated === true;
   const out = step.output;
-  if (out) {
-    if (out.kind === 'local_command') {
-      if (!tail && out.stdout) parts.push(out.stdout);
-      if (out.stderr) parts.push(out.stderr);
-      truncated = truncated || out.truncated === true;
-    } else if (out.kind === 'api_call') {
+  if (out?.kind === 'local_command') {
+    const merged = reconcileStdout(tailText, typeof out.stdout === 'string' ? out.stdout : '');
+    if (merged.text) parts.push(merged.text);
+    if (merged.lost) truncated = true;
+    if (out.stderr) parts.push(out.stderr);
+    truncated = truncated || out.truncated === true;
+  } else {
+    if (tailText.length > 0) parts.push(tailText);
+    if (out?.kind === 'api_call') {
       if (out.responseBody) parts.push(out.responseBody);
       truncated = truncated || out.truncated === true;
-    } else if (out.kind === 'ekoa_action') {
+    } else if (out?.kind === 'ekoa_action') {
       for (const entry of out.trace ?? []) {
         parts.push(`${entry.op}: ${entry.summary}${entry.error ? ` — ${entry.error}` : ''}`);
       }

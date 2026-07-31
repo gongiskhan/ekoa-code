@@ -198,12 +198,22 @@ export const automationRuns = new Store<Doc>('automation_runs');
  * loser reads the winner's `runId` instead of starting a second run.
  *
  * The row is intentionally tiny: it carries no inputs and no key material (the caller's key is
- * only ever hashed into the `_id`, never stored), so it is safe to keep for the life of the run.
+ * only ever hashed into the `_id`, never stored).
+ *
+ * RETENTION IS UNBOUNDED TODAY, DELIBERATELY (E4 review, hardening 6). Nothing reads or reaps
+ * `at`; a row lives forever. The trade accepted here: a row is ~120 bytes and is written ONLY by a
+ * client that sends an idempotency key (the dashboard sends none, so the platform's own traffic
+ * writes zero rows), which puts a heavy API consumer at single-digit MB per million keyed creates.
+ * Reaping is NOT free correctness — deleting a mapping re-arms the key, so a retry that arrives
+ * after the reap starts a SECOND run. Any future reaper must therefore key on `at` with a window
+ * comfortably longer than a client would keep retrying (days, not hours) and must be introduced
+ * with that risk stated, not as a silent cleanup job.
  */
 export interface RunIdempotencyDoc extends Doc {
   /** The run the FIRST accepted call minted for this key. */
   runId: string;
-  /** ISO timestamp of that first acceptance. */
+  /** ISO timestamp of that first acceptance. The reap key IF a reaper is ever added — see the
+   *  retention note above; nothing reads this today. */
   at: string;
 }
 export const automationRunIdempotency = new Store<RunIdempotencyDoc>('automation_run_idempotency');

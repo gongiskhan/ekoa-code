@@ -244,6 +244,21 @@ only by their owner (`/api/v1/gateway-keys`, uniform 404 cross-user), `lastUsedA
 anomaly surface, and every metered key turn lands a metadata-only `gateway_turn` row in the
 owner's Registo (who/when/tier/model/metered - never content).
 
+**Automation run logs widen what a run reader sees (accepted residual, slice E4, 2026-07-31).**
+`GET /api/v1/automations/runs/:id/logs` serves per-step captured output that the run-detail
+serializer deliberately withholds (`toWireStep` drops `output` wholesale): a `local_command`'s
+stdout/stderr verbatim and unredacted, an `api_call`'s response body (secret-redacted upstream at
+`automation/executors/api-call.ts`), and an `ekoa_action`'s primitive trace. Its visibility
+predicate is `canSeeRun` — the run's OWNER **or an org-admin of the run's org** — so an org-admin can
+read the command output of any member's run. Accepted on PARITY grounds, not on "it is harmless":
+the same org-admin can already watch the identical bytes arrive live on the run's SSE stream
+(`step_output_chunk`, gated by the same `canSeeRun`), so the endpoint changes the retention window,
+not the audience. What it does NOT change: cross-ORG reads and non-admin cross-owner reads answer
+the same uniform 404 as the run itself, and the response is bounded twice (16 KB/step, 128 KB/run,
+on write and again on read) so a 5 MB capture can never be exfiltrated in one call. Revisit if
+org-admin visibility of member runs is ever narrowed — the logs endpoint must narrow with it, and
+the SSE stream must narrow at the same time or the parity argument stops holding.
+
 **LLM gateway count_tokens is uncapped (accepted residual, 2026-07-17).** The gateway's
 `count_tokens` forward is auth-gated but exempt from the rate caps, the allowance gate, and
 metering: it is free upstream, produces no billable usage, and stock Claude Code polls it

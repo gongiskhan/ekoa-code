@@ -42,7 +42,10 @@ import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.
 // Errors (the router maps `.code` onto the ch03 error envelope, CONV-2)
 // ============================================================================
 
-export type AutomationErrorCode = 'NOT_FOUND' | 'FORBIDDEN' | 'VALIDATION';
+/** `IDEMPOTENCY_UNRESOLVED` (slice E4): the dedupe store contradicted itself — it refused our
+ *  claim as a duplicate and then reported no mapping, repeatedly. The caller did nothing wrong and
+ *  retrying the SAME key is safe, so the router answers it as INTERNAL (500), never a 4xx. */
+export type AutomationErrorCode = 'NOT_FOUND' | 'FORBIDDEN' | 'VALIDATION' | 'IDEMPOTENCY_UNRESOLVED';
 export class AutomationServiceError extends Error {
   constructor(public readonly code: AutomationErrorCode, message: string) {
     super(message);
@@ -422,17 +425,26 @@ export interface RunCreateOutcome {
   created: boolean;
 }
 
+/** How many times a keyed create may re-attempt its dedupe claim before failing closed. Each
+ *  extra attempt only happens when a concurrent caller rolled ITS mapping back mid-flight. */
+const RUN_CLAIM_ATTEMPTS = 5;
+
 /**
  * The dedupe document id: sha256 over the automation, the RUN OWNER, and the caller's key.
  *
  * All three matter. Without the automation two different automations share a key; without the
  * owner one tenant's key collides with another's (and could hand back a run they may not even
- * see); without the key there is no idempotency at all. The two ids are server-minted UUIDs and
- * the only caller-controlled component is LAST, so no key can be crafted to shift a separator and
- * collide with a different (automation, owner) pair.
+ * see); without the key there is no idempotency at all.
+ *
+ * The three components are JSON-ENCODED, not `|`-joined. A separator-joined string is only
+ * injective if no component can contain the separator, and that premise was false: an
+ * integration-provisioned automation's id is `${integrationKey}-${templateKey}`
+ * (integration-automations.ts), not a UUID, so the "both ids are server-minted UUIDs" argument did
+ * not hold (E4 review finding 5). JSON.stringify escapes quotes and backslashes, which makes the
+ * encoding injective for ANY three strings — no assumption about their alphabets survives here.
  */
 function runDedupeId(automationId: string, ownerUserId: string, key: string): string {
-  return createHash('sha256').update(`${automationId}|${ownerUserId}|${key}`).digest('hex');
+  return createHash('sha256').update(JSON.stringify([automationId, ownerUserId, key])).digest('hex');
 }
 
 /**
@@ -482,6 +494,20 @@ async function auditRunCreate(
  * The one case that DOES roll the mapping back is a run that never started at all (the audit or the
  * run-row insert threw): there is nothing to be idempotent about, and leaving the mapping would
  * poison the key permanently.
+ *
+ * THE TWO INTERACT, AND THE LOSER CAN BE HANDED A RUN THAT NEVER EXISTED (E4 review finding 3).
+ * Ordering: A claims the mapping → B is refused, reads it, answers 200 with A's runId → A's own
+ * start throws and rolls the mapping back. B now holds a runId whose run does not exist and never
+ * will. The condition is self-healing — the key is free again, so B's retry with the SAME key
+ * starts a real run — but a client must not treat 200 as "definitely accepted, just poll it": a
+ * 404 from the following `GET /runs/:id` means the create did not take, and the correct response
+ * is to POST again with the same key. That is stated on the wire contract too
+ * (shared/src/automations.ts RunCreateRequest), because a client cannot infer it.
+ *
+ * WHAT NEVER HAPPENS IS PROCEEDING UNCLAIMED. If the store keeps refusing the claim while also
+ * reporting no mapping, the call FAILS (IDEMPOTENCY_UNRESOLVED) instead of starting a run with no
+ * dedupe row — an unrecorded run would let the next retry start a second one, which is the exact
+ * thing the key exists to prevent (E4 review finding 2).
  */
 export async function startRun(
   actor: Actor,
@@ -504,10 +530,11 @@ export async function startRun(
 
   let claimed = dedupeId === undefined;
   if (dedupeId) {
-    // Two attempts, not one: a refusal followed by a MISSING mapping means a concurrent caller
-    // rolled its own mapping back (its run never started) in the window between our insert and our
-    // read. Re-claiming keeps the guarantee for this key instead of starting an unrecorded run.
-    for (let attempt = 0; attempt < 2 && !claimed; attempt += 1) {
+    // Retry, because a refusal followed by a MISSING mapping means a concurrent caller rolled its
+    // own mapping back (its run never started) in the window between our insert and our read.
+    // Re-claiming keeps the guarantee for this key. The loop NEVER falls through unclaimed: an
+    // unrecorded run would let the next retry start a second one.
+    for (let attempt = 0; attempt < RUN_CLAIM_ATTEMPTS && !claimed; attempt += 1) {
       claimed = await automationRunIdempotency.insert({ _id: dedupeId, runId, at: new Date().toISOString() });
       if (claimed) break;
       const existing = await automationRunIdempotency.get(dedupeId);
@@ -515,6 +542,13 @@ export async function startRun(
         await auditRunCreate(actor, call, { automationId: id, runId: existing.runId, idempotent: true });
         return { runId: existing.runId, created: false };
       }
+    }
+    if (!claimed) {
+      // Refused as a duplicate AND absent, every attempt: the store is contradicting itself (or a
+      // pathological rollback storm). FAIL CLOSED — nothing started, no row written, and the same
+      // key is safe to retry.
+      console.error(`[automations] idempotency claim unresolved after ${RUN_CLAIM_ATTEMPTS} attempts (automation=${id})`);
+      throw new AutomationServiceError('IDEMPOTENCY_UNRESOLVED', 'could not establish the idempotency claim');
     }
   }
 

@@ -123,6 +123,31 @@ describe('step log accumulator caps (slice E4)', () => {
     expect(logs[0]!.truncated).toBe(true);
   });
 
+  it('projection: a tail that is NOT contained in the authoritative stdout keeps both honest', () => {
+    // Neither view contains the other (a step that streamed one thing and captured another).
+    const [longer] = runLogsFromSteps([
+      {
+        stepId: 's0', index: 0, status: 'completed', tier: 'cache', durationMs: 1,
+        logTail: { text: 'apenas-transmitido', truncated: false },
+        output: { kind: 'local_command', stdout: 'capturado-e-mais-longo', stderr: '', exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+      },
+    ]);
+    expect(longer!.log).toBe('capturado-e-mais-longo'); // the longer, authoritative side wins
+    expect(longer!.truncated).toBe(true); // and the discarded tail is declared
+
+    // The reverse: a captured stdout SHORTER than the tail (a truncated observation) is not the
+    // one kept, and is likewise declared.
+    const [shorter] = runLogsFromSteps([
+      {
+        stepId: 's0', index: 0, status: 'completed', tier: 'cache', durationMs: 1,
+        logTail: { text: 'transmitido-mais-longo-do-que-o-capturado', truncated: false },
+        output: { kind: 'local_command', stdout: 'xyz', stderr: 'aviso', exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+      },
+    ]);
+    expect(shorter!.log).toBe('transmitido-mais-longo-do-que-o-capturado\naviso');
+    expect(shorter!.truncated).toBe(true);
+  });
+
   it('projection: an ekoa_action trace and an api_call body both become readable logs', () => {
     const logs = runLogsFromSteps([
       {
@@ -179,6 +204,49 @@ describe('engine persists a bounded log tail for streamed steps (slice E4)', () 
     expect(logs.steps).toHaveLength(1);
     expect(logs.steps[0]!.stepIndex).toBe(0);
     expect(logs.steps[0]!.log).toBe('linha 1\nlinha 2\nlinha 3\n\naviso');
+    expect(logs.steps[0]!.truncated).toBe(false);
+  });
+
+  it('E4 review finding 1: a streamed chunk NEVER hides the authoritative stdout behind truncated:false', async () => {
+    await automations.insert({ _id: 'auto-auth', ...automationWith('auto-auth') } as never);
+    // The daemon's progress channel carries ONE undiscriminated line; the final observation carries
+    // the real 200 KB stdout (executors/local-command.ts: "the authoritative stdout/stderr split
+    // comes from the final observation"). Preferring the tail dropped 200 KB while reporting
+    // truncated:false — a log that lies about being complete.
+    const authoritative = `${'S'.repeat(200_000)}FIM-AUTORITATIVO`;
+    setDaemonConnectionResolver(() => streamingDaemon(
+      ['a correr...\n'],
+      { exitCode: 0, stdout: authoritative, stderr: '' },
+    ));
+
+    await runAutomation('auto-auth', ctx, { runId: 'run-log-auth' });
+
+    const logs = await getRunLogs({ userId: 'u1', orgId: 'o1', role: 'user' }, 'run-log-auth');
+    expect(RunLogsResponse.safeParse(logs).success).toBe(true);
+    const entry = logs.steps[0]!;
+    // The authoritative capture is what is served (its END, per the tail semantics)…
+    expect(entry.log).toContain('FIM-AUTORITATIVO');
+    expect(entry.log.length).toBe(STEP_LOG_MAX_CHARS);
+    // …and the response SAYS output was dropped.
+    expect(entry.truncated).toBe(true);
+    // The pre-fix behaviour, pinned so it cannot come back: the one-line tail alone, claiming
+    // nothing was lost.
+    expect(entry.log).not.toBe('a correr...\n');
+  });
+
+  it('the truncated flag does not cry wolf when the tail is genuinely part of stdout', async () => {
+    await automations.insert({ _id: 'auto-quiet', ...automationWith('auto-quiet') } as never);
+    // The ordinary case: the daemon streamed exactly what stdout ends up holding. Nothing was
+    // dropped, so nothing may be reported as dropped.
+    setDaemonConnectionResolver(() => streamingDaemon(
+      ['linha A\n', 'linha B\n'],
+      { exitCode: 0, stdout: 'linha A\nlinha B\n', stderr: '' },
+    ));
+
+    await runAutomation('auto-quiet', ctx, { runId: 'run-log-quiet' });
+
+    const logs = await getRunLogs({ userId: 'u1', orgId: 'o1', role: 'user' }, 'run-log-quiet');
+    expect(logs.steps[0]!.log).toBe('linha A\nlinha B\n');
     expect(logs.steps[0]!.truncated).toBe(false);
   });
 

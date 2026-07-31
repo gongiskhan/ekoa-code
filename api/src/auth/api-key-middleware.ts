@@ -21,6 +21,21 @@ export interface ApiKeyPrincipal {
   xClient?: string;
 }
 
+/**
+ * `x-client` is a caller-controlled, trace-only tag that every consumer writes VERBATIM into its
+ * audit row (memvault's activity metadata, automations' run-create row). Unbounded, a 4 KB header
+ * lands whole in `activity_logs` on every call — an audit-trail amplification primitive, and a
+ * cost the durable store pays forever (E4 review, hardening 7). Capped HERE, once, so both
+ * consumers inherit the bound instead of each re-deriving it. Truncation is marked so a reader
+ * never mistakes a cut tag for the client's real name.
+ */
+export const X_CLIENT_MAX = 128;
+
+function boundedXClient(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return raw.length <= X_CLIENT_MAX ? raw : `${raw.slice(0, X_CLIENT_MAX)}…`;
+}
+
 function fail(res: Response, code: ErrorCode, message: string): void {
   res.status(ERROR_STATUS[code]).json({ error: { code, message } });
 }
@@ -57,7 +72,7 @@ async function admitApiKey(secret: string, req: AuthedRequest, res: Response, ne
     // Synthetic — there is no token to revoke on this path; revocation is the key doc itself.
     jti: `gk:${verdict.keyId}`,
   };
-  const xClient = req.header('x-client');
+  const xClient = boundedXClient(req.header('x-client'));
   const principal: ApiKeyPrincipal = { keyId: verdict.keyId, ...(xClient ? { xClient } : {}) };
   res.locals.apiKeyPrincipal = principal;
   const rate = admitCapabilityCall({ keyId: verdict.keyId, billeeUserId: verdict.userId, orgId: owner.orgId });

@@ -22,8 +22,11 @@ const owner: Actor = { userId: 'u1', orgId: 'o1', role: 'user' };
 const root: Actor = { userId: 'root', orgId: 'o-root', role: 'super-admin' };
 const stranger: Actor = { userId: 'x1', orgId: 'o2', role: 'user' };
 
+/** Mirrors service.runDedupeId. JSON-encoded, NOT `|`-joined: an integration-provisioned
+ *  automation's id is `${integrationKey}-${templateKey}`, so the "every component is a UUID"
+ *  premise a separator join needs was false (E4 review, hardening 5). */
 const dedupeId = (automationId: string, ownerUserId: string, key: string): string =>
-  createHash('sha256').update(`${automationId}|${ownerUserId}|${key}`).digest('hex');
+  createHash('sha256').update(JSON.stringify([automationId, ownerUserId, key])).digest('hex');
 
 async function seedAutomation(id: string, ownerUserId = 'u1', orgId = 'o1'): Promise<void> {
   await automations.insert({
@@ -134,6 +137,53 @@ describe('idempotent run create (slice E4)', () => {
     const retry = await svc.startRun(owner, 'auto-5', { idempotencyKey: 'k-rollback' });
     expect(retry.created).toBe(true);
     expect((await automationRunIdempotency.get(dedupeId('auto-5', 'u1', 'k-rollback')))?.runId).toBe(retry.runId);
+  });
+
+  it('E4 review finding 2: an unresolvable claim FAILS CLOSED — it never starts an unrecorded run', async () => {
+    await seedAutomation('auto-7');
+    // The pathological interleaving: every claim is refused as a duplicate and every read finds no
+    // mapping (a concurrent caller rolling its own claim back, over and over). Falling through here
+    // used to create the run and answer {created:true} with NO dedupe row — so the next retry with
+    // the same key started a SECOND run, the exact double execution the key exists to prevent.
+    const insert = vi.spyOn(automationRunIdempotency, 'insert').mockResolvedValue(false);
+    const get = vi.spyOn(automationRunIdempotency, 'get').mockResolvedValue(null);
+
+    await expect(svc.startRun(owner, 'auto-7', { idempotencyKey: 'irresolúvel' })).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_UNRESOLVED',
+    });
+    expect(insert.mock.calls.length).toBeGreaterThan(1); // it really did retry before giving up
+    insert.mockRestore();
+    get.mockRestore();
+
+    // NOTHING was started and NOTHING was written: the failure is closed on both sides.
+    expect(await automationRuns.find({ automationId: 'auto-7' })).toEqual([]);
+    expect(await automationRunIdempotency.find({})).toEqual([]);
+
+    // And the key is still usable once the store behaves.
+    const retry = await svc.startRun(owner, 'auto-7', { idempotencyKey: 'irresolúvel' });
+    expect(retry.created).toBe(true);
+  });
+
+  it('E4 review finding 3: a replay whose run was rolled back is self-healing on a same-key retry', async () => {
+    await seedAutomation('auto-8');
+    const id = dedupeId('auto-8', 'u1', 'perdida');
+    // The state a losing caller can observe: the winner claimed the key, this caller read the
+    // mapping and answered 200 with the winner's runId, and only then did the winner's own start
+    // fail and roll the claim back. Reconstructed deterministically.
+    await automationRunIdempotency.insert({ _id: id, runId: 'run-fantasma', at: new Date().toISOString() });
+    const replay = await svc.startRun(owner, 'auto-8', { idempotencyKey: 'perdida' });
+    expect(replay).toEqual({ runId: 'run-fantasma', created: false });
+
+    await automationRunIdempotency.delete(id); // the winner's rollback lands
+    // What the client sees when it follows the documented path: the run named by its 200 is not
+    // there (GET /runs/:id 404s at the route)…
+    expect(await automationRuns.get('run-fantasma')).toBeNull();
+
+    // …and the documented recovery — POST AGAIN WITH THE SAME KEY — starts a real, different run.
+    const recovered = await svc.startRun(owner, 'auto-8', { idempotencyKey: 'perdida' });
+    expect(recovered.created).toBe(true);
+    expect(recovered.runId).not.toBe('run-fantasma');
+    expect(await automationRuns.get(recovered.runId)).toBeTruthy();
   });
 
   it('audits ONLY key-admitted creates (the JWT path is untouched), carrying keyId + x-client', async () => {

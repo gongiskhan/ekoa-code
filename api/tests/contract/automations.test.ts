@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
+import { connect } from 'node:net';
 import {
   Automation,
   AutomationListResponse,
@@ -25,6 +26,7 @@ import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, orgs, activityLogs, automationRuns } from '../../src/data/stores.js';
 import { setActivation } from '../../src/data/activation.js';
 import { __resetCapabilityRateForTests } from '../../src/auth/api-key-rate.js';
+import { X_CLIENT_MAX } from '../../src/auth/api-key-middleware.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
@@ -255,6 +257,38 @@ async function newAutomation(t: string, name: string): Promise<string> {
 const startRunReq = (id: string, t: string, body: unknown, headers: Record<string, string> = {}) =>
   api(`/api/v1/automations/${id}/runs`, t, { method: 'POST', body: JSON.stringify(body), headers });
 
+/**
+ * A POST down a RAW socket, so a header can be sent MORE THAN ONCE — `fetch` and undici both
+ * collapse repeats, and Node's server side joins them with ', ' before Express ever sees them, so
+ * a raw request is the only way to exercise the duplicate-header refusal.
+ */
+function rawPost(path: string, token: string, extraHeaderLines: string[]): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const body = '{}';
+    const lines = [
+      `POST ${path} HTTP/1.1`,
+      'Host: 127.0.0.1',
+      `Authorization: Bearer ${token}`,
+      'Content-Type: application/json',
+      `Content-Length: ${Buffer.byteLength(body)}`,
+      'Connection: close',
+      ...extraHeaderLines,
+      '',
+      body,
+    ];
+    const socket = connect(port, '127.0.0.1', () => socket.write(lines.join('\r\n')));
+    const chunks: Buffer[] = [];
+    socket.on('data', (c: Buffer) => chunks.push(c));
+    socket.on('error', reject);
+    socket.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const status = Number(raw.slice(9, 12));
+      const sep = raw.indexOf('\r\n\r\n');
+      resolve({ status, body: sep >= 0 ? raw.slice(sep + 4) : '' });
+    });
+  });
+}
+
 /** Wait until the async engine has written its LAST record for a run (finalize), so a test that
  *  mutates the run row afterwards is not racing the engine. */
 async function waitForTerminalRun(runId: string, t: string): Promise<void> {
@@ -385,9 +419,37 @@ describe('automations run lifecycle (slice E4)', () => {
     expect(tooLong.status).toBe(400);
     expect(ErrorEnvelope.safeParse(await tooLong.json()).success).toBe(true);
 
+
     // Neither refusal started anything: the automation still has exactly the one run.
     const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: Array<{ id: string }> };
     expect(runs.items.map((r) => r.id)).toEqual([firstBody.runId]);
+  });
+
+  it('a REPEATED Idempotency-Key header is refused, never joined into a third key', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Idem-repetido');
+
+    // Node collapses `aa` + `bb` into the single value 'aa, bb'. Accepting that silently moves the
+    // caller into a key namespace neither the client nor the proxy chose — the same class of bug
+    // the body/header conflict check exists to prevent (E4 review, hardening 4).
+    const repeated = await rawPost(`/api/v1/automations/${id}/runs`, t, ['Idempotency-Key: aa', 'Idempotency-Key: bb']);
+    expect(repeated.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(JSON.parse(repeated.body)).success).toBe(true);
+
+    // Nothing ran, and NEITHER spelling was claimed: 'aa' is still free, and the joined 'aa, bb'
+    // never became a key at all.
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: unknown[] };
+    expect(runs.items).toEqual([]);
+    const claimAa = await startRunReq(id, t, { idempotencyKey: 'aa' });
+    expect(claimAa.status).toBe(202);
+    const joined = await startRunReq(id, t, { idempotencyKey: 'aa, bb' });
+    expect(joined.status).toBe(202); // a fresh key, not a replay of anything
+    expect(((await joined.json()) as { runId: string }).runId).not.toBe(((await claimAa.json()) as { runId: string }).runId);
+
+    // A single header line is still perfectly fine down the same raw path.
+    const single = await rawPost(`/api/v1/automations/${id}/runs`, t, ['Idempotency-Key: cc']);
+    expect(single.status).toBe(202);
+    expect(RunCreateResponse.safeParse(JSON.parse(single.body)).success).toBe(true);
   });
 
   it('a mapping whose run is GONE still answers the mapping — the retry never re-executes', async () => {
@@ -452,6 +514,28 @@ describe('automations run lifecycle (slice E4)', () => {
       expect(row.metadata.runId).toBe(startedBody.runId);
     }
     expect(rows.map((r) => r.metadata.idempotent).sort()).toEqual([false, true]);
+  });
+
+  it('an oversized x-client is BOUNDED before it reaches the audit row (E1 middleware, hardening 7)', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Chave-xclient');
+    await activityLogs.deleteMany({ category: 'automations' } as never);
+    const minted = (await (await api('/api/v1/gateway-keys', t, { method: 'POST', body: JSON.stringify({ label: 'xclient' }) })).json()) as { id: string; key: string };
+
+    // x-client is caller-controlled and audited verbatim by every consumer. Unbounded, a 4 KB
+    // header lands whole in activity_logs on EVERY call — audit-trail amplification the durable
+    // store pays for forever. The cap lives in the middleware so memvault inherits it too.
+    const started = await fetch(`http://127.0.0.1:${port}/api/v1/automations/${id}/runs`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${minted.key}`, 'x-client': 'C'.repeat(4000) },
+    });
+    expect(started.status).toBe(202);
+
+    const [row] = (await activityLogs.find({ category: 'automations' } as never)) as unknown as Array<{ metadata: { xClient: string } }>;
+    expect(row!.metadata.xClient.length).toBe(X_CLIENT_MAX + 1); // 128 kept + the truncation marker
+    expect(row!.metadata.xClient.startsWith('C'.repeat(X_CLIENT_MAX))).toBe(true);
+    expect(row!.metadata.xClient.endsWith('…')).toBe(true); // a cut tag is never mistaken for a name
   });
 
   it('run logs: schema-valid, bounded per step AND per run, cross-owner is the uniform 404', async () => {

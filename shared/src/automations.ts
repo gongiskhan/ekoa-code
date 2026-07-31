@@ -159,9 +159,17 @@ export type IdempotencyKey = z.infer<typeof IdempotencyKey>;
  * The key may equally be sent as the `Idempotency-Key` REQUEST HEADER (the conventional spelling an
  * HTTP client library sets). The two are the same field: if BOTH are present and DISAGREE the
  * request is refused with VALIDATION_FAILED — a body/header mismatch is a client bug, and silently
- * picking one of them is exactly how a retry ends up executing twice.
+ * picking one of them is exactly how a retry ends up executing twice. The header must appear AT
+ * MOST ONCE for the same reason: repeated header lines are refused, never joined.
  *
  * Absent (no field, no header) the endpoint behaves exactly as before: every POST mints a fresh run.
+ *
+ * A 200 REPLAY IS "ALREADY ACCEPTED", NOT "CERTAINLY RUNNING". In one narrow interleaving the run
+ * named by a replay never came into existence: the caller that won the key had its own start fail
+ * and roll the claim back after this reply was already sent. A client must therefore treat a 404
+ * from the following `GET /automations/runs/:id` as "the create did not take" and POST AGAIN WITH
+ * THE SAME KEY — the rollback freed the key, so the retry starts a real run. (Retrying is always
+ * safe: that is the point of the key.)
  */
 export const RunCreateRequest = z.object({
   inputs: z.record(z.unknown()).optional(),
