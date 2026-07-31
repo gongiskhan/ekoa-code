@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- listener bookkeeping mirrors Node's own
+   EventEmitter signature; narrowing it makes removeListener untypable. */
 import { describe, it, expect, afterEach } from 'vitest';
 import { installPipeGuard, EXIT_OK } from '../src/output.js';
 
@@ -15,7 +17,7 @@ import { installPipeGuard, EXIT_OK } from '../src/output.js';
  * The `exit` seam on installPipeGuard exists precisely so this can be driven in-process.
  */
 describe('the pipe guard is deliberately asymmetric', () => {
-  const added: Array<{ stream: NodeJS.EventEmitter; fn: (...args: never[]) => void }> = [];
+  const added: Array<{ stream: NodeJS.EventEmitter; fn: (...args: any[]) => void }> = [];
 
   function arm(): number[] {
     const exits: number[] = [];
@@ -33,7 +35,7 @@ describe('the pipe guard is deliberately asymmetric', () => {
       [process.stderr, before.err],
     ] as const) {
       for (const fn of stream.listeners('error')) {
-        if (!prior.includes(fn)) added.push({ stream, fn: fn as (...args: never[]) => void });
+        if (!prior.includes(fn)) added.push({ stream, fn: fn as (...args: any[]) => void });
       }
     }
     return exits;
