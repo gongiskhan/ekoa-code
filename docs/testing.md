@@ -76,12 +76,19 @@ lane; `npm run e2e` runs `--run`.
   workspaces - unit + contract under vitest), then `build` (shared, api, web).
 - `npm run test` - vitest across workspaces (no build).
 - `npm run e2e` - the suite-ledger `--run` lane (Playwright + node drivers).
-- `npm run e2e:server` (`scripts/e2e-with-server.mjs`) - boots `dev-api.mjs --built` (build first),
-  waits for the featured-app prebuild, runs the ledger e2e. Carries documented committed-baseline debt
+- `npm run e2e:server` (`scripts/e2e-with-server.mjs`) - boots the WHOLE stack through the committed
+  `run-ekoa-code` driver (api on an internal port, the CORS proxy on `backend.port`, and the web app),
+  waits for both planes, runs the ledger e2e. Carries documented committed-baseline debt
   (band1 dashboard specs need the separately-running Next web; band2 retired-`/api/v1/action` specs;
   the deferred `erp-*` CUTOVER fork). Not a regression - see `docs/known-flakes.md`.
+  **It binds fixed ports.** `backend.port` (4111) is read from the committed file and is NOT
+  configurable; the web port is `EKOA_WEB_PORT` (3000) and the specs' base URL is `WEB_BASE_URL`.
+  A dev server already holding one of them makes the whole estate red for a reason that has nothing
+  to do with the code - set both env vars rather than reading the result. See `docs/findings.md`
+  `e2e-server-loses-to-a-running-dev-server`.
 - Security gates, out of the lane: `gate:sast` (semgrep), `gate:secrets` (gitleaks), `gate:audit`
-  (`npm audit --audit-level=high`).
+  (`scripts/audit-gate.mjs` - a per-advisory ledger, because `npm audit --audit-level=high` is
+  all-or-nothing and was therefore unsatisfiable and unread).
 
 ## E2e discipline
 

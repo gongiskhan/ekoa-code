@@ -6,6 +6,36 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`ported-e2e-estate-is-not-green`** (OPEN 2026-07-31, MEDIUM, process — measured, not inferred).
+  `CLAUDE.md` says the ported estate "stays green on every PR" and that "a red baseline spec is fixed
+  before any new work merges". It is not green and has not been for some time. Measured on this
+  machine at gate G12, 242 due specs:
+  - `origin/main` (`1984ac0`) alone: **49 failed / 179 passed** and **51 failed / 176 passed** on two
+    runs of IDENTICAL code — so roughly two specs are outright flaky before anything else is said.
+  - the merge (`4261a75`): **39 failed / 190 passed**, and its failure set is a STRICT SUBSET of
+    `origin/main` run 1's. Nothing regressed; two specs that differ from run 2 both failed on run 1.
+  Three of the 39 are provably broken rather than failing:
+  `simuladores-trabalho.spec.ts` builds from `join(process.cwd(), '..', 'ekoa-data', …)`, which
+  resolves OUTSIDE the repo (`/home/ggomes/dev/ekoa-data`) and exists on no checkout;
+  `legal-shared-drift.spec.ts` shells out to `scripts/sync-legal-shared.mjs`, which is not in the
+  repo on either side of the merge; and 28 of the 39 are one data-driven suite (`demos.spec.ts`)
+  failing identically at its first step, so they are one root cause, not 28. `docs/testing.md` does
+  acknowledge "committed-baseline debt" in three named bands, but the debt is now much larger than
+  those bands and is not enumerated anywhere, which is the actual problem: a 39-red estate cannot
+  detect the 40th. Recorded as a standing contradiction rather than fixed inside a merge.
+- **`e2e-server-loses-to-a-running-dev-server`** (OPEN 2026-07-31, MEDIUM, tooling — cost a full
+  30-minute run before it was noticed). `npm run e2e:server` binds three ports and only one of them
+  is configurable in practice: `EKOA_WEB_PORT` (3000) and `EKOA_API_PORT` (4211) come from env, but
+  the CORS proxy port is `readBackendPort()` — the committed `backend.port` — because `next.config.ts`
+  INLINES that origin into the browser bundle. On a machine with a dev server already on :3000 the
+  web app dies with `EADDRINUSE` and the harness reports **130 due artifacts red plus "10 drivers
+  require a live dev API"**, which reads exactly like a catastrophic code regression and is not one.
+  Worse for anyone checking first: the collision here was with an IPv6-only listener (`:::3000`), so
+  a `/dev/tcp/127.0.0.1/3000` probe reported the port FREE. Use `ss -ltn`, and pass
+  `EKOA_WEB_PORT` + `WEB_BASE_URL` together (the Playwright `baseURL` reads the latter, the harness's
+  readiness poll the former — setting only one silently checks the wrong app). Recorded rather than
+  fixed because the real fix is to make the proxy port configurable end-to-end, which means the
+  inlined origin in `next.config.ts`, and that is its own change.
 - **`consent-once-re-prompts-forever`** (OPEN 2026-07-31, MEDIUM, correctness — found while merging
   the capability-contract and Cofre lines of work). `resolveConsent`'s `once` decision persists
   nothing (correctly) and sets the run's resume flag — but the engine's resume path re-runs the same
