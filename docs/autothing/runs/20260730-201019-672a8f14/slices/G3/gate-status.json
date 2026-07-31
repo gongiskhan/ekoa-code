@@ -1,0 +1,41 @@
+{
+  "slice": "G3",
+  "title": "basic-memory-backend-switch",
+  "kind": "api",
+  "status": "in_progress",
+  "commit": "757d519",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "18 new + 14 spool + 12 seed + 6 validation + 3 hooks-install = 53/53 across 5 files; typecheck 0; validate-fitting PASS; lead re-verified 53/53. Default path pinned LITERALLY: exact 10-call CLI conversation, settings.json deep-equal, no jobs file, skill byte-identical",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "no key or private URL in any committed or installed artefact (tested); capture-session.py and flush-spool.mjs byte-unchanged",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "adversarialReview": {
+      "status": "needs-work",
+      "attempts": 1,
+      "detail": "Byte-identity of the default path PROVEN by the reviewer (pre/post setup.sh at identical paths, 6 configs, full tree+content diff: IDENTICAL) and the 112-combo spool matrix holds. But: the marker protection is ILLUSORY (apm install --force re-deploys over that path unconditionally, so nothing an operator writes there is durable and the restore branch is redundant in production); the fitting own Skill VIEW edits the LOCAL variant on the remote backend so UI edits are silently discarded; and the marker grep is unanchored, so a skill merely QUOTING the marker is overwritten on the DEFAULT path.",
+      "at": "2026-07-31T07:35:05Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "operator-disabled"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "pending",
+      "mode": "asciinema"
+    }
+  }
+}

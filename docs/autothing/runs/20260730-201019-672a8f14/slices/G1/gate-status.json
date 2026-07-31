@@ -1,0 +1,41 @@
+{
+  "slice": "G1",
+  "title": "cortex-client-fitting-install",
+  "kind": "api",
+  "status": "in_progress",
+  "commit": "d7591d7",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "new fitting suite 15 + seed 12 + validation 6 = 33/33; regression subset 152/152; typecheck 0; validate-fitting PASS all four checks; lead re-verified 33/33 + typecheck 0 + compositions/default* untouched",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "license-isolation guard runs BEFORE any write and before the unconfigured early-exit; repo_url deliberately NOT recorded in the receipt (a git remote can embed a token); gitleaks clean",
+      "at": "2026-07-31T06:55:38Z"
+    },
+    "adversarialReview": {
+      "status": "needs-work",
+      "attempts": 1,
+      "detail": "MAJOR: the configured clone executes with the full vault env (postinstall dumped every API key incl. the reviewers own live session token, shredded); MAJOR: a shebang-less bin HANGS setup for 900s via /bin/sh + ImageMagick import; MEDIUM x3: setup/verify probe disagreement, verify-ok-on-failed-install, repo-controlled path knobs bypassing the guard into the MIT tree; LOW-MED: repo_url token in argv and .git/config",
+      "at": "2026-07-31T07:19:23Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "operator-disabled"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "pending",
+      "mode": "asciinema"
+    }
+  }
+}

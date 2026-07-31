@@ -1,0 +1,42 @@
+{
+  "slice": "G5",
+  "title": "cortex-automations-view-fitting",
+  "kind": "api",
+  "status": "passed",
+  "commit": "99b41d5",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T07:11:50Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "15 new + 33 sibling/registry = 48/48; regression batch 70 passed/15 skipped; typecheck 0; validate-fitting PASS on the new fitting AND still PASS on the untouched local engine; lead re-verified 48/48 + local automations still valid + default compositions untouched",
+      "at": "2026-07-31T07:11:50Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "verify probes with credentials STRIPPED from the env; key presence reported never printed nor gated; receipt read as a lookup table only; no set -x",
+      "at": "2026-07-31T07:11:50Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "detail": "batched with G3. All four criteria verified independently: connector-only kind, local automations untouched and still PASS, three verify outcomes each probed (incl. non-executable and too-old receipts), the three honesty points asserted, registry entry non-vacuous. The SKILL.md-path claim was VERIFIED against the apm.lock deployed_files and claude-install-source.ts - a root-level SKILL.md would indeed have shipped nothing. 2 hardening items recorded.",
+      "at": "2026-07-31T07:35:05Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "operator-disabled"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "pending",
+      "mode": "asciinema"
+    }
+  }
+}

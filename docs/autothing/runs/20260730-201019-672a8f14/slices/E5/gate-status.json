@@ -1,0 +1,61 @@
+{
+  "slice": "E5",
+  "title": "knowledge-rest-search-read",
+  "kind": "api",
+  "status": "passed",
+  "commit": "a26b64b + 79aa116",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T02:54:19Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "+26 tests (knowledge contract 7->19, new scoping suite 14); whole api 2309 passed/1 skipped/0 failed; shared 60/60; lead re-verified typecheck 0 all workspaces, sast 0, chokepoint 0, targeted 81/81. Both suites MUTATION-PROBED by the implementer (hardcoding the org fails 3 security tests; removing the _shared guards fails 1)",
+      "at": "2026-07-31T02:54:19Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "typecheck 0, lint 0 errors, gate:sast 0, chokepoint 0, garrison-grep 0, gitleaks 0; no new deps",
+      "at": "2026-07-31T02:54:19Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE-after-fix",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 2,
+      "detail": "Org-scoping core UNBROKEN under every vector (31 traversal probes, 8 body + 8 query field names, 7 header spellings, key-drift, no super-admin hatch). 2 real defects fixed: the browse-audit exemption I had approved (a leaked key could harvest every title org-wide unattributed) and a shared-corpus stamp that returned a 200 body failing its own schema. Plus a platform-wide 500-instead-of-400 on malformed path escapes.",
+      "at": "2026-07-31T03:52:01Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/E5/evidence.cast",
+      "videoSha256": "a9a16b1e1356e54c...",
+      "videoBytes": 798,
+      "selfVerified": "cast contains passing counts",
+      "at": "2026-07-31T03:52:01Z"
+    },
+    "diagrams": {
+      "status": "passed",
+      "detail": "02 AS-BUILT; 05 untouched (no data-model change - existing state exposed)"
+    },
+    "ratchet": {
+      "status": "passed",
+      "detail": "raw-control-byte gate added after the NUL-byte class RECURRED (E2 then E5); shrink-only allowlist for 3 pre-existing; the gate caught its own file on first run"
+    }
+  }
+}

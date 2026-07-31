@@ -1,0 +1,57 @@
+{
+  "slice": "E3",
+  "title": "memvault-fts-search-export",
+  "kind": "api",
+  "status": "passed",
+  "commit": "55ec094 + 507ab81",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-30T22:12:12Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "isolation 21/21 (+7 regression tests, each verified to fail on revert), contract 18/18, whole api suite 2250 passed/1 skipped/0 failed; lead re-verified typecheck 0, sast 0, chokepoint 0, memvault 39/39",
+      "at": "2026-07-30T23:40:19Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gate:sast 0, chokepoint 0, garrison-grep 0, encryption-key-grep 0, gitleaks 0; NO new deps (archiver pre-existing)",
+      "at": "2026-07-30T22:12:12Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 3,
+      "detail": "2 review rounds. Round 1 found a REAL cross-tenant breach (symlinked user root). Round 2 found F2 half-closed at the index-FILE path (cross-tenant read + index poisoning) plus 2 availability defects. Final APPROVE after a 15/15 dangling-symlink CLASS sweep, both non-tautology reverts reproduced by the reviewer itself (8/40 evictions, jail 200-vs-404), and 2 LOW nits applied.",
+      "at": "2026-07-31T00:11:35Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/E3/evidence.cast",
+      "videoSha256": "3a9cd9f1c8c38ce2...",
+      "videoBytes": 801,
+      "selfVerified": "cast contains \"22 passed\" (isolation suite)",
+      "at": "2026-07-31T00:11:35Z"
+    },
+    "diagrams": {
+      "status": "passed",
+      "detail": "02/05 AS-BUILT, additive 33/0, JSON valid"
+    }
+  }
+}

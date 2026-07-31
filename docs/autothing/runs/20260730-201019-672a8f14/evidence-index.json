@@ -1,0 +1,151 @@
+{
+  "runId": "20260730-201019-672a8f14",
+  "profile": "build",
+  "gatesConfig": {
+    "test": true,
+    "adversarialReview": true,
+    "adversarialTest": true,
+    "codexSliceReview": false,
+    "design": true,
+    "walkthrough": true,
+    "deliberateRed": true,
+    "mutation": true,
+    "report": true,
+    "foundation": true,
+    "codexCheckpoint": false,
+    "askQuestions": false
+  },
+  "runSpec": "docs/autothing/runs/20260730-201019-672a8f14/RUN_SPEC.md",
+  "runLog": "RUN_LOG.md",
+  "slices": [
+    {
+      "id": "A0",
+      "title": "convergence-audit-voice-investigation",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E1",
+      "title": "user-or-key-admission-rate-caps",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "G2",
+      "title": "capture-spool-cli-flush",
+      "repo": "garrison",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E2",
+      "title": "memvault-jail-store-router-isolation",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E3",
+      "title": "memvault-fts-search-export",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E4",
+      "title": "automations-idempotency-logs-xclient",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E5",
+      "title": "knowledge-rest-search-read",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E6",
+      "title": "openapi-spec-drift-gate",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "E7",
+      "title": "cortex-cli-generated-client",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "in_progress"
+    },
+    {
+      "id": "G1",
+      "title": "cortex-client-fitting-install",
+      "repo": "garrison",
+      "kind": "api",
+      "status": "in_progress"
+    },
+    {
+      "id": "G3",
+      "title": "basic-memory-backend-switch",
+      "repo": "garrison",
+      "kind": "api",
+      "status": "in_progress"
+    },
+    {
+      "id": "G5",
+      "title": "cortex-automations-view-fitting",
+      "repo": "garrison",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "G4",
+      "title": "import-shadow-comparator",
+      "repo": "garrison",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "G6",
+      "title": "docs-hard-rules-both-repos",
+      "repo": "both",
+      "kind": "api",
+      "status": "passed"
+    },
+    {
+      "id": "VIS",
+      "title": "automation-private-visibility-enforcement",
+      "repo": "ekoa-code",
+      "kind": "api",
+      "status": "passed",
+      "origin": "independent-test-pass finding"
+    }
+  ],
+  "globalGate": {
+    "status": "in_progress",
+    "buildableRemaining": 3,
+    "deliberateRed": {
+      "status": "passed",
+      "at": "2026-07-31T02:56:24Z",
+      "detail": "schema-coverage bit (50 vs pinned 49); mount-coverage correctly did NOT (documented router-level limit, empirically confirmed); probe restored, gates green"
+    },
+    "decorrelatedVerification": {
+      "status": "passed",
+      "at": "2026-07-31T04:17:29Z",
+      "detail": "~430 assertions, live HTTP against the real compiled server; all 27 documented ops conform; 1 REAL defect (unenforced automation visibility) + 2 spec divergences + 5 observations; run-log caps and _shared honestly unverifiable without a model credential"
+    },
+    "mutation": {
+      "status": "passed-by-substitute",
+      "at": "2026-07-31T12:11:39Z",
+      "detail": "NOT a mutation-tool run. Every fix in the run was revert-proofed - reverted, covering test observed to FAIL, failure text recorded - which is semantic rather than syntactic mutation and caught three tests that passed for the wrong reason (an eviction test green against pre-fix code until BOTH layers were reverted; a jail non-tautology proven by reverting one anchor line; a docs test that passes in both states BY DESIGN and is labelled so). NOT COVERED: untouched pre-existing paths were not mutated - a tool run over api/src/memvault and api/src/auth is recommended, not claimed."
+    }
+  },
+  "assumptions_confirmed": [
+    "garrison-repo-identity confirmed by operator 2026-07-31"
+  ],
+  "landing": "docs/autothing/runs/20260730-201019-672a8f14/LANDING.md"
+}

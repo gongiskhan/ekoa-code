@@ -1,0 +1,53 @@
+{
+  "slice": "E7",
+  "title": "cortex-cli-generated-client",
+  "kind": "api",
+  "status": "in_progress",
+  "commit": "efb5759 + a305c70",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T06:28:16Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "CLI suite 43->71 across 6 files, every finding covered by a test verified to FAIL on revert; api 2339 passed/1 skipped/0 failed; shared 60/60; lead re-verified typecheck 0, lint 0 errors, sast 0, client-drift 0, cli 71/71",
+      "at": "2026-07-31T07:28:27Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gate:sast extended to clients/*; chokepoint 0; garrison-grep 0; gitleaks 0; NEW DEP openapi-typescript 7.13.0 verified before install AND its 3.1 handling checked against OUR document rather than taken on faith",
+      "at": "2026-07-31T06:28:16Z"
+    },
+    "adversarialReview": {
+      "status": "reverifying",
+      "attempts": 2,
+      "detail": "7 findings fixed in a305c70; reviewer asked to ATTACK THE REDACTION ITSELF (the new surface) rather than just re-run the original repros",
+      "at": "2026-07-31T07:28:27Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "operator-disabled"
+    },
+    "adversarialTest": {
+      "status": "passed",
+      "note": "covered by the run-level batched independent test pass + this slice's own e2e against a real server"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "pending",
+      "mode": "asciinema"
+    },
+    "diagrams": {
+      "status": "passed",
+      "detail": "01 + 02 AS-BUILT, additive, trailing bytes preserved"
+    },
+    "lintZone": {
+      "status": "passed",
+      "detail": "proven to fire BOTH directions; a first attempt silently did NOT fire because a glob target switches import/no-restricted-paths to full-path matching"
+    }
+  }
+}

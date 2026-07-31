@@ -1,0 +1,52 @@
+{
+  "slice": "G4",
+  "title": "import-shadow-comparator",
+  "kind": "api",
+  "status": "passed",
+  "commit": "d3d2798 + d353570 + afde53a + 82a47e2 + 764b75a",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T07:35:05Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "shadow 21->37->43; full basic-memory surface 104/104 across 6 files; with docs+metadata 154 green; typecheck 0; validate-fitting PASS; lead confirmed the Python mirror is GONE (zero unicodedata/_slug_segment/_remote_permalink hits) and the 2026-08-14 date unchanged",
+      "at": "2026-07-31T08:42:11Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "a test seeds sentinel strings in note BODIES and asserts they never reach stdout, stderr or the report - reports carry identities, counts and digests only",
+      "at": "2026-07-31T07:35:05Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 4,
+      "detail": "THREE review rounds each finding what the previous could not: the shadow/comparator identity mismatch (parity unreachable while the shadow WORKED); the overdue gate failing open exactly when the CLI was absent; a stale-but-importable lib killing the drain. Two fixes were structural (a deadline closure every exit routes through; the Python/JS mirror DELETED not patched). Reviewer executed the real hook command from settings.json to prove %q quoting survives a spaced folder.",
+      "at": "2026-07-31T08:54:52Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "operator-disabled"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/G4/evidence.cast",
+      "videoSha256": "d6366621b545b62d...",
+      "videoBytes": 1094075,
+      "selfVerified": "shadow suite 44 passing",
+      "at": "2026-07-31T08:54:52Z"
+    },
+    "rule10": {
+      "status": "passed",
+      "detail": "dated review recorded in docs/DECISIONS.md closing 2026-08-14; every report header carries first-dual-write, review date, days remaining (OVERDUE at zero) and the three outcomes; the 14-day window is not a config key and the marker is not reset by toggling"
+    }
+  }
+}

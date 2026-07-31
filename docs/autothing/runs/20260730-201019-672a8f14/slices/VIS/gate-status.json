@@ -1,0 +1,9 @@
+{"slice":"VIS","title":"automation-private-visibility-enforcement","kind":"api","status":"passed","commit":"db4ca19",
+ "origin":"run-level independent test pass (not a planned slice) - a REAL cross-user read leak on the documented capability surface",
+ "gates":{"implement":{"status":"passed","at":"2026-07-31T05:10:29Z"},
+ "test":{"status":"passed","detail":"10 new tests (8 security with real minted keys for all 4 principals, 2 contract); targeted 218/218 across 17 files; whole api 2339 passed/1 skipped/0 failed; revert proof 7 of 30 fail, each site individually load-bearing (list 4, read 5, trigger 1), 3 no-regression controls pass in both states BY DESIGN","at":"2026-07-31T05:10:29Z"},
+ "securityWall":{"status":"passed","detail":"typecheck 0, lint 0, gate:sast 0, chokepoint 0, gate:openapi 0 (no schema shape change), gitleaks 0","at":"2026-07-31T05:10:29Z"},
+ "adversarialReview":{"status":"passed","verdict":"found-BY-independent-test","detail":"the defect itself came from the decorrelated verification pass; the fix enumerated the whole read class (11 paths audited, runs deliberately exempt with a stated reason) rather than the 2 reported endpoints"},
+ "codexSliceReview":{"status":"degraded","reason":"codex-unavailable","actualModel":null},
+ "design":{"status":"skipped","reason":"kind-conditional"},
+ "walkthrough":{"status":"passed","mode":"asciinema","evidence":"shares slices/E4 automations evidence"}}}

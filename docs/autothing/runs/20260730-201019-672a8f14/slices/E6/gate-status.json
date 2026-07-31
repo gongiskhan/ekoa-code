@@ -1,0 +1,57 @@
+{
+  "slice": "E6",
+  "title": "openapi-spec-drift-gate",
+  "kind": "api",
+  "status": "passed",
+  "commit": "8fd8748 + 7961bc4 + fdf092c",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-31T03:29:59Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "drift test 7->13, each proven to fail on revert; whole api 2329 passed/1 skipped/0 failed; shared 60/60; PRISTINE-checkout regeneration byte-identical, reproduced independently by the lead",
+      "at": "2026-07-31T04:23:01Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gate:sast 0, chokepoint 0, garrison-grep 0, gitleaks 0; NEW DEP zod-to-json-schema 3.25.2 verified before install (91 versions since 2021, 54.6M weekly, correct maintainer/repo, already present as an MCP-SDK transitive)",
+      "at": "2026-07-31T03:29:59Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 3,
+      "detail": "Round 1: F1 BLOCKER (spec generated from a contaminated build - the LEADs verification error), F2 every op documented 200 erasing the replay signal, F3 incomplete response list, F4-F7. Round 2 APPROVE after pristine re-verification: 27/27 successStatus agreement, ajv-verified refinement encoding, the rename repro now firing a BREAKING message, and the reviewer BREAKING the freshness gate as asked (a dirty-but-freshly-built dist still passes - the declared KNOWN LIMIT, now in findings.md).",
+      "at": "2026-07-31T04:43:42Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/E6/evidence.cast",
+      "videoSha256": "63b5e13fbb74322f...",
+      "videoBytes": 791,
+      "selfVerified": "cast contains \"13 passed\"",
+      "at": "2026-07-31T04:43:42Z"
+    },
+    "deliberateRed": {
+      "status": "passed",
+      "detail": "implementer proved the gate bites 3 ways: changed constraint, added descriptor (failing byte-drift AND set-equality independently), and vacuity (empty/deleted file)"
+    }
+  }
+}

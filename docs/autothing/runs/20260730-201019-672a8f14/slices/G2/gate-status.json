@@ -1,0 +1,53 @@
+{
+  "slice": "G2",
+  "title": "capture-spool-cli-flush",
+  "kind": "api",
+  "status": "passed",
+  "commit": "bcd40ad + 57434c7",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "spool suite 14/14 (4 regression tests from review findings); seed 12/12; hooks-install 3/3; typecheck 0; validate-fitting PASS",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "no new deps; no secrets; garrison repo has no sast lane (fitting validator run instead)",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 2,
+      "detail": "4 real findings (MEDIUM eviction scope, SIGKILL, cap guard, scheduler-state write) fixed in 57434c7; reviewer re-ran all 6 original probes",
+      "at": "2026-07-30T21:15:58Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/G2/evidence.cast",
+      "videoSha256": "34507e10c375ac18...",
+      "videoBytes": 265670,
+      "selfVerified": "cast contains \"14 passed\"",
+      "at": "2026-07-30T21:15:58Z"
+    }
+  }
+}

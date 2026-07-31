@@ -1,0 +1,53 @@
+{
+  "slice": "E1",
+  "title": "user-or-key-admission-rate-caps",
+  "kind": "api",
+  "status": "passed",
+  "commit": "72e457e + d67d261 + c201d58",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "middleware suite 9/9; api/tests/auth 46/46; schema-coverage pinned 2/2; shared+api typecheck 0; lint 0 errors",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gate:sast clean; gitleaks staged+precommit clean; no new deps",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "detail": "APPROVE with 1 Low (stale mint-time username) fixed in d67d261 + ratchet test c201d58; reviewer ran 48/48 + limiter probes; forward warning recorded: never flip /auth/refresh or jti-nonce routes to user-or-key",
+      "at": "2026-07-30T21:01:48Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "detail": "auth death (see RUN_LOG DECISION codex-auth-death)",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/E1/evidence.cast",
+      "videoSha256": "3f1cd58cdfdd747e...",
+      "videoBytes": 809,
+      "selfVerified": "cast contains \"9 passed\"",
+      "at": "2026-07-30T21:01:48Z"
+    }
+  }
+}

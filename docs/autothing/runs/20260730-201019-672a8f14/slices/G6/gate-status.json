@@ -1,0 +1,52 @@
+{
+  "slice": "G6",
+  "title": "docs-hard-rules-both-repos",
+  "kind": "api",
+  "status": "passed",
+  "commit": "e3d60c9+6a28214+b4046c9 (ekoa) + a82bdcb+d537df9+a6851ec (garrison)",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-30T21:59:42Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "citation gate extended to cover CAPABILITY_CONTRACT.md: 6/6 across both docs (was skipped as docs-only; the doc is now self-gating)",
+      "at": "2026-07-30T22:15:59Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks clean on both commits; no code, no deps",
+      "at": "2026-07-30T21:59:42Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 3,
+      "detail": "5 findings: 2 overstated gates (mount-coverage router-vs-subroute, schema-coverage COVERED-is-a-claim), present-tense pattern, provider-name leakage in a shipped fitting, inbound localhost half - ALL applied; reviewer verified every cited gate exists AND runs in CI",
+      "at": "2026-07-30T22:15:59Z"
+    },
+    "codexSliceReview": {
+      "status": "skipped",
+      "reason": "profile-conditional (docs-only, no security-boundary code)"
+    },
+    "adversarialTest": {
+      "status": "skipped",
+      "reason": "kind-conditional (docs-only)"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/G6/evidence.cast",
+      "videoSha256": "697e5562ecb180b6...",
+      "videoBytes": 742,
+      "selfVerified": "cast contains \"6 passed\"",
+      "at": "2026-07-30T22:15:59Z"
+    }
+  }
+}

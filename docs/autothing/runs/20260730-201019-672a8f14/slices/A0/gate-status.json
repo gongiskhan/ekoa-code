@@ -1,0 +1,54 @@
+{
+  "slice": "A0",
+  "title": "convergence-audit-voice-investigation",
+  "kind": "api",
+  "status": "passed",
+  "commit": "ccac637",
+  "gates": {
+    "implement": {
+      "status": "passed",
+      "at": "2026-07-30T20:45:05Z"
+    },
+    "test": {
+      "status": "passed",
+      "detail": "citation gate 3/3 after attempt-3 fixes; api typecheck both configs 0",
+      "at": "2026-07-30T20:56:02Z"
+    },
+    "securityWall": {
+      "status": "passed",
+      "detail": "gitleaks staged clean; gate:sast clean; no new deps",
+      "at": "2026-07-30T20:45:05Z"
+    },
+    "adversarialReview": {
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 3,
+      "detail": "attempt-2 NEEDS-WORK (MAJOR voice-module claim + 6 minors) fixed in ccac637; re-verified APPROVE",
+      "at": "2026-07-30T20:57:39Z"
+    },
+    "codexSliceReview": {
+      "status": "degraded",
+      "reason": "codex-unavailable",
+      "detail": "chatgpt refresh token revoked; no API key available; deterministic 401",
+      "actualModel": null
+    },
+    "adversarialTest": {
+      "status": "pending",
+      "note": "api-kind: batched run-level pass"
+    },
+    "design": {
+      "status": "skipped",
+      "reason": "kind-conditional"
+    },
+    "walkthrough": {
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/A0/evidence.cast",
+      "videoSha256": "535e5cb04ca88f04...",
+      "videoBytes": 745,
+      "selfVerified": "cast contains \"3 passed\"",
+      "at": "2026-07-30T20:57:39Z"
+    }
+  }
+}
