@@ -1,0 +1,33 @@
+{
+  "name": "@ekoa/cortex-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "cortex - the CLI over the public Cortex Capability API (docs/openapi/cortex.v1.json). One generated typed client, one generic fetch wrapper, no hand-written per-capability HTTP.",
+  "bin": {
+    "cortex": "./bin/cortex.mjs"
+  },
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "SKILL.md"
+  ],
+  "scripts": {
+    "build": "tsc -b && node scripts/copy-generated-types.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "npm run build && vitest run",
+    "generate": "node scripts/generate-client.mjs",
+    "check:drift": "node scripts/check-client-drift.mjs"
+  },
+  "dependencies": {
+    "@ekoa/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.6",
+    "mongodb-memory-server": "^10.1.2",
+    "openapi-typescript": "^7.13.0"
+  }
+}

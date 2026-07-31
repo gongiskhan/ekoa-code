@@ -62,6 +62,22 @@ module.exports = {
               { target: './api', from: './web', message: 'api/ must not import from web/ (FIXED-1).' },
               { target: './shared', from: './api', message: 'shared/ must not import from api/ (FIXED-1).' },
               { target: './shared', from: './web', message: 'shared/ must not import from web/ (FIXED-1).' },
+              // Rule 1 (extension) — generated API CONSUMERS (clients/*). A consumer is an
+              // ordinary API client: it may reach shared/ (the contract) and its own generated
+              // client, and NOTHING else in this repo. Reaching into api/ would make the CLI a
+              // second implementation of a capability instead of a caller of one (Capability
+              // Contract rule 1), and would silently couple a shipped binary to server internals.
+              // Targeted at the SHIPPED source (src/ + bin/): clients/*/tests is a dev-only
+              // harness that boots the provider in-process, the same carve-out that lets
+              // api/tests import server.ts under the module-direction zone below.
+              { target: './clients/*/src/**', from: './api', message: 'clients/ must not import from api/ — a consumer is an API client, not a second implementation (Capability Contract rule 1).' },
+              { target: './clients/*/src/**', from: './web', message: 'clients/ must not import from web/ — a consumer talks to the public API, not to the dashboard.' },
+              { target: './clients/*/bin/**', from: './api', message: 'clients/ must not import from api/ (Capability Contract rule 1).' },
+              { target: './clients/*/bin/**', from: './web', message: 'clients/ must not import from web/.' },
+              // …and nothing in the platform may depend on a consumer.
+              { target: './api', from: './clients', message: 'api/ must not import from clients/ — the dependency runs one way, provider to contract to consumer.' },
+              { target: './web', from: './clients', message: 'web/ must not import from clients/ — the dashboard is not a consumer of the CLI.' },
+              { target: './shared', from: './clients', message: 'shared/ must not import from clients/ — the contract depends on nothing.' },
               // Rule 3 — module direction (ch02 §2.7): nothing imports routes/ or server.ts
               // (server.ts is the composition root — it imports everything, nothing imports it);
               // routes/ must not import data/ directly.

@@ -2365,6 +2365,38 @@
    "locked": false,
    "containerId": null,
    "lineHeight": 1.25
+  },
+  {
+   "type": "text",
+   "id": "annot-cortex-cli-e7-4b21c8de",
+   "x": 60,
+   "y": 860,
+   "width": 874,
+   "height": 192.5,
+   "text": "AS-BUILT 2026-07-31 (cortex CLI + generated client, slice E7): a THIRD external consumer appears on the\nleft edge, beside the web client and the future OS shell - clients/cortex-cli, a Node binary that an\nagent session or a shell script runs. It enters through the SAME REST /api/v1 door as everything else:\nno new port, no new protocol, no server-side code at all. What is new is the CREDENTIAL and the SHAPE of\nthe client - it authenticates with a user-scoped ekoa_gk_ gateway key (minted from a platform session,\nNEVER by the CLI), and its typed client is GENERATED from docs/openapi/cortex.v1.json, so what it can\nreach is definitionally the key-reachable surface: memvault, knowledge, automations, nothing else.\nIt sends X-Client: cortex-cli/<version>, which the audit trail records and no code branches on\n(Capability Contract rule 3).\nThe four SSE streams stay web-client-only: a key cannot subscribe to run events (a token-query\nendpoint), so \"cortex automations watch\" POLLS getRun/getRunLogs. A contract boundary, not a gap.",
+   "originalText": "AS-BUILT 2026-07-31 (cortex CLI + generated client, slice E7): a THIRD external consumer appears on the\nleft edge, beside the web client and the future OS shell - clients/cortex-cli, a Node binary that an\nagent session or a shell script runs. It enters through the SAME REST /api/v1 door as everything else:\nno new port, no new protocol, no server-side code at all. What is new is the CREDENTIAL and the SHAPE of\nthe client - it authenticates with a user-scoped ekoa_gk_ gateway key (minted from a platform session,\nNEVER by the CLI), and its typed client is GENERATED from docs/openapi/cortex.v1.json, so what it can\nreach is definitionally the key-reachable surface: memvault, knowledge, automations, nothing else.\nIt sends X-Client: cortex-cli/<version>, which the audit trail records and no code branches on\n(Capability Contract rule 3).\nThe four SSE streams stay web-client-only: a key cannot subscribe to run events (a token-query\nendpoint), so \"cortex automations watch\" POLLS getRun/getRunLogs. A contract boundary, not a gap.",
+   "fontSize": 14,
+   "fontFamily": 3,
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#b45309",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 1,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 300121,
+   "version": 1,
+   "versionNonce": 300122,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "containerId": null,
+   "lineHeight": 1.25
   }
  ]
 }

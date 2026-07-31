@@ -8,10 +8,15 @@ the Garrison checkout at `docs/CAPABILITY_CONTRACT.md` (`~/dev/garrison`); the f
 
 Capabilities are implemented once, in Cortex, and exposed as public, versioned, OpenAPI-documented APIs.
 Consumers use them as ordinary API clients: fittings become views over the contract, hooks call the API,
-in-session agents reach capabilities through a thin CLI generated from the same spec. (Partial state: as of
-2026-07-31 the SPEC exists - `docs/openapi/cortex.v1.json`, generated from the `shared/` descriptor maps and
-pinned by the drift gate named in rule 7 - but the generated client and the CLI are not built yet, so the
-descriptor maps plus that document are the contract and consumers are still hand-written. The PROVIDER half of the pattern is live; no fitting consumes a capability API yet.) Every call carries a
+in-session agents reach capabilities through a thin CLI generated from the same spec. (State as of
+2026-07-31: the SPEC exists - `docs/openapi/cortex.v1.json`, generated from the `shared/` descriptor maps and
+pinned by the drift gate named in rule 7 - and so do the generated client and the CLI over it,
+`clients/cortex-cli`: `clients/cortex-cli/src/generated/cortex-v1.d.ts` is generated from that document by
+`clients/cortex-cli/scripts/generate-client.mjs`, diffed by `clients/cortex-cli/scripts/check-client-drift.mjs`
+(root `gate:client-drift`, in `ci:lane`), and driven by one generic wrapper, `clients/cortex-cli/src/client.ts`,
+with the agent-facing usage notes in `clients/cortex-cli/SKILL.md`. What is still open is adoption, not
+machinery: no fitting consumes a capability API yet, so existing consumers remain hand-written until they
+migrate onto the generated client.) Every call carries a
 user-scoped API key, so tenancy and authorization live where they already exist, inside Cortex. Garrison is the
 daily proving ground: capabilities earn their Ekoa customer UI only after surviving real use through the
 Garrison views. The two sides stay decoupled; the only coupling is the contract.

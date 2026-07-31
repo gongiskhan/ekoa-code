@@ -6,7 +6,8 @@
   "workspaces": [
     "shared",
     "api",
-    "web"
+    "web",
+    "clients/*"
   ],
   "engines": {
     "node": ">=20 <21"
@@ -25,10 +26,11 @@
     "gate:chokepoint": "bash scripts/chokepoint-grep.sh",
     "gate:encryption-key": "bash scripts/encryption-key-grep.sh",
     "gate:garrison": "bash scripts/garrison-grep.sh",
-    "gate:sast": "semgrep --config scripts/semgrep.yml --error --quiet api/src shared/src",
+    "gate:client-drift": "npm run check:drift --workspace @ekoa/cortex-cli",
+    "gate:sast": "semgrep --config scripts/semgrep.yml --error --quiet api/src shared/src clients/*/src clients/*/bin clients/*/scripts",
     "gate:secrets": "gitleaks detect --no-banner --redact -c scripts/gitleaks.toml",
     "gate:audit": "npm audit --audit-level=high",
-    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run typecheck && npm run test && NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} npm run build",
+    "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run gate:client-drift && npm run typecheck && npm run test && NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} npm run build",
     "gate:ledger": "node scripts/suite-ledger-run.mjs",
     "e2e:server": "node scripts/e2e-with-server.mjs"
   },
