@@ -1,6 +1,6 @@
 id: users
-title: Utilizadores e Equipas
-path: /users
+title: Utilizadores e Equipas (Settings tab)
+path: /settings/users
 mode: steps
 areas: []
 steps:

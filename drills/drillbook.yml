@@ -89,8 +89,8 @@ pages:
     mode: steps
     selected: true
   - id: orgs
-    title: Escritórios (offices / tenants)
-    path: /orgs
+    title: Escritórios (offices / tenants, Settings tab)
+    path: /settings/offices
     mode: steps
     selected: true
   - id: pedidos
@@ -139,7 +139,7 @@ pages:
     mode: steps
     selected: true
   - id: users
-    title: Utilizadores e Equipas
-    path: /users
+    title: Utilizadores e Equipas (Settings tab)
+    path: /settings/users
     mode: steps
     selected: true

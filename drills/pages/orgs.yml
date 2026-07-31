@@ -1,6 +1,6 @@
 id: orgs
-title: Escritórios (offices / tenants)
-path: /orgs
+title: Escritórios (offices / tenants, Settings tab)
+path: /settings/offices
 mode: steps
 areas: []
 steps:
