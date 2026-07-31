@@ -1,0 +1,783 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import {
+  Plus,
+  Trash2,
+  Users2,
+  Shield,
+  AlertTriangle,
+  KeyRound,
+  RotateCcw,
+  Gauge,
+} from "lucide-react";
+import { useAuthStore } from "@/stores/auth";
+import { useUsersStore } from "@/stores/users";
+import { useOrgsStore } from "@/stores/orgs";
+import { useCompanyStore } from "@/stores/company";
+import { useBillingStore, type AdminUsageRow } from "@/stores/billing";
+import { useTranslation } from "@/stores/i18n";
+import type { AuthUser, OrgConfig } from "@ekoa/shared";
+import { AdminGate } from "@/components/admin-gate";
+import { fmtTokens } from "@/lib/format/tokens";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Button, IconButton } from "@/components/ui/button";
+import { Card, CardTitle } from "@/components/ui/card";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
+import { LoadingState } from "@/components/ui/spinner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Dialog } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
+import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
+
+/* ---------- Stable refs for selectors ---------- */
+
+const EMPTY_USERS: AuthUser[] = [];
+
+/* ---------- Types ---------- */
+
+type DialogState =
+  | { kind: "none" }
+  | { kind: "addUser" }
+  | { kind: "resetPassword"; user: AuthUser }
+  | { kind: "setLimit"; user: AuthUser; usage?: AdminUsageRow };
+
+/* ---------- Helpers ---------- */
+
+function getInitials(name: string) {
+  return name
+    .split(/[\s._@-]+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
+/* ---------- Sub-components ---------- */
+
+function RoleBadge({ role }: { role: string }) {
+  const { pages } = useTranslation();
+  const t = pages.users;
+  if (role === "super-admin") {
+    return <Badge tone="warning">{t.roleSuperAdmin}</Badge>;
+  }
+  if (role === "org-admin") {
+    return <Badge tone="brand">{t.roleAdmin}</Badge>;
+  }
+  return <Badge tone="neutral">{t.roleUser}</Badge>;
+}
+
+/**
+ * FC-500 role toggle between 'user' and 'org-admin'. A super-admin is never a
+ * toggle target - its badge is shown read-only. Available to org-admins (own
+ * org) and super-admins.
+ */
+function RoleToggle({
+  user,
+  disabled,
+  onToggle,
+}: {
+  user: AuthUser;
+  disabled: boolean;
+  onToggle: (role: "org-admin" | "user") => void;
+}) {
+  const { pages } = useTranslation();
+  const t = pages.users;
+  if (user.role === "super-admin") {
+    return <RoleBadge role={user.role} />;
+  }
+  const options: { value: "user" | "org-admin"; label: string }[] = [
+    { value: "user", label: t.roleUser },
+    { value: "org-admin", label: t.roleAdmin },
+  ];
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-lg border border-line"
+      role="group"
+      aria-label={t.role}
+      data-testid={`role-toggle-${user.username}`}
+    >
+      {options.map((opt) => {
+        const selected = user.role === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            disabled={disabled || selected}
+            onClick={() => onToggle(opt.value)}
+            aria-pressed={selected}
+            className={`px-2.5 py-1 text-xs font-medium transition-colors focus-ring ${
+              selected
+                ? "bg-teal-600 text-white"
+                : "bg-surface text-neutral-500 hover:text-neutral-900"
+            } ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Dialogs ---------- */
+
+function AddUserDialog({
+  open,
+  orgs,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  orgs: OrgConfig[];
+  onClose: () => void;
+  onAdd: (data: {
+    username: string;
+    password: string;
+    role: "org-admin" | "user";
+    orgId?: string;
+  }) => void;
+}) {
+  const { pages, common } = useTranslation();
+  const t = pages.users;
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"org-admin" | "user">("user");
+  const [orgId, setOrgId] = useState("");
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!username.trim()) return;
+    onAdd({
+      username: username.trim(),
+      password: password.trim() || username.trim().padEnd(6, "0"),
+      role,
+      orgId: orgId || undefined,
+    });
+    setUsername("");
+    setPassword("");
+    setRole("user");
+    setOrgId("");
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t.addUser}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            {common.cancel}
+          </Button>
+          <Button type="submit" form="add-user-form" variant="primary">
+            {t.addUser}
+          </Button>
+        </>
+      }
+    >
+      <form id="add-user-form" onSubmit={handleSubmit} className="space-y-4">
+        <Input
+          label={t.username}
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder={t.usernamePlaceholder}
+          required
+        />
+        <Input
+          label={pages.login.password}
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder={t.leaveEmptyForDefault}
+          hint={t.passwordDefaultHint}
+        />
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-neutral-600">{t.role}</label>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={role === "user" ? "primary" : "secondary"}
+              className="flex-1 justify-center"
+              onClick={() => setRole("user")}
+            >
+              {t.roleUser}
+            </Button>
+            <Button
+              type="button"
+              variant={role === "org-admin" ? "primary" : "secondary"}
+              className="flex-1 justify-center"
+              onClick={() => setRole("org-admin")}
+            >
+              {t.roleAdmin}
+            </Button>
+          </div>
+        </div>
+        {orgs.length > 0 && (
+          <Select
+            label="Escritório"
+            value={orgId}
+            onChange={(e) => setOrgId(e.target.value)}
+            data-testid="add-user-org"
+          >
+            <option value="">Por omissão (o seu escritório)</option>
+            {orgs.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.displayName ?? org.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </form>
+    </Dialog>
+  );
+}
+
+function ResetPasswordDialog({
+  open,
+  user,
+  onClose,
+  onReset,
+}: {
+  open: boolean;
+  user: AuthUser | null;
+  onClose: () => void;
+  onReset: (userId: string, newPassword: string) => void;
+}) {
+  const { pages, common } = useTranslation();
+  const t = pages.users;
+  const [newPassword, setNewPassword] = useState("");
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !newPassword.trim()) return;
+    onReset(user.id, newPassword.trim());
+    setNewPassword("");
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t.resetPassword}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            {common.cancel}
+          </Button>
+          <Button type="submit" form="reset-password-form" variant="primary">
+            {t.resetPassword}
+          </Button>
+        </>
+      }
+    >
+      <form id="reset-password-form" onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-neutral-600">
+          {t.resetPasswordFor}{" "}
+          <span className="font-semibold text-neutral-800">{user?.username}</span>
+        </p>
+        <Input
+          label={pages.changePassword.newPassword}
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder={pages.changePassword.newPasswordPlaceholder}
+          required
+          minLength={4}
+        />
+      </form>
+    </Dialog>
+  );
+}
+
+function SetLimitDialog({
+  open,
+  user,
+  usage,
+  isLoading,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  user: AuthUser | null;
+  usage?: AdminUsageRow;
+  isLoading: boolean;
+  onClose: () => void;
+  onSave: (tokenLimit: number | null) => void;
+}) {
+  const { pages, common } = useTranslation();
+  const t = pages.users;
+  const currentLimit = usage?.tokensBase ?? 10_000_000;
+  const [valueMillions, setValueMillions] = useState<string>(
+    (currentLimit / 1_000_000).toString(),
+  );
+
+  useEffect(() => {
+    if (open) {
+      setValueMillions((currentLimit / 1_000_000).toString());
+    }
+  }, [open, currentLimit]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+    const parsed = parseFloat(valueMillions);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    onSave(Math.floor(parsed * 1_000_000));
+  }
+
+  function handleResetDefault() {
+    if (!user) return;
+    onSave(null);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t.setTokenLimit}
+      size="sm"
+      footer={
+        <div className="flex w-full items-center justify-between">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleResetDefault}
+            disabled={isLoading || !usage?.isCustomLimit}
+          >
+            {t.resetToDefault}
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={isLoading}>
+              {common.cancel}
+            </Button>
+            <Button
+              type="submit"
+              form="set-limit-form"
+              variant="primary"
+              loading={isLoading}
+            >
+              {common.save}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <form id="set-limit-form" onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-neutral-600">
+          {t.setTokenLimitFor}{" "}
+          <span className="font-semibold text-neutral-800">{user?.username}</span>.
+        </p>
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-neutral-600">
+            {t.limitInMillions}
+          </label>
+          <div className="flex items-center space-x-2">
+            <Input
+              type="number"
+              step="0.1"
+              min="0.1"
+              value={valueMillions}
+              onChange={(e) => setValueMillions(e.target.value)}
+              wrapperClassName="flex-1"
+              required
+            />
+            <span className="text-sm text-neutral-500">{t.mTokens}</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {[1, 5, 10, 25, 50, 100].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setValueMillions(m.toString())}
+                className="px-2.5 py-1 text-xs border border-line rounded-md hover:border-teal-500 hover:text-teal-700 transition-colors cursor-pointer focus-ring"
+              >
+                {m}M
+              </button>
+            ))}
+          </div>
+          {usage?.isCustomLimit && (
+            <p className="text-[11px] text-neutral-500 mt-2">{t.customLimitHint}</p>
+          )}
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/* ---------- Main Component ---------- */
+
+export default function SettingsUsersPage() {
+  const { pages, common } = useTranslation();
+  const t = pages.users;
+  const confirm = useConfirm();
+
+  const users = useUsersStore((s) => s.users) || EMPTY_USERS;
+  const usersLoading = useUsersStore((s) => s.isLoading);
+  const usersError = useUsersStore((s) => s.error);
+  const fetchUsers = useUsersStore((s) => s.fetchUsers);
+  const addUser = useUsersStore((s) => s.addUser);
+  const updateUser = useUsersStore((s) => s.updateUser);
+  const removeUser = useUsersStore((s) => s.removeUser);
+  const resetPassword = useUsersStore((s) => s.resetPassword);
+  const clearUsersError = useUsersStore((s) => s.clearError);
+
+  const allUsage = useBillingStore((s) => s.allUsage);
+  const fetchAllUsage = useBillingStore((s) => s.fetchAllUsage);
+  const resetUsageForUser = useBillingStore((s) => s.resetUsageForUser);
+  const setLimitForUser = useBillingStore((s) => s.setLimitForUser);
+
+  const currentUserRole = useAuthStore((s) => s.user?.role ?? null);
+  const isSuperAdmin = currentUserRole === "super-admin";
+
+  const orgs = useOrgsStore((s) => s.orgs);
+  const fetchOrgs = useOrgsStore((s) => s.fetchOrgs);
+  const ownOrg = useCompanyStore((s) => s.company);
+  const hasOwnOrg = useCompanyStore((s) => s.company !== null);
+  const fetchCompany = useCompanyStore((s) => s.fetchCompany);
+
+  const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+
+  useEffect(() => {
+    fetchUsers();
+    if (!hasOwnOrg) fetchCompany();
+  }, [fetchUsers, fetchCompany, hasOwnOrg]);
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      fetchAllUsage();
+      fetchOrgs();
+    }
+  }, [isSuperAdmin, fetchAllUsage, fetchOrgs]);
+
+  const orgById = new Map<string, OrgConfig>(orgs.map((org) => [org.id, org]));
+  function resolveOrgName(orgId: string): string {
+    const fromList = orgById.get(orgId);
+    if (fromList) return fromList.displayName ?? fromList.name;
+    if (ownOrg && ownOrg.id === orgId) return ownOrg.displayName ?? ownOrg.name;
+    return orgId;
+  }
+
+  const usageByUserId = new Map<string, AdminUsageRow>(
+    (allUsage ?? []).map((row) => [row.userId, row]),
+  );
+
+  const filteredUsers = users.filter((u) =>
+    u.username.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
+  const isLoading = usersLoading;
+  const error = usersError;
+
+  const handleRetry = useCallback(() => {
+    clearUsersError();
+    fetchUsers();
+  }, [clearUsersError, fetchUsers]);
+
+  async function handleAddUser(data: {
+    username: string;
+    password: string;
+    role: "org-admin" | "user";
+    orgId?: string;
+  }) {
+    setActionLoading(true);
+    const result = await addUser({
+      username: data.username,
+      password: data.password,
+      role: data.role,
+      orgId: data.orgId,
+      passwordChangeRequired: true,
+    });
+    setActionLoading(false);
+    if (result.success) {
+      setDialog({ kind: "none" });
+    }
+  }
+
+  async function handleToggleActive(user: AuthUser, active: boolean) {
+    await updateUser(user.id, { active });
+  }
+
+  async function handleToggleRole(user: AuthUser, role: "org-admin" | "user") {
+    await updateUser(user.id, { role });
+  }
+
+  async function handleDeleteUser(user: AuthUser) {
+    const ok = await confirm({
+      title: t.deleteUser,
+      description: t.deleteConfirmation,
+      confirmLabel: common.delete,
+      tone: "danger",
+    });
+    if (!ok) return;
+    await removeUser(user.id);
+  }
+
+  async function handleResetPassword(userId: string, newPassword: string) {
+    setActionLoading(true);
+    const result = await resetPassword(userId, newPassword);
+    setActionLoading(false);
+    if (result.success) {
+      setDialog({ kind: "none" });
+    }
+  }
+
+  async function handleResetUsage(user: AuthUser) {
+    const ok = await confirm({
+      title: t.resetUsageAction,
+      description: `${t.resetUsageFor} ${user.username}? ${t.resetUsageHint}`,
+    });
+    if (!ok) return;
+    await resetUsageForUser(user.id);
+  }
+
+  async function handleSetLimit(user: AuthUser, tokenLimit: number | null) {
+    setActionLoading(true);
+    await setLimitForUser(user.id, tokenLimit);
+    setActionLoading(false);
+    setDialog({ kind: "none" });
+  }
+
+  return (
+    <AdminGate allowOrgAdmin>
+      <PageShell width="wide" testId="users-page">
+        <PageHeader
+          title={t.title}
+          description={t.subtitle}
+          icon={Users2}
+          actions={
+            isSuperAdmin ? (
+              <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: "addUser" })}>
+                {t.addUser}
+              </Button>
+            ) : undefined
+          }
+        />
+
+        {error && (
+          <Card className="flex items-center justify-between border-red-200 bg-red-50">
+            <div className="flex items-center space-x-2 text-red-600">
+              <AlertTriangle size={16} aria-hidden />
+              <span className="text-sm">{error}</span>
+            </div>
+            <Button variant="danger-ghost" size="sm" onClick={handleRetry}>
+              {common.retry}
+            </Button>
+          </Card>
+        )}
+
+        {isLoading && users.length === 0 ? (
+          <LoadingState label={common.loading} />
+        ) : (
+          <>
+            <Card>
+              <div className="flex items-center justify-between">
+                <CardTitle icon={Shield}>{t.overview}</CardTitle>
+                <div className="flex items-center space-x-4 text-xs text-neutral-500">
+                  <span>
+                    {users.length} {t.users.toLowerCase()}
+                  </span>
+                  <span>
+                    {users.filter((u) => u.role === "org-admin" || u.role === "super-admin").length}{" "}
+                    {t.roleAdmin.toLowerCase()}
+                  </span>
+                  <span>
+                    {users.filter((u) => u.active).length} {common.active.toLowerCase()}
+                  </span>
+                </div>
+              </div>
+            </Card>
+
+            <section>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-bold text-neutral-400 tracking-wider">
+                  {t.users.toUpperCase()}
+                </h2>
+                <SearchInput
+                  value={searchQuery}
+                  onValueChange={setSearchQuery}
+                  placeholder={`${common.search} ${t.users.toLowerCase()}...`}
+                  className="w-56"
+                />
+              </div>
+
+              {filteredUsers.length === 0 ? (
+                <EmptyState
+                  icon={Users2}
+                  title={searchQuery ? t.noUsersMatch : t.noUsersYet}
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table data-testid="users-table">
+                    <THead>
+                      <TR>
+                        <TH>{t.username}</TH>
+                        <TH>Escritório</TH>
+                        <TH>{t.role}</TH>
+                        <TH>{common.active}</TH>
+                        {isSuperAdmin && <TH>{t.tokensUsed}</TH>}
+                        <TH>{t.created}</TH>
+                        <TH>{t.lastLogin}</TH>
+                        {isSuperAdmin && <TH className="text-right">{t.action}</TH>}
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {filteredUsers.map((user) => {
+                        const usage = usageByUserId.get(user.id);
+                        const isUserSuperAdmin = user.role === "super-admin";
+                        const createdAt = (user as { createdAt?: string }).createdAt;
+                        const lastLoginAt = (user as { lastLoginAt?: string }).lastLoginAt;
+                        const tokensTone: BadgeTone = !usage
+                          ? "neutral"
+                          : usage.percentage >= 100
+                            ? "danger"
+                            : usage.percentage >= 85
+                              ? "warning"
+                              : "neutral";
+                        return (
+                          <TR key={user.id} hover data-testid={`user-row-${user.username}`}>
+                            <TD>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-neutral-100 text-neutral-700 font-semibold text-xs flex items-center justify-center flex-shrink-0">
+                                  {getInitials(user.username)}
+                                </div>
+                                <span className="text-sm font-medium text-neutral-800">
+                                  {user.username}
+                                </span>
+                              </div>
+                            </TD>
+                            <TD className="text-sm text-neutral-600" data-testid={`user-org-${user.username}`}>
+                              {resolveOrgName(user.orgId)}
+                            </TD>
+                            <TD>
+                              <RoleToggle
+                                user={user}
+                                disabled={false}
+                                onToggle={(role) => handleToggleRole(user, role)}
+                              />
+                            </TD>
+                            <TD>
+                              <div
+                                className="flex items-center gap-2"
+                                data-testid={`user-active-${user.username}`}
+                              >
+                                <Switch
+                                  checked={user.active}
+                                  disabled={isUserSuperAdmin}
+                                  onChange={(v) => handleToggleActive(user, v)}
+                                />
+                                <span className="text-xs text-neutral-500">
+                                  {user.active ? common.active : common.inactive}
+                                </span>
+                              </div>
+                            </TD>
+                            {isSuperAdmin && (
+                              <TD>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge tone={tokensTone}>
+                                    {usage
+                                      ? `${fmtTokens(usage.tokensUsed)} / ${fmtTokens(usage.tokensBase)} (${usage.percentage}%)`
+                                      : "—"}
+                                  </Badge>
+                                  {usage?.isCustomLimit && (
+                                    <span className="text-[11px] text-teal-700">{t.customLimit}</span>
+                                  )}
+                                </div>
+                              </TD>
+                            )}
+                            <TD className="text-xs text-neutral-500">
+                              {createdAt ? new Date(createdAt).toLocaleDateString() : "—"}
+                            </TD>
+                            <TD className="text-xs text-neutral-500">
+                              {lastLoginAt
+                                ? new Date(lastLoginAt).toLocaleDateString()
+                                : "—"}
+                            </TD>
+                            {isSuperAdmin && (
+                              <TD>
+                                <div className="flex items-center justify-end gap-1">
+                                  <IconButton
+                                    icon={Gauge}
+                                    label={t.setTokenLimit}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      setDialog({ kind: "setLimit", user, usage })
+                                    }
+                                  />
+                                  <IconButton
+                                    icon={RotateCcw}
+                                    label={t.resetUsageAction}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleResetUsage(user)}
+                                  />
+                                  <IconButton
+                                    icon={KeyRound}
+                                    label={t.resetPassword}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setDialog({ kind: "resetPassword", user })}
+                                  />
+                                  {!isUserSuperAdmin && (
+                                    <IconButton
+                                      icon={Trash2}
+                                      label={t.deleteUser}
+                                      variant="ghost"
+                                      size="sm"
+                                      className="hover:text-red-600 hover:bg-red-50"
+                                      onClick={() => handleDeleteUser(user)}
+                                      data-testid="delete-user-button"
+                                    />
+                                  )}
+                                </div>
+                              </TD>
+                            )}
+                          </TR>
+                        );
+                      })}
+                    </TBody>
+                  </Table>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </PageShell>
+
+      <AddUserDialog
+        open={dialog.kind === "addUser"}
+        orgs={orgs}
+        onClose={() => setDialog({ kind: "none" })}
+        onAdd={handleAddUser}
+      />
+
+      <ResetPasswordDialog
+        open={dialog.kind === "resetPassword"}
+        user={dialog.kind === "resetPassword" ? dialog.user : null}
+        onClose={() => setDialog({ kind: "none" })}
+        onReset={handleResetPassword}
+      />
+
+      <SetLimitDialog
+        open={dialog.kind === "setLimit"}
+        user={dialog.kind === "setLimit" ? dialog.user : null}
+        usage={dialog.kind === "setLimit" ? dialog.usage : undefined}
+        isLoading={actionLoading}
+        onClose={() => setDialog({ kind: "none" })}
+        onSave={(limit) => dialog.kind === "setLimit" && handleSetLimit(dialog.user, limit)}
+      />
+    </AdminGate>
+  );
+}

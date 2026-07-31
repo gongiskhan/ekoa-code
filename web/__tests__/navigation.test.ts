@@ -24,17 +24,17 @@ describe('lib/navigation NAV_ITEMS', () => {
     expect(NAV_ITEMS[0].href).toBe('/chat');
     const settings = NAV_ITEMS.find((i) => i.href === '/settings/platform');
     expect(settings?.bottom).toBe(true);
-    // FC-500: the users page is now visible to org-admins (manage own org), not super-admin only.
-    const users = NAV_ITEMS.find((i) => i.href === '/users');
+    // FC-500: users moved to /settings/users (settings tab); still admin-only.
+    const users = NAV_ITEMS.find((i) => i.href === '/settings/users');
     expect(users?.adminOnly).toBe(true);
   });
 
-  it('exposes the H4 change-requests queue as an admin-only surface (raw PT label, like registo)', () => {
-    const pedidos = NAV_ITEMS.find((i) => i.href === '/pedidos');
-    expect(pedidos).toBeTruthy();
-    expect(pedidos?.adminOnly).toBe(true);
-    expect(pedidos?.superAdminOnly).toBeFalsy(); // org-admin AND super-admin, like registo
-    expect(pedidos?.label).toBe('Pedidos');
-    expect(pedidos?.icon).toBeTruthy();
+  it('H4 change-requests queue is no longer a top-level nav item (moved to a settings tab)', () => {
+    // Pedidos moved to /settings/pedidos as a tab under the settings area.
+    const pedidosTopLevel = NAV_ITEMS.find((i) => i.href === '/pedidos');
+    expect(pedidosTopLevel).toBeUndefined();
+    // The settings entry still covers the /settings subtree.
+    const settings = NAV_ITEMS.find((i) => i.href === '/settings/platform');
+    expect(settings?.activePrefix).toBe('/settings');
   });
 });

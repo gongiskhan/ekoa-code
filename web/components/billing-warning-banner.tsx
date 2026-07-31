@@ -30,7 +30,9 @@ export default function BillingWarningBanner() {
         <span className="font-medium">
           {fmtTokens(used)} / {fmtTokens(usage.tokensBase)} tokens
         </span>
-        <Link href="/users" className="underline hover:text-amber-900 font-medium">
+        {/* The users page moved under the Settings tab group. `/users` still redirects here, but
+            linking through it costs a round trip the user can see. */}
+        <Link href="/settings/users" className="underline hover:text-amber-900 font-medium">
           {pages_billing.manageBilling}
         </Link>
       </div>

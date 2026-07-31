@@ -12,7 +12,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import UsersPage from '@/app/(dashboard)/users/page';
+// The page moved under the Settings tab group; `(dashboard)/users` is now only a redirect,
+// and importing THAT here made every assertion below throw NEXT_REDIRECT instead of rendering.
+import UsersPage from '@/app/(dashboard)/settings/users/page';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { useAuthStore } from '@/stores/auth';
 import { useUsersStore } from '@/stores/users';

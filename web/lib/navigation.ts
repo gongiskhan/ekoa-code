@@ -8,7 +8,6 @@ import {
   Palette,
   Users,
   ScrollText,
-  Inbox,
   Building2,
   ShieldCheck,
   KeyRound,
@@ -54,14 +53,12 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/memory", icon: Brain, labelKey: "memory" },
   { href: "/knowledge", icon: Library, labelKey: "knowledge" },
   { href: "/settings/branding", icon: Palette, labelKey: "branding" },
-  // FC-500: the users page is now managed by org-admins (own org) and super-admins.
-  { href: "/users", icon: Users, labelKey: "users", adminOnly: true },
+  // FC-500: the users page lives under /settings/users (settings tabs).
+  { href: "/settings/users", icon: Users, labelKey: "users", adminOnly: true, activePrefix: "/settings/users" },
   // FC-502: the Registo admin read surface (metadata + artifacts only).
   { href: "/registo", icon: ScrollText, label: "Registo", adminOnly: true },
-  // H4: the request-changes queue (users' change requests; org-admin converts one to a patch run).
-  { href: "/pedidos", icon: Inbox, label: "Pedidos", adminOnly: true },
-  // FC-501: super-admin org management.
-  { href: "/orgs", icon: Building2, label: "Escritórios", superAdminOnly: true },
+  // FC-501: super-admin org management lives under /settings/offices (settings tabs).
+  { href: "/settings/offices", icon: Building2, label: "Escritórios", superAdminOnly: true, activePrefix: "/settings/offices" },
   // FC-404 (RESOLVED Q-07): the "Privacidade e ponte local" surface, absorbing the
   // old orphan /settings/bridge. One settings-navigation entry.
   {
