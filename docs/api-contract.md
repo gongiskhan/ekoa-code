@@ -135,9 +135,53 @@ filesystem PATH does not yet reliably detokenize in `tool_use` args across the l
 doing filesystem work through Claude Code are affected; the empty-ruleset default posture is a
 proven true no-op.
 
+## The public OpenAPI document (`docs/openapi/cortex.v1.json`)
+
+The capability surface Cortex exposes to outside clients is published as an OpenAPI 3.1 document,
+**generated** from the descriptor maps by `api/scripts/generate-openapi.mjs`
+(`npm run openapi:generate`). It is committed, and it is never hand-edited.
+
+**What is in it - one rule, no allowlist.** An endpoint belongs in the document IFF its descriptor
+carries `auth: 'user-or-key'`. That makes the spec *definitionally equal* to the key-accepting
+surface (Capability Contract rule 4) rather than a second inventory that can drift from it: flip a
+descriptor to `user-or-key` and it appears, flip it back and it disappears. Everything that needs a
+platform session (`user`, `org-admin`, `super-admin`, `token-query`, `hmac`, ...) is absent by
+construction. At 2026-07-31 that is 27 operations over 22 paths in three domains - `memvault`,
+`automations`, `knowledge` - plus the 54 schema components reachable from them. Those counts are a
+snapshot, not a gate: additive growth is silent (see the versioning rule below), so the committed
+document is the census, not this paragraph.
+
+**What it contains per endpoint.** Path + method; path parameters derived from the path template
+(the descriptor has no `params` field, so they are typed as non-empty strings and nothing more);
+query parameters exploded from the descriptor's `query` object schema, each with its own converted
+schema and a `required` flag; the `request` schema as an `application/json` request body; the
+`response` schema as the `200`. `kind: 'binary'` responses are `application/octet-stream` with
+`{type: string, format: binary}` - the descriptor carries no media type, so the spec does not invent
+one. Every operation additionally documents the CONV-2 failure statuses (`401 402 403 404 429 500`,
+plus `400` where a `request`/`query` schema exists), each referencing the one reusable
+`ErrorEnvelope` component. Auth is a single bearer `securityScheme` (the `ekoa_gk_` gateway key;
+its description records that a platform JWT is accepted too). Descriptor facts OpenAPI cannot
+express ride as `x-ekoa-*` extensions (`domain`, `endpoint`, `auth`, `kind`, `timeout-ms`).
+
+**Conversion.** zod v3 has no `toJSONSchema`, so schemas go through `zod-to-json-schema` (an `api/`
+devDependency - `shared/` still imports zod and nothing else) with the **`jsonSchema7`** target, not
+`openApi3`. OpenAPI 3.1's dialect is JSON Schema 2020-12; the `openApi3` target emits the OpenAPI
+*3.0* dialect, which renders exclusive bounds as booleans and a null branch as
+`{"enum":["null"],"nullable":true}` - both wrong in 3.1, and both occur on this surface. The
+generator asserts the emitted schemas carry no draft-7-only construct, and that every `$ref`
+resolves, rather than shipping a silently-wrong schema.
+
+**Versioning rule.** The document's `info.version` major mirrors the `/api/vN` path prefix and is
+*derived from the paths*, not hand-maintained. Per Capability Contract rule 7, **additive change is
+silent**: a new `user-or-key` endpoint or a new optional field regenerates the document and does NOT
+move the version. A **breaking** change - a removed or renamed endpoint or field, a narrowed type, a
+new required field - needs a major bump, which means a new `/api/vN` prefix, its own
+`docs/openapi/cortex.vN.json`, and an explicit migration of every consumer. Regenerating is never
+the whole fix for a breaking change.
+
 ## Contract-change discipline and CI gates
 
-Three gates walk `shared/` against the code. Know exactly what each guarantees:
+Four gates walk `shared/` against the code. Know exactly what each guarantees:
 
 - **schema-coverage** (`api/tests/contract/schema-coverage.test.ts`) - every descriptor in `shared/`
   is either COVERED (a hand-maintained allowlist) or PENDING (pinned count). It fails if a descriptor
@@ -152,5 +196,15 @@ Three gates walk `shared/` against the code. Know exactly what each guarantees:
   shrink-only: the EXCLUDED list may only shrink. Known limit: a router mounts with `requireAuth`, so
   it proves the ROUTER exists, not a specific sub-route beneath it (per-endpoint contract tests cover
   that).
+- **openapi-drift** (`api/tests/contract/openapi-drift.test.ts`) - regenerates the public OpenAPI
+  document in-process and requires it to be byte-identical to the committed
+  `docs/openapi/cortex.v1.json`, failing with the exact regeneration command. It also independently
+  asserts set-equality between the documented operations and the `user-or-key` descriptors in both
+  directions (a missing capability endpoint and a leaked platform-session endpoint both fail), that
+  every failure response references the shared error envelope, and that the committed file is a real
+  3.1 document (so a missing or gutted file cannot pass vacuously). It rides the ordinary api vitest
+  suite, so `npm test` / `ci:lane` already run it; no separate CI lane. Known limit, same shape as
+  schema-coverage: it proves spec-versus-descriptor agreement, NOT that a real response body matches
+  its schema.
 - **protocol-parity** - the migration parity suites (`api/tests/migration/`) replay legacy workloads
   and billing against the rebuilt engine to prove byte/behaviour parity on the carried surfaces.

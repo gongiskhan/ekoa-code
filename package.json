@@ -20,6 +20,8 @@
     "test": "npm run test --workspaces --if-present",
     "test:contract": "npm run test:contract --workspace api --if-present",
     "e2e": "node scripts/suite-ledger-run.mjs --run",
+    "openapi:generate": "node api/scripts/generate-openapi.mjs",
+    "gate:openapi": "npm run openapi:generate && git diff --exit-code -- docs/openapi",
     "gate:chokepoint": "bash scripts/chokepoint-grep.sh",
     "gate:encryption-key": "bash scripts/encryption-key-grep.sh",
     "gate:garrison": "bash scripts/garrison-grep.sh",

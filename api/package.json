@@ -51,6 +51,7 @@
     "fflate": "^0.8.3",
     "mongodb-memory-server": "^10.1.2",
     "supertest": "^7.0.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

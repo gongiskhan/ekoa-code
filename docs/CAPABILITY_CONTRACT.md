@@ -72,9 +72,14 @@ PENDING against a pinned `EXPECTED_PENDING_COUNT` (49 as of 2026-07-30), so a ne
 unaccounted. Read that as accounting, not proof: COVERED is a hand-maintained CLAIM, and a key added with no test
 passes the gate (a 2026-07-10 audit found 27 of 154 COVERED keys unexercised; two real bugs shipped through it).
 Only the per-domain contract suites verify that a body matches its schema - plus
-`api/tests/contract/mount-coverage.test.ts` for mounting. The OpenAPI document and its
-spec-versus-descriptor drift test do not exist yet; they land with the spec slice of this run, and until then the
-descriptor maps are the contract (see [api-contract.md](./api-contract.md)).
+`api/tests/contract/mount-coverage.test.ts` for mounting. The public OpenAPI document now exists and is pinned:
+`docs/openapi/cortex.v1.json` is GENERATED from the descriptor maps by `api/scripts/generate-openapi.mjs` and
+contains exactly the endpoints whose descriptor carries `user-or-key`, so it is *definitionally* the
+key-reachable surface rather than a second list that can drift from it;
+`api/tests/contract/openapi-drift.test.ts` regenerates it in-process on every api test run and fails on any byte
+difference, so a `shared/` change that has not been published to the spec cannot merge. Read that gate for what
+it is: spec-versus-descriptor agreement, not proof that a response body matches its schema (still the per-domain
+suites' job). Conventions and the versioning rule: [api-contract.md](./api-contract.md).
 
 **8. The provider stays boring.** It authenticates, meters, routes, and logs. It never interprets prompt content,
 injects context, or executes side effects on the caller's behalf. A direct-provider fallback always exists.
