@@ -161,12 +161,15 @@ export const memvaultEndpoints = {
   },
   /** Streams a tar of the caller's MARKDOWN — the derived per-user search index is never in
    *  it. `kind: 'binary'` marks the body as opaque bytes (the servedApp/uploads precedent):
-   *  there is no JSON response schema to validate, so `response` is z.unknown(). */
+   *  there is no JSON response schema to validate, so `response` is z.unknown(). `mediaType`
+   *  states the concrete type the route sends, so the published spec does not have to guess
+   *  (E6 review F6 — it guessed application/octet-stream, and that was wrong). */
   exportVault: {
     method: 'GET',
     path: '/api/v1/memvault/export',
     auth: 'user-or-key',
     kind: 'binary',
+    mediaType: 'application/x-tar',
     response: z.unknown(),
   },
 } as const satisfies DomainDescriptorMap;

@@ -322,6 +322,7 @@ export const automationsEndpoints = {
     auth: 'user-or-key',
     request: AutomationCreateRequest,
     response: Automation,
+    successStatus: 201,
   },
   patch: {
     method: 'PATCH',
@@ -350,6 +351,9 @@ export const automationsEndpoints = {
     auth: 'user-or-key',
     request: RunCreateRequest,
     response: RunCreateResponse,
+    /** 202 started a run; 200 is an idempotent replay of the SAME runId, started nothing. The
+     *  status code is the only signal — the body is byte-identical either way. */
+    successStatus: [202, 200],
   },
   listRuns: {
     method: 'GET',

@@ -151,25 +151,59 @@ construction. At 2026-07-31 that is 27 operations over 22 paths in three domains
 snapshot, not a gate: additive growth is silent (see the versioning rule below), so the committed
 document is the census, not this paragraph.
 
-**What it contains per endpoint.** Path + method; path parameters derived from the path template
-(the descriptor has no `params` field, so they are typed as non-empty strings and nothing more);
-query parameters exploded from the descriptor's `query` object schema, each with its own converted
-schema and a `required` flag; the `request` schema as an `application/json` request body; the
-`response` schema as the `200`. `kind: 'binary'` responses are `application/octet-stream` with
-`{type: string, format: binary}` - the descriptor carries no media type, so the spec does not invent
-one. Every operation additionally documents the CONV-2 failure statuses (`401 402 403 404 429 500`,
-plus `400` where a `request`/`query` schema exists), each referencing the one reusable
-`ErrorEnvelope` component. Auth is a single bearer `securityScheme` (the `ekoa_gk_` gateway key;
-its description records that a platform JWT is accepted too). Descriptor facts OpenAPI cannot
-express ride as `x-ekoa-*` extensions (`domain`, `endpoint`, `auth`, `kind`, `timeout-ms`).
+**Everything it says comes from a descriptor field.** The generator holds no per-endpoint
+knowledge; where a fact about an endpoint could not be read from `shared/`, the fix was to add the
+field, not to hardcode the fact. `EndpointDescriptor` therefore carries, besides
+`request`/`response`/`query`:
+
+| field | what it makes documentable |
+|---|---|
+| `params` | the zod for the express `:params`. Path segments get their real type (`KnowledgeSegment`, not "a string"), **and** the endpoint gets its `400` - `knowledge.readKnowledgeDoc` validates its segments and rejects a bad one. |
+| `successStatus` | the success status when it is not 200; an ARRAY when the status itself carries information. `automations.create` is `201`; `automations.createRun` is `[202, 200]`, where 202 started a run and 200 is an idempotent replay of the same runId and the status is the ONLY signal telling them apart. |
+| `mediaType` | the response media type for a non-JSON body. Mandatory with `kind: 'binary'` - the generator refuses to guess, because guessing produced `application/octet-stream` for a route that sends `application/x-tar`. |
+
+**What it contains per endpoint.** Path + method; path parameters typed from `params` where it is
+declared and as `{type: string, minLength: 1}` where it is not (the honest limit: without a `params`
+schema the contract states nothing about the segment, and a route that validates its params without
+declaring them is a contract gap, not a generator gap); query parameters exploded from the `query`
+object schema with a `required` flag each; the `request` schema as an `application/json` body; the
+`response` schema under every declared success status, with an `x-ekoa-success-statuses` extension
+preserving declared order when there is more than one. Failure responses are derived, never listed
+per endpoint: `401 402 403 404 429 500` always (they are platform-wide invariants), `400` iff the
+descriptor declares `request`, `query` **or** `params`, and `413` iff it declares `request` - one
+global `express.json({limit:'1mb'})` covers every route here, and 413 is reachable from a
+spec-valid body because schema `maxLength` counts CHARACTERS while the limit counts BYTES. Every
+failure references the one reusable `ErrorEnvelope` component. Auth is a single bearer
+`securityScheme` (the `ekoa_gk_` gateway key; its description records that a platform JWT is
+accepted too). `x-ekoa-*` extensions carry `domain`, `endpoint`, `auth`, `kind`,
+`success-statuses`, `timeout-ms`.
 
 **Conversion.** zod v3 has no `toJSONSchema`, so schemas go through `zod-to-json-schema` (an `api/`
 devDependency - `shared/` still imports zod and nothing else) with the **`jsonSchema7`** target, not
 `openApi3`. OpenAPI 3.1's dialect is JSON Schema 2020-12; the `openApi3` target emits the OpenAPI
 *3.0* dialect, which renders exclusive bounds as booleans and a null branch as
-`{"enum":["null"],"nullable":true}` - both wrong in 3.1, and both occur on this surface. The
-generator asserts the emitted schemas carry no draft-7-only construct, and that every `$ref`
-resolves, rather than shipping a silently-wrong schema.
+`{"enum":["null"],"nullable":true}` - both wrong in 3.1, and both occur on this surface.
+
+Three things the generator refuses to do silently, because each would publish a contract WIDER or
+otherwise different from the one the code enforces:
+
+- **A dropped refinement.** `.refine()` is invisible to the converter, which renders the inner
+  schema and discards the predicate - so `KnowledgeSegment`'s refusal of `.` and `..` would vanish
+  and the spec would advertise `..` as a legal path segment. Refinements are encoded from a
+  FAIL-CLOSED table (`KnowledgeSegment` -> `not: {enum: [".", ".."]}`); any effect not in it throws.
+- **A draft-7-only construct** (`definitions`, `dependencies`, tuple `items: []`, boolean
+  `exclusiveMinimum`, `nullable`) reaching a 3.1 document.
+- **A dangling `$ref`.**
+
+**Component names are public API.** Schemas are hoisted into `#/components/schemas/*` under their
+`shared/` export name, because a component name becomes a type name in the generated client.
+Several exports alias one schema object (`OkResponse` is also `AgentFaceCancelResponse`; `NoteRecord`
+is also `WriteNoteResponse`; `NotePermalink` is also `NoteFolder`); the shortest name wins, ties
+alphabetical. That is a deterministic tie-break, **not** a way of finding the canonical name - the
+third pair disproves that, since the derived alias `NoteFolder` is shorter and wins. What keeps it
+safe is the gate, not the rule: adding an aliasing export can silently RENAME an existing component,
+so the drift test diffs the component-name set separately and reports a disappearing name as
+breaking.
 
 **Versioning rule.** The document's `info.version` major mirrors the `/api/vN` path prefix and is
 *derived from the paths*, not hand-maintained. Per Capability Contract rule 7, **additive change is
@@ -198,13 +232,22 @@ Four gates walk `shared/` against the code. Know exactly what each guarantees:
   that).
 - **openapi-drift** (`api/tests/contract/openapi-drift.test.ts`) - regenerates the public OpenAPI
   document in-process and requires it to be byte-identical to the committed
-  `docs/openapi/cortex.v1.json`, failing with the exact regeneration command. It also independently
-  asserts set-equality between the documented operations and the `user-or-key` descriptors in both
-  directions (a missing capability endpoint and a leaked platform-session endpoint both fail), that
-  every failure response references the shared error envelope, and that the committed file is a real
-  3.1 document (so a missing or gutted file cannot pass vacuously). It rides the ordinary api vitest
-  suite, so `npm test` / `ci:lane` already run it; no separate CI lane. Known limit, same shape as
+  `docs/openapi/cortex.v1.json`, failing with the exact regeneration command. It additionally
+  asserts, independently of the generator: set-equality between the documented operations and the
+  `user-or-key` descriptors in BOTH directions (a missing capability endpoint and a leaked
+  platform-session endpoint both fail); that every declared `successStatus`, `params`-driven `400`,
+  body-driven `413` and `mediaType` reached the document; that `KnowledgeSegment`'s refinement
+  survived and that an unregistered refinement throws; that every failure response references the
+  shared error envelope; and that the committed file is a real 3.1 document (so a missing or gutted
+  file cannot pass vacuously). Two failures carry a DIFFERENT remedy on purpose: a disappearing
+  component NAME is reported as breaking rather than "regenerate", and a `shared/dist` older than
+  `shared/src` fails first with "run `npm run build --workspace shared`" - the generator and the
+  test both read the gitignored build output, so a stale build would otherwise compare the spec
+  against a contract nobody is looking at. It rides the ordinary api vitest suite, so `npm test` /
+  `ci:lane` already run it; no separate CI lane. **Two stated limits.** Same shape as
   schema-coverage: it proves spec-versus-descriptor agreement, NOT that a real response body matches
-  its schema.
+  its schema. And the freshness check catches a STALE build, not one built correctly from
+  UNCOMMITTED source - that is a legitimate mid-work state, so the proof against it is procedural:
+  regenerate and re-verify from a pristine checkout of HEAD before committing the document.
 - **protocol-parity** - the migration parity suites (`api/tests/migration/`) replay legacy workloads
   and billing against the rebuilt engine to prove byte/behaviour parity on the carried surfaces.

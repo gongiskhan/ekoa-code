@@ -136,8 +136,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Success.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
@@ -147,7 +147,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -188,6 +188,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -355,7 +365,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -396,6 +406,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -530,6 +550,10 @@
         "x-ekoa-domain": "automations",
         "x-ekoa-endpoint": "createRun",
         "x-ekoa-auth": "user-or-key",
+        "x-ekoa-success-statuses": [
+          202,
+          200
+        ],
         "parameters": [
           {
             "name": "id",
@@ -553,7 +577,17 @@
         },
         "responses": {
           "200": {
-            "description": "Success.",
+            "description": "Success. This operation answers one of 202 or 200; the STATUS CODE is the discriminator - the response body schema is identical for each.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCreateResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted - processing started. This operation answers one of 202 or 200; the STATUS CODE is the discriminator - the response body schema is identical for each.",
             "content": {
               "application/json": {
                 "schema": {
@@ -563,7 +597,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -604,6 +638,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -751,7 +795,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -792,6 +836,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -939,7 +993,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -980,6 +1034,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1053,7 +1117,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1358,7 +1422,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1399,6 +1463,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1672,7 +1746,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1713,6 +1787,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1879,7 +1963,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1967,8 +2051,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/components/schemas/KnowledgeSegment"
             }
           },
           {
@@ -1976,8 +2059,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/components/schemas/KnowledgeSegment"
             }
           }
         ],
@@ -1988,6 +2070,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/KnowledgeDocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2087,7 +2179,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2136,6 +2228,16 @@
               }
             }
           },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
             "content": {
@@ -2172,9 +2274,9 @@
         "x-ekoa-kind": "binary",
         "responses": {
           "200": {
-            "description": "Opaque bytes. The contract declares `kind: \"binary\"` and carries no media type; read the response `Content-Type` header for the concrete type.",
+            "description": "Opaque bytes (`application/x-tar`).",
             "content": {
-              "application/octet-stream": {
+              "application/x-tar": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -2277,7 +2379,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2379,7 +2481,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2502,7 +2604,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2604,7 +2706,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2645,6 +2747,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2708,7 +2820,7 @@
             }
           },
           "400": {
-            "description": "Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2749,6 +2861,16 @@
           },
           "404": {
             "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3326,7 +3448,13 @@
       },
       "KnowledgeSegment": {
         "type": "string",
-        "pattern": "^[a-zA-Z0-9._-]{1,100}$"
+        "pattern": "^[a-zA-Z0-9._-]{1,100}$",
+        "not": {
+          "enum": [
+            ".",
+            ".."
+          ]
+        }
       },
       "Language": {
         "type": "string",

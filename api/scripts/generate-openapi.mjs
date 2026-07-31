@@ -86,9 +86,8 @@ const METHOD_ORDER = ['get', 'put', 'post', 'patch', 'delete', 'options', 'head'
 
 /**
  * The failure responses every capability operation can answer, and why each is UNIVERSAL
- * rather than per-endpoint. These are platform-wide invariants, not endpoint facts, so
- * listing them uniformly keeps the document free of a second hand-maintained table (same
- * reasoning as the filter rule above - a per-endpoint list would drift).
+ * rather than per-endpoint. These are platform-wide invariants, not endpoint facts, so listing
+ * them uniformly keeps the document free of a second hand-maintained per-endpoint table.
  *
  *   401 - `requireUserOrApiKey` fails closed on every capability route (rule 4).
  *   402 - the activation/billing gate runs on every authenticated surface.
@@ -97,8 +96,8 @@ const METHOD_ORDER = ['get', 'put', 'post', 'patch', 'delete', 'options', 'head'
  *   429 - the per-key capability window applies to every key principal.
  *   500 - the terminal error handler, in the same envelope.
  *
- * 400 is the one CONDITIONAL entry: emitted only where the descriptor declares a `request`
- * or `query` schema, because that is exactly where contract validation can reject the call.
+ * The two CONDITIONAL entries below are conditioned on the DESCRIPTOR, never on an endpoint
+ * name - the condition is a property of the contract, so it cannot drift from it (E6 review F3).
  */
 const UNIVERSAL_ERROR_RESPONSES = [
   ['401', 'Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).'],
@@ -109,10 +108,48 @@ const UNIVERSAL_ERROR_RESPONSES = [
   ['500', 'Internal error (`INTERNAL`).'],
 ];
 
+/**
+ * 400 - emitted wherever the descriptor declares ANY validated input: a `request` body, a
+ * `query` schema, or a `params` schema. Path params count: `knowledge.readKnowledgeDoc`
+ * safeParses `req.params` and answers 400 on a bad segment, and a spec that omitted that left
+ * a guaranteed status out of the client's response union (E6 review F3b).
+ */
 const VALIDATION_ERROR_RESPONSE = [
   '400',
-  'Request body or query string failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.',
+  'Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.',
 ];
+
+/**
+ * 413 - emitted wherever the descriptor declares a `request` body. Every non-`/api/v1/llm` route
+ * is parsed by ONE global `express.json({ limit: '1mb' })`, whose `entity.too.large` maps to
+ * `PAYLOAD_TOO_LARGE` 413 in the CONV-2 envelope. It is reachable from the published contract,
+ * not theoretical: `WriteNoteRequest.contentMd` permits 1_000_000 CHARACTERS, and a million
+ * characters of accented Portuguese is well over the 1_048_576 BYTE limit - so a request that
+ * validates against this document can still 413 (E6 review F3a).
+ */
+const PAYLOAD_TOO_LARGE_RESPONSE = [
+  '413',
+  'Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.',
+];
+
+/** Standard reason phrases, so a success status never ships with an empty description. */
+const SUCCESS_STATUS_PHRASE = { 200: 'Success.', 201: 'Created.', 202: 'Accepted - processing started.', 204: 'No content.' };
+
+/**
+ * Refinements that zod-to-json-schema DROPS, and the JSON Schema that encodes them, keyed by the
+ * component the refinement is the root of.
+ *
+ * `.refine()` is invisible to the converter (`effectStrategy: 'input'` renders the inner schema
+ * and discards the predicate), so a refined constraint silently WIDENS the published contract.
+ * This table is a FAIL-CLOSED allowlist, not a drifting one: `convertSchema` throws on any effect
+ * that is not in it, so the failure mode of forgetting an entry is a red build, never a quietly
+ * wider spec (E6 review F4).
+ */
+export const REFINEMENT_ENCODINGS = {
+  // KnowledgeSegment: `.regex(/^[a-zA-Z0-9._-]{1,100}$/)` then `.refine(s => s !== '.' && s !== '..')`.
+  // The charset admits both, so without this the spec advertises '..' as a legal path segment.
+  KnowledgeSegment: { not: { enum: ['.', '..'] } },
+};
 
 // ---------------------------------------------------------------------------
 // Named-schema registry
@@ -123,14 +160,20 @@ const VALIDATION_ERROR_RESPONSE = [
  * reusable `#/components/schemas/*` components instead of being inlined at every use site
  * (which the E7 client generator needs: a component name is a type name).
  *
- * Keyed by the zod `_def` object because that is the identity zod-to-json-schema itself
- * keys on. Several names can alias ONE schema object - `OkResponse` is also exported as
- * `AgentFaceCancelResponse`, `CompanySpaceStopResponse` and
- * `PlatformIntegrationDisconnectResponse`; `NoteRecord` is also `WriteNoteResponse`. One
- * component per schema OBJECT, and the winning name is the SHORTEST, ties broken
- * alphabetically. Deterministic, and on today's aliases it picks the canonical name every
- * time (`OkResponse`, `NoteRecord`) rather than an incidental domain-specific one - which
- * matters because a component name becomes a type name in the generated client.
+ * Keyed by the zod `_def` object because that is the identity zod-to-json-schema itself keys on.
+ * Several names alias ONE schema object: `OkResponse` is also `AgentFaceCancelResponse`,
+ * `CompanySpaceStopResponse` and `PlatformIntegrationDisconnectResponse`; `NoteRecord` is also
+ * `WriteNoteResponse`; `NotePermalink` is also `NoteFolder`. One component per schema OBJECT,
+ * and the winning name is the SHORTEST, ties broken alphabetically.
+ *
+ * BE HONEST ABOUT WHAT THAT RULE IS. It is a deterministic tie-break, NOT a way of finding the
+ * canonical name, and the third group above disproves any such claim: `NoteFolder` is the
+ * derived alias of `NotePermalink`, it is shorter, so it wins and now types the `folder` query
+ * param AND (via the alias) the permalink of two memvault operations. The rule was chosen
+ * because it happens to pick `OkResponse` and `NoteRecord` correctly and because SOME total
+ * order is required; nothing makes it right. What keeps this safe is not the rule but the gate:
+ * a component NAME is public API, so `openapi-drift.test.ts` diffs the component-name SET
+ * separately and reports a rename as BREAKING rather than as additive growth (E6 review F5).
  */
 function buildNameRegistry() {
   const nameByDef = new Map();
@@ -164,9 +207,19 @@ const refTo = (name) => ({ $ref: `${COMPONENT_POINTER_PREFIX}${name}` });
  *
  * The library appends a draft-07 `$schema` to the top level of every result; it is stripped
  * here, because a 3.1 document's schemas are 2020-12 and must not claim otherwise.
+ *
+ * REFINEMENTS ARE NOT ALLOWED TO VANISH. `.refine()` renders as its INNER schema and the
+ * predicate is discarded, which WIDENS the published contract. Every `ZodEffects` reached by
+ * this conversion is therefore recorded and then either encoded from `REFINEMENT_ENCODINGS` or
+ * thrown on. A refinement on a schema that IS a named export is not "reached" here - the
+ * override hoists it to a `$ref` before descending, and it is checked when that component is
+ * converted in its own right (E6 review F4).
  */
-function convertSchema(componentName, zodSchema, enqueue, nameByDef) {
+export function convertSchema(componentName, zodSchema, enqueue, nameByDef) {
   const rootDef = zodSchema._def;
+  const isEffects = (def) => def?.typeName === 'ZodEffects';
+  let rootIsRefined = false;
+  const droppedInside = [];
   const converted = zodToJsonSchema(zodSchema, {
     target: 'jsonSchema7',
     $refStrategy: 'root',
@@ -174,14 +227,46 @@ function convertSchema(componentName, zodSchema, enqueue, nameByDef) {
     errorMessages: false,
     markdownDescription: false,
     override: (def) => {
-      if (def === rootDef) return ignoreOverride;
+      if (def === rootDef) {
+        if (isEffects(def)) rootIsRefined = true;
+        return ignoreOverride;
+      }
       const hoisted = nameByDef.get(def);
-      if (!hoisted) return ignoreOverride;
-      enqueue(hoisted);
-      return refTo(hoisted);
+      if (hoisted) {
+        enqueue(hoisted);
+        return refTo(hoisted);
+      }
+      if (isEffects(def)) droppedInside.push(def.effect?.type ?? 'effect');
+      return ignoreOverride;
     },
   });
   delete converted.$schema;
+
+  if (droppedInside.length > 0) {
+    throw new Error(
+      `generate-openapi: component '${componentName}' contains an INLINE zod effect ` +
+        `(${[...new Set(droppedInside)].join(', ')}) that the JSON Schema conversion silently drops, ` +
+        'which would publish a WIDER contract than the code enforces. Export the refined schema from ' +
+        'shared/ as a named schema and add its encoding to REFINEMENT_ENCODINGS, or encode it inline.',
+    );
+  }
+  if (rootIsRefined) {
+    const encoding = REFINEMENT_ENCODINGS[componentName];
+    if (!encoding) {
+      throw new Error(
+        `generate-openapi: '${componentName}' carries a zod effect (.refine/.transform/.preprocess) that the ` +
+          'JSON Schema conversion drops, so the published schema would be WIDER than the code enforces. ' +
+          'Add an entry to REFINEMENT_ENCODINGS expressing the constraint in JSON Schema, or state why it ' +
+          'cannot be expressed - do not let it disappear.',
+      );
+    }
+    for (const key of Object.keys(encoding)) {
+      if (key in converted) {
+        throw new Error(`generate-openapi: REFINEMENT_ENCODINGS['${componentName}'] would overwrite the converted '${key}'.`);
+      }
+    }
+    Object.assign(converted, encoding);
+  }
   return converted;
 }
 
@@ -386,22 +471,45 @@ export function buildOpenApiDocument() {
   const tags = new Set();
 
   for (const endpoint of endpoints) {
-    const { domain, name, method, path: expressPath, request, response, query, kind, timeoutMs } = endpoint;
+    const { domain, name, method, path: expressPath, request, response, query, params, kind, mediaType, successStatus, timeoutMs } = endpoint;
     const operationKey = `${domain}.${name}`;
     tags.add(domain);
 
-    // --- parameters: path params from the path template, query params from the schema.
+    // --- parameters: path params typed from the descriptor's `params` schema where it declares
+    // one, query params exploded from the `query` schema.
     const parameters = [];
-    for (const paramName of pathParamNames(expressPath)) {
-      parameters.push({
-        name: paramName,
-        in: 'path',
-        required: true,
-        // The descriptor carries no `params` field, so a path parameter is typed by the ONE
-        // thing the contract actually states about it: it is a single non-empty path
-        // segment. Narrowing further would encode a fact the contract does not hold.
-        schema: { type: 'string', minLength: 1 },
-      });
+    const pathNames = pathParamNames(expressPath);
+    const paramsShape = params ? queryShapeOf(params) : null;
+    if (params && !paramsShape) {
+      throw new Error(`generate-openapi: ${operationKey} declares a non-object params schema; it cannot be rendered as path parameters.`);
+    }
+    if (paramsShape) {
+      // A params schema that disagrees with the path template is a contract bug, not something
+      // to paper over: either the route validates a segment the path does not have, or the path
+      // has a segment the schema forgot.
+      const declaredNames = Object.keys(paramsShape).sort();
+      const templateNames = [...pathNames].sort();
+      if (declaredNames.join(',') !== templateNames.join(',')) {
+        throw new Error(
+          `generate-openapi: ${operationKey} params schema declares [${declaredNames}] but the path template has [${templateNames}].`,
+        );
+      }
+    }
+    for (const paramName of pathNames) {
+      // With a `params` schema the segment is typed by its own zod (so `KnowledgeSegment`'s
+      // grammar and its '.'/'..' refusal reach the client). Without one, the contract states
+      // nothing about the segment beyond "a non-empty path segment", and the spec says exactly
+      // that rather than inventing a narrower type (E6 review F3/F4).
+      let paramSchema = { type: 'string', minLength: 1 };
+      if (paramsShape) {
+        const declared = paramsShape[paramName];
+        const propertySchema = unwrapOptional(declared);
+        const exported = nameByDef.get(propertySchema._def);
+        paramSchema = exported
+          ? refTo(enqueue(exported))
+          : convertSchema(`${pascal(domain, name)}Params`, propertySchema, enqueue, nameByDef);
+      }
+      parameters.push({ name: paramName, in: 'path', required: true, schema: paramSchema });
     }
     if (query) {
       const shape = queryShapeOf(query);
@@ -437,30 +545,53 @@ export function buildOpenApiDocument() {
     }
     parameters.sort((a, b) => (a.in === b.in ? a.name.localeCompare(b.name, 'en') : a.in.localeCompare(b.in, 'en')));
 
-    // --- success response.
+    // --- success response(s).
     let successContent;
     if (kind === 'binary') {
-      // `kind: 'binary'` means "opaque bytes", and the descriptor carries NO media type
-      // (`response` is `z.unknown()`). The spec must not invent one: narrowing this to a
-      // concrete type would copy a fact out of api/src that could then drift silently.
-      successContent = { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } };
+      // "Opaque bytes" is not a media type. A generated client picks its `Accept` header and its
+      // deserializer from what is declared here, so guessing (this used to emit
+      // application/octet-stream while the route sends application/x-tar) breaks every
+      // conformance proxy. The descriptor must state it (E6 review F6).
+      if (!mediaType) {
+        throw new Error(
+          `generate-openapi: ${operationKey} is kind:'binary' but declares no mediaType. ` +
+            "Add `mediaType: '<type>'` to its descriptor - the spec will not guess a media type.",
+        );
+      }
+      successContent = { [mediaType]: { schema: { type: 'string', format: 'binary' } } };
     } else if (response) {
-      successContent = { 'application/json': { schema: refTo(componentNameFor(response, domain, name, 'Response')) } };
+      successContent = { [mediaType ?? 'application/json']: { schema: refTo(componentNameFor(response, domain, name, 'Response')) } };
     }
+
+    // The success STATUS is a contract fact, not always 200. `automations.create` is 201, and
+    // `automations.createRun` is 202-or-200 where the status is the ONLY signal separating a
+    // started run from an idempotent replay of the same runId - a client generated against a
+    // 200-only spec cannot implement replay detection, and openapi-fetch would type the real
+    // 202 into neither `data` nor `error` (E6 review F2). Read from the descriptor; never a
+    // status list in this file.
+    const successStatuses = (successStatus === undefined ? [200] : [successStatus].flat()).map(Number);
+    if (successStatuses.some((s) => !Number.isInteger(s) || s < 200 || s > 299)) {
+      throw new Error(`generate-openapi: ${operationKey} declares a non-2xx successStatus (${successStatuses.join(', ')}).`);
+    }
+    const multiSuccess = successStatuses.length > 1;
 
     // Response keys are integer-like strings, so JS (and therefore JSON.stringify) always
     // orders them numerically ascending regardless of insertion order - deterministic.
-    const responses = {
-      200: {
-        description:
-          kind === 'binary'
-            ? 'Opaque bytes. The contract declares `kind: "binary"` and carries no media type; read the response `Content-Type` header for the concrete type.'
-            : 'Success.',
+    const responses = {};
+    for (const status of successStatuses) {
+      const base = kind === 'binary'
+        ? `Opaque bytes (\`${mediaType}\`).`
+        : SUCCESS_STATUS_PHRASE[status] ?? 'Success.';
+      responses[status] = {
+        description: multiSuccess
+          ? `${base} This operation answers one of ${successStatuses.join(' or ')}; the STATUS CODE is the discriminator - the response body schema is identical for each.`
+          : base,
         ...(successContent ? { content: successContent } : {}),
-      },
-    };
-    if (request || query) responses[VALIDATION_ERROR_RESPONSE[0]] = errorResponse(VALIDATION_ERROR_RESPONSE[1]);
+      };
+    }
+    if (request || query || params) responses[VALIDATION_ERROR_RESPONSE[0]] = errorResponse(VALIDATION_ERROR_RESPONSE[1]);
     for (const [status, description] of UNIVERSAL_ERROR_RESPONSES) responses[status] = errorResponse(description);
+    if (request) responses[PAYLOAD_TOO_LARGE_RESPONSE[0]] = errorResponse(PAYLOAD_TOO_LARGE_RESPONSE[1]);
 
     const operation = {
       operationId: operationKey,
@@ -472,6 +603,9 @@ export function buildOpenApiDocument() {
       'x-ekoa-endpoint': name,
       'x-ekoa-auth': PUBLIC_AUTH_CLASS,
       ...(kind ? { 'x-ekoa-kind': kind } : {}),
+      // In DECLARED order (the `responses` map is forced into numeric order by JS), so a client
+      // can tell the primary outcome from the alternative one.
+      ...(multiSuccess ? { 'x-ekoa-success-statuses': successStatuses } : {}),
       ...(timeoutMs ? { 'x-ekoa-timeout-ms': timeoutMs } : {}),
       ...(parameters.length > 0 ? { parameters } : {}),
       ...(request
