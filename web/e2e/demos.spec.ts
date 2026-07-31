@@ -177,6 +177,19 @@ test.beforeAll(async ({ browser }) => {
 
 for (const { file, spec } of specs) {
   test(`demo ${file}: the tour runs to completion`, async ({ page }) => {
+    // A tour cannot run inside Playwright's DEFAULT 30s test budget, and every wait below was
+    // written as though it could: `clickNext` allows 60s for one button, the banner 90s, the
+    // overlay 45s. None of those could ever elapse — the test was killed at 30s first, so the
+    // careful per-assertion budgets in this file were dead code and all 28 demos failed at their
+    // FIRST step with "Test timeout of 30000ms exceeded" printed directly above an
+    // "Expect toBeVisible with timeout 60000ms" that never got the chance.
+    //
+    // One tour is a login plus N steps, each of which may wait on the bridge handshake. Five
+    // minutes is the budget the internal waits already assumed; setting it here is what makes them
+    // mean anything. Every other long spec in this estate does the same (live-bridge 180s,
+    // summary-cards-chip 240s, voice-proof up to 480s).
+    test.setTimeout(300_000);
+
     // (1) shape first
     const shapeErrors = validateSpecShape(spec);
     test.skip(

@@ -19,8 +19,7 @@
         "integration-session-automations",
         "legal-knowledge",
         "demos",
-        "legal-shared-drift",
-        "simuladores-trabalho"
+        "legal-shared-drift"
       ]
     },
     "band2_fixture_swap": {
@@ -78,10 +77,11 @@
       ]
     },
     "retired": {
-      "note": "behaviors re-covered by store-level unit halves + new schema-validated-stub specs at G9",
+      "note": "behaviors re-covered by store-level unit halves + new schema-validated-stub specs at G9. 2026-07-31: RETIRED simuladores-trabalho. It drove a UI app at ekoa-data/apps/simuladores-trabalho that was never ported into this repo and is a featured artifact in NEITHER repo - so it built from a path resolving OUTSIDE the checkout and had failed with MODULE_NOT_FOUND on every run the estate has ever done. Nothing is lost: every figure it asserted (compensacao art. 366, faltas art. 251, ferias art. 238-239, aviso previo) is covered deterministically by api/tests/legal/simuladores.test.ts - 18 tests over the ported pure engine api/src/legal/simuladores.ts. What is NOT covered is the UI wiring of an app that does not exist here; if that app is ever ported, this spec comes back with it.",
       "specs": [
         "chat-fixes",
-        "chat-preview-resolution"
+        "chat-preview-resolution",
+        "simuladores-trabalho"
       ]
     },
     "band5_live_proof": {

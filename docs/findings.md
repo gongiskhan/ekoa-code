@@ -14,15 +14,48 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
     runs of IDENTICAL code — so roughly two specs are outright flaky before anything else is said.
   - the merge (`4261a75`): **39 failed / 190 passed**, and its failure set is a STRICT SUBSET of
     `origin/main` run 1's. Nothing regressed; two specs that differ from run 2 both failed on run 1.
-  Three of the 39 are provably broken rather than failing:
-  `simuladores-trabalho.spec.ts` builds from `join(process.cwd(), '..', 'ekoa-data', …)`, which
-  resolves OUTSIDE the repo (`/home/ggomes/dev/ekoa-data`) and exists on no checkout;
-  `legal-shared-drift.spec.ts` shells out to `scripts/sync-legal-shared.mjs`, which is not in the
-  repo on either side of the merge; and 28 of the 39 are one data-driven suite (`demos.spec.ts`)
-  failing identically at its first step, so they are one root cause, not 28. `docs/testing.md` does
-  acknowledge "committed-baseline debt" in three named bands, but the debt is now much larger than
-  those bands and is not enumerated anywhere, which is the actual problem: a 39-red estate cannot
-  detect the 40th. Recorded as a standing contradiction rather than fixed inside a merge.
+  Three of the 39 were provably broken rather than failing, and TWO OF THOSE ARE NOW CLOSED
+  (2026-07-31, same day):
+  - `legal-shared-drift.spec.ts` shelled out to `scripts/sync-legal-shared.mjs`, which is in neither
+    parent — MODULE_NOT_FOUND on every run the estate has ever done. REWRITTEN to assert the
+    invariant that script existed to protect, using only what this repo has: the shared layer's ten
+    files must be byte-identical across every `legal-*` scaffold. It does not import a canonical
+    directory, because choosing where that lives in this repo is a design decision and not a
+    mechanical port — if all copies agree, the canonical layer is what they agree on. Now a REAL
+    gate: 11 tests over 29 apps × 10 files, green, and verified to go red on a one-line drift probe.
+  - `simuladores-trabalho.spec.ts` built from `join(process.cwd(), '..', 'ekoa-data', …)`, resolving
+    OUTSIDE the checkout. RETIRED explicitly (ledger `retired` band, with the reasoning): it drove a
+    UI app that was never ported here and is a featured artifact in neither repo. Nothing is lost —
+    every figure it asserted is covered by `api/tests/legal/simuladores.test.ts`, 18 tests over the
+    ported pure engine. If that app is ever ported, the spec comes back with it.
+  The third is the big one and is STILL OPEN — see `demos-tour-waits-for-a-button-that-never-renders`
+  below, which now has half of it fixed and the other half root-caused to a specific line.
+  `docs/testing.md` does acknowledge "committed-baseline debt" in three named bands, but the debt is
+  larger than those bands and is not enumerated anywhere, which is the actual problem: a red estate
+  cannot detect the next failure.
+- **`demos-tour-waits-for-a-button-that-never-renders`** (OPEN 2026-07-31, MEDIUM, test-estate — 28
+  of the estate's reds, one cause, half of it now fixed). All 28 `demos.spec.ts` tours failed
+  identically. There were TWO stacked causes and the first was hiding the second.
+  - **FIXED — the test budget.** The file's waits were written as though they had minutes:
+    `clickNext` allows 60s, the banner 90s, the overlay 45s. `playwright.config.ts` sets no
+    `timeout`, so Playwright's DEFAULT 30s per-test cap applied and every one of those budgets was
+    dead code. The output said so plainly and had been misread for as long as it has been printed:
+    `Test timeout of 30000ms exceeded` sits directly above
+    `Expect "toBeVisible" with timeout 60000ms`. A `test.setTimeout(300_000)` now gives the file the
+    budget its own waits assume — the convention every other long spec here already follows
+    (live-bridge 180s, summary-cards-chip 240s, voice-proof up to 480s).
+  - **OPEN — what it was hiding.** With a real budget the tour genuinely runs: it logs in, mounts
+    the overlay, and steps into the loop. It then dies waiting the full honest 60s for
+    `demo-next` on a `step.to` navigation step. `DemoOverlay.tsx` renders that button only when
+    `tour.awaitingManual && tour.status === "running"`; the sibling branch renders `demo-awaiting`
+    for `status === "awaiting"`. So the tour is in a state that legitimately has no Next button and
+    the SPEC is what is wrong: `demos.spec.ts:274` calls `clickNext` unconditionally whenever
+    `step.copy` is set, without first checking that the tour is actually waiting for a manual
+    advance. Likely a navigation step auto-advances and never gates on the user at all.
+    NOT fixed here deliberately: correcting it means changing how the spec walks the tour state
+    machine, and doing that without understanding the machine is how you get a test that passes for
+    the wrong reason. The next person starts from a named line and a named condition rather than
+    from "timeout".
 - **`e2e-server-loses-to-a-running-dev-server`** (OPEN 2026-07-31, MEDIUM, tooling — cost a full
   30-minute run before it was noticed). `npm run e2e:server` binds three ports and only one of them
   is configurable in practice: `EKOA_WEB_PORT` (3000) and `EKOA_API_PORT` (4211) come from env, but
@@ -43,18 +76,21 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   does NOT hold in the checkout that already has a dev server up — there, the only options are to
   stop that server or to verify from a worktree. Learnt the second way, after the first fix looked
   like it had worked.
-- **`consent-once-re-prompts-forever`** (OPEN 2026-07-31, MEDIUM, correctness — found while merging
-  the capability-contract and Cofre lines of work). `resolveConsent`'s `once` decision persists
-  nothing (correctly) and sets the run's resume flag — but the engine's resume path re-runs the same
-  step, and `local-command.ts` re-checks `isCommandShapeApproved`, which is still false. The step
-  returns `awaiting_consent` again and the user is asked the same question, indefinitely. There is no
-  per-run "approved for this run only" state anywhere in the module (`signals` carries
-  `resumeFlag`/`cancelled` and nothing else), so `once` cannot currently mean what the dialog says it
-  means. PRE-EXISTING on both merged lines, not introduced by the merge; recorded rather than fixed
-  because the fix is a new piece of run state (a per-run approved-shape set threaded through
-  `RunContext` into the executor), which is its own unit of work with its own tests. `always` is
-  correct as of the same merge — see `consent-approval-scope-mismatch` below.
 
+- **`consent-once-re-prompts-forever`** (FIXED 2026-07-31, MEDIUM, correctness — found while merging
+  the capability-contract and Cofre lines of work). `resolveConsent`'s `once` persisted nothing
+  (correctly — that is the answer's whole meaning) and set the resume flag; the engine then re-ran
+  the step, `local-command.ts` re-read the DURABLE approvals store, found nothing, and raised the
+  same dialog. The only exits were "sempre" and "parar" — the two answers the user had just declined
+  to give. There was no per-run consent state anywhere in the module: `signals` carried
+  `resumeFlag`/`cancelled` and nothing else. PRE-EXISTING on both merged lines. FIXED with a
+  run-scoped `runApprovedShapes` set on the signal record, threaded through `RunContext` and checked
+  BEFORE the durable store so a one-off answer never touches it; in memory only, so a restart
+  re-asks (the safe direction). The shape check now binds `once` as well as `always` — a mismatched
+  `once` is the same caller-supplied-shape hole with a shorter blast radius. Pinned by two tests in
+  `api/tests/automation/service.test.ts`; the first drives `once` to COMPLETION and then asserts the
+  store is still empty, so it proves both halves at once. Reverting the executor's check makes it
+  fail by TIMEOUT rather than assertion — the loop itself, observed.
 - **`consent-approval-scope-mismatch`** (FIXED 2026-07-31, MEDIUM, correctness — found by merging,
   not by either line of work on its own). J-7 made a command-shape approval key on owner + org +
   MACHINE, and `executors/local-command.ts` looks it up with the connected daemon's real
