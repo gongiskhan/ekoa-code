@@ -65,9 +65,8 @@ No FAILURE message prints your key: an error body or a transport complaint that 
 redacted before it reaches stderr. Two limits, stated rather than implied: a SUCCESS body that
 echoes the key is printed verbatim on stdout (only reachable from a hostile or mistyped
 CORTEX_BASE_URL, which is the same threat model the redaction exists for), and a key reflected
-in a different encoding - base64, \u-escaped - is not matched by value. A reflected error body or a transport complaint that quotes the
-`Authorization` header is scrubbed to `<redacted>` before anything reaches stderr, so a CLI failure
-is safe to paste into a log, a transcript or an issue.
+in a different encoding - base64, \u-escaped - is not matched by value. Within those limits a CLI
+FAILURE is safe to paste into a log, a transcript or an issue.
 
 ## memory - the per-user note vault
 

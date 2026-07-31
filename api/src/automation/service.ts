@@ -674,11 +674,23 @@ export async function resolveConsent(
     if (sig) sig.cancelled = true;
     return { decision: 'stop', resumed: false, persisted: false };
   }
-  // Defense-in-depth: only persist a STANDING command approval when the run is genuinely awaiting
-  // consent — never let an approval be injected against a run that never asked for one.
-  const awaitingConsent = run.status === 'awaiting_consent';
+  // A standing approval must be bound to the shape the run is ACTUALLY awaiting, not to one the
+  // caller supplies. Checking only `status === 'awaiting_consent'` let a caller bank an approval
+  // for a shape the user was never shown: no prompt, no SSE event, nothing in the UI, and a later
+  // local_command matching it then runs unprompted. That is the same class command-shape.ts says
+  // it closed from the other end (over-generalising an approval the user DID grant); this is the
+  // inverse — granting one they never saw. `signals` is in-memory, so a run left awaiting_consent
+  // by a restart would otherwise be a permanent injection window in the durable store.
+  const pendingShape = run.consentRequest?.shape;
+  const awaitingConsent = run.status === 'awaiting_consent' && !!pendingShape;
   let persisted = false;
   if (input.decision === 'always' && awaitingConsent) {
+    if (input.shape !== pendingShape) {
+      throw new AutomationServiceError(
+        'FORBIDDEN',
+        'consent shape does not match the shape this run is awaiting',
+      );
+    }
     await approveCommandShape(ownerUserId, input.shape);
     persisted = true;
   }
