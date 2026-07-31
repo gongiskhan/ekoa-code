@@ -13,10 +13,11 @@ import {
  * validation lands with the contract suite from G2 onward.
  */
 describe('shared contract', () => {
-  it('loads all 28 domain descriptor maps', () => {
+  it('loads all 29 domain descriptor maps', () => {
     // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4)
-    // + gatewayKeys (cortex-gateway S4a, run 20260717) + sheets (mega-run B1, decision B.B).
-    expect(Object.keys(ALL_ENDPOINTS).length).toBe(28);
+    // + gatewayKeys (cortex-gateway S4a, run 20260717) + sheets (mega-run B1, decision B.B)
+    // + memvault (capability-contract E2, run 20260730).
+    expect(Object.keys(ALL_ENDPOINTS).length).toBe(29);
   });
 
   it('every endpoint descriptor is well-formed', () => {
@@ -211,7 +212,9 @@ describe('shared contract', () => {
 
   it('no auth cell carries a bare "admin" class (ch03 acceptance 11)', () => {
     for (const e of allEndpointsFlat()) {
-      expect(['public', 'user', 'org-admin', 'super-admin', 'token-query', 'hmac', 'header-scoped', 'optional-jwt', 'app-id-gated', 'bridge']).toContain(e.auth);
+      // 'user-or-key' (capability-contract E1) is a USER class, not an admin one: it admits a
+      // platform JWT or that user's own gateway key, both resolving to one owner actor.
+      expect(['public', 'user', 'user-or-key', 'org-admin', 'super-admin', 'token-query', 'hmac', 'header-scoped', 'optional-jwt', 'app-id-gated', 'bridge']).toContain(e.auth);
     }
   });
 });
