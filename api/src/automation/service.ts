@@ -13,7 +13,7 @@
  * `resumeSignal` hooks. This module wires NOTHING — the composition root binds `startRunForTrigger`
  * to the delivery pipeline and the engine's seams.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Actor } from '@ekoa/shared';
 import type {
   Automation as WireAutomation,
@@ -24,8 +24,10 @@ import type {
   ApprovedCommand as WireApprovedCommand,
   StepFeedbackResponse as WireStepFeedbackResponse,
   RevokeApprovedCommandResponse as WireRevokeResponse,
+  RunLogsResponse as WireRunLogsResponse,
 } from '@ekoa/shared';
-import { automations, automationRuns } from '../data/stores.js';
+import { automations, automationRuns, automationRunIdempotency } from '../data/stores.js';
+import { logActivity } from '../data/activity.js';
 import { createMemory } from '../memory/index.js';
 import { runAutomation, rehearseAutomation, scrubCredentials, type RunContext } from './engine.js';
 import { planFromGoal as plannerPlanFromGoal } from './planner.js';
@@ -33,7 +35,7 @@ import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
 import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprovedCommandRecords } from './consent.js';
 import { runEventEmitterFactory } from './seams.js';
-import { screenshotUrlFromPath } from './persistence.js';
+import { screenshotUrlFromPath, runLogsFromSteps } from './persistence.js';
 import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
 
 // ============================================================================
@@ -361,9 +363,11 @@ export async function planFromGoal(
 async function startRunInternal(
   automationId: string,
   owner: { userId: string; orgId: string },
-  opts: { kind: 'normal' | 'rehearsal'; inputs?: Record<string, unknown>; goal?: string },
+  opts: { kind: 'normal' | 'rehearsal'; inputs?: Record<string, unknown>; goal?: string; runId?: string },
 ): Promise<string> {
-  const runId = randomUUID();
+  // The id may be pre-minted by the caller (the idempotent create records the mapping BEFORE the
+  // run exists, so it must know the id first). Absent → mint here, exactly as before.
+  const runId = opts.runId ?? randomUUID();
   const sig: RunSignals = { ownerUserId: owner.userId, orgId: owner.orgId, cancelled: false, resumeFlag: false };
   signals.set(runId, sig);
 
@@ -393,7 +397,98 @@ async function startRunInternal(
   return runId;
 }
 
-export async function startRun(actor: Actor, id: string, input: { inputs?: Record<string, unknown> } = {}): Promise<{ runId: string }> {
+/** Run-create input (the shared RunCreateRequest, plus nothing else). */
+export interface RunCreateInput {
+  inputs?: Record<string, unknown>;
+  /** Slice E4: makes the create at-most-once for (automation, run owner, key). */
+  idempotencyKey?: string;
+}
+
+/**
+ * Per-call context the ROUTE knows and the Actor does not: which credential admitted the call, and
+ * the caller's username for the audit row. Trace only — nothing here is ever branched on
+ * (Capability Contract rule 3: `x-client` is read into the audit principal and never read again).
+ */
+export interface RunCreateCallContext {
+  /** Present ONLY when a gateway key admitted the call (res.locals.apiKeyPrincipal). */
+  principal?: { keyId: string; xClient?: string };
+  /** Registo username (the shared Actor type does not carry one). */
+  username?: string;
+}
+
+export interface RunCreateOutcome {
+  runId: string;
+  /** false = an idempotent replay: this run already existed and NOTHING was started. */
+  created: boolean;
+}
+
+/**
+ * The dedupe document id: sha256 over the automation, the RUN OWNER, and the caller's key.
+ *
+ * All three matter. Without the automation two different automations share a key; without the
+ * owner one tenant's key collides with another's (and could hand back a run they may not even
+ * see); without the key there is no idempotency at all. The two ids are server-minted UUIDs and
+ * the only caller-controlled component is LAST, so no key can be crafted to shift a separator and
+ * collide with a different (automation, owner) pair.
+ */
+function runDedupeId(automationId: string, ownerUserId: string, key: string): string {
+  return createHash('sha256').update(`${automationId}|${ownerUserId}|${key}`).digest('hex');
+}
+
+/**
+ * One audit row per KEY-ADMITTED run create, carrying the keyId and the trace-only `x-client`.
+ * Written BEFORE the engine is fired, so nothing reaches the caller unaudited (the memvault
+ * discipline). JWT-admitted creates are unchanged — the dashboard drives this same endpoint and
+ * this slice does not alter its behaviour.
+ */
+async function auditRunCreate(
+  actor: Actor,
+  call: RunCreateCallContext,
+  meta: { automationId: string; runId: string; idempotent: boolean },
+): Promise<void> {
+  if (!call.principal) return;
+  await logActivity(
+    { userId: actor.userId, username: call.username ?? actor.userId, orgId: actor.orgId },
+    'automations',
+    'automation_run_create',
+    { now: () => Date.now(), genId: () => randomUUID() },
+    {
+      automationId: meta.automationId,
+      runId: meta.runId,
+      idempotent: meta.idempotent,
+      keyId: call.principal.keyId,
+      ...(call.principal.xClient ? { xClient: call.principal.xClient } : {}),
+    },
+  );
+}
+
+/**
+ * Start a run. With no `idempotencyKey` the behaviour is exactly as it always was: a fresh run per
+ * call (`created: true` → the route's 202).
+ *
+ * With a key, the create is AT-MOST-ONCE for (automation, run owner, key):
+ *   1. authorize (an unauthorized caller must never be able to plant a mapping),
+ *   2. INSERT the mapping first, on a deterministic `_id` — the duplicate-key refusal is what
+ *      settles a concurrent race, so the loser of two simultaneous POSTs reads the winner's runId
+ *      instead of starting a second run,
+ *   3. only then create the run.
+ *
+ * A DUPLICATE ANSWERS THE MAPPING, ALWAYS — it is never re-validated against the runs store. If
+ * the run is gone (deleted, reaped, or a mid-flight failure), the honest answer is still "this key
+ * was already accepted, and this is the run it named": `GET /runs/:id` then 404s and the caller
+ * knows. Re-creating instead would resurrect exactly the double execution the key exists to
+ * prevent — a client retrying a POST cannot be told apart from one whose run was deleted.
+ *
+ * The one case that DOES roll the mapping back is a run that never started at all (the audit or the
+ * run-row insert threw): there is nothing to be idempotent about, and leaving the mapping would
+ * poison the key permanently.
+ */
+export async function startRun(
+  actor: Actor,
+  id: string,
+  input: RunCreateInput = {},
+  call: RunCreateCallContext = {},
+): Promise<RunCreateOutcome> {
   const automation = (await automations.get(id)) as StoredAutomation | null;
   if (!automation || !canReadAutomation(automation, actor)) throw new AutomationServiceError('NOT_FOUND', 'automation not found');
   // A user run must be owned by the actor (the engine's ownership guard); a super-admin runs it as
@@ -403,8 +498,38 @@ export async function startRun(actor: Actor, id: string, input: { inputs?: Recor
   else if (actor.role === 'super-admin') owner = { userId: automation.ownerUserId, orgId: automation.orgId };
   else throw new AutomationServiceError('FORBIDDEN', 'not authorized to run this automation');
 
-  const runId = await startRunInternal(id, owner, { kind: 'normal', ...(input.inputs ? { inputs: input.inputs } : {}) });
-  return { runId };
+  const key = input.idempotencyKey;
+  const runId = randomUUID();
+  const dedupeId = key ? runDedupeId(id, owner.userId, key) : undefined;
+
+  let claimed = dedupeId === undefined;
+  if (dedupeId) {
+    // Two attempts, not one: a refusal followed by a MISSING mapping means a concurrent caller
+    // rolled its own mapping back (its run never started) in the window between our insert and our
+    // read. Re-claiming keeps the guarantee for this key instead of starting an unrecorded run.
+    for (let attempt = 0; attempt < 2 && !claimed; attempt += 1) {
+      claimed = await automationRunIdempotency.insert({ _id: dedupeId, runId, at: new Date().toISOString() });
+      if (claimed) break;
+      const existing = await automationRunIdempotency.get(dedupeId);
+      if (existing) {
+        await auditRunCreate(actor, call, { automationId: id, runId: existing.runId, idempotent: true });
+        return { runId: existing.runId, created: false };
+      }
+    }
+  }
+
+  try {
+    // Audited BEFORE the engine is fired: nothing reaches the caller unaudited (the memvault
+    // discipline), and a failed audit rolls the mapping back with the run it never started.
+    await auditRunCreate(actor, call, { automationId: id, runId, idempotent: false });
+    await startRunInternal(id, owner, { kind: 'normal', runId, ...(input.inputs ? { inputs: input.inputs } : {}) });
+  } catch (err) {
+    // Nothing started → the mapping must not survive to answer a retry with a run that will never
+    // exist. Best effort: a failed rollback is strictly better than a failed start going unreported.
+    if (dedupeId && claimed) await automationRunIdempotency.delete(dedupeId).catch(() => false);
+    throw err;
+  }
+  return { runId, created: true };
 }
 
 export async function listRuns(actor: Actor, query: { automationId?: string; limit?: number } = {}): Promise<WireRunRecord[]> {
@@ -422,6 +547,20 @@ export async function getRunRecord(actor: Actor, runId: string): Promise<WireRun
   const run = (await automationRuns.get(runId)) as StoredRun | null;
   if (!run || !canSeeRun(run, actor)) throw new AutomationServiceError('NOT_FOUND', 'run not found');
   return toWireRun(run);
+}
+
+/**
+ * Per-step logs for one run (slice E4). Visibility is EXACTLY `getRunRecord`'s — the same
+ * `canSeeRun` predicate, the same uniform NOT_FOUND for a missing run and for another tenant's
+ * run, so the logs endpoint can never become an existence oracle the run endpoint is not.
+ *
+ * The response is bounded by construction (persistence.runLogsFromSteps re-applies the per-step
+ * and per-run caps to whatever is on disk), so a 5 MB captured stdout cannot become a 5 MB body.
+ */
+export async function getRunLogs(actor: Actor, runId: string): Promise<WireRunLogsResponse> {
+  const run = (await automationRuns.get(runId)) as StoredRun | null;
+  if (!run || !canSeeRun(run, actor)) throw new AutomationServiceError('NOT_FOUND', 'run not found');
+  return { runId: run.id, steps: runLogsFromSteps(Array.isArray(run.steps) ? run.steps : []) };
 }
 
 /** Owner-scoped idempotent cancel (§5.3.1). Cancelling a terminal/unknown/unauthorized run is a

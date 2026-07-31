@@ -87,7 +87,11 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../src/automation/persistence.js', () => ({
+vi.mock('../../src/automation/persistence.js', async (importOriginal) => ({
+  // Slice E4: the engine builds its per-step log accumulator from persistence.js. It is pure
+  // (no store, no filesystem) and its CAPS are part of what the engine must honour, so it is
+  // passed through to the real implementation rather than faked.
+  createStepLogAccumulator: (await importOriginal<typeof import('../../src/automation/persistence.js')>()).createStepLogAccumulator,
   automationStore: {
     findById: hoisted.findAutomation,
     update: vi.fn(async (id: string, patch: any) => {

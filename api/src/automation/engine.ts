@@ -46,7 +46,13 @@ import {
   type ResolveActionOutput,
 } from './vision.js';
 import { applyArgsTemplate } from './template-vars.js';
-import { automationStore, automationRunStore, writeStepScreenshot, screenshotUrlFromPath } from './persistence.js';
+import {
+  automationStore,
+  automationRunStore,
+  writeStepScreenshot,
+  screenshotUrlFromPath,
+  createStepLogAccumulator,
+} from './persistence.js';
 import {
   lookupActionCache,
   writeActionCache,
@@ -319,6 +325,12 @@ async function runOrRehearse(
 
   const emit = options.emit;
 
+  // Bounded per-step capture of everything the run STREAMS (slice E4). Independent of `emit`: the
+  // SSE frames are ephemeral and may have no listener at all (a gateway-key caller has no stream),
+  // so the tail is accumulated whether or not anyone is watching, and persisted on the step record
+  // as each step finishes. Caps live in persistence.ts.
+  const stepLogs = createStepLogAccumulator();
+
   // Executor face: browser steps normally run on the local ekoa daemon (see
   // browser-session.ts). `connection` is the live daemon for this owner, or
   // undefined when none is dialed in. When there's no daemon AND the in-process
@@ -467,7 +479,7 @@ async function runOrRehearse(
         ? { step: (workingSteps[lastRecord.index] ?? workingSteps[i - 1])!, record: lastRecord }
         : undefined;
 
-      const record = await executeStep({
+      const executed = await executeStep({
         browser: getBrowser(),
         daemonConnected: !!connection,
         automation,
@@ -477,10 +489,17 @@ async function runOrRehearse(
         ctx,
         inputs,
         previousStep,
-        emitOutputChunk: emit?.runOutputChunk
-          ? (info) => emit.runOutputChunk!(info.runId, { stepIndex: info.stepIndex, chunk: info.chunk, stream: info.stream })
-          : undefined,
+        // ALWAYS supplied: the accumulator needs every chunk even when no SSE emitter exists.
+        // Forwarding to the stream stays exactly as before when one does.
+        emitOutputChunk: (info) => {
+          stepLogs.append(info.stepIndex, info.chunk);
+          emit?.runOutputChunk?.(info.runId, { stepIndex: info.stepIndex, chunk: info.chunk, stream: info.stream });
+        },
       });
+      // Attach the step's captured tail as it finishes, so EVERY persist site below (the per-step
+      // update and every finalize path) carries it — including the cancelled/failed exits.
+      const logTail = stepLogs.tailFor(i);
+      const record: StepRecord = logTail ? { ...executed, logTail } : executed;
 
       // Replace any prior record for this index (rehearsal retries the
       // same index after a patch); push otherwise.

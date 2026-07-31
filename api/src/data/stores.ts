@@ -189,6 +189,24 @@ export const usageEvents = new Store<UsageEventDoc>('usage_events');
 export const billingAccounts = new Store<Doc>('billing_accounts');
 export const automations = new Store<Doc>('automations');
 export const automationRuns = new Store<Doc>('automation_runs');
+/**
+ * Idempotent run-create mapping (slice E4). `_id` IS the sha256 hex of
+ * `<automationId>|<runOwnerUserId>|<idempotencyKey>` — the SAME deterministic-`_id` insert
+ * pattern the gateway-keys store uses (§4.3.2: no unique indexes anywhere; the duplicate-key
+ * refusal from `insert` IS the uniqueness primitive). The mapping is written BEFORE the run is
+ * created, so two concurrent POSTs with the same key race on this single-document insert and the
+ * loser reads the winner's `runId` instead of starting a second run.
+ *
+ * The row is intentionally tiny: it carries no inputs and no key material (the caller's key is
+ * only ever hashed into the `_id`, never stored), so it is safe to keep for the life of the run.
+ */
+export interface RunIdempotencyDoc extends Doc {
+  /** The run the FIRST accepted call minted for this key. */
+  runId: string;
+  /** ISO timestamp of that first acceptance. */
+  at: string;
+}
+export const automationRunIdempotency = new Store<RunIdempotencyDoc>('automation_run_idempotency');
 export const approvedCommands = new Store<Doc>('approved_commands');
 export const triggers = new Store<Doc>('triggers');
 export const appSessions = new Store<Doc>('app_sessions');

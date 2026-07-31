@@ -389,6 +389,22 @@ export interface EkoaActionTraceEntry {
   error?: string;
 }
 
+/**
+ * A BOUNDED tail of the output a step streamed while it ran (slice E4). Streamed chunks used to
+ * exist only as ephemeral SSE `step_output_chunk` frames — a client that connected late, or a
+ * key-driven caller with no stream at all, could never see them again. The engine now accumulates
+ * them into this fixed-size tail (persistence.ts owns the caps) and persists it on the step
+ * record, so `GET /automations/runs/:id/logs` can answer after the run is over.
+ *
+ * `truncated` means bytes were DROPPED (the step or the run hit its cap) — never that the step
+ * failed. The tail is deliberately absent from the run-detail wire shape (shared RunStepRecord
+ * stays lean); the logs endpoint is the only reader.
+ */
+export interface StepLogTail {
+  text: string;
+  truncated: boolean;
+}
+
 export type HumanActionKind = 'captcha' | 'mfa' | 'payment' | 'identity' | 'login' | 'other';
 
 export interface HumanActionRequired {
@@ -416,6 +432,11 @@ export interface StepRecord {
    * Stays unset for browser steps.
    */
   output?: StepOutput;
+  /**
+   * Bounded tail of what this step STREAMED (slice E4). Written by the engine as the step
+   * finishes; read only by the run-logs endpoint. Absent for steps that streamed nothing.
+   */
+  logTail?: StepLogTail;
   /**
    * `details` is structured failure context (request + redacted
    * response for integration steps; arbitrary debug payload for

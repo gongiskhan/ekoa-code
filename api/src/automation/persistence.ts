@@ -10,11 +10,12 @@
  * engine already calls `update` at each one. Per-step PNG screenshots (§13.4) are best-effort;
  * a write failure never fails a run (the engine's `snap` swallows it).
  */
+import { RUN_LOG_STEP_MAX_CHARS, RUN_LOG_TOTAL_MAX_CHARS } from '@ekoa/shared';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { automations, automationRuns } from '../data/stores.js';
 import { loadAutomationConfig } from './config.js';
-import type { Automation, RunRecord } from './types.js';
+import type { Automation, RunRecord, StepLogTail, StepRecord } from './types.js';
 
 // --- Automations -------------------------------------------------------------
 
@@ -98,4 +99,169 @@ export function automationRunsRoot(): string {
 export function screenshotUrlFromPath(relPath: string | undefined): string | undefined {
   if (!relPath) return undefined;
   return `/automation-screenshots/${relPath.replace(/^automation-runs\//, '')}`;
+}
+
+// --- Run logs (slice E4) ------------------------------------------------------
+//
+// Step stdout/stderr used to exist ONLY as ephemeral SSE `step_output_chunk` frames: a client that
+// connected late — or a gateway-key caller with no stream at all — could never see it again. The
+// engine now accumulates a BOUNDED tail per step through the accumulator below and persists it on
+// the step record; `runLogsFromSteps` is the read side behind GET /automations/runs/:id/logs.
+//
+// BOUNDED EVERYWHERE, TWICE. Writing is capped (a runaway command cannot grow the run document),
+// and reading is capped AGAIN over whatever is on disk — because the other log source, the
+// already-persisted `StepRecord.output`, is NOT written by this module and carries up to 5 MB of
+// stdout per local_command step. Serving it verbatim would be an unbounded response built from
+// attacker-influenced data.
+//
+// The caps are measured in CHARACTERS (JS string length): the contract publishes the same two
+// numbers, and step output on this path is overwhelmingly ASCII, so characters ≈ bytes.
+
+/** Per-step cap, both on write (the accumulator) and on read (the endpoint). */
+export const STEP_LOG_MAX_CHARS = RUN_LOG_STEP_MAX_CHARS;
+/** Whole-run cap: the sum of every step's RETAINED log, on write and on read. */
+export const RUN_LOG_MAX_CHARS = RUN_LOG_TOTAL_MAX_CHARS;
+
+/** Keep the LAST `max` characters. A cut that lands inside a surrogate pair drops the orphaned
+ *  low half rather than persisting a lone surrogate. */
+function keepTail(text: string, max: number): string {
+  if (max <= 0) return '';
+  if (text.length <= max) return text;
+  const cut = text.slice(text.length - max);
+  const first = cut.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff ? cut.slice(1) : cut;
+}
+
+export interface StepLogAccumulator {
+  /** Append a streamed chunk for one step. Never throws; silently drops beyond the caps. */
+  append(stepIndex: number, chunk: string): void;
+  /** The tail to persist on that step's record, or undefined when it streamed nothing. */
+  tailFor(stepIndex: number): StepLogTail | undefined;
+}
+
+/**
+ * A per-RUN accumulator of streamed step output.
+ *
+ * Per step it is a ROLLING tail: the newest `STEP_LOG_MAX_CHARS` characters survive, so a
+ * ten-minute command's ending — the part that says what happened — is what is kept, and older
+ * output is evicted rather than the tail being frozen at the first 16 KB.
+ *
+ * Across the run it is a budget on RETAINED characters (the sum of the live buffers), so a run
+ * with many chatty steps cannot exceed `RUN_LOG_MAX_CHARS` no matter how the output is spread.
+ * When a step's share of that budget is exhausted its buffer stops growing and it is flagged
+ * `truncated`; rolling within an existing buffer never needs new budget.
+ */
+export function createStepLogAccumulator(): StepLogAccumulator {
+  const buffers = new Map<number, { text: string; truncated: boolean }>();
+  let retained = 0;
+  return {
+    append(stepIndex: number, chunk: string): void {
+      if (typeof chunk !== 'string' || chunk.length === 0) return;
+      const cur = buffers.get(stepIndex) ?? { text: '', truncated: false };
+      let truncated = cur.truncated;
+      // Cap the INCOMING chunk first so a single pathological write never materialises a huge
+      // intermediate string just to slice it back down.
+      let incoming = chunk;
+      if (incoming.length > STEP_LOG_MAX_CHARS) {
+        incoming = keepTail(incoming, STEP_LOG_MAX_CHARS);
+        truncated = true;
+      }
+      let text = cur.text + incoming;
+      if (text.length > STEP_LOG_MAX_CHARS) {
+        text = keepTail(text, STEP_LOG_MAX_CHARS);
+        truncated = true;
+      }
+      const others = retained - cur.text.length;
+      const allowed = Math.max(0, RUN_LOG_MAX_CHARS - others);
+      if (text.length > allowed) {
+        text = keepTail(text, allowed);
+        truncated = true;
+      }
+      retained = others + text.length;
+      buffers.set(stepIndex, { text, truncated });
+    },
+    tailFor(stepIndex: number): StepLogTail | undefined {
+      const buf = buffers.get(stepIndex);
+      if (!buf || (buf.text.length === 0 && !buf.truncated)) return undefined;
+      return { text: buf.text, truncated: buf.truncated };
+    },
+  };
+}
+
+/** One step's entry in the logs response (shape-compatible with shared `RunLogStep`). */
+export interface RunLogStepEntry {
+  stepIndex: number;
+  log: string;
+  truncated: boolean;
+}
+
+/**
+ * What a single step contributes to the logs, from the two sources a step record can carry:
+ *
+ *  - `logTail` — the bounded tail of what the step STREAMED (the daemon's progress channel, which
+ *    is stdout-only), written by the engine.
+ *  - `output` — the step's captured StepOutput, written by the step executors: a local_command's
+ *    authoritative stdout/stderr split, an api_call's response body, an ekoa_action's trace.
+ *
+ * They are complementary, not alternatives: for a local_command the tail already holds the
+ * streamed stdout, so only the final `stderr` is appended to it; without a tail (older records, a
+ * dispatch failure, a run with no streaming) the stored stdout is used instead.
+ */
+function stepLogSource(step: StepRecord): { text: string; truncated: boolean } | undefined {
+  const parts: string[] = [];
+  let truncated = false;
+  const tail = step.logTail;
+  if (tail && typeof tail.text === 'string') {
+    if (tail.text.length > 0) parts.push(tail.text);
+    truncated = truncated || tail.truncated === true;
+  }
+  const out = step.output;
+  if (out) {
+    if (out.kind === 'local_command') {
+      if (!tail && out.stdout) parts.push(out.stdout);
+      if (out.stderr) parts.push(out.stderr);
+      truncated = truncated || out.truncated === true;
+    } else if (out.kind === 'api_call') {
+      if (out.responseBody) parts.push(out.responseBody);
+      truncated = truncated || out.truncated === true;
+    } else if (out.kind === 'ekoa_action') {
+      for (const entry of out.trace ?? []) {
+        parts.push(`${entry.op}: ${entry.summary}${entry.error ? ` — ${entry.error}` : ''}`);
+      }
+      if (out.result) parts.push(out.result);
+    }
+  }
+  if (parts.length === 0) return truncated ? { text: '', truncated: true } : undefined;
+  return { text: parts.join('\n'), truncated };
+}
+
+/**
+ * Project a run's persisted step records onto the logs wire shape, re-applying BOTH caps. Steps
+ * with nothing to show are omitted; a step whose output exists but no longer fits the run budget
+ * is kept with an empty `log` and `truncated: true` — silence and "we dropped it" must not look
+ * the same to a caller.
+ */
+export function runLogsFromSteps(steps: readonly StepRecord[]): RunLogStepEntry[] {
+  const ordered = [...(steps ?? [])].sort((a, b) => (a?.index ?? 0) - (b?.index ?? 0));
+  const out: RunLogStepEntry[] = [];
+  let budget = RUN_LOG_MAX_CHARS;
+  for (const step of ordered) {
+    if (!step || typeof step.index !== 'number') continue;
+    const source = stepLogSource(step);
+    if (!source) continue;
+    let text = source.text;
+    let truncated = source.truncated;
+    if (text.length > STEP_LOG_MAX_CHARS) {
+      text = keepTail(text, STEP_LOG_MAX_CHARS);
+      truncated = true;
+    }
+    if (text.length > budget) {
+      text = keepTail(text, budget);
+      truncated = true;
+    }
+    budget -= text.length;
+    if (text.length === 0 && !truncated) continue;
+    out.push({ stepIndex: step.index, log: text, truncated });
+  }
+  return out;
 }

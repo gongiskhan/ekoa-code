@@ -10,26 +10,37 @@ import {
   RunCreateResponse,
   RunCancelResponse,
   RunResumeResponse,
+  RunLogsResponse,
+  RUN_LOG_STEP_MAX_CHARS,
+  RUN_LOG_TOTAL_MAX_CHARS,
   CatalogResponse,
   ApprovedCommandListResponse,
   RevokeApprovedCommandResponse,
   OkResponse,
   ErrorEnvelope,
+  automationsEndpoints,
 } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, orgs } from '../../src/data/stores.js';
+import { users, orgs, activityLogs, automationRuns } from '../../src/data/stores.js';
 import { setActivation } from '../../src/data/activation.js';
+import { __resetCapabilityRateForTests } from '../../src/auth/api-key-rate.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
 import { automationsRouter } from '../../src/routes/automations.js';
+import { gatewayKeysRouter } from '../../src/routes/gateway-keys.js';
 
 /**
  * Contract test for the automations endpoints (ch03 §3.8.18): every response validates against
  * its shared/ schema (ch13 §13.5), the Amendment-2 creation authority is enforced (org-admin by
  * default, builder only behind the flippable org setting), and every non-2xx body validates
  * against the shared error envelope. The planner's model call is mocked (LLM-free per PR).
+ *
+ * Slice E4 adds the run lifecycle an OUTSIDE client needs: idempotent create (body field or
+ * `Idempotency-Key` header), the per-step logs endpoint, and the `user-or-key` flip — exercised
+ * here under BOTH admissions, a platform JWT and a REAL key minted through POST /gateway-keys
+ * (mounted beside the automations router for exactly that).
  */
 const hoisted = vi.hoisted(() => ({ planText: '' }));
 vi.mock('../../src/llm/index.js', async (importOriginal) => {
@@ -64,9 +75,11 @@ beforeAll(async () => {
   await users.insert({ _id: 'b1', username: 'b1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'o1', active: true } as never);
   setActivation('admin1', { active: true, billingLocked: false });
   setActivation('b1', { active: true, billingLocked: false });
+  __resetCapabilityRateForTests();
   const app = express();
   app.use(express.json());
   app.use('/api/v1/automations', automationsRouter());
+  app.use('/api/v1/gateway-keys', gatewayKeysRouter(deps));
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
   port = (server.address() as { port: number }).port;
 }, 60_000);
@@ -225,5 +238,290 @@ describe('automations contract (§3.8.18)', () => {
     const res = await api('/api/v1/automations/ghost', t);
     expect(res.status).toBe(404);
     expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
+  });
+});
+
+// ============================================================================
+// Slice E4 — idempotent create, logs, user-or-key
+// ============================================================================
+
+/** Create an automation and return its id (admin token; no steps → the run completes at once). */
+async function newAutomation(t: string, name: string): Promise<string> {
+  const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name }) });
+  expect(res.status).toBe(201);
+  return ((await res.json()) as { id: string }).id;
+}
+
+const startRunReq = (id: string, t: string, body: unknown, headers: Record<string, string> = {}) =>
+  api(`/api/v1/automations/${id}/runs`, t, { method: 'POST', body: JSON.stringify(body), headers });
+
+/** Wait until the async engine has written its LAST record for a run (finalize), so a test that
+ *  mutates the run row afterwards is not racing the engine. */
+async function waitForTerminalRun(runId: string, t: string): Promise<void> {
+  for (let i = 0; i < 100; i += 1) {
+    const res = await api(`/api/v1/automations/runs/${runId}`, t);
+    if (res.status === 200) {
+      const { status } = (await res.json()) as { status: string };
+      if (status !== 'running') return;
+    } else {
+      await res.body?.cancel();
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`run ${runId} never reached a terminal status`);
+}
+
+describe('automations run lifecycle (slice E4)', () => {
+  it('descriptors: the whole domain is user-or-key EXCEPT the SSE stream, which stays token-query', () => {
+    for (const [name, d] of Object.entries(automationsEndpoints)) {
+      if (name === 'events') {
+        // A key must never ride a jti-bearing platform JWT (E1 review, binding constraint).
+        expect(d.auth, 'events').toBe('token-query');
+        continue;
+      }
+      expect(d.auth, name).toBe('user-or-key');
+    }
+    expect(automationsEndpoints.getRunLogs.path).toBe('/api/v1/automations/runs/:id/logs');
+    expect(automationsEndpoints.getRunLogs.method).toBe('GET');
+  });
+
+  it('the same idempotencyKey answers 202 then 200 with the SAME runId, and starts exactly ONE run', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Idem-1');
+
+    const first = await startRunReq(id, t, { idempotencyKey: 'chave-1' });
+    expect(first.status).toBe(202);
+    const firstBody = (await first.json()) as { runId: string };
+    expect(RunCreateResponse.safeParse(firstBody).success).toBe(true);
+
+    const replay = await startRunReq(id, t, { idempotencyKey: 'chave-1' });
+    expect(replay.status).toBe(200); // fresh create is 202; a replay is 200
+    const replayBody = (await replay.json()) as { runId: string };
+    expect(RunCreateResponse.safeParse(replayBody).success).toBe(true);
+    expect(replayBody.runId).toBe(firstBody.runId);
+
+    // ONE run exists for this automation — the replay started nothing.
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: Array<{ id: string }> };
+    expect(RunListResponse.safeParse(runs).success).toBe(true);
+    expect(runs.items.map((r) => r.id)).toEqual([firstBody.runId]);
+  });
+
+  it('two SIMULTANEOUS creates with one key race on the insert: both callers get the same runId, one run exists', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Idem-race');
+
+    // The reason the mapping is inserted BEFORE the run is created: the loser of this race must
+    // read the winner's runId, never mint a second run.
+    const [a, b] = await Promise.all([
+      startRunReq(id, t, { idempotencyKey: 'corrida' }),
+      startRunReq(id, t, { idempotencyKey: 'corrida' }),
+    ]);
+    const [bodyA, bodyB] = (await Promise.all([a.json(), b.json()])) as [{ runId: string }, { runId: string }];
+    expect(RunCreateResponse.safeParse(bodyA).success).toBe(true);
+    expect(RunCreateResponse.safeParse(bodyB).success).toBe(true);
+    expect(bodyA.runId).toBe(bodyB.runId);
+    // Exactly one of them created it (202); the other replayed it (200).
+    expect([a.status, b.status].sort()).toEqual([200, 202]);
+
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: Array<{ id: string }> };
+    expect(runs.items.map((r) => r.id)).toEqual([bodyA.runId]);
+  });
+
+  it('the dedupe key spans (automation, owner, key): a different key, automation or owner starts a DISTINCT run', async () => {
+    const t = await adminToken();
+    const one = await newAutomation(t, 'Idem-scope-1');
+    const two = await newAutomation(t, 'Idem-scope-2');
+
+    const base = ((await (await startRunReq(one, t, { idempotencyKey: 'ka' })).json()) as { runId: string }).runId;
+    const otherKey = ((await (await startRunReq(one, t, { idempotencyKey: 'kb' })).json()) as { runId: string }).runId;
+    const otherAutomation = ((await (await startRunReq(two, t, { idempotencyKey: 'ka' })).json()) as { runId: string }).runId;
+
+    // A different OWNER: the builder runs their OWN automation under the same key string.
+    await orgs.update('o1', (o) => ({ ...o, settings: { allowBuilderAutomations: true } }));
+    const bt = await builderToken();
+    const builderAutomation = await newAutomation(bt, 'Idem-scope-builder');
+    const otherOwner = ((await (await startRunReq(builderAutomation, bt, { idempotencyKey: 'ka' })).json()) as { runId: string }).runId;
+    await orgs.update('o1', (o) => ({ ...o, settings: { allowBuilderAutomations: false } }));
+
+    expect(new Set([base, otherKey, otherAutomation, otherOwner]).size).toBe(4);
+  });
+
+  it('no idempotency key: behaviour is unchanged — every POST mints a fresh run with 202', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Sem-chave');
+    const a = await startRunReq(id, t, {});
+    const b = await startRunReq(id, t, {});
+    expect([a.status, b.status]).toEqual([202, 202]);
+    const [bodyA, bodyB] = (await Promise.all([a.json(), b.json()])) as [{ runId: string }, { runId: string }];
+    expect(bodyA.runId).not.toBe(bodyB.runId);
+  });
+
+  it('the Idempotency-Key HEADER is the same field; a body/header disagreement is refused, not resolved', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Idem-header');
+
+    const first = await startRunReq(id, t, {}, { 'idempotency-key': 'cabecalho-1' });
+    expect(first.status).toBe(202);
+    const firstBody = (await first.json()) as { runId: string };
+
+    // Header alone replays.
+    const replay = await startRunReq(id, t, {}, { 'idempotency-key': 'cabecalho-1' });
+    expect(replay.status).toBe(200);
+    expect(((await replay.json()) as { runId: string }).runId).toBe(firstBody.runId);
+
+    // Header + IDENTICAL body field is fine (the two are one field).
+    const agreeing = await startRunReq(id, t, { idempotencyKey: 'cabecalho-1' }, { 'idempotency-key': 'cabecalho-1' });
+    expect(agreeing.status).toBe(200);
+    expect(((await agreeing.json()) as { runId: string }).runId).toBe(firstBody.runId);
+
+    // Disagreeing: refused. Picking a winner would bind at-most-once to a key the client did not
+    // think it was using.
+    const conflict = await startRunReq(id, t, { idempotencyKey: 'corpo-2' }, { 'idempotency-key': 'cabecalho-1' });
+    expect(conflict.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await conflict.json()).success).toBe(true);
+
+    // An over-long header key is a validation failure, not a silent truncation.
+    const tooLong = await startRunReq(id, t, {}, { 'idempotency-key': 'x'.repeat(129) });
+    expect(tooLong.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await tooLong.json()).success).toBe(true);
+
+    // Neither refusal started anything: the automation still has exactly the one run.
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: Array<{ id: string }> };
+    expect(runs.items.map((r) => r.id)).toEqual([firstBody.runId]);
+  });
+
+  it('a mapping whose run is GONE still answers the mapping — the retry never re-executes', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Idem-orfa');
+    const created = (await (await startRunReq(id, t, { idempotencyKey: 'orfa' })).json()) as { runId: string };
+
+    // Simulate a deleted / reaped run (after the engine's last write, so the delete sticks).
+    await waitForTerminalRun(created.runId, t);
+    await automationRuns.delete(created.runId);
+
+    const replay = await startRunReq(id, t, { idempotencyKey: 'orfa' });
+    expect(replay.status).toBe(200);
+    expect(((await replay.json()) as { runId: string }).runId).toBe(created.runId);
+    // And the endpoint is honest about it: the run really is gone.
+    const gone = await api(`/api/v1/automations/runs/${created.runId}`, t);
+    expect(gone.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await gone.json()).success).toBe(true);
+    // Nothing was re-created behind the caller's back.
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${id}`, t)).json()) as { items: Array<{ id: string }> };
+    expect(runs.items).toEqual([]);
+  });
+
+  it('a REAL minted gateway key drives a run: 202 + ONE audit row carrying keyId and the x-client tag', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Chave-corre');
+    await activityLogs.deleteMany({ category: 'automations' } as never);
+
+    const mint = await api('/api/v1/gateway-keys', t, { method: 'POST', body: JSON.stringify({ label: 'automations-e4' }) });
+    expect(mint.status).toBe(201);
+    const minted = (await mint.json()) as { id: string; key: string };
+    expect(minted.key.startsWith('ekoa_gk_')).toBe(true);
+
+    const keyed = (p: string, init: RequestInit = {}) =>
+      fetch(`http://127.0.0.1:${port}${p}`, {
+        ...init,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${minted.key}`, 'x-client': 'claude-code', ...(init.headers ?? {}) },
+      });
+
+    const started = await keyed(`/api/v1/automations/${id}/runs`, { method: 'POST', body: JSON.stringify({ idempotencyKey: 'via-chave' }) });
+    expect(started.status).toBe(202);
+    const startedBody = (await started.json()) as { runId: string };
+    expect(RunCreateResponse.safeParse(startedBody).success).toBe(true);
+
+    // The key reads its own run back (same user-or-key admission on every route).
+    const rec = await keyed(`/api/v1/automations/runs/${startedBody.runId}`);
+    expect(rec.status).toBe(200);
+    expect(RunRecord.safeParse(await rec.json()).success).toBe(true);
+
+    // A replay under the key is the same 200 + same runId, and is audited as such.
+    const replay = await keyed(`/api/v1/automations/${id}/runs`, { method: 'POST', body: JSON.stringify({ idempotencyKey: 'via-chave' }) });
+    expect(replay.status).toBe(200);
+    expect(((await replay.json()) as { runId: string }).runId).toBe(startedBody.runId);
+
+    const rows = (await activityLogs.find({ category: 'automations' } as never)) as unknown as Array<{ type: string; metadata: Record<string, unknown> }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.type).toBe('automation_run_create');
+      expect(row.metadata.keyId).toBe(minted.id);
+      expect(row.metadata.xClient).toBe('claude-code'); // trace only — nothing branches on it
+      expect(row.metadata.automationId).toBe(id);
+      expect(row.metadata.runId).toBe(startedBody.runId);
+    }
+    expect(rows.map((r) => r.metadata.idempotent).sort()).toEqual([false, true]);
+  });
+
+  it('run logs: schema-valid, bounded per step AND per run, cross-owner is the uniform 404', async () => {
+    const t = await adminToken();
+    const id = await newAutomation(t, 'Logs');
+
+    // A run record shaped exactly as the engine persists one: step 0 carries the streamed tail
+    // (plus the final stderr), step 1 an api_call body far over the cap, step 2 nothing at all.
+    const runId = 'run-logs-fixture';
+    await automationRuns.insert({
+      _id: runId,
+      id: runId,
+      automationId: id,
+      startedAt: new Date().toISOString(),
+      status: 'completed',
+      inputs: {},
+      triggeredBy: 'user',
+      ownerUserId: 'admin1',
+      orgId: 'o1',
+      steps: [
+        {
+          stepId: 's0', index: 0, status: 'completed', tier: 'cache', durationMs: 5,
+          logTail: { text: `${'a'.repeat(RUN_LOG_STEP_MAX_CHARS - 3)}FIM`, truncated: true },
+          output: { kind: 'local_command', stdout: 'ignorado', stderr: 'aviso no stderr', exitCode: 0, durationMs: 5, truncated: false, timedOut: false },
+        },
+        {
+          stepId: 's1', index: 1, status: 'completed', tier: 'cache', durationMs: 7,
+          output: { kind: 'api_call', status: 200, responseHeaders: {}, responseBody: 'b'.repeat(200_000), responseBodyIsJson: false, truncated: false, durationMs: 7 },
+        },
+        { stepId: 's2', index: 2, status: 'completed', tier: 'cache', durationMs: 1 },
+      ],
+    } as never);
+
+    const res = await api(`/api/v1/automations/runs/${runId}/logs`, t);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string; steps: Array<{ stepIndex: number; log: string; truncated: boolean }> };
+    expect(RunLogsResponse.safeParse(body).success).toBe(true);
+    expect(body.runId).toBe(runId);
+
+    // Only the steps that produced something are listed.
+    expect(body.steps.map((s) => s.stepIndex)).toEqual([0, 1]);
+
+    // Step 0: the streamed tail wins over the stored stdout, the final stderr is appended, and the
+    // whole thing is re-capped at the per-step bound.
+    const s0 = body.steps[0]!;
+    expect(s0.log.length).toBeLessThanOrEqual(RUN_LOG_STEP_MAX_CHARS);
+    expect(s0.truncated).toBe(true);
+    expect(s0.log).toContain('aviso no stderr'); // the tail keeps the END
+    expect(s0.log).not.toContain('ignorado'); // the streamed tail replaced the stored stdout
+
+    // Step 1: a 200 000-char response body cannot become a 200 000-char log.
+    const s1 = body.steps[1]!;
+    expect(s1.log.length).toBeLessThanOrEqual(RUN_LOG_STEP_MAX_CHARS);
+    expect(s1.truncated).toBe(true);
+
+    // And the whole response is bounded, whatever is on disk.
+    const total = body.steps.reduce((n, s) => n + s.log.length, 0);
+    expect(total).toBeLessThanOrEqual(RUN_LOG_TOTAL_MAX_CHARS);
+
+    // Tenancy: the same uniform 404 GET /runs/:id gives — never an existence oracle.
+    const bt = await builderToken();
+    const foreign = await api(`/api/v1/automations/runs/${runId}/logs`, bt);
+    expect(foreign.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await foreign.json()).success).toBe(true);
+    const foreignRun = await api(`/api/v1/automations/runs/${runId}`, bt);
+    expect(foreignRun.status).toBe(404);
+
+    // A run that does not exist answers identically.
+    const ghost = await api('/api/v1/automations/runs/ghost-run/logs', t);
+    expect(ghost.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await ghost.json()).success).toBe(true);
   });
 });

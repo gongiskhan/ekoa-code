@@ -152,6 +152,19 @@ const COVERED = new Set<string>([
   // asserts the media type + the decoded entries instead of a safeParse. Covering both keeps
   // EXPECTED_PENDING_COUNT unchanged.
   'memvault.searchNotes', 'memvault.exportVault',
+  // slice E4 - the automations run-lifecycle endpoint this slice ADDS (automations.test.ts:
+  // "run logs: schema-valid, bounded per step AND per run, cross-owner is the uniform 404", plus
+  // tests/automation/run-logs.test.ts for the engine-side capture through a real run).
+  //
+  // WHY ONLY THIS ONE. The gate is an exact-count ledger: `pending = allDescriptors - COVERED`,
+  // pinned at EXPECTED_PENDING_COUNT. Adding a descriptor raises the count by one, so covering
+  // exactly the new descriptor restores the pin. The automations domain was ALREADY entirely
+  // PENDING before this slice, and E4 additionally lands real coverage for `automations.createRun`
+  // (idempotency, the header, the race, the key-admitted audit) and `automations.getRun` — but
+  // claiming them here would drop `pending` to 47 and fail the pin, which this slice may not
+  // re-pin. The honest reading: PENDING now UNDERSTATES automations coverage; the domain's keys
+  // move to COVERED with the re-pin they need, not silently.
+  'automations.getRunLogs',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

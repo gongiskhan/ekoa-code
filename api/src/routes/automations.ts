@@ -4,6 +4,12 @@
  * authenticates via ?token= (CONV-1) and attaches to events/. Org scoping (Amendment 2)
  * lives in the service; creation authority reads the org's flippable builder-authoring
  * setting through the platform-crud org read.
+ *
+ * SLICE E4 — this is a CAPABILITY surface (Capability Contract rule 4): the router mounts
+ * `requireUserOrApiKey`, so a platform JWT (byte-identical requireAuth path) or an `ekoa_gk_`
+ * gateway key admits every route below. The SSE stream deliberately stays `?token=`-only: its
+ * token is a real jti-bearing platform JWT, and a key must never end up riding a session token
+ * that outlives the key's revocation (E1 review).
  */
 import { Router, type Request, type Response } from 'express';
 import {
@@ -11,12 +17,14 @@ import {
   AutomationPatch,
   PlanRequest,
   RunCreateRequest,
+  IdempotencyKey,
   ConsentRequest,
   StepFeedbackRequest,
   RevokeApprovedCommandRequest,
   type Actor,
 } from '@ekoa/shared';
-import { requireAuth, verifySseToken, type AuthedRequest } from '../auth/middleware.js';
+import { verifySseToken, type AuthedRequest } from '../auth/middleware.js';
+import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import { sseManager } from '../events/sse-manager.js';
 import {
   AutomationServiceError,
@@ -29,6 +37,7 @@ import {
   startRun,
   listRuns,
   getRunRecord,
+  getRunLogs,
   cancelRun,
   resumeRun,
   resolveConsent,
@@ -36,6 +45,7 @@ import {
   buildCatalog,
   listApprovedCommands,
   revokeApprovedCommand,
+  type RunCreateCallContext,
 } from '../automation/index.js';
 import { getOrg } from '../services/platform-crud.js';
 import { actorOf, sendError, parseBody } from './helpers.js';
@@ -48,6 +58,48 @@ function sendServiceError(res: Response, err: unknown): void {
     return sendError(res, 'VALIDATION_FAILED', err.message);
   }
   throw err;
+}
+
+/** The key principal a gateway-key admission left on res.locals — trace only (rule 3). */
+function callContextOf(req: AuthedRequest, res: Response): RunCreateCallContext {
+  const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
+  return {
+    ...(p ? { principal: { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } } : {}),
+    ...(req.user?.username ? { username: req.user.username } : {}),
+  };
+}
+
+/**
+ * The run-create idempotency key, from the body field or the conventional `Idempotency-Key`
+ * header. Returns `{ ok: false }` AFTER answering the envelope when the two disagree or the header
+ * value is not a legal key.
+ *
+ * A body/header CONFLICT is refused rather than resolved. Picking a winner would mean a client
+ * whose HTTP layer sets the header while its payload carries a different key silently gets the
+ * at-most-once guarantee bound to a key it did not think it was using — the one failure mode this
+ * whole feature exists to prevent.
+ */
+function idempotencyKeyOf(
+  req: AuthedRequest,
+  res: Response,
+  body: { idempotencyKey?: string },
+): { ok: true; key?: string } | { ok: false } {
+  // An EMPTY header is treated as absent (a client that always sets the header but has no key must
+  // behave exactly like one that never sets it). The value itself is opaque and never normalised.
+  const raw = req.header('idempotency-key');
+  const header = raw !== undefined && raw.trim().length > 0 ? raw : undefined;
+  if (header !== undefined && body.idempotencyKey !== undefined && header !== body.idempotencyKey) {
+    sendError(res, 'VALIDATION_FAILED', 'O cabeçalho Idempotency-Key não corresponde ao idempotencyKey do corpo.');
+    return { ok: false };
+  }
+  const key = body.idempotencyKey ?? header;
+  if (key === undefined) return { ok: true };
+  const parsed = IdempotencyKey.safeParse(key);
+  if (!parsed.success) {
+    sendError(res, 'VALIDATION_FAILED', 'Dados inválidos.', { issues: parsed.error.issues });
+    return { ok: false };
+  }
+  return { ok: true, key: parsed.data };
 }
 
 /** Route wrapper: awaits the handler and maps service errors; anything else -> 500 envelope. */
@@ -84,7 +136,7 @@ export function automationsRouter(): Router {
     sseManager.attach(res, auth.claims.sub, 'automation', req.params.id as string, lastEventId ? Number(lastEventId) : undefined);
   });
 
-  r.use(requireAuth);
+  r.use(requireUserOrApiKey);
 
   // --- Fixed paths BEFORE '/:id' so 'runs'/'plan'/'catalog'/'approved-commands' never bind as ids.
 
@@ -110,6 +162,12 @@ export function automationsRouter(): Router {
 
   r.get('/runs/:id', handle(async (req, res) => {
     res.json(await getRunRecord(actorOf(req), req.params.id as string));
+  }));
+
+  // Per-step logs (slice E4). Same owner scoping as GET /runs/:id — a run the caller may not see
+  // answers the identical uniform NOT_FOUND.
+  r.get('/runs/:id/logs', handle(async (req, res) => {
+    res.json(await getRunLogs(actorOf(req), req.params.id as string));
   }));
 
   r.post('/runs/:id/cancel', handle(async (req, res) => {
@@ -176,11 +234,21 @@ export function automationsRouter(): Router {
     res.json(await deleteAutomation(actorOf(req), req.params.id as string));
   }));
 
-  // Runs are created under the automation id (CONV-3 async job pattern, 202).
+  // Runs are created under the automation id (CONV-3 async job pattern, 202). With an idempotency
+  // key (body field or `Idempotency-Key` header) a replay answers 200 with the SAME runId and
+  // starts nothing — the status code is the only signal, the body stays exactly RunCreateResponse.
   r.post('/:id/runs', handle(async (req, res) => {
     const body = parseBody(res, RunCreateRequest, req.body ?? {});
     if (!body) return;
-    res.status(202).json(await startRun(actorOf(req), req.params.id as string, body));
+    const key = idempotencyKeyOf(req, res, body);
+    if (!key.ok) return;
+    const out = await startRun(
+      actorOf(req),
+      req.params.id as string,
+      { ...(body.inputs ? { inputs: body.inputs } : {}), ...(key.key ? { idempotencyKey: key.key } : {}) },
+      callContextOf(req, res),
+    );
+    res.status(out.created ? 202 : 200).json({ runId: out.runId });
   }));
 
   return r;
