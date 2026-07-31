@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { bundleFromZip, readBundleFile, looksLikeZip, type ArtifactBundle } from '@/lib/artifact-bundle';
+import {
+  bundleFromZip, readBundleFile, looksLikeZip,
+  toContractBundle, type ArtifactBundle } from '@/lib/artifact-bundle';
 
 /** Build a zip shaped like "Transferir código" output: files at the root, manifest.json included. */
 function makeAppZip(opts?: { prefix?: string; withRuntimeNoise?: boolean }): Uint8Array {
@@ -103,5 +105,72 @@ describe('readBundleFile', () => {
     // Defense against a mislabelled download — magic-byte sniff wins.
     const bundle = (await readBundleFile(fileFrom(makeAppZip(), 'mislabelled.json'))) as ArtifactBundle;
     expect(bundle.manifest.id).toBe('app-123');
+  });
+});
+
+/** base64 of a UTF-8 string — what bundleFromZip writes into contentB64. */
+function strToBase64(s: string): string {
+  return Buffer.from(s, 'utf8').toString('base64');
+}
+
+/**
+ * `toContractBundle` — the conversion that was MISSING, and what its absence cost.
+ *
+ * Import and bundle-update posted this module's PORTABLE envelope at routes that validate the
+ * CONTRACT shape from `shared/src/artifacts.ts`. Two unrelated types both named `ArtifactBundle`,
+ * plus a `bundle as ArtifactBundle` cast, made that typecheck — so nothing caught it until the
+ * server did: `400 VALIDATION_FAILED`, `path: ["bundle","manifestId"]`, shown to the user as
+ * "Dados inválidos.". Every export -> re-import, and every "Transferir código" -> update, failed.
+ *
+ * These assert the conversion is TOTAL, because a partial one fails the same way but later and
+ * more confusingly: past validation, with `files` empty, the server writes zero files and reports
+ * success.
+ */
+describe('toContractBundle', () => {
+  const portable: ArtifactBundle = {
+    schemaVersion: 1,
+    manifest: { id: 'app-77', name: 'Contrato', version: '2.1.0', extends: 'app-auth-persistent' },
+    scaffold: [
+      { path: 'frontend/src/App.jsx', contentB64: strToBase64('export default () => <h1>olá</h1>;\n') },
+      { path: 'frontend/src/styles.css', contentB64: strToBase64('body { margin: 0 }') },
+    ],
+    seedData: { clientes: [{ id: 'c1' }] },
+    exportedAt: '2026-07-31T00:00:00.000Z',
+    sourceArtifactId: 'app-77',
+  };
+
+  it('produces every field the server reads, under the names it reads them by', () => {
+    const c = toContractBundle(portable);
+    expect(c.manifestId).toBe('app-77'); // the field whose absence produced the 400
+    expect(c.name).toBe('Contrato');
+    expect(c.version).toBe('2.1.0');
+    // `files`, not `scaffold`: writeBundleFiles() iterates bundle.files and would otherwise write
+    // NOTHING while still reporting success.
+    expect(c.files.map((f) => f.path)).toEqual(['frontend/src/App.jsx', 'frontend/src/styles.css']);
+    expect(c.data).toEqual({ clientes: [{ id: 'c1' }] });
+  });
+
+  it('decodes contentB64 as UTF-8, not byte-wise', () => {
+    // A byte-wise decode turns "olá" into "olÃ¡" and ships mojibake into the user's source file.
+    expect(toContractBundle(portable).files[0]!.content).toBe('export default () => <h1>olá</h1>;\n');
+  });
+
+  it('falls back through sourceArtifactId then name when the manifest carries no id', () => {
+    // manifestId is REQUIRED by the contract, so there is no "leave it out" — only a fallback.
+    const noId = { ...portable, manifest: { name: 'Sem Id' } } as unknown as ArtifactBundle;
+    expect(toContractBundle(noId).manifestId).toBe('app-77'); // sourceArtifactId
+    const bare = { ...noId, sourceArtifactId: undefined } as unknown as ArtifactBundle;
+    expect(toContractBundle(bare).manifestId).toBe('Sem Id'); // then the name
+  });
+
+  it('round-trips a real downloaded zip into something the contract accepts', () => {
+    // Straight through bundleFromZip: `fileFrom` is scoped to another block, and the File wrapper
+    // adds nothing here - readBundleFile delegates to this for a zip anyway.
+    const c = toContractBundle(bundleFromZip(makeAppZip()));
+    expect(c.manifestId).toBe('app-123');
+    expect(c.files.length).toBeGreaterThan(0);
+    expect(c.files.every((f) => typeof f.content === 'string')).toBe(true);
+    // The runtime dirs the reader excludes must not reappear on the way out.
+    expect(c.files.some((f) => f.path.startsWith('dist/') || f.path.startsWith('node_modules/'))).toBe(false);
   });
 });

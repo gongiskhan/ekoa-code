@@ -40,8 +40,12 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api, tryCall, ApiError } from "@/lib/api";
-import type { ArtifactBundle, BundleUpdateResponse } from "@ekoa/shared";
-import { readBundleFile } from "@/lib/artifact-bundle";
+import type { BundleUpdateResponse } from "@ekoa/shared";
+import {
+  readBundleFile,
+  toContractBundle,
+  type ArtifactBundle as PortableBundle,
+} from "@/lib/artifact-bundle";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useAuthStore } from "@/stores/auth";
 import { useTranslation } from "@/stores/i18n";
@@ -1863,7 +1867,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
     if (isImporting) return;
     setIsImporting(true);
     try {
-      const result = await tryCall(() => api.artifacts.import({ bundle: bundle as ArtifactBundle }));
+      const result = await tryCall(() => api.artifacts.import({ bundle: toContractBundle(bundle as PortableBundle) }));
       if (result.ok) {
         toast.success(
           `Artefacto importado: "${(result.data as { name?: string })?.name || "sem nome"}".`,
@@ -1887,7 +1891,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
     try {
       const result = await tryCall(() => api.artifacts.bundleUpdate({
         id: pendingImport.match.id,
-        bundle: pendingImport.bundle as ArtifactBundle,
+        bundle: toContractBundle(pendingImport.bundle as PortableBundle),
       }));
       if (result.ok) {
         const name = result.data.artifact.name || getArtifactTitle(pendingImport.match);
@@ -1933,7 +1937,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
       const bundle = await readBundleFile(file); // JSON bundle or downloaded .zip
       const result = await tryCall(() => api.artifacts.bundleUpdate({
         id: artifact.id,
-        bundle: bundle as ArtifactBundle,
+        bundle: toContractBundle(bundle as PortableBundle),
         force: false,
       }));
       if (result.ok) {
@@ -1965,7 +1969,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
     try {
       const result = await tryCall(() => api.artifacts.bundleUpdate({
         id: artifact.id,
-        bundle: bundle as ArtifactBundle,
+        bundle: toContractBundle(bundle as PortableBundle),
         force: true,
       }));
       if (result.ok) {

@@ -1,4 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import {
+  login as restLogin,
+  importArtifact,
+  listArtifacts,
+  getArtifact,
+  patchArtifact,
+  deleteArtifact,
+} from './helpers/backend-rest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -26,14 +34,11 @@ const b64 = (s: string) => Buffer.from(s).toString('base64');
 let token = '';
 const cleanupIds: string[] = [];
 
-async function action(request: APIRequestContext, app: string, intent: string, params: Record<string, unknown>) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
-    headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-${Math.random().toString(36).slice(2)}` },
-    timeout: 30_000,
-  });
-  return res.json();
-}
+// TRANSPORT ONLY. This spec used to seed through `POST /api/v1/action { app: 'ekoa.templates' }`,
+// a dispatcher the rebuild retired — it 404s, so `loginRes.success` was `undefined` and the spec
+// died in beforeAll without reaching one product assertion. The assertions below are untouched;
+// only the fixtures' transport moves to the REST routes that replaced the intents. A "template
+// instance" is an ARTIFACT here, which is the whole of the rename.
 
 function makeBundle(name: string, manifestId: string) {
   return {
@@ -49,9 +54,8 @@ function makeBundle(name: string, manifestId: string) {
 }
 
 async function listFeatured(request: APIRequestContext): Promise<Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>> {
-  const res = await action(request, 'ekoa.templates', 'list-instances', {});
-  const data = res.data as { featured?: unknown[] };
-  return (data?.featured ?? []) as Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>;
+  const { featured } = await listArtifacts(request, token);
+  return featured as Array<{ id: string; slug?: string; name?: string; data?: Record<string, unknown> }>;
 }
 
 async function login(page: Page) {
@@ -79,14 +83,12 @@ function watchConsole(page: Page): string[] {
 }
 
 test.beforeAll(async ({ request }) => {
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  token = await restLogin(request);
 });
 
 test.afterAll(async ({ request }) => {
   for (const id of cleanupIds) {
-    await action(request, 'ekoa.templates', 'delete-instance', { id }).catch(() => {});
+    await deleteArtifact(request, token, id);
   }
 });
 
@@ -120,9 +122,9 @@ test('the Aplicações section lists the featured apps, each with a "Usar" actio
 test('an own artifact card shows the universal "Usar" button', async ({ page, request }) => {
   const errors = watchConsole(page);
   const name = `E2E Own Usar ${STAMP}`;
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(name, `e2e-own-usar-${STAMP}`) });
-  expect(imp.success).toBe(true);
-  const ownId = (imp.data as { id: string }).id;
+  const imp = await importArtifact(request, token, makeBundle(name, `e2e-own-usar-${STAMP}`));
+  expect(imp.id, 'import returned an artifact id').toBeTruthy();
+  const ownId = imp.id;
   cleanupIds.push(ownId);
 
   await login(page);
@@ -141,8 +143,7 @@ test('clicking a featured card routes to its chat (?continue=) instead of forkin
   const target = featured[0];
 
   // No fork must be created: own-instance count stays the same.
-  const beforeList = await action(request, 'ekoa.templates', 'list-instances', {});
-  const beforeCount = ((beforeList.data as { instances?: unknown[] }).instances ?? []).length;
+  const beforeCount = (await listArtifacts(request, token)).items.length;
 
   await login(page);
   await page.goto('/artifacts');
@@ -153,8 +154,7 @@ test('clicking a featured card routes to its chat (?continue=) instead of forkin
   // The card click routes to the direct-edit chat via ?continue=<featuredId>.
   await page.waitForURL(new RegExp(`/chat\\?continue=${target.id}`), { timeout: 15_000 });
 
-  const afterList = await action(request, 'ekoa.templates', 'list-instances', {});
-  const afterCount = ((afterList.data as { instances?: unknown[] }).instances ?? []).length;
+  const afterCount = (await listArtifacts(request, token)).items.length;
   expect(afterCount).toBe(beforeCount);
 
   expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
@@ -167,12 +167,12 @@ test('featured update badge: "Manter a minha versão" clears the badge and recor
   const target = featured[featured.length - 1];
 
   // Snapshot the original data so we can restore it verbatim afterwards.
-  const originalGet = await action(request, 'ekoa.templates', 'get-instance', { id: target.id });
-  const originalData = ((originalGet.data as { data?: Record<string, unknown> })?.data) ?? {};
+  const originalGet = await getArtifact(request, token, target.id);
+  const originalData = (originalGet.data as Record<string, unknown>) ?? {};
 
   // Simulate the seeder having flagged an update for a customized instance.
   const patched = { ...originalData, customized: true, updateAvailable: { version: '9.9.9' } };
-  const patchRes = await action(request, 'ekoa.templates', 'update-instance', { id: target.id, data: patched });
+  const patchRes = await patchArtifact(request, token, target.id, { data: patched });
   expect(patchRes.success).toBe(true);
 
   try {
@@ -192,16 +192,15 @@ test('featured update badge: "Manter a minha versão" clears the badge and recor
     await expect(badge).toHaveCount(0, { timeout: 10_000 });
 
     // …and ignoredVersion persisted, updateAvailable cleared.
-    const after = await action(request, 'ekoa.templates', 'get-instance', { id: target.id });
-    const afterData = (after.data as { data?: Record<string, unknown> })?.data ?? {};
+    const after = await getArtifact(request, token, target.id);
+    const afterData = (after.data as Record<string, unknown>) ?? {};
     expect(afterData.ignoredVersion).toBe('9.9.9');
     expect(afterData.updateAvailable ?? null).toBeNull();
   } finally {
     // Restore the featured instance's data to its pre-test state. update-instance
     // MERGES data for featured instances, so explicitly clear the keys the test
     // introduced rather than relying on a replace.
-    await action(request, 'ekoa.templates', 'update-instance', {
-      id: target.id,
+    await patchArtifact(request, token, target.id, {
       data: { ...originalData, customized: false, updateAvailable: null, ignoredVersion: null },
     }).catch(() => {});
   }

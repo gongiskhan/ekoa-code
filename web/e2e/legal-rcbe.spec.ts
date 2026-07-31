@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import { legalAppUrl } from './helpers/legal';
 
 /**
@@ -12,6 +12,52 @@ import { legalAppUrl } from './helpers/legal';
 
 const APP = legalAppUrl('legal-rcbe');
 
+/**
+ * REPETIBILIDADE: este spec CUMPRE a obrigação, por isso uma segunda corrida encontrava-a
+ * "Cumprida" e morria na primeira asserção do calendário (/atraso|Pendente|Prevista/). Não era
+ * flakiness - era o spec a depender de uma base de dados virgem, o que só é verdade uma vez.
+ *
+ * A app já sabe repor-se, mas SÓ com uma tour de demonstração activa (`isDemoActive()` em
+ * EntidadesPage.jsx); este spec entra directamente na app, sem tour, por isso essa reposição nunca
+ * dispara. Em vez de alargar a reposição da app - que a faria correr em uso real, onde apagar
+ * artefactos do utilizador seria destrutivo - o spec repõe o SEU próprio estado inicial, pela mesma
+ * superfície REST que já usa no fim para verificar a proveniência.
+ *
+ * Espelha exactamente o que a app faz com uma tour activa: obrigação demo de volta a `em_atraso`,
+ * entidade sem declaração, e os artefactos derivados (comprovativos/avenças) removidos. Só toca em
+ * linhas marcadas `demo: true`.
+ */
+async function reporEstadoInicial(request: APIRequestContext, base: string): Promise<void> {
+  const H = { 'X-Ekoa-App-Id': 'legal-rcbe' };
+  const list = async (c: string): Promise<Array<Record<string, unknown>>> => {
+    const res = await request.get(`${base}/api/app-shared/${c}`, { headers: H });
+    return ((await res.json()) as { data?: Array<Record<string, unknown>> }).data ?? [];
+  };
+
+  const ents = (await list('rcbe_entidades')).filter((e) => e?.demo === true);
+  for (const e of ents) {
+    await request.put(`${base}/api/app-shared/rcbe_entidades/${e.id}`, {
+      headers: H,
+      data: { ...e, ultimaDeclaracaoEm: null, passosPortal: {} },
+    });
+    const obr = (await list('rcbe_obrigacoes')).filter((o) => o?.demo === true && o.entidadeId === e.id);
+    for (const o of obr) {
+      await request.put(`${base}/api/app-shared/rcbe_obrigacoes/${o.id}`, {
+        headers: H,
+        data: { ...o, estado: 'em_atraso', cumpridaEm: null },
+      });
+    }
+    for (const col of ['documentos', 'lancamentos']) {
+      const derivadas = (await list(col)).filter(
+        (r) =>
+          r?.demo === true &&
+          (r.entidadeId === e.id || /Avença RCBE/i.test(String(r.descricao ?? r.nome ?? ''))),
+      );
+      for (const r of derivadas) await request.delete(`${base}/api/app-shared/${col}/${r.id}`, { headers: H });
+    }
+  }
+}
+
 test('RCBE completo: entidade -> declaração -> submissão assistida -> comprovativo + avença', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -24,6 +70,9 @@ test('RCBE completo: entidade -> declaração -> submissão assistida -> comprov
     await page.getByTestId('demo-instalar').click();
     await expect(page.getByTestId('demo-banner')).toBeVisible({ timeout: 90_000 });
   }
+
+  // Repor ANTES de abrir a app: a lista lê o estado ao montar.
+  await reporEstadoInicial(page.request, APP.split('/apps/')[0]!);
 
   await page.goto(APP, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('rcbe-lista')).toBeVisible({ timeout: 20_000 });

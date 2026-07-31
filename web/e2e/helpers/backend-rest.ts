@@ -15,9 +15,12 @@ import { expect, type APIRequestContext } from '@playwright/test';
  * dispatcher to the endpoints that replaced it. If a spec then fails, that failure is real and is a
  * product defect to fix — which is the whole point of getting them running again.
  *
- * NOT EVERY INTENT HAS A HOME HERE. `ekoa.templates/*` and `ekoa.artifact-backend/*` have no REST
- * equivalent, no route and no `shared/` module — those surfaces were never built in the rebuild, so
- * the specs that need them cannot be repointed and are tracked separately in `docs/findings.md`.
+ * CORRECTION (2026-07-31). This docblock used to end by saying `ekoa.templates/*` and
+ * `ekoa.artifact-backend/*` "have no REST equivalent, no route and no `shared/` module — those
+ * surfaces were never built in the rebuild". That was wrong, and three specs stayed red on the
+ * strength of it. The surfaces exist; the rebuild RENAMED the concept — a "template instance" is an
+ * ARTIFACT. See the artifacts section at the foot of this file for the intent-to-route mapping,
+ * every line of which was checked against the running API.
  */
 const BE = process.env.BACKEND_URL ?? 'http://localhost:4111';
 
@@ -81,4 +84,121 @@ export async function patchSettings(
 ): Promise<Record<string, unknown>> {
   const res = await request.patch(`${BE}/api/v1/settings`, { headers: auth(token), data: patch, timeout: 30_000 });
   return json<Record<string, unknown>>(res, 'patch settings');
+}
+
+// ---------------------------------------------------------------------------
+// Artifacts — what the retired `ekoa.templates` / `ekoa.artifact-backend` intents became
+// ---------------------------------------------------------------------------
+
+/**
+ * The docblock at the top of this file says `ekoa.templates/*` and `ekoa.artifact-backend/*` have
+ * "no REST equivalent, no route and no `shared/` module". That was WRONG, and three specs sat red
+ * for it. The surfaces exist — the rebuild renamed the concept: a "template instance" is an
+ * ARTIFACT. Every intent those specs needed has a route, in `shared/src/artifacts.ts`, mounted and
+ * answering:
+ *
+ *   ekoa.templates/import-instance   -> POST   /api/v1/artifacts/import
+ *   ekoa.templates/list-instances    -> GET    /api/v1/artifacts        ({ items, featured })
+ *   ekoa.templates/get-instance      -> GET    /api/v1/artifacts/:id
+ *   ekoa.templates/update-instance   -> PATCH  /api/v1/artifacts/:id
+ *   ekoa.templates/delete-instance   -> DELETE /api/v1/artifacts/:id
+ *   ekoa.templates/versions-list     -> GET    /api/v1/artifacts/:id/versions
+ *   ekoa.artifact-backend/run-sample -> POST   /api/v1/artifacts/:id/backend/sample-run
+ *
+ * Shapes below were read off the RUNNING API, not off the schema — the list envelope really is
+ * `{ items, featured }`, which is why `listArtifacts` returns both instead of flattening.
+ */
+export interface ArtifactSummary {
+  id: string;
+  name?: string;
+  slug?: string;
+  status?: string;
+  featured?: boolean;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export async function importArtifact(
+  request: APIRequestContext,
+  token: string,
+  bundle: unknown,
+): Promise<ArtifactSummary> {
+  const res = await request.post(`${BE}/api/v1/artifacts/import`, {
+    headers: auth(token),
+    data: { bundle },
+    timeout: 60_000,
+  });
+  return json<ArtifactSummary>(res, 'import artifact');
+}
+
+export async function listArtifacts(
+  request: APIRequestContext,
+  token: string,
+): Promise<{ items: ArtifactSummary[]; featured: ArtifactSummary[] }> {
+  const res = await request.get(`${BE}/api/v1/artifacts`, { headers: auth(token), timeout: 30_000 });
+  const body = await json<{ items?: ArtifactSummary[]; featured?: ArtifactSummary[] }>(res, 'list artifacts');
+  if (!Array.isArray(body.items)) {
+    throw new Error(`list artifacts: expected { items: [...] }, got keys [${Object.keys(body).join(', ')}]`);
+  }
+  return { items: body.items, featured: body.featured ?? [] };
+}
+
+export async function getArtifact(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+): Promise<ArtifactSummary> {
+  const res = await request.get(`${BE}/api/v1/artifacts/${encodeURIComponent(id)}`, {
+    headers: auth(token),
+    timeout: 30_000,
+  });
+  return json<ArtifactSummary>(res, 'get artifact');
+}
+
+export async function patchArtifact(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<ArtifactSummary> {
+  const res = await request.patch(`${BE}/api/v1/artifacts/${encodeURIComponent(id)}`, {
+    headers: auth(token),
+    data: patch,
+    timeout: 30_000,
+  });
+  return json<ArtifactSummary>(res, 'patch artifact');
+}
+
+/** Best-effort delete, for cleanup: a 404 on an already-gone artifact is not a failure. */
+export async function deleteArtifact(request: APIRequestContext, token: string, id: string): Promise<void> {
+  await request
+    .delete(`${BE}/api/v1/artifacts/${encodeURIComponent(id)}`, { headers: auth(token), timeout: 30_000 })
+    .catch(() => undefined);
+}
+
+export async function listArtifactVersions(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+): Promise<Array<Record<string, unknown>>> {
+  const res = await request.get(`${BE}/api/v1/artifacts/${encodeURIComponent(id)}/versions`, {
+    headers: auth(token),
+    timeout: 30_000,
+  });
+  const body = await json<{ items?: Array<Record<string, unknown>> }>(res, 'list artifact versions');
+  return body.items ?? [];
+}
+
+export async function runBackendSample(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+  data: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await request.post(`${BE}/api/v1/artifacts/${encodeURIComponent(id)}/backend/sample-run`, {
+    headers: auth(token),
+    data,
+    timeout: 60_000,
+  });
+  return json<Record<string, unknown>>(res, 'backend sample run');
 }

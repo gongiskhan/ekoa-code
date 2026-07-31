@@ -127,3 +127,61 @@ export async function readBundleFile(file: File): Promise<unknown> {
   if (isZip) return bundleFromZip(bytes);
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+
+/**
+ * Convert the PORTABLE bundle above into the shape `POST /api/v1/artifacts/import` and
+ * `/bundle-update` actually accept.
+ *
+ * WHY THIS EXISTS (a live bug, not a tidy-up). Two different types were both called
+ * `ArtifactBundle`: this file's portable envelope (`{ schemaVersion, manifest, scaffold:
+ * [{ path, contentB64 }] }`) and the CONTRACT's (`shared/src/artifacts.ts`:
+ * `{ manifestId, name?, files: [{ path, content }], data? }`). The import call site bridged them
+ * with `bundle as ArtifactBundle` — a cast between two unrelated shapes that TypeScript accepted
+ * only because the names matched. So every import posted the portable shape at a route that
+ * validates the contract shape, and the server answered:
+ *
+ *   400 VALIDATION_FAILED — path ["bundle","manifestId"], "Required"  ->  "Dados inválidos."
+ *
+ * Meaning artifact import and bundle-update were BROKEN end to end: export an app, or press
+ * "Transferir código" and re-import the zip, and it always failed. Even past validation it would
+ * have written nothing, because the server writes from `bundle.files` and the portable envelope
+ * has `scaffold`.
+ *
+ * The contract is the source of truth (`shared/` is the contract; `api/` implements it), so the
+ * conversion belongs here, on the reader's side. `contentB64` is decoded as UTF-8 — the exact
+ * inverse of `bytesToBase64` above, chunked the same way so a large file cannot blow the
+ * argument limit.
+ */
+export function toContractBundle(bundle: ArtifactBundle): {
+  manifestId: string;
+  name?: string;
+  files: Array<{ path: string; content: string }>;
+  data?: Record<string, unknown>;
+  version?: string;
+} {
+  const manifest = bundle.manifest ?? ({} as ArtifactBundle['manifest']);
+  const manifestId =
+    (typeof manifest.id === 'string' && manifest.id) ||
+    (typeof bundle.sourceArtifactId === 'string' && bundle.sourceArtifactId) ||
+    manifest.name ||
+    'imported-app';
+  return {
+    manifestId,
+    ...(manifest.name ? { name: manifest.name } : {}),
+    files: (bundle.scaffold ?? []).map((f) => ({ path: f.path, content: base64ToText(f.contentB64) })),
+    ...(bundle.seedData ? { data: bundle.seedData as Record<string, unknown> } : {}),
+    ...(typeof manifest.version === 'string' ? { version: manifest.version } : {}),
+    // `.passthrough()` on the contract schema keeps this, and the server's update-in-place matcher
+    // reads the manifest for `extends`. Sending it costs nothing and losing it would silently
+    // change which base an updated app validates against.
+    manifest,
+  } as ReturnType<typeof toContractBundle>;
+}
+
+/** UTF-8 decode of a base64 payload. The inverse of `bytesToBase64`. */
+function base64ToText(b64: string): string {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}

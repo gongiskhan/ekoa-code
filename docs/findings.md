@@ -6,6 +6,38 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`artifact-import-posts-a-shape-the-contract-rejects`** (FIXED 2026-07-31, HIGH, correctness —
+  a live user-facing break, found by repairing the specs that existed to catch it). **Artifact
+  import and bundle-update were broken end to end.** `web/lib/artifact-bundle.ts` reads an export or
+  a "Transferir código" zip into a PORTABLE envelope — `{ schemaVersion, manifest, scaffold:
+  [{ path, contentB64 }] }` — and `artifacts-surface.tsx` posted it, unconverted, at
+  `POST /api/v1/artifacts/import`, whose contract (`shared/src/artifacts.ts`) is
+  `{ manifestId, name?, files: [{ path, content }], data? }`. The server validates against the
+  contract, so every import answered **400 VALIDATION_FAILED**, `path: ["bundle","manifestId"]`,
+  which the UI showed as **"Dados inválidos."** Four call sites: `import` plus all three
+  `bundleUpdate` paths.
+  HOW IT SURVIVED TYPECHECK, which is the part worth remembering: TWO different types are named
+  `ArtifactBundle` — this file's and the contract's — and each call site bridged them with
+  `bundle as ArtifactBundle`. The cast is between unrelated shapes and TypeScript took it purely
+  because the names matched. Past validation it would still have written NOTHING, since the server
+  writes from `bundle.files` and the portable envelope has `scaffold`.
+  FIXED with `toContractBundle()` on the reader's side (the contract is the source of truth), the
+  four casts replaced by real conversions, and the local type imported as `PortableBundle` so the
+  name collision cannot re-arm the same mistake. Proven against the RUNNING api: the same bundle
+  gives 400 raw and 201 converted, with files written and UTF-8 intact. Pinned by four tests in
+  `web/__tests__/lib/artifact-bundle.test.ts`; the UTF-8 one is revert-proofed (byte-wise decode
+  yields `olÃ¡`).
+- **`a-tracked-test-file-that-vitest-never-loads`** (FIXED 2026-07-31, MEDIUM, test-estate — found
+  by appending four tests to it and watching them not run). `web/lib/artifact-bundle.test.ts` was
+  tracked in git, looked like coverage, and had **never executed**: `web/vitest.config`'s include is
+  `['__tests__/**/*.test.{ts,tsx}', 'src/**/*.test.{ts,tsx}']`, and the file sits in neither. It was
+  a leftover from the G9 frontend copy — an exact duplicate of the live
+  `web/__tests__/lib/artifact-bundle.test.ts`, same nine test names. The suite-ledger census cannot
+  see it either: it counts `web/__tests__` only, so the file was invisible from both directions.
+  DELETED, with its unique value (nothing) established by diffing the test sets first. Worth
+  recording as a class, not an incident: a test file outside the include is worse than no file,
+  because it reads as coverage in review and in a directory listing. It was the ONLY one — checked.
+
 - **`ported-e2e-estate-is-not-green`** (OPEN 2026-07-31, MEDIUM, process — measured, not inferred).
   `CLAUDE.md` says the ported estate "stays green on every PR" and that "a red baseline spec is fixed
   before any new work merges". It is not green and has not been for some time. Measured on this
