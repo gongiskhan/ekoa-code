@@ -250,6 +250,30 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Product bugs
 
+- **`automation-private-visibility-unenforced`** (HIGH, run 20260730, found by the independent test
+  pass, FIXED same run). `visibility: 'private'` on an automation was stored, echoed by
+  `toWireAutomation`, and published as `Automation.visibility` in the OpenAPI document - and enforced
+  nowhere: a same-org peer read a private automation by id and saw it in the list, under a JWT or a
+  gateway key. Six diff-reading review rounds missed it because the leaking code was code nobody
+  changed; only an agent driving the whole running surface found it. Now one predicate
+  (`isVisibleTo`) inside `canReadAutomation`/`canWriteAutomation`: private is OWNER-ONLY, not the
+  org-admin and not the super-admin, following `OwnerVisibilityScoped` (the repo's existing rule for
+  this exact field) rather than `canSeeRun` (a different resource's default scope). Absent or `'org'`
+  keeps legacy behaviour byte for byte. Refusals are a uniform 404 - PATCH/DELETE/run-create
+  previously answered 403, which was itself an existence oracle.
+- **`automation-managed-metadata-leak`** (low, run 20260730, OPEN). Two paths still expose an
+  automation's id and sometimes its NAME to org members regardless of visibility:
+  `api/src/automation/integration-automations.ts` `sessionActionRows` (id + name for
+  integration-managed automations) and `api/src/events/service.ts` `listTriggers` via `triggerView`
+  (opaque id + integrationKey/eventName). Both are metadata on a DIFFERENT resource - the automation
+  itself correctly 404s - and the provisioner never marks managed rows private, so this only bites
+  after someone PATCHes a managed automation to private. Out of the fixing slice's file set.
+- **`automation-triggered-subautomation-owner-skip`** (low, run 20260730, OPEN, pre-existing). A
+  trigger-driven run's `sub_automation` step re-enters `runAutomation` with the owner check skipped,
+  so a triggered parent could call a sub-automation the trigger owner does not own. Not reachable
+  through the public wire (`mapWireStepToEngine` drops `subAutomationId`); only via planner output or
+  an integration template.
+
 - **`restoreVersion-featured-500`** (medium). `restoreVersion` on a *featured* artifact still 500s.
   (The broader versions-500 - never-built artifacts and the featured list - was fixed 2026-07-11; this
   case remains.)

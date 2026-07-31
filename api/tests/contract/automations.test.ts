@@ -538,6 +538,75 @@ describe('automations run lifecycle (slice E4)', () => {
     expect(row!.metadata.xClient.endsWith('…')).toBe(true); // a cut tag is never mistaken for a name
   });
 
+  it('`visibility: private` is ENFORCED, not merely echoed: owner-only, uniform 404, JWT and key alike', async () => {
+    // The field is published in the contract (`Automation.visibility`), so a client reads it as
+    // access control. It used to be stored and echoed and enforced NOWHERE — any member of the org
+    // read the automation by id and got it in their list. The full matrix (org-admin/super-admin,
+    // patch-to-private, absent-visibility parity, the trigger delivery path) lives in
+    // api/tests/security/automation-visibility.test.ts; this pins the CONTRACT half of it.
+    const t = await adminToken();
+    const created = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'Privada', visibility: 'private', plan: { steps: [] } }) });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as Record<string, unknown>;
+    expect(Automation.safeParse(body).success).toBe(true);
+    expect(body.visibility).toBe('private');
+    const id = body.id as string;
+
+    // The owner still holds it, by id and in their list.
+    expect((await api(`/api/v1/automations/${id}`, t)).status).toBe(200);
+    const ownerList = (await (await api('/api/v1/automations', t)).json()) as { items: Array<{ id: string }> };
+    expect(AutomationListResponse.safeParse(ownerList).success).toBe(true);
+    expect(ownerList.items.some((a) => a.id === id)).toBe(true);
+
+    // A same-org peer, under BOTH admissions: 404 by id, absent from a still schema-valid list.
+    const bt = await builderToken();
+    const minted = (await (await api('/api/v1/gateway-keys', bt, { method: 'POST', body: JSON.stringify({ label: 'peer-visibility' }) })).json()) as { key: string };
+    const peers = [bt, minted.key];
+    for (const cred of peers) {
+      const hidden = await api(`/api/v1/automations/${id}`, cred);
+      const missing = await api('/api/v1/automations/nao-existe', cred);
+      const [hiddenBody, missingBody] = [await hidden.text(), await missing.text()];
+      expect(hidden.status).toBe(404);
+      expect(ErrorEnvelope.safeParse(JSON.parse(hiddenBody)).success).toBe(true);
+      // Indistinguishable from a genuinely missing id — status AND body bytes.
+      expect(hidden.status).toBe(missing.status);
+      expect(hiddenBody).toBe(missingBody);
+
+      const list = (await (await api('/api/v1/automations', cred)).json()) as { items: Array<{ id: string }> };
+      expect(AutomationListResponse.safeParse(list).success).toBe(true);
+      expect(list.items.some((a) => a.id === id)).toBe(false);
+    }
+  });
+
+  it('plan-from-goal cannot be aimed at someone else`s private automation (same refusal as a missing id)', async () => {
+    // /plan with an `automationId` OVERWRITES that automation — it is a write path, gated by
+    // canWriteAutomation, which now refuses an automation the caller cannot see. The refusal is
+    // the SAME FORBIDDEN this endpoint already gives for an id that does not exist, so it is not
+    // an existence oracle either.
+    // The non-owner here is the ORG-ADMIN, who otherwise passes canWriteAutomation on any row in
+    // the org — the only caller for whom the private gate is what stops the overwrite.
+    hoisted.planText = JSON.stringify({ status: 'ok', name: 'Reescrita', description: '', inputs: [], steps: [{ type: 'wait', durationMs: 1 }], reasoning: '' });
+    await orgs.update('o1', (o) => ({ ...o, settings: { allowBuilderAutomations: true } }));
+    const bt = await builderToken();
+    const priv = (await (await api('/api/v1/automations', bt, { method: 'POST', body: JSON.stringify({ name: 'Plan-alvo', visibility: 'private' }) })).json()) as { id: string };
+    await orgs.update('o1', (o) => ({ ...o, settings: { allowBuilderAutomations: false } }));
+
+    const t = await adminToken();
+    const onPrivate = await api('/api/v1/automations/plan', t, { method: 'POST', body: JSON.stringify({ goal: 'reescreve', language: 'pt', automationId: priv.id }) });
+    const onGhost = await api('/api/v1/automations/plan', t, { method: 'POST', body: JSON.stringify({ goal: 'reescreve', language: 'pt', automationId: 'nao-existe-mesmo' }) });
+    const [pb, gb] = [await onPrivate.text(), await onGhost.text()];
+    expect(onPrivate.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(JSON.parse(pb)).success).toBe(true);
+    expect(onPrivate.status).toBe(onGhost.status);
+    expect(pb).toBe(gb);
+
+    // Untouched: the owner's automation still has its own name, and no run was started on it.
+    const still = (await (await api(`/api/v1/automations/${priv.id}`, bt)).json()) as { name: string };
+    expect(still.name).toBe('Plan-alvo');
+    const runs = (await (await api(`/api/v1/automations/runs?automationId=${priv.id}`, bt)).json()) as { items: unknown[] };
+    expect(runs.items).toEqual([]);
+  });
+
   it('run logs: schema-valid, bounded per step AND per run, cross-owner is the uniform 404', async () => {
     const t = await adminToken();
     const id = await newAutomation(t, 'Logs');

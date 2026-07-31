@@ -6,7 +6,9 @@
  * against those zod schemas).
  *
  * Scoping (Amendment 2): automations are org-scoped + creator-owned (visible across the org, mutated
- * by their creator or an org-admin/super-admin). Runs are visible to the owner and org-admins.
+ * by their creator or an org-admin/super-admin) — UNLESS marked `visibility: 'private'`, which is
+ * owner-only on every read and write path and invisible even to an org-admin/super-admin (see
+ * `isVisibleTo`). Runs are visible to the owner and org-admins.
  * Creation is org-admin-only by default with a flippable org setting for builder authoring
  * (`canCreateAutomation`). Cancel/resume/consent are owner-scoped and idempotent, driven by an
  * in-memory signal registry (single-process, FIXED-8) that binds the engine's `cancellation` /
@@ -131,12 +133,46 @@ function toWireStep(s: StepRecord): Record<string, unknown> {
 
 const isAdmin = (actor: Actor): boolean => actor.role === 'super-admin' || actor.role === 'org-admin';
 
-/** Read scope: an automation is visible across its org. */
+/**
+ * THE PRIVATE GATE. `visibility: 'private'` means OWNER-ONLY, and it is enforced, not decorative:
+ * the field is accepted on create/patch, echoed by `toWireAutomation`, and published in the
+ * OpenAPI document, so an API client reads it as access control and must be right to.
+ *
+ * WHO CAN SEE A PRIVATE AUTOMATION: its owner. NOBODY else — not an org-admin, not a super-admin.
+ * That is not a new rule; it is the ONE rule this codebase already has for the ONE other resource
+ * carrying the same `visibility: 'private' | 'org'` field. `OwnerVisibilityScoped` (data/scoped.ts,
+ * behind memory/) says it verbatim: "private row of another user — invisible even to the org
+ * admin", and it grants no super-admin exception either. `canSeeRun` below is deliberately NOT the
+ * analogue: a run carries no visibility field at all, so "owner + org-admin" is that resource's
+ * DEFAULT scope, never a decision about an explicit private marker. When the two candidate house
+ * rules disagree, the one that governs this exact field wins.
+ *
+ * THE DEFAULT IS NOT PRIVATE. `visibility` is optional and absent on every row written before it
+ * existed; all of those are org-visible today. Only the literal string 'private' hides a row —
+ * 'org' and absent keep exactly the behaviour they have always had. Reading "absent" as private
+ * (which is what `OwnerVisibilityScoped.listVisible`'s `visibility === 'org'` test would do here)
+ * would silently retire the existing estate from every org's list.
+ *
+ * A hidden automation answers the uniform NOT_FOUND every caller path already uses for a missing
+ * one — identical status AND body, so nothing here is an existence oracle. That is why the gate
+ * sits inside `canReadAutomation`/`canWriteAutomation` rather than beside them: every mutation
+ * path (patch, delete, run-create, plan-onto-existing) gates on one of those two first, so a
+ * caller who may not READ a private automation cannot probe for it with a write either.
+ */
+function isVisibleTo(doc: Pick<StoredAutomation, 'visibility' | 'ownerUserId'>, actor: { userId: string }): boolean {
+  if (doc.visibility !== 'private') return true;
+  return doc.ownerUserId === actor.userId;
+}
+
+/** Read scope: an automation is visible across its org — except a private one, owner-only. */
 function canReadAutomation(doc: StoredAutomation, actor: Actor): boolean {
+  if (!isVisibleTo(doc, actor)) return false;
   return actor.role === 'super-admin' || doc.orgId === actor.orgId;
 }
-/** Write scope: the creator, or an org-admin in the same org, or a super-admin. */
+/** Write scope: the creator, or an org-admin in the same org, or a super-admin — and never an
+ *  automation the actor cannot even see (someone else's private one). */
 function canWriteAutomation(doc: StoredAutomation, actor: Actor): boolean {
+  if (!isVisibleTo(doc, actor)) return false;
   if (actor.role === 'super-admin') return true;
   if (doc.orgId !== actor.orgId) return false;
   return doc.ownerUserId === actor.userId || actor.role === 'org-admin';
@@ -197,7 +233,10 @@ export async function listAutomations(actor: Actor): Promise<WireAutomation[]> {
     actor.role === 'super-admin' ? {} : { orgId: actor.orgId },
     { updatedAt: -1 },
   )) as unknown as StoredAutomation[];
-  return rows.map(toWireAutomation);
+  // The LIST must not hand back what GET /:id refuses. Filtered in memory through the SAME
+  // predicate the by-id path uses (exactly as OwnerVisibilityScoped.listVisible does) rather than
+  // as a query clause, so the two read paths can never drift apart.
+  return rows.filter((doc) => isVisibleTo(doc, actor)).map(toWireAutomation);
 }
 
 export async function getAutomation(actor: Actor, id: string): Promise<WireAutomation> {
@@ -705,6 +744,9 @@ export async function submitStepFeedback(
 // Catalog + approved commands
 // ============================================================================
 
+/** Private gate: subsumed. `buildAutomationCatalog` queries `{ ownerUserId }` (catalog.ts), so the
+ *  catalog is already strictly owner-only — a stricter scope than the private gate, for every
+ *  role including super-admin (the flag it takes widens only integration/ekoa actions). */
 export async function buildCatalog(actor: Actor): Promise<WireCatalogResponse> {
   const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
   return {
@@ -759,6 +801,16 @@ export async function startRunForTrigger(input: TriggerRunInput): Promise<Trigge
   // executed, never retried.
   const target = (await automations.get(input.automationId)) as StoredAutomation | null;
   if (!target || target.orgId !== input.orgId) {
+    return { outcome: 'failed', permanent: true };
+  }
+  // The private gate reaches the DELIVERY path too. Trigger creation validates its target through
+  // `getAutomation` (routes/triggers.ts), so it is already gated — but the trigger record OUTLIVES
+  // that check: the automation can be flipped to private afterwards, and the engine deliberately
+  // skips its owner check for non-user runs. Without this, a stale trigger would keep executing
+  // (and streaming) another member's private automation under a server-trusted owner. The trigger
+  // owner is judged as a plain member; a private automation that is not theirs is a PERMANENT
+  // failure — the delivery pipeline must not retry an authorization refusal.
+  if (!isVisibleTo(target, { userId: input.ownerUserId })) {
     return { outcome: 'failed', permanent: true };
   }
   const ctx: RunContext = {
@@ -830,6 +882,10 @@ async function extractActionRunOutput(runId: string): Promise<unknown> {
  * the outcome onto the executor's result contract (carried runAutomationBackedAction semantics:
  * unknown_automation / forbidden / automation_failed; CREDENTIAL BOUNDARY — secrets only ever
  * nest under `inputs.credentials`, never top-level, never in error text).
+ *
+ * Private gate: subsumed. The owner check below is `ownerUserId !== input.ownerUserId` — strictly
+ * owner-only regardless of visibility — so a private automation is already unreachable to anyone
+ * but its owner on this path.
  */
 export async function runAutomationForAction(input: ActionRunInput): Promise<ActionRunResult> {
   const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
