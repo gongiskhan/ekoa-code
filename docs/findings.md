@@ -109,6 +109,43 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Contract / schema drift (the schema-coverage honor-system class)
 
+- **`openapi-contentmd-bytes-vs-chars`** (medium, run 20260730 E6). `WriteNoteRequest.contentMd` is
+  bounded at 1,000,000 CHARACTERS while the body parser's limit is 1 MiB of BYTES, so a body that is
+  VALID against the published spec can still answer 413 - accented Portuguese exceeds one byte per
+  character. The 413 is documented on all 10 body-accepting operations and its description names the
+  trap, but the schema still promises a size the transport cannot carry. Real fix: narrow
+  `contentMd`'s bound or raise the body limit - a behaviour change to shipped endpoints, deliberately
+  out of scope for a spec-generation slice.
+- **`openapi-body-limit-hand-carried`** (low, run 20260730 E6). The 1 MiB body limit is copied from
+  `api/src/server.ts` into the generator's 413 description - the one place the generator does what it
+  otherwise refuses (it THROWS rather than guess a media type, but copies this number). Prose only, so
+  a stale value misleads a reader without breaking a client, and the drift test asserts the
+  BYTE-vs-CHARACTER warning shape but NOT the number, so it can go stale silently. Fix: a `shared/`
+  constant read by both.
+- **`openapi-automations-path-params-untyped`** (low, run 20260730 E6). The automations routes pass
+  `req.params.id`/`stepId` through with no `safeParse`, so the spec types them as bare strings.
+  Declaring a `params` schema would encode a constraint the contract does not actually hold AND emit a
+  400 those routes never produce, so omitting it is the accurate choice today. Fix: validate the params
+  in the routes first, then declare them.
+- **`openapi-drift-gate-dirty-source`** (low, run 20260730 E6, KNOWN LIMIT). The generator and its drift
+  gate read `@ekoa/shared` from the gitignored `shared/dist`, and the freshness check (`tsc -b --dry`)
+  proves dist is CURRENT WITH source, not that source is committed. A concurrent session's uncommitted
+  edit, freshly built, therefore lands in the published contract with a green gate - reproduced twice in
+  run 20260730, in both directions. Failing on a dirty tree would block the normal edit-build-test loop,
+  so the control is procedural: verify a committed generated artifact from a pristine checkout. Possible
+  mechanical fix: gate on `git status --porcelain -- shared/` only when a CI env var is set.
+- **`automations-runs-limit-unvalidated`** (medium, run 20260730, found by the independent test pass).
+  `GET /api/v1/automations/runs` ignores the `limit` constraints the OpenAPI document publishes
+  (`limit=0` answers 200 with an empty list instead of 400; `-1`, `501` and `abc` are ignored; `2.5` is
+  floored), because the route hand-rolls `Number(req.query.limit)` instead of parsing the shared schema.
+  The sibling list operations in the same document (knowledge documents, memvault notes) enforce the
+  identical schema exactly, so this is an outlier, not a convention.
+- **`automations-idempotency-header-undocumented`** (low, run 20260730, found by the independent test
+  pass). `POST /api/v1/automations/{id}/runs` fully implements an `Idempotency-Key` HEADER (replay, 400
+  on a repeated raw header, 400 on header/body conflict, empty-as-absent) but documents only the body
+  field, so a generated client cannot use the header form or know that misusing it is a 400. Fix: a
+  headers field on the descriptor, then emit it.
+
 - **`schema-coverage-honor-system`** (structural). The schema-coverage gate is a hand-maintained
   allowlist that does NOT verify a test exercises each COVERED endpoint; a green gate is not proof a
   body matches its schema. Audit 2026-07-10 found 27 of 154 COVERED keys unexercised and ~6 endpoint

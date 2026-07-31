@@ -21,10 +21,13 @@ jobs:
       - run: npm run gate:garrison
       # 2. typecheck shared/api/web
       - run: npm run typecheck
-      # 3. unit + module tests (api vitest runs tests/contract too, once the suite exists)
-      - run: npm test
-      # 5. build web + api
+      # 3. build FIRST: shared/dist is gitignored, and the api suite imports @ekoa/shared from it.
+      # Before this, `npm test` on a clean checkout died with "Failed to resolve entry for package
+      # @ekoa/shared" and NO tests ran - so every api gate, including the OpenAPI drift gate, was
+      # silently absent from CI. Found by the E6 fresh-context review (run 20260730).
       - run: npm run build
+      # 4. unit + module tests (api vitest runs tests/contract too)
+      - run: npm test
       # 6+7. ledger-gated e2e: the suite-ledger runner is the single authority for which
       # ported specs/drivers run at the current gate (from the latest gate-* tag). Not-yet-due
       # artifacts report `skipped (awaiting G<N>)`; due artifacts run and must be green; the
