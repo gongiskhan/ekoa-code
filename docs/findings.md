@@ -14,6 +14,12 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
     runs of IDENTICAL code — so roughly two specs are outright flaky before anything else is said.
   - the merge (`4261a75`): **39 failed / 190 passed**, and its failure set is a STRICT SUBSET of
     `origin/main` run 1's. Nothing regressed; two specs that differ from run 2 both failed on run 1.
+  - after the repairs below (`d6d922f`, same day): **37 failed / 205 passed / 5 skipped** in 37.4m.
+    No new failures (the set is a strict subset of the 39), and the +15 passes are exactly the two
+    repaired specs: `legal-shared-drift` now contributes 11 and `settings-redirects` 4. Runtime rose
+    6.8 minutes, which is the cost of the `demos` budget fix below: those 28 now fail HONESTLY after
+    ~60s each instead of being killed misleadingly at 30s. A fast lie is worse than a slow truth,
+    but the real end state is fixing the spec, not paying that every run.
   Three of the 39 were provably broken rather than failing, and TWO OF THOSE ARE NOW CLOSED
   (2026-07-31, same day):
   - `legal-shared-drift.spec.ts` shelled out to `scripts/sync-legal-shared.mjs`, which is in neither
