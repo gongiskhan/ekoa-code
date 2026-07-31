@@ -22,6 +22,18 @@ export const Artifact = z
     featuredRank: z.number().int().optional(),
     shareable: z.boolean().optional(),
     data: z.record(z.unknown()).optional(),
+    /**
+     * The manifest id this artifact was imported from, surfaced as its OWN field because the
+     * client genuinely needs it and `data` is not on the wire.
+     *
+     * `artifactView` deliberately does not return `data` — it holds server-owned keys like
+     * `projectDir`, and shipping the bag wholesale would put a build-sandbox path in every list
+     * response. But the import flow's "update the existing app or create a copy?" decision matches
+     * on exactly this key, so with `data` absent the client's `i.data?.importedFrom` was always
+     * `undefined` and the choice was never offered: every re-import silently made a duplicate.
+     * Narrow field, not the whole bag — additive per Rule 7.
+     */
+    importedFrom: z.string().optional(),
     /** Thumbnail URL (`/artifact-screenshots/<id>.png`), present once a capture exists (§7.11). */
     screenshotUrl: z.string().optional(),
     createdAt: IsoTimestamp.optional(),

@@ -1,4 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import {
+  login as restLogin,
+  importArtifact,
+  listArtifacts,
+  listArtifactVersions,
+  deleteArtifact,
+} from './helpers/backend-rest';
+import { toContractBundle } from '../lib/artifact-bundle';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -65,19 +73,17 @@ let baseSlug = '';
 let tmp = '';
 const cleanupIds: string[] = [];
 
-async function action(request: APIRequestContext, app: string, intent: string, params: Record<string, unknown>) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
-    headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-${Math.random().toString(36).slice(2)}` },
-    // import/update intents run a real esbuild server-side; don't trip on a busy backend
-    timeout: 30_000,
-  });
-  return res.json();
-}
+// TRANSPORT ONLY. The `POST /api/v1/action` dispatcher this spec seeded through is retired (404),
+// so `loginRes.success` was undefined and beforeAll died before a single product assertion. The
+// assertions are untouched; the fixtures move to the REST routes that replaced the intents.
+//
+// NOTE the two bundle shapes, both correct: `makeBundle` stays PORTABLE because it is written to
+// DISK for the UI's file picker to read - that is what a real user's export looks like - while a
+// direct API seed must send the CONTRACT shape. `toContractBundle` is the product's own converter,
+// imported rather than duplicated so this spec exercises the same code the import button does.
 
 async function listOwnInstances(request: APIRequestContext): Promise<Array<{ id: string; slug?: string; name?: string; title?: string }>> {
-  const res = await action(request, 'ekoa.templates', 'list-instances', {});
-  const data = res.data as { instances?: unknown[] } | unknown[];
+  const data = { instances: (await listArtifacts(request, token)).items } as { instances?: unknown[] } | unknown[];
   return (Array.isArray(data) ? data : (data?.instances ?? [])) as Array<{ id: string; slug?: string; name?: string; title?: string }>;
 }
 
@@ -114,20 +120,19 @@ async function importViaUi(page: Page, bundlePath: string) {
 
 test.beforeAll(async ({ request }) => {
   tmp = mkdtempSync(join(tmpdir(), 'ekoa-e2e-upd-'));
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  token = await restLogin(request);
 
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(1, NAME_V1) });
-  expect(imp.success).toBe(true);
-  baseId = (imp.data as { id: string }).id;
-  baseSlug = (imp.data as { slug: string }).slug;
+
+  const imp = await importArtifact(request, token, toContractBundle(makeBundle(1, NAME_V1) as never));
+  expect(imp.id, 'seed import returned an artifact').toBeTruthy();
+  baseId = imp.id;
+  baseSlug = String(imp.slug);
   cleanupIds.push(baseId);
 });
 
 test.afterAll(async ({ request }) => {
   for (const id of cleanupIds) {
-    await action(request, 'ekoa.templates', 'delete-instance', { id }).catch(() => {});
+    await deleteArtifact(request, token, id);
   }
 });
 
@@ -168,8 +173,8 @@ test('matching bundle offers the choice; update keeps id + slug and guides to Ve
   expect(mine[0].name ?? mine[0].title).toBe(NAME_V2);
 
   // The update is a revision: history carries the pre-update snapshot.
-  const versions = await action(request, 'ekoa.templates', 'versions-list', { artifactId: baseId });
-  const messages = ((versions.data as { versions: Array<{ message: string }> }).versions ?? []).map((v) => v.message);
+  const versions = await listArtifactVersions(request, token, baseId);
+  const messages = versions.map((v) => String(v.message ?? ''));
   expect(messages).toContain('update from bundle');
   expect(messages).toContain('pre-update snapshot');
 
@@ -188,6 +193,14 @@ test('"Criar nova instância" creates a separate copy instead of touching the or
 
   // Escape dismisses the choice without importing anything…
   await expect(page.getByTestId('update-or-create-dialog')).toBeVisible();
+  // …but only once the dialog is LISTENING. `toBeVisible()` resolves the moment the panel is in
+  // the DOM, while the Escape handler is attached in an effect that runs after paint — pressing
+  // immediately raced it and the key went nowhere. The dialog moves focus into itself in that same
+  // effect pass, so waiting for focus to land inside it is the precondition, not a sleep.
+  await page.waitForFunction(() => {
+    const panel = document.querySelector('[data-testid="update-or-create-dialog"]');
+    return !!panel && !!document.activeElement && panel.closest('[role="dialog"]')?.contains(document.activeElement);
+  }, undefined, { timeout: 10_000 });
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('update-or-create-dialog')).not.toBeVisible();
 
@@ -237,9 +250,9 @@ test('a non-matching bundle imports directly with no choice dialog', async ({ pa
 
 /** Create a fresh imported instance via the API and return its id/slug/name. */
 async function createInstance(request: APIRequestContext, manifestId: string, name: string) {
-  const imp = await action(request, 'ekoa.templates', 'import-instance', { bundle: makeBundle(1, name, manifestId) });
-  expect(imp.success).toBe(true);
-  const d = imp.data as { id: string; slug: string };
+  const imp = await importArtifact(request, token, toContractBundle(makeBundle(1, name, manifestId) as never));
+  expect(imp.id, 'seed import returned an artifact').toBeTruthy();
+  const d = imp as { id: string; slug: string };
   cleanupIds.push(d.id);
   return { id: d.id, slug: d.slug };
 }

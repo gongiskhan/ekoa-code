@@ -145,8 +145,18 @@ describe('toContractBundle', () => {
     expect(c.name).toBe('Contrato');
     expect(c.version).toBe('2.1.0');
     // `files`, not `scaffold`: writeBundleFiles() iterates bundle.files and would otherwise write
-    // NOTHING while still reporting success.
-    expect(c.files.map((f) => f.path)).toEqual(['frontend/src/App.jsx', 'frontend/src/styles.css']);
+    // NOTHING while still reporting success. manifest.json rides along as a FILE because the
+    // contract has no manifest field and the server reads the manifest off disk — without it the
+    // app arrives with a DEFAULT manifest and loses its `backend`, `extends` and `type`.
+    expect(c.files.map((f) => f.path)).toEqual([
+      'frontend/src/App.jsx',
+      'frontend/src/styles.css',
+      'manifest.json',
+    ]);
+    expect(JSON.parse(c.files.find((f) => f.path === 'manifest.json')!.content)).toMatchObject({
+      id: 'app-77',
+      extends: 'app-auth-persistent',
+    });
     expect(c.data).toEqual({ clientes: [{ id: 'c1' }] });
   });
 
@@ -170,6 +180,8 @@ describe('toContractBundle', () => {
     expect(c.manifestId).toBe('app-123');
     expect(c.files.length).toBeGreaterThan(0);
     expect(c.files.every((f) => typeof f.content === 'string')).toBe(true);
+    // The zip's manifest was lifted out of the scaffold by the reader; it must come back here.
+    expect(c.files.some((f) => f.path === 'manifest.json')).toBe(true);
     // The runtime dirs the reader excludes must not reappear on the way out.
     expect(c.files.some((f) => f.path.startsWith('dist/') || f.path.startsWith('node_modules/'))).toBe(false);
   });

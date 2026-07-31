@@ -1845,7 +1845,10 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
             .filter(
               (i) =>
                 i.id === manifestId ||
-                (i.data as Record<string, unknown> | undefined)?.importedFrom === manifestId,
+                // `importedFrom` is a TOP-LEVEL field on the wire: `data` is not returned by
+                // artifactView, so the old `i.data?.importedFrom` read undefined for every
+                // artifact and this branch never once matched.
+                i.importedFrom === manifestId,
             )
             .sort(
               (x, y) =>

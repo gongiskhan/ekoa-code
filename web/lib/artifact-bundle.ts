@@ -165,15 +165,26 @@ export function toContractBundle(bundle: ArtifactBundle): {
     (typeof bundle.sourceArtifactId === 'string' && bundle.sourceArtifactId) ||
     manifest.name ||
     'imported-app';
+  // THE MANIFEST TRAVELS AS A FILE, and it has to. `bundleFromZip` deliberately lifts manifest.json
+  // OUT of `scaffold` into its own field, but the CONTRACT has no manifest field at all — only
+  // `files`. The server reads the manifest off DISK after writing the bundle
+  // (`ensureManifest` keeps an existing manifest.json and only forces id/name), so the manifest's
+  // channel into the server is `files`. Drop it and the import silently loses everything the
+  // manifest declares: `backend` (entryPoint + handlers — the app arrives with no backend at all),
+  // `extends`, `type`, `entryPoint`. The server then writes a DEFAULT manifest and the app is
+  // quietly not the app that was exported.
+  const files = (bundle.scaffold ?? []).map((f) => ({ path: f.path, content: base64ToText(f.contentB64) }));
+  if (!files.some((f) => f.path === 'manifest.json')) {
+    files.push({ path: 'manifest.json', content: JSON.stringify(manifest, null, 2) });
+  }
   return {
     manifestId,
     ...(manifest.name ? { name: manifest.name } : {}),
-    files: (bundle.scaffold ?? []).map((f) => ({ path: f.path, content: base64ToText(f.contentB64) })),
+    files,
     ...(bundle.seedData ? { data: bundle.seedData as Record<string, unknown> } : {}),
     ...(typeof manifest.version === 'string' ? { version: manifest.version } : {}),
-    // `.passthrough()` on the contract schema keeps this, and the server's update-in-place matcher
-    // reads the manifest for `extends`. Sending it costs nothing and losing it would silently
-    // change which base an updated app validates against.
+    // Also passed through (the contract schema is `.passthrough()`), so a server that prefers the
+    // field over the file gets the same answer either way.
     manifest,
   } as ReturnType<typeof toContractBundle>;
 }

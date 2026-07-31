@@ -56,7 +56,17 @@ export function stripReservedDataKeys(data: Record<string, unknown>): Record<str
 const scoped = new OwnerVisibilityScoped<ArtifactDoc>(artifacts as never);
 
 export function artifactView(a: ArtifactDoc) {
-  return { id: a._id, name: a.name, slug: a.slug, userId: a.userId, orgId: a.orgId, visibility: a.visibility, featured: !!a.featured, shareable: !!a.shareable, status: a.status, screenshotUrl: getArtifactScreenshotUrl(a._id) };
+  // `data` stays OFF the wire on purpose: it holds server-owned keys (projectDir, sdkSessionId)
+  // that no client may see. `importedFrom` is lifted out of it as its own field because the import
+  // flow's update-or-copy match keys on it — while it lived only inside `data`, the client read
+  // `undefined` every time and silently created a duplicate instead of offering the choice.
+  const importedFrom = (a.data as Record<string, unknown> | undefined)?.importedFrom;
+  return {
+    id: a._id, name: a.name, slug: a.slug, userId: a.userId, orgId: a.orgId,
+    visibility: a.visibility, featured: !!a.featured, shareable: !!a.shareable, status: a.status,
+    ...(typeof importedFrom === 'string' ? { importedFrom } : {}),
+    screenshotUrl: getArtifactScreenshotUrl(a._id),
+  };
 }
 
 const STOPWORDS = new Set(['a', 'o', 'de', 'da', 'do', 'the', 'and', 'e']);

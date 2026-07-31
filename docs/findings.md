@@ -6,6 +6,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`artifact-backend-runtime-never-wired`** (OPEN 2026-08-01, HIGH, feature inert — found by
+  repairing `artifact-backend-panel.spec.ts`). **Artifact backends (Layer 2) cannot run at all.**
+  `setArtifactBackendRuntime()` is defined in `api/src/apps/backend-runtime/runtime.ts` and is
+  called from **nowhere** in `api/src`, so the module singleton stays `NullArtifactBackendRuntime`
+  for the process's whole life and every `invoke` returns
+  `{ ok: false, error: 'artifact backend runtime is not initialised' }`. `WorkerThreadRuntime`, the
+  real implementation, is right there at `runtime.ts:166` — written, exported, never installed.
+  Nothing outside the `backend-runtime/` directory imports the module at all.
+  WHAT A USER SEES: an app can declare `backend: { entryPoint, handlers }`, the import builds it
+  (`appBuilder.build` compiles the backend bundle), and the panel reports `hasBackend: true` with
+  the handlers `declared` — so it all looks wired. Then every invocation fails, and
+  `events/`-driven trigger delivery into an artifact backend silently does nothing.
+  Verified against the running api: import an app with a declared backend, poll `sample-run` for
+  40s, get "not initialised" on every attempt while `GET /:id/backend` cheerfully reports
+  `hasBackend: true, declared: { entryPoint: 'backend/index.js', handlers: ['onEmail'] }`.
+  NOT fixed here deliberately. Wiring it means constructing `RuntimeDeps` at the composition root —
+  `resolveOwner`, `resolveBundlePath`, and the capability surface that mints tokens for user code
+  executing in worker threads. That is a security-relevant change to an execution boundary, which
+  the review policy sends to adversarial review; improvising it inside a red-fixing pass is exactly
+  how such a thing lands unreviewed. `api/tests/security/` has suites for the capability layer that
+  should be re-read as part of doing it.
+  `web/e2e/artifact-backend-panel.spec.ts` is skipped at file level naming this finding, with its
+  polling precondition left intact so the file starts working the moment the runtime is installed.
+  This is the SAME SHAPE as the daemon seam that sat on its "honest default" until it was wired —
+  see `docs/decisions.md` 2026-07-31 and the `LocalCommandSpec` docblock. Worth noting as a pattern:
+  a seam with a null default reads as finished from every angle except running it.
+
 - **`artifact-import-posts-a-shape-the-contract-rejects`** (FIXED 2026-07-31, HIGH, correctness —
   a live user-facing break, found by repairing the specs that existed to catch it). **Artifact
   import and bundle-update were broken end to end.** `web/lib/artifact-bundle.ts` reads an export or
@@ -27,6 +54,31 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   gives 400 raw and 201 converted, with files written and UTF-8 intact. Pinned by four tests in
   `web/__tests__/lib/artifact-bundle.test.ts`; the UTF-8 one is revert-proofed (byte-wise decode
   yields `olÃ¡`).
+- **`import-loses-the-manifest-so-a-backend-app-arrives-without-its-backend`** (FIXED 2026-08-01,
+  HIGH, correctness — found while proving the import fix above). The contract's `ArtifactBundle` has
+  no manifest field: only `manifestId, name, slug, files, data, version`. But `bundleFromZip`
+  deliberately lifts `manifest.json` OUT of the scaffold into its own field ("the manifest travels
+  in its own field"), so converting portable → contract dropped it entirely. The server writes the
+  bundle's files, then `ensureManifest()` finds no manifest.json and writes a DEFAULT one — so
+  everything the manifest declared was silently lost on import: `backend` (entryPoint + handlers —
+  the app arrives with no backend at all), `extends`, `type`, `entryPoint`.
+  Proven both ways against the running api: import the same app without manifest.json →
+  `hasBackend: false, declared: null`; with it → `hasBackend: true, declared: { entryPoint:
+  'backend/index.js', handlers: ['onEmail'] }`. FIXED in `toContractBundle` by appending the
+  manifest as a `manifest.json` FILE — the only channel the contract has, and the one
+  `ensureManifest` reads (it keeps an existing manifest and only forces id/name).
+- **`featured-update-badge-unreachable-from-a-spec`** (OPEN 2026-07-31, LOW, test-coverage — a
+  hardening, not a defect). `artifacts-apps-section`'s update-badge test seeds itself by PATCHing
+  `data.customized` + `data.updateAvailable`. Both are in `RESERVED_ARTIFACT_DATA_KEYS` and stripped
+  twice (route boundary and `patchArtifact`), deliberately: the same list stops a client writing
+  `projectDir` (build-sandbox path injection) and `tours` (stored-content injection into the public
+  `GET /api/demos/:appId`). A client that could forge "this app has an update" could also drive the
+  flow it gates. The old RPC dispatcher allowed it; the rebuild closed it, correctly. So the fixture
+  path is closed BY DESIGN and there is no legitimate public route to the state. The BEHAVIOUR is
+  still worth covering — it needs a server-side seam (drive `featured-seeder.ts` with a bumped
+  manifest version), which is a harness change with its own design. The test is skipped with this
+  reasoning inline. Explicitly NOT done: widening the reserved-key list to make a test pass, which
+  trades a security control for a green tick.
 - **`a-tracked-test-file-that-vitest-never-loads`** (FIXED 2026-07-31, MEDIUM, test-estate — found
   by appending four tests to it and watching them not run). `web/lib/artifact-bundle.test.ts` was
   tracked in git, looked like coverage, and had **never executed**: `web/vitest.config`'s include is
