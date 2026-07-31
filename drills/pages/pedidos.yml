@@ -1,6 +1,6 @@
 id: pedidos
-title: Pedidos (change requests)
-path: /pedidos
+title: Pedidos (change requests, Settings tab)
+path: /settings/pedidos
 mode: steps
 areas: []
 steps:
@@ -115,6 +115,85 @@ steps:
     tags:
       - functionality
     judgment: true
+  - id: settings-tab-bar-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      A settings tab bar sits above the page header with exactly two tabs,
+      "Plataforma" and "Pedidos", and "Pedidos" is the active tab (highlighted
+      with the active underline) - this page now lives as a tab inside Settings,
+      not as a standalone page.
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/pedidos.spec.ts#settings-tab-bar-visible
+    assertion:
+      kind: count
+      role: tab
+      op: eq
+      value: 2
+  - id: tab-switch-to-platform
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the app has navigated to the platform settings tab: the
+      URL is /settings/platform, the "Configurações da Plataforma" heading has
+      replaced the Pedidos queue, and the same tab bar remains visible with
+      "Plataforma" now the active tab.
+    actions:
+      - id: __act-0
+        description: click the "Plataforma" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Plataforma
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/pedidos.spec.ts#tab-switch-to-platform
+    assertion:
+      kind: url-matches
+      pattern: /settings/platform
+      mode: contains
+  - id: sidebar-has-no-pedidos-entry
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the expanded left navigation rail lists NO "Pedidos"
+      entry anywhere (the queue is reached only through Settings now); the rail
+      shows entries such as Chat, Automatizações, Artefactos, Integrações,
+      Memória, Utilizadores, Registo and Configurações, and "Configurações" is
+      the highlighted active section while on this page.
+    actions:
+      - id: __act-0
+        description: click the "Alternar barra lateral" button to expand the sidebar
+        resolved:
+          kind: click
+          role: button
+          name: Alternar barra lateral
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/pedidos.spec.ts#sidebar-has-no-pedidos-entry
+    assertion:
+      kind: visible
+      role: link
+      name: Configurações
 states:
   - id: populated
     label: At least one change request exists
@@ -126,11 +205,9 @@ states:
           skip the state
 spotter:
   stability:
-    phash:
+    step-end:
       decision: drop
       runs: 1
-      lastRunId: 01KYNADECP6S8AMQSNM0360AZP
-      annotation: >-
-        /pedidos loaded — same visual state as frame-0024 which is more
-        definitive (step-end); drop the earlier phash duplicate.
+      lastRunId: 01KYPET5MMPF4J2J9N47XEEE8C
+      annotation: Identical to frame-0000; redundant step-end boundary capture.
   rules: []

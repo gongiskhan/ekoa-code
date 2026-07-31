@@ -1,0 +1,38 @@
+id: pedidos-redirect
+title: Pedidos legacy route (redirect into Settings)
+path: /pedidos
+mode: steps
+areas: []
+steps:
+  - id: redirects-to-settings-pedidos
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Navigating to /pedidos no longer renders a standalone page: the browser is
+      redirected to /settings/pedidos and lands on the Pedidos tab inside
+      Settings - the settings tab bar ("Plataforma" / "Pedidos", with "Pedidos"
+      active) is visible above the "Pedidos" heading and its Escritório/Estado
+      filter bar, and the URL shown is /settings/pedidos, not /pedidos.
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/pedidos-redirect.spec.ts#redirects-to-settings-pedidos
+    assertion:
+      kind: url-matches
+      pattern: /settings/pedidos
+      mode: contains
+spotter:
+  stability:
+    step-end:
+      decision: drop
+      runs: 1
+      lastRunId: 01KYPET5MMPF4J2J9N47XEEE8C
+      annotation: >-
+        Same post-redirect Pedidos state as frame-0031; redundant step-end
+        duplicate.
+  rules: []

@@ -1,21 +1,26 @@
 app:
   name: Ekoa
   url: http://localhost:3000
-fullDrill: true
+fullDrill: false
 autonomy: gated
-viewports: [desktop]
+viewports:
+  - desktop
 globalRules: >-
-  The product UI is Portuguese (pt-PT) throughout - any English string in the interface chrome,
-  navigation, headings or messages is a defect unless the page is demonstrably a third-party embed.
-  Every authenticated page shares the same shell: a dark icon rail on the left (expandable to labelled
-  navigation), a top bar carrying the office name, the token meter, the language switcher and the user
-  menu, and a page header made of an icon tile, a large title and a one-line grey subtitle. Pages are
-  built from full-width cards with consistent horizontal margins. Dates must always render as real
-  formatted dates - "Invalid Date", raw epochs and empty dashes for records that do have a date are
-  defects. Destructive or irreversible actions (revoking a key, resetting a quota or a brand, deleting)
-  must confirm or give explicit feedback, never act silently. Loading states must resolve: a page that
-  stays on a spinner is a failure, not a slow success. Zero browser console errors is the bar on every
-  page. Do not treat decorative emoji as acceptable UI - this product uses SVG icons.
+  The product UI is Portuguese (pt-PT) throughout - any English string in the
+  interface chrome, navigation, headings or messages is a defect unless the page
+  is demonstrably a third-party embed. Every authenticated page shares the same
+  shell: a dark icon rail on the left (expandable to labelled navigation), a top
+  bar carrying the office name, the token meter, the language switcher and the
+  user menu, and a page header made of an icon tile, a large title and a
+  one-line grey subtitle. Pages are built from full-width cards with consistent
+  horizontal margins. Dates must always render as real formatted dates -
+  "Invalid Date", raw epochs and empty dashes for records that do have a date
+  are defects. Destructive or irreversible actions (revoking a key, resetting a
+  quota or a brand, deleting) must confirm or give explicit feedback, never act
+  silently. Loading states must resolve: a page that stays on a spinner is a
+  failure, not a slow success. Zero browser console errors is the bar on every
+  page. Do not treat decorative emoji as acceptable UI - this product uses SVG
+  icons.
 dispatch: manual
 auth:
   loginPath: /login
@@ -23,17 +28,24 @@ auth:
     - fill the "Nome de utilizador" field with "admin"
     - fill the "Palavra-passe" field with "tmp12345"
     - click the "Entrar" button
-  success: the dashboard shell is visible (dark icon sidebar plus the top bar with the token meter and user menu) and no login form remains
+  success: >-
+    the dashboard shell is visible (dark icon sidebar plus the top bar with the
+    token meter and user menu) and no login form remains
   cacheMinutes: 720
 pages:
-  - id: login
-    title: Iniciar sessão (login)
-    path: /login
+  - id: activate
+    title: Authorize this device (CLI device activation)
+    path: /activate
     mode: steps
     selected: true
-  - id: chat
-    title: Chat (assistant workspace)
-    path: /chat
+  - id: artifacts
+    title: Os Meus Artefactos (artifact gallery)
+    path: /artifacts
+    mode: steps
+    selected: true
+  - id: automation-detail-unknown
+    title: Automatização (detail, unknown id)
+    path: /automations/00000000-0000-0000-0000-000000000000
     mode: steps
     selected: true
   - id: automations
@@ -46,14 +58,14 @@ pages:
     path: /automations/new
     mode: steps
     selected: true
-  - id: automation-detail-unknown
-    title: Automatização (detail, unknown id)
-    path: /automations/00000000-0000-0000-0000-000000000000
+  - id: change-password
+    title: Alterar Palavra-passe
+    path: /change-password
     mode: steps
     selected: true
-  - id: artifacts
-    title: Os Meus Artefactos (artifact gallery)
-    path: /artifacts
+  - id: chat
+    title: Chat (assistant workspace)
+    path: /chat
     mode: steps
     selected: true
   - id: integrations
@@ -61,34 +73,19 @@ pages:
     path: /integrations
     mode: steps
     selected: true
-  - id: memory
-    title: Memória (agent knowledge store)
-    path: /memory
-    mode: steps
-    selected: true
   - id: knowledge
     title: O que a Ekoa sabe (knowledge base)
     path: /knowledge
     mode: steps
     selected: true
-  - id: usage
-    title: Utilização (token consumption)
-    path: /usage
+  - id: login
+    title: Iniciar sessão (login)
+    path: /login
     mode: steps
     selected: true
-  - id: users
-    title: Utilizadores e Equipas
-    path: /users
-    mode: steps
-    selected: true
-  - id: registo
-    title: Registo (audit log)
-    path: /registo
-    mode: steps
-    selected: true
-  - id: pedidos
-    title: Pedidos (change requests)
-    path: /pedidos
+  - id: memory
+    title: Memória (agent knowledge store)
+    path: /memory
     mode: steps
     selected: true
   - id: orgs
@@ -96,19 +93,29 @@ pages:
     path: /orgs
     mode: steps
     selected: true
-  - id: settings-branding
-    title: Marca (brand research and design system)
-    path: /settings/branding
+  - id: pedidos
+    title: Pedidos (change requests, Settings tab)
+    path: /settings/pedidos
     mode: steps
     selected: true
-  - id: settings-privacy
-    title: Privacidade e ponte local
-    path: /settings/privacy
+  - id: pedidos-redirect
+    title: Pedidos legacy route (redirect into Settings)
+    path: /pedidos
+    mode: steps
+    selected: true
+  - id: registo
+    title: Registo (audit log)
+    path: /registo
     mode: steps
     selected: true
   - id: settings-api-keys
     title: Chaves de API
     path: /settings/api-keys
+    mode: steps
+    selected: true
+  - id: settings-branding
+    title: Marca (brand research and design system)
+    path: /settings/branding
     mode: steps
     selected: true
   - id: settings-devices
@@ -121,13 +128,18 @@ pages:
     path: /settings/platform
     mode: steps
     selected: true
-  - id: change-password
-    title: Alterar Palavra-passe
-    path: /change-password
+  - id: settings-privacy
+    title: Privacidade e ponte local
+    path: /settings/privacy
     mode: steps
     selected: true
-  - id: activate
-    title: Authorize this device (CLI device activation)
-    path: /activate
+  - id: usage
+    title: Utilização (token consumption)
+    path: /usage
+    mode: steps
+    selected: true
+  - id: users
+    title: Utilizadores e Equipas
+    path: /users
     mode: steps
     selected: true
