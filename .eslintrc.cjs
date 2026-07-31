@@ -84,7 +84,11 @@ module.exports = {
               { target: ['./clients/*/src/**', './clients/*/bin/**', './clients/*/scripts/**'], from: './web', message: 'clients/ must not import from web/ — a consumer talks to the public API, not to the dashboard.' },
               // …and nothing in the platform may depend on a consumer.
               { target: './api', from: './clients', message: 'api/ must not import from clients/ — the dependency runs one way, provider to contract to consumer.' },
-              { target: './web', from: './clients', message: 'web/ must not import from clients/ — the dashboard is not a consumer of the CLI.' },
+              // NOTE: web/** is in ignorePatterns (web self-lints), so a zone targeting it here
+              // can never fire. The real enforcement of web -> clients lives in
+              // web/eslint.config.mjs; this entry is kept only so the four-edge intent is
+              // readable in one place, and is deliberately NOT counted as a working gate.
+              { target: './web', from: './clients', message: 'web/ must not import from clients/ — the dashboard is not a consumer of the CLI. (Enforced by web/eslint.config.mjs; this zone cannot fire.)' },
               { target: './shared', from: './clients', message: 'shared/ must not import from clients/ — the contract depends on nothing.' },
               // Rule 3 — module direction (ch02 §2.7): nothing imports routes/ or server.ts
               // (server.ts is the composition root — it imports everything, nothing imports it);

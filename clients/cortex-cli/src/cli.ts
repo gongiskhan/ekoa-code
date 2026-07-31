@@ -115,7 +115,9 @@ export async function main(argv: readonly string[], opts: MainOptions = {}): Pro
   // through report(), so the scrubber is built here, from the configured key, and applied to every
   // message regardless of which layer raised it (client.ts scrubs its own too - two independent
   // passes, because one missed message is one leaked key).
-  const redact = makeRedactor(env.CORTEX_API_KEY);
+  // Trimmed, to match the value actually sent: requiredEnv trims before use, so an
+  // untrimmed pattern would never match the key on the wire.
+  const redact = makeRedactor(env.CORTEX_API_KEY?.trim());
   try {
     const client = new CortexClient({
       baseUrl: requiredEnv(env, 'CORTEX_BASE_URL'),
