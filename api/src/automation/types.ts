@@ -14,6 +14,8 @@
  * zero imports, so it re-homes into ekoa-code/automation/ unchanged.
  */
 
+import { StepDeclaration } from '@ekoa/shared';
+
 // ============================================================================
 // Cache layer — Locators
 // ============================================================================
@@ -185,12 +187,22 @@ export interface LocalCommandSpec {
   timeoutMs?: number;
   /** Piped to the process's stdin then closed. */
   stdin?: string;
-  /**
-   * Environment variables to forward to the subprocess. Never leaks the
-   * full daemon/Cortex env. Each name must be a literal string here; we
-   * read the corresponding value from `process.env` at spawn time.
+  /*
+   * DELETED 2026-07-27 (Cofre J-4, invariant I9): `envWhitelist?: string[]`.
+   *
+   * It was a list of variable NAMES accepted from the planner — i.e. from a model — which
+   * `buildEnv` resolved against the CORTEX API SERVER's OWN `process.env`, holding the provider
+   * keys, ENCRYPTION_KEY, JWT_SECRET and the database credentials, and shipped the values to a
+   * user's machine. `envWhitelist: ["JWT_SECRET"]` was a complete platform compromise expressed as
+   * an ordinary step field. It was the exact INVERSE of the I9 primitive.
+   *
+   * Secrets now reach a non-browser step ONLY through `cofre/process-injection.ts`, which takes a
+   * name -> `cofre:` REFERENCE mapping and resolves each reference through the Cofre's `unwrap()`
+   * seam (so the grant, the tenancy and the lock all apply). Deleted rather than hardened because
+   * `local_command` is unreachable end-to-end today — `setDaemonConnectionResolver` stays on its
+   * honest default at the composition root — so deletion cost nothing then and becomes impossible
+   * once the path is wired.
    */
-  envWhitelist?: string[];
 }
 
 // ============================================================================
@@ -269,6 +281,36 @@ export interface Step {
    * short-circuit).
    */
   cachedAssertion?: PlaywrightAssertion;  // verify
+
+  /**
+   * WHERE and HOW this step may run (Cofre E-2; contract in `shared/` as `StepDeclaration`).
+   *
+   * Optional on the type because every automation authored before this existed has none, and a
+   * missing declaration must keep working. It does NOT mean "unrestricted": `resolveStepDeclaration`
+   * fills the absent fields with the contract's defaults, which are the CLOSED ones — no required
+   * capabilities, `cloud` target, not attended, no credential refs, and `offlinePolicy: 'fail'`.
+   * A step that declares nothing therefore asks for nothing and stops rather than degrading.
+   *
+   * The four fields the router needs are deliberately separate concerns: `requiredCapabilities` is
+   * what the machine must be able to do, `target` is which machine, `attended` is whether a human
+   * must be present, and `credentialRefs` names the Cofre items the step consumes — REFERENCES
+   * only, never values (I5/I9). `offlinePolicy` is the run's answer to "and if that is not
+   * available?", which is a property of the run, not of the fleet.
+   */
+  declaration?: Partial<StepDeclaration>;
+}
+
+/**
+ * Fill an absent or partial step declaration from the contract's defaults.
+ *
+ * ONE PLACE, deliberately. Every consumer (the engine's placement, the capability match in
+ * `delegateToLocal`, the offline-policy branch) must see the same resolved shape, and a second
+ * inline `?? 'fail'` somewhere is how a default drifts open. Parsing through the zod schema rather
+ * than spreading literals means the defaults live in `shared/` — where the contract test asserts
+ * `offlinePolicy` is `fail` and that a raw secret in `credentialRefs` is refused.
+ */
+export function resolveStepDeclaration(step: Pick<Step, 'declaration'>): StepDeclaration {
+  return StepDeclaration.parse(step.declaration ?? {});
 }
 
 export interface AutomationInputField {
@@ -405,7 +447,18 @@ export interface StepLogTail {
   truncated: boolean;
 }
 
-export type HumanActionKind = 'captcha' | 'mfa' | 'payment' | 'identity' | 'login' | 'other';
+export type HumanActionKind =
+  | 'captcha'
+  | 'mfa'
+  | 'payment'
+  | 'identity'
+  | 'login'
+  /** F-4/I8: a SIGNATURE ceremony is not a login. Signing is an act of legal authorship by a named
+   *  person, bound to the card in the reader in front of them, so "the user completed a ceremony"
+   *  is not interchangeable evidence for it. Kept apart at classification so everything downstream
+   *  inherits the distinction instead of re-deriving it. */
+  | 'signature'
+  | 'other';
 
 export interface HumanActionRequired {
   kind: HumanActionKind;
@@ -515,6 +568,17 @@ export interface ConsentRequest {
   argv: string[];
   /** Plain English: "run cat to read a file" — never raw argv. */
   description: string;
+  /**
+   * The owner + tenant + MACHINE an "approve always" is banked in (J-7), recorded by the executor
+   * that asked rather than re-derived by the resolver. `isCommandShapeApproved` keys on all three
+   * exactly, so a resolver that guessed `pairingId: null` while the executor looks up the connected
+   * daemon's real pairing writes a row that lookup can never read: the user approves, the step
+   * re-checks, and the same prompt returns forever. Server-written and never caller-supplied.
+   *
+   * Absent on a run that paused before this field existed; the resolver then falls back to the
+   * pre-existing behaviour (the run's own owner/org, no machine).
+   */
+  approvalScope?: { userId: string; orgId: string; pairingId: string | null };
 }
 
 export interface PauseRequest {

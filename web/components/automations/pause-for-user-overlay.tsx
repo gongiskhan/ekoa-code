@@ -60,7 +60,7 @@ export default function PauseForUserOverlay() {
   if (!open || !pauseRequest) return null;
 
   const screenshotSrc = pauseRequest.screenshotUrl
-    ? api.resolveUrl(pauseRequest.screenshotUrl)
+    ? api.withPreviewToken(api.resolveUrl(pauseRequest.screenshotUrl))
     : null;
 
   const streamingActive = !!streamingSession && streamingSession.status !== 'failed';

@@ -241,6 +241,9 @@ export const knowledgeSources = new Store<Doc>('knowledge_sources');
 export const knowledgeUploads = new Store<Doc>('knowledge_uploads');
 export const anonymisationDenyLists = new Store<Doc>('anonymisation_deny_lists');
 export const bridgePairings = new Store<Doc>('bridge_pairings');
+/** Per-tenant-per-machine capability grants (Cofre I-3). Advertisement says what a machine CAN do;
+ *  a row here is the org saying what it MAY be used for. Default deny: no row, no capability. */
+export const bridgeCapabilityGrants = new Store<Doc>('bridge_capability_grants');
 export const eventQueue = new Store<Doc>('event_queue');
 export const webhookAudit = new Store<Doc>('webhook_audit');
 /** Per-listener poll state (2A-S1): one row per `kind:'listener'` trigger (`_id` = triggerId),

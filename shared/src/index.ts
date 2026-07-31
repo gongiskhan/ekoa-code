@@ -31,6 +31,7 @@ import { appAssistantEndpoints } from './app-assistant.js';
 import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
 import { gatewayKeysEndpoints } from './gateway-keys.js';
+import { cofreEndpoints } from './cofre.js';
 import { notificationsEndpoints } from './notifications.js';
 import { memvaultEndpoints } from './memvault.js';
 
@@ -71,6 +72,8 @@ export * from './portal.js';
 export * from './served-app.js';
 export * from './ekoa-local.js';
 export * from './gateway-keys.js';
+// Cofre vocabulary (WS-A) + its endpoints (WS-B B-3). The I7/I8 encodings live in this module.
+export * from './cofre.js';
 export * from './notifications.js';
 // memvault (slice E2) - the per-user markdown-notes capability ("cortex memory").
 export * from './memvault.js';
@@ -108,6 +111,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,
   gatewayKeys: gatewayKeysEndpoints,
+  cofre: cofreEndpoints,
   notifications: notificationsEndpoints,
   memvault: memvaultEndpoints,
 };

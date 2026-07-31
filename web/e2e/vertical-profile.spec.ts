@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { login, patchSettings } from './helpers/backend-rest.js';
 import { resolve } from 'node:path';
 
 /**
@@ -28,20 +29,6 @@ function backendUrl(): string {
 
 let token = '';
 
-async function action(
-  request: APIRequestContext,
-  app: string,
-  intent: string,
-  params: Record<string, unknown>,
-) {
-  const res = await request.post(`${backendUrl()}/api/v1/action`, {
-    headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-    data: { app, intent, params, request_id: `e2e-vp-${Math.random().toString(36).slice(2)}` },
-    timeout: 20_000,
-  });
-  return res.json();
-}
-
 async function loginUi(page: Page) {
   await page.goto('/login');
   await page.locator('input[type="text"], input:not([type])').first().fill('admin');
@@ -61,13 +48,11 @@ function watchPageErrors(page: Page): string[] {
 }
 
 test.beforeAll(async ({ request }) => {
-  const loginRes = await action(request, 'ekoa.auth', 'login', { username: 'admin', password: 'tmp12345' });
-  expect(loginRes.success).toBe(true);
-  token = (loginRes.data as { token: string }).token;
+  // REST, not the retired `POST /api/v1/action` RPC dispatcher (see helpers/backend-rest.ts).
+  token = await login(request);
 
-  const upd = await action(request, 'ekoa.settings', 'update', { general: { vertical: 'legal' } });
-  expect(upd.success, 'settings update should succeed').toBe(true);
-  expect((upd.data as { general?: { vertical?: string } })?.general?.vertical).toBe('legal');
+  const upd = await patchSettings(request, token, { general: { vertical: 'legal' } });
+  expect((upd as { general?: { vertical?: string } })?.general?.vertical).toBe('legal');
 });
 
 test('chat empty state shows the legal example prompts (prazos processuais + Citius)', async ({ page }) => {

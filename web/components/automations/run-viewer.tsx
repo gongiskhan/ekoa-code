@@ -366,14 +366,14 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
 
               {live && live.type === 'automation_run_step' && live.screenshotUrl && (
                 <a
-                  href={api.resolveUrl(live.screenshotUrl)}
+                  href={api.withPreviewToken(api.resolveUrl(live.screenshotUrl))}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block w-full max-w-md"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={api.resolveUrl(live.screenshotUrl)}
+                    src={api.withPreviewToken(api.resolveUrl(live.screenshotUrl))}
                     alt={t.stepScreenshotAlt(i + 1)}
                     className="rounded border border-neutral-200 hover:border-neutral-400 transition-colors"
                     loading="lazy"
@@ -540,14 +540,14 @@ function PauseForUserBanner({
         </div>
         {screenshotUrl && (
           <a
-            href={api.resolveUrl(screenshotUrl)}
+            href={api.withPreviewToken(api.resolveUrl(screenshotUrl))}
             target="_blank"
             rel="noopener noreferrer"
             className="block shrink-0"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={api.resolveUrl(screenshotUrl)}
+              src={api.withPreviewToken(api.resolveUrl(screenshotUrl))}
               alt={t.pausedAlt}
               className="h-32 rounded border border-cyan-200 hover:border-cyan-400"
               loading="lazy"

@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { executeApiCallStep } from '../../src/automation/executors/api-call.js';
-import { setIntegrationCredentialLoader, __resetAutomationSeamsForTests } from '../../src/automation/seams.js';
+import {
+  setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
+  __resetAutomationSeamsForTests,
+} from '../../src/automation/seams.js';
 import type { Step, StepRecord, Automation } from '../../src/automation/types.js';
 import type { RunContext } from '../../src/automation/engine.js';
 
@@ -56,6 +60,9 @@ let fetchSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   setIntegrationCredentialLoader(async () => ({ apiKey: SECRET }));
+  // Cofre R-2: a credential-bearing api_call must declare the hosts it may reach. These specs all
+  // target api.example.com, so that is this integration's binding.
+  setIntegrationOriginResolver(async () => ['api.example.com']);
   // A 200 so the executor persists resolvedAction on the success path.
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }),
@@ -90,7 +97,7 @@ describe('api_call credential redaction (§5.6.7)', () => {
     });
     const resolved = captured.resolvedAction as { url: string };
     expect(resolved.url).not.toContain(SECRET);
-    expect(resolved.url).toContain('<redacted>');
+    expect(resolved.url).toContain('[REDACTED:');
     // The REAL request used the un-redacted URL.
     expect(fetchSpy.mock.calls[0]![0]).toContain(SECRET);
   });
@@ -119,7 +126,7 @@ describe('api_call credential redaction (§5.6.7)', () => {
     });
     const resolved = captured.resolvedAction as { body?: string };
     expect(resolved.body).not.toContain(SECRET);
-    expect(resolved.body).toContain('<redacted>');
+    expect(resolved.body).toContain('[REDACTED:');
   });
 
   it('redacts the secret from error details when the call fails non-2xx', async () => {

@@ -87,8 +87,17 @@ export async function executeLocalCommandStep(
   const shape = computeCommandShape(interpolatedArgv);
   const timeoutMs = Math.min(spec.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
 
-  // Consent check
-  const isApproved = await isCommandShapeApproved(ctx.ownerUserId, shape);
+  // Consent check. Scoped to the tenant AND the machine (J-7): "yes, run this on my work laptop"
+  // was never an answer about a machine paired later. Resolved here rather than reusing the
+  // defensive re-resolve below so the SCOPE is fixed before the approval is looked up; the control
+  // flow is unchanged (a missing daemon still surfaces as awaiting_consent first, then
+  // awaiting_daemon, exactly as before).
+  const scope = {
+    userId: ctx.ownerUserId,
+    orgId: ctx.orgId,
+    pairingId: getDaemonConnection(ctx.ownerUserId)?.pairingId ?? null,
+  };
+  const isApproved = await isCommandShapeApproved(scope, shape);
 
   if (!isApproved) {
     // Mark step as awaiting consent; engine's caller will surface
@@ -104,13 +113,18 @@ export async function executeLocalCommandStep(
           argv: interpolatedArgv,
           description: describeCommandShape(shape, interpolatedArgv),
           stepIndex: index,
+          // The SCOPE the answer will be banked in, decided by the party that is asking. An
+          // "approve always" is looked up again right here, by this exact key — so if the resolver
+          // re-derived the scope on its own it could bank a row this lookup never reads, and the
+          // user would re-approve the same command forever. It travels with the question instead.
+          approvalScope: scope,
         },
       },
     });
   }
 
   // Bump approval lastUsedAt (fire-and-forget)
-  void recordApprovalUse(ctx.ownerUserId, shape).catch(() => {});
+  void recordApprovalUse(scope, shape).catch(() => {});
 
   // The bash capability runs on the local daemon. The engine only reaches
   // this executor after confirming a daemon is connected, but re-resolve
@@ -143,7 +157,10 @@ export async function executeLocalCommandStep(
         input: {
           argv: interpolatedArgv,
           cwd: interpolatedCwd,
-          env: buildEnv(spec.envWhitelist),
+          // Cofre J-4 (I9): a secret reaches a child process ONLY through
+          // cofre/process-injection.ts, from a declared name -> cofre: reference mapping resolved
+          // through unwrap(). Nothing here reads the Cortex server's own environment.
+          env: undefined,
           stdin: interpolatedStdin,
           timeoutMs,
         },
@@ -250,12 +267,3 @@ function makeResolved(argv: string[], cwd: string | undefined, shape: string, ti
   return { kind: 'local_command', argv, cwd, shape, timeoutMs, stdin };
 }
 
-function buildEnv(whitelist?: string[]): Record<string, string> | undefined {
-  if (!whitelist || whitelist.length === 0) return undefined;
-  const env: Record<string, string> = {};
-  for (const name of whitelist) {
-    const value = process.env[name];
-    if (typeof value === 'string') env[name] = value;
-  }
-  return env;
-}

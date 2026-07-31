@@ -16,6 +16,7 @@ import {
   type DaemonConnection,
 } from '../../src/automation/seams.js';
 import { __resetAutomationConfigForTests } from '../../src/automation/config.js';
+import { SecretRegistry } from '../../src/security/redaction.js';
 import { automations, automationRuns, approvedCommands } from '../../src/data/stores.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport } from '../agents/_setup.js';
 import type { Automation, StepRecord } from '../../src/automation/types.js';
@@ -173,7 +174,12 @@ describe('engine persists a bounded log tail for streamed steps (slice E4)', () 
     resetAgentState(); // fake LLM transport — this suite never reaches a model
     __resetAutomationSeamsForTests();
     __resetAutomationConfigForTests();
-    await approveCommandShape('u1', computeCommandShape(ARGV)); // no consent pause
+    // J-7: an approval is scoped to owner + org + machine, so the seed names the same scope
+    // resolveConsent would (pairingId null = "no specific machine").
+    await approveCommandShape(
+      { userId: 'u1', orgId: 'o1', pairingId: null },
+      computeCommandShape(ARGV),
+    ); // no consent pause
   });
   afterEach(async () => {
     restoreTransport();
@@ -269,6 +275,46 @@ describe('engine persists a bounded log tail for streamed steps (slice E4)', () 
     expect(RunLogsResponse.safeParse(logs).success).toBe(true);
     expect(logs.steps[0]!.log.length).toBeLessThanOrEqual(STEP_LOG_MAX_CHARS);
     expect(logs.steps[0]!.truncated).toBe(true);
+  });
+
+  // The engine's H-1 filter (`redactStepRecord`) says a new SINK inherits it — and it does. A new
+  // FIELD does not, which is how this tail and that filter could both be correct and still leave a
+  // gap: `logTail` arrived from a different line of work than the redaction, and the two met at the
+  // merge of 2026-07-31. The daemon path redacts at bridge INGRESS as well, so this is the second
+  // guard rather than the only one; it is pinned because "the filter covers the record" is the
+  // claim the docblock makes, and a claim about the whole record has to be true of all of it.
+  it('a secret streamed into the tail is redacted out of the emitted step record', async () => {
+    await automations.insert({ _id: 'auto-secret', ...automationWith('auto-secret') } as never);
+    const secret = 'palavra-passe-supersecreta';
+    const secrets = new SecretRegistry();
+    const handle = secrets.register(secret);
+    expect(handle).toBeTruthy(); // long enough to substitute; a short value would be a different test
+
+    setDaemonConnectionResolver(() => streamingDaemon(
+      [`a autenticar com ${secret}\n`, 'pronto\n'],
+      { exitCode: 0, stdout: '', stderr: '' },
+    ));
+
+    const emitted: StepRecord[] = [];
+    await runAutomation('auto-secret', { ...ctx, secrets }, {
+      runId: 'run-log-secret',
+      emit: {
+        stepUpdate: (record) => { emitted.push(record); },
+        runComplete: () => {},
+        runError: () => {},
+        runPaused: () => {},
+      },
+    });
+
+    // The chunk really did carry it (otherwise this test proves nothing)…
+    const persisted = (await persistedSteps('run-log-secret'))[0]!;
+    expect(persisted.logTail?.text).toContain(secret);
+    // …and the record that leaves the engine does not.
+    expect(emitted).not.toHaveLength(0);
+    const tail = emitted[emitted.length - 1]!.logTail;
+    expect(tail?.text).not.toContain(secret);
+    expect(tail?.text).toContain(`[REDACTED:${handle}]`);
+    expect(tail?.text).toContain('pronto');
   });
 
   it('the tail survives a FAILED step (it is written as the step finishes, not only on success)', async () => {

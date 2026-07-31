@@ -19,6 +19,14 @@ export interface MemoryDoc extends Doc {
   type?: string;
   tags?: string[];
   tier?: string;
+  /**
+   * NON-MEMORABLE class (Cofre R-5, invariant I3). A row that exists so the product can look
+   * something up, but must NEVER be scored against a user's prompt and injected into a model. The
+   * automation action cache is the motivating case: it is written from live page interactions, so
+   * its rows can carry whatever the page held. Distinct from `tier:'archive'` (user-hidden but
+   * still a memory) — this is "not a memory at all, structurally".
+   */
+  nonMemorable?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -86,9 +94,17 @@ export async function resolveMemoryBlock(actor: Actor): Promise<string> {
 function isGuardrail(m: MemoryDoc): boolean {
   return m.type === 'guardrail' || m.tier === 'guardrail' || (m.tags ?? []).includes('guardrail');
 }
-/** Archived memories are hidden in the dashboard and must not steer the model either. */
+/**
+ * Archived memories are hidden in the dashboard and must not steer the model either.
+ *
+ * `nonMemorable` (Cofre R-5, invariant I3) is the second exclusion and the load-bearing one: the
+ * automation action cache writes rows derived from LIVE PAGE INTERACTIONS through this same store,
+ * and excluding only `tier:'archive'` meant those rows were scored against the user's ordinary chat
+ * query and injected under `# Memória`. A magic-link or SSO-callback URL captured by a `navigate`
+ * was replayed to the model on term overlap.
+ */
 function isInjectable(m: MemoryDoc): boolean {
-  return m.tier !== 'archive';
+  return m.tier !== 'archive' && m.nonMemorable !== true;
 }
 
 /** Split text into a lowercase term set for the deterministic overlap resolver (no model call). */
@@ -185,6 +201,9 @@ export async function createMemory(actor: Actor, body: Record<string, unknown>, 
     // Defaulting only at read time left the store and the wire disagreeing: a future byTier
     // aggregation reading documents would bucket these rows as undefined.
     tier: (body.tier as string | undefined) ?? 'active',
+    // Only ever set by internal callers (the automation caches). Absent for every ordinary memory,
+    // so the flag can only ever REMOVE a row from injection, never add one.
+    ...(body.nonMemorable === true ? { nonMemorable: true } : {}),
     createdAt: now,
     updatedAt: now,
   };

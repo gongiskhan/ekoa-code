@@ -71,6 +71,15 @@ export const NAV_ITEMS: NavItem[] = [
     bottom: true,
     activePrefix: "/settings/privacy",
   },
+  // Cofre (WS-D, 2026-07-27): credential custody. Its OWN left-menu item, per the product spec —
+  // not a settings sub-page, because locking a credential is an operational act a user reaches for
+  // under time pressure, not a preference they configure once.
+  {
+    href: "/cofre",
+    icon: ShieldCheck,
+    label: "Cofre",
+    activePrefix: "/cofre",
+  },
   // S4b (run 20260717): per-user gateway API keys for Anthropic-compatible clients.
   {
     href: "/settings/api-keys",

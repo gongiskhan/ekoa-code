@@ -80,7 +80,18 @@ export interface VerifyOutcomeInput {
  * screenshot — it's far more reliable to ask it explicitly than to
  * regex its prose afterwards.
  */
-export type HumanActionKind = 'captcha' | 'mfa' | 'payment' | 'identity' | 'login' | 'other';
+export type HumanActionKind =
+  | 'captcha'
+  | 'mfa'
+  | 'payment'
+  | 'identity'
+  | 'login'
+  /** F-4/I8: a SIGNATURE ceremony is not a login. Signing is an act of legal authorship by a named
+   *  person, bound to the card in the reader in front of them, so "the user completed a ceremony"
+   *  is not interchangeable evidence for it. Kept apart at classification so everything downstream
+   *  inherits the distinction instead of re-deriving it. */
+  | 'signature'
+  | 'other';
 
 export interface HumanActionRequired {
   kind: HumanActionKind;
@@ -191,7 +202,7 @@ Return ONLY a JSON object in the EXACT shape, with the fields ordered EXACTLY as
   "reasoning": "one short sentence explaining the decision",
   "cachedAssertion": <PlaywrightAssertion> | null,
   "humanAction": null | {
-    "kind": "captcha" | "mfa" | "payment" | "identity" | "login" | "other",
+    "kind": "captcha" | "mfa" | "payment" | "identity" | "login" | "signature" | "other",
     "userInstructions": "plain-English Post-it telling the user exactly what to do in the headed browser, then click Continue"
   },
   "extractedInputs": null | { "<name>": "<value-as-shown-on-page>", ... }
@@ -304,7 +315,7 @@ Return ONLY a JSON object in the EXACT shape:
 
 {
   "humanAction": null | {
-    "kind": "captcha" | "mfa" | "payment" | "identity" | "login" | "other",
+    "kind": "captcha" | "mfa" | "payment" | "identity" | "login" | "signature" | "other",
     "userInstructions": "plain-English Post-it telling the user exactly what to do in the headed browser, then click Continue"
   }
 }
@@ -315,6 +326,7 @@ Set humanAction whenever the screenshot shows ANY of:
 - A 3-D Secure / SCA / banking step-up / "confirm payment" / "approve transaction" screen -> kind="payment".
 - A "verify it's you" / "is this you?" / "trusted device" / "unusual sign-in" identity check -> kind="identity".
 - A password / sign-in form for a credential we don't have stored -> kind="login".
+- A DOCUMENT-SIGNING ceremony: "assinar", "assinatura digital/qualificada", a Chave Movel Digital or citizen-card signing prompt, a PIN prompt for a signature certificate, or a "confirm you are signing this document" screen -> kind="signature". This is NOT "login": signing is an act of authorship by a named person, and it is resolved by a human AT the machine with the card, never by a code relayed elsewhere.
 - Any other clearly-human-only step the page is asking for -> kind="other".
 
 Otherwise set humanAction to null.

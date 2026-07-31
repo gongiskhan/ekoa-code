@@ -42,3 +42,57 @@ sweep ran on every page load; a fast navigation re-listed a session whose fire-a
 delete from the previous mount was still in flight, and the re-delete 404d in the console.
 Deterministic repro: chat-thinking then coherence-locale. Fixed in orchestration.ts by
 tracking swept session ids per tab (sessionStorage) so an id is only ever deleted once.
+
+## RESOLVED (2026-07-27): `verify-runner.test.ts` "expires and rejects tampering" — NOT a flake, a cross-file env clobber
+Root-caused the same day rather than logged as environmental. `tests/security/canvas-token-class.test.ts`
+(added by the Cofre F-1 work) set `process.env.JWT_SECRET = 's'` UNCONDITIONALLY in `beforeAll`.
+Vitest workers share `process.env` across test FILES, so that assignment could change the signing
+secret out from under `verify-runner.test.ts` between its `mintPreviewToken` and
+`verifyPreviewToken` — which straddle a `__resetConfigForTests()` — making a valid token verify as
+tampered. Intermittent because it depended on file scheduling. Fixed by using `??=` there: the
+suite does not care WHICH secret is in play, only that it is stable. NOTE the wider hazard: several
+older contract tests also assign these vars unconditionally, so the same class of interference is
+latent elsewhere. Prefer `??=` in any new test that touches `JWT_SECRET` / `ENCRYPTION_KEY`.
+## api vitest: one unreproduced failure on the post-rebase run (2026-07-29, Cofre J-2..J-7 push)
+
+A single api test failed on the first full run after rebasing the Cofre J-work onto origin/main
+(252 files, 1 failed / 2616 passed). It did NOT reproduce: three subsequent full-suite runs were
+252/252 green, and five back-to-back runs of the two timing-sensitive new suites
+(`bridge-replay`, `bridge-audit`) were 21/21 each. The failing test name was not captured before the
+re-run, so this is logged as an unattributed one-off rather than guessed at.
+
+**Structural hazard closed in the same change, because it is the shape this repo has been bitten by
+before.** J-6 writes bridge Registo rows FIRE-AND-FORGET from `delegation.ts` (a delegation must not
+fail because a bookkeeping row could not be written). The CORRECTED 2026-07-10 entry above records
+that a previous "every test passed but the lane exited 1" was exactly that: an unguarded write in a
+fire-and-forget pipeline landing after a test closed mongo. Two aggravating factors here — several
+suites assert on `activityLogs` contents, and `write-approval.test.ts` drives `delegateToLocal`
+with no mongo at all, so its audit writes reject and are swallowed.
+
+`bridge/audit.ts` now TRACKS in-flight writes and exports `drainBridgeAudit()`, called in the
+teardown of both suites that fire them. Production never drains; teardown does. If an api-suite
+flake recurs, check for a NEW untracked async write before assuming mongo-memory-server teardown —
+same advice as the 2026-07-10 entry, now with a drain helper to hang it on.
+
+## RESOLVED (2026-07-30): the platform-poll burst spec was quadratic, not unlucky
+
+`tests/integrations/platform-poll.test.ts` > "drains a >cap same-timestamp burst across consecutive
+ticks (no starvation)" timed out at the 30 s per-test cap on a full-suite run, then passed 3/3 in
+isolation. That profile - green alone, red under load - is normally logged here as environmental and
+watched. It was not environmental, and the entry above ("unreproduced failure on the post-rebase
+run", 2026-07-29) may well have been this same test.
+
+Root cause: the spec's `claimAllDedupKeys` helper drained the queue one row at a time to answer
+"were all 700 messages enqueued?". `events/queue.ts` `claimNext` re-runs `find({status:'pending'})`
+and sorts the whole result on EVERY call, so draining a 700-row burst is quadratic - roughly 245k
+document reads plus 700 updates against mongodb-memory-server. On a quiet machine that fits inside
+30 s; sharing CPU with the rest of the suite it does not.
+
+Fixed at the cause rather than by raising the timeout: the assertion is about what is IN the queue,
+not about the claim protocol (which a separate test exercises directly, on two rows), so the helper
+now does ONE read. Test body time went 8.05 s -> 2.44 s.
+
+Worth knowing for the next one: `claimNext` is the production dispatcher path and carries the same
+full-scan-and-sort per claim. It is not a defect at current queue depths and is deliberately simple,
+but any test that drains a large queue through it will be slow for the same reason, and a deep
+production queue would pay it too.

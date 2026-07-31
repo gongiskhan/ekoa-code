@@ -1,0 +1,172 @@
+/**
+ * bridge/write-approval.ts — the write confirmation stops being model-asserted (Cofre J-7).
+ *
+ * THE BYPASS, precisely. The daemon gates a first write to a file on `confirmed === true`
+ * (`../ekoa-bridge/src/tools/write.ts` step 2) and its header says the user assents Cortex-side.
+ * Nothing Cortex-side checked it. Worse, `agents/sdk-tools.ts` literally INSTRUCTED the model to
+ * set the flag, and `delegateToLocal` passes the model's TaskProgram through verbatim and SIGNS it
+ * with the pairing's secret. So Cortex's signature laundered a model self-assertion into an
+ * authorisation the daemon trusts: the model could write to any file inside a granted root by
+ * claiming permission it was never given. `confirmed` was documentation, not a control.
+ *
+ * WHY THIS IS ENFORCED HERE. Cortex is the only signer of delegated tasks, so Cortex is the place
+ * where "the user actually approved this" can be decided. A daemon-side change (require a signed
+ * approval token instead of a boolean) is real defence in depth and is flagged as C8 in
+ * `docs/bridge-counterpart-changes.md` — but it is not needed to close the hole, and waiting for a
+ * two-repo round trip would leave a live model-authorised write path open in the meantime.
+ *
+ * THE HONEST CURRENT STATE. There is no Cortex-side write-confirmation UI yet, so nothing calls
+ * `approveWrite()` and every `confirmed: true` a model emits is REFUSED. That is deliberate: the
+ * capability as shipped was "the model may authorise its own writes", which is not a capability
+ * worth preserving while a real approval flow is built. Reads, lists, greps and every other step
+ * are untouched. When the UI lands it calls `approveWrite()` for the exact file the user saw, and
+ * the same delegation goes through.
+ */
+import { randomUUID } from 'node:crypto';
+
+/** How long a user's approval stays spendable. A confirmation is an answer to a question asked
+ *  seconds ago; an approval that outlives the conversation is a different authorisation. */
+const APPROVAL_TTL_MS = 10 * 60_000;
+
+interface WriteApproval {
+  id: string;
+  userId: string;
+  pairingId: string;
+  grantRef: string;
+  relPath: string;
+  createdAt: number;
+}
+
+/** Approvals awaiting their single use. Process-local, like the live socket they authorise against. */
+const approvals = new Map<string, WriteApproval>();
+
+/**
+ * NUL is the separator because it is the one byte that cannot appear in any of the four parts, so
+ * no combination of them can forge another's key. It MUST be written as the `\u0000` ESCAPE, never
+ * as a raw 0x00 byte: a raw NUL makes the whole file binary to every text tool, and this module is
+ * one `grep -rI` away from being unscannable. It shipped that way once. `chokepoint-grep.sh`
+ * (FIXED-13 - the belt-and-braces layer that catches raw `fetch` calls ESLint cannot see) skips
+ * binary files, so a planted provider-endpoint literal (the exact token that gate exists to find,
+ * not repeated here, since this file is inside its scan path) went UNSEEN here while the same string in
+ * a sibling file failed the build. `git diff` also renders a binary file as `Bin N -> M bytes`, so
+ * this module was invisible to diff review, which on an authorisation control is arguably the larger cost.
+ */
+function keyOf(userId: string, pairingId: string, grantRef: string, relPath: string): string {
+  return `${userId}\u0000${pairingId}\u0000${grantRef}\u0000${relPath}`;
+}
+
+function sweep(now: number): void {
+  for (const [k, a] of approvals) {
+    if (now - a.createdAt > APPROVAL_TTL_MS) approvals.delete(k);
+  }
+}
+
+export class WriteNotApprovedError extends Error {
+  readonly code = 'WRITE_NOT_APPROVED';
+  constructor(readonly relPath: string, message: string) {
+    super(message);
+    this.name = 'WriteNotApprovedError';
+  }
+}
+
+/**
+ * Record that the OWNER approved one write to one file on one machine. Called by the confirmation
+ * surface — never by the model, and never by anything the model can reach. Single-use: spending it
+ * removes it, so a second write to the same file asks again.
+ */
+export function approveWrite(
+  input: { userId: string; pairingId: string; grantRef: string; relPath: string },
+  now = Date.now(),
+): string {
+  sweep(now);
+  const id = randomUUID();
+  approvals.set(keyOf(input.userId, input.pairingId, input.grantRef, input.relPath), {
+    id,
+    userId: input.userId,
+    pairingId: input.pairingId,
+    grantRef: input.grantRef,
+    relPath: input.relPath,
+    createdAt: now,
+  });
+  return id;
+}
+
+/** Spend an approval if one exists. */
+function spendApproval(userId: string, pairingId: string, grantRef: string, relPath: string, now: number): boolean {
+  sweep(now);
+  const k = keyOf(userId, pairingId, grantRef, relPath);
+  if (!approvals.has(k)) return false;
+  approvals.delete(k);
+  return true;
+}
+
+/** A write step as it appears in a TaskProgram. Only the fields this gate judges. */
+interface WriteStepish {
+  tool?: unknown;
+  grantRef?: unknown;
+  relPath?: unknown;
+  confirmed?: unknown;
+}
+
+/**
+ * Every `write` step in a TaskProgram that asserts `confirmed: true`, in order.
+ *
+ * Parsing is deliberately TOLERANT of everything except the thing being judged: the task is an
+ * opaque program this repo does not otherwise validate, so a shape we do not recognise must not
+ * become an accidental allow. An unparseable task carries no provable approval, so it is treated
+ * as carrying none — and a task that is not an object, or has no steps array, simply has no write
+ * steps to approve.
+ */
+export function confirmedWriteSteps(taskJson: string): Array<{ grantRef: string; relPath: string }> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(taskJson);
+  } catch {
+    return [];
+  }
+  const steps = (parsed as { steps?: unknown })?.steps;
+  if (!Array.isArray(steps)) return [];
+  const out: Array<{ grantRef: string; relPath: string }> = [];
+  for (const raw of steps) {
+    const s = raw as WriteStepish;
+    if (s?.tool !== 'write') continue;
+    if (s.confirmed !== true) continue;
+    out.push({
+      grantRef: typeof s.grantRef === 'string' ? s.grantRef : '',
+      relPath: typeof s.relPath === 'string' ? s.relPath : '',
+    });
+  }
+  return out;
+}
+
+/**
+ * Refuse a task whose write steps assert a confirmation the OWNER never gave.
+ *
+ * Refuses rather than strips: silently clearing the flag would make the daemon reject the write on
+ * its own first-write rule, producing an opaque "confirmation required" failure far from the cause.
+ * A refusal here can say what actually happened, and the caller turns it into something the user
+ * can act on.
+ */
+export function assertWritesApproved(
+  input: { userId: string; pairingId: string; taskJson: string },
+  now = Date.now(),
+): void {
+  for (const step of confirmedWriteSteps(input.taskJson)) {
+    if (!spendApproval(input.userId, input.pairingId, step.grantRef, step.relPath, now)) {
+      throw new WriteNotApprovedError(
+        step.relPath,
+        `write to ${step.relPath || '(unnamed path)'} asserts a confirmation the owner did not give`,
+      );
+    }
+  }
+}
+
+/** Test/boot helper. */
+export function __resetWriteApprovalsForTests(): void {
+  approvals.clear();
+}
+
+/** Test helper: unspent approval count. */
+export function __pendingApprovalCount(): number {
+  return approvals.size;
+}

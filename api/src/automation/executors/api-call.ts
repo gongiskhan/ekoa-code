@@ -19,9 +19,17 @@ import type {
 } from '../types.js';
 import type { RunContext } from '../engine.js';
 import { interpolate } from '../template-vars.js';
-import { loadIntegrationCredentialFields as loadDecryptedCredentialFields } from '../seams.js';
+import {
+  loadIntegrationCredentialFields as loadDecryptedCredentialFields,
+  loadIntegrationBoundOrigins,
+} from '../seams.js';
+import { assertOriginAllowed, CredentialOriginError } from '../../security/origin-binding.js';
 import { guardedFetch } from '../../services/url-fetcher.js';
 import { SsrfError } from '../../services/url-safety.js';
+// Cofre R-6: one value-keyed masker for the whole repo. The private copy that used to live in this
+// file matched only the RAW literal, so a URL-encoded/base64/JSON-escaped occurrence of a secret
+// walked straight into the persisted step record.
+import { secretRegistryFromFields } from '../../security/redaction.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
@@ -96,6 +104,27 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   const resolvedBody = spec.body ? interpolate(spec.body, inputs, undefined, integrationFields) : undefined;
   const bodyKind = spec.bodyKind ?? (resolvedBody ? 'json' : 'none');
 
+  // ORIGIN BINDING (Cofre R-2, invariant I6). `spec.url` is MODEL-authored and, since rehearsal.ts
+  // lets the mid-run fixer rewrite it, is not covered by the planner's checks. A decrypted
+  // credential may therefore only leave for a host the integration itself declares. Checked AFTER
+  // interpolation (the binding is about where the bytes actually go) and BEFORE the request.
+  if (spec.authIntegrationKey) {
+    try {
+      const allowedOrigins = await loadIntegrationBoundOrigins(spec.authIntegrationKey);
+      assertOriginAllowed(resolvedUrl, { allowedOrigins, credentialLabel: spec.authIntegrationKey });
+    } catch (err) {
+      if (err instanceof CredentialOriginError) {
+        return finishRecord(baseRecord, 'failed', stepStart, {
+          tier: 'cache',
+          // The URL is NOT echoed: a refused destination is attacker-chosen text and this record is
+          // persisted and surfaced. The host and the binding are in the error's own message.
+          error: { message: err.message, recoverable: false },
+        });
+      }
+      throw err;
+    }
+  }
+
   // Default content-type by bodyKind when caller didn't set it
   if (resolvedBody && !findHeader(resolvedHeaders, 'content-type')) {
     if (bodyKind === 'json') resolvedHeaders['Content-Type'] = 'application/json';
@@ -108,13 +137,13 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   // interpolated into the URL query string, the request body, or a non-auth-shaped header would
   // otherwise be stored in cleartext. Redact every occurrence of any decrypted integration secret
   // VALUE from the persisted copy (the real request above already used the un-redacted values).
-  const secretValues = collectSecretValues(integrationFields);
+  const secrets = secretRegistryFromFields(integrationFields);
   const resolved: ApiCallResolved = {
     kind: 'api_call',
     method: spec.method,
-    url: redactSecretValues(resolvedUrl, secretValues),
-    headers: redactHeaderValues(redactHeadersForCache(resolvedHeaders), secretValues),
-    body: resolvedBody ? redactSecretValues(resolvedBody, secretValues) : resolvedBody,
+    url: secrets.redact(resolvedUrl),
+    headers: secrets.redactHeaderValues(redactHeadersForCache(resolvedHeaders)),
+    body: resolvedBody ? secrets.redact(resolvedBody) : resolvedBody,
     bodyKind,
     timeoutMs,
     authIntegrationKey: spec.authIntegrationKey,
@@ -139,7 +168,7 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
     // in its query string or authority — redact before persisting/emitting it (credential boundary).
     return finishRecord(baseRecord, 'failed', stepStart, {
       tier: 'cache',
-      error: { message: redactSecretValues(`request failed: ${message}`, secretValues), recoverable: !(err instanceof SsrfError) },
+      error: { message: secrets.redact(`request failed: ${message}`), recoverable: !(err instanceof SsrfError) },
       resolvedAction: resolved,
     });
   }
@@ -171,10 +200,10 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   // PERSISTED in the step output + error details, so mask any occurrence of the client's decrypted
   // credential values. This only ever masks the CLIENT's own configured secret — a token the API
   // legitimately RETURNS is a different value (not in secretValues), so real data survives.
-  const safeBody = redactSecretValues(bodyText, secretValues);
-  const safeResponseHeaders = redactHeaderValues(responseHeaders, secretValues);
+  const safeBody = secrets.redact(bodyText);
+  const safeResponseHeaders = secrets.redactHeaderValues(responseHeaders);
   // The HTTP reason phrase (statusText) is server-controlled and can echo the client secret too.
-  const safeStatusText = redactSecretValues(response.statusText, secretValues);
+  const safeStatusText = secrets.redact(response.statusText);
 
   const output: StepOutput = {
     kind: 'api_call',
@@ -195,7 +224,7 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
         message: `HTTP ${response.status} ${safeStatusText}`,
         recoverable: true,
         // Both the URL (query-string secret) and the response body (echoed secret) are redacted.
-        details: { request: { method: spec.method, url: redactSecretValues(resolvedUrl, secretValues) }, response: { status: response.status, body: safeBody.slice(0, 2000) } },
+        details: { request: { method: spec.method, url: secrets.redact(resolvedUrl) }, response: { status: response.status, body: safeBody.slice(0, 2000) } },
       },
       output,
       resolvedAction: resolved,
@@ -230,36 +259,6 @@ function redactHeadersForCache(headers: Record<string, string>): Record<string, 
   for (const [k, v] of Object.entries(headers)) {
     out[k] = isAuthShapedHeader(k) ? '<resolved-at-runtime>' : v;
   }
-  return out;
-}
-
-/** Every decrypted secret value across the resolved integration credential fields. Longest first
- *  so an overlapping shorter value never masks a longer one. */
-function collectSecretValues(integrationFields: Record<string, Record<string, string>> | undefined): string[] {
-  if (!integrationFields) return [];
-  const values = new Set<string>();
-  for (const fields of Object.values(integrationFields)) {
-    for (const v of Object.values(fields)) {
-      if (typeof v === 'string' && v.length >= 4) values.add(v); // skip trivially-short values
-    }
-  }
-  return [...values].sort((a, b) => b.length - a.length);
-}
-
-/** Replace every occurrence of any secret value in `text` with a redaction marker. */
-function redactSecretValues(text: string, secretValues: string[]): string {
-  let out = text;
-  for (const secret of secretValues) {
-    if (out.includes(secret)) out = out.split(secret).join('<redacted>');
-  }
-  return out;
-}
-
-/** Redact secret values that landed in a (non-auth-shaped) header value. */
-function redactHeaderValues(headers: Record<string, string>, secretValues: string[]): Record<string, string> {
-  if (!secretValues.length) return headers;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) out[k] = redactSecretValues(v, secretValues);
   return out;
 }
 

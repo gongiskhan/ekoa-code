@@ -71,7 +71,9 @@ test.describe('pages-core (S4)', () => {
     await page.setViewportSize(DESKTOP);
     await page.goto('/usage');
     await expect(page.getByTestId('usage-page')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('h1').first()).toHaveText(/Usage/i);
+    // PT-PT, like every other assertion in this file (and this spec's own header): the page title
+    // is "Utilização". `/Usage/i` was an English leftover that never matched the shipped UI.
+    await expect(page.locator('h1').first()).toHaveText(/Utiliza/i);
 
     await page.setViewportSize(MOBILE);
     await expect(page.getByTestId('usage-page')).toBeVisible();

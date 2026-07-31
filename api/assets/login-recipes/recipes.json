@@ -1,0 +1,26 @@
+{
+  "$comment": "Per-site login recipes (Cofre F-3). FIXED DATA — never model-authored, never user-authored, never fetched at runtime. Loaded by api/src/automation/login-recipes.ts and validated on load: every value must be a plain CSS selector, and the loader REFUSES the whole file rather than a single bad entry (a half-loaded registry is a registry nobody can reason about). Keys are eTLD+1-ish hosts matched the same way origin binding matches them, so a subdomain inherits its parent's recipe.",
+  "version": 1,
+  "recipes": {
+    "webmail.oa.pt": {
+      "$note": "Ordem dos Advogados webmail — Roundcube. The plan's terminal proof-gate portal: the only surveyed rail where a typist login is possible at all.",
+      "usernameSelector": "input#rcmloginuser",
+      "passwordSelector": "input#rcmloginpwd",
+      "submitSelector": "button#rcmloginsubmit"
+    },
+    "accounts.google.com": {
+      "$note": "Two-step: the password field does not exist until the identifier is submitted, which is what nextSelector exists for.",
+      "usernameSelector": "input[type=\"email\"]",
+      "nextSelector": "#identifierNext button",
+      "passwordSelector": "input[type=\"password\"]",
+      "submitSelector": "#passwordNext button"
+    },
+    "login.microsoftonline.com": {
+      "$note": "Two-step, same shape as Google.",
+      "usernameSelector": "input[type=\"email\"]",
+      "nextSelector": "input[type=\"submit\"]",
+      "passwordSelector": "input[type=\"password\"]",
+      "submitSelector": "input[type=\"submit\"]"
+    }
+  }
+}

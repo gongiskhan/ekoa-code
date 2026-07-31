@@ -126,6 +126,7 @@ export {
   setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,
@@ -153,3 +154,10 @@ export {
   type ConnectedAccount,
   type LocalBrowserContextProvider,
 } from './seams.js';
+
+export {
+  screenshotPlaneRouter,
+  sweepExpiredScreenshots,
+  deleteRunScreenshots,
+  DEFAULT_SCREENSHOT_RETENTION_DAYS,
+} from './screenshot-plane.js';

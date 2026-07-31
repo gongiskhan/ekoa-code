@@ -13,11 +13,11 @@ import {
  * validation lands with the contract suite from G2 onward.
  */
 describe('shared contract', () => {
-  it('loads all 29 domain descriptor maps', () => {
+  it('loads all 30 domain descriptor maps', () => {
     // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4)
     // + gatewayKeys (cortex-gateway S4a, run 20260717) + sheets (mega-run B1, decision B.B)
-    // + memvault (capability-contract E2, run 20260730).
-    expect(Object.keys(ALL_ENDPOINTS).length).toBe(29);
+    // + cofre (WS-B B-3, 2026-07-27) + memvault (capability-contract E2, run 20260730).
+    expect(Object.keys(ALL_ENDPOINTS).length).toBe(30);
   });
 
   it('every endpoint descriptor is well-formed', () => {

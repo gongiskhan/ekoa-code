@@ -23,9 +23,15 @@ import { fileURLToPath } from 'node:url';
  * THE FIX IS ALWAYS THE SAME: write the escape ('a' + backslash-u-0-0-0-0 + 'b') or construct the
  * bytes (`Buffer.from([0x01, 0x02])`). Both keep the test's intent and keep the file text.
  *
- * ALLOWLIST: three PRE-EXISTING occurrences, each the same defect in a file outside this slice's
+ * ALLOWLIST: the PRE-EXISTING occurrences, each the same defect in a file outside this slice's
  * write scope. It is SHRINK-ONLY — the test fails if an allowlisted file is cleaned up and its
  * entry is left behind, so the list cannot rot into permanent furniture.
+ *
+ * It has already shrunk from three to one, and the ratchet is what noticed. `document-source.test.ts`
+ * and `llm/anonymise/index.ts` were cleaned on a parallel line of work (`1984ac0`, "the last raw
+ * NULs") that had never seen this gate; the two changes met at the merge of 2026-07-31 and this test
+ * failed on the stale entries rather than passing over them. That is the whole point of shrink-only:
+ * a fix landing anywhere in the repo forces the ledger to be corrected here.
  */
 const HERE = dirname(fileURLToPath(import.meta.url)); // <root>/api/tests/security
 const ROOT = resolve(HERE, '../../..'); // <root>
@@ -40,14 +46,6 @@ const ALLOWLIST = new Map<string, string>([
   [
     'api/tests/contract/app-files.test.ts',
     "0x01/0x02 inside Buffer.from('olá mundo binário …') — a deliberate binary upload payload written as raw bytes; fix is Buffer.concat with Buffer.from([0x01, 0x02]).",
-  ],
-  [
-    'api/tests/apps/document-source.test.ts',
-    "a raw NUL in the ['NUL byte', 'foo\\0bar'] charset probe — same defect as the one this gate was written for; fix is the '\\u0000' escape.",
-  ],
-  [
-    'api/src/llm/anonymise/index.ts',
-    "parts.join(NUL) uses a raw NUL as an audit-record separator; fix is '\\u0000'. Inside the egress chokepoint, which only its own slice may edit.",
   ],
 ]);
 

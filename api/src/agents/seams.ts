@@ -182,6 +182,9 @@ export function catalog(input: { userId: string; orgId: string }): Promise<strin
  *  key). Both bind from the run's actor at spec-build time — NEVER from tool arguments. */
 export interface DelegationToolActor {
   userId: string;
+  /** Cofre E-1: carried so the dispatch path can CHECK the org instead of adopting whatever org the
+   *  resolved connection happens to hold. Bound from the run's actor, never from a request body. */
+  orgId: string;
   sessionId: string;
 }
 

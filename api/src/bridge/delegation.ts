@@ -15,10 +15,17 @@
  * (§18.3.5, S4).
  */
 import { randomUUID } from 'node:crypto';
-import type { AllowanceRef, BridgeFrame, DelegatedTask, DelegationResult } from '@ekoa/shared';
+import type { AllowanceRef, BridgeFrame, BridgeRegistoEvent, DelegatedTask, DelegationResult } from '@ekoa/shared';
 import { getActivation as defaultGetActivation } from '../data/activation.js';
-import { getConnectionByOwner as defaultGetConnectionByOwner, sendToPairing as defaultSend, type LiveConnection } from './registry.js';
+import {
+  getConnectionByOwner as defaultGetConnectionByOwner,
+  getPairingSigningSecret as defaultGetPairingSigningSecret,
+  sendToPairing as defaultSend,
+  type LiveConnection,
+} from './registry.js';
 import { signDelegatedTask } from './signing.js';
+import { assertWritesApproved, WriteNotApprovedError } from './write-approval.js';
+import { recordBridgeEvent, toolsUsedIn } from './audit.js';
 
 /** How long a minted task stays valid; the daemon rejects a task past its `expiry` (S2). */
 const DELEGATION_TASK_TTL_MS = 300_000;
@@ -30,7 +37,21 @@ const DELEGATION_AWAIT_TIMEOUT_MS = 300_000;
 /** The delegating principal: the pairing owner + the hosted conversation id (the §18.4.3 vault key). */
 export interface DelegationActor {
   userId: string;
+  /**
+   * The caller's org (Cofre E-1). Previously absent, so `getConn(actor.userId)` ADOPTED whatever
+   * org the resolved connection carried instead of checking it. Org binding was structural on the
+   * connect/provider path and adopted-not-checked here — the one dispatch path that mints a signed
+   * task. Now passed as `expectedOrg`, so a connection from another org resolves to undefined.
+   */
+  orgId: string;
   sessionId: string;
+  /**
+   * Display name for the Registo row (J-6). Optional because the delegating call sites do not all
+   * have one in hand, and an audit row keyed on userId + orgId is complete without it — blank
+   * means "not supplied here", which is honest, where substituting the userId would render a
+   * plausible-looking name that is not the user's.
+   */
+  username?: string;
 }
 
 /** The tool arguments (§18.2.1). `grantRefs` are opaque — Cortex passes them through, never
@@ -46,8 +67,9 @@ export interface DelegationDeps {
   genId?: () => string;
   genNonce?: () => string;
   getActivation?: (userId: string) => { active: boolean; billingLocked: boolean } | undefined;
-  getConnectionByOwner?: (ownerUserId: string) => LiveConnection | undefined;
+  getConnectionByOwner?: (ownerUserId: string, expectedOrg?: string) => LiveConnection | undefined;
   send?: (pairingId: string, frame: BridgeFrame) => boolean;
+  getPairingSigningSecret?: (pairingId: string, expectedOrg?: string) => Promise<string | null>;
   timeoutMs?: number;
 }
 
@@ -58,6 +80,25 @@ interface PendingDelegation {
 }
 
 const pending = new Map<string, PendingDelegation>();
+
+/**
+ * Write a bridge Registo row (J-6) without ever being able to affect the delegation.
+ *
+ * Fire-and-forget WITH the rejection swallowed: an audit write is bookkeeping, and a delegation
+ * that failed because its audit row could not be written would be a worse outcome than a missing
+ * row. (The inverse — dropping the row silently on a working database — does not happen: the write
+ * either lands or the store itself is down, which is a louder failure elsewhere.)
+ */
+function audit(actor: DelegationActor, event: BridgeRegistoEvent, metadata: Record<string, unknown>): void {
+  void recordBridgeEvent(
+    { userId: actor.userId, orgId: actor.orgId, username: actor.username ?? '' },
+    event,
+    metadata,
+    { now: Date.now },
+  ).catch(
+    () => undefined,
+  );
+}
 
 /** Empty derived result for an offline/denied outcome (never carries file bytes, §18.2.2). */
 function terminalResult(status: DelegationResult['status']): DelegationResult {
@@ -107,11 +148,13 @@ export async function delegateToLocal(
   const getActivation = deps.getActivation ?? defaultGetActivation;
   const getConn = deps.getConnectionByOwner ?? defaultGetConnectionByOwner;
   const send = deps.send ?? defaultSend;
+  const getSigningSecret = deps.getPairingSigningSecret ?? defaultGetPairingSigningSecret;
   const timeoutMs = deps.timeoutMs ?? DELEGATION_AWAIT_TIMEOUT_MS;
 
   // Offline is a first-class state — no live pairing means unreachable, never a silent upload
   // (§18.2.3, invariant I1, S5).
-  const conn = getConn(actor.userId);
+  // E-1: the org is CHECKED, not adopted. A pairing belonging to another org reads as no pairing.
+  const conn = getConn(actor.userId, actor.orgId);
   if (!conn) return terminalResult('unreachable');
 
   // Activation admission at delegation dispatch (§18.3.2): a deactivated / billing-locked owner's
@@ -119,6 +162,29 @@ export async function delegateToLocal(
   // to a clean `denied` (the connect + provider planes surface ACCOUNT_DISABLED / BILLING_LOCKED).
   const act = getActivation(conn.ownerUserId);
   if (!act || !act.active || act.billingLocked) return terminalResult('denied');
+
+  // J-7: the write confirmation is not the model's to assert. Checked BEFORE signing, because the
+  // signature is exactly what turns a model's `confirmed: true` into an authorisation the daemon
+  // trusts — sign it and the hole is already open, whatever happens afterwards.
+  try {
+    assertWritesApproved({ userId: actor.userId, pairingId: conn.pairingId, taskJson: req.task });
+  } catch (e) {
+    if (!(e instanceof WriteNotApprovedError)) throw e;
+    // J-6: a REFUSED dispatch is as much a fact worth keeping as a successful one — arguably more,
+    // since a run of them is what an attempted bypass looks like from the outside.
+    void audit(actor, 'bridge_delegation_dispatched', {
+      pairingId: conn.pairingId,
+      refusal: 'write_not_approved',
+      tools: toolsUsedIn(req.task),
+    });
+    return {
+      ...terminalResult('denied'),
+      // The model gets an honest reason it can relay, instead of a bare `denied` it will guess at.
+      answer:
+        `A escrita em "${e.relPath}" precisa da confirmação do utilizador. ` +
+        'A confirmação é dada por quem é dono do computador, não pelo assistente.',
+    };
+  }
 
   // Mint the S2 binding. org + pairingId come from the registry-resolved connection, NEVER a
   // request body (§18.4.4); a fresh nonce and a future expiry bind replay + staleness (S2).
@@ -134,7 +200,13 @@ export async function delegateToLocal(
     expiry: new Date(now() + DELEGATION_TASK_TTL_MS).toISOString(),
     nonce: genNonce(),
   };
-  const task: DelegatedTask = { ...base, sig: signDelegatedTask(base) };
+  // R-8: sign with the PAIRING's own secret. A pairing with no secret (revoked, or registered
+  // before R-8) is refused outright — never a fallback to the platform JWT secret, which is the
+  // key monoculture this replaces. `denied` rather than `unreachable`: the machine is reachable,
+  // the binding is not mintable.
+  const signingSecret = await getSigningSecret(conn.pairingId, conn.org);
+  if (!signingSecret) return terminalResult('denied');
+  const task: DelegatedTask = { ...base, sig: signDelegatedTask(base, signingSecret) };
 
   const result = new Promise<DelegationResult>((resolve) => {
     const timer = setTimeout(() => settle(task.taskId, terminalResult('unreachable')), timeoutMs);
@@ -142,12 +214,30 @@ export async function delegateToLocal(
     pending.set(task.taskId, { pairingId: task.pairingId, resolve, timer });
   });
 
+  void audit(actor, 'bridge_delegation_dispatched', {
+    pairingId: conn.pairingId,
+    taskId: task.taskId,
+    tools: toolsUsedIn(req.task),
+    grantRefCount: req.grantRefs.length,
+  });
+
   // Dispatch. A failed send (socket died between resolve and send) is an honest unreachable.
   if (!send(task.pairingId, { type: 'delegate', task })) {
     settle(task.taskId, terminalResult('unreachable'));
   }
 
-  return result;
+  const settled = await result;
+  // The OUTCOME is a separate row from the dispatch, deliberately: a dispatch with no matching
+  // settlement is exactly what a machine that went dark mid-task looks like, and collapsing the two
+  // into one row written at the end would erase that distinction.
+  void audit(actor, 'bridge_delegation_settled', {
+    pairingId: conn.pairingId,
+    taskId: task.taskId,
+    outcome: settled.status,
+    egressBytes: settled.telemetry.egressBytes,
+    citationCount: settled.citations.length,
+  });
+  return settled;
 }
 
 /** Test helper: clear the pending-delegation table (resolves nothing; drops timers). */

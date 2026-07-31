@@ -108,8 +108,10 @@ export function delegateToolSpec(
       '"compose"?:{"provider":true,"instructions":"..."}}. Passos: {"tool":"read"|"list"|"glob"|' +
       '"grep"|"stat"|"extract_text"|"write","grantRef":"g-...","relPath":"caminho/relativo",...}; ' +
       'read/extract_text aceitam "as":"nome" e "cite":true para citar; grep usa "pattern"; write ' +
-      'exige "confirmed":true e "expectedSha256":null para criar um ficheiro novo (reescrever um ' +
-      'existente exige o sha256 atual dos bytes). Com compose.provider:true a ponte compõe a ' +
+      'exige "expectedSha256":null para criar um ficheiro novo (reescrever um existente exige o ' +
+      'sha256 atual dos bytes) e SÓ é permitida depois de o utilizador a confirmar — o campo ' +
+      '"confirmed" é dado pelo Cortex a partir dessa confirmação e NUNCA deve ser escrito por si: ' +
+      'uma tarefa que o traga é recusada por inteiro. Com compose.provider:true a ponte compõe a ' +
       'resposta a partir do conteúdo lido segundo as instruções; sem compose, defina answer. Se a ' +
       'ponte estiver offline o resultado é unreachable; nunca há upload de ficheiros.',
     inputSchema: {
@@ -131,7 +133,7 @@ export function delegateToolSpec(
       const grantRefs = Array.isArray(args.grantRefs) ? args.grantRefs.map((g) => String(g)) : [];
       const egressBytes = typeof args.egressBytes === 'number' ? args.egressBytes : DELEGATION_DEFAULT_EGRESS_BYTES;
       const result = await delegateToLocalTool(
-        { userId: actor.userId, sessionId },
+        { userId: actor.userId, orgId: actor.orgId, sessionId },
         { task, grantRefs, budget: { egressBytes, modelSpend: { userId: actor.userId } } },
       );
       onResult?.(result);

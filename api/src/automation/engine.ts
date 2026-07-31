@@ -35,6 +35,7 @@ import {
 } from './seams.js';
 import { LocalBrowserSession } from './local-browser-session.js';
 import { rebaseSelfUrl } from './self-url.js';
+import { isCredentialAdjacentFailure } from './human-action-routing.js';
 import {
   DaemonBrowserSession,
   type BrowserSession,
@@ -46,6 +47,7 @@ import {
   type ResolveActionOutput,
 } from './vision.js';
 import { applyArgsTemplate } from './template-vars.js';
+import { SecretRegistry } from '../security/redaction.js';
 import {
   automationStore,
   automationRunStore,
@@ -68,6 +70,7 @@ import {
 import type {
   AppliedPatch,
   Automation,
+  ConsentRequest,
   FailureKind,
   PageFingerprint,
   PlaywrightAssertion,
@@ -91,6 +94,71 @@ import type {
  *   down only fires for triggeredBy === 'user' specifically because webhook/listener runs already
  *   have a server-trusted owner; they must skip the guard, not satisfy it.
  */
+/**
+ * Input names a verifier must never populate from page content (Cofre R-4, invariant I2). These are
+ * the names whose values are, by convention, exactly the material that must not enter the shared
+ * `inputs` map — from there they are template-substituted into downstream api_call URLs, headers
+ * and bodies whose RESOLVED form is persisted into the step record.
+ * PT-PT names are included because the planner writes Portuguese input names.
+ * Exported so the security suite can pin the vocabulary: a control that is not asserted is not a
+ * control (this repo's own verdict rule).
+ */
+export const SECRET_SHAPED_INPUT_NAME =
+  /(?:otp|mfa|2fa|totp|token|password|passwd|senha|palavra[-_]?passe|secret|segredo|apikey|api[-_]?key|authorization|auth[-_]?token|\bauth\b|bearer|cookie|session|sessao|sess[aã]o|credential|credencial|\bpin\b|cvv)/i;
+
+/**
+ * Register every string in a decrypted credential bag (Cofre H-1). The bag is
+ * `{ [field]: value }` or a nested `{ [key]: { [field]: value } }`; both shapes appear depending on
+ * whether the credentials came from an integration action or a captured session.
+ */
+function registerCredentialBag(registry: SecretRegistry, bag: unknown): void {
+  if (!bag || typeof bag !== 'object') return;
+  for (const v of Object.values(bag as Record<string, unknown>)) {
+    if (typeof v === 'string') registry.register(v);
+    else if (v && typeof v === 'object') registerCredentialBag(registry, v);
+  }
+}
+
+/**
+ * Filter a step record before it leaves the engine (Cofre H-1).
+ *
+ * The record goes THREE places at once — the SSE stream, the persisted run row, and (on a failure)
+ * the rehearsal fixer's prompt. Filtering here rather than at each sink is deliberate: a new sink
+ * added later inherits the filter instead of having to remember it.
+ */
+function redactStepRecord(record: StepRecord, secrets: SecretRegistry | undefined): StepRecord {
+  if (!secrets || secrets.size === 0) return record;
+  return {
+    ...record,
+    ...(record.error
+      ? {
+          error: {
+            ...record.error,
+            message: secrets.redact(record.error.message),
+            ...(record.error.details !== undefined
+              ? { details: secrets.redactDeep(record.error.details) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(record.output !== undefined
+      ? { output: secrets.redactDeep(record.output) as StepRecord['output'] }
+      : {}),
+    ...(record.resolvedAction !== undefined
+      ? { resolvedAction: secrets.redactDeep(record.resolvedAction) as StepRecord['resolvedAction'] }
+      : {}),
+    // `logTail` (slice E4) is the bounded tail of what a step streamed while it ran, and it landed
+    // on StepRecord from a different line of work than this filter. The claim above — that a new
+    // sink inherits the filter — holds for sinks but NOT for new FIELDS, which is how the two
+    // changes could both be right and still leave a gap. In the wired daemon path the text is
+    // already ingress-redacted (bridge H-4), so this is defence in depth rather than the only
+    // guard; it is here so the docblock is true of the whole record, not most of it.
+    ...(record.logTail !== undefined
+      ? { logTail: { ...record.logTail, text: secrets.redact(record.logTail.text) } }
+      : {}),
+  };
+}
+
 export interface RunContext {
   ownerUserId: string;
   /** The owner's org — threaded so the memory-backed cache and scoped-memory injection are
@@ -114,6 +182,17 @@ export interface RunContext {
   parentRunId?: string;
   /** Used for SSE event correlation. */
   traceId: string;
+  /**
+   * RUN-SCOPED SECRET REGISTRY (Cofre H-1). Every credential value the run resolves is registered
+   * here, and every byte stream the run produces toward a model, a log, an SSE frame or a persisted
+   * record passes through it.
+   *
+   * Scoped to the RUN, never process-wide: a process-wide registry would outlive the use window and
+   * quietly redact one tenant's output using another tenant's values. Created by `startRun` so
+   * every step of a run shares one, and populated lazily as credentials are loaded — a run that
+   * touches no credential has an empty registry, which is a genuine no-op rather than a cost.
+   */
+  secrets?: SecretRegistry;
   /** Optional cancellation signal from the handler / UI. */
   cancellation?: { isCancelled: () => boolean };
   /**
@@ -307,6 +386,12 @@ async function runOrRehearse(
   // substitution). It must NEVER reach the persisted run record — `GET /automations/runs/:id`
   // returns `inputs` to the owner AND org admins, so a persisted credential is a cross-actor leak.
   const persistedInputs = scrubCredentials(inputs);
+
+  // H-1: one registry per RUN. Seeded from `inputs.credentials` (the decrypted bag the browser
+  // session consumes) so the values are known BEFORE the first step produces any output. Steps
+  // that resolve further credentials register them as they go.
+  ctx.secrets ??= new SecretRegistry();
+  registerCredentialBag(ctx.secrets, inputs.credentials);
 
   const initialRecord: RunRecord = {
     id: runId,
@@ -524,7 +609,7 @@ async function runOrRehearse(
             })
           : undefined,
       });
-      emit?.stepUpdate(record, runId);
+      emit?.stepUpdate(redactStepRecord(record, ctx.secrets), runId);
 
       if (record.status === 'failed') {
         // Awaiting-integration pause path is shared between modes.
@@ -1634,10 +1719,24 @@ async function executeVerifyStep(args: BrowserVerifyContext): Promise<StepRecord
   // user-supplied value wins over a page-extracted one.
   if (result.extractedInputs) {
     for (const [k, v] of Object.entries(result.extractedInputs)) {
+      // CREDENTIAL BOUNDARY (Cofre R-4, invariant I2). A verifier-extracted value comes off a LIVE
+      // PAGE of an authenticated session, so it can be a one-time code, a session token or a
+      // password the page echoed. Two controls:
+      //   (a) a secret-shaped KEY NAME is refused outright — the extracted value then never joins
+      //       the shared `inputs` map, and so is never template-substituted into a downstream
+      //       api_call URL/header/body whose RESOLVED form is persisted;
+      //   (b) the log records the key and the LENGTH, never the value. It previously printed
+      //       `${k}="${v}"` in cleartext to the process log.
+      if (SECRET_SHAPED_INPUT_NAME.test(k)) {
+        console.log(`[automation] verifier extraction refused for secret-shaped input "${k}" on step ${step.id}`);
+        continue;
+      }
       const current = (args.inputs as Record<string, unknown>)[k];
       if (current == null || (typeof current === 'string' && current.trim().length === 0)) {
         (args.inputs as Record<string, unknown>)[k] = v;
-        console.log(`[automation] verifier extracted ${k}="${v}" from page on step ${step.id}`);
+        console.log(
+          `[automation] verifier extracted ${k} (${String(v ?? '').length} chars) from page on step ${step.id}`,
+        );
       }
     }
   }
@@ -1892,16 +1991,29 @@ async function waitForResumeOrCancel(ctx: RunContext): Promise<boolean> {
 }
 
 // Helpers for non-browser pause flows (local_command awaiting consent)
-function extractAwaitingConsent(record: StepRecord): { stepIndex: number; shape: string; argv: string[]; description: string } | null {
+function extractAwaitingConsent(record: StepRecord): ConsentRequest | null {
   const details = record.error?.details;
   if (!details || typeof details !== 'object') return null;
   const d = details as Record<string, unknown>;
   if (d.kind !== 'awaiting_consent') return null;
+  const scope = d.approvalScope as Record<string, unknown> | undefined;
   return {
     stepIndex: typeof d.stepIndex === 'number' ? d.stepIndex : record.index,
     shape: String(d.shape ?? ''),
     argv: Array.isArray(d.argv) ? (d.argv as string[]) : [],
     description: String(d.description ?? ''),
+    // Carried through verbatim, never re-derived: see the executor's note on approvalScope. A
+    // record written before this field existed has no scope, and the resolver falls back to the
+    // run's own owner/org with no machine — which is exactly what it did before.
+    ...(scope && typeof scope.userId === 'string' && typeof scope.orgId === 'string'
+      ? {
+          approvalScope: {
+            userId: scope.userId,
+            orgId: scope.orgId,
+            pairingId: typeof scope.pairingId === 'string' ? scope.pairingId : null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -2034,6 +2146,12 @@ function classifyFailure(record: StepRecord, step: Step): FailureKind {
  */
 function shouldAttemptFix(record: StepRecord, step: Step): boolean {
   if (record.error?.recoverable === false) return false;
+  // F-4: a CREDENTIAL-ADJACENT failure never reaches the fixer. When the typist cannot find the
+  // form it expects, handing the page to an LLM to work out which field is the password is exactly
+  // what invariant I5 forbids — the next action in that sequence types a decrypted credential into
+  // whatever the model picked. An unfamiliar login form is a case for a human (relay or attended),
+  // not for a guess. Checked FIRST so no step-type branch below can re-enable it.
+  if (isCredentialAdjacentFailure(record.error)) return false;
   switch (step.type) {
     case 'browser':
     case 'verify':

@@ -18,9 +18,10 @@
  */
 
 import { getDefinition, type IntegrationActionHttpConfig } from './definitions.js';
+import { guardedFetch } from '../services/url-fetcher.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
 import { integrationConfigs } from '../data/stores.js';
-import { decrypt, encrypt } from '../data/crypto.js';
+import { encrypt, envelopeDecrypt } from '../data/crypto.js';
 import {
   interpolate,
   interpolateObj,
@@ -54,6 +55,7 @@ export type IntegrationErrorCode =
   | 'credential_missing_scope'
   | 'credential_invalid'
   | 'unsupported_auth_type'
+  | 'unsupported_transport'
   | 'invalid_base_url'
   | 'transient_5xx'
   | 'client_4xx'
@@ -114,6 +116,22 @@ export async function executeUserIntegrationAction(
     const available = def.actions.map((a) => a.actionName).join(', ');
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}. Available: ${available}` };
   }
+  // TRANSPORT GATE (2A-S4). This executor runs exactly two kinds of action: HTTP-backed
+  // (`httpConfig`) and automation-backed (`automationBinding`). A package may legitimately declare
+  // an action that needs a different wire protocol (the shipped `imap` package's poll action
+  // declares `transport: "imap"`). Refuse it here — before any credential is decrypted — with a
+  // clear, coded error. The alternative the ekoa-dev scaffold used, a placeholder
+  // http://127.0.0.1:0 URL, fails with an unrelated connect error and reads like a network blip; a
+  // listener driving this action must fail with the truth ("not available in this version"), never
+  // a fabricated empty result.
+  const transport = action.transport ?? 'http';
+  if (transport !== 'http') {
+    return {
+      success: false,
+      code: 'unsupported_transport',
+      error: `action "${input.actionName}" on ${input.integrationKey} needs the "${transport}" transport, which is not available in this version — this executor runs HTTP-backed and automation-backed actions only`,
+    };
+  }
   if (!action.httpConfig && !action.automationBinding) {
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };
   }
@@ -126,7 +144,7 @@ export async function executeUserIntegrationAction(
     return { success: false, code: 'disabled', error: `integration ${input.integrationKey} is disabled` };
   }
 
-  const decrypted = decryptCredentialFields(config);
+  const decrypted = await decryptCredentialFields(config);
   if (decrypted === DECRYPT_FAILED) {
     return { success: false, code: 'credential_decrypt_failed', error: 'failed to decrypt credentials' };
   }
@@ -250,11 +268,17 @@ async function persistProviderCredentialUpdates(
 
 const DECRYPT_FAILED = Symbol('decrypt-failed');
 
-/** Decrypt the config's credential blob into a field map, or DECRYPT_FAILED. No config → {}. */
-function decryptCredentialFields(config: IntegrationConfigDoc | null): Record<string, unknown> | typeof DECRYPT_FAILED {
+/**
+ * Decrypt the config's credential blob into a field map, or DECRYPT_FAILED. No config → {}.
+ *
+ * Cofre B-4: reads through the ORG-BOUND versioned envelope. A v1 row (written before K-1) still
+ * decrypts, so adoption needed no flag day; a v2 row is bound to the config's own org, so a row
+ * copied between tenants no longer decrypts — which the flat global key permitted.
+ */
+async function decryptCredentialFields(config: IntegrationConfigDoc | null): Promise<Record<string, unknown> | typeof DECRYPT_FAILED> {
   if (!config || !config.credentialsCiphertext) return {};
   try {
-    const plaintext = decrypt(config.credentialsCiphertext);
+    const plaintext = await envelopeDecrypt(config.credentialsCiphertext, config.orgId);
     try {
       return JSON.parse(plaintext) as Record<string, unknown>;
     } catch {
@@ -308,7 +332,22 @@ async function executeHttpAction(
     body: body ? truncateForDisplay(redactBody(body), MAX_BODY_DISPLAY_BYTES) : undefined,
   }, secretValues) as { method: string; url: string; headers: Record<string, string>; body?: string };
 
-  const fetchImpl = deps.fetchImpl ?? ((u: string, init?: Parameters<FetchLike>[1]) => globalThis.fetch(u, init as RequestInit));
+  // SSRF GUARD (Cofre R-2). This path used to send on a bare `globalThis.fetch` behind nothing but
+  // a `^https?://` shape check on a baseUrl written VERBATIM from an LLM-authored package config
+  // (routes/integration-builder.ts) — no private-IP block, no metadata-endpoint block, no
+  // DNS-rebinding re-check, while injecting the owner's decrypted credential. It now goes through
+  // the same guarded fetcher as every other platform-initiated fetch of a user-supplied URL.
+  // NOTE (deliberately NOT closed here): binding this request to the package's own baseUrl would
+  // be tautological, because the package declares that baseUrl itself. A hostile user-defined
+  // package is a PROVENANCE problem — see `integration-package-baseurl-unreviewed` in findings.
+  const fetchImpl = deps.fetchImpl
+    ?? ((u: string, init?: Parameters<FetchLike>[1]) =>
+      guardedFetch(u, {
+        method: init?.method ?? httpConfig.method,
+        ...(init?.headers ? { headers: init.headers } : {}),
+        ...(init?.body !== undefined ? { body: init.body } : {}),
+        timeoutMs: deps.timeoutMs ?? 30_000,
+      }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? 30_000);
   try {

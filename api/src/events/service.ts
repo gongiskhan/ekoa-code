@@ -6,7 +6,7 @@
  */
 import { createHash } from 'node:crypto';
 import { triggers, webhookAudit } from '../data/stores.js';
-import { decrypt, encrypt } from '../data/crypto.js';
+import { envelopeDecrypt, decrypt, encrypt } from '../data/crypto.js';
 import { getDefinition, findConfigForOwner } from '../integrations/index.js';
 import { enqueue } from './queue.js';
 import { wakeDelivery } from './delivery.js';
@@ -53,8 +53,14 @@ export function triggerView(t: TriggerDoc, publicUrlBase: string) {
     id: t._id,
     integrationKey: t.integrationKey,
     eventName: t.eventName,
-    automationId: t.automationId,
-    artifactId: t.artifactId,
+    // OMIT when absent; never emit null. `shared/` types both as `Id.optional()`, and zod's
+    // `.optional()` accepts undefined but REJECTS null — so a `null` here fails
+    // `TriggerListResponse` on the client, `tryCall` reports not-ok, and the webhooks store keeps
+    // an empty array. The user then sees "Ainda não existem webhooks" over a populated database,
+    // with no error anywhere: the list silently blanks. Same field-by-field discipline as
+    // `sessionView` in services/platform-crud.ts.
+    ...(t.automationId != null ? { automationId: t.automationId } : {}),
+    ...(t.artifactId != null ? { artifactId: t.artifactId } : {}),
     disabled: t.disabled,
     // `kind` absent on a legacy row surfaces as 'webhook' (migration-free semantic, 2A-S1);
     // pollConfig only appears for listeners. The publicUrl is meaningful for webhook triggers.
@@ -144,7 +150,8 @@ async function resolveWebhookSecret(t: TriggerDoc, source: WebhookSecretSource |
     const cfg = await findConfigForOwner(t.orgId, t.ownerUserId, t.integrationKey);
     if (!cfg?.credentialsCiphertext) return null;
     try {
-      const fields = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      // Cofre B-4: the integration credential blob is org-bound v2 now; v1 rows still read.
+      const fields = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
       const v = fields[source.credentialField];
       return typeof v === 'string' && v !== '' ? v : null;
     } catch {

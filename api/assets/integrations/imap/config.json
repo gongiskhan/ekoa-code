@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "imap",
   "displayName": "IMAP",
-  "description": "Polling email listener: fetches new messages from an IMAP mailbox and fires the trigger for each one. v1 scaffold — pollAction is a placeholder pending an IMAP transport (the executor only supports HTTP today).",
+  "description": "Polling email listener: fetches new messages from an IMAP mailbox and fires the trigger for each one. NOT AVAILABLE IN THIS VERSION: the generic listener rail is wired end to end, but the IMAP protocol transport itself is deferred (the integration executor runs HTTP-backed and automation-backed actions only), so a listener on this integration fails loudly on every tick instead of silently reporting an empty mailbox. Connect a Microsoft 365 or Google Workspace mailbox for a working email listener.",
   "authType": "api_key",
   "provider": "IMAP",
   "category": "communication",
@@ -52,8 +52,9 @@
   "actions": [
     {
       "actionName": "fetch_messages",
-      "description": "Placeholder pollAction. v1 returns an empty list until an IMAP transport is wired into the integration-action-executor.",
+      "description": "Fetch messages newer than the highest UID seen so far. DEFERRED: needs the IMAP transport, which the integration executor does not implement (it runs HTTP-backed and automation-backed actions only) — every call is refused with a coded `unsupported_transport` error, never an empty list, which would look like a quiet mailbox.",
       "mutates": false,
+      "transport": "imap",
       "argsSchema": {
         "type": "object",
         "properties": {
@@ -66,12 +67,6 @@
           "messages": { "type": "array" },
           "next_uid": { "type": "string" }
         }
-      },
-      "httpConfig": {
-        "method": "GET",
-        "baseUrl": "http://127.0.0.1:0",
-        "path": "/imap-bridge-placeholder",
-        "headers": {}
       }
     }
   ],

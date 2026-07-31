@@ -64,15 +64,20 @@ function realDeps(call: (args: Record<string, unknown>) => Promise<PlatformCallR
   };
 }
 
-/** Drain EVERY claimable row's dedupKey (bounded), for the burst-completeness assertion. */
-async function claimAllDedupKeys(nowIso = '2026-06-19T23:59:59Z'): Promise<Set<string>> {
-  const ids = new Set<string>();
-  for (let i = 0; i < 2_000; i++) {
-    const row = (await claimNext(nowIso)) as QueuedEvent | null;
-    if (!row) break;
-    ids.add(row.dedupKey);
-  }
-  return ids;
+/**
+ * Every enqueued row's dedupKey, for the burst-completeness assertion.
+ *
+ * READS the queue rather than DRAINING it, deliberately. The assertion is "all 700 messages were
+ * enqueued, none starved" is a statement about what is IN the queue, not about the claim protocol
+ * (which line ~110 tests directly, on two rows). Draining was the expensive way to ask: `claimNext`
+ * re-runs `find({status:'pending'})` and sorts it on EVERY call, so claiming a 700-row burst one at
+ * a time is quadratic: ~245k document reads plus 700 updates. That is what made this spec time out
+ * at 30 s under full-suite load while passing in isolation: a load-sensitive flake with a real
+ * cause, not an unlucky machine. One read instead.
+ */
+async function enqueuedDedupKeys(): Promise<Set<string>> {
+  const rows = (await eventQueue.find({})) as QueuedEvent[];
+  return new Set(rows.map((r) => r.dedupKey));
 }
 
 describe('pollPlatformSource — first poll initialises cursor without backfill', () => {
@@ -185,8 +190,8 @@ describe('pollPlatformSource — in-tick paging (same-timestamp burst)', () => {
     // Tick 2: RESUMES from the continuation (skip 500) and finishes the burst.
     const t2 = await pollPlatformSource(TRIGGER, realDeps(call));
     expect(t2.enqueued).toBe(200);
-    // Every message was eventually enqueued — nothing beyond the cap was starved.
-    const ids = await claimAllDedupKeys();
+    // Every message was eventually enqueued - nothing beyond the cap was starved.
+    const ids = await enqueuedDedupKeys();
     expect(ids.size).toBe(TOTAL);
   });
 

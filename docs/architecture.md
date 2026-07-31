@@ -72,6 +72,9 @@ exhaustive; the lint rules of `docs/governance.md` enforce the load-bearing edge
 | `services/` | Cross-domain logic: error sanitiser, secret-commit guard, safe-path jail, browser pool, SSRF-guarded fetcher, GitHub pipeline. Also the pure-buffer Word track-changes engine (`docx-redline.ts` + `docx-comments.ts`, track 2C) wrapping `@adeu/core` pinned exactly at 1.28.0 - native `w:ins`/`w:del` + `word/comments.xml` + `commentsExtended` resolution; see `docs/word-track-changes.md`. Never imports `llm/`. |
 | `memory/` | Org memory: resolver, formatter, post-run extraction (one FAST call per run, always `visibility: private`). No model call of its own. |
 | `knowledge/` | Org-partitioned markdown vault + FTS5 index, ingest, cited-or-silent grounding builder. |
+| `memvault/` | Per-USER markdown notes ("cortex memory"), the first `user-or-key` capability. Three files, three concerns: `jail.ts` is the single path-resolution point (realpath containment; a symlink escape fails closed), `store.ts` does file CRUD through it, `service.ts` runs write/read/list/delete with one audit row per call. `fts.ts` adds the per-user search index. Imports `data/` + `config.ts` only - never `llm/`. |
+| `security/` | THE value-keyed redaction module (`redaction.ts`, Cofre R-6 / H-1 / H-4) plus the shared origin-binding and path-containment primitives. It replaced two divergent private maskers; every model-bound, log-bound, SSE and persisted stream a run touches goes through it. Imports `services/` only. |
+| `cofre/` | Credential custody: items, grants, sessions, checkout, process injection, and its own audit trail. A top-level module rather than a sub-tree of `data/` or of either consumer (`decisions.md` 2026-07-27) - the raw item/grant stores are NOT exported and a lint rule bans importing them, so every credential read goes through `unwrap()`. |
 | `integrations/` | OAuth flows, encrypted credentials, action runner, Pipedream, e-signature, and `.docx` ingest for the redline pipeline (`docx-fetch.ts`: direct URL through the per-hop SSRF-guarded fetcher, OneDrive/SharePoint + Google Drive over the injected workspace-credential seam, 25 MB triple-enforced). |
 | `bridge/` | Daemon-facing WS server the ekoa-local daemon dials into; delegation dispatch; the provider endpoint routes back through `llm/`. |
 | `streaming/` | Live browser-canvas media relay (the one FIXED-2 WebSocket carve-out). |
@@ -91,7 +94,9 @@ Tier table (imports point strictly down; the graph is acyclic by construction):
 | 6 | `routes/` (domain modules, `auth/`, `events/`, `billing/`, `shared/`) |
 | 5 | `agents/`, `automation/`, `apps/`, `legal/` |
 | 4 | `events/` |
-| 3 | `integrations/`, `memory/`, `knowledge/`, `bridge/`, `streaming/`, `voice/` |
+| 3 | `integrations/`, `memory/`, `knowledge/`, `memvault/`, `bridge/`, `streaming/`, `voice/` |
+| 2c | `cofre/` (imports `data/` + `security/`; consumed by `bridge/`, `automation/`, `routes/`) |
+| 2b | `security/` (imports `services/`; consumed by `cofre/`, `bridge/`, `integrations/`, `automation/`) |
 | 2 | `llm/`, `services/` |
 | 1 | `auth/`, `billing/`, `content/` |
 | 0 | `data/`, `config.ts`, `shared/` |
@@ -99,6 +104,11 @@ Tier table (imports point strictly down; the graph is acyclic by construction):
 Two deliberate absences keep it clean: nothing imports `routes/` or `server.ts`; nothing below
 tier 5 imports `agents/`, `automation/`, or `apps/` - lower tiers reach them only through injected
 callbacks.
+
+`security/` and `cofre/` land BETWEEN the existing tiers 2 and 3 (`security/` imports `services/`,
+and `bridge/` at tier 3 imports `cofre/`), so they are numbered `2b`/`2c` rather than renumbering
+the table - the direction stays strictly downward and every other document's tier references stay
+valid.
 
 ## Import boundaries (FIXED-1) and module-direction lint
 

@@ -32,7 +32,18 @@ named test suite).
    existence). Enforced by the cross-org adversarial suite and in-org sharing tests.
 6. **Credential encryption at rest; key mandatory; single crypto module.** One AES-256-GCM
    implementation in `data/`; `ENCRYPTION_KEY` absent = refuse to boot in every environment; no
-   default key constant anywhere (grep gate).
+   default key constant anywhere (grep gate). Ciphertext is VERSIONED: a v2 record carries its own
+   data key, wrapped per TENANT, so a row moved between tenants fails to decrypt. Legacy v1 rows
+   (flat global key, never tenant-bound, so they decrypt under any tenant argument) still decrypt
+   unchanged until the `ciphertext-v2` migration retires them - that migration is the point at
+   which the v1 weakness actually goes away. The wrapping is a SEAM (`data/kms.ts`): the target is
+   one Cloud KMS key per environment, and until that key is provisioned `LocalKeyWrapper` derives
+   the wrapping key from `ENCRYPTION_KEY`. Stated plainly, because it is the whole difference
+   between the two: under the local wrapper a database breach PLUS that one environment variable
+   yields plaintext, which is exactly the property the KMS wrapper removes. Installed wrapper:
+   `key-wrapper: local-v1` - machine-checked against `currentKeyWrapper().keyId` by
+   `api/tests/security/key-custody-posture.test.ts`, so this line cannot drift from the code in
+   either direction.
 7. **Secret guard on code egress.** User-app code leaves through exactly three doors (version
    snapshot commit, GitHub mirror push, download zip); each runs the secret scanner. A hit blocks:
    `commit-blocked` audit row on snapshot, `422 SECRET_GUARD_BLOCKED` on download.
@@ -73,6 +84,17 @@ static client bundles under a strict CSP with no server-side eval ever.
 The pipeline is a submodule of the chokepoint (`llm/anonymise/`), invoked by `llm/client.ts` after
 the payload is assembled and before any Anthropic request, and again on every response and streamed
 delta. Because the chokepoint is the only transport, a caller cannot skip it.
+
+**SCOPE — text, not pixels (corrected 2026-07-27, Cofre H-2).** This pipeline covers model-bound
+TEXT. It does not tokenize images: `runOneShot` anonymises `prompt` and `systemPrompt` and forwards
+`images` verbatim, because finding sensitive regions in a finished PNG is OCR-and-hope. The pixel
+plane is protected UPSTREAM instead, at the only layer that can do it correctly — the browser
+session masks credential-bearing regions by LOCATOR at capture time, so those pixels are never
+rendered into the buffer, and suppresses the capture entirely during a credential window
+(`automation/screenshot-masking.ts`). Stating the pipeline as covering "all model-bound text"
+without this paragraph was true and false-by-omission at the same time: a reader took it as
+covering everything model-bound. RESIDUAL, stated plainly: a screenshot still carries whatever
+non-credential content is on the page (a processo number, a client name) as pixels, untokenized.
 
 Per request: **collect** all model-bound text; **detect** sensitive spans on the delta only (never
 the tokenized prefix - preserves prompt caching); **tokenize** each span into a deterministic,
@@ -279,7 +301,10 @@ egress past the anonymisation boundary; S2 single-org/user exposure or auth bypa
 exploitation; S3 vulnerability without exposure. Containment (first hour): scope from Registo; cut
 access narrowly (deactivate account -> bump token epoch -> revoke bridge pairings -> rotate the
 secret in Secret Manager -> last resort stop the service); preserve the append-only evidence before
-any remediation. GDPR: personal-data breach to the supervisory authority within 72 h of awareness
+any remediation. A COFRE key compromise is a different lever and rotating a service secret is not
+it: ciphertext already at rest does not care that a new secret exists. Containment there is the
+per-owner `POST /api/v1/cofre/lock-all` (every grant revoked, so `unwrap()` refuses on the default-
+deny ground), then rotate the environment wrapping key and re-wrap the per-tenant DEKs. GDPR: personal-data breach to the supervisory authority within 72 h of awareness
 unless no risk; record the decision either way. Post-incident: write it up in `docs/decisions.md`,
 and every accepted root cause ships a deterministic guard in the same fix.
 
@@ -294,5 +319,14 @@ in system prompts. CI security gates run on every lane: gitleaks (secrets), Semg
 adversarial, in-org sharing, rate-limit/spend-cap, anonymisation payload-capture, and the bridge
 S1-S6 scenarios. The determinism ratchet: every accepted review or incident finding ships a
 deterministic guard (test, lint rule, Semgrep pattern, grep gate) in the same fix, so reviews trend
-toward judgment-only and regressions are machine-caught. Secrets live in a managed store only (GCP
-Secret Manager in prod; a bootstrap-generated key in dev); rotation is documented per secret.
+toward judgment-only and regressions are machine-caught. Secrets live in a managed store only, on
+two DISTINCT custody planes - one earlier sentence covered both and that is what read as a
+contradiction when the Cofre ruled Secret Manager out (`docs/decisions.md` 2026-07-28, A-8).
+SERVICE secrets - `JWT_SECRET`, `ENCRYPTION_KEY`, `MONGODB_URI`, provider keys: what the service
+needs to boot - live in GCP Secret Manager in prod (a bootstrap-generated key in dev), injected by
+NAME at deploy time and gated by `deploy/validate-topology.sh`; rotation is documented per secret.
+TENANT credential material - what users put in the Cofre - is NOT a Secret Manager tenant: one
+managed secret per user credential is the wrong unit, and it carries none of the per-item grants,
+locks and origin binding that make a Cofre item different from a stored string. It is ciphertext in
+the database under a per-tenant DEK wrapped by one Cloud KMS key per environment (invariant 6),
+reachable only through `cofre.unwrap()`.

@@ -14,7 +14,7 @@ import { setRulesetResolver, __resetRulesetResolverForTests, __resetVaultForTest
 import { mintBridgeToken } from '../../src/bridge/token.js';
 import { attachBridgeServer, type BridgeServerHandle } from '../../src/bridge/server.js';
 import { createProviderHandler } from '../../src/bridge/provider.js';
-import { registerPairing, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
+import { registerPairing, getPairingSigningSecret, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
 import { delegateToLocal, __resetPendingDelegationsForTests } from '../../src/bridge/delegation.js';
 import { FakeDaemonClient } from '../../test/fake-daemon/ws-client.js';
 import type { Grant } from '../../test/fake-daemon/daemon.js';
@@ -108,10 +108,12 @@ describe('correlation-id join + bridge payload-capture (§18.5 S6, §18.7.3)', (
   it('the daemon ledger row and the hosted anon-audit share one correlationId; the outbound payload is tokenized', async () => {
     setActivation('u1', { active: true, billingLocked: false });
     await registerPairing({ pairingId: 'p1', org: 'orgA', ownerUserId: 'u1' });
+    // Cofre R-8: verify with the PAIRING's minted secret, not the platform JWT secret.
+    const signingSecret = (await getPairingSigningSecret('p1')) ?? '';
     const { token } = mintBridgeToken({ sub: 'u1' }, 'p1');
     const grants: Grant[] = [{ grantRef: 'g1', root: grantRoot, session: 'sess-1' }];
     const client = new FakeDaemonClient({
-      pairingId: 'p1', org: 'orgA', signingSecret: loadConfig().jwtSecret, grants,
+      pairingId: 'p1', org: 'orgA', signingSecret, grants,
       wsBase: `ws://127.0.0.1:${port}`, bridgeToken: token,
       // The local loop reasons over the file excerpt (containing PARTY) via a provider request,
       // then reads within the grant and returns a derived answer.
@@ -126,7 +128,7 @@ describe('correlation-id join + bridge payload-capture (§18.5 S6, §18.7.3)', (
     await new Promise((r) => setTimeout(r, 50));
     try {
       const result = await delegateToLocal(
-        { userId: 'u1', sessionId: 'sess-1' },
+        { userId: 'u1', orgId: 'orgA', sessionId: 'sess-1' },
         { task: 'resume', grantRefs: ['g1'], budget: { egressBytes: 10_000, modelSpend: { userId: 'u1' } } },
       );
       expect(result.status).toBe('ok');

@@ -135,11 +135,44 @@ describe('F25: a tenant subprocess never inherits the host cwd or HOME', () => {
     const [c1, c2] = sink.calls;
     expect(c1!.cwd).not.toBe(c2!.cwd); // per-run, not a shared scratch
 
-    // Nothing in the spawn contract may carry the operator's home or the repo checkout.
-    const serialized = JSON.stringify({ cwd: c1!.cwd, env: c1!.env });
-    expect(serialized).not.toContain('ekoa-code');
+    // Nothing in the spawn contract may carry the operator's home or the SERVER CHECKOUT PATH.
+    //
+    // Asserted against the actual roots (`process.cwd()`, `$HOME`) rather than the literal repo
+    // NAME, which is what this used to do. That substring proxy could never pass on CI: the repo is
+    // named `ekoa-code`, so GitHub's own injected metadata (`GITHUB_REPOSITORY`,
+    // `GITHUB_WORKFLOW_REF`) and npm's workspace-PARENT bin entry
+    // (`/home/runner/work/ekoa-code/node_modules/.bin`, which is NOT under the checkout root and so
+    // is correctly kept by `underPathRoot`) all contain it. The test was green locally and
+    // structurally red on CI, and nobody saw it because the lane died at typecheck before ever
+    // reaching `npm test` (see docs/findings.md `ci-typecheck-never-ran`).
+    //
+    // The roots below are the same ones `buildSubprocessEnv` filters on, so this asserts the
+    // invariant the code actually implements instead of a name that happens to correlate with it.
     const home = process.env.HOME;
-    if (home && home !== '/') expect(serialized).not.toContain(`"${home}"`);
+    const checkout = process.cwd();
+
+    // 1. The sandbox is not the server's working directory or the operator's home.
+    expect(c1!.cwd).not.toBe(checkout);
+    if (home && home !== '/') expect(c1!.cwd).not.toBe(home);
+    expect(c1!.env.HOME).toBe(c1!.cwd);
+
+    // 2. No NON-PATH value carries the checkout or the operator home. PATH is exempt BY DESIGN and
+    // by written disposition (`docs/findings.md` — "subprocess PATH home-path residual", accepted):
+    // node and the toolchain live under $HOME on nvm/fnm/volta/asdf hosts, and the Agent SDK spawns
+    // the CLI as a bare `node` resolved against this PATH, so filtering $HOME out of it ENOENTs
+    // every model subprocess.
+    for (const [k, v] of Object.entries(c1!.env)) {
+      if (k === 'PATH') continue;
+      expect(`${k}=${v}`).not.toContain(checkout);
+      if (home && home !== '/') expect(`${k}=${v}`).not.toContain(home);
+    }
+
+    // 3. PATH itself carries no segment UNDER the checkout root — the half of the residual that is
+    // NOT accepted, since `<repo>/node_modules/.bin` would hand the model the server's checkout.
+    for (const seg of (c1!.env.PATH ?? '').split(':')) {
+      if (!seg) continue;
+      expect(seg === checkout || seg.startsWith(`${checkout}/`)).toBe(false);
+    }
   });
 });
 

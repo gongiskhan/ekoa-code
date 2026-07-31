@@ -691,7 +691,19 @@ export async function resolveConsent(
         'consent shape does not match the shape this run is awaiting',
       );
     }
-    await approveCommandShape(ownerUserId, input.shape);
+    // Bank it in the scope the RUN recorded when it asked — not one re-derived here. J-7 keys an
+    // approval on owner + org + machine, and the executor looks it up with the connected daemon's
+    // real `pairingId`; writing `pairingId: null` from this side stored a row that lookup could
+    // never read, so "approve always" re-prompted forever on any machine actually able to run the
+    // command. The fallback keeps a run that paused before `approvalScope` existed resolvable.
+    await approveCommandShape(
+      run.consentRequest?.approvalScope ?? {
+        userId: ownerUserId,
+        orgId: run.orgId ?? actor.orgId,
+        pairingId: null,
+      },
+      input.shape,
+    );
     persisted = true;
   }
   const resumed = !!sig;
@@ -773,7 +785,7 @@ export async function listApprovedCommands(actor: Actor): Promise<WireApprovedCo
 }
 
 export async function revokeApprovedCommand(actor: Actor, input: { shape: string }): Promise<WireRevokeResponse> {
-  const revoked = await revokeCommandShape(actor.userId, input.shape);
+  const revoked = await revokeCommandShape({ userId: actor.userId, orgId: actor.orgId }, input.shape);
   const remaining = (await listApprovedShapes(actor.userId)).length;
   return { revoked, remaining };
 }

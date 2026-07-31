@@ -63,3 +63,102 @@ A `provider_response` carrying an error body currently degrades to an empty comp
 The daemon should map typed provider errors (the CONV-2 codes the ekoa-code provider
 endpoint emits after its diagnostics-honesty slice) to an honest PT-PT note in the
 `delegation_result` instead of `answer: ''`.
+
+---
+
+# Second flag round — Cofre J-2 (2026-07-28)
+
+> **STATUS: OPEN.** Flagged from ekoa-code's Cofre run; NOT implemented in `../ekoa-bridge`. The
+> Cortex side of J-2 landed without needing any of this, and a current daemon keeps working
+> unchanged — C6 is verified compatible, C7 is the part that needs the counterpart.
+
+## C6 — No change needed, recorded so the next daemon change does not break it
+
+Bridge connect tokens are now **single-use**: each carries a `jti` and the connect path spends it
+exactly once (`api/src/bridge/connect-nonce.ts`). A replay is refused `token-replayed` and, most
+importantly, does **not** evict the live socket.
+
+The shipped daemon is already compatible and this was verified by reading it, not assumed:
+`src/transport/bridge-socket.ts` calls `getToken()` immediately before **every** (re)dial and
+`src/auth/bridge-token.ts` mints over HTTP with **no caching**. Recorded here because the
+compatibility is a property of that behaviour: **a daemon that starts caching its bridge token
+for the token's 600s life would connect once and then fail every redial with `token-replayed`.**
+Mint-per-dial is now load-bearing, not an implementation detail.
+
+Also: the `?token=` query-string fallback on `/api/v1/bridge/connect/:pairingId` is **removed**.
+The daemon already uses the `Authorization: Bearer` header, so nothing changes for it; any
+out-of-tree tooling still using the query form breaks deliberately (a URL-borne token is written
+to every proxy and access log along the path).
+
+## C7 — Connect-token proof-of-possession (the remaining half of J-2)
+
+Single-use narrows the replay window from "the token's full 600s" to "a race the attacker must
+win against the real daemon's own dial". That is a large reduction and **not** a closure: an
+attacker positioned to capture the token in transit (a compromised proxy terminating TLS) can
+still race and win, and the prize is the daemon's socket.
+
+Closing it needs the daemon to prove possession of something the token alone does not carry, which
+is a two-repo change and therefore flagged rather than built:
+
+- the daemon generates a keypair at pair time and registers the public key (it already stores a
+  per-pairing signing secret from R-8 — `config.json` today, OS keychain under J-8, which should
+  land first so the new private key is not written to disk in cleartext);
+- `POST /api/v1/bridge/token` accepts a client nonce/public-key binding and Cortex embeds the
+  binding in the token's claims;
+- the WS upgrade carries a signature over `(jti, pairingId, timestamp)` that Cortex verifies
+  against the registered key before spending the nonce.
+
+Until C7 lands, the honest statement of the property is: a captured bridge token is single-use and
+must beat the legitimate daemon to the socket, rather than being freely replayable for ten minutes.
+
+## C8 — `confirmed` should stop being a boolean the sender can set (J-7)
+
+`src/tools/write.ts` step 2 gates a first write on `pre.confirmed === true`, and the file's header
+says the user assents Cortex-side. Nothing Cortex-side checked it, and ekoa-code's tool description
+**instructed the model to set it** — so, because Cortex signs the model's TaskProgram verbatim, the
+signature laundered a model self-assertion into an authorisation the daemon trusts.
+
+**Closed from the ekoa-code side, and the daemon needs no change to be safe today**: Cortex now
+refuses to sign any task whose `write` step carries `confirmed: true` without a matching owner
+approval (`api/src/bridge/write-approval.ts`), and the model is told the field is not its to write.
+Since Cortex is the only signer of delegated tasks, that is sufficient.
+
+**Flagged as defence in depth**: the daemon currently trusts a boolean in a message it received.
+Preferred shape is a Cortex-issued, per-file approval token — signed with the pairing secret
+(already present since R-8), naming `{grantRef, relPath, sha256Before, expiry, nonce}` — that the
+daemon verifies instead of reading `confirmed`. Then a task that reaches the daemon without a real
+user confirmation cannot be constructed by anything, not merely by anything well-behaved.
+
+Note for whoever implements it: keep the daemon's first-write rule as-is until the token exists.
+Removing the boolean check before the replacement lands would widen the hole rather than close it.
+
+## C9 — Grant issuance/revocation is unaudited on both sides (J-6, daemon half)
+
+ekoa-code now writes durable Registo rows for every bridge invocation it can observe — dispatch,
+settlement, refusal, secret delivery, pairing register/revoke — under a `bridge` category with a
+`.strict()` metadata schema that has **no path field** (see below).
+
+What Cortex **cannot** audit is what it never sees. Grants are minted and served daemon-side
+(`GET /grants`, `POST /grants/revoke` on the loopback surface) and the `EgressLedgerRow` union has
+no grant kind, so the moment a user hands a folder to Ekoa — the single most consequential act in
+the whole local plane — nothing anywhere records it. Needed: a `grant` kind on the ledger row (or a
+sibling frame) carrying `{grantRef, scope, createdAt}` and its revocation, streamed up like other
+rows. Cortex will persist the FACT and the ref; it must not persist the path (below).
+
+**Standing constraint for anything added here:** `EgressLedgerRow.path` stays un-persisted
+hosted-side (§18.2 / FC-407). A path is itself sensitive — client names live in folder names, and
+for a legal practice a directory listing is privileged. Send counts, refs, kinds and outcomes; do
+not send, and do not expect Cortex to store, the path itself.
+
+## C10 — Credentials still live in a plaintext `config.json` (J-8)
+
+R-8 split the task-signing secret so each pairing has its own, which bounds the blast radius of a
+stolen daemon config to that one machine. It did **not** change where the daemon keeps it:
+`config.json` on disk, in cleartext. J-8 is the other half — move the pairing signing secret and
+the platform credential into the OS keychain (Keychain / Credential Manager / libsecret), leaving
+`config.json` with non-secret settings only.
+
+Entirely daemon-side; there is no ekoa-code change that can substitute for it, so it is flagged
+rather than half-built here. Its acceptance test is also daemon-side: after `ekoa-bridge pair`,
+`config.json` contains no token material. Worth doing **before** C7, since C7 introduces a client
+private key that must not land in the same cleartext file.

@@ -138,6 +138,8 @@ export async function writeActionCache(input: {
       type: 'fact',
       tags: makeTags(input.automationId, input.stepId, 'action-cache'),
       tier: 'active',
+      // I3 (Cofre R-5): derived from live page interactions — never scored against a user prompt.
+      nonMemorable: true,
       visibility: input.shared ? 'org' : 'private',
     },
     deps,
@@ -200,6 +202,8 @@ export async function writeAssertionCache(input: {
       type: 'fact',
       tags: makeTags(input.automationId, input.stepId, 'assertion-cache'),
       tier: 'active',
+      // I3 (Cofre R-5): derived from live page interactions — never scored against a user prompt.
+      nonMemorable: true,
       visibility: input.shared ? 'org' : 'private',
     },
     deps,
@@ -252,16 +256,27 @@ function stepLabel(stepId: string): string {
   return stepId.length > 8 ? stepId.slice(0, 8) : stepId;
 }
 
+/**
+ * A human-readable label for a cached action — SHAPE ONLY, never page content (Cofre R-5).
+ *
+ * This string becomes the memory row's `content`, which is term-scored against the user's prompt.
+ * It previously carried the first 40 characters of any `fill` value, the FULL `navigate` URL and
+ * the FULL `select` value, so a password prefix, a magic-link URL or an SSO callback with its token
+ * in the query string was persisted verbatim and replayed to the chat model on term overlap. The
+ * cache does not need the value here to function: the exact action is stored structurally in
+ * `cachePayload`, which is never injected. Only the display string is de-valued.
+ */
 function summariseAction(action: PlaywrightAction): string {
   switch (action.kind) {
-    case 'navigate': return `navigate to ${action.url}`;
+    // Origin + pathname only: the query string is where magic-link tokens and SSO codes live.
+    case 'navigate': return `navigate to ${safeUrlLabel(action.url)}`;
     case 'click': return `click ${describeLocator(action.locator)}`;
     case 'dblclick': return `double-click ${describeLocator(action.locator)}`;
-    case 'fill': return `fill ${describeLocator(action.locator)} with "${action.value.slice(0, 40)}"`;
+    case 'fill': return `fill ${describeLocator(action.locator)} (${action.value.length} chars)`;
     case 'press': return action.locator
       ? `press ${action.key} on ${describeLocator(action.locator)}`
       : `press ${action.key}`;
-    case 'select': return `select "${action.value}" in ${describeLocator(action.locator)}`;
+    case 'select': return `select an option in ${describeLocator(action.locator)}`;
     case 'check': return `check ${describeLocator(action.locator)}`;
     case 'uncheck': return `uncheck ${describeLocator(action.locator)}`;
     case 'hover': return `hover ${describeLocator(action.locator)}`;
@@ -273,13 +288,26 @@ function summariseAction(action: PlaywrightAction): string {
   }
 }
 
+/** Same rule as `summariseAction`: shape only. An expectation is authored from an OBSERVED page, so
+ *  its literal can carry page content (an `expect_url` pattern is the obvious carrier). */
 function summariseAssertion(assertion: PlaywrightAssertion): string {
   switch (assertion.kind) {
     case 'expect_visible': return `expect ${describeLocator(assertion.locator)} visible`;
     case 'expect_hidden': return `expect ${describeLocator(assertion.locator)} hidden`;
-    case 'expect_text': return `expect ${describeLocator(assertion.locator)} contains "${assertion.contains}"`;
-    case 'expect_url': return `expect URL contains "${assertion.pattern}"`;
-    case 'expect_title': return `expect title contains "${assertion.contains}"`;
+    case 'expect_text': return `expect ${describeLocator(assertion.locator)} to contain text`;
+    case 'expect_url': return `expect URL to match a pattern`;
+    case 'expect_title': return `expect title to contain text`;
+  }
+}
+
+/** Origin + pathname of a URL, dropping the query and fragment. Falls back to the origin alone,
+ *  and to a fixed placeholder for an unparseable value — never the raw string. */
+function safeUrlLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '<url>';
   }
 }
 

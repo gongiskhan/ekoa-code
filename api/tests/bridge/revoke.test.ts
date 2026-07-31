@@ -83,7 +83,7 @@ describe('revoke kill switch (§18.3.5)', () => {
   it('an in-flight delegation fails cleanly when the pairing is revoked mid-session', async () => {
     await connect('p1', 'owner-1');
     // Dispatch (no daemon result will come back) then revoke — the in-flight delegation must fail clean.
-    const pending = delegateToLocal({ userId: 'owner-1', sessionId: 's1' }, { task: 'ler', grantRefs: ['g1'], budget }, { timeoutMs: 5000 });
+    const pending = delegateToLocal({ userId: 'owner-1', orgId: 'org-1', sessionId: 's1' }, { task: 'ler', grantRefs: ['g1'], budget }, { timeoutMs: 5000 });
     await revokePairing('p1');
     const result = await pending;
     expect(result.status).toBe('unreachable');
@@ -92,7 +92,7 @@ describe('revoke kill switch (§18.3.5)', () => {
   it('a delegation after revoke is unreachable (offline), never an upload', async () => {
     await connect('p1', 'owner-1');
     await revokePairing('p1');
-    const result = await delegateToLocal({ userId: 'owner-1', sessionId: 's1' }, { task: 'ler', grantRefs: ['g1'], budget }, { timeoutMs: 5000 });
+    const result = await delegateToLocal({ userId: 'owner-1', orgId: 'org-1', sessionId: 's1' }, { task: 'ler', grantRefs: ['g1'], budget }, { timeoutMs: 5000 });
     expect(result.status).toBe('unreachable');
   });
 });

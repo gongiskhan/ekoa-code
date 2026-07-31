@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { login, listSessions, deleteSession, patchSettings } from './helpers/backend-rest.js';
 import { resolve } from 'node:path';
 
 /**
@@ -45,50 +46,16 @@ const FIRST_CHIP = 'Sou advogado(a) num escritório'; // legal vertical's first 
 // -------------------------------------------------------------------------
 // Backend action API helpers (absolute BE url; independent of the UI session).
 // -------------------------------------------------------------------------
-async function action<T = unknown>(
-  request: APIRequestContext,
-  app: string,
-  intent: string,
-  params: Record<string, unknown>,
-  token?: string,
-): Promise<T> {
-  // One retry: the dev cortex can blink during a concurrent restart. Login
-  // (bcrypt + license check) runs ~4s and slows under load, so use a generous
-  // per-call timeout - the config's 10s actionTimeout is too tight here.
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await request.post(`${BE}/api/v1/action`, {
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        data: { app, intent, params, request_id: Math.random().toString(36).slice(2) },
-        timeout: 60_000,
-      });
-      const body = await res.json();
-      return (body?.data ?? body) as T;
-    } catch (err) {
-      lastErr = err;
-      await new Promise((r) => setTimeout(r, 1_000));
-    }
-  }
-  throw lastErr;
-}
-
-async function apiLogin(request: APIRequestContext): Promise<string> {
-  const data = await action<{ token?: string }>(request, 'ekoa.auth', 'login', {
-    username: 'admin',
-    password: 'tmp12345',
-  });
-  const token = data?.token;
-  expect(token, 'backend login returned a JWT').toBeTruthy();
-  return token as string;
-}
-
-type Sess = { id: string; type?: string; messageCount?: number };
+// Fixtures go through the REBUILD's REST contract. They used the old Cortex RPC dispatcher
+// (`POST /api/v1/action`), which this repo does not implement and which is absent from `shared/`
+// entirely — so every call 404'd, the token came back undefined, and this spec died in beforeAll
+// before reaching a single product assertion. Only the transport changed; nothing below is touched.
+const apiLogin = (request: APIRequestContext) => login(request);
 
 async function deleteOnboardingSessions(request: APIRequestContext, token: string): Promise<void> {
-  const sessions = (await action<Sess[]>(request, 'ekoa.sessions', 'list', {}, token)) || [];
+  const sessions = await listSessions(request, token);
   for (const s of sessions.filter((x) => x.type === 'onboarding')) {
-    await action(request, 'ekoa.sessions', 'delete', { sessionId: s.id }, token);
+    await deleteSession(request, token, s.id);
   }
 }
 
@@ -113,6 +80,20 @@ function sessionIdFromUrl(page: Page): string {
 }
 
 let token: string;
+
+/**
+ * The welcome chips this spec asserts on (`FIRST_CHIP`) are LEGAL-VERTICAL copy — the default
+ * vertical is 'generic', which renders different chips entirely. The spec never set the vertical,
+ * so it only passed when some earlier spec (vertical-profile, alphabetically later but earlier in
+ * a full run's ordering) happened to flip the global singleton first. That is an order dependency:
+ * green in the estate, red on its own, and the kind of thing that turns a real regression into a
+ * shrug about flakiness. Set it here so the spec is self-contained, exactly as
+ * vertical-profile.spec.ts documents doing for the same reason.
+ */
+test.beforeAll(async ({ request }) => {
+  const t = await login(request);
+  await patchSettings(request, t, { general: { vertical: 'legal' } });
+});
 
 test.beforeEach(async ({ page, request }) => {
   token = await apiLogin(request);

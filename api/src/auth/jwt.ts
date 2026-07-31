@@ -57,6 +57,15 @@ export function verifyToken(token: string): JwtClaims {
   if (decoded.aud === 'ekoa-bridge' || decoded.pairingId !== undefined || decoded.connectionId !== undefined) {
     throw new Error('bridge token presented on the platform verifier (token-class separation, ch18 §18.3.6)');
   }
+  // Cofre F-1: the CANVAS (screencast) token is signed with this same secret and carried no class
+  // marker, so this verifier accepted it — making a leaked 600s canvas token a platform bearer
+  // token for every route that authorizes on `sub` alone (gateway-key mint, bridge /token, the
+  // Cofre item routes), since `role`/`orgId` come back undefined and those routes never read them.
+  // `traceId` is checked as well as `aud` so a token minted before the audience landed is also
+  // refused rather than enjoying a grandfathered window.
+  if (decoded.aud === 'ekoa-canvas' || (decoded as { traceId?: unknown }).traceId !== undefined) {
+    throw new Error('canvas token presented on the platform verifier (token-class separation)');
+  }
   // Legacy-window shim (H1 role rename `builder` → `user`). A JWT minted before the rename carries
   // role 'builder', which is no longer a valid Role. Normalise it HERE — the single verify
   // chokepoint every admission path (requireAuth, verifySseToken, and every ?token= consumer)

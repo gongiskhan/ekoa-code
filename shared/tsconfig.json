@@ -4,5 +4,10 @@
     "rootDir": "./src",
     "outDir": "./dist"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // Tests are not part of the published surface. They were compiled into dist/ alongside the
+  // contract, which both shipped them to every consumer and — because Vitest 4 narrowed its
+  // default `exclude` to node_modules/.git only — made the suite collect each one TWICE (once
+  // from src/, once from the dist/ copy). See vitest.config.ts.
+  "exclude": ["src/**/*.test.ts"]
 }

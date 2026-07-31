@@ -47,6 +47,14 @@ export interface DaemonStepRequest {
  *  `BridgeConnection.runStep` (carryover-audit B16); the concrete WS transport lands in `bridge/`. */
 export interface DaemonConnection {
   runStep(req: DaemonStepRequest, opts?: { onProgress?: (chunk: string) => void }): Promise<ResultEnvelope>;
+  /**
+   * The pairing this connection belongs to (Cofre J-7). Optional because the seam predates it and
+   * a test double need not supply one — but when the composition root wires the real bridge it
+   * MUST, because it is what binds a local-command approval to the machine the user approved it
+   * for. Absent means "no specific machine", which is a distinct approval scope that never matches
+   * a pairing-bound row rather than a wildcard that matches every one.
+   */
+  readonly pairingId?: string;
 }
 
 export type DaemonConnectionResolver = (ownerUserId: string) => DaemonConnection | null;
@@ -151,6 +159,28 @@ export function loadIntegrationCredentialFields(
   ownerUserId: string,
 ): Promise<Record<string, string> | null> {
   return credentialLoader(integrationKey, ownerUserId);
+}
+
+// ---- Bound origins for a credential (Cofre R-2, invariant I6) --------------
+//
+// The api_call step interpolates a decrypted credential into a URL the MODEL wrote, so the
+// destination and the credential have independent provenance. The integration's own declared base
+// URL is the interim binding (the Cofre's per-item `boundOrigins` replaces this in WS-C without
+// moving the enforcement point). `automation/` does not import `integrations/`, hence the seam.
+
+export type IntegrationOriginResolver = (integrationKey: string) => Promise<string[]>;
+
+/** DEFAULT IS REFUSE. An unbound credential must not fall back to "any public host" — that is
+ *  precisely the hole R-2 closes, and a permissive default would reopen it for every caller that
+ *  forgets to bind the seam. */
+const defaultOriginResolver: IntegrationOriginResolver = async () => [];
+let originResolver: IntegrationOriginResolver = defaultOriginResolver;
+export function setIntegrationOriginResolver(fn: IntegrationOriginResolver): void {
+  originResolver = fn;
+}
+/** Hosts the named integration's credential may be sent to. Empty → the api_call step refuses. */
+export function loadIntegrationBoundOrigins(integrationKey: string): Promise<string[]> {
+  return originResolver(integrationKey);
 }
 
 // ============================================================================
@@ -366,6 +396,7 @@ export function __resetAutomationSeamsForTests(): void {
   integrationExecutor = defaultIntegrationExecutor;
   platformCaller = defaultPlatformCaller;
   credentialLoader = defaultCredentialLoader;
+  originResolver = defaultOriginResolver;
   scopedMemoryResolver = defaultScopedMemoryResolver;
   appDataStore = defaultAppDataStore;
   artifactResolver = defaultArtifactResolver;

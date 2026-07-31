@@ -17,6 +17,18 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const FALLBACK_PROBE_MS = 2_000;
 const TYPE_DELAY_MS = 35;
 
+/** Origin + pathname of a URL for an error message — the query and fragment are where one-time
+ *  codes and magic-link tokens live, and this message reaches the fixer prompt and the SSE stream
+ *  (Cofre H-1). Degrades to a placeholder rather than the raw string. */
+function safeUrlForMessage(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '<url>';
+  }
+}
+
 /**
  * Resolve our Locator type to a Playwright Locator. Throws on
  * unsupported strategy.
@@ -288,21 +300,35 @@ export async function executePlaywrightAssertion(
       const target = resolveLocator(page, assertion.locator);
       const text = (await target.innerText({ timeout: DEFAULT_TIMEOUT_MS })) ?? '';
       if (!text.includes(assertion.contains)) {
-        throw new Error(`expected text to contain "${assertion.contains}", got "${text.slice(0, 200)}"`);
+        // COFRE H-1. This message is the ONE live in-process DOM-text path: it reaches the
+        // rehearsal fixer's PROMPT, the SSE stream and the persisted step record. The text is
+        // whatever is on a page of an AUTHENTICATED session, so echoing 200 raw characters of it
+        // shipped page content to a model and into storage on every failed assertion. Report the
+        // SHAPE of the mismatch — the expectation (which the model wrote and already knows) plus
+        // how much text was actually there.
+        throw new Error(
+          `expected text to contain "${assertion.contains}" — not found in ${text.length} characters of element text`,
+        );
       }
       return true;
     }
     case 'expect_url': {
       const url = page.url();
       if (!url.includes(assertion.pattern)) {
-        throw new Error(`expected URL to contain "${assertion.pattern}", got "${url}"`);
+        // Same path, same rule: a URL's QUERY STRING is where magic-link tokens and SSO codes
+        // live, so the failure reports origin + pathname only.
+        throw new Error(
+          `expected URL to contain "${assertion.pattern}", got "${safeUrlForMessage(url)}"`,
+        );
       }
       return true;
     }
     case 'expect_title': {
       const title = await page.title();
       if (!title.includes(assertion.contains)) {
-        throw new Error(`expected title to contain "${assertion.contains}", got "${title}"`);
+        // A page title is far less likely to carry a credential than body text, but it is still
+        // content from an authenticated session; bound it rather than echoing it whole.
+        throw new Error(`expected title to contain "${assertion.contains}", got "${title.slice(0, 80)}"`);
       }
       return true;
     }

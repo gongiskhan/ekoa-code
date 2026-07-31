@@ -15,7 +15,10 @@
  */
 import type { WebSocket } from 'ws';
 import type { BridgeFrame } from '@ekoa/shared';
-import { bridgePairings } from '../data/stores.js';
+import { randomBytes } from 'node:crypto';
+import { bridgePairings, bridgeCapabilityGrants } from '../data/stores.js';
+import { encrypt, decrypt } from '../data/crypto.js';
+import { logActivity } from '../data/activity.js';
 import type { Doc } from '../data/store.js';
 
 /** The durable pairing row (§18.3.4). */
@@ -25,6 +28,32 @@ export interface PairingRow extends Doc {
   ownerUserId: string;
   createdAt: string;
   revokedAt: string | null;
+  /**
+   * Capabilities this machine advertises (Cofre WS-I / I-2). Closed vocabulary from
+   * `shared/src/cofre.ts` `BridgeCapability`. Absent on a pairing registered before capability
+   * advertisement, which reads as "advertises nothing" — the fail-closed direction.
+   */
+  capabilities?: string[];
+  /**
+   * The machine's tailnet address, advertised in its `hello` frame, used as the proxy target when
+   * a run declares residential egress. NEVER a request-body value: it is recorded from the
+   * authenticated registration, like org and owner.
+   */
+  egressEndpoint?: string;
+  /**
+   * PER-PAIRING task-signing secret, encrypted at rest (Cofre R-8).
+   *
+   * Delegated tasks used to be HMAC'd with `loadConfig().jwtSecret` — the platform-wide secret that
+   * signs every user's session token. Making delegation WORK therefore required copying that secret
+   * onto every paired laptop, where the daemon stores it in a plaintext `config.json`. One secret
+   * signing platform sessions, minting bridge tokens AND keying task HMACs means one compromised
+   * laptop compromises every session in the deployment. Minted here, per pairing, so the blast
+   * radius of a stolen daemon config is that one machine.
+   *
+   * Optional on the type because rows written before R-8 have none; `getPairingSigningSecret`
+   * returns null for those and the signer refuses rather than falling back to the JWT secret.
+   */
+  signingSecretCiphertext?: string;
 }
 
 /** A live daemon connection: the WS plus the identity it was admitted under. `registeredAt`
@@ -38,6 +67,15 @@ export interface LiveConnection {
   alive: boolean;
   /** ISO stamp of the last heartbeat proof (attach or pong) — the FC-405 "last seen". */
   lastSeenAt: string;
+  /**
+   * The `iat` of the bridge token this socket was admitted under (J-2). Retained so admission can
+   * be RE-checked while the socket is open: a WebSocket is admitted once and then lives for hours,
+   * so a connect-time-only epoch check would let "terminar todas as sessões" leave the offending
+   * socket running until it happened to redial. Undefined only for a token with no `iat`, which
+   * the epoch rule then cannot judge (matching `auth/middleware.ts`, which also skips the
+   * comparison when `iat` is absent).
+   */
+  admittedIat?: number;
 }
 
 /** Monotonic sequence so redials register strictly after their predecessor even within one ms. */
@@ -49,16 +87,33 @@ const live = new Map<string, LiveConnection>();
 /** Register (or re-register) a pairing durably. On redial the row is preserved but un-revoked and
  *  its createdAt kept; a first pairing creates the row. Returns the stored row. */
 export async function registerPairing(
-  input: { pairingId: string; org: string; ownerUserId: string },
+  input: {
+    pairingId: string;
+    org: string;
+    ownerUserId: string;
+    /** Advertised at registration (I-1). Replaces the prior list wholesale — a machine that stops
+     *  offering a capability must stop being selected for it. */
+    capabilities?: string[];
+    egressEndpoint?: string;
+  },
   deps?: { now?: () => number },
 ): Promise<PairingRow> {
   const nowIso = new Date(deps?.now?.() ?? Date.now()).toISOString();
   const existing = (await bridgePairings.get(input.pairingId)) as PairingRow | null;
+  // R-8: mint once per pairing and carry it forward. Rotating on redial would silently break a
+  // daemon that already holds the old secret (it would deny every task, fail-closed but opaque).
+  const signingSecretCiphertext =
+    existing?.signingSecretCiphertext ?? encrypt(randomBytes(32).toString('hex'));
   const row: PairingRow = {
     _id: input.pairingId,
     pairingId: input.pairingId,
     org: input.org,
     ownerUserId: input.ownerUserId,
+    // Advertisement REPLACES rather than merges: a machine that stops offering a capability must
+    // stop being selected for it, and a merge would make revocation impossible.
+    ...(input.capabilities ? { capabilities: input.capabilities } : existing?.capabilities ? { capabilities: existing.capabilities } : {}),
+    ...(input.egressEndpoint ? { egressEndpoint: input.egressEndpoint } : existing?.egressEndpoint ? { egressEndpoint: existing.egressEndpoint } : {}),
+    signingSecretCiphertext,
     createdAt: existing?.createdAt ?? nowIso,
     // Preserve a revocation tombstone (§18.3.5, S4): a revoked pairingId stays revoked forever - a
     // reconnect must NEVER resurrect it (that would defeat the kill switch). Re-pairing is an
@@ -77,6 +132,21 @@ export async function getPairingById(pairingId: string, expectedOrg?: string): P
   if (!row) return null;
   if (expectedOrg !== undefined && row.org !== expectedOrg) return null;
   return row;
+}
+
+/**
+ * The pairing's decrypted task-signing secret, or null when the pairing is unknown, REVOKED, or
+ * predates R-8. Null makes the signer refuse — never a fallback to the platform JWT secret, which
+ * is the monoculture this replaces.
+ */
+export async function getPairingSigningSecret(pairingId: string, expectedOrg?: string): Promise<string | null> {
+  const row = await getPairingById(pairingId, expectedOrg);
+  if (!row || row.revokedAt !== null || !row.signingSecretCiphertext) return null;
+  try {
+    return decrypt(row.signingSecretCiphertext);
+  } catch {
+    return null;
+  }
 }
 
 /** Is the pairing durably revoked? A missing row counts as "not a live pairing" for the caller. */
@@ -102,7 +172,7 @@ export async function getPairingsByOwner(ownerUserId: string): Promise<PairingRo
  * the stale socket with a normal close before the new one takes its slot (multi-device is by
  * DISTINCT pairingId, not a second socket on one id). Returns the stored LiveConnection.
  */
-export function attachLiveConnection(input: { pairingId: string; org: string; ownerUserId: string; ws: WebSocket }): LiveConnection {
+export function attachLiveConnection(input: { pairingId: string; org: string; ownerUserId: string; ws: WebSocket; admittedIat?: number }): LiveConnection {
   const stale = live.get(input.pairingId);
   if (stale && stale.ws !== input.ws) {
     try {
@@ -119,9 +189,16 @@ export function attachLiveConnection(input: { pairingId: string; org: string; ow
     registeredAt: ++registrationSeq,
     alive: true,
     lastSeenAt: new Date().toISOString(),
+    ...(input.admittedIat !== undefined ? { admittedIat: input.admittedIat } : {}),
   };
   live.set(input.pairingId, conn);
   return conn;
+}
+
+/** Every live connection, for sweeps that must judge all of them (the heartbeat's admission
+ *  re-check). Returned as an array so a caller may close sockets while iterating. */
+export function allLiveConnections(): LiveConnection[] {
+  return [...live.values()];
 }
 
 /** Remove a live connection on socket close — but only if the map still points at THIS socket (a
@@ -154,6 +231,59 @@ export function getConnectionByOwner(ownerUserId: string, expectedOrg?: string):
     // Enforce (not just document) org-safety: when the caller names its org, never return a
     // connection from a different org (§18.3.4, S2).
     if (expectedOrg !== undefined && conn.org !== expectedOrg) continue;
+    if (!best || conn.registeredAt > best.registeredAt) best = conn;
+  }
+  return best;
+}
+
+/**
+ * Select a live connection for a step's DECLARATION rather than "newest socket for this owner"
+ * (Cofre E-4).
+ *
+ * Three placements, and the difference between them is the point:
+ *   - `cloud`   — not a machine at all; the caller handles it, so this returns undefined.
+ *   - `pinned`  — exactly that pairing or nothing. A pinned step that falls back to a different
+ *                 machine is not a pinned step; the run declared a specific computer for a reason
+ *                 (its card reader, its VPN, its residential line).
+ *   - `any`     — the router picks, but only from machines the ORG GRANTED for the capability.
+ *
+ * `usable` is the intersection of advertised and granted (I-3), passed in rather than read here so
+ * the async grant lookup stays at the caller and this stays a pure, synchronous choice over the
+ * live map. Org is checked on every branch: a machine in another tenant is never a candidate, not
+ * a candidate filtered afterwards.
+ *
+ * Returns undefined when nothing matches — the caller then applies the step's OFFLINE POLICY, which
+ * is a property of the run, not of the fleet. Never a silent fallback to some other machine.
+ */
+export function selectConnectionForStep(input: {
+  ownerUserId: string;
+  org: string;
+  target: { kind: 'cloud' } | { kind: 'pinned'; pairingId: string } | { kind: 'any'; capability: string };
+  /** pairingId -> capabilities that machine may actually be used for (advertised ∩ granted). */
+  usable: Map<string, readonly string[]>;
+  requiredCapabilities?: readonly string[];
+}): LiveConnection | undefined {
+  const { ownerUserId, org, target, usable, requiredCapabilities = [] } = input;
+  if (target.kind === 'cloud') return undefined;
+
+  const hasAll = (pairingId: string, caps: readonly string[]): boolean => {
+    const granted = usable.get(pairingId) ?? [];
+    return caps.every((c) => granted.includes(c));
+  };
+
+  if (target.kind === 'pinned') {
+    const conn = live.get(target.pairingId);
+    if (!conn || conn.org !== org || conn.ownerUserId !== ownerUserId) return undefined;
+    return hasAll(conn.pairingId, requiredCapabilities) ? conn : undefined;
+  }
+
+  // `any:<capability>`: the declared capability is required IN ADDITION to requiredCapabilities —
+  // naming it in the target is a request, not a substitute for declaring what the step needs.
+  const needed = [...new Set([...requiredCapabilities, target.capability])];
+  let best: LiveConnection | undefined;
+  for (const conn of live.values()) {
+    if (conn.ownerUserId !== ownerUserId || conn.org !== org) continue;
+    if (!hasAll(conn.pairingId, needed)) continue;
     if (!best || conn.registeredAt > best.registeredAt) best = conn;
   }
   return best;
@@ -215,6 +345,33 @@ export async function revokePairing(pairingId: string, deps?: { now?: () => numb
   return updated !== null || conn !== undefined;
 }
 
+/**
+ * Revoke + audit as one domain operation (Cofre R-9). The Registo write lives HERE, not in the
+ * route, because `routes/` may not import `data/` directly (ch02 §2.7 module direction) — the route
+ * calls a domain module and the domain module owns the side effects.
+ *
+ * The metadata is ids and an outcome flag ONLY: a Registo row never carries credential material,
+ * and this pairing's signing secret is exactly the sort of thing that must not leak into an audit
+ * trail that is rendered in the dashboard.
+ */
+export async function revokePairingAudited(
+  pairingId: string,
+  actor: { userId: string; orgId: string; username?: string },
+  ownerUserId: string,
+  deps?: { now?: () => number },
+): Promise<boolean> {
+  const revoked = await revokePairing(pairingId, deps);
+  await logActivity(
+    // `username` is required by ActivityActor; a token without one is still auditable by id.
+    { userId: actor.userId, orgId: actor.orgId, username: actor.username ?? actor.userId },
+    'security',
+    'bridge_pairing_revoked',
+    { now: deps?.now ?? (() => Date.now()) },
+    { pairingId, ownerUserId, byOwner: actor.userId === ownerUserId },
+  );
+  return revoked;
+}
+
 /** Test helper: drop every live connection (does not touch durable rows). */
 export function __resetLiveConnectionsForTests(): void {
   for (const conn of live.values()) {
@@ -226,4 +383,52 @@ export function __resetLiveConnectionsForTests(): void {
   }
   live.clear();
   registrationSeq = 0;
+}
+
+/**
+ * Egress candidates for an org (Cofre WS-I / I-2). Org-scoped by construction — a run can never be
+ * routed through another tenant's home connection, because a foreign machine is not a candidate at
+ * all rather than a candidate that is later filtered.
+ */
+export async function egressCandidatesForOrg(org: string): Promise<
+  Array<{ pairingId: string; org: string; capabilities: string[]; egressEndpoint?: string; live: boolean }>
+> {
+  const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
+  // I-3: what a machine ADVERTISES is a self-assertion; what the org GRANTED is the authorisation.
+  // The candidate carries the INTERSECTION, so a daemon cannot widen its own privileges by claiming
+  // more, and a grant for a capability the machine no longer offers cannot make it selectable.
+  // Default deny falls out of this: a machine with no grants contributes an empty list and is never
+  // chosen for anything.
+  //
+  // One query for the org's grants rather than one per machine — the intersection is cheap in
+  // memory and a fleet listing should not be N+1 against the store.
+  const grants = (await bridgeCapabilityGrants.find({ orgId: org, revokedAt: null })) as unknown as Array<{
+    pairingId: string;
+    capability: string;
+  }>;
+  const grantedBy = new Map<string, Set<string>>();
+  for (const g of grants) {
+    const set = grantedBy.get(g.pairingId) ?? new Set<string>();
+    set.add(g.capability);
+    grantedBy.set(g.pairingId, set);
+  }
+
+  return rows.map((row) => {
+    const granted = grantedBy.get(row.pairingId) ?? new Set<string>();
+    return {
+      pairingId: row.pairingId,
+      org: row.org,
+      capabilities: (row.capabilities ?? []).filter((c) => granted.has(c)),
+      ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
+      live: isLive(row.pairingId),
+    };
+  });
+}
+
+/** The raw ADVERTISED list, for an admin surface that must show what a machine offers versus what
+ *  it has been granted. Never feed this to selection — that is what `egressCandidatesForOrg` is
+ *  for, and the difference between the two is the whole of I-3. */
+export async function advertisedCapabilitiesForOrg(org: string): Promise<Array<{ pairingId: string; advertised: string[] }>> {
+  const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
+  return rows.map((row) => ({ pairingId: row.pairingId, advertised: row.capabilities ?? [] }));
 }

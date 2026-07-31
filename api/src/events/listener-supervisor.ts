@@ -23,10 +23,13 @@
  *    stopped+restarted (delete+recreate, or process restart) — the dev version stop/restarted on an
  *    'updated' event. The behavioural property the gate cares about (a listener polls + enqueues; a
  *    failing listener backs off without affecting siblings) is fully met.
- *  - Platform path only in this slice. Platform providers (M365/Google) poll through
- *    `pollPlatformSource` + the injected `callPlatform` (OAuth refresh in core). The user-defined
- *    (IMAP/generic) branch is an injected seam (`pollUserDefined`) whose default is an honest throw
- *    that the backoff absorbs — it is wired in slice 2A-4.
+ *  - TWO poll branches, one shape. Platform providers (M365/Google) poll through
+ *    `pollPlatformSource` + the injected `callPlatform` (OAuth refresh in core). Every other
+ *    (user-defined / IMAP / generic) listener polls through `pollUserDefinedSource` + the injected
+ *    `callUserIntegration` (the integrations/ action executor), driven by the integration package's
+ *    `listenerConfig` (2A-S4). Both branches carry the same durability contract
+ *    (cursor-advance-only-after-enqueue, deterministic dedup key, cancel-safe, first-poll = no
+ *    backfill) and both report a `stalled` tick so a non-advancing cursor is observable.
  *
  * Isolation contract: a thrown exception in one listener's tick never affects siblings or the
  * main-thread dispatcher. Each listener is an independent timer loop with try/catch at every tick +
@@ -42,6 +45,10 @@ import {
   type EnqueueResult,
   type PlatformCallResult,
 } from '../integrations/event-sources/platform-poll.js';
+import {
+  pollUserDefinedSource,
+  type UserIntegrationCallResult,
+} from '../integrations/event-sources/user-defined-poll.js';
 
 const RESTART_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 120_000, 300_000];
 const DEFAULT_INTERVAL_MS = 60_000;
@@ -64,8 +71,16 @@ export interface ListenerSupervisorDeps {
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   /** Platform OAuth-refreshing call, bound to the trigger's org by the composition root. */
   callPlatform(trigger: SupervisorTrigger, args: Record<string, unknown>): Promise<PlatformCallResult>;
-  /** Optional user-defined (non-platform) poll seam — wired in slice 2A-4. Default: honest throw. */
-  pollUserDefined?(trigger: SupervisorTrigger, ctx: { isCancelled: () => boolean }): Promise<void>;
+  /**
+   * User-defined (non-platform) integration action call — `executeUserIntegrationAction`, bound to
+   * the trigger's org + owner by the composition root (2A-S4). REQUIRED: making it optional would
+   * let the process boot with a half-wired listener rail whose only symptom is a runtime throw;
+   * the type system catches it instead.
+   */
+  callUserIntegration(
+    trigger: SupervisorTrigger,
+    call: { integrationKey: string; actionName: string; args: Record<string, unknown> },
+  ): Promise<UserIntegrationCallResult>;
   /** Current ISO timestamp (injected so tests are deterministic). */
   now(): string;
   /** How often to reconcile the active loop set against the store. Default 30s. */
@@ -216,13 +231,33 @@ export class ListenerSupervisor {
       return;
     }
 
-    // User-defined (IMAP/generic) listener path — the transport seam lands in slice 2A-4. Until
-    // then this throws so the backoff absorbs it (never a silent no-op that would stall the cursor
-    // without an audit row).
-    if (!this.deps.pollUserDefined) {
-      throw new Error(`user-defined listener polling for "${trigger.integrationKey}" is not wired (slice 2A-4)`);
+    // User-defined (IMAP/generic) listener path (2A-S4): the poll runs through the integrations/
+    // action executor, driven by the integration package's listenerConfig. Any failure — unknown
+    // package, missing listenerConfig, a failed action, or the deferred IMAP transport's
+    // `unsupported_transport` refusal — THROWS here, so the backoff absorbs it and bumpFailure
+    // leaves an audit row. Never a silent no-op.
+    const res = await pollUserDefinedSource(
+      {
+        id: trigger._id,
+        integrationKey: trigger.integrationKey,
+        ...(trigger.pollConfig?.actionName ? { pollActionName: trigger.pollConfig.actionName } : {}),
+      },
+      {
+        call: (call) => this.deps.callUserIntegration(trigger, call),
+        readCursor: (id) => this.deps.readCursor(id),
+        writeCursor: (id, cursor) => this.deps.writeCursor(id, cursor),
+        enqueue: (input) => this.deps.enqueue(input),
+        now: () => this.deps.now(),
+        isCancelled: () => state.cancelled,
+      },
+    );
+    if (res.stalled) {
+      // Observable, not silent: the tick delivered its items but could not advance the cursor, so
+      // the next tick re-fetches the same window (the queue's UNIQUE dedupes the repeats).
+      console.warn(
+        `[listener-supervisor] trigger ${trigger._id} (${trigger.integrationKey}): cursor did not advance — ${res.stallReason ?? 'unknown reason'}`,
+      );
     }
-    await this.deps.pollUserDefined(trigger, { isCancelled: () => state.cancelled });
   }
 }
 

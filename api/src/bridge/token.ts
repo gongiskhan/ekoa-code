@@ -7,6 +7,7 @@
  * bridge tokens (the additive guard in auth/jwt.ts). Two classes, one secret (§18.3.6).
  */
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'node:crypto';
 import { loadConfig } from '../config.js';
 
 /** The bridge audience — the class marker that separates a pairing token from a platform JWT. */
@@ -22,6 +23,13 @@ export interface BridgeTokenClaims {
   pairingId: string; // the pairing this token authorises
   connectionId: string; // carried alias of pairingId (compat)
   aud: string; // BRIDGE_AUDIENCE
+  /**
+   * Single-use id (J-2). Every minted bridge token carries one, and the connect path spends it
+   * exactly once (bridge/connect-nonce.ts). REQUIRED at connect: a token without a jti cannot be
+   * made single-use, so accepting one would be a replay bypass — the same reasoning that makes
+   * `auth/middleware.ts` reject a platform token with no jti rather than treat it as unrevoked.
+   */
+  jti: string;
   exp?: number;
   iat?: number;
 }
@@ -44,7 +52,10 @@ export class BridgeAuthError extends Error {
 export function mintBridgeToken(userClaims: { sub: string }, pairingId: string): { token: string; expiresIn: number } {
   const expiresIn = BRIDGE_TOKEN_TTL_SECONDS;
   const token = jwt.sign(
-    { sub: userClaims.sub, pairingId, connectionId: pairingId },
+    // `jti` (J-2) is what makes the token single-use at connect. The daemon mints fresh before
+    // every dial, so a per-token id costs a legitimate reconnect nothing and costs a replay
+    // everything.
+    { sub: userClaims.sub, pairingId, connectionId: pairingId, jti: randomUUID() },
     loadConfig().jwtSecret,
     { algorithm: 'HS256', audience: BRIDGE_AUDIENCE, expiresIn },
   );
@@ -68,7 +79,11 @@ export function readBridgeToken(token: string): BridgeTokenClaims {
   const pairingId = decoded.pairingId ?? decoded.connectionId;
   if (!pairingId || typeof pairingId !== 'string') throw new BridgeAuthError('missing-pairing-claim', 'bridge token has no pairing claim');
   if (!decoded.sub || typeof decoded.sub !== 'string') throw new BridgeAuthError('missing-subject', 'bridge token has no subject');
-  return { sub: decoded.sub, pairingId, connectionId: decoded.connectionId ?? pairingId, aud: decoded.aud, exp: decoded.exp, iat: decoded.iat };
+  // J-2: no jti means the token cannot be spent single-use, so it cannot be admitted at all —
+  // accepting it would leave exactly the replay hole the nonce store exists to close. Rejected
+  // here rather than at the connect site so no verifier can forget the check.
+  if (!decoded.jti || typeof decoded.jti !== 'string') throw new BridgeAuthError('missing-jti', 'bridge token has no jti');
+  return { sub: decoded.sub, pairingId, connectionId: decoded.connectionId ?? pairingId, aud: decoded.aud, jti: decoded.jti, exp: decoded.exp, iat: decoded.iat };
 }
 
 /**

@@ -23,6 +23,10 @@ import {
 let mem: MongoMemoryServer;
 
 beforeAll(async () => {
+  // Cofre R-8: registerPairing now mints a PER-PAIRING signing secret and encrypts it at rest, so
+  // the registry needs the crypto module's mandatory key (the platform refuses boot without it).
+  process.env.ENCRYPTION_KEY ??= 'test-encryption-key';
+  process.env.JWT_SECRET ??= 'test-jwt-secret';
   mem = await createMem();
   await connectMongo(mem.getUri(), 'ekoa_bridge_registry_test');
 }, 60_000);

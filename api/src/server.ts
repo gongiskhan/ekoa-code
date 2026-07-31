@@ -47,7 +47,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -90,9 +90,11 @@ import { appPdfRouter, getArtifactPdfDir, renderHtmlToPdf } from './apps/pdf.js'
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
+import { verifySseToken } from './auth/middleware.js';
 import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { memvaultRouter } from './routes/memvault.js';
+import { cofreRouter } from './routes/cofre.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -125,11 +127,13 @@ import {
   setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
+  setIntegrationOriginResolver,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  setDaemonConnectionResolver,
   setAutomationContentSections,
   startRunForTrigger,
   runAutomationForAction,
@@ -137,10 +141,13 @@ import {
   formatCatalogForPrompt,
   automationStepEventPayload,
   automationRunsRoot,
+  screenshotPlaneRouter,
+  sweepExpiredScreenshots,
   type RunEventEmitter,
 } from './automation/index.js';
 import {
   executeUserIntegrationAction,
+  type AutomationBackedHandler,
   callPlatformIntegration,
   findConfigForOwner,
   integrationPrefetch,
@@ -152,6 +159,7 @@ import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
+import { originFromBaseUrl } from './security/origin-binding.js';
 import { setDeliveryTargets } from './events/delivery.js';
 import {
   configureListenerSupervisor,
@@ -164,7 +172,7 @@ import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './
 import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
-import { decrypt, encrypt } from './data/crypto.js';
+import { decrypt, encrypt, envelopeDecrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -375,6 +383,22 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //    callback seam onto the AutomationRunEvent wire union, replayable via Last-Event-ID.
   setRunEventEmitterFactory((runId) => makeRunSseEmitter(runId));
   // 2. Integration action execution (user-defined skills; §5.6.7 integration steps).
+  //    integração-por-automação (carried B25): an `automationBinding` action runs the bound
+  //    automation under the verified owner; integrations/ never imports automation/ (tiers). This
+  //    handler is bound ONCE and handed to EVERY caller of the executor — the automation engine's
+  //    `integration` step below AND the listener supervisor's user-defined poll (2A-S4). An
+  //    executor call site that omits it silently breaks every automation-backed action of that
+  //    integration (e.g. citius, whose poll action is automation-backed), so there is exactly one.
+  const runAutomationBackedAction: AutomationBackedHandler = async (b) => {
+    const out = await runAutomationForAction({
+      binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
+      args: b.args,
+      credentialFields: b.credentialFields,
+      orgId: b.orgId,
+      ownerUserId: b.ownerUserId,
+    });
+    return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
+  };
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     const r = await executeUserIntegrationAction(
@@ -385,20 +409,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         actionName: call.actionName,
         args: call.args,
       },
-      {
-        // integração-por-automação (carried B25): an automationBinding action runs the bound
-        // automation under the verified owner; integrations/ never imports automation/ (tiers).
-        runAutomationBackedAction: async (b) => {
-          const out = await runAutomationForAction({
-            binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
-            args: b.args,
-            credentialFields: b.credentialFields,
-            orgId: b.orgId,
-            ownerUserId: b.ownerUserId,
-          });
-          return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
-        },
-      },
+      { runAutomationBackedAction },
     );
     return { success: r.success, data: r.data, error: r.error, details: r.code };
   });
@@ -418,11 +429,31 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const cfg = await findConfigForOwner(owner.orgId, ownerUserId, integrationKey);
     if (!cfg?.credentialsCiphertext) return null;
     try {
-      const values = JSON.parse(decrypt(cfg.credentialsCiphertext)) as Record<string, unknown>;
+      // Cofre B-4: org-bound v2 envelope; v1 rows still read (no flag day).
+      const values = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
       return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
     } catch {
       return null;
     }
+  });
+  // 4b. Bound origins for that credential (Cofre R-2, invariant I6). The api_call step writes its
+  // URL from a MODEL-authored template, so the destination and the credential have independent
+  // provenance; the integration's own declared base URL is the interim binding until Cofre items
+  // carry per-item `boundOrigins` (WS-C). An integration with no usable declared host resolves to
+  // an EMPTY list, and the seam refuses on empty — unbound never means unrestricted.
+  setIntegrationOriginResolver(async (integrationKey) => {
+    const def = getDefinition(integrationKey);
+    if (!def) return [];
+    const origins = new Set<string>();
+    for (const action of Object.values(def.actions ?? {})) {
+      const baseUrl = (action as { httpConfig?: { baseUrl?: string } }).httpConfig?.baseUrl;
+      if (!baseUrl) continue;
+      // A templated host (`{{region}}.api.example.com`) cannot be pinned at this layer; skip it
+      // rather than binding to a pattern that would match more than it should.
+      const host = originFromBaseUrl(baseUrl);
+      if (host) origins.add(host);
+    }
+    return [...origins];
   });
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {
@@ -482,7 +513,46 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const browser = await getSharedBrowser();
     return browser.newContext();
   });
-  // (setDaemonConnectionResolver stays on its honest default — the bridge lands at G8A.)
+  // 10. THE DAEMON SEAM (Cofre J-1 wiring). This is a SECURITY EVENT, not plumbing: the moment it
+  // is wired, `local_command` and daemon-driven browser steps become reachable end to end, and
+  // every latent I5/I9 defect in that path goes live. The plan gates it explicitly — "J-1 must not
+  // land before H-1, H-4, J-4 and J-7" — and all four are in:
+  //   H-1  value-keyed redaction on every model-bound and log-bound stream
+  //   H-4  ingress redaction, so a step echoing a delivered credential is filtered before it
+  //        reaches the run record, the SSE stream or the model
+  //   J-4  the I9 primitive; `envWhitelist` DELETED, so nothing reads this server's own env
+  //   J-7  the write flag is no longer the model's to assert, and command shapes bind to the exact
+  //        command rather than a wildcard class
+  //
+  // What is deliberately NOT granted here: the resolver hands back a connection only when the ORG
+  // has granted that machine the capability (I-3, re-read per invocation), so wiring the seam does
+  // not by itself authorise anything. A fleet with no capability grants stays exactly as inert as
+  // it was before this line existed — the difference is that granting one now works.
+  setDaemonConnectionResolver((ownerUserId: string) => {
+    const conn = getConnectionByOwner(ownerUserId);
+    if (!conn) return null;
+    return {
+      pairingId: conn.pairingId,
+      async runStep(req: { capability: 'browser' | 'bash'; input: unknown; stepId?: string; runId: string }, opts?: unknown) {
+        void opts; // streamed progress arrives as its own frames; not part of the invoke contract
+        const capability = req.capability === 'bash' ? 'local.bash' : 'local.filesystem';
+        const res = await invokeTool({
+          pairingId: conn.pairingId,
+          orgId: conn.org,
+          capability,
+          payload: { capability: req.capability, input: req.input, stepId: req.stepId, runId: req.runId },
+        });
+        // Shape the bridge's result into the envelope the automation engine expects. A refusal is
+        // an ordinary failed observation, not a thrown error, because the engine's step record is
+        // where a user-visible failure belongs.
+        return {
+          ok: res.ok,
+          ...(res.error ? { error: res.error } : {}),
+          observation: { data: (res.output ?? {}) as Record<string, unknown> },
+        } as never;
+      },
+    };
+  });
 
   // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).
   setDeliveryTargets({
@@ -557,10 +627,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     },
   });
 
-  // G8/2A-S1 — listener supervisor: the durable poll→enqueue rail for `kind:'listener'` triggers.
+  // G8/2A-S1+S4 — listener supervisor: the durable poll→enqueue rail for `kind:'listener'` triggers.
   // Injected across the seams here (ch02 §2.8: only the composition root wires collaborators):
   // the listener-state cursor store, the SHARED event queue (via enqueueListenerEvent — never a
-  // second queue), and callPlatformIntegration bound to each trigger's org (OAuth refresh in core).
+  // second queue), callPlatformIntegration bound to each trigger's org (OAuth refresh in core) for
+  // the M365/Google branch, and executeUserIntegrationAction bound to each trigger's org + owner for
+  // every other (user-defined) integration.
   // The loop is STARTED post-listen (below) and stopped on shutdown.
   configureListenerSupervisor({
     listListeners: async () => {
@@ -583,8 +655,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         },
         { now: deps.now, genId: deps.genId },
       ),
-    // The user-defined (IMAP/generic) poll transport is wired in slice 2A-4; until then that branch
-    // throws and the supervisor's backoff absorbs it.
+    // User-defined (non-platform) poll call (2A-S4) — the SAME executor the automation `integration`
+    // step uses, with the SAME automation-backed handler, bound to the trigger's own org + owner so
+    // the poll runs under the owner's stored credentials and never a caller's. The automation seam
+    // is NOT optional here: citius — the one shipped non-deferred user-defined listener source —
+    // polls via an `automationBinding` action (consultar_notificacoes), so omitting it would leave
+    // that listener permanently failing with `automation_required`. Actions whose package declares a
+    // transport the executor does not implement (the imap package) come back as an
+    // `unsupported_transport` failure, which the poll turns into a throw → backoff + audit row.
+    callUserIntegration: (trigger, call) =>
+      executeUserIntegrationAction(
+        {
+          orgId: trigger.orgId,
+          ownerUserId: trigger.ownerUserId,
+          integrationKey: call.integrationKey,
+          actionName: call.actionName,
+          args: call.args,
+        },
+        { runAutomationBackedAction },
+      ),
     now: () => new Date(deps.now()).toISOString(),
   });
 
@@ -736,6 +825,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // E2 — memvault ("cortex memory"): per-user markdown notes, JWT or gateway-key admission
   // (requireUserOrApiKey inside the router); state is per-user files behind the path jail.
   app.use('/api/v1/memvault', memvaultRouter(deps));
+  // Cofre (WS-B B-3): credential custody. Every authorization decision lives in api/src/cofre/,
+  // not the router — one place to audit, and one place for WS-K's KMS envelope to install behind.
+  app.use('/api/v1/cofre', cofreRouter(deps));
   // G4 — integrations + knowledge.
   app.use('/api/v1/integrations', integrationsRouter(deps));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
@@ -942,14 +1034,30 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   mkdirSync(getArtifactScreenshotDir(), { recursive: true });
   app.use('/artifact-screenshots', express.static(getArtifactScreenshotDir(), { fallthrough: false }));
   // Per-step automation screenshots (ch12): PNGs written per run at <dataDir>/automation-runs/
-  // <automationId>/<runId>/step-N.png, served publicly as capability URLs (the unguessable
-  // automationId/runId path IS the capability — the run UI renders them via <img>, which cannot
-  // carry an Authorization header; decisions.md). Same fallthrough/caching posture as the
-  // artifact-thumbnail mount above (express.static's ETag + Last-Modified revalidation keeps a
-  // step whose screenshot was overwritten by a same-index retry fresh). Dir pre-created so a fresh
-  // data dir serves clean 404s instead of an ENOENT from static().
+  // <automationId>/<runId>/step-N.png.
+  //
+  // SUPERSEDES the `express.static` capability-URL mount (Cofre R-3). These are screenshots of an
+  // AUTHENTICATED session on a client portal — for this product, processo numbers and client NIFs
+  // rendered as pixels — and they were served with no auth middleware, no tenant check and no
+  // expiry. The recorded rationale was that an <img> cannot carry an Authorization header; the
+  // answer is the SAME short-lived-query-token pattern the SSE stream already uses for exactly
+  // that constraint, not trading the control away. The URL SHAPE is unchanged, so every persisted
+  // screenshotUrl keeps resolving; the client appends `?token=<jwt>`.
   mkdirSync(automationRunsRoot(), { recursive: true });
-  app.use('/automation-screenshots', express.static(automationRunsRoot(), { fallthrough: false }));
+  app.use(
+    '/automation-screenshots',
+    screenshotPlaneRouter({
+      verifyQueryToken: (token) => {
+        const v = verifySseToken(token);
+        return v.ok
+          ? { ok: true as const, claims: { sub: v.claims.sub, orgId: v.claims.orgId, role: v.claims.role } }
+          : { ok: false as const, status: v.status, code: v.code };
+      },
+      onDenied: ({ runId, actorUserId, actorOrg }) => {
+        console.warn(`[automation] screenshot access denied run=${runId} actor=${actorUserId} org=${actorOrg}`);
+      },
+    }),
+  );
   // Brand-research logos (ch05 §5.6.4): the pipeline downloads + validates the owner's logo and
   // stores it under <dataDir>/brand-assets; served publicly read-only like the artifact
   // thumbnails above (the dashboard renders `/brand-assets/<file>` via <img>). Dir pre-created so
@@ -993,6 +1101,15 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   await bootContentLoader();
   await backfillKnowledgeIndex();
   await sweepOrphans(deps.now);
+  // Cofre R-3: per-step screenshots had NO retention — every reference in api/src was a write or a
+  // path builder, so stale PNGs of authenticated client-portal sessions accumulated forever in an
+  // unindexed tree. That is a GDPR erasure gap, so the sweeper lands with the auth change rather
+  // than as a follow-up. Best-effort by construction: a sweep failure must never fail boot.
+  void sweepExpiredScreenshots({ now: deps.now })
+    .then(({ removed, scanned }) => {
+      if (removed > 0) console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs`);
+    })
+    .catch(() => {});
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;

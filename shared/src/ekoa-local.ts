@@ -1,5 +1,6 @@
 // ekoa-local surfaces (ch03 §3.10): LLM gateway, agent-face, bridge - ported wire-stable, plus the P-18 TUI compat SSE.
 import { z } from 'zod';
+import { BridgeCapability } from './cofre.js';
 import { Id, OkResponse } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
@@ -45,6 +46,15 @@ export type AgentFaceCancelResponse = z.infer<typeof AgentFaceCancelResponse>;
 export const BridgeTokenResponse = z.object({
   token: z.string(),
   expiresIn: z.number(),
+  /**
+   * The pairing's PER-PAIRING task-signing secret (Cofre R-8). Present only for the OWNER of a
+   * live, non-revoked pairing. Delegated tasks were previously HMAC'd with the platform-wide JWT
+   * secret, so making delegation work required copying the key that signs every user's session
+   * onto every paired laptop; this is minted per pairing and delivered on the daemon's own
+   * authenticated pre-dial exchange. Optional so a revoked/unknown pairing simply omits it and the
+   * daemon fails closed rather than falling back to anything.
+   */
+  signingSecret: z.string().optional(),
 });
 export type BridgeTokenResponse = z.infer<typeof BridgeTokenResponse>;
 
@@ -228,6 +238,64 @@ export const BridgeFrame = z.discriminatedUnion('type', [
   // presence
   z.object({ type: z.literal('ping') }),
   z.object({ type: z.literal('pong') }),
+
+  // ---- PROTOCOL v2 (Cofre WS-J) ------------------------------------------------------------
+  // Added, not replaced. `provider_request`/`provider_response` STAY: they are the mechanism that
+  // keeps the LLM egress chokepoint intact for bridge traffic, and dropping them would need a
+  // replacement story nobody has (recorded as a decision rather than left implicit).
+  //
+  // daemon -> hosted: the machine ADVERTISES what it is and what it can do. Capabilities are a
+  // closed vocabulary, and advertisement REPLACES the stored list — a machine that stops offering
+  // a capability must stop being selected for it.
+  z.object({
+    type: z.literal('hello'),
+    machineName: z.string().max(120),
+    capabilities: z.array(BridgeCapability),
+    /** Tailnet address for residential egress. Absent = this machine offers no egress. */
+    egressEndpoint: z.string().max(255).optional(),
+    daemonVersion: z.string().max(40),
+  }),
+  // hosted -> daemon: a streamed tool invocation, replacing the ad-hoc per-capability shapes.
+  z.object({
+    type: z.literal('tool.invoke'),
+    invocationId: z.string(),
+    capability: BridgeCapability,
+    input: z.unknown(),
+  }),
+  z.object({
+    type: z.literal('tool.result'),
+    invocationId: z.string(),
+    ok: z.boolean(),
+    output: z.unknown().optional(),
+    error: z.string().optional(),
+  }),
+  /**
+   * ONE-TIME secret delivery (the bridge transit rule, I9). The payload is nonce-bound and
+   * single-use; the daemon holds it in RAM only, injects it at execution time and zeroizes it. It
+   * is NEVER written to bridge disk and NEVER ledgered as a value.
+   */
+  z.object({
+    type: z.literal('secret.deliver'),
+    invocationId: z.string(),
+    nonce: z.string(),
+    /** env-var name -> value. The only frame in the union that carries credential material. */
+    env: z.record(z.string(), z.string()),
+  }),
+  /** Route a ceremony (a card unlock, a relay code) to a machine with a human at it. */
+  z.object({
+    type: z.literal('attended.request'),
+    requestId: z.string(),
+    kind: z.enum(['card_login', 'relay_code']),
+    origin: z.string(),
+    reason: z.string().max(500),
+  }),
+  /** The daemon returns a captured session for storage as a Cofre item (WS-G). */
+  z.object({
+    type: z.literal('session.push'),
+    requestId: z.string(),
+    origin: z.string(),
+    storageState: z.unknown(),
+  }),
 ]);
 export type BridgeFrame = z.infer<typeof BridgeFrame>;
 

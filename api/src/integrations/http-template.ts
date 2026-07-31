@@ -6,7 +6,23 @@
  *
  * The `$?` in the placeholder pattern lets Microsoft Graph OData params (`{{$top}}`,
  * `{{$filter}}`) interpolate; a plain `{{name}}` still matches.
+ *
+ * REDACTION (Cofre R-6): the value-keyed and name-pattern maskers that used to live here are now
+ * `api/src/security/redaction.ts` — one implementation, shared with the automation executor, with
+ * the historical `***…1234` plaintext-suffix leak and the silent sub-4-char skip both removed. The
+ * wrappers below keep this module's published signatures for its existing call sites.
  */
+
+import {
+  SecretRegistry,
+  secretRegistryFromValues,
+  maskUnknownSecret,
+  redactHeadersByName,
+  redactBodyByName,
+  redactUrlByName,
+} from '../security/redaction.js';
+
+export { SecretRegistry, secretRegistryFromValues };
 
 const PLACEHOLDER = /\{\{(\$?\w+)\}\}/g;
 const BARE_PLACEHOLDER = /^\{\{(\$?\w+)\}\}$/;
@@ -65,38 +81,16 @@ export function buildVars(
 // surfaced to the UI or persisted (never let a secret reach a log/transcript).
 // ---------------------------------------------------------------------------
 
-const SECRET_HEADER_PATTERNS = [/^authorization$/i, /^proxy-authorization$/i, /api[-_]?key/i, /^x-api-token$/i, /^x-auth-token$/i, /token/i, /secret/i, /^cookie$/i, /^set-cookie$/i];
-const SECRET_KEY_PATTERN = /(?:secret|token|password|passwd|api[_-]?key|client[_-]?secret|access[_-]?key|private[_-]?key|auth(?:orization)?)/i;
-
-export function maskValue(v: string): string {
-  if (!v) return v;
-  const space = v.indexOf(' ');
-  const head = space > 0 && space <= 12 ? v.slice(0, space + 1) : '';
-  const rest = head ? v.slice(head.length) : v;
-  const tail = rest.length > 4 ? rest.slice(-4) : '';
-  return `${head}***${tail ? `…${tail}` : ''}`;
-}
+/** @deprecated Use `maskUnknownSecret` from security/redaction.ts. Retained as a named re-export so
+ *  the historical call sites keep compiling; the leaky `***…1234` suffix is GONE (Cofre R-6). */
+export const maskValue = maskUnknownSecret;
 
 export function redactHeaders(headers: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    out[k] = SECRET_HEADER_PATTERNS.some((re) => re.test(k)) ? maskValue(v) : v;
-  }
-  return out;
+  return redactHeadersByName(headers);
 }
 
 export function redactBody(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      return JSON.stringify(redactJsonTree(JSON.parse(raw)), null, 2);
-    } catch {
-      /* not JSON — fall through */
-    }
-  }
-  return raw.replace(/([\w.-]+)=([^&\s]+)/g, (match, key: string, value: string) =>
-    SECRET_KEY_PATTERN.test(key) ? `${key}=${maskValue(decodeURIComponent(value))}` : match,
-  );
+  return redactBodyByName(raw);
 }
 
 /**
@@ -106,28 +100,12 @@ export function redactBody(raw: string): string {
  * value is masked, then a secret-key-name pass catches conventionally-named params too.
  */
 export function redactUrl(url: string, secretValues: string[]): string {
-  let out = url;
-  for (const secret of secretValues) {
-    if (!secret || secret.length < 4) continue;
-    for (const form of new Set([secret, encodeURIComponent(secret)])) {
-      if (out.includes(form)) out = out.split(form).join(maskValue(secret));
-    }
-  }
-  return out.replace(/([?&][\w.-]+)=([^&#\s]+)/g, (match, prefixKey: string, value: string) =>
-    SECRET_KEY_PATTERN.test(prefixKey) ? `${prefixKey}=${maskValue(decodeURIComponent(value))}` : match,
-  );
+  return redactUrlByName(secretRegistryFromValues(secretValues).redact(url));
 }
 
 /** Mask every occurrence of a decrypted credential value in a string (value-based). */
 export function redactSecretValuesIn(text: string, secretValues: string[]): string {
-  let out = text;
-  for (const secret of secretValues) {
-    if (!secret || secret.length < 4) continue;
-    for (const form of new Set([secret, encodeURIComponent(secret)])) {
-      if (out.includes(form)) out = out.split(form).join(maskValue(secret));
-    }
-  }
-  return out;
+  return secretRegistryFromValues(secretValues).redact(text);
 }
 
 /**
@@ -138,26 +116,7 @@ export function redactSecretValuesIn(text: string, secretValues: string[]): stri
  */
 export function redactSecretsDeep(value: unknown, secretValues: string[]): unknown {
   if (!secretValues.length) return value;
-  if (typeof value === 'string') return redactSecretValuesIn(value, secretValues);
-  if (Array.isArray(value)) return value.map((v) => redactSecretsDeep(v, secretValues));
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[k] = redactSecretsDeep(v, secretValues);
-    return out;
-  }
-  return value;
-}
-
-function redactJsonTree(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(redactJsonTree);
-  if (node && typeof node === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_PATTERN.test(k) && typeof v === 'string' ? maskValue(v) : redactJsonTree(v);
-    }
-    return out;
-  }
-  return node;
+  return secretRegistryFromValues(secretValues).redactDeep(value);
 }
 
 export function truncateForDisplay(s: string, max: number): string {
