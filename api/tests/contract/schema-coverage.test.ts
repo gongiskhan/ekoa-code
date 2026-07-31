@@ -165,6 +165,18 @@ const COVERED = new Set<string>([
   // re-pin. The honest reading: PENDING now UNDERSTATES automations coverage; the domain's keys
   // move to COVERED with the re-pin they need, not silently.
   'automations.getRunLogs',
+  // slice E5 - the two knowledge READ capabilities this slice ADDS (knowledge.test.ts: the
+  // search + read round trips safeParsed against KnowledgeSearchResponse /
+  // KnowledgeDocumentResponse under BOTH admissions, the `_shared` corpus round trip, the
+  // collection filter and the 400/404 envelopes; tests/security/knowledge-scoping.test.ts:
+  // cross-org blindness through search AND read, the shared-partition invariant, and the
+  // "no request field names an org" matrix).
+  //
+  // The two endpoints this slice FLIPPED to `user-or-key` (knowledge.listCollections,
+  // knowledge.listDocuments) were already COVERED under G7B and stay where they are — flipping
+  // an auth class adds no descriptor, so the pinned count is untouched by them. Covering exactly
+  // the two NEW descriptors restores EXPECTED_PENDING_COUNT to its pin.
+  'knowledge.searchKnowledge', 'knowledge.readKnowledgeDoc',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

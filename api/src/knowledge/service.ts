@@ -9,8 +9,16 @@
  *
  * knowledge/ has NO import path to llm/ (CLAUDE.md, FIXED-3). The grounding builder lives beside
  * this module and is consumed by agents/, not by any REST route.
+ *
+ * SLICE E5 adds the two READ capabilities the vault always had in-process (the agents' knowledge
+ * tools) but never exposed over REST: {@link searchDocuments} and {@link readDocument}. They add
+ * no storage and no new query — they wrap the SAME index/vault calls the agent seams use, with
+ * the capability-surface obligations bolted on: the org comes from the call context's actor and
+ * from nowhere else, the reserved `_shared` partition can never BE that actor, and every call
+ * leaves one activity row plus one structured console line.
  */
 import { knowledgeSources, knowledgeUploads } from '../data/stores.js';
+import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
 import { assertSafeUrl, SsrfError } from '../services/url-safety.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
@@ -57,11 +65,22 @@ export class KnowledgeError extends Error {
  * assigned this org id (UUIDs never collide with it), so this is a structural invariant, not a
  * user-facing permission: any request actor presenting the shared org id is refused before it can
  * mutate the corpus through the service.
+ *
+ * E5 tightens the invariant from "cannot MUTATE the corpus" to "is never a request actor at all":
+ * the two capability reads refuse it as well (via {@link assertNotSharedOrg}). Nothing legitimate
+ * is lost — every org's search already consults `_shared` and every org can read a `_shared`
+ * document, so the corpus stays fully readable; what is refused is a caller CLAIMING to be it.
  */
+function sharedActorRefusal(): KnowledgeError {
+  return new KnowledgeError('FORBIDDEN', 403, 'A coleção partilhada é só de leitura.');
+}
+
+function assertNotSharedOrg(orgId: string): void {
+  if (orgId === SHARED_ORG_ID) throw sharedActorRefusal();
+}
+
 function assertNotSharedActor(actor: Actor): void {
-  if (actor.orgId === SHARED_ORG_ID) {
-    throw new KnowledgeError('FORBIDDEN', 403, 'A coleção partilhada é só de leitura.');
-  }
+  assertNotSharedOrg(actor.orgId);
 }
 
 // --- Sources (G4, unchanged) ---------------------------------------------------------------
@@ -200,15 +219,23 @@ export async function ingestDocument(actor: Actor, input: CreateDocumentInput, d
   return { id: docId };
 }
 
+/**
+ * The two browse reads. `assertNotSharedActor` here is not about the corpus being secret — it is
+ * public and every org reads it — but about the invariant that NO request actor is ever the shared
+ * partition. Keeping it uniform across every endpoint an actor can reach means the property is
+ * "presenting `_shared` is refused", with no endpoint-by-endpoint exceptions to reason about.
+ */
 export async function listDocuments(
   actor: Actor,
   opts: { collection?: string; offset?: number; limit?: number },
 ): Promise<{ items: ReturnType<typeof toSummary>[]; total: number }> {
+  assertNotSharedActor(actor);
   const { items, total } = await vault.listDocs(actor.orgId, opts);
   return { items: items.map((d) => toSummary(d)), total };
 }
 
 export async function listCollections(actor: Actor): Promise<string[]> {
+  assertNotSharedActor(actor);
   return vault.listCollections(actor.orgId);
 }
 
@@ -217,16 +244,22 @@ export async function listCollections(actor: Actor): Promise<string[]> {
  * org doc SHADOWS a shared doc on the same (collection, docId). A shared-scope caller reads the
  * shared partition once (no double read). This backs the in-process knowledge read tool so an agent
  * can open a shared-corpus citation it surfaced via {@link searchKnowledgeIndex}.
+ *
+ * `scope` (E5) names WHICH partition answered, mirroring the same field on a search hit. It is
+ * derived here rather than re-deriving the fallback at the caller: the shadowing rule must have
+ * exactly one implementation. The org id itself is never returned — a caller learns "yours" or
+ * "public", never an identifier.
  */
 export async function readDocWithShared(
   orgId: string,
   collection: string,
   docId: string,
-): Promise<{ fm: vault.DocFrontmatter; body: string } | null> {
+): Promise<{ fm: vault.DocFrontmatter; body: string; scope: 'org' | 'shared' } | null> {
   const own = await vault.readDoc(orgId, collection, docId);
-  if (own) return own;
+  if (own) return { ...own, scope: orgId === SHARED_ORG_ID ? 'shared' : 'org' };
   if (orgId === SHARED_ORG_ID) return null;
-  return vault.readDoc(SHARED_ORG_ID, collection, docId);
+  const shared = await vault.readDoc(SHARED_ORG_ID, collection, docId);
+  return shared ? { ...shared, scope: 'shared' } : null;
 }
 
 /** Delete a document: remove the vault file + the index row. */
@@ -241,6 +274,168 @@ export async function deleteDocument(actor: Actor, collection: string, docId: st
   }
   index.removeDoc(actor.orgId, collection, docId);
   return removed;
+}
+
+// --- The capability READ surface (slice E5) -------------------------------------------------
+
+/** Key principal marker (res.locals.apiKeyPrincipal) — present only on key-admitted calls. */
+export interface KnowledgePrincipal {
+  keyId: string;
+  xClient?: string;
+}
+
+export type KnowledgeVerdict = 'ok' | 'denied' | 'not_found' | 'forbidden' | 'error';
+
+/**
+ * Everything a capability call is allowed to know about itself. The org lives on `actor` and is
+ * put there by the auth middleware from a verified JWT or a verified key's OWNER — there is
+ * deliberately no other channel into these functions, so no request field can reach the partition
+ * selection.
+ */
+export interface KnowledgeCallContext {
+  actor: ActivityActor;
+  deps: LogActivityDeps;
+  principal?: KnowledgePrincipal | undefined;
+}
+
+/**
+ * One activity row + one structured console line per capability call (the E2/E3 memvault shape).
+ *
+ * What is NOT recorded: the query text and the document body. A search string on this surface is
+ * a client's confidential matter ("penhora Cliente X"), and the durable audit store is the wrong
+ * place for it; the row carries the SHAPE of the call (op, verdict, hit count, addressed
+ * collection/docId) which is what an attribution or abuse question actually needs.
+ */
+async function auditKnowledge(
+  ctx: KnowledgeCallContext,
+  op: string,
+  verdict: KnowledgeVerdict,
+  t0: number,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  const ms = Date.now() - t0;
+  const key = ctx.principal
+    ? { keyId: ctx.principal.keyId, ...(ctx.principal.xClient ? { xClient: ctx.principal.xClient } : {}) }
+    : {};
+  await logActivity(ctx.actor, 'knowledge', `knowledge_${op}`, ctx.deps, { op, verdict, ms, ...key, ...extra });
+  console.log(
+    JSON.stringify({ ts: new Date(ctx.deps.now()).toISOString(), userId: ctx.actor.userId, ...key, op, ...extra, verdict, ms }),
+  );
+}
+
+/**
+ * Audit a refusal that never reached an op — a router-level schema rejection (a traversal-shaped
+ * collection, an empty query). Without this the highest-signal events on the surface would be a
+ * 400 and total silence in the trail (the E2 review F3 lesson, applied here up front). `attempt`
+ * is attacker-controlled text: length-capped, only ever recorded, never resolved, never echoed.
+ */
+export async function auditKnowledgeDenied(ctx: KnowledgeCallContext, op: string, attempt?: string): Promise<void> {
+  await auditKnowledge(ctx, op, 'denied', Date.now(), attempt ? { attempt: attempt.slice(0, 128) } : {});
+}
+
+/** Default page size for a capability search when the caller does not ask for one. */
+export const SEARCH_DEFAULT_LIMIT = 10;
+/**
+ * A collection filter is applied AFTER the index query, because the FTS query has no collection
+ * predicate and adding one would change the shape the agent tools already depend on. So a filtered
+ * search over-fetches and narrows. The consequence is stated rather than hidden: for an org whose
+ * matches for a term are dominated by other collections, a filtered search can under-report — it
+ * is a relevance-ordered narrowing, not a `WHERE collection = ?` scan.
+ */
+const COLLECTION_OVERFETCH = 20;
+const COLLECTION_OVERFETCH_MAX = 500;
+
+/**
+ * Search the caller's own partition + the shared corpus. Thin over {@link index.search}, which is
+ * the SAME function the in-process agent tool calls: org partitioning is in its signature, so a
+ * cross-org hit is structurally impossible rather than filtered out afterwards.
+ */
+export async function searchDocuments(
+  ctx: KnowledgeCallContext,
+  input: { query: string; limit?: number; collection?: string },
+): Promise<{ hits: index.SearchHit[] }> {
+  const t0 = Date.now();
+  const { orgId } = ctx.actor;
+  if (orgId === SHARED_ORG_ID) {
+    await auditKnowledge(ctx, 'search', 'forbidden', t0);
+    throw sharedActorRefusal();
+  }
+  const limit = input.limit ?? SEARCH_DEFAULT_LIMIT;
+  try {
+    const want = input.collection ? Math.min(limit * COLLECTION_OVERFETCH, COLLECTION_OVERFETCH_MAX) : limit;
+    const raw = index.search(orgId, input.query, want);
+    const hits = input.collection ? raw.filter((h) => h.collection === input.collection).slice(0, limit) : raw;
+    await auditKnowledge(ctx, 'search', 'ok', t0, {
+      hits: hits.length,
+      ...(input.collection ? { collection: input.collection } : {}),
+    });
+    return { hits };
+  } catch (e) {
+    await auditKnowledge(ctx, 'search', 'error', t0);
+    // Server-side only: a sqlite message can name absolute paths, so it never reaches the wire.
+    console.error('[knowledge] search', e instanceof Error ? e.message : e);
+    throw new KnowledgeError('INTERNAL', 500, 'Erro interno.');
+  }
+}
+
+/** The wire view of one document: the list summary a client already knows + body + partition. */
+export interface KnowledgeDocumentView {
+  id: string;
+  collection: string;
+  title: string;
+  sourceUrl?: string;
+  sourceType?: string;
+  language?: string;
+  createdAt?: string;
+  scope: 'org' | 'shared';
+  contentMd: string;
+}
+
+/**
+ * Read one document by (collection, docId), the caller's own partition shadowing the shared
+ * corpus. A missing document, an unreadable one and a document belonging to another org are the
+ * SAME null here and the same uniform 404 on the wire — there is no cross-org existence oracle.
+ * Path safety is the vault's (docPath asserts every segment); the contract-level grammar refuses
+ * the same shapes one layer earlier.
+ */
+export async function readDocument(
+  ctx: KnowledgeCallContext,
+  collection: string,
+  docId: string,
+): Promise<KnowledgeDocumentView | null> {
+  const t0 = Date.now();
+  const { orgId } = ctx.actor;
+  const addressed = { collection, docId };
+  if (orgId === SHARED_ORG_ID) {
+    await auditKnowledge(ctx, 'read', 'forbidden', t0, addressed);
+    throw sharedActorRefusal();
+  }
+  let doc: Awaited<ReturnType<typeof readDocWithShared>>;
+  try {
+    doc = await readDocWithShared(orgId, collection, docId);
+  } catch (e) {
+    await auditKnowledge(ctx, 'read', 'error', t0, addressed);
+    console.error('[knowledge] read', e instanceof Error ? e.message : e);
+    throw new KnowledgeError('INTERNAL', 500, 'Erro interno.');
+  }
+  if (!doc) {
+    await auditKnowledge(ctx, 'read', 'not_found', t0, addressed);
+    return null;
+  }
+  await auditKnowledge(ctx, 'read', 'ok', t0, { ...addressed, scope: doc.scope });
+  return {
+    id: docId,
+    collection,
+    title: doc.fm.title,
+    ...(doc.fm.sourceUrl ? { sourceUrl: doc.fm.sourceUrl } : {}),
+    ...(doc.fm.sourceType ? { sourceType: doc.fm.sourceType } : {}),
+    ...(doc.fm.language ? { language: doc.fm.language } : {}),
+    // A vault file written by any path this service owns always carries createdAt; a hand-placed
+    // or legacy corpus file may not, and the contract's IsoTimestamp would reject an empty string.
+    ...(doc.fm.createdAt ? { createdAt: doc.fm.createdAt } : {}),
+    scope: doc.scope,
+    contentMd: doc.body,
+  };
 }
 
 // --- Uploads (this slice) -------------------------------------------------------------------

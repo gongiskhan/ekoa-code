@@ -1,16 +1,42 @@
 /**
  * Knowledge router (ch03 §3.8.20). Org-partitioned vault CRUD, sources, uploads, and the
- * org-admin heal operations. No human search endpoint by design — agents consume search/read via
- * in-process tools (the grounding builder), not REST. Persistence via the knowledge service.
+ * org-admin heal operations. Persistence via the knowledge service.
+ *
+ * SLICE E5 — the router now has TWO admission tiers, and the split is the point:
+ *
+ *   1. A `user-or-key` CAPABILITY READ surface, mounted FIRST (Capability Contract rule 4):
+ *      collections, the document list, search and read-one. A gateway-key client browses and
+ *      reads; nothing here writes. Search/read are the same index/vault calls the in-process
+ *      agent tools make (api/src/agents/), now reachable over REST — the in-process path is
+ *      untouched, and neither surface takes an org from its arguments.
+ *   2. Everything below `r.use(requireAuth)` — ingest, delete, sources, uploads and the
+ *      org-admin heal ops — stays platform-session-only. Opening INGESTION to keys is a separate
+ *      decision this slice does not make.
+ *
+ * Express runs middleware in mount order, so registering the tier-1 routes before the router-wide
+ * `requireAuth` is what keeps the two tiers apart (the same shape automations.ts uses for its SSE
+ * route). `requireUserOrApiKey` delegates to `requireAuth` untouched for a non-key bearer, so a
+ * dashboard JWT reaches these four routes exactly as it did before.
+ *
+ * ORG SCOPE COMES FROM `actorOf(req)` AND NOWHERE ELSE. No handler here reads an org/tenant from a
+ * body, query or header — there is no such field in any knowledge schema, and zod strips unknown
+ * keys, so naming one is silently inert rather than influential.
  */
 import { Router, raw as expressRaw, type Response } from 'express';
 import { z } from 'zod';
-import { CreateDocumentRequest, SourceInput as SourceInputSchema } from '@ekoa/shared';
+import {
+  CreateDocumentRequest,
+  KnowledgeDocParams,
+  KnowledgeSearchRequest,
+  SourceInput as SourceInputSchema,
+} from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
+import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import {
   listSources, addSource, deleteSource, updateSource, getVisibleSource, sourceView, KnowledgeError,
   ingestDocument, listDocuments, listCollections, deleteDocument,
   createUpload, listUploads, deleteUpload, reindexOrg, indexStatus,
+  searchDocuments, readDocument, auditKnowledgeDenied, type KnowledgeCallContext,
 } from '../knowledge/service.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 
@@ -21,23 +47,115 @@ const DocumentsQuery = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
 });
 
+/** The Registo actor from the verified principal (logActivity needs a username, which the shared
+ *  Actor type does not carry — same shape as routes/memvault.ts). */
+function activityActorOf(req: AuthedRequest): { userId: string; username: string; orgId: string } {
+  const u = req.user!;
+  return { userId: u.sub, username: u.username ?? u.sub, orgId: u.orgId ?? '' };
+}
+
+/** The key principal a gateway-key admission left on res.locals — trace only (rule 3). */
+function principalOf(res: Response): { keyId: string; xClient?: string } | undefined {
+  const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
+  return p ? { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } : undefined;
+}
+
+/** Text a refused request was aiming at, for the audit line. Attacker-controlled: recorded
+ *  (capped by the service) and never resolved, never echoed back on the wire. */
+function attemptOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value.slice(0, 128) : undefined;
+}
+
 // 50 MB default upload ceiling (ch03 §3.8.20 / ch03 §3.2).
 const UPLOAD_LIMIT = process.env.EKOA_KNOWLEDGE_UPLOAD_MAX_SIZE || '50mb';
 
 export function knowledgeRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
-  r.use(requireAuth);
 
-  // --- Collections + documents ---
-  r.get('/collections', async (req: AuthedRequest, res: Response) => {
-    res.json({ items: await listCollections(actorOf(req)) });
+  const ctxOf = (req: AuthedRequest, res: Response): KnowledgeCallContext => ({
+    actor: activityActorOf(req),
+    deps,
+    principal: principalOf(res),
   });
 
-  r.get('/documents', async (req: AuthedRequest, res: Response) => {
+  // =============================================================================================
+  // TIER 1 — the `user-or-key` capability READ surface (slice E5). Mounted BEFORE the router-wide
+  // requireAuth below; everything after it is platform-session-only.
+  // =============================================================================================
+
+  r.get('/collections', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json({ items: await listCollections(actorOf(req)) });
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
+  });
+
+  r.get('/documents', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
     const q = DocumentsQuery.safeParse(req.query);
     if (!q.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: q.error.issues });
-    res.json(await listDocuments(actorOf(req), q.data));
+    try {
+      res.json(await listDocuments(actorOf(req), q.data));
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
   });
+
+  /**
+   * searchKnowledge — POST /api/v1/knowledge/search. The org partition rides the actor into the
+   * service; `orgId` is not a field of KnowledgeSearchRequest, and zod strips unknown keys, so a
+   * body/query/header naming one changes nothing about which partition is searched.
+   *
+   * These two routes (unlike the two browse routes above, which pre-date the capability surface
+   * and are unchanged apart from their admission) carry the per-call audit: one activity row and
+   * one structured console line, refusals included.
+   */
+  r.post('/search', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const body = KnowledgeSearchRequest.safeParse(req.body);
+    if (!body.success) {
+      const raw = req.body as { collection?: unknown } | null;
+      await auditKnowledgeDenied(ctxOf(req, res), 'search', attemptOf(raw?.collection));
+      return sendError(res, 'VALIDATION_FAILED', 'Dados inválidos.', { issues: body.error.issues });
+    }
+    try {
+      res.json(await searchDocuments(ctxOf(req, res), body.data));
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
+  });
+
+  /**
+   * readKnowledgeDoc — GET /api/v1/knowledge/documents/:collection/:docId. Two ordinary express
+   * params: a collection and a docId are each ONE vault path segment (KnowledgeSegment mirrors
+   * paths.ts SEGMENT_RE), so '/' is unrepresentable in either and no wildcard/query-param
+   * workaround is needed — unlike memvault's multi-segment permalinks. Contract-invalid segments
+   * (including '.' / '..') are a 400 here; a document that is missing, unreadable or another
+   * org's is the identical uniform 404.
+   */
+  r.get('/documents/:collection/:docId', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const params = KnowledgeDocParams.safeParse(req.params);
+    if (!params.success) {
+      await auditKnowledgeDenied(ctxOf(req, res), 'read', attemptOf(`${req.params.collection}/${req.params.docId}`));
+      return sendError(res, 'VALIDATION_FAILED', 'Dados inválidos.', { issues: params.error.issues });
+    }
+    try {
+      const doc = await readDocument(ctxOf(req, res), params.data.collection, params.data.docId);
+      if (!doc) return notFound(res);
+      res.json(doc);
+    } catch (e) {
+      if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
+      throw e;
+    }
+  });
+
+  // =============================================================================================
+  // TIER 2 — WRITE + admin, platform session only. A gateway key is refused here by omission:
+  // requireAuth rejects an `ekoa_gk_` bearer as an unparseable JWT.
+  // =============================================================================================
+  r.use(requireAuth);
 
   r.post('/documents', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, CreateDocumentRequest, req.body);
