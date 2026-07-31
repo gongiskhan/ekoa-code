@@ -1,0 +1,10 @@
+{
+  "runId": "20260729-104340-772ea6fd",
+  "profile": "feature",
+  "gatesConfig": {"test":true,"adversarialReview":true,"adversarialTest":true,"codexSliceReview":true,"design":true,"walkthrough":true,"deliberateRed":false,"mutation":false,"report":true,"foundation":true,"codexCheckpoint":true},
+  "slices": [
+    {"id":"S1","title":"settings-pages-and-tabs","status":"passed","kind":"ui"},
+    {"id":"S2","title":"nav-cleanup","status":"passed","kind":"ui"}
+  ],
+  "globalGate": {"status":"passed","buildableRemaining":0,"at":"2026-07-29T10:52:35Z"}
+}

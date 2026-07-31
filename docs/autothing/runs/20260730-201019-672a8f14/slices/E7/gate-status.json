@@ -2,8 +2,8 @@
   "slice": "E7",
   "title": "cortex-cli-generated-client",
   "kind": "api",
-  "status": "in_progress",
-  "commit": "efb5759 + a305c70",
+  "status": "passed",
+  "commit": "efb5759 + a305c70 + 0761096 + edf2041 + 990a81e",
   "gates": {
     "implement": {
       "status": "passed",
@@ -20,10 +20,12 @@
       "at": "2026-07-31T06:28:16Z"
     },
     "adversarialReview": {
-      "status": "reverifying",
-      "attempts": 2,
-      "detail": "7 findings fixed in a305c70; reviewer asked to ATTACK THE REDACTION ITSELF (the new surface) rather than just re-run the original repros",
-      "at": "2026-07-31T07:28:27Z"
+      "status": "passed",
+      "verdict": "CONFIRMED",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 4,
+      "detail": "Round 1: 7 findings incl. TWO key-leakage paths to stderr. Round 2 found a REGRESSION the fix introduced (stderr EPIPE reporting a failed command as success - the drain deletes a capture on exit 0) plus 4 more, and attacked the redaction itself with 15 encodings. Round 3 CONFIRMED all five, independently reproducing the revert proof (symmetric loop -> 1 failed on the stderr case alone).",
+      "at": "2026-07-31T13:11:42Z"
     },
     "codexSliceReview": {
       "status": "skipped",
@@ -38,8 +40,13 @@
       "reason": "kind-conditional"
     },
     "walkthrough": {
-      "status": "pending",
-      "mode": "asciinema"
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/E7/evidence.cast",
+      "videoSha256": "c8e67882e454715e...",
+      "videoBytes": 793,
+      "selfVerified": "CLI suite 74 passing",
+      "at": "2026-07-31T13:11:42Z"
     },
     "diagrams": {
       "status": "passed",

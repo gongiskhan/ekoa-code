@@ -36,12 +36,12 @@ Capabilities are implemented once in Cortex and reachable by an ordinary user-ke
 | G5 | cortex-automations view fitting | 1 | passed |
 | G6 | Capability-contract docs, both repos | 3 | passed |
 | G4 | Import, shadow, dated comparator | 4 | passed |
-| E7 | cortex CLI + generated client | 3 | **re-verification outstanding** |
-| G1 | cortex-client fitting | 2 | **re-verification outstanding** |
-| G3 | basic-memory backend switch | 2 | **re-verification outstanding** |
+| E7 | cortex CLI + generated client | 4 | passed |
+| G1 | cortex-client fitting | 4 | passed |
+| G3 | basic-memory backend switch | 3 | passed |
 
 Run-level: deliberate-red **passed**; independent test pass **passed**; mutation — see below;
-built-in security review and the terminal verdict pending.
+**security review passed with two HIGH blockers found and fixed** (below). All 15 slices closed.
 
 ## NEEDS HUMAN EYES
 
@@ -56,8 +56,16 @@ built-in security review and the terminal verdict pending.
 2. **Codex was unavailable for the whole run**, then disabled by you. Cross-model decorrelation is
    genuinely absent. Every other decorrelation held (per-slice fresh-context review, the run-level
    independent test pass, the built-in security review).
-3. **Three slices await final re-verification** (E7, G1, G3). All three are committed *with* their review
-   fixes; what is missing is the confirming verdict.
+3. **The run-level security review found two HIGH blockers, both proven live, both now fixed.**
+   (a) A standing consent approval was bound to a caller-supplied command shape rather than the one the
+   run was awaiting, so a key could bank an approval the user was never shown — the inverse of the hole
+   the code's own docstring says it closed. (b) The operator-configurable `vault_dir` and
+   `memory_dir` were interpolated unquoted into the hook command written to
+   `~/.claude/settings.json`, which is executed as a shell command on every session end and
+   pre-compact — a shell injection on a recurring trigger. Both have regression tests verified to fail on
+   revert. **Five MEDIUM findings remain open and are listed in the run log**, the sharpest being that the
+   CLI redacts only the failure half (a 200 body echoing the key prints verbatim) and that the same key
+   also authenticates the LLM gateway, which the published spec does not mention.
 4. **The 14-day shadow review falls due 2026-08-14**, recorded in `garrison:docs/DECISIONS.md`. Its three
    outcomes are named there. The comparator now fails loudly once that date passes, including when the
    CLI is absent.

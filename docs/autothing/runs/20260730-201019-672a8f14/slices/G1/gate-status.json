@@ -2,7 +2,7 @@
   "slice": "G1",
   "title": "cortex-client-fitting-install",
   "kind": "api",
-  "status": "in_progress",
+  "status": "passed",
   "commit": "d7591d7",
   "gates": {
     "implement": {

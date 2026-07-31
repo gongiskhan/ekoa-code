@@ -2,8 +2,8 @@
   "slice": "G3",
   "title": "basic-memory-backend-switch",
   "kind": "api",
-  "status": "in_progress",
-  "commit": "757d519",
+  "status": "passed",
+  "commit": "757d519 + 0c98169",
   "gates": {
     "implement": {
       "status": "passed",
@@ -20,10 +20,12 @@
       "at": "2026-07-31T06:55:38Z"
     },
     "adversarialReview": {
-      "status": "needs-work",
-      "attempts": 1,
-      "detail": "Byte-identity of the default path PROVEN by the reviewer (pre/post setup.sh at identical paths, 6 configs, full tree+content diff: IDENTICAL) and the 112-combo spool matrix holds. But: the marker protection is ILLUSORY (apm install --force re-deploys over that path unconditionally, so nothing an operator writes there is durable and the restore branch is redundant in production); the fitting own Skill VIEW edits the LOCAL variant on the remote backend so UI edits are silently discarded; and the marker grep is unanchored, so a skill merely QUOTING the marker is overwritten on the DEFAULT path.",
-      "at": "2026-07-31T07:35:05Z"
+      "status": "passed",
+      "verdict": "APPROVE",
+      "by": "fresh-context (claude-fable-5)",
+      "attempts": 3,
+      "detail": "Round 1 found the marker protection was ILLUSORY (apm install --force re-deploys that path before every setup hook, so nothing written there is durable) plus an unanchored match that fired on the DEFAULT path - content-conditional, which a byte-diff structurally cannot catch. Round 2 APPROVE with NO defects: the reviewer verified hard rule 6 DIFFERENTIALLY against the true pre-switch commit rather than via the tests (CLI call log, artifact set, checksums, settings.json, stdout and stderr all identical modulo sandbox path; capture-session.py run against an identical payload gives a byte-identical note), and re-probed all six precedence combinations and the flip-flop itself.",
+      "at": "2026-07-31T12:40:44Z"
     },
     "codexSliceReview": {
       "status": "skipped",
@@ -34,8 +36,13 @@
       "reason": "kind-conditional"
     },
     "walkthrough": {
-      "status": "pending",
-      "mode": "asciinema"
+      "status": "passed",
+      "mode": "asciinema",
+      "evidence": "slices/G3/evidence.cast",
+      "videoSha256": "543629496c53af3d...",
+      "videoBytes": 708822,
+      "selfVerified": "backend suite passing",
+      "at": "2026-07-31T12:40:44Z"
     }
   }
 }

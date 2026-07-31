@@ -79,21 +79,21 @@
       "title": "cortex-cli-generated-client",
       "repo": "ekoa-code",
       "kind": "api",
-      "status": "in_progress"
+      "status": "passed"
     },
     {
       "id": "G1",
       "title": "cortex-client-fitting-install",
       "repo": "garrison",
       "kind": "api",
-      "status": "in_progress"
+      "status": "passed"
     },
     {
       "id": "G3",
       "title": "basic-memory-backend-switch",
       "repo": "garrison",
       "kind": "api",
-      "status": "in_progress"
+      "status": "passed"
     },
     {
       "id": "G5",
@@ -126,23 +126,15 @@
     }
   ],
   "globalGate": {
-    "status": "in_progress",
-    "buildableRemaining": 3,
-    "deliberateRed": {
-      "status": "passed",
-      "at": "2026-07-31T02:56:24Z",
-      "detail": "schema-coverage bit (50 vs pinned 49); mount-coverage correctly did NOT (documented router-level limit, empirically confirmed); probe restored, gates green"
-    },
-    "decorrelatedVerification": {
-      "status": "passed",
-      "at": "2026-07-31T04:17:29Z",
-      "detail": "~430 assertions, live HTTP against the real compiled server; all 27 documented ops conform; 1 REAL defect (unenforced automation visibility) + 2 spec divergences + 5 observations; run-log caps and _shared honestly unverifiable without a model credential"
-    },
-    "mutation": {
-      "status": "passed-by-substitute",
-      "at": "2026-07-31T12:11:39Z",
-      "detail": "NOT a mutation-tool run. Every fix in the run was revert-proofed - reverted, covering test observed to FAIL, failure text recorded - which is semantic rather than syntactic mutation and caught three tests that passed for the wrong reason (an eviction test green against pre-fix code until BOTH layers were reverted; a jail non-tautology proven by reverting one anchor line; a docs test that passes in both states BY DESIGN and is labelled so). NOT COVERED: untouched pre-existing paths were not mutated - a tool run over api/src/memvault and api/src/auth is recommended, not claimed."
-    }
+    "status": "passed",
+    "reducedBar": true,
+    "at": "2026-07-31T13:23:59Z",
+    "buildableRemaining": 0,
+    "gatesDisabled": [
+      "codex-slice",
+      "codex-checkpoint"
+    ],
+    "detail": "15/15 slices passed. api 236 files / 2340 passed / 1 skipped / 0 failed; garrison 159/159 across 8 files; shared 60/60; CLI 74/74. typecheck 0, lint 0 errors, gate:sast 0, chokepoint 0, garrison-grep 0, gate:openapi 0, gate:client-drift 0, gitleaks 0. Security review issues-fixed (2 HIGH, both proven live, both with revert-proofed regression tests). Deliberate-red passed. Independent test pass passed. Mutation passed-by-substitute. Cross-model decorrelation ABSENT - operator-disabled, openly recorded."
   },
   "assumptions_confirmed": [
     "garrison-repo-identity confirmed by operator 2026-07-31"

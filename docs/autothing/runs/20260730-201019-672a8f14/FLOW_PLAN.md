@@ -16,7 +16,7 @@ Derived from RUN_SPEC.md (same dir). Two repos: ekoa-code (E*, A0) and ~/dev/gar
 | 8 | E6 | OpenAPI spec generator + committed cortex.v1.json + drift gate | ekoa-code | api | 5 | after E5 | passed |
 | 9 | E7 | cortex CLI + generated client workspace (clients/cortex-cli) + lint zone + diagrams | ekoa-code | api | 8 | after E6 | pending |
 | 10 | G1 | cortex-client fitting: pinned-clone CLI install + verify (dogfood-dev only) | garrison | api | 6 | after E7 | pending |
-| 11 | G3 | basic-memory backend switch (`backend: local\|cortex`, local default; SKILL swap) | garrison | api | 5 | after G1+G2+E3 | pending |
+| 11 | G3 | basic-memory backend switch | garrison | api | 5 | after G1+G2+E3 | passed |
 | 12 | G5 | cortex-automations view fitting (connector kind, skill-first) | garrison | api | 5 | after G1 | passed |
 | 13 | G4 | One-time import + shadow dual-write + daily comparator | garrison | api | 6 | after G3 | passed |
 | 14 | G6 | Docs + hard rules both repos (CAPABILITY_CONTRACT.md x2, CLAUDE/AGENTS sections, stale-doc reconciliation) | both | api | 4 | after A0 | passed |
