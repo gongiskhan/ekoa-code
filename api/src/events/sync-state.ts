@@ -22,10 +22,15 @@
  *      (`duplicatesSuppressed++`, never data loss / never a cross-key leak). Acceptable, documented
  *      v1 behaviour — raise the cap (or shard the key finer) if a real source ever approaches it.
  *
- * CONCURRENCY: like listener-state, the mutators are read-modify-put WITHOUT a CAS loop. The
- * platform runs at most one verified-sync per key at a time (one poll/run per action), so there is
- * no concurrent writer to race; a future concurrent driver must add CAS here.
+ * CONCURRENCY: the platform runs at most one verified-sync per key at a time (one poll/run per
+ * action - the CS6 obligation #serialize), so in normal operation there is no concurrent writer. The
+ * completeness reasoning assumes that serialization. Even so, the terminal mutators go through the
+ * store's CAS `update((cur) => ...)` path (bounded-retry compare-and-swap on `_rev`), NOT a blind
+ * read-modify-put, so an accidental overlap re-reads and re-applies rather than silently clobbering a
+ * concurrent write. A mutator whose row does not yet exist creates the default row first, then
+ * updates it (create-then-update).
  */
+import { createHash } from 'node:crypto';
 import { syncState, syncReports } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 import type { SyncRunReport } from '@ekoa/shared';
@@ -69,9 +74,16 @@ export const SEEN_HARD_CAP = 2000;
 /** How many `SyncRunReport`s to keep per key. */
 export const REPORT_HISTORY_CAP = 50;
 
-/** Deterministic `_id`: `${orgId}::${integrationKey}::${actionKey}`. */
+/**
+ * Deterministic, INJECTIVE `_id` for one logical sync. A raw `::` join is NOT injective — a component
+ * that itself contains `::` collides with a differently-split tuple (e.g. `('a::b','c','d')` and
+ * `('a','b::c','d')` both join to `a::b::c::d`, silently sharing one state row). So the tuple is
+ * JSON-encoded and hashed, exactly as `definitionIdFor` (integrations/definition-store.ts) argues for
+ * its own composite id: no separator can collide, and the id is stable across runs. */
 export function syncStateId(key: SyncStateKey): string {
-  return `${key.orgId}::${key.integrationKey}::${key.actionKey}`;
+  return createHash('sha256')
+    .update(JSON.stringify([key.orgId, key.integrationKey, key.actionKey]))
+    .digest('hex');
 }
 
 function defaultDoc(key: SyncStateKey): SyncStateDoc {
@@ -127,6 +139,26 @@ export async function writeSyncState(doc: SyncStateDoc): Promise<void> {
 }
 
 /**
+ * Compare-and-swap mutate of the state row (Finding 3): ensure the row exists, then apply `mutate`
+ * through the store's `update((cur) => ...)` CAS path (bounded-retry on `_rev` drift) so a concurrent
+ * write cannot be silently lost. `mutate` receives the NORMALISED current doc and returns the next
+ * one. If the row does not yet exist we create the default first (create-then-update); a lost create
+ * race is fine (`insert` returns false, the winner's row is what `update` then reads).
+ */
+async function mutateState(
+  key: SyncStateKey,
+  mutate: (cur: SyncStateDoc) => SyncStateDoc,
+): Promise<void> {
+  const id = syncStateId(key);
+  if (!(await syncState.get(id))) await syncState.insert(defaultDoc(key) as Doc);
+  const updated = await syncState.update(id, (cur) => mutate(normalize(cur, key)) as Doc);
+  if (!updated) {
+    // The row was deleted between the ensure and the CAS (not expected under #serialize) — recreate.
+    await writeSyncState(mutate(defaultDoc(key)));
+  }
+}
+
+/**
  * Bound the seen-set: dedup by ref (last wins), drop entries older than `watermark - MARGIN` (when
  * the watermark is a parseable date), then keep only the newest `SEEN_HARD_CAP` by `itemDate`.
  */
@@ -145,6 +177,15 @@ export function pruneSeen(refs: SeenRef[], watermark: string | null): SeenRef[] 
   }
 
   out.sort((a, b) => dateKey(b.itemDate) - dateKey(a.itemDate)); // newest first
+  if (out.length > SEEN_HARD_CAP) {
+    // Hard-cap overflow drops the OLDEST refs; a dropped-then-re-seen item re-lands idempotently, but
+    // the eviction must not be SILENT (it signals the cap ASSUMPTION being approached). No seam is
+    // wired into this pure helper, so surface it on the console per the review's guidance.
+    console.warn(
+      `[sync-state] seen-set hard-cap overflow: ${out.length} refs exceed SEEN_HARD_CAP=${SEEN_HARD_CAP}; ` +
+        `dropping ${out.length - SEEN_HARD_CAP} oldest by itemDate`,
+    );
+  }
   return out.slice(0, SEEN_HARD_CAP);
 }
 
@@ -153,15 +194,14 @@ function dateKey(s: string): number {
   return Number.isNaN(d) ? -Infinity : d;
 }
 
-/** On `complete`: advance the watermark, absorb `newSeen`, reset BOTH streaks. */
+/** On `complete`: advance the watermark, absorb `newSeen`, reset BOTH streaks. CAS-guarded. */
 export async function advanceWatermark(
   key: SyncStateKey,
   watermark: string,
   newSeen: SeenRef[],
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  const cur = await readSyncState(key);
-  await writeSyncState({
+  await mutateState(key, (cur) => ({
     ...cur,
     watermark,
     seenRefs: pruneSeen([...cur.seenRefs, ...newSeen], watermark),
@@ -169,55 +209,52 @@ export async function advanceWatermark(
     lastOutcome: 'complete',
     consecutiveIncomplete: 0,
     consecutiveFailures: 0,
-  });
+  }));
 }
 
-/** On `incomplete`: absorb refs into the seen-set; the watermark STAYS put. */
+/** On `incomplete`: absorb refs into the seen-set; the watermark STAYS put. CAS-guarded. */
 export async function absorbRefs(
   key: SyncStateKey,
   refs: SeenRef[],
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  const cur = await readSyncState(key);
-  await writeSyncState({
+  await mutateState(key, (cur) => ({
     ...cur,
     seenRefs: pruneSeen([...cur.seenRefs, ...refs], cur.watermark),
     lastRunAt: nowIso,
-  });
+  }));
 }
 
 /** On `incomplete`: record the proved-partial run (watermark + seen-set left as `absorbRefs` set
  *  them). Increments the incomplete streak and resets the failure streak (a proved miss is not a
- *  machinery error). */
+ *  machinery error). CAS-guarded. */
 export async function bumpIncomplete(
   key: SyncStateKey,
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  const cur = await readSyncState(key);
-  await writeSyncState({
+  await mutateState(key, (cur) => ({
     ...cur,
     lastRunAt: nowIso,
     lastOutcome: 'incomplete',
     consecutiveIncomplete: cur.consecutiveIncomplete + 1,
     consecutiveFailures: 0,
-  });
+  }));
 }
 
 /** On `failed`: record the machinery error. Watermark AND seen-set are left untouched (spread from
- *  the current row) — nothing moves. */
+ *  the current row) — nothing moves. CAS-guarded. */
 export async function bumpFailure(
   key: SyncStateKey,
   error: string,
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  const cur = await readSyncState(key);
-  await writeSyncState({
+  await mutateState(key, (cur) => ({
     ...cur,
     lastRunAt: nowIso,
     lastOutcome: 'failed',
     consecutiveFailures: cur.consecutiveFailures + 1,
     lastError: error.slice(0, 1000),
-  });
+  }));
 }
 
 /** The read view the orchestrator needs. */
@@ -235,6 +272,9 @@ export async function readSyncSnapshot(key: SyncStateKey): Promise<SyncStateSnap
  *  to the syncState row). Prunes reports older than the newest `REPORT_HISTORY_CAP` for the key. */
 export async function persistSyncReport(key: SyncStateKey, report: SyncRunReport): Promise<void> {
   const stateKey = syncStateId(key);
+  // The `insert` boolean is intentionally IGNORED: the report history is an append-only audit trail,
+  // so a duplicate report id (the same run persisted twice) is a harmless no-op, not an error to
+  // surface. This is audit-only bookkeeping — no completeness invariant rides on the return value.
   await syncReports.insert({ ...report, _id: report.id, stateKey } as Doc);
   const rows = await syncReports.find({ stateKey }, { startedAt: -1 });
   if (rows.length > REPORT_HISTORY_CAP) {

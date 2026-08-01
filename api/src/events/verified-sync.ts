@@ -22,10 +22,41 @@
  * WHY no silent miss (the two invariants together): (1) because refs are absorbed only AFTER every
  * new item is landed, the seen-set can never name an unlanded item — so dedup can never skip an item
  * that was not already durably landed; (2) because the watermark advances only on a `complete`
- * outcome (pass 2 revealed nothing pass 1 missed AND any count check matched), a proved-partial run
- * leaves the window open to be re-swept. A machinery `failed` (an enumerate returning `ok:false`)
- * moves nothing at all. A genuinely missed item is thus either landed-and-absorbed this run, or the
- * window stays open until a run comes back clean; it is never both unlanded and behind the cursor.
+ * outcome (pass 2 revealed nothing pass 1 missed AND completeness was PROVED - either both passes
+ * reached the end of the window, or a page-total count check matched), a proved-partial run - which
+ * now INCLUDES a run whose passes truncated at `maxPages` without such proof - leaves the window open
+ * to be re-swept. A machinery `failed` (an enumerate returning `ok:false`) moves nothing at all. A
+ * genuinely missed item is thus either landed-and-absorbed this run, or the window stays open until a
+ * run comes back clean; it is never both unlanded and behind the cursor.
+ *
+ * ================================================================================================
+ * ENUMERATE/LAND CONTRACT (CS6 MUST GUARANTEE)
+ * ------------------------------------------------------------------------------------------------
+ * The completeness proof is only as sound as the two injected seams. Any CS6 wiring (the HTTP Citius
+ * connector today, an engine run later) MUST honour every clause below; a violation reintroduces the
+ * silent-miss vector this module exists to close.
+ *
+ *   (1) #complete-or-ok:false - `enumerate` is COMPLETE-OR-`ok:false`. It MUST NOT return `ok:true`
+ *       with a partially-swept window UNLESS it either sets `reachedEnd:false` (the window was
+ *       truncated at `maxPages`) OR supplies `pageTotal` (so the count check can independently prove
+ *       the sweep). Now ENFORCED by the `clean` gate: a clean-but-truncated pass with neither proof
+ *       is `incomplete`, not `complete`, so the watermark cannot advance past unpaged items.
+ *
+ *   (2) #visibility-monotonic - the enumeration cursor MUST be monotonic in VISIBILITY, not in
+ *       item-timestamp. An item must NEVER become visible to `enumerate` AFTER the window ceiling
+ *       that would exclude it (a source that back-dates a late-published item would slip it behind
+ *       the advancing watermark, unseen). If the source can publish late, the caller MUST set
+ *       `untilSkewMs` beyond the source's maximum publish lag so the ceiling stays behind that lag.
+ *
+ *   (3) #land-throws-or-duplicate - `land` MUST THROW on a real land failure (the throw propagates,
+ *       the run ends `failed`, and NOTHING moves) and return `{landed:false}` ONLY for a genuine
+ *       deterministic-id duplicate (already landed). Returning `{landed:false}` for a transient
+ *       failure would mark the ref "seen" for an item that never landed - a silent drop.
+ *
+ *   (4) #serialize - at most ONE verified-sync per key runs at a time (one poll/run per action). The
+ *       durable state mutators are CAS-guarded so an accidental overlap cannot silently clobber a
+ *       concurrent write, but the completeness reasoning above still assumes serialized runs per key.
+ * ================================================================================================
  */
 import type { SyncRunReport, SyncOutcome, SyncSessionEvent } from '@ekoa/shared';
 
@@ -82,9 +113,11 @@ export interface EnumerateWindow {
 }
 
 /** Result of one enumeration pass. `ok:false` is a MACHINERY failure (→ `failed`), never an empty
- *  result (an empty window is `ok:true` with `items:[]`). `pageTotal`, when the source advertises
- *  it, drives the optional count reconciliation. `sessionEvents` lets a session-managing enumerator
- *  report its lifecycle for the report. */
+ *  result (an empty window is `ok:true` with `items:[]`). `reachedEnd` is LOAD-BEARING (contract
+ *  clause #complete-or-ok:false): it MUST be `false` whenever the pass truncated at `maxPages`
+ *  without exhausting the window - only then, or with a matching `pageTotal`, can a clean run be
+ *  `complete`. `pageTotal`, when the source advertises it, drives the optional count reconciliation.
+ *  `sessionEvents` lets a session-managing enumerator report its lifecycle for the report. */
 export type EnumerateResult =
   | {
       ok: true;
@@ -105,16 +138,28 @@ export interface RunVerifiedSyncInput {
   syncKey: string;
   orgId: string;
   /** The window ceiling this run advances the watermark to on `complete`. Defaults to the run's
-   *  start time (`clock()` ISO) — the inclusive-from-W, up-to-now sweep of the poll precedent. */
+   *  start time held back by `untilSkewMs` — the inclusive-from-W, up-to-(now-skew) sweep of the poll
+   *  precedent. An explicit value overrides both the clock and the skew. */
   until?: string;
-  /** Per-pass page bound handed to `enumerate`. */
+  /** Hold the default window ceiling this many ms behind the run clock to absorb source PUBLISH LAG
+   *  (an item that becomes visible to `enumerate` slightly after its own timestamp — see contract
+   *  clause #visibility-monotonic). When `until` is not set explicitly, `until = clock() -
+   *  untilSkewMs`. Default 0 (ceiling = now); plumb a value at least the source's max publish lag. */
+  untilSkewMs?: number;
+  /** Per-pass page bound handed to `enumerate`; also recorded on the report as truncation evidence. */
   maxPages?: number;
   /** Deterministic report id (tests set it); otherwise derived from `syncKey` + start time. */
   reportId?: string;
 
-  /** Enumerate a window. Called TWICE per run with the SAME window (the two verification passes). */
+  /** Enumerate a window. Called TWICE per run with the SAME window (the two verification passes).
+   *  CONTRACT: MUST be complete-or-`ok:false` (#complete-or-ok:false) — never `ok:true` for a
+   *  partially-swept window unless it sets `reachedEnd:false` or supplies `pageTotal`; and its cursor
+   *  MUST be monotonic in VISIBILITY, not item-timestamp (#visibility-monotonic). See module header. */
   enumerate: (window: EnumerateWindow) => Promise<EnumerateResult>;
-  /** Land one item. Idempotent deterministic-id insert: `landed:false` = already present. */
+  /** Land one item. Idempotent deterministic-id insert: `landed:false` = already present.
+   *  CONTRACT (#land-throws-or-duplicate): MUST THROW on a real land failure (propagates → `failed`,
+   *  nothing moves) and return `{landed:false}` ONLY for a genuine deterministic-id duplicate — never
+   *  for a transient failure (that would mark an unlanded item "seen"). See module header. */
   land: (item: EnumeratedItem) => Promise<{ landed: boolean }>;
   store: SyncStateStore;
   clock: () => Date;
@@ -132,9 +177,12 @@ const DEFAULT_MAX_PAGES = 50;
 export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<SyncRunReport> {
   const { enumerate, land, store, clock, recordLesson } = input;
   const maxPages = input.maxPages ?? DEFAULT_MAX_PAGES;
+  const untilSkewMs = input.untilSkewMs ?? 0;
 
-  const startedAt = clock().toISOString();
-  const until = input.until ?? startedAt;
+  const startClock = clock();
+  const startedAt = startClock.toISOString();
+  // Default ceiling = now held back by the publish-lag skew (#visibility-monotonic); explicit wins.
+  const until = input.until ?? new Date(startClock.getTime() - untilSkewMs).toISOString();
   const reportId = input.reportId ?? `${input.syncKey}::${startedAt}`;
 
   const state = await store.read();
@@ -160,6 +208,7 @@ export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<Sync
       W,
       error: p1.error,
       sessionEvents,
+      maxPages,
     });
   }
   if (p1.result.sessionEvents) sessionEvents.push(...p1.result.sessionEvents);
@@ -189,7 +238,13 @@ export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<Sync
       W,
       error: p2.error,
       sessionEvents,
-      pass1: { pages: p1.result.pages, itemsSeen: pass1Items.length, newRefs: pass1New.length },
+      maxPages,
+      pass1: {
+        pages: p1.result.pages,
+        itemsSeen: pass1Items.length,
+        newRefs: pass1New.length,
+        reachedEnd: p1.result.reachedEnd,
+      },
       // Pass 1's lands are durable even though the run is unverifiable; report them honestly.
       landed,
       duplicatesSuppressed,
@@ -220,7 +275,14 @@ export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<Sync
           match: p1.result.pageTotal === pass1Items.length,
         };
 
-  const clean = refsOnlyInPass2.length === 0 && (countCheck ? countCheck.match : true);
+  // A run is `complete` only when it is clean at the ref level AND completeness was PROVED: either a
+  // count check matched, or — with no count check — BOTH passes reached the end of the window. A
+  // clean-but-truncated pass (both `reachedEnd:false`, no matching count) is a proved-partial run:
+  // treated as `incomplete` so the watermark stays at W and the window reopens for a re-sweep, rather
+  // than silently advancing past items that were never paged in (Finding 1, the silent-miss vector).
+  const clean =
+    refsOnlyInPass2.length === 0 &&
+    (countCheck ? countCheck.match : p1.result.reachedEnd && p2.result.reachedEnd);
   const outcome: SyncOutcome = clean ? 'complete' : 'incomplete';
 
   if (outcome === 'complete') {
@@ -242,8 +304,19 @@ export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<Sync
     outcome,
     window: { since: W, until },
     verification: {
-      pass1: { pages: p1.result.pages, itemsSeen: pass1Items.length, newRefs: pass1New.length },
-      pass2: { pages: p2.result.pages, itemsSeen: pass2Items.length, refsOnlyInPass2 },
+      pass1: {
+        pages: p1.result.pages,
+        itemsSeen: pass1Items.length,
+        newRefs: pass1New.length,
+        reachedEnd: p1.result.reachedEnd,
+      },
+      pass2: {
+        pages: p2.result.pages,
+        itemsSeen: pass2Items.length,
+        refsOnlyInPass2,
+        reachedEnd: p2.result.reachedEnd,
+      },
+      maxPages,
       ...(countCheck ? { countCheck } : {}),
     },
     landed,
@@ -266,7 +339,8 @@ async function finishFailed(
     W: string | null;
     error: string;
     sessionEvents: SyncSessionEvent[];
-    pass1?: { pages: number; itemsSeen: number; newRefs: number };
+    maxPages: number;
+    pass1?: { pages: number; itemsSeen: number; newRefs: number; reachedEnd: boolean };
     landed?: number;
     duplicatesSuppressed?: number;
   },
@@ -280,8 +354,10 @@ async function finishFailed(
     outcome: 'failed',
     window: { since: ctx.W, until: ctx.until },
     verification: {
-      pass1: ctx.pass1 ?? { pages: 0, itemsSeen: 0, newRefs: 0 },
-      pass2: { pages: 0, itemsSeen: 0, refsOnlyInPass2: [] },
+      // A `failed` run proved nothing about completeness: `reachedEnd:false` on both passes.
+      pass1: ctx.pass1 ?? { pages: 0, itemsSeen: 0, newRefs: 0, reachedEnd: false },
+      pass2: { pages: 0, itemsSeen: 0, refsOnlyInPass2: [], reachedEnd: false },
+      maxPages: ctx.maxPages,
     },
     landed: ctx.landed ?? 0,
     duplicatesSuppressed: ctx.duplicatesSuppressed ?? 0,

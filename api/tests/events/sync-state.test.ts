@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { SyncRunReport } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -44,9 +44,17 @@ beforeEach(async () => {
   await syncReports.deleteMany({});
 });
 
-describe('deterministic key', () => {
-  it('composes `_id` as `${orgId}::${integrationKey}::${actionKey}`', () => {
-    expect(syncStateId(KEY)).toBe('org1::citius::consulta');
+describe('deterministic, injective key (Finding 5)', () => {
+  it('is a stable sha256 hex of the (orgId, integrationKey, actionKey) tuple (not a raw `::` join)', () => {
+    expect(syncStateId(KEY)).toBe(syncStateId({ ...KEY })); // stable across calls
+    expect(syncStateId(KEY)).toMatch(/^[0-9a-f]{64}$/); // sha256 hex, injective encoding
+  });
+
+  it('is INJECTIVE: a component containing `::` cannot collide with a differently-split tuple', () => {
+    // A raw `::` join would render both tuples as `a::b::c::d` and silently share one state row.
+    expect(syncStateId({ orgId: 'a::b', integrationKey: 'c', actionKey: 'd' })).not.toBe(
+      syncStateId({ orgId: 'a', integrationKey: 'b::c', actionKey: 'd' }),
+    );
   });
 });
 
@@ -76,6 +84,41 @@ describe('advanceWatermark (on complete)', () => {
     expect(doc.consecutiveIncomplete).toBe(0);
     expect(doc.consecutiveFailures).toBe(0);
     expect(doc.lastOutcome).toBe('complete');
+  });
+});
+
+describe('CAS-guarded mutators (Finding 3: per-key write race)', () => {
+  it('two SEQUENTIAL advanceWatermark calls compose (watermark = last, seen = union)', async () => {
+    await advanceWatermark(KEY, 'W1', [{ ref: 'A', itemDate: '2026-07-29T00:00:00.000Z' }]);
+    await advanceWatermark(KEY, 'W2', [{ ref: 'B', itemDate: '2026-07-29T02:00:00.000Z' }]);
+
+    const doc = await readSyncState(KEY);
+    expect(doc.watermark).toBe('W2');
+    expect(new Set(doc.seenRefs.map((r) => r.ref))).toEqual(new Set(['A', 'B']));
+  });
+
+  it('two CONCURRENT advanceWatermark calls both land — no lost update (CAS re-reads on _rev drift)', async () => {
+    await Promise.all([
+      advanceWatermark(KEY, 'W1', [{ ref: 'A', itemDate: '2026-07-29T00:00:00.000Z' }]),
+      advanceWatermark(KEY, 'W2', [{ ref: 'B', itemDate: '2026-07-29T02:00:00.000Z' }]),
+    ]);
+
+    const doc = await readSyncState(KEY);
+    // Neither writer clobbered the other: both refs are absorbed regardless of which won the race.
+    expect(new Set(doc.seenRefs.map((r) => r.ref))).toEqual(new Set(['A', 'B']));
+    expect(['W1', 'W2']).toContain(doc.watermark);
+  });
+
+  it('a later mutator re-reads the freshest row (stale snapshot is not reapplied) and bumps _rev', async () => {
+    await advanceWatermark(KEY, 'W1', []);
+    const stale = await readSyncState(KEY);
+    await advanceWatermark(KEY, 'W2', []); // bumps _rev past the stale snapshot
+    await bumpIncomplete(KEY); // built on the fresh row via CAS, not the stale one
+
+    const fresh = await readSyncState(KEY);
+    expect(fresh.watermark).toBe('W2'); // not rolled back to the stale W1
+    expect(fresh.consecutiveIncomplete).toBe(1);
+    expect(fresh._rev ?? 0).toBeGreaterThan(stale._rev ?? 0);
   });
 });
 
@@ -163,6 +206,23 @@ describe('seenRefs pruning', () => {
     );
     expect(out).toEqual([{ ref: 'x', itemDate: '2026-07-02T00:00:00.000Z' }]);
   });
+
+  it('WARNS (observable, not silent) when the hard cap slices off overflow refs (Finding 5)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const base = Date.parse('2026-06-01T00:00:00.000Z');
+      const many: SeenRef[] = Array.from({ length: SEEN_HARD_CAP + 5 }, (_, i) => ({
+        ref: `r-${i}`,
+        itemDate: new Date(base + i * 60_000).toISOString(),
+      }));
+      const out = pruneSeen(many, null);
+      expect(out.length).toBe(SEEN_HARD_CAP);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain('hard-cap overflow');
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('persistSyncReport', () => {
@@ -177,8 +237,9 @@ describe('persistSyncReport', () => {
       outcome: 'complete',
       window: { since: null, until: t },
       verification: {
-        pass1: { pages: 1, itemsSeen: 0, newRefs: 0 },
-        pass2: { pages: 1, itemsSeen: 0, refsOnlyInPass2: [] },
+        pass1: { pages: 1, itemsSeen: 0, newRefs: 0, reachedEnd: true },
+        pass2: { pages: 1, itemsSeen: 0, refsOnlyInPass2: [], reachedEnd: true },
+        maxPages: 50,
       },
       landed: 0,
       duplicatesSuppressed: 0,

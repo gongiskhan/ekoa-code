@@ -258,7 +258,7 @@ export const webhookAudit = new Store<Doc>('webhook_audit');
  *  ONLY after every polled item is durably enqueued, so a crash re-polls rather than drops. */
 export const listenerState = new Store<Doc>('listener_state');
 /** Per-action completeness-verification state (slice CS3): one row per
- *  `(orgId, integrationKey, actionKey)` (`_id` = `${orgId}::${integrationKey}::${actionKey}`),
+ *  `(orgId, integrationKey, actionKey)` (`_id` = `sha256(JSON.stringify([orgId, integrationKey, actionKey]))`,
  *  holding the durable watermark, the bounded seen-set, and the incomplete/failure streaks. The
  *  two-pass orchestrator (events/verified-sync.ts) owns the discipline; the typed accessors live in
  *  events/sync-state.ts, which WRAPS this collection (mirrors listenerState/listener-state.ts).

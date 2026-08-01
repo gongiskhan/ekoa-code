@@ -155,6 +155,98 @@ describe('runVerifiedSync — complete', () => {
   });
 });
 
+describe('runVerifiedSync — truncation / reachedEnd gate (Finding 1: silent-miss vector)', () => {
+  it('(a) both passes reachedEnd:false, no pageTotal, no new pass-2 refs → INCOMPLETE, watermark UNCHANGED, items still landed', async () => {
+    const store = makeFakeStore(); // watermark null
+    const landed: string[] = [];
+    // Both passes truncate identically at maxPages and the source advertises no total: the ref-level
+    // diff is empty, but the window was NOT proved swept — the pre-fix silent-miss vector.
+    const truncated = okResult(items(A, B), { reachedEnd: false, pages: 50 });
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        maxPages: 50,
+        enumerate: async () => truncated,
+        land: async (it) => {
+          landed.push(it.ref);
+          return { landed: true };
+        },
+      }),
+    );
+
+    expect(report.outcome).toBe('incomplete'); // NOT complete, despite the clean ref-level diff
+    expect(store.state.watermark).toBeNull(); // watermark did NOT advance past the unpaged tail
+    expect(report.verification.pass2.refsOnlyInPass2).toEqual([]); // clean at the ref level...
+    expect(report.verification.pass1.reachedEnd).toBe(false); // ...but truncated — the evidence
+    expect(report.verification.pass2.reachedEnd).toBe(false);
+    expect(report.verification.maxPages).toBe(50);
+    expect(landed.sort()).toEqual(['A', 'B']); // items still landed (at-least-once)
+    expect(store.state.consecutiveIncomplete).toBe(1);
+    expect(new Set(store.state.seenRefs.map((r) => r.ref))).toEqual(new Set(['A', 'B'])); // absorbed
+    expect(() => SyncRunReport.parse(report)).not.toThrow();
+  });
+
+  it('(b) reachedEnd:false BUT a matching countCheck independently proves the sweep → COMPLETE, watermark advances', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        enumerate: async () => okResult(items(A, B), { reachedEnd: false, pageTotal: 2 }),
+      }),
+    );
+
+    expect(report.outcome).toBe('complete'); // the count proves completeness even though truncated
+    expect(report.verification.countCheck).toEqual({ pageTotal: 2, enumerated: 2, match: true });
+    expect(report.verification.pass1.reachedEnd).toBe(false);
+    expect(store.state.watermark).toBe(CLOCK_ISO); // advanced
+    expect(() => SyncRunReport.parse(report)).not.toThrow();
+  });
+
+  it('(c) reachedEnd:true on both passes (the normal case) → COMPLETE, watermark advances', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({ store, enumerate: async () => okResult(items(A, B)) }), // reachedEnd:true default
+    );
+
+    expect(report.outcome).toBe('complete');
+    expect(report.verification.pass1.reachedEnd).toBe(true);
+    expect(report.verification.pass2.reachedEnd).toBe(true);
+    expect(report.verification.maxPages).toBeGreaterThan(0);
+    expect(store.state.watermark).toBe(CLOCK_ISO);
+  });
+});
+
+describe('runVerifiedSync — untilSkewMs (publish-lag ceiling, Finding 2)', () => {
+  it('derives `until` as clock() - untilSkewMs when `until` is not set explicitly', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        until: undefined, // force derivation from the clock
+        untilSkewMs: 60_000, // hold the ceiling 1 minute behind `now`
+        enumerate: async () => okResult(items(A)),
+      }),
+    );
+
+    expect(report.window.until).toBe('2026-07-30T11:59:00.000Z'); // CLOCK_ISO (12:00:00) minus 60s
+    expect(report.outcome).toBe('complete');
+    expect(store.state.watermark).toBe('2026-07-30T11:59:00.000Z'); // advances to the held-back ceiling
+  });
+
+  it('an explicit `until` overrides the skew (skew only affects the derived default)', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        until: '2026-07-30T09:00:00.000Z',
+        untilSkewMs: 60_000,
+        enumerate: async () => okResult(items(A)),
+      }),
+    );
+    expect(report.window.until).toBe('2026-07-30T09:00:00.000Z');
+  });
+});
+
 describe('runVerifiedSync — incomplete (a proved miss)', () => {
   it('pass-1 miss revealed in pass 2: outcome incomplete, watermark UNCHANGED, missed item still landed', async () => {
     const store = makeFakeStore(); // watermark null

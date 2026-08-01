@@ -50,10 +50,20 @@ export type SyncCountCheck = z.infer<typeof SyncCountCheck>;
 
 /** The two-pass verification evidence. `pass1.newRefs` is a COUNT (references not already in the
  *  seen-set); `pass2.refsOnlyInPass2` is the LIST of references pass 2 surfaced that pass 1 did not
- *  — the load-bearing proof, kept as concrete strings because a non-empty list IS the miss. */
+ *  - the load-bearing proof, kept as concrete strings because a non-empty list IS the miss.
+ *
+ *  `pass1.reachedEnd` / `pass2.reachedEnd` record whether each pass swept the window to its end (vs
+ *  truncated at `maxPages`), and `maxPages` records the bound in force. These make a `complete`
+ *  report AUDITABLE FOR TRUNCATION: with a `complete` outcome, either both `reachedEnd` are true or a
+ *  matching `countCheck` is present - a clean-but-truncated pass with neither can never be `complete`
+ *  (see the `clean` gate in verified-sync.ts). Without this evidence a run truncated identically on
+ *  both passes could look all-clean and silently advance the watermark past unpaged items. */
 export const SyncVerification = z.object({
-  pass1: z.object({ pages: Count, itemsSeen: Count, newRefs: Count }),
-  pass2: z.object({ pages: Count, itemsSeen: Count, refsOnlyInPass2: z.array(z.string()) }),
+  pass1: z.object({ pages: Count, itemsSeen: Count, newRefs: Count, reachedEnd: z.boolean() }),
+  pass2: z.object({ pages: Count, itemsSeen: Count, refsOnlyInPass2: z.array(z.string()), reachedEnd: z.boolean() }),
+  /** The per-pass page bound in force this run: the number of pages beyond which a pass truncates
+   *  (`reachedEnd:false`). Recorded so a `complete` report proves the window was not cut off here. */
+  maxPages: Count,
   countCheck: SyncCountCheck.optional(),
 });
 export type SyncVerification = z.infer<typeof SyncVerification>;
