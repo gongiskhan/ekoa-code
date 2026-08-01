@@ -1,0 +1,47 @@
+{
+  "slice": "A1",
+  "title": "Tenant-scoped definition store (private by default)",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "0e6a836",
+  "tag": "run-20260801-171149-A1",
+  "securityWall": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "garrison": "clean",
+    "encryptionKey": "clean",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "suites": [
+      "integration-definition-visibility (7 new)",
+      "integrations (162)"
+    ],
+    "note": "169 green; independently re-run by orchestrator",
+    "cases": 10
+  },
+  "adversarialReview": {
+    "status": "clean",
+    "by": "fresh-context general-purpose",
+    "verdict": "clean on tenancy, no cross-tenant leak; finding 1 (tier-symmetric global) + finding 2 (missing super-admin/injectivity coverage) fixed in 0e6a836; findings 3-5 are informational A2 notes"
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  },
+  "at": "2026-08-01T18:01:00Z"
+}

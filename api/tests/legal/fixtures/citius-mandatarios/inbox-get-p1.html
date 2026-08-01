@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+  <script type="text/javascript">
+  function __doPostBack(eventTarget, eventArgument) {
+    var theForm = document.forms['aspnetForm'];
+    theForm.__EVENTTARGET.value = eventTarget;
+    theForm.__EVENTARGUMENT.value = eventArgument;
+    theForm.submit();
+  }
+  </script>
+</head>
+<body>
+  <form name="aspnetForm" method="post" action="./CaixaCorreio.aspx" id="aspnetForm">
+    <input type="hidden" name="__VIEWSTATE" value="/wEPDwUKMTk4NzY1NDMyMA9kFgJmD2QWAgIBD2QWAg" />
+    <input type="hidden" name="__EVENTVALIDATION" value="/wEdAAQb1aXg" />
+    <h1>Caixa de correio &ndash; Notificações</h1>
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr>
+        <th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th>
+      </tr>
+      <tr class="rgRow">
+        <td>1234/26.0T8LSB</td>
+        <td>2026-06-15</td>
+        <td>Tribunal Judicial da Comarca de Lisboa</td>
+        <td>Citação</td>
+        <td><a href="Documento.aspx?docId=abc123&amp;t=not">Descarregar</a></td>
+      </tr>
+      <tr class="rgAltRow">
+        <td>5678/26.1T8PRT</td>
+        <td>2026-06-16</td>
+        <td>Tribunal Judicial da Comarca do Porto</td>
+        <td>Notificação</td>
+        <td>&nbsp;</td>
+      </tr>
+    </table>
+    <div class="pager">
+      <span>Páginas:</span>
+      <a href="CaixaCorreio.aspx?page=1">1</a>
+      <a href="CaixaCorreio.aspx?page=2">2</a>
+    </div>
+  </form>
+</body>
+</html>

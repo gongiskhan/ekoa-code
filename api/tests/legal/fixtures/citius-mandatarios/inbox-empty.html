@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+</head>
+<body>
+  <form name="aspnetForm" method="post" action="./CaixaCorreio.aspx" id="aspnetForm">
+    <input type="hidden" name="__VIEWSTATE" value="/wEPDwUKMTk4NzY1NDMyMA9kFgJmD2QWAgIBD2QWAj" />
+    <input type="hidden" name="__EVENTVALIDATION" value="/wEdAAQb1aZj" />
+    <h1>Caixa de correio &ndash; Notificações</h1>
+    <!-- A GENUINELY EMPTY inbox: the GridView renders its header row (ShowHeaderWhenEmpty) plus a
+         single EmptyDataTemplate cell, and ZERO data rows. This is ok:true rows:[], NOT an error. -->
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr>
+        <th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th>
+      </tr>
+      <tr class="rgEmpty">
+        <td colspan="5">Não existem notificações na caixa de correio.</td>
+      </tr>
+    </table>
+  </form>
+</body>
+</html>

@@ -87,3 +87,38 @@ export function parseCampoValorTable(html: string): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * Reads a single attribute value off one already-isolated HTML tag string, tolerant of
+ * attribute ORDER (scans the whole tag) and of double-quoted / single-quoted / unquoted
+ * values. Returns `null` when the attribute is absent, `''` for an explicitly empty value.
+ */
+function tagAttr(tag: string, name: string): string | null {
+  const re = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
+  const m = re.exec(tag);
+  if (!m) return null;
+  return m[1] ?? m[2] ?? m[3] ?? '';
+}
+
+/**
+ * Extracts the ASP.NET WebForms hidden form state from a page's HTML into a plain
+ * `name -> value` map: `__VIEWSTATE`, `__VIEWSTATEGENERATOR`, `__EVENTVALIDATION`,
+ * `__EVENTTARGET`, `__EVENTARGUMENT` and every other `<input type="hidden" name=.. value=..>`.
+ * Tolerant of attribute order and single/double/unquoted values (`tagAttr`); entity-decodes the
+ * captured value. Pure, no network. A WebForms POST must echo these fields back verbatim to
+ * keep a server-side session valid, so a later authenticated-replay slice (CS4) will re-POST
+ * exactly this map; CS1 only proves they are captured from a login/inbox page.
+ */
+export function parseHiddenFields(html: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const inputRe = /<input\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = inputRe.exec(html)) !== null) {
+    const tag = m[0];
+    if (!/\btype\s*=\s*["']?hidden["']?/i.test(tag)) continue;
+    const name = tagAttr(tag, 'name');
+    if (!name) continue;
+    out[name] = decodeEntities(tagAttr(tag, 'value') ?? '');
+  }
+  return out;
+}

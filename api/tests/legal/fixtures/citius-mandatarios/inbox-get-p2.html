@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+  <script type="text/javascript">
+  function __doPostBack(eventTarget, eventArgument) {
+    var theForm = document.forms['aspnetForm'];
+    theForm.__EVENTTARGET.value = eventTarget;
+    theForm.__EVENTARGUMENT.value = eventArgument;
+    theForm.submit();
+  }
+  </script>
+</head>
+<body>
+  <form name="aspnetForm" method="post" action="./CaixaCorreio.aspx" id="aspnetForm">
+    <input type="hidden" name="__VIEWSTATE" value="/wEPDwUKMTk4NzY1NDMyMA9kFgJmD2QWAgIBD2QWAh" />
+    <input type="hidden" name="__EVENTVALIDATION" value="/wEdAAQb1aYh" />
+    <h1>Caixa de correio &ndash; Notificações</h1>
+    <!-- Deliberately REORDERED columns (Data before Processo) to prove the parser maps by
+         header label, not by position. -->
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr>
+        <th>Data</th><th>Processo</th><th>Ato</th><th>Tribunal</th><th>Documento</th>
+      </tr>
+      <tr class="rgRow">
+        <td>2026-06-17</td>
+        <td>9012/26.2T8CBR</td>
+        <td>Citação</td>
+        <td>Tribunal Judicial da Comarca de Coimbra</td>
+        <td><a href="Documento.aspx?docId=def456">Descarregar</a></td>
+      </tr>
+    </table>
+    <div class="pager">
+      <span>Páginas:</span>
+      <a href="CaixaCorreio.aspx?page=1">1</a>
+      <a href="CaixaCorreio.aspx?page=2">2</a>
+    </div>
+  </form>
+</body>
+</html>
