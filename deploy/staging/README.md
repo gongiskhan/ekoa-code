@@ -34,7 +34,9 @@ the origin it was served from, and Caddy path-routes `/api` to the api container
 - A GCP VM (`e2-standard-2`, Ubuntu 24.04) with SSH via Tailscale/IAP - see the plan/runbook.
 - DNS: an `A` record `staging.ekoa.io` -> the VM's static IP, **DNS-only (grey cloud)** so Caddy's
   ACME challenge reaches the box directly. Ports 80 + 443 open to the internet (ACME needs them).
-- The repo cloned on the VM (deploy key or `gh auth`), on the intended commit.
+- The source on the VM at the intended commit. It is NOT a git clone in practice (see Deploy
+  below) - `~/ekoa-code` on the box has no `.git`, so anything documented as `git pull` will not
+  work there.
 
 ## Bring-up
 
@@ -80,7 +82,7 @@ docker compose ps                     # status
 docker compose logs -f api            # api logs (chat/build/automation)
 docker compose logs -f caddy          # edge / TLS issuance
 docker compose pull && docker compose up -d   # (n/a - images build locally)
-git pull && docker compose up -d --build      # deploy a new commit
+# see "Deploy a new commit" below - `git pull` does NOT work: the VM tree has no .git
 docker compose down                   # stop (volumes persist)
 docker compose down -v                # stop + WIPE data (mongo + api-data + certs)
 ```
@@ -89,3 +91,45 @@ docker compose down -v                # stop + WIPE data (mongo + api-data + cer
 
 Staging is disposable. `docker compose down -v` wipes local state; deleting the VM, its static
 IP, the firewall rules, and the DNS record removes it entirely. Nothing here touches production.
+
+## Deploy a new commit
+
+`~/ekoa-code` on the VM is an extracted tree, **not a clone** - it has no `.git`, so the older
+`git pull && docker compose up -d --build` in this file could never work there. Ship a pushed
+commit as an archive instead. This is deliberate and worth keeping: `git archive` uploads exactly
+the committed tree, with no local scratch, no `node_modules`, and no repo credentials on a
+public-facing box.
+
+```bash
+# on your machine, from a clean checkout of the pushed commit
+git archive --format=tar <sha> | gzip > /tmp/ekoa-<sha>.tgz
+gcloud compute scp /tmp/ekoa-<sha>.tgz ekoa-staging:~/ --zone europe-west4-a --tunnel-through-iap
+
+# on the VM
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+cp ~/ekoa-code/deploy/staging/.env ~/.env.staging.backup.$TS && chmod 600 ~/.env.staging.backup.$TS
+sudo docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep ekoa-staging > ~/images.before.$TS.txt
+mkdir ~/ekoa-code.new && tar xzf ~/ekoa-<sha>.tgz -C ~/ekoa-code.new
+cp ~/.env.staging.backup.$TS ~/ekoa-code.new/deploy/staging/.env && chmod 600 ~/ekoa-code.new/deploy/staging/.env
+mv ~/ekoa-code ~/ekoa-code.prev.$TS && mv ~/ekoa-code.new ~/ekoa-code
+cd ~/ekoa-code/deploy/staging && sudo docker compose up -d --build
+```
+
+**`.env` is gitignored, so it is NOT in the archive** - copy it across before the swap or the stack
+comes up with no secrets. Back it up outside the tree first; the swap moves the directory it lives in.
+
+**A failed build leaves staging UP.** `docker compose up -d --build` builds before it recreates, so
+a build error keeps the running containers serving the previous image. That is the safety property
+that makes this worth doing in place; do not "helpfully" `down` first.
+
+Verify the NEW code is live rather than trusting `/health` (which the OLD containers answer just as
+happily):
+
+```bash
+sudo docker ps --format '{{.Names}}\t{{.Status}}'          # api + web recently recreated
+curl -s -o /dev/null -w '%{http_code}\n' https://staging.ekoa.io/api/v1/memvault/notes  # 401 = mounted
+```
+
+A route that only exists in the new build answering **401** (auth required) rather than **404**
+(unmounted) is the cheap proof. Roll back by swapping `~/ekoa-code.prev.$TS` back and rebuilding;
+the previous image IDs are in `~/images.before.$TS.txt`.
