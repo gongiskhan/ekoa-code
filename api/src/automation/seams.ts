@@ -335,10 +335,23 @@ export function getCatalogSources(): CatalogSources {
 
 // ============================================================================
 // In-process browser context (ch02 `services/` automation-browser, port-as-is
-// but not yet built) — the persistent per-owner stealth Chromium context the
-// LocalBrowserSession runs against when no daemon is paired. Default throws an
-// honest "not available" (the engine only reaches it when the local-browser
-// fallback is enabled AND no daemon is connected).
+// but not yet built) — the stealth Chromium context the LocalBrowserSession
+// runs against when no daemon is paired. Default throws an honest "not
+// available" (the engine only reaches it when the local-browser fallback is
+// enabled AND no daemon is connected).
+//
+// THE PROVIDER MUST BE NON-PERSISTENT. This docblock used to describe it as a
+// "persistent per-owner" context; it never was — the composition root hands
+// back `browser.newContext()` (pinned by
+// api/tests/security/browser-context-lifecycle.test.ts), and it must keep
+// doing so. Two callers make that a security property rather than a detail:
+// `local-browser-session.ts` (no cookie jar shared across runs) and
+// `session-establishment.ts`, which calls `context.storageState()` right after
+// a login and stores the result as a credential-equivalent Cofre item. Against
+// a persistent per-owner profile that call means "capture the owner's WHOLE
+// cross-site cookie jar" — every site they were ever signed into, encrypted
+// into one item bound to one portal — and a login that merely reused stale
+// cookies would report itself as a successful re-establishment.
 // ============================================================================
 
 export type LocalBrowserContextProvider = (ownerUserId: string) => Promise<BrowserContext>;

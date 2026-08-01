@@ -37,6 +37,8 @@ export {
 
 export {
   captureSessionToCofre,
+  captureSessionWithGrant,
+  boundOriginsForEstablishedHost,
   originsFromStorageState,
   findSessionItemsForOrigin,
   markSessionUnhealthy,

@@ -151,6 +151,32 @@ export class SecretRegistry {
     return value;
   }
 
+  /**
+   * A registry NEVER serialises its contents. This is not decoration — it closes a live hole.
+   *
+   * The private state is a `Map` and a `Set`, which `JSON.stringify` renders as `{}`, so a registry
+   * looked harmless in a `JSON.stringify(result)` assertion. But `orderedSecrets` memoises into
+   * `orderedCache` as a plain ARRAY of `{ handle, value, forms }`, so the FIRST call to `redact()`
+   * turns the same object into one that stringifies every live credential in plaintext — including
+   * its base64 form. Registries are handed back on result objects (`typistLogin`,
+   * `deliverSecretToDaemon`, `ensureSession`) precisely so a caller can filter its streams, and
+   * those results are logged, persisted to step records and pushed onto SSE frames. A disclosure
+   * that only appears after a redaction has run is the worst possible shape for one.
+   *
+   * `toJSON` is the interception point every serialiser honours (`JSON.stringify`, and anything
+   * built on it), so the container is inert by construction rather than by every caller
+   * remembering. Values remain reachable through `redact()` — which is the whole point of holding
+   * one — and nowhere else.
+   */
+  toJSON(): { secrets: number; unmaskable: number } {
+    return { secrets: this.byValue.size, unmaskable: this.short.size };
+  }
+
+  /** Same for `util.inspect` / `console.log`, which do not call `toJSON`. */
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `SecretRegistry(${this.byValue.size} secrets, ${this.short.size} unmaskable)`;
+  }
+
   /** Redact every header VALUE (names are not secrets; values may be). */
   redactHeaderValues(headers: Record<string, string>): Record<string, string> {
     if (this.byValue.size === 0) return headers;

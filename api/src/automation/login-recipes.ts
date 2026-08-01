@@ -17,6 +17,16 @@
  * is one nobody can reason about: the typist would fall back to its generic selectors for that site
  * and nobody would know which sites are actually covered. Failing loudly at load is cheap; a
  * half-loaded registry is a permanent question mark.
+ *
+ * THE SECOND MAP: `loginUrls`. A selector decides which FIELD on a page receives the password; the
+ * URL decides which HOST receives it, and that is the strictly more dangerous parameter — yet it
+ * was the one left free-form at the caller while the far less dangerous selectors were fixed,
+ * reviewed data. So a host may also declare its login URL here, and `session-establishment.ts`
+ * prefers it over anything a caller passes. It is a SIBLING map rather than a field on a recipe
+ * entry deliberately: "a recipe is selectors only" is a rule worth keeping literally true, and a
+ * URL is not a selector. Validation is correspondingly different — an https URL, no userinfo, and
+ * the URL's host must BE the key or a subdomain of it, so an entry cannot aim one portal's password
+ * at another site.
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -92,19 +102,79 @@ export function parseRecipeRegistry(raw: unknown): Map<string, TypistRecipe> {
   return out;
 }
 
+/**
+ * Parse + validate the `loginUrls` map. Absent is fine (most hosts declare only selectors); present
+ * and malformed is a hard error, for the same all-or-nothing reason the recipes are.
+ *
+ * The host-containment check is the load-bearing one: `loginUrls["citius…mj.pt"]` MUST point at
+ * `citius…mj.pt` or a subdomain of it. Without it this map would be a place to write "when you are
+ * establishing citius, go type the password over there", which is the exact confused-deputy shape
+ * the whole module exists to prevent — and it would be reviewed as a URL, not as a redirection.
+ */
+export function parseLoginUrls(raw: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const root = raw as { loginUrls?: unknown } | null;
+  if (!root || typeof root !== 'object' || root.loginUrls === undefined) return out;
+  const map = root.loginUrls;
+  if (!map || typeof map !== 'object' || Array.isArray(map)) {
+    throw new RecipeRegistryError('`loginUrls` must be a map of host -> https login URL');
+  }
+  for (const [host, value] of Object.entries(map as Record<string, unknown>)) {
+    if (host.startsWith('$')) continue; // documentation for the reviewer, as in `recipes`
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new RecipeRegistryError(`loginUrls.${host} must be a non-empty string`);
+    }
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new RecipeRegistryError(`loginUrls.${host} is not a URL`);
+    }
+    if (url.protocol !== 'https:') {
+      throw new RecipeRegistryError(`loginUrls.${host} must be https — a credential is replayed against it`);
+    }
+    if (url.username || url.password) {
+      throw new RecipeRegistryError(`loginUrls.${host} must not carry userinfo`);
+    }
+    const key = host.toLowerCase();
+    const target = url.hostname.toLowerCase();
+    if (!(target === key || target.endsWith(`.${key}`))) {
+      throw new RecipeRegistryError(`loginUrls.${host} points at ${target}, which is not on ${key}`);
+    }
+    out.set(key, url.toString());
+  }
+  return out;
+}
+
 let cached: Map<string, TypistRecipe> | null = null;
+let cachedLoginUrls: Map<string, string> | null = null;
+let cachedRaw: unknown;
+let cachedRawLoaded = false;
+
+/** The asset's parsed JSON, read once. Both maps live in the same reviewed file. */
+function rawRegistryFile(): unknown {
+  if (cachedRawLoaded) return cachedRaw;
+  const path = recipesPath();
+  cachedRaw = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+  cachedRawLoaded = true;
+  return cachedRaw;
+}
 
 /** The registry, loaded once. A malformed file throws — the typist then runs on its generic
  *  selectors, which is the honest degradation, but the operator sees why. */
 export function loadRecipeRegistry(): Map<string, TypistRecipe> {
   if (cached) return cached;
-  const path = recipesPath();
-  if (!existsSync(path)) {
-    cached = new Map();
-    return cached;
-  }
-  cached = parseRecipeRegistry(JSON.parse(readFileSync(path, 'utf8')));
+  const raw = rawRegistryFile();
+  cached = raw === null ? new Map() : parseRecipeRegistry(raw);
   return cached;
+}
+
+/** The login-URL map, loaded once from the same asset. */
+export function loadLoginUrlRegistry(): Map<string, string> {
+  if (cachedLoginUrls) return cachedLoginUrls;
+  const raw = rawRegistryFile();
+  cachedLoginUrls = raw === null ? new Map() : parseLoginUrls(raw);
+  return cachedLoginUrls;
 }
 
 /**
@@ -113,12 +183,27 @@ export function loadRecipeRegistry(): Map<string, TypistRecipe> {
  * for "is this the same site", not two that can disagree.
  */
 export function recipeForHost(host: string): TypistRecipe | undefined {
-  const registry = loadRecipeRegistry();
+  return lookupByHost(loadRecipeRegistry(), host);
+}
+
+/**
+ * The REVIEWED login URL for a host, or undefined. Subdomains inherit by the same rule recipes do.
+ *
+ * `session-establishment.ts` prefers this over a caller-supplied URL, and refuses when a caller
+ * supplies one that disagrees with it — the URL is the parameter that decides which host receives a
+ * password, so it belongs in reviewed data rather than in a request field.
+ */
+export function loginUrlForHost(host: string): string | undefined {
+  return lookupByHost(loadLoginUrlRegistry(), host);
+}
+
+/** Exact host, else the nearest declared parent domain. One rule for "is this the same site". */
+function lookupByHost<T>(registry: Map<string, T>, host: string): T | undefined {
   const h = host.toLowerCase().replace(/^https?:\/\//, '').split('/')[0]!.split(':')[0]!;
   const exact = registry.get(h);
-  if (exact) return exact;
-  for (const [key, recipe] of registry) {
-    if (h.endsWith(`.${key}`)) return recipe;
+  if (exact !== undefined) return exact;
+  for (const [key, value] of registry) {
+    if (h.endsWith(`.${key}`)) return value;
   }
   return undefined;
 }
@@ -126,4 +211,7 @@ export function recipeForHost(host: string): TypistRecipe | undefined {
 /** Test helper: drop the cache so a test can load a crafted registry. */
 export function __resetRecipeRegistryForTests(): void {
   cached = null;
+  cachedLoginUrls = null;
+  cachedRaw = undefined;
+  cachedRawLoaded = false;
 }

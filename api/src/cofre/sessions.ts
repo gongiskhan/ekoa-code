@@ -19,9 +19,9 @@
  */
 import type { Actor, SessionMetadata } from '@ekoa/shared';
 import { hostMatchesOrigin } from '../security/origin-binding.js';
-import { mintCofreItem } from './items.js';
+import { issueGrant, mintCofreItem, type CofreDeps } from './items.js';
 import { cofreItems } from './store.js';
-import type { CofreItemDoc } from './types.js';
+import type { CofreGrantDoc, CofreItemDoc } from './types.js';
 
 /** How long a captured session is assumed good before it must be re-established or re-checked. */
 export const DEFAULT_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -71,6 +71,63 @@ export async function captureSessionToCofre(
     sessionMetadata: input.metadata as unknown as Record<string, unknown>,
   }));
   return { ...item, sessionMetadata: input.metadata as unknown as Record<string, unknown> };
+}
+
+/**
+ * Capture a session AND arm it for reuse, in one step. THE round-trip helper (Cofre G-4/G-5).
+ *
+ * WHY THIS EXISTS AS A SEPARATE FUNCTION. `mintCofreItem` issues no grant — deliberately, and the
+ * security suite pins it ("a capture does not grant use"): a credential the USER hands over is
+ * locked until the user unlocks it, and that is the whole consent model. A session this platform
+ * ESTABLISHED is the one case where that would be circular: nobody typed the storageState in, it
+ * exists only because the user already consented to the login that produced it, and leaving it
+ * locked means the reuse path — the overwhelmingly common one, the one that must cost nothing —
+ * fails closed on every run and re-logs-in instead. Re-logging-in against a portal with an unknown
+ * lock-out policy is precisely the risk the at-most-once rule exists to avoid.
+ *
+ * SO: ESTABLISHING A SESSION IS THE CONSENT CEREMONY, and this is where that is written down. The
+ * grant is `until_locked` — the narrowest scope the model has that survives the run that made it
+ * (`this_run` would expire before the next run and reinstate the re-login loop, and a `ttl` would
+ * pick an arbitrary clock). Lock-now / lock-all remain the kill switch, unchanged: the user
+ * revoking it is what ends the session's usability, exactly as for a password.
+ *
+ * It is a DISTINCT function rather than a flag on `captureSessionToCofre` so that the plain capture
+ * stays locked-by-default and the security suite keeps testing that; a boolean would make the
+ * dangerous direction one character away from the safe one.
+ */
+export async function captureSessionWithGrant(
+  actor: Actor,
+  input: CaptureSessionInput,
+  deps: CofreDeps = {},
+): Promise<{ item: CofreItemDoc; grant: CofreGrantDoc }> {
+  const item = await captureSessionToCofre(actor, input, deps);
+  // `until_locked` goes through the ordinary grant API — no new grant kind, no second code path
+  // that `lockItem`/`lockAll` would have to learn about to be able to revoke.
+  const grant = await issueGrant(actor, item._id, 'until_locked', {}, deps);
+  return { item, grant };
+}
+
+/**
+ * The origins a session captured while establishing `host` may be bound to: `[host]`, or nothing.
+ *
+ * WHY NARROW, AND WHY HERE. `originsFromStorageState` reports every domain in the jar, which after
+ * a real login includes the analytics and CDN domains the page happened to touch and whatever
+ * parent domain the portal scopes its own cookies to. Binding the captured session to all of them
+ * makes it findable — and unwrappable — under `google-analytics.com` and under every sibling host
+ * of the portal's parent domain. A session is credential-equivalent, so its binding must be the
+ * narrowest one that still works, not the widest one the jar can justify.
+ *
+ * The narrowest one that still works is the single host we actually established against:
+ * `unwrap()` matches with `hostMatchesOrigin`, and a host always matches itself. The jar is used
+ * only as EVIDENCE — at least one cookie domain must cover `host`, or the login left nothing for
+ * this portal and there is no session to store. It lives beside `originsFromStorageState` (and uses
+ * the same matcher `unwrap` uses) so the derivation and the check can never drift apart.
+ */
+export function boundOriginsForEstablishedHost(storageState: unknown, host: string): string[] {
+  const h = hostOf(host);
+  if (!h) return [];
+  const covered = originsFromStorageState(storageState).some((origin) => hostMatchesOrigin(h, origin));
+  return covered ? [h] : [];
 }
 
 /**
