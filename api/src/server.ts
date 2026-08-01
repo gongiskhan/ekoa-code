@@ -406,9 +406,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   };
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
+    // REFUSE an org-less caller (A2 review F4). Before A2 an empty orgId merely missed a credential
+    // lookup; now it is the READ ACTOR, and an actor with no org matches no own row and every
+    // `global` row — i.e. it would resolve an arbitrary tenant's package (and its egress origins).
+    // A user with no org is a broken row, not a tenant: fail closed rather than resolve someone.
+    if (!owner?.orgId) {
+      return { success: false, error: 'integration unavailable: the calling user has no organisation', details: 'not_connected' };
+    }
     const r = await executeUserIntegrationAction(
       {
-        orgId: owner?.orgId ?? '',
+        orgId: owner.orgId,
         ownerUserId: call.ownerUserId,
         integrationKey: call.integrationKey,
         actionName: call.actionName,
@@ -421,8 +428,13 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // 3. Platform integrations (Google/Microsoft) behind automation + listener steps.
   setPlatformIntegrationCaller(async (call, pactor) => {
     const owner = (await users.get(pactor.userId)) as { orgId?: string } | null;
+    // Same fail-closed rule as the action executor above (A2 review F4): with A2 the orgId selects
+    // WHICH definition resolves, so an empty one would reach every global row.
+    if (!owner?.orgId) {
+      return { success: false, error: 'platform integration unavailable: the calling user has no organisation' };
+    }
     const r = await callPlatformIntegration(
-      { orgId: owner?.orgId ?? '', integrationKey: call.integrationKey, actionName: call.actionName, args: call.args },
+      { orgId: owner.orgId, integrationKey: call.integrationKey, actionName: call.actionName, args: call.args },
       { now: deps.now, genId: deps.genId },
     );
     return { success: r.success, data: r.data, error: r.error };

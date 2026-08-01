@@ -18,6 +18,10 @@
  * A tenant row SHADOWS a baseline package of the same key FOR THAT TENANT ONLY. Another org keeps
  * seeing the baseline — which is precisely the cross-tenant listing leak this slice closes on the
  * read path: before A2, `listDefinitions()` handed every org every runtime-tier package on the box.
+ * The fallback below is BASELINE-ONLY (`getBaselineDefinition`/`listBaselineDefinitions`) — falling
+ * back to the MERGED disk cache would have walked straight back into that leak, because the runtime
+ * tier is one global directory any tenant can write (A2 review F1). See definitions.ts for the
+ * full reasoning.
  *
  * SHAPE. `definitionFromDoc` projects a stored doc onto the SAME `IntegrationDefinition` the disk
  * registry emits — including the `integrationKey` alias the catalog seam keys on — so no caller
@@ -34,9 +38,9 @@
  */
 import type { Actor } from '@ekoa/shared';
 import {
-  getDefinition,
-  listDefinitions,
-  integrationSkillMd,
+  getBaselineDefinition,
+  listBaselineDefinitions,
+  baselineSkillMd,
   redactSecrets,
   type IntegrationDefinition,
   type ActiveIntegrationCatalog,
@@ -113,7 +117,7 @@ export async function resolveDefinition(
 ): Promise<IntegrationDefinition | null> {
   const doc = await store.getForActor(actor, key);
   if (doc) return definitionFromDoc(doc);
-  return getDefinition(key);
+  return getBaselineDefinition(key);
 }
 
 /**
@@ -157,7 +161,7 @@ export async function listDefinitionsFor(
   // Baseline first so the shipped ordering is preserved; `Map.set` on an existing key overwrites
   // IN PLACE, so a tenant row shadows its baseline without reordering the list.
   const merged = new Map<string, IntegrationDefinition>();
-  for (const def of listDefinitions()) merged.set(def.key, def);
+  for (const def of listBaselineDefinitions()) merged.set(def.key, def);
   for (const [key, doc] of chosen) merged.set(key, definitionFromDoc(doc));
   return [...merged.values()];
 }
@@ -174,7 +178,7 @@ export async function resolveSkillMd(
 ): Promise<string | null> {
   const doc = await store.getForActor(actor, key);
   if (doc) return doc.skillMd ?? null;
-  return integrationSkillMd(key);
+  return baselineSkillMd(key);
 }
 
 /**

@@ -135,7 +135,7 @@ export type SetVisibilityResult =
   | { verdict: 'forbidden' };
 
 /** A typed store error the caller (A2/route layer) maps onto the error envelope. */
-export type IntegrationDefinitionStoreErrorCode = 'DUPLICATE';
+export type IntegrationDefinitionStoreErrorCode = 'DUPLICATE' | 'FORBIDDEN' | 'INVALID';
 export class IntegrationDefinitionStoreError extends Error {
   constructor(public readonly code: IntegrationDefinitionStoreErrorCode, message: string) {
     super(message);
@@ -166,7 +166,13 @@ type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'vi
 export function isDefinitionVisibleTo(doc: VisibilityView, actor: Actor): boolean {
   if (doc.visibility === 'global') return true; // cross-org tier
   if (doc.orgId !== actor.orgId) return false; // NEVER another org's private/org row
-  if (doc.userId === actor.userId) return true; // own row, any visibility
+  // OWN-ROW BRANCH, with the empty-userId hole closed (A2 review F3). Several server-side readers
+  // are built as org-scoped SYSTEM actors carrying `userId: ''` (platform-call, the poll rail), and
+  // their whole safety argument is "an empty userId can never equal a real author's". That argument
+  // is only as good as the data: a row stamped `userId: ''` (the obvious shape for an ownerless
+  // migrated package) would be matched as the system actor's OWN row and hand it a private
+  // definition. Require BOTH sides non-empty so the identity can never be the empty string.
+  if (doc.userId !== '' && actor.userId !== '' && doc.userId === actor.userId) return true;
   return doc.visibility === 'org'; // org-shared peer row; a peer's PRIVATE row → invisible
 }
 
@@ -213,8 +219,25 @@ export class IntegrationDefinitionStore {
    */
   async create(
     input: IntegrationDefinitionCreate,
-    opts: { onConflict?: 'reject' | 'replace' } = {},
+    opts: { onConflict?: 'reject' | 'replace'; actor?: Actor } = {},
   ): Promise<IntegrationDefinitionDoc> {
+    // THE GLOBAL TIER IS SUPER-ADMIN ONLY — on CREATE as well as on setVisibility (A2 review F2).
+    // Gating only the transition left the front door open: `create({visibility:'global'})` published
+    // to every org in one step, and A2 made that load-bearing (a global row is the resolution for
+    // every org without its own, and the source of their credential-egress origins). `actor` is
+    // optional so internal seeding/migration can mint a reviewed global deliberately, but ANY caller
+    // that passes an actor is held to the same super-admin bar as the toggle.
+    if (input.visibility === 'global' && opts.actor && opts.actor.role !== 'super-admin') {
+      throw new IntegrationDefinitionStoreError(
+        'FORBIDDEN',
+        'only a super-admin may create a globally-visible integration definition',
+      );
+    }
+    // An author identity is required and may never be the empty string: `isDefinitionVisibleTo`
+    // treats a non-empty match as "own row", and org-scoped system actors carry `userId: ''`.
+    if (input.userId === '') {
+      throw new IntegrationDefinitionStoreError('INVALID', 'a definition must name a real author (userId)');
+    }
     const onConflict = opts.onConflict ?? 'reject';
     const nowIso = this.nowIso();
     const _id = definitionIdFor(input.orgId, input.key);

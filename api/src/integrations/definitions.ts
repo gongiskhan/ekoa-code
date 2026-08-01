@@ -310,6 +310,48 @@ export function getDefinition(key: string): IntegrationDefinition | null {
 }
 
 /**
+ * BASELINE-ONLY reads — the shipped, repo-authored packages, with the process-wide RUNTIME tier
+ * excluded.
+ *
+ * Why this exists (A2 review, F1). The runtime tier is ONE global directory that any authenticated
+ * user of any org can write through the builder, and `load()` folds it into the same cache as the
+ * shipped packages. So `getDefinition`/`listDefinitions` — which read that merged cache — hand one
+ * tenant's authored package to every other tenant. That is the very leak the tenant-scoped registry
+ * exists to close, and a fallback to the MERGED cache silently reopened it: the definition-registry
+ * would fall through a tenant miss straight into another tenant's runtime package, including its
+ * action `baseUrl`s, which the origin resolver turns into a credential-egress allow-list.
+ *
+ * The tenant-scoped registry therefore falls back to THESE, never to the merged cache. Runtime-tier
+ * packages stay reachable only through the paths that already existed for them (the builder's own
+ * routes) until A3 moves that write path into Mongo and retires the tier entirely.
+ */
+export function getBaselineDefinition(key: string): IntegrationDefinition | null {
+  const d = ensure().get(key);
+  if (!d) return null;
+  return baselineKeys.has(key) ? d : null;
+}
+
+/** Every SHIPPED definition (runtime-tier packages excluded — see `getBaselineDefinition`). */
+export function listBaselineDefinitions(): IntegrationDefinition[] {
+  ensure();
+  return Array.from(cache!.values()).filter((d) => baselineKeys.has(d.key));
+}
+
+/** The SHIPPED package's SKILL.md (runtime tier excluded — see `getBaselineDefinition`). */
+export function baselineSkillMd(key: string): string | null {
+  if (!baselineKeys.has(key) && (ensure(), !baselineKeys.has(key))) return null;
+  for (const p of [join(integrationsDir(), key, 'SKILL.md')]) {
+    if (!existsSync(p)) continue;
+    try {
+      return readFileSync(p, 'utf8');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
  * The integration package's knowledge SKILL.md (raw markdown), or null when the package has
  * none. The definitions registry deliberately ignores SKILL.md (config.json is the runtime
  * contract); this is the ON-DEMAND knowledge surface the agents pull through `load_context`

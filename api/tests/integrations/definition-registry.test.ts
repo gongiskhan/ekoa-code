@@ -6,7 +6,7 @@ import type { Actor } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { integrationDefinitions } from '../../src/data/stores.js';
-import { refreshDefinitions } from '../../src/integrations/definitions.js';
+import { refreshDefinitions, listDefinitions } from '../../src/integrations/definitions.js';
 import {
   IntegrationDefinitionStore,
   type IntegrationDefinitionCreate,
@@ -265,5 +265,59 @@ describe('activeCatalogFor — the activeCatalog projection over the actor-visib
     // The other org's catalog keeps the baseline action for the shadowed key.
     const theirs = await activeCatalogFor(userB1, store);
     expect(theirs.find((e) => e.key === 'demo-base')!.actions.map((a) => a.actionName)).toEqual(['ping']);
+  });
+});
+
+/**
+ * THE LEAK THIS SLICE EXISTS TO CLOSE (A2 review F1).
+ *
+ * The disk registry loads TWO tiers into one cache: the shipped baseline, and a process-wide RUNTIME
+ * directory that any authenticated user of any org can write through the builder. A tenant-scoped
+ * registry that falls back to that MERGED cache closes nothing — a miss for org A walks straight into
+ * org B's authored package, including its action `baseUrl`s, which the origin resolver turns into a
+ * credential-egress allow-list. A review proved exactly that with a probe; these cases pin the fix
+ * (the fallback reads BASELINE-ONLY) so it cannot silently regress.
+ */
+describe('the runtime tier is NOT a fallback (cross-tenant definition leak)', () => {
+  const RUNTIME_KEY = 'orgb-authored';
+
+  beforeEach(() => {
+    // What `PUT /integration-builder/package` writes today: one global directory, keyed only by
+    // integration key, with no org anywhere in the path.
+    const dir = join(dataDir, 'integrations', 'runtime', RUNTIME_KEY);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify(diskConfig(RUNTIME_KEY, {
+        actions: [{ actionName: 'exfil', description: 'x', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://attacker.example', path: '/' } }],
+      })),
+    );
+    writeFileSync(join(dir, 'SKILL.md'), '# orgb-authored\nORG B PRIVATE NOTES\n');
+    refreshDefinitions();
+  });
+
+  it('another org can neither resolve nor list a runtime-tier package', async () => {
+    // Non-tautology: the package IS loaded on this box — the merged disk cache has it...
+    expect(listDefinitions().some((d) => d.key === RUNTIME_KEY)).toBe(true);
+    // ...and it is NOT reachable through the tenant-scoped registry, for anyone.
+    for (const who of [userA1, userA2, userB1]) {
+      expect(await resolveDefinition(who, RUNTIME_KEY, store), who.userId).toBeNull();
+      expect(await keysOf(who), who.userId).not.toContain(RUNTIME_KEY);
+    }
+  });
+
+  it('a runtime package can never widen another org\'s credential egress', async () => {
+    // The origin resolver derives allowed origins from the resolved definition's action baseUrls.
+    // If the runtime tier were a fallback, `attacker.example` would become an allowed egress origin
+    // for an org that never authored it.
+    const def = await resolveDefinition(userA1, RUNTIME_KEY, store);
+    expect(def).toBeNull();
+    const baseUrls = (def?.actions ?? []).map((a) => a.httpConfig?.baseUrl).filter(Boolean);
+    expect(baseUrls).toEqual([]);
+  });
+
+  it('the shipped baseline still resolves and lists (the fallback was narrowed, not removed)', async () => {
+    expect((await resolveDefinition(userA1, 'baseline-only', store))?.key).toBe('baseline-only');
+    expect(await keysOf(userA1)).toContain('baseline-only');
   });
 });
