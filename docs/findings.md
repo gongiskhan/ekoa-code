@@ -6,6 +6,48 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`runtime-integration-packages-are-global`** (OPEN 2026-08-01, HIGH, tenancy/confidentiality -
+  found by the integrations-unification discovery gate, `docs/INTEGRATIONS_UNIFICATION_AUDIT.md`).
+  User-created integration packages have NO ownership model: any authenticated user of any org
+  saves via the builder (`api/src/routes/integration-builder.ts:210`, `requireAuth` only, any
+  role) into ONE global filesystem tier (`<dataDir>/integrations/runtime/<key>/`,
+  `api/src/integrations/definitions.ts:219,380`), and `GET /api/v1/integrations` returns every
+  definition unfiltered to every tenant (`api/src/routes/integrations.ts:41`). So a user-created
+  integration is globally visible across tenants TODAY - the inverse of the unification brief's
+  private-by-default, and the definition itself (SKILL.md prose, credentialGuide, action
+  templates, baseUrls) can carry client-specific values, which for law-firm tenants is exactly
+  the leak class the brief's publish-scrub exists for. Credentials are NOT exposed (config rows
+  are org-scoped with their own ciphertext); the leak surface is the definition. CLOSE BY:
+  tenant-scoped definition storage (Mongo via `OwnerVisibilityScoped`) with private-by-default +
+  an isolation suite of the memvault class; interim mitigation if needed sooner: filter the list
+  endpoint by creator org. Planned as a prerequisite slice of the unification build.
+
+- **`integration-provision-id-not-org-scoped`** (OPEN 2026-08-01, MEDIUM, correctness/tenancy -
+  found by the same discovery gate). `provisionIntegrationAutomations` materialises package
+  templates as automations with deterministic id `<integrationKey>-<templateKey>` and NO org
+  component (`api/src/automation/integration-automations.ts:54`); `Store.insert` swallows the
+  duplicate-_id insert (`api/src/data/store.ts:28` returns false, unchecked at the call site). So
+  the FIRST org to provision a template owns the row and a second org provisioning the same
+  package silently gets nothing - no error, no automation. Also the pattern the unification brief
+  wants for "authored actions land in the acting tenant's own copy", so it must be org-safe
+  before it is reused. CLOSE BY: org-scoped deterministic id + a test provisioning the same
+  package from two orgs and asserting both copies exist and are tenant-invisible to each other.
+
+- **`attended-ceremony-docblock-false-premise`** (OPEN 2026-08-01, LOW, docs/design - found by
+  the discovery gate's web-research pass; full sourcing in
+  `docs/INTEGRATIONS_UNIFICATION_AUDIT.md` section 7). `api/src/bridge/attended.ts:5` justifies
+  the attended ceremony with "Portuguese legal portals (Citius, the Ordem dos Advogados)
+  authenticate with a smartcard... A cloud browser cannot touch one." Wrong on all three counts
+  for the advogado read path: Citius mandatarios logs in with username+password today (legally
+  sanctioned until 2027-01-01, Portaria 350-A/2025/1 art. 39.º/3), the OA certificate is a
+  downloadable `.p12` file (not a card), and the smartcard rail belongs to magistrados. The
+  DESIGN survives - the ceremony is right for CC/CMD SCAP and for anyone on that rail after the
+  2027 cliff - but the load-bearing rationale must become "we choose not to custody private key
+  material", and the now-visible third option (server-side mTLS with a lawyer-supplied `.p12`,
+  unattended, works before and after the cliff) needs an explicit accept/reject including the OA
+  professional-conduct question on key custody. CLOSE BY: docblock rewrite + a decisions.md entry
+  on the `.p12` custody question.
+
 - **`npm-ci-has-been-broken-on-main`** (FIXED 2026-08-01, HIGH, build — found by a staging deploy
   failing, not by CI, because CI is the thing it breaks). `npm ci` refused the committed lockfile:
   `@napi-rs/wasm-runtime` requires `@emnapi/core@^2.0.0-alpha.3` while the lock hoisted `1.10.0`
