@@ -205,6 +205,17 @@ let cache: Map<string, IntegrationDefinition> | null = null;
  *  one) is derived from this + the pipedream row — not from the whole cache, which now also holds
  *  runtime (user-created) packages. */
 let baselineKeys = new Set<string>();
+/**
+ * The BASELINE tier as its OWN map, not a key-set view over `cache`.
+ *
+ * `load()` writes both tiers into one map and lets runtime SHADOW baseline on a key collision, so
+ * for a colliding key `cache.get(key)` is the RUNTIME object while `baselineKeys.has(key)` is still
+ * true. A baseline-only read built as "look in `cache`, then check the key-set" would therefore hand
+ * back the user-authored package for exactly the key an attacker would choose (A2 review F1, the
+ * predicted residual). The builder's reserved-key guard makes that write hard, but the READ must not
+ * depend on the write path holding — so the shipped packages are kept in a map of their own.
+ */
+let baselineCache = new Map<string, IntegrationDefinition>();
 
 /** Root of the versioned BASELINE packages. Resolved at call time so tests can point
  *  EKOA_INTEGRATIONS_DIR at a fixture and refresh() picks it up. `__dirname/../../assets/integrations`
@@ -283,6 +294,8 @@ function load(): Map<string, IntegrationDefinition> {
   const next = new Map<string, IntegrationDefinition>();
   const baseKeys = new Set<string>();
   loadTier(integrationsDir(), false, next, baseKeys);
+  // Snapshot the baseline BEFORE the runtime tier shadows anything into `next`.
+  baselineCache = new Map(next);
   loadTier(runtimeDir(), true, next, new Set<string>());
   cache = next;
   baselineKeys = baseKeys;
@@ -326,29 +339,27 @@ export function getDefinition(key: string): IntegrationDefinition | null {
  * routes) until A3 moves that write path into Mongo and retires the tier entirely.
  */
 export function getBaselineDefinition(key: string): IntegrationDefinition | null {
-  const d = ensure().get(key);
-  if (!d) return null;
-  return baselineKeys.has(key) ? d : null;
+  ensure(); // populates baselineCache
+  return baselineCache.get(key) ?? null;
 }
 
 /** Every SHIPPED definition (runtime-tier packages excluded — see `getBaselineDefinition`). */
 export function listBaselineDefinitions(): IntegrationDefinition[] {
-  ensure();
-  return Array.from(cache!.values()).filter((d) => baselineKeys.has(d.key));
+  ensure(); // populates baselineCache
+  return Array.from(baselineCache.values());
 }
 
 /** The SHIPPED package's SKILL.md (runtime tier excluded — see `getBaselineDefinition`). */
 export function baselineSkillMd(key: string): string | null {
-  if (!baselineKeys.has(key) && (ensure(), !baselineKeys.has(key))) return null;
-  for (const p of [join(integrationsDir(), key, 'SKILL.md')]) {
-    if (!existsSync(p)) continue;
-    try {
-      return readFileSync(p, 'utf8');
-    } catch {
-      return null;
-    }
+  ensure(); // populates baselineCache (a cold cache must not answer null for a real baseline key)
+  if (!baselineCache.has(key)) return null;
+  const p = join(integrationsDir(), key, 'SKILL.md'); // the BASELINE dir only, never runtimeDir()
+  if (!existsSync(p)) return null;
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**
