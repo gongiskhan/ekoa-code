@@ -67,6 +67,9 @@ describe('citius-mandatarios · parseInboxPage (rows + metadata)', () => {
     });
     // documentoRef is captured (with &amp; entity-decoded) but INERT.
     expect(res.rows[0]!.documentoRef).toBe('Documento.aspx?docId=abc123&t=not');
+    // per-row source id is parsed and used verbatim as the dedup ref
+    expect(res.rows[0]!.sourceId).toBe('14235');
+    expect(res.rows[0]!.ref).toBe('14235');
 
     // Row 2 has no attached document.
     expect(res.rows[1]).toMatchObject({
@@ -75,6 +78,8 @@ describe('citius-mandatarios · parseInboxPage (rows + metadata)', () => {
       temDocumento: false,
     });
     expect(res.rows[1]!.documentoRef).toBeUndefined();
+    expect(res.rows[1]!.sourceId).toBe('14236');
+    expect(res.rows[1]!.ref).toBe('14236');
   });
 
   it('maps columns BY HEADER LABEL, not position (reordered page 2)', () => {
@@ -130,6 +135,84 @@ describe('citius-mandatarios · parseInboxPage (empty vs unavailable — the ant
     // a table with the word "processo" in body text but no real header must NOT read as empty-ok
     expect(parseInboxPage('<table><tr><td>sobre o processo</td></tr></table>').ok).toBe(false);
   });
+
+  // (a) A prose error / session-expired page laid out as a table, whose cells CONTAIN 'ato' and
+  // 'data' as substrings ("imediato", "nesta data") but EQUAL no column label, must NOT be read
+  // as a valid-but-empty grid. Exact-label header matching is what forces ok:false here.
+  it('a session-expired prose page laid out as a table is ok:false — NOT a false empty (CRITICAL-1)', () => {
+    const sessionExpired =
+      '<h1>Sessao expirada</h1><table><tr>' +
+      '<td>O seu processo de autenticacao terminou</td>' +
+      '<td>contacte o suporte imediato</td></tr></table>';
+    const res = parseInboxPage(sessionExpired);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('indisponível');
+  });
+
+  // (b) A filter / section-title table BEFORE the real grid must not shadow it: the page still
+  // reports the real notification, not a false empty from the first table.
+  it('a filter/section table before the real grid still yields the real row (CRITICAL-2)', () => {
+    const filterThenGrid = [
+      '<html><body>',
+      '<table class="filtros"><tr><td colspan="2">Filtrar notificacoes</td></tr></table>',
+      '<table id="ctl00_cph_gvNotificacoes">',
+      '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+      '  <tr><td>1111/26.0T8LSB</td><td>2026-07-01</td><td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+      '</table>',
+      '</body></html>',
+    ].join('\n');
+    const res = parseInboxPage(filterThenGrid);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('1111/26.0T8LSB');
+  });
+
+  // A strong-but-EMPTY grid before the real grid (both pass strong id) must not shadow the real
+  // one: the table WITH data rows wins.
+  it('an empty strong grid before a populated one does not shadow it (CRITICAL-2)', () => {
+    const emptyThenReal = [
+      '<html><body>',
+      '<table><tr><th>Processo</th><th>Data</th></tr>',
+      '        <tr><td colspan="2">Sem resultados</td></tr></table>',
+      '<table id="ctl00_cph_gvNotificacoes">',
+      '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+      '  <tr><td>2020/26.0T8LSB</td><td>2026-07-05</td><td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+      '</table>',
+      '</body></html>',
+    ].join('\n');
+    const res = parseInboxPage(emptyThenReal);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('2020/26.0T8LSB');
+  });
+
+  // (MEDIUM) A caption / colspan row above the real <th> header within the SAME table must be
+  // skipped, not mistaken for the header (which would fail the column test and drop the table).
+  it('a caption/colspan row above the header is skipped, not mistaken for it (MEDIUM)', () => {
+    const captionThenHeader = [
+      '<table id="ctl00_cph_gvNotificacoes">',
+      '  <tr><td colspan="5">Lista de processos</td></tr>',
+      '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+      '  <tr><td>2222/26.0T8PRT</td><td>2026-07-02</td><td>Tribunal do Porto</td><td>Citacao</td><td>&nbsp;</td></tr>',
+      '</table>',
+    ].join('\n');
+    const res = parseInboxPage(captionThenHeader);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('2222/26.0T8PRT');
+  });
+
+  // (c) The genuinely-empty grid stays ok:true rows:[] — the ONE legitimate empty result.
+  it('the genuinely-empty grid fixture stays ok:true rows:[] (the ONLY legitimate empty)', () => {
+    const res = parseInboxPage(load('inbox-empty.html'));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toEqual([]);
+  });
 });
 
 describe('citius-mandatarios · detectPagingMode', () => {
@@ -148,7 +231,19 @@ describe('citius-mandatarios · detectPagingMode', () => {
   });
 });
 
-describe('citius-mandatarios · notificacaoRef (stable content hash)', () => {
+describe('citius-mandatarios · notificacaoRef (per-row source id, hash fallback)', () => {
+  // Two rows that are IDENTICAL in processo|data|tribunal|ato with no doc link — a content hash
+  // would collide and drop one — but each carries a DISTINCT per-row source id, so their refs
+  // stay distinct. This is the real dedup-collision guard (HIGH).
+  const TWIN_ROWS_DISTINCT_IDS = [
+    '<table id="ctl00_cph_gvNotificacoes">',
+    '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+    '  <tr><td><input type="checkbox" name="sel" value="90001" />3333/26.0T8LSB</td><td>2026-07-03</td>',
+    '      <td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+    '  <tr><td><input type="checkbox" name="sel" value="90002" />3333/26.0T8LSB</td><td>2026-07-03</td>',
+    '      <td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+  ].join('\n') + '\n</table>';
+
   it('is stable across a re-parse of the same page', () => {
     const a = parseInboxPage(load('inbox-get-p1.html'));
     const b = parseInboxPage(load('inbox-get-p1.html'));
@@ -159,15 +254,62 @@ describe('citius-mandatarios · notificacaoRef (stable content hash)', () => {
     expect(notificacaoRef(a.rows[0]!)).toBe(a.rows[0]!.ref);
   });
 
-  it('differs across distinct rows', () => {
+  it('the per-row source id is used VERBATIM as the ref when present', () => {
     const res = parseInboxPage(load('inbox-get-p1.html'));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const refs = res.rows.map((r) => r.ref);
-    expect(new Set(refs).size).toBe(refs.length);
+    expect(res.rows.map((r) => r.ref)).toEqual(['14235', '14236']);
+    expect(res.rows.map((r) => r.sourceId)).toEqual(['14235', '14236']);
   });
 
-  it('changes when an id-bearing field changes, stable otherwise', () => {
+  // The rewritten "differs across distinct rows": CONTENT-IDENTICAL rows with DISTINCT source ids
+  // must NOT collide — exercising the source-id path, not just distinct-content rows.
+  it('differs across distinct rows (content-identical rows with distinct source ids do not collide)', () => {
+    const res = parseInboxPage(TWIN_ROWS_DISTINCT_IDS);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+    // content is identical across the two rows...
+    expect(res.rows[0]!.processo).toBe(res.rows[1]!.processo);
+    expect(res.rows[0]!.data).toBe(res.rows[1]!.data);
+    expect(res.rows[0]!.tribunal).toBe(res.rows[1]!.tribunal);
+    expect(res.rows[0]!.ato).toBe(res.rows[1]!.ato);
+    // ...but the source ids, and therefore the refs, are distinct (no dedup MISS)
+    expect(res.rows.map((r) => r.sourceId)).toEqual(['90001', '90002']);
+    expect(new Set(res.rows.map((r) => r.ref)).size).toBe(2);
+  });
+
+  it('two content-identical rows with DISTINCT source ids get DISTINCT refs (HIGH ref-collision)', () => {
+    const withId = (id: string): Omit<CitiusNotificacaoMeta, 'ref'> => ({
+      processo: '3333/26.0T8LSB',
+      data: '2026-07-03',
+      tribunal: 'Tribunal de Lisboa',
+      ato: 'Citação',
+      temDocumento: false,
+      sourceId: id,
+    });
+    expect(notificacaoRef(withId('A'))).toBe('A'); // verbatim
+    expect(notificacaoRef(withId('A'))).not.toBe(notificacaoRef(withId('B')));
+  });
+
+  // The pinned residual: with NO per-row id, content-identical notifications DO collide on the
+  // hash fallback (a MISS). Documented in the module + fixtures README; the downstream
+  // completeness reconciliation's count-check is the backstop.
+  it('falls back to the content hash when no source id — and identical content then collides (SPIKE #5)', () => {
+    const base: Omit<CitiusNotificacaoMeta, 'ref'> = {
+      processo: '1/26.0T8LSB',
+      data: '2026-01-01',
+      tribunal: 'Lisboa',
+      ato: 'Citação',
+      temDocumento: false,
+    };
+    // hash-shaped (24 hex chars), not a verbatim id
+    expect(notificacaoRef(base)).toMatch(/^[0-9a-f]{24}$/);
+    // the documented residual: no id => identical content collides
+    expect(notificacaoRef(base)).toBe(notificacaoRef({ ...base }));
+  });
+
+  it('changes when an id-bearing field changes, stable otherwise (hash-fallback path)', () => {
     const base: Omit<CitiusNotificacaoMeta, 'ref'> = {
       processo: '1/26.0T8LSB',
       data: '2026-01-01',
@@ -182,11 +324,39 @@ describe('citius-mandatarios · notificacaoRef (stable content hash)', () => {
 });
 
 describe('citius-mandatarios · structural metadata-only guard (no document fetch)', () => {
-  it('the module imports no network machinery (parse-half only)', () => {
+  // The guard bans not a fixed NAME set but the SHAPE of any network read: a bare fetch() call,
+  // an import of any http/fetch machinery, and reading a response body. So a later
+  // `fetch(row.documentoRef).then((r) => r.text())` is caught even under a novel name.
+  const FETCH_CALL_RE = /\bfetch\s*\(/;
+  const NET_IMPORT_RE =
+    /from\s+['"](?:node:)?(?:https?|undici)['"]|from\s+['"][^'"]*(?:url-fetcher|fetch)[^'"]*['"]|\bguardedFetch\b|\bfetchImpl\b/i;
+  const RESP_BODY_RE = /\.(?:arrayBuffer|blob|text)\s*\(/;
+
+  it('the module makes no bare fetch() call, imports no http/fetch machinery, reads no response body', () => {
+    expect(MODULE_SRC).not.toMatch(FETCH_CALL_RE);
+    expect(MODULE_SRC).not.toMatch(NET_IMPORT_RE);
+    expect(MODULE_SRC).not.toMatch(RESP_BODY_RE);
+    // the original fixed-name checks stay as belt-and-braces
     expect(MODULE_SRC).not.toMatch(/from ['"][^'"]*url-fetcher/);
     expect(MODULE_SRC).not.toMatch(/\bguardedFetch\b/);
     expect(MODULE_SRC).not.toMatch(/\bfetchImpl\b/);
     expect(MODULE_SRC).not.toMatch(/\.arrayBuffer\s*\(/);
+  });
+
+  it('those guard matchers actually FIRE on planted violations (non-tautological)', () => {
+    const plantedFetch = 'const bytes = await fetch(row.documentoRef).then((r) => r.arrayBuffer());';
+    expect(plantedFetch).toMatch(FETCH_CALL_RE);
+    expect(plantedFetch).toMatch(RESP_BODY_RE);
+
+    const plantedTextRead = 'const body = await resp.text();';
+    expect(plantedTextRead).toMatch(RESP_BODY_RE);
+
+    const plantedFetchImport = "import { guardedFetch } from '../net/url-fetcher.js';";
+    expect(plantedFetchImport).toMatch(NET_IMPORT_RE);
+    const plantedHttpsImport = "import https from 'node:https';";
+    expect(plantedHttpsImport).toMatch(NET_IMPORT_RE);
+    const plantedUndiciImport = "import { request } from 'undici';";
+    expect(plantedUndiciImport).toMatch(NET_IMPORT_RE);
   });
 
   it('defines no function that fetches/downloads/opens a document', () => {

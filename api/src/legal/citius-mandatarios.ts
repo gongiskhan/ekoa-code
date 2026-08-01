@@ -27,6 +27,14 @@
  *      portals silently log the older one out mid-sync).
  *   4. Pagination mode — GET (`?page=N`) vs WebForms `__doPostBack` postback vs none; `detectPagingMode`
  *      encodes both guesses so CS4 can branch on the observed reality.
+ *   5. Per-row source id — whether each notification row exposes its OWN stable id (a select
+ *      checkbox / hidden value, a `data-*` / row id, or an open-notification link). `extractSourceId`
+ *      reads it and `notificacaoRef` uses it VERBATIM as the dedup ref, so two content-identical
+ *      notifications never collide. ONLY when a row exposes no id does ref fall back to a content
+ *      hash — and then two content-identical notifications WOULD share a ref (a dedup MISS that
+ *      silently drops one). If the first real snapshot shows no per-row id, that collision is a
+ *      pinned risk whose backstop is the completeness reconciliation's count-check downstream (a
+ *      dropped row surfaces as a count mismatch), not this parser.
  */
 import { createHash } from 'node:crypto';
 import { cellText, decodeEntities } from './portal-html.js';
@@ -40,7 +48,10 @@ const UNAVAILABLE = 'Caixa de correio Citius indisponível';
  * here fetches a document.
  */
 export interface CitiusNotificacaoMeta {
-  /** Stable content-hash id for dedup (the portal rows carry no stable id). See `notificacaoRef`. */
+  /**
+   * Dedup id for this notification: the row's own STABLE SOURCE ID (`sourceId`) when the portal
+   * exposes one, otherwise a content hash of the id-bearing fields. See `notificacaoRef`.
+   */
   ref: string;
   processo: string;
   data: string;
@@ -50,6 +61,13 @@ export interface CitiusNotificacaoMeta {
   temDocumento: boolean;
   /** INERT captured href/token for the document — never fetched by this codebase. */
   documentoRef?: string;
+  /**
+   * The row's own STABLE identifier as exposed by the portal (a select-checkbox / hidden input
+   * value, a `data-*` / row id, or an open-notification link). Present only when the row carries
+   * one; when present `ref` is set to it VERBATIM so content-identical notifications never collide.
+   * Absent when the portal exposes no per-row id — see FIRST-REAL-ACCOUNT SPIKE #5.
+   */
+  sourceId?: string;
 }
 
 export type ParseInboxResult =
@@ -70,12 +88,18 @@ function extractTables(html: string): string[] {
   return out;
 }
 
-/** Inner HTML of every `<tr>` inside a table fragment. */
-function extractRows(tableInner: string): string[] {
-  const out: string[] = [];
-  const re = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+/** One `<tr>`: its opening-tag attribute string (for `data-*` / `id` on the row) plus its inner HTML. */
+interface RawRow {
+  attrs: string;
+  inner: string;
+}
+
+/** Every `<tr>` inside a table fragment, with its opening-tag attributes and its inner HTML. */
+function extractRows(tableInner: string): RawRow[] {
+  const out: RawRow[] = [];
+  const re = /<tr\b([^>]*)>([\s\S]*?)<\/tr>/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(tableInner)) !== null) out.push(m[1] ?? '');
+  while ((m = re.exec(tableInner)) !== null) out.push({ attrs: m[1] ?? '', inner: m[2] ?? '' });
   return out;
 }
 
@@ -99,18 +123,94 @@ function extractHref(cellHtml: string): string | undefined {
   return href || undefined;
 }
 
-/** Canonical field a header label maps to (accent-insensitive substring match), or '' if none. */
-function fieldForHeader(label: string): string {
-  const h = label
+/**
+ * Normalizes a header cell for EXACT-label comparison: lowercase, strip accents, collapse
+ * internal whitespace, trim, and drop a single trailing ':'. ("Ato:" / " ACTO " -> "ato").
+ */
+function normalizeHeader(label: string): string {
+  return label
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '');
-  if (h.includes('processo')) return 'processo';
-  if (h.includes('documento') || h.includes('anexo')) return 'documento';
-  if (h.includes('tribunal')) return 'tribunal';
-  if (h.includes('acto') || h.includes('ato')) return 'ato';
-  if (h.includes('data')) return 'data';
-  return '';
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/:$/, '')
+    .trim();
+}
+
+/**
+ * Canonical field a header label maps to via NORMALIZED EXACT-LABEL match — a cell counts as a
+ * column ONLY when it EQUALS a known label, never as a substring. This is what stops a prose
+ * error / session-expired page laid out as a table (cells like "contacte o suporte imediato" or
+ * "…terminou nesta data") from being mistaken for the notifications grid via 'ato'/'data'
+ * substrings. Returns '' when the cell is not a known column.
+ */
+function fieldForHeader(label: string): string {
+  switch (normalizeHeader(label)) {
+    case 'processo':
+      return 'processo';
+    case 'data':
+      return 'data';
+    case 'tribunal':
+      return 'tribunal';
+    case 'ato':
+    case 'acto':
+      return 'ato';
+    case 'documento':
+    case 'anexo':
+      return 'documento';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Reads one attribute value off a raw tag / attribute string (attribute-order and
+ * single/double/unquoted tolerant), entity-decoded and trimmed. `nameAlt` is a regex alternation
+ * of acceptable attribute names. Returns `undefined` when absent or empty.
+ */
+function attrValue(source: string, nameAlt: string): string | undefined {
+  const re = new RegExp(`\\b(?:${nameAlt})\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
+  const m = re.exec(source);
+  if (!m) return undefined;
+  const v = decodeEntities(m[1] ?? m[2] ?? m[3] ?? '').trim();
+  return v || undefined;
+}
+
+/**
+ * The row's own STABLE SOURCE ID as the portal exposes it — preferred over a content hash for
+ * dedup so two content-identical notifications never collide. Looks, in priority order, for:
+ *   1. a select-checkbox / hidden `<input>` value in the row (the classic WebForms GridView
+ *      select-column key);
+ *   2. a `data-*` notification id (or a row `id`) on the `<tr>` element itself;
+ *   3. an id-bearing OPEN-notification link (an href naming a `notific…` endpoint) — never the
+ *      inert documento download href.
+ * Returns `undefined` when the row exposes none, in which case `notificacaoRef` falls back to a
+ * content hash. This never fetches anything: every candidate is read out of the row's own markup.
+ */
+function extractSourceId(rowAttrs: string, rowInner: string): string | undefined {
+  // 1) a checkbox / hidden input value in the row
+  const inputRe = /<input\b[^>]*>/gi;
+  let im: RegExpExecArray | null;
+  while ((im = inputRe.exec(rowInner)) !== null) {
+    const tag = im[0];
+    if (!/\btype\s*=\s*["']?(?:checkbox|hidden)["']?/i.test(tag)) continue;
+    const v = attrValue(tag, 'value');
+    if (v) return v;
+  }
+  // 2) a data-* notification id (or a row id) on the <tr> itself
+  const dataId = attrValue(rowAttrs, 'data-notif(?:icacao)?-?id|data-message-?id|data-msg-?id|data-id|data-key');
+  if (dataId) return dataId;
+  const rowId = attrValue(rowAttrs, 'id');
+  if (rowId) return rowId;
+  // 3) an id-bearing open-notification link (never the inert documento download href)
+  const anchorRe = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+  let am: RegExpExecArray | null;
+  while ((am = anchorRe.exec(rowInner)) !== null) {
+    const href = decodeEntities(am[1] ?? am[2] ?? am[3] ?? '').trim();
+    if (href && /notific/i.test(href) && !/documento/i.test(href)) return href;
+  }
+  return undefined;
 }
 
 /**
@@ -166,59 +266,91 @@ export function detectPagingMode(html: string): 'get' | 'postback' | 'none' {
 }
 
 /**
- * A stable content-hash ref for one notification row (sha256 of the id-bearing fields, mirroring
- * `insolvencia-watch.publicacaoRef`) because the portal rows carry no stable id. Stable across a
- * re-parse of the same row and distinct across distinct rows. `temDocumento` is derived from
- * `documentoRef` and left out of the hash; `ref` itself is obviously not fed back in.
+ * The dedup ref for one notification row. When the row exposes its own stable id (`sourceId`,
+ * from `extractSourceId`) that id is the ref VERBATIM, so two content-identical notifications with
+ * distinct source ids keep distinct refs (no dedup MISS). ONLY when the row exposes no source id
+ * does the ref fall back to a sha256 content hash of the id-bearing fields (mirroring
+ * `insolvencia-watch.publicacaoRef`) — in which case two content-identical id-less notifications
+ * WOULD share a ref (a pinned first-real-account risk; see SPIKE #5). Stable across a re-parse of
+ * the same row. `temDocumento` is derived and left out of the hash; `ref` is not fed back in.
  */
 export function notificacaoRef(row: Omit<CitiusNotificacaoMeta, 'ref'>): string {
+  if (row.sourceId) return row.sourceId;
   return createHash('sha256')
     .update([row.processo, row.data, row.tribunal ?? '', row.ato ?? '', row.documentoRef ?? ''].join('|'))
     .digest('hex')
     .slice(0, 24);
 }
 
+/** A STRONG-grid candidate table already reduced to its parsed rows + its known-column count. */
+interface GridCandidate {
+  knownCount: number;
+  rows: CitiusNotificacaoMeta[];
+}
+
+/**
+ * STRONG grid identification for one header-candidate `<tr>`: the mapped columns must contain an
+ * EXACT 'processo' column AND at least TWO known columns in total. Anything less is NOT the
+ * notifications grid (a filter panel, a section-title row, or a prose error page laid out as a
+ * table). Returns the per-index field map on success, `null` otherwise.
+ */
+function identifyHeader(rowInner: string): string[] | null {
+  const fieldByIndex = extractCells(rowInner).map((c) => fieldForHeader(cellText(c)));
+  const known = new Set(fieldByIndex.filter(Boolean));
+  return known.has('processo') && known.size >= 2 ? fieldByIndex : null;
+}
+
 /**
  * Parses one caixa-de-correio (mandatários) inbox page into notification METADATA. A LIBERAL
- * header-keyed table walker (like `parsePublicacoes`): finds the notifications table by its
- * header row (a `<tr>` whose text names "processo" plus at least one other known column), maps
- * columns BY HEADER LABEL (so a reordered GridView still parses), and reads each following data
- * row by that column map. Entity-decoded throughout.
+ * header-keyed table walker (like `parsePublicacoes`), hardened against the two ways a naive walk
+ * silently drops legal deadlines:
+ *   - it scans ALL `<table>`s and, WITHIN each, the FIRST row that passes STRONG grid
+ *     identification (`identifyHeader`) — skipping caption / colspan / decorative rows that merely
+ *     mention "processo" in prose;
+ *   - among the tables that pass, it picks the BEST grid (one WITH data rows beats one with none,
+ *     then most known columns, then most data rows) rather than the first, so a filter / section
+ *     table before the real GridView cannot shadow it.
+ * Columns map BY HEADER LABEL (a reordered GridView still parses). Entity-decoded throughout.
  *
  * THE ONE LIE THIS MUST NEVER TELL is a false empty — reporting `{ok:true, rows:[]}` ("inbox
  * complete, zero notifications") for a page that was actually a login redirect / error / empty
- * shell. So:
- *   - a hard error/maintenance marker (`looksUnavailable`) -> `{ok:false, error}`.
- *   - the notifications table FOUND, with data rows -> `{ok:true, rows:[...]}`.
- *   - the notifications table FOUND but with zero data rows (a genuinely empty inbox; the header
- *     is present, e.g. GridView ShowHeaderWhenEmpty) -> `{ok:true, rows:[]}`.
- *   - the notifications table NOT found (no table / login page / error shell) -> `{ok:false, error}`.
- * "Table present, zero rows" (ok, empty) is thus distinguished from "no table" (not ok) by the
- * positive presence of the header row — never conflated.
+ * shell. So the ONLY `{ok:true, rows:[]}` outcome is a STRONGLY-identified grid that positively
+ * has zero data rows. Concretely:
+ *   - a hard error/maintenance marker (`looksUnavailable`), or empty/absent HTML -> `{ok:false}`.
+ *   - a STRONG grid FOUND with data rows -> `{ok:true, rows:[...]}`.
+ *   - a STRONG grid FOUND with zero data rows (a genuinely empty inbox; header present, e.g.
+ *     GridView ShowHeaderWhenEmpty) -> `{ok:true, rows:[]}`.
+ *   - NO strong grid anywhere (no table / login page / error shell / prose-as-table) -> `{ok:false}`.
  */
 export function parseInboxPage(html: string): ParseInboxResult {
   if (!html || looksUnavailable(html)) {
     return { ok: false, error: UNAVAILABLE };
   }
 
+  let best: GridCandidate | null = null;
+
   for (const tableInner of extractTables(html)) {
     const rows = extractRows(tableInner);
-    // The header is the first row whose text names the processo column.
-    const headerIdx = rows.findIndex((r) => cellText(r).toLowerCase().includes('processo'));
-    if (headerIdx === -1) continue;
 
-    const headerCells = extractCells(rows[headerIdx] ?? '');
-    const fieldByIndex = headerCells.map((c) => fieldForHeader(cellText(c)));
-    // Require processo + at least one other known column, so a stray layout table that merely
-    // contains the word "processo" is not mistaken for the notifications grid.
-    const known = new Set(fieldByIndex.filter(Boolean));
-    if (!known.has('processo') || known.size < 2) continue;
+    // The header is the FIRST row that passes strong grid identification (not merely the first
+    // row containing "processo"), so a caption / colspan row above the real <th> is skipped.
+    let headerIdx = -1;
+    let fieldByIndex: string[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const mapped = identifyHeader(rows[i]!.inner);
+      if (mapped) {
+        headerIdx = i;
+        fieldByIndex = mapped;
+        break;
+      }
+    }
+    if (headerIdx === -1) continue; // not the notifications grid
 
     const idxOf = (field: string): number => fieldByIndex.indexOf(field);
     const out: CitiusNotificacaoMeta[] = [];
 
-    for (const rowInner of rows.slice(headerIdx + 1)) {
-      const cells = extractCells(rowInner);
+    for (const row of rows.slice(headerIdx + 1)) {
+      const cells = extractCells(row.inner);
       if (cells.length < 2) continue; // skip an EmptyDataTemplate / footer / pager row (single colspan cell)
 
       const rawAt = (field: string): string | undefined => {
@@ -249,6 +381,8 @@ export function parseInboxPage(html: string): ParseInboxResult {
         }
       }
 
+      const sourceId = extractSourceId(row.attrs, row.inner);
+
       const base: Omit<CitiusNotificacaoMeta, 'ref'> = {
         processo,
         data: textAt('data'),
@@ -256,14 +390,31 @@ export function parseInboxPage(html: string): ParseInboxResult {
         ...(tribunal ? { tribunal } : {}),
         ...(ato ? { ato } : {}),
         ...(documentoRef ? { documentoRef } : {}),
+        ...(sourceId ? { sourceId } : {}),
       };
       out.push({ ref: notificacaoRef(base), ...base });
     }
 
-    const pageTotal = detectPageTotal(html);
-    return pageTotal !== undefined ? { ok: true, rows: out, pageTotal } : { ok: true, rows: out };
+    const candidate: GridCandidate = { knownCount: new Set(fieldByIndex.filter(Boolean)).size, rows: out };
+    // BEST among strong grids: a table WITH data rows outranks one with none (so a strong-but-empty
+    // decorative / filter grid cannot shadow the real one), then most known columns, then most rows.
+    if (best === null || isBetterGrid(candidate, best)) best = candidate;
   }
 
-  // No notifications table found anywhere -> honestly unavailable, NOT a false empty.
-  return { ok: false, error: UNAVAILABLE };
+  if (best === null) {
+    // No STRONG notifications grid anywhere -> honestly unavailable, NOT a false empty.
+    return { ok: false, error: UNAVAILABLE };
+  }
+
+  const pageTotal = detectPageTotal(html);
+  return pageTotal !== undefined ? { ok: true, rows: best.rows, pageTotal } : { ok: true, rows: best.rows };
+}
+
+/** True when grid `a` should be preferred over `b`: has-data-rows, then knownCount, then rowCount. */
+function isBetterGrid(a: GridCandidate, b: GridCandidate): boolean {
+  const aHasRows = a.rows.length > 0 ? 1 : 0;
+  const bHasRows = b.rows.length > 0 ? 1 : 0;
+  if (aHasRows !== bHasRows) return aHasRows > bHasRows;
+  if (a.knownCount !== b.knownCount) return a.knownCount > b.knownCount;
+  return a.rows.length > b.rows.length;
 }
