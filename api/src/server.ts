@@ -152,9 +152,9 @@ import {
   callPlatformIntegration,
   findConfigForOwner,
   integrationPrefetch,
-  integrationSkillMd,
-  listDefinitions,
-  getDefinition,
+  resolveDefinition,
+  listDefinitionsFor,
+  resolveSkillMd,
 } from './integrations/index.js';
 import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
@@ -346,9 +346,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     if (m) {
       const key = m[1]!;
       const user = (await users.get(userId)) as { orgId?: string } | null;
-      const cfg = user?.orgId ? await findConfigForOwner(user.orgId, userId, key) : null;
-      if (cfg && (cfg as { enabled?: boolean }).enabled !== false) {
-        const raw = integrationSkillMd(key);
+      const orgId = user?.orgId;
+      const cfg = orgId ? await findConfigForOwner(orgId, userId, key) : null;
+      if (orgId && cfg && (cfg as { enabled?: boolean }).enabled !== false) {
+        // A2: the knowledge body is resolved TENANT-SCOPED under the requesting user's own org, so
+        // a tenant that authored its own package serves ITS SKILL.md, not the shipped one.
+        const raw = await resolveSkillMd({ userId, orgId, role: 'user' }, key);
         if (raw) return stripFrontmatter(raw);
       }
     }
@@ -369,9 +372,10 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // cross-agent automation/integration catalog (layer 4).
   setIntegrationPrefetch(integrationPrefetch);
   setCatalog(async ({ userId, orgId }) => {
-    void orgId; // catalog visibility is user-keyed; org scoping rides the underlying stores
     try {
-      const catalog = await buildAutomationCatalog(userId, false);
+      // A2: the org is now load-bearing — integration definitions in the catalog are tenant-scoped.
+      // Role stays the least-privileged `user` (the previous call passed superAdmin: false).
+      const catalog = await buildAutomationCatalog({ userId, orgId, role: 'user' });
       return formatCatalogForPrompt(catalog);
     } catch {
       return ''; // catalog failures are non-fatal (§5.5.2 layer 4)
@@ -442,8 +446,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // provenance; the integration's own declared base URL is the interim binding until Cofre items
   // carry per-item `boundOrigins` (WS-C). An integration with no usable declared host resolves to
   // an EMPTY list, and the seam refuses on empty — unbound never means unrestricted.
-  setIntegrationOriginResolver(async (integrationKey) => {
-    const def = getDefinition(integrationKey);
+  // A2: resolved TENANT-SCOPED under the RUN's actor. The binding logic is unchanged — the allowed
+  // origins are still derived from the definition's own action baseUrls, and an integration with no
+  // usable declared host still resolves EMPTY so the seam refuses (unbound never means unrestricted,
+  // and an integration the actor cannot see resolves to null → empty → refuse).
+  setIntegrationOriginResolver(async (integrationKey, actor) => {
+    const def = await resolveDefinition(actor, integrationKey);
     if (!def) return [];
     const origins = new Set<string>();
     for (const action of Object.values(def.actions ?? {})) {
@@ -491,18 +499,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // 8. Catalog sources: integration definitions feed skills; connected platform accounts and
   //    artifact (ekoa_action) capabilities keep honest empties this gate — the seam carries no
   //    org context for accounts and no MANIFEST-capability surface exists yet (G9 note).
+  //    A2: both definition reads are TENANT-SCOPED (the actor comes from the catalog builder), so
+  //    an agent prompt only ever advertises integrations the caller may actually see. `listenerConfig`
+  //    is now carried through as the SkillEntry declares it — without it the listener event-name
+  //    resolution in automation/catalog.ts could never resolve and always fell back to the raw
+  //    poll-action name.
   setCatalogSources({
-    getVisibleSkills: () =>
-      listDefinitions().map((d) => ({
+    getVisibleSkills: async (actor) =>
+      (await listDefinitionsFor(actor)).map((d) => ({
         integrationKey: d.integrationKey,
         actions: d.actions.map((a) => ({ actionName: a.actionName, description: a.description, mutates: a.mutates })),
+        ...(d.listenerConfig ? { listenerConfig: d.listenerConfig } : {}),
       })),
-    getSkill: (integrationKey) => {
-      const d = getDefinition(integrationKey);
+    getSkill: async (actor, integrationKey) => {
+      const d = await resolveDefinition(actor, integrationKey);
       return d
         ? {
             integrationKey: d.integrationKey,
             actions: d.actions.map((a) => ({ actionName: a.actionName, description: a.description, mutates: a.mutates })),
+            ...(d.listenerConfig ? { listenerConfig: d.listenerConfig } : {}),
           }
         : undefined;
     },

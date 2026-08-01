@@ -6,17 +6,25 @@
  * Persistence via the integrations service; definitions via the registry (ch02 §2.7).
  */
 import { Router, type Response } from 'express';
+import type { Actor } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
-import { listDefinitions, activeCatalog, refreshDefinitions, getDefinition, integrationAutomationTemplate } from '../integrations/definitions.js';
+import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
+import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import { z } from 'zod';
 
-/** Join a definition's automation-bound actions with their template payloads (the provisioner
- *  and the session rows both consume this; automation/ never imports integrations/). */
-function automationBindings(key: string): ProvisionBinding[] {
-  const def = getDefinition(key);
+/**
+ * Join a definition's automation-bound actions with their template payloads (the provisioner
+ * and the session rows both consume this; automation/ never imports integrations/).
+ *
+ * A2: the DEFINITION is resolved tenant-scoped; the TEMPLATE body still comes off disk
+ * (`integrationAutomationTemplate`) because automation templates are package FILES that have not
+ * moved to the database — A3 owns that move.
+ */
+async function automationBindings(actor: Actor, key: string): Promise<ProvisionBinding[]> {
+  const def = await resolveDefinition(actor, key);
   return (def?.actions ?? [])
     .filter((a) => a.automationBinding?.automationTemplate)
     .map((a) => ({
@@ -38,20 +46,29 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
   // --- Definitions registry (read surface; execution stack is G8) ---------------------------
 
   // GET /api/v1/integrations -> { items: IntegrationDefinition[] } (auth: user, 'list-skills').
-  r.get('/', (_req: AuthedRequest, res: Response) => {
-    res.json({ items: listDefinitions() });
+  // A2: TENANT-SCOPED. The actor's visible stored definitions merged over the shipped baseline —
+  // this is the filter that stops one org's authored package being listed to every other org.
+  // Wire shape is unchanged (Rule 7): the same `{ items: IntegrationDefinition[] }`.
+  r.get('/', async (req: AuthedRequest, res: Response) => {
+    res.json({ items: await listDefinitionsFor(actorOf(req)) });
   });
 
   // GET /api/v1/integrations/active -> { items: ActiveIntegration[] } (auth: user, 'list-active').
   // The active set = definitions the actor's org has an ENABLED config for; each entry carries
-  // the action + webhook/listener event catalogs the trigger picker offers.
+  // the action + webhook/listener event catalogs the trigger picker offers. A2: the catalog is
+  // built over the actor's VISIBLE definitions before the enabled-config join.
   r.get('/active', async (req: AuthedRequest, res: Response) => {
-    const configs = await listConfigs(actorOf(req));
+    const actor = actorOf(req);
+    const configs = await listConfigs(actor);
     const enabled = new Set(configs.filter((c) => c.enabled).map((c) => c.integrationKey));
-    res.json({ items: activeCatalog().filter((e) => enabled.has(e.key)) });
+    res.json({ items: (await activeCatalogFor(actor)).filter((e) => enabled.has(e.key)) });
   });
 
   // POST /api/v1/integrations/refresh -> { count, keys } (auth: org-admin, 'refresh-registry').
+  // SCOPE (A2): this reloads the PROCESS-WIDE DISK registry (api/assets/integrations + the runtime
+  // tier) and nothing else. It does not read, write or invalidate any tenant definition document —
+  // those are read per request straight off Mongo and need no refresh. The reported {count, keys}
+  // is therefore the disk baseline's, deliberately NOT the caller's visible set.
   r.post('/refresh', requireRole('org-admin', 'super-admin'), (_req: AuthedRequest, res: Response) => {
     res.json(refreshDefinitions());
   });
@@ -98,6 +115,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
    */
   r.get('/:key/session', async (req: AuthedRequest, res: Response) => {
     const key = req.params.key as string;
+    const actor = actorOf(req);
     res.json({
       integrationKey: key,
       status: 'none',
@@ -110,7 +128,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
         message: 'Captura de sessão não disponível nesta versão.',
       },
       session: { status: 'none', capturedAt: null },
-      actions: await sessionActionRows(actorOf(req), key, automationBindings(key)),
+      actions: await sessionActionRows(actor, key, await automationBindings(actor, key)),
     });
   });
 
@@ -124,10 +142,12 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
 
   r.post('/:key/provision-automations', async (req: AuthedRequest, res: Response) => {
     const key = req.params.key as string;
-    if (!getDefinition(key)) return notFound(res);
+    const actor = actorOf(req);
+    // A2: a key the actor cannot see is a 404, byte-for-byte with a key that does not exist.
+    if (!(await resolveDefinition(actor, key))) return notFound(res);
     // Materialize the definition's bound automation templates as org automations (idempotent:
     // deterministic ids; re-provision refreshes from the template).
-    const { created, updated, rows } = await provisionIntegrationAutomations(actorOf(req), key, automationBindings(key));
+    const { created, updated, rows } = await provisionIntegrationAutomations(actor, key, await automationBindings(actor, key));
     res.json({ provisioned: rows.some((row) => row.provisioned), created, updated, actions: rows });
   });
 

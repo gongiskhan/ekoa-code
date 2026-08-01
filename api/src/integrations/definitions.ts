@@ -174,8 +174,14 @@ export interface ActiveIntegrationCatalog {
 const SECRET_KEY_RE =
   /^(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token)$/i;
 
-/** Deep-clone a value, redacting any property whose key names a credential value. */
-function redactSecrets<T>(value: T): T {
+/**
+ * Deep-clone a value, redacting any property whose key names a credential value.
+ *
+ * Exported (A2) so the tenant-scoped Mongo tier in `definition-registry.ts` runs the SAME scrub on
+ * its projection as this disk tier runs on its own — one implementation of the rule, never a second
+ * copy that can drift from `SECRET_KEY_RE`.
+ */
+export function redactSecrets<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((v) => redactSecrets(v)) as unknown as T;
   }

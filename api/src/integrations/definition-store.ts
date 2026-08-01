@@ -35,7 +35,14 @@ import { createHash } from 'node:crypto';
 import type { Actor } from '@ekoa/shared';
 import { Store, type Doc } from '../data/store.js';
 import { integrationDefinitions } from '../data/stores.js';
-import type { IntegrationConfigField, IntegrationAction, IntegrationPackageConfig } from './definitions.js';
+import type {
+  IntegrationConfigField,
+  IntegrationAction,
+  IntegrationPackageConfig,
+  IntegrationSessionConnectConfig,
+  IntegrationWebhookConfig,
+  IntegrationListenerConfig,
+} from './definitions.js';
 
 /** The three-tier visibility of a stored definition (private-by-default, org-shared, cross-org). */
 export type DefinitionVisibility = 'private' | 'org' | 'global';
@@ -88,6 +95,17 @@ export interface IntegrationDefinitionFields {
   skillMd: string;
   /** Accumulated authoring lessons (free text), if any. */
   lessons?: string;
+  /**
+   * The three remaining package-level blocks of the ONE canonical `IntegrationPackageConfig`
+   * (A2, additive + optional so no A1 row needs migrating). They are carried on the document
+   * because the merged read registry (`definition-registry.ts`) projects a stored row onto the
+   * SAME `IntegrationDefinition` shape the rest of the code consumes: without them a tenant row
+   * that shadows a shipped package would silently lose its webhook verification config and its
+   * listener poll contract, and the events/listener rails would read a package that cannot poll.
+   */
+  sessionConnect?: IntegrationSessionConnectConfig;
+  webhookConfig?: IntegrationWebhookConfig;
+  listenerConfig?: IntegrationListenerConfig;
   /** Origins the definition may talk to (egress allow-list carried from the package). */
   declaredOrigins: string[];
   origin?: IntegrationDefinitionOrigin;

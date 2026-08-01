@@ -32,8 +32,8 @@ import { validateConfig } from '../agents/integration-builder-parser.js';
 import {
   reservedIntegrationKeys,
   writeRuntimePackage,
-  getDefinition,
-  integrationSkillMd,
+  resolveDefinition,
+  resolveSkillMd,
   createConfig,
   updateConfig,
   findConfigForOwner,
@@ -169,13 +169,16 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
     let session = await findSessionForKey(actor.userId, integrationKey);
     if (!session) {
       // No live session: rebuild an editable one from the saved package, when the key exists.
-      const def = getDefinition(integrationKey);
+      // A2: resolved TENANT-SCOPED, so the builder loads the actor's OWN definition when they have
+      // one and the shipped baseline otherwise — never another tenant's package of the same key.
+      // The SAVE path below still writes the disk runtime tier; A3 moves it to the store.
+      const def = await resolveDefinition(actor, integrationKey);
       if (!def) return notFound(res);
       session = await createSession(actor, deps, {
         integrationKey,
         loadedKey: integrationKey,
         currentPackage: definitionToConfig(def),
-        currentSkillMd: integrationSkillMd(integrationKey) ?? '',
+        currentSkillMd: (await resolveSkillMd(actor, integrationKey)) ?? '',
       });
     }
     res.status(200).json({

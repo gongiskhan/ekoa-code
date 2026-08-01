@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import type { Actor } from '@ekoa/shared';
 import { buildAutomationCatalog, formatCatalogForPrompt } from '../../src/automation/catalog.js';
 import { setCatalogSources, __resetAutomationSeamsForTests, type CatalogSources } from '../../src/automation/seams.js';
 import { automations, automationRuns } from '../../src/data/stores.js';
@@ -9,12 +10,17 @@ import { bootAgentTestDb, shutdownAgentTestDb } from '../agents/_setup.js';
  * catalog-listing cases: the builder reads the owner's automations (from the `automations` store),
  * and its integration actions / connected accounts / ekoa actions through the injected
  * `CatalogSources` seam. Owner-scoping and the PT-PT triggered-automation rendering carry.
+ *
+ * A2: the seam's two definition reads take the whole ACTOR and are async (integration definitions
+ * are tenant-scoped), so the builder now takes an actor too.
  */
+const ACTOR: Actor = { userId: 'u1', orgId: 'orgA', role: 'user' };
+
 const sources: CatalogSources = {
-  getVisibleSkills: () => [
+  getVisibleSkills: async () => [
     { integrationKey: 'slack', actions: [{ actionName: 'post_message', description: 'Post a message to Slack', argsSchema: { properties: { channel: { type: 'string' }, text: { type: 'string' } }, required: ['channel', 'text'] }, mutates: true }] },
   ],
-  getSkill: () => undefined,
+  getSkill: async () => undefined,
   getConnectedPlatformAccounts: async () => [{ integrationKey: 'google-workspace', email: 'me@example.com' }],
   listEkoaActions: async () => [
     { artifactSlug: 'crm', artifactName: 'CRM', capabilityName: 'add_client', description: 'Add a client', argsSummary: 'name, email', mutates: true },
@@ -41,7 +47,7 @@ describe('automation catalog (§5.5.2 layer 4)', () => {
   afterEach(async () => { __resetAutomationSeamsForTests(); await automations.deleteMany({}); await automationRuns.deleteMany({}); });
 
   it('lists only the owner\'s automations, plus integration actions / accounts / ekoa actions from the seam', async () => {
-    const catalog = await buildAutomationCatalog('u1', false);
+    const catalog = await buildAutomationCatalog(ACTOR);
 
     expect(catalog.automations.map((a) => a.id)).toEqual(['auto-u1']); // owner-scoped: u2's is hidden
     expect(catalog.automations[0]!.name).toBe('Enviar relatório');
@@ -55,7 +61,7 @@ describe('automation catalog (§5.5.2 layer 4)', () => {
   });
 
   it('formats the catalog for the planner prompt, including the PT-PT triggered-automation lines', async () => {
-    const catalog = await buildAutomationCatalog('u1', false);
+    const catalog = await buildAutomationCatalog(ACTOR);
     const text = formatCatalogForPrompt(catalog);
 
     expect(text).toContain('Enviar relatório');

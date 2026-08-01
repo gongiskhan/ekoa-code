@@ -14,7 +14,8 @@
  * separate (different credential custody, different SSRF posture — ch09 invariant 8).
  */
 
-import { getDefinition, type IntegrationActionHttpConfig } from './definitions.js';
+import { type IntegrationActionHttpConfig } from './definitions.js';
+import { resolveDefinition, systemActorForOrg } from './definition-registry.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { SsrfError } from '../services/url-safety.js';
 import {
@@ -51,7 +52,10 @@ export async function callPlatformIntegration(input: PlatformCallInput, deps: OA
   if (!provider) {
     return { success: false, code: 'unknown_integration', error: `unknown platform integration: ${input.integrationKey}` };
   }
-  const def = getDefinition(input.integrationKey);
+  // A2: TENANT-SCOPED. A platform call carries the org (whose OAuth tokens it is about to spend)
+  // but no acting user, so the read runs under the org system actor — it can only ever see `org`
+  // and `global` rows of this org, never any user's private definition (definition-registry.ts).
+  const def = await resolveDefinition(systemActorForOrg(input.orgId), input.integrationKey);
   const action = def?.actions.find((a) => a.actionName === input.actionName);
   if (!action?.httpConfig) {
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}` };

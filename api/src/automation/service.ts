@@ -332,7 +332,7 @@ export async function planFromGoal(
   if (!input.automationId && !canCreateAutomation(actor, orgSettings)) {
     throw new AutomationServiceError('FORBIDDEN', 'not authorized to create automations');
   }
-  const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
+  const catalog = await buildAutomationCatalog(actor);
   const result = await plannerPlanFromGoal({ goal: input.goal, userId: actor.userId, catalog, ...(input.name ? { automationName: input.name } : {}) });
 
   if (result.status === 'unavailable') {
@@ -799,7 +799,7 @@ export async function submitStepFeedback(
  *  catalog is already strictly owner-only — a stricter scope than the private gate, for every
  *  role including super-admin (the flag it takes widens only integration/ekoa actions). */
 export async function buildCatalog(actor: Actor): Promise<WireCatalogResponse> {
-  const catalog = await buildAutomationCatalog(actor.userId, actor.role === 'super-admin');
+  const catalog = await buildAutomationCatalog(actor);
   return {
     automations: catalog.automations.map((a) => ({ key: a.id, name: a.name, ...(a.description ? { description: a.description } : {}), type: 'automation' })),
     integrationActions: catalog.integrationActions.map((e) => ({ key: `${e.integrationKey}.${e.actionName}`, name: `${e.integrationKey}.${e.actionName}`, ...(e.description ? { description: e.description } : {}), type: 'integration-action' })),

@@ -110,7 +110,13 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
   // interpolation (the binding is about where the bytes actually go) and BEFORE the request.
   if (spec.authIntegrationKey) {
     try {
-      const allowedOrigins = await loadIntegrationBoundOrigins(spec.authIntegrationKey);
+      // A2: resolved TENANT-SCOPED. The run's owner + org are the read actor, so the allow-list
+      // comes from the definition THIS org sees — never another tenant's package of the same key.
+      const allowedOrigins = await loadIntegrationBoundOrigins(spec.authIntegrationKey, {
+        userId: ctx.ownerUserId,
+        orgId: ctx.orgId,
+        role: 'user',
+      });
       assertOriginAllowed(resolvedUrl, { allowedOrigins, credentialLabel: spec.authIntegrationKey });
     } catch (err) {
       if (err instanceof CredentialOriginError) {

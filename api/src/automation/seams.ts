@@ -14,6 +14,7 @@
  * `api/src/llm/` (vision.ts, planner.ts, rehearsal.ts). These seams are transport/persistence.
  */
 import type { BrowserContext } from 'playwright';
+import type { Actor } from '@ekoa/shared';
 // Type-only import (erased at compile) — the run event emitter's shape lives in engine.ts, which
 // imports this module at RUNTIME; a type-only import back here creates no runtime cycle.
 import type { RunEventEmitter } from './engine.js';
@@ -168,7 +169,10 @@ export function loadIntegrationCredentialFields(
 // URL is the interim binding (the Cofre's per-item `boundOrigins` replaces this in WS-C without
 // moving the enforcement point). `automation/` does not import `integrations/`, hence the seam.
 
-export type IntegrationOriginResolver = (integrationKey: string) => Promise<string[]>;
+// A2: the resolver now carries the RUN's actor, because an integration definition is tenant-scoped
+// — the same key resolves to a different package (and therefore a different allow-list) per org.
+// Resolving it unscoped would bind one org's credential to another org's declared hosts.
+export type IntegrationOriginResolver = (integrationKey: string, actor: Actor) => Promise<string[]>;
 
 /** DEFAULT IS REFUSE. An unbound credential must not fall back to "any public host" — that is
  *  precisely the hole R-2 closes, and a permissive default would reopen it for every caller that
@@ -178,9 +182,10 @@ let originResolver: IntegrationOriginResolver = defaultOriginResolver;
 export function setIntegrationOriginResolver(fn: IntegrationOriginResolver): void {
   originResolver = fn;
 }
-/** Hosts the named integration's credential may be sent to. Empty → the api_call step refuses. */
-export function loadIntegrationBoundOrigins(integrationKey: string): Promise<string[]> {
-  return originResolver(integrationKey);
+/** Hosts the named integration's credential may be sent to, AS SEEN BY `actor`. Empty → the
+ *  api_call step refuses (unbound never means unrestricted). */
+export function loadIntegrationBoundOrigins(integrationKey: string, actor: Actor): Promise<string[]> {
+  return originResolver(integrationKey, actor);
 }
 
 // ============================================================================
@@ -299,10 +304,15 @@ export interface EkoaActionCatalogEntry {
 }
 
 export interface CatalogSources {
-  /** Integration definitions visible to the user (their actions feed the catalog). */
-  getVisibleSkills(userId: string, superAdmin: boolean): SkillEntry[];
-  /** One skill by key (listener event-name resolution). */
-  getSkill(integrationKey: string, ownerUserId?: string): SkillEntry | undefined;
+  /**
+   * Integration definitions visible to the ACTOR (their actions feed the catalog). A2: takes the
+   * whole actor and is ASYNC, because definition visibility is now a tenant-scoped database read —
+   * a user-id alone cannot answer "which definitions may this caller see". The super-admin flag it
+   * used to take is `actor.role`.
+   */
+  getVisibleSkills(actor: Actor): Promise<SkillEntry[]>;
+  /** One skill by key, as seen by the actor (listener event-name resolution). */
+  getSkill(actor: Actor, integrationKey: string): Promise<SkillEntry | undefined>;
   /** Connected platform accounts (Google/Microsoft) for the "signed in as" block. */
   getConnectedPlatformAccounts(): Promise<ConnectedAccount[]>;
   /** The user's artifact capabilities (MANIFEST.md), flattened into catalog entries. */
@@ -310,8 +320,8 @@ export interface CatalogSources {
 }
 
 const defaultCatalogSources: CatalogSources = {
-  getVisibleSkills: () => [],
-  getSkill: () => undefined,
+  getVisibleSkills: async () => [],
+  getSkill: async () => undefined,
   getConnectedPlatformAccounts: async () => [],
   listEkoaActions: async () => [],
 };

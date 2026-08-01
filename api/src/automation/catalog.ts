@@ -12,6 +12,7 @@
  * most-recently-successful first, then alphabetical.
  */
 
+import type { Actor } from '@ekoa/shared';
 import { automationRunStore } from './persistence.js';
 import { automations as automationsStore } from '../data/stores.js';
 import { getCatalogSources } from './seams.js';
@@ -72,11 +73,17 @@ export interface Catalog {
 // Builders
 // ============================================================================
 
-export async function buildAutomationCatalog(userId: string, superAdmin = false): Promise<Catalog> {
-  const automations = await listAutomationCatalog(userId);
-  const integrationActions = listIntegrationActionCatalog(userId, superAdmin);
+/**
+ * A2: takes the whole ACTOR rather than `(userId, superAdmin)`. Integration definitions are now
+ * tenant-scoped, so building the catalog needs the org as well as the user; `superAdmin` is
+ * `actor.role === 'super-admin'`.
+ */
+export async function buildAutomationCatalog(actor: Actor): Promise<Catalog> {
+  const superAdmin = actor.role === 'super-admin';
+  const automations = await listAutomationCatalog(actor);
+  const integrationActions = await listIntegrationActionCatalog(actor);
   const connectedAccounts = await listConnectedAccounts();
-  const ekoaActions = await listEkoaActionsCatalog(userId, superAdmin);
+  const ekoaActions = await listEkoaActionsCatalog(actor.userId, superAdmin);
   return { automations, integrationActions, connectedAccounts, ekoaActions };
 }
 
@@ -90,8 +97,11 @@ async function listEkoaActionsCatalog(userId: string, superAdmin: boolean): Prom
   return getCatalogSources().listEkoaActions(userId, superAdmin);
 }
 
-function resolveListenerEventName(integrationKey: string, ownerUserId: string): string | undefined {
-  const skill = getCatalogSources().getSkill(integrationKey, ownerUserId) ?? getCatalogSources().getSkill(integrationKey);
+/** A2: one scoped lookup. The actor already determines what is visible, so the old
+ *  owner-then-unscoped double call (which could resolve a definition the caller cannot see) is
+ *  gone rather than kept as a fallback. */
+async function resolveListenerEventName(actor: Actor, integrationKey: string): Promise<string | undefined> {
+  const skill = await getCatalogSources().getSkill(actor, integrationKey);
   return skill?.listenerConfig?.events?.[0]?.name;
 }
 
@@ -104,24 +114,25 @@ async function listConnectedAccounts(): Promise<ConnectedAccountEntry[]> {
   }
 }
 
-async function listAutomationCatalog(userId: string): Promise<AutomationCatalogEntry[]> {
-  const all = (await automationsStore.find({ ownerUserId: userId })) as unknown as Automation[];
+async function listAutomationCatalog(actor: Actor): Promise<AutomationCatalogEntry[]> {
+  const all = (await automationsStore.find({ ownerUserId: actor.userId })) as unknown as Automation[];
   // Visibility: an automation is visible to its owner only (no shared/public concept yet).
-  const mine = all.filter((a) => a.ownerUserId === userId);
+  const mine = all.filter((a) => a.ownerUserId === actor.userId);
 
   const entries: AutomationCatalogEntry[] = [];
   for (const automation of mine) {
     const lastRun = (await automationRunStore.listForAutomation(automation.id, 1))[0];
-    entries.push(toCatalogEntry(automation, lastRun?.startedAt, lastRun?.status === 'completed'));
+    entries.push(await toCatalogEntry(actor, automation, lastRun?.startedAt, lastRun?.status === 'completed'));
   }
   return entries;
 }
 
-function toCatalogEntry(
+async function toCatalogEntry(
+  actor: Actor,
   a: Automation,
   lastRunAt: string | undefined,
   lastRunSucceeded: boolean | undefined,
-): AutomationCatalogEntry {
+): Promise<AutomationCatalogEntry> {
   let trigger: AutomationCatalogEntry['trigger'];
   if (a.trigger && a.trigger.kind !== 'manual') {
     if (a.trigger.kind === 'webhook') {
@@ -130,7 +141,7 @@ function toCatalogEntry(
       // Resolve a user-facing event name from the skill's listenerConfig.events
       // (the same labels the trigger picker shows). Falls back to the pollAction
       // when the skill omits an `events` declaration.
-      const eventName = resolveListenerEventName(a.trigger.integrationKey, a.ownerUserId)
+      const eventName = (await resolveListenerEventName(actor, a.trigger.integrationKey))
         ?? a.trigger.pollAction;
       trigger = { kind: 'listener', integrationKey: a.trigger.integrationKey, eventName };
     }
@@ -150,11 +161,8 @@ function toCatalogEntry(
   };
 }
 
-function listIntegrationActionCatalog(
-  userId: string,
-  superAdmin: boolean,
-): IntegrationActionCatalogEntry[] {
-  const skills = getCatalogSources().getVisibleSkills(userId, superAdmin);
+async function listIntegrationActionCatalog(actor: Actor): Promise<IntegrationActionCatalogEntry[]> {
+  const skills = await getCatalogSources().getVisibleSkills(actor);
   const entries: IntegrationActionCatalogEntry[] = [];
   for (const skill of skills) {
     for (const action of skill.actions ?? []) {

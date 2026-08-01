@@ -56,6 +56,7 @@
  */
 
 import { getDefinition, type IntegrationListenerConfig } from '../definitions.js';
+import { resolveDefinition, actorForOwnedRow } from '../definition-registry.js';
 import type { EnqueueInput, EnqueueResult } from './platform-poll.js';
 
 /** Minimal trigger shape the generic poller needs (decoupled from events/ TriggerDoc). */
@@ -64,6 +65,16 @@ export interface UserDefinedPollTrigger {
   integrationKey: string;
   /** Trigger-level override of `listenerConfig.pollAction` (TriggerDoc.pollConfig.actionName). */
   pollActionName?: string;
+  /**
+   * A2 — the TENANT the trigger row belongs to (`TriggerDoc.orgId` / `TriggerDoc.ownerUserId`).
+   * Supplied ⇒ the package is resolved TENANT-SCOPED (`resolveDefinition`), so a listener polls the
+   * definition ITS org sees. OPTIONAL, and absent ⇒ the disk baseline resolves exactly as before
+   * this slice: the caller of this rail is `events/listener-supervisor.ts`, owned by another slice,
+   * so the fields are additive and the un-threaded path keeps its shipped behaviour rather than
+   * failing closed on a definition that has not moved to the database yet.
+   */
+  orgId?: string;
+  ownerUserId?: string;
 }
 
 /** The subset of `ExecuteIntegrationActionResult` this source reads (kept structural so the
@@ -116,7 +127,7 @@ export async function pollUserDefinedSource(
   trigger: UserDefinedPollTrigger,
   deps: UserDefinedPollDeps,
 ): Promise<UserDefinedPollResult> {
-  const cfg = resolveListenerConfig(trigger.integrationKey);
+  const cfg = await resolveListenerConfig(trigger);
   const actionName = trigger.pollActionName || cfg.pollAction;
 
   const state = parseStoredCursor(await deps.readCursor(trigger.id), trigger.integrationKey);
@@ -226,10 +237,21 @@ export async function pollUserDefinedSource(
   return { polled: true, enqueued, cursorAdvanced: true };
 }
 
-/** Read + validate the integration package's listenerConfig. Throws with a specific message for
- *  each failure mode so the audit row says WHY the listener cannot poll. */
-function resolveListenerConfig(integrationKey: string): IntegrationListenerConfig {
-  const def = getDefinition(integrationKey);
+/**
+ * Read + validate the integration package's listenerConfig. Throws with a specific message for
+ * each failure mode so the audit row says WHY the listener cannot poll.
+ *
+ * A2: TENANT-SCOPED when the trigger row carries its org. The read actor is built from the row
+ * itself (`actorForOwnedRow`) — the owner when the row names one, otherwise the org system actor,
+ * which by construction can only ever see `org` + `global` rows of that same org and never another
+ * user's private definition. A row with no org falls back to the disk baseline (see the trigger
+ * type's note).
+ */
+async function resolveListenerConfig(trigger: UserDefinedPollTrigger): Promise<IntegrationListenerConfig> {
+  const integrationKey = trigger.integrationKey;
+  const def = trigger.orgId
+    ? await resolveDefinition(actorForOwnedRow(trigger.orgId, trigger.ownerUserId), integrationKey)
+    : getDefinition(integrationKey);
   if (!def) throw new Error(`integration "${integrationKey}" has no installed package — the listener cannot poll`);
   const cfg = def.listenerConfig;
   if (!cfg) throw new Error(`integration "${integrationKey}" has no listenerConfig — it is not a pollable listener source`);

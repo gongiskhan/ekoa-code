@@ -17,7 +17,8 @@
  * lead wires to automation/); absent that, it returns a coded, non-throwing result.
  */
 
-import { getDefinition, type IntegrationActionHttpConfig } from './definitions.js';
+import { type IntegrationActionHttpConfig } from './definitions.js';
+import { resolveDefinition } from './definition-registry.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
 import { integrationConfigs } from '../data/stores.js';
@@ -108,7 +109,13 @@ export async function executeUserIntegrationAction(
   input: ExecuteIntegrationActionInput,
   deps: ExecutorDeps = {},
 ): Promise<ExecuteIntegrationActionResult> {
-  const def = getDefinition(input.integrationKey);
+  // A2: TENANT-SCOPED resolution. The call already carries the verified org + owner (the same pair
+  // `findConfigForOwner` below is scoped to), so the package this action runs against is the one
+  // THIS org sees — a tenant definition first, the shipped baseline otherwise.
+  const def = await resolveDefinition(
+    { userId: input.ownerUserId, orgId: input.orgId, role: 'user' },
+    input.integrationKey,
+  );
   if (!def) return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
 
   const action = def.actions.find((a) => a.actionName === input.actionName);

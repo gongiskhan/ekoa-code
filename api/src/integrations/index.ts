@@ -31,4 +31,23 @@ export {
   type IntegrationAction,
   type IntegrationActionHttpConfig,
   type IntegrationConfigField,
+  type ActiveIntegrationCatalog,
 } from './definitions.js';
+// A2 — the MERGED (tenant Mongo in front of the disk baseline) async read API. Every caller that
+// holds an actor reads definitions through this, not through the raw disk functions above.
+export {
+  resolveDefinition,
+  listDefinitionsFor,
+  resolveSkillMd,
+  activeCatalogFor,
+  definitionFromDoc,
+  systemActorForOrg,
+  actorForOwnedRow,
+  type DefinitionStoreReader,
+} from './definition-registry.js';
+export {
+  integrationDefinitionStore,
+  IntegrationDefinitionStore,
+  type IntegrationDefinitionDoc,
+  type DefinitionVisibility,
+} from './definition-store.js';
