@@ -16,6 +16,28 @@ export default defineConfig({
   globalSetup: './web/e2e/global-setup.ts',
   fullyParallel: false,
   workers: 1,
+  /**
+   * THE PER-TEST BUDGET, raised from Playwright's 30s default because thirty specs in this estate
+   * were quietly exceeding it.
+   *
+   * Those specs pick per-assertion budgets deliberately and document why: the demo-spine removal
+   * walks ~24 collections then reloads (90s), a legal chain runs end to end (120s), the bridge
+   * handshake takes ~20s on a first step (60s). Every one of those was DEAD CODE past 30s — the
+   * test was killed by the global cap first, and the output said so on two adjacent lines:
+   *
+   *     Test timeout of 30000ms exceeded.
+   *     Expect "toHaveCount" with timeout 90000ms
+   *
+   * That reads as a product hang and is nothing of the sort, which is why it kept being triaged as
+   * "flaky under load": the closer the machine gets to the cap, the more of these tip over. It is
+   * also why `demos.spec.ts` had all 28 of its tours failing at their first step.
+   *
+   * 180s is above the longest legitimate wait (120s) with headroom. It is a BACKSTOP, not the
+   * bound: each assertion still fails at its own budget, so a genuinely stuck test surfaces at the
+   * assertion that stuck rather than at an arbitrary global. Specs needing more still say so with
+   * `test.setTimeout` (part-b-proof 1500s, voice-proof 480s, demos 300s), which overrides this.
+   */
+  timeout: 180_000,
   forbidOnly: !!process.env.CI,
   reporter: [['line']],
   use: {

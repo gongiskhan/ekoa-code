@@ -6,6 +6,26 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`thirty-specs-budgeted-waits-they-could-never-use`** (FIXED 2026-08-01, HIGH, test-estate — the
+  single largest cause of this estate's "flakiness"). `playwright.config.ts` set no `timeout`, so
+  Playwright's **30s default per-test cap** applied, while **30 of the 76 specs** budget individual
+  assertions above it: `legal-cadeia-credito` 120s, `demo-spine`/`gateway-keys`/`legal-jurimetria`/
+  `legal-rcbe` 90s, and 25 more at 60s. Every one of those budgets was DEAD CODE — the test was
+  killed by the global cap before its own wait could elapse.
+  The output said so plainly, on two adjacent lines, and had done for as long as the estate has
+  run:
+  `Test timeout of 30000ms exceeded.` directly above `Expect "toHaveCount" with timeout 90000ms`.
+  It reads as a product hang and is nothing of the sort, which is exactly why it kept being triaged
+  as "flake under heavy machine load": the closer the machine ran to the cap, the more specs tipped
+  over, and WHICH ones varied per run. Several `docs/known-flakes.md` entries describing
+  load-dependent failures at the tail of a long suite are candidates to re-read in this light.
+  FIXED at the config, one line, not thirty edits: `timeout: 180_000` — above the longest legitimate
+  wait (120s) with headroom, and a BACKSTOP rather than the bound, since each assertion still fails
+  at its own budget so a stuck test surfaces where it stuck. Specs needing more still override with
+  `test.setTimeout` (part-b-proof 1500s, voice-proof 480s, demos 300s).
+  This was the second half of the demos cluster: on the wrong web port their bridge handshake also
+  failed, so BOTH causes were real and each alone was enough to keep 28 tours red.
+
 - **`artifact-backend-runtime-never-wired`** (OPEN 2026-08-01, HIGH, feature inert — found by
   repairing `artifact-backend-panel.spec.ts`). **Artifact backends (Layer 2) cannot run at all.**
   `setArtifactBackendRuntime()` is defined in `api/src/apps/backend-runtime/runtime.ts` and is
@@ -90,7 +110,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   recording as a class, not an incident: a test file outside the include is worse than no file,
   because it reads as coverage in review and in a directory listing. It was the ONLY one — checked.
 
-- **`ported-e2e-estate-is-not-green`** (OPEN 2026-07-31, MEDIUM, process — measured, not inferred).
+- **`ported-e2e-estate-is-not-green`** (FIXED 2026-08-01 — **the estate is green**: 247 passed /
+  0 failed / 8 skipped in 17.2m, `[suite-ledger] OK — census matches, every non-due artifact
+  ledger-skipped, ratchet holds`, exit 0. Measured on a FRESH stack via `npm run e2e:server`, which
+  matters: a warm reused stack accumulates state across runs, and re-running `demo-spine` alone
+  deletes the shared Fonseca spine that later specs read. Several "flaky" readings during this work
+  were that, self-inflicted. The causes are below and each has its own entry: the port artifact
+  (`e2e-server-loses-to-a-running-dev-server`), the 30s cap
+  (`thirty-specs-budgeted-waits-they-could-never-use`), three specs on a retired dispatcher, and
+  two specs that could never pass on any checkout. Original entry kept below for the measurements.)
+- **`ported-e2e-estate-is-not-green` — original 2026-07-31 record** (MEDIUM, process).
   `CLAUDE.md` says the ported estate "stays green on every PR" and that "a red baseline spec is fixed
   before any new work merges". It is not green and has not been for some time. Measured on this
   machine at gate G12, 242 due specs:
