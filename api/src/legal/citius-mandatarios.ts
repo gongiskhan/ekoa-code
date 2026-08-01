@@ -38,6 +38,14 @@
  *      (a dedup MISS that silently drops one). If the first real snapshot shows no per-row id, that
  *      collision is a pinned risk whose backstop is the completeness reconciliation's count-check
  *      downstream (a dropped row surfaces as a count mismatch), not this parser.
+ *   6. Empty-inbox RENDER SHAPE — this parser proves an empty inbox POSITIVELY (a GridView-structural
+ *      marker on the <table>, plus no <input>-bearing rows), never from "a header table with no
+ *      rows". If the real portal OMITS the `gvNotificacoes` id (or renders no <table> at all) when
+ *      the inbox is empty, `parseInboxPage` returns ok:false and the sync treats empty as
+ *      UNAVAILABLE. That is the safe direction (never a false empty), but a genuinely-empty inbox
+ *      that renders without the marker would keep reporting "indisponível" — a live LIVELOCK risk.
+ *      CS4/CS6 MUST confirm the real empty-state markup on first real access, and (see the CS4/CS6
+ *      note by PROCESS_NUMBER_RE) key the inbox off the authenticated page identity, not the header.
  */
 import { createHash } from 'node:crypto';
 import { cellText, decodeEntities } from './portal-html.js';
@@ -46,28 +54,53 @@ import { cellText, decodeEntities } from './portal-html.js';
 const UNAVAILABLE = 'Caixa de correio Citius indisponível';
 
 /**
- * POSITIVE-PROOF signals for the notifications grid. An empty inbox is NEVER inferred from "a
+ * POSITIVE-PROOF signal for the notifications grid. An empty inbox is NEVER inferred from "a
  * header table with no rows" (a filter/search/legend/login/WAF table has exactly that shape) — it
- * must be positively PROVEN by one of these, which is the whole anti-false-empty guarantee.
+ * must be positively PROVEN by a GridView-STRUCTURAL marker, which is the whole anti-false-empty
+ * guarantee.
  */
 
-/** A GridView-style notifications MARKER: a substring expected in the grid <table>'s id/class
- *  (`ctl00_cph_gvNotificacoes`, a `.GridView`, …). Configurable; matched case-insensitively. */
-const GRID_MARKERS = ['gvnotific', 'notificac', 'gridview'] as const;
+/**
+ * GridView-STRUCTURAL notifications markers on the grid <table>'s id/class. These must be
+ * GRIDVIEW-structural, NOT the bare domain word `notificac`: a filter/error/menu container such as
+ * `ctl00_cph_pnlPesquisaNotificacoes`, `divNotificacoesErro`, or `menuNotificacoesLink` ALSO
+ * contains `notificac`, and treating that as proof was the round-3 false-empty defect. So a marker
+ * is EITHER an ASP.NET GridView id whose `gv` control-type prefix is token-bounded and precedes
+ * `notific` (`gvNotificacoes`, `ctl00_cph_gvNotificacoes`) OR an explicit `GridView` CSS class.
+ *
+ * A bare `notificacoes` id/class token is DELIBERATELY NOT a marker: an error/filter container like
+ * `notificacoes-erro` / `notificacoes-panel` carries it too, so accepting it would re-open the very
+ * hole this fix closes (the task lists it as a candidate token, rejected here as not
+ * gridview-structural). `gv` must be token-bounded (start / non-alphanumeric, so `_gv` in the
+ * ASP.NET id namespace qualifies but `pnlgvx…` does not). Matched case-insensitively.
+ */
+const GRID_MARKERS: readonly RegExp[] = [
+  /(?:^|[^a-z0-9])gv[\w-]*notific/i, // ASP.NET GridView id: gvNotificacoes, ctl00_cph_gvNotificacoes
+  /gridview/i,                        // an explicit GridView CSS class (.GridView / RadGrid variants)
+];
 
-/** Explicit empty-inbox messages (normalized + accent-stripped, matched as exact substrings). An
- *  empty inbox typically renders one inside the grid (GridView EmptyDataTemplate). Configurable. */
-const EMPTY_INBOX_SIGNALS = [
-  'nao existem notificacoes',
-  'sem notificacoes',
-  'nenhuma notificacao',
-  'nao foram encontrad',
-] as const;
+/**
+ * A Citius process number, ANCHORED so a European date can never masquerade as one (round-3
+ * false-POSITIVE defect: an unanchored regex accepted `15/06/2026` as a process number, letting a
+ * search-results/related-cases table parse as the inbox). A Citius number has EXACTLY ONE '/':
+ * `<number>/<year>` optionally followed by a dotted court-code that CONTAINS A LETTER
+ * (`1234/26.0T8LSB`, `45/26.7T8ABC-A`), or the bare `NNNN/YYYY` form (`123/2026`). A `DD/MM/YYYY`
+ * date has TWO '/', so the single literal '/' plus the `$` anchor structurally rejects it (and
+ * `isProcessNumber` guards the exact date shape explicitly, belt-and-braces). A row's processo cell
+ * must match THIS to count as a notification, so a filter panel's <input>/label row (empty or
+ * "Pesquisar" text) or a date cell can't be one.
+ *
+ * CS4/CS6 RESIDUAL (reviewer): the column HEADER alone does not prove a page is the inbox — a
+ * search-results / related-cases page can carry the same Processo/Data/Tribunal header at a
+ * DIFFERENT authenticated URL. CS4/CS6 MUST key the inbox off the authenticated URL / page identity
+ * (the CaixaCorreio.aspx endpoint reached with a valid session), not merely this header/column
+ * shape, so such a page can never be parsed as the notifications inbox.
+ */
+const PROCESS_NUMBER_RE = /^\d{1,7}\/(?:\d{1,4}\.\d+[a-z][a-z0-9]*(?:-[a-z0-9]+)?|\d{2,4})$/i;
 
-/** A Citius process number ("1234/26.0T8LSB", "123/2026"): leading digits, a '/', more digits,
- *  optionally a dotted alphanumeric suffix. A row's processo cell must have THIS shape to count as
- *  a notification, so a filter panel's <input>/label row (empty or "Pesquisar" text) can't be one. */
-const PROCESS_NUMBER_RE = /^\d{1,7}\s*\/\s*\d{1,4}(?:\.[0-9a-z]+)*/i;
+/** A European DD/MM/YYYY (or D/M/YY) date — the shape DEFECT 2 must keep OUT of the processo cell.
+ *  It carries TWO '/' where a Citius number has exactly one; an explicit guard in `isProcessNumber`. */
+const EURO_DATE_RE = /^\d{1,2}\/\d{1,2}\/\d{2,4}$/;
 
 /** Static / non-identifying `<input value=…>` tokens that must NOT be trusted as a per-row source
  *  id (a checkbox `value="on"` is shared by every row) — see `isIdentifyingId` / `extractSourceId`. */
@@ -218,24 +251,27 @@ function fieldForHeader(label: string): string {
   return HEADER_LABELS[normalizeHeader(label)] ?? '';
 }
 
-/** A Citius process number shape in a row's processo cell (see `PROCESS_NUMBER_RE`). */
+/** A Citius process number shape in a row's processo cell (see `PROCESS_NUMBER_RE`). A `DD/MM/YYYY`
+ *  date is rejected FIRST (its two '/' would otherwise be a false positive), then the anchored,
+ *  single-'/' Citius shape is required — which independently rejects any cell with a second '/'. */
 function isProcessNumber(text: string): boolean {
-  return PROCESS_NUMBER_RE.test(text.trim());
+  const t = text.trim();
+  if (EURO_DATE_RE.test(t)) return false; // a European date is never a process number
+  return PROCESS_NUMBER_RE.test(t);
 }
 
-/** True when a `<table>`'s opening-tag attributes carry a GridView-style notifications marker
- *  (id/class contains one of `GRID_MARKERS`) — the positive STRUCTURAL proof this IS the grid. */
+/** True when a `<table>`'s opening-tag attributes carry a GridView-STRUCTURAL notifications marker
+ *  (id/class matches one of `GRID_MARKERS`) — the positive STRUCTURAL proof this IS the grid. A
+ *  bare `notificac` substring (a `pnl…`/`div…`/`menu…` filter/error container) does NOT qualify. */
 function hasGridMarker(tableAttrs: string): boolean {
-  const hay = tableAttrs.toLowerCase();
-  return GRID_MARKERS.some((m) => hay.includes(m));
+  return GRID_MARKERS.some((re) => re.test(tableAttrs));
 }
 
-/** True when a grid's inner HTML carries an explicit empty-inbox message (`EMPTY_INBOX_SIGNALS`,
- *  normalized + accent-stripped) — the positive proof of a GENUINELY empty inbox, as distinct from
- *  "a header table that merely happens to have no rows". */
-function hasEmptyInboxSignal(tableInner: string): boolean {
-  const text = normalizeHeader(cellText(tableInner));
-  return EMPTY_INBOX_SIGNALS.some((s) => text.includes(s));
+/** True when any NON-header row of a table bears an `<input>`. A genuine empty grid has a header +
+ *  zero data rows (or an EmptyDataTemplate message row), NEVER `<input>` rows — so an input-bearing
+ *  row is a filter/search panel and DISQUALIFIES the table from the empty-inbox verdict. */
+function hasInputBearingRow(rows: RawRow[], headerIdx: number): boolean {
+  return rows.some((r, i) => i !== headerIdx && /<input\b/i.test(r.inner));
 }
 
 /** A candidate per-row source id is IDENTIFYING only when it is not a static/non-identifying token
@@ -377,9 +413,9 @@ interface GridCandidate {
  * 'processo' column AND at least TWO known columns in total. This is the NECESSARY header gate, not
  * sufficient on its own — a filter/search panel can carry the same label row — so a table that
  * passes here is only treated as the grid once it ALSO clears the positive-identification gate in
- * `parseInboxPage` (marker / empty-message / a process-number-shaped data row). Anything that fails
- * the exact-label test (a section-title row, a prose error page laid out as a table) is rejected
- * outright here. Returns the per-index field map on success, `null` otherwise.
+ * `parseInboxPage` (a GridView-structural marker with no input rows, OR a process-number-shaped data
+ * row). Anything that fails the exact-label test (a section-title row, a prose error page laid out as
+ * a table) is rejected outright here. Returns the per-index field map on success, `null` otherwise.
  */
 function identifyHeader(rowInner: string): string[] | null {
   const fieldByIndex = extractCells(rowInner).map((c) => fieldForHeader(cellText(c)));
@@ -400,19 +436,25 @@ function identifyHeader(rowInner: string): string[] | null {
  * notifications") for a page that was actually a login / WAF-challenge / session-expired / error /
  * filter-search-chrome page. An empty inbox is therefore POSITIVELY PROVEN, never inferred from
  * "a header table with no rows" (a filter/login/error table has exactly that shape). A table is a
- * POSITIVELY-IDENTIFIED notifications grid only when it carries one of three positive signals: a
- * GridView-style MARKER on the <table> (`hasGridMarker`), an explicit EMPTY-INBOX message within it
- * (`hasEmptyInboxSignal`), OR >=1 PROCESS-NUMBER-SHAPED data row (`isProcessNumber`).
+ * POSITIVELY-IDENTIFIED notifications grid only when EITHER: it has >=1 PROCESS-NUMBER-SHAPED data
+ * row (`isProcessNumber`); OR it carries a GridView-STRUCTURAL marker on the <table> (`hasGridMarker`
+ * — NOT the bare word `notificac`) AND has NO `<input>`-bearing rows (`hasInputBearingRow` — a filter
+ * panel's row of inputs is not an empty grid). An explicit empty-inbox MESSAGE is NOT sufficient
+ * proof on its own (a `pnlPesquisaNotificacoes` filter panel and a `divNotificacoesErro` error page
+ * can both show one over a Processo/Data header): the structural marker is REQUIRED for the empty
+ * verdict, so a message-only, non-gv table reads ok:false. The message is corroboration only, and is
+ * deliberately not part of the decision (round-3: the marker+input requirement replaces it).
  *
  * THE DECISION RULE:
- *   - `ok:true` WITH rows        ⇔ a positively-identified grid with >=1 process-number-shaped data row.
- *   - `ok:true` rows:[]          ⇔ a positively-identified grid — one carrying a structural MARKER or
- *                                  an explicit empty-inbox message — with ZERO process-number-shaped
- *                                  data rows (a genuinely empty inbox).
+ *   - `ok:true` WITH rows        ⇔ a grid with >=1 process-number-shaped data row.
+ *   - `ok:true` rows:[]          ⇔ a table with a GridView-STRUCTURAL marker AND no <input>-bearing
+ *                                  rows AND zero process-number-shaped rows (a genuinely empty inbox).
  *   - `ok:false` ('indisponível') ⇔ EVERYTHING ELSE: a hard error/maintenance marker or empty/absent
  *                                  HTML; and any header-only filter / search / legend / login / WAF /
- *                                  session table that has the right label TEXTS but NEITHER a data
- *                                  row NOR a structural marker NOR an empty-inbox message.
+ *                                  session/error table that has the right label TEXTS (even an empty
+ *                                  message, even a `notificac` substring in its id) but NEITHER a
+ *                                  process-number data row NOR a GridView-structural marker over
+ *                                  input-free rows.
  * A filter/search/legend/error/login page satisfies NONE of the positive signals -> `ok:false`, the
  * SAFE outcome (a dropped-deadline false empty is never worth risking over an honest "indisponível").
  */
@@ -505,12 +547,14 @@ export function parseInboxPage(html: string): ParseInboxResult {
       return { ref: notificacaoRef(withId), ...withId };
     });
 
-    // POSITIVELY-IDENTIFIED grid gate: a structural marker, an explicit empty-inbox message, OR
-    // >=1 process-number-shaped data row. A header-only filter / search / legend / login / WAF /
-    // session table with NONE of these is NOT the grid — skipping it (rather than treating it as an
-    // empty inbox) is the whole anti-false-empty guarantee.
-    const positivelyIdentified =
-      hasGridMarker(table.attrs) || hasEmptyInboxSignal(table.inner) || out.length > 0;
+    // POSITIVELY-IDENTIFIED grid gate: EITHER >=1 process-number-shaped data row, OR a GridView-
+    // STRUCTURAL marker on the <table> WITH no <input>-bearing rows (a genuinely empty grid). A bare
+    // `notificac` substring, an empty-inbox message alone, or a row of filter <input>s does NOT
+    // qualify — a header-only filter / search / legend / login / WAF / session / error table with
+    // NONE of these is NOT the grid, and skipping it (rather than treating it as an empty inbox) is
+    // the whole anti-false-empty guarantee.
+    const emptyGridProven = hasGridMarker(table.attrs) && !hasInputBearingRow(rows, headerIdx);
+    const positivelyIdentified = out.length > 0 || emptyGridProven;
     if (!positivelyIdentified) continue;
 
     const candidate: GridCandidate = { knownCount: new Set(fieldByIndex.filter(Boolean)).size, rows: out };

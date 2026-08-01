@@ -105,6 +105,28 @@ describe('citius-mandatarios · parseInboxPage (rows + metadata)', () => {
     expect(res.rows).toHaveLength(1);
     expect(res.rows[0]).toMatchObject({ processo: '3456/26.3T8FAR', ato: 'Notificação' });
   });
+
+  // round-3 DEFECT 2 (false-positive rows): a European date in the processo cell must NOT be counted
+  // as a notification — the old unanchored PROCESS_NUMBER_RE accepted 15/06/2026 (a DD/MM/YYYY date
+  // has TWO '/', a Citius number exactly one). Real Citius numbers (with a lettered court code, or
+  // the bare NNNN/YYYY form) are still counted. The grid carries the gv marker so it is identified.
+  it('a DD/MM/YYYY date in the processo cell is not counted; real process numbers still are', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>15/06/2026</td><td>2026-06-15</td><td>Tribunal de Lisboa</td></tr>',
+        '  <tr><td>1/1/2026</td><td>2026-01-01</td><td>Tribunal do Porto</td></tr>',
+        '  <tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Tribunal de Lisboa</td></tr>',
+        '  <tr><td>123/2026</td><td>2026-06-17</td><td>Tribunal de Coimbra</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // both dates dropped; only the two real process numbers counted
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '123/2026']);
+  });
 });
 
 describe('citius-mandatarios · parseInboxPage (empty vs unavailable — the anti-false-empty guarantee)', () => {
@@ -335,6 +357,57 @@ describe('citius-mandatarios · false-empty regressions (reviewer inputs — eac
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.rows).toEqual([]);
+  });
+
+  // ---- round-3 DEFECT 1 (still-open false empty) --------------------------------------------
+
+  // The exact round-3 PROBE A: a "sessao terminou" page whose FILTER panel <table> has an id that
+  // CONTAINS 'notificac' (ctl00_cph_pnlPesquisaNotificacoes) AND a Processo/Data/Tribunal label row
+  // over an <input> row. The old bare-substring marker matched 'notificac' and, with a passing
+  // header + zero data rows, returned a FALSE EMPTY. The GridView-STRUCTURAL marker (a pnl… panel
+  // is not gv…), plus the <input>-row disqualifier, now rejects it.
+  it('PROBE A: sessao-terminou filter panel with a notificac-substring id is ok:false', () => {
+    expectUnavailable(
+      '<h1>A sua sessao terminou</h1>' +
+        '<table id="ctl00_cph_pnlPesquisaNotificacoes" class="pesquisa">' +
+        '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+        '<tr><td><input/></td><td><input/></td><td><input/></td></tr>' +
+        '</table>',
+    );
+  });
+
+  // An error/session page showing an empty-inbox MESSAGE inside a Processo/Data header table that
+  // has NO GridView-structural marker. The message alone is NOT sufficient proof (round-3): without
+  // the structural marker this is ok:false, never a false empty. (Deliberately avoids the hard
+  // looksUnavailable markers, so the MARKER requirement — not looksUnavailable — is what forces it.)
+  it('empty-inbox message inside a non-gv header table is ok:false (message not sufficient alone)', () => {
+    expectUnavailable(
+      [
+        '<html><body>',
+        '<h1>A sua sessao expirou</h1>',
+        '<table id="tabelaMensagens">',
+        '  <tr><th>Processo</th><th>Data</th></tr>',
+        '  <tr><td colspan="2">Nao existem notificacoes na caixa de correio.</td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // Error CHROME whose id/class CONTAINS 'notificac' but is NOT gridview-structural: a
+  // divNotificacoesErro wrapper + a menuNotificacoesLink table. Neither is a GridView marker, so
+  // even with a Processo/Data/Tribunal label row over inputs this is ok:false (already; kept).
+  it('notificac-substring error chrome (div.notificacoes-erro / table#menuNotificacoesLink) is ok:false', () => {
+    expectUnavailable(
+      [
+        '<div class="notificacoes-erro">',
+        '  <table id="menuNotificacoesLink">',
+        '    <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '    <tr><td><input/></td><td><input/></td><td><input/></td></tr>',
+        '  </table>',
+        '</div>',
+      ].join('\n'),
+    );
   });
 });
 
