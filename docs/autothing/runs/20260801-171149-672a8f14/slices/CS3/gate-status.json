@@ -1,0 +1,48 @@
+{
+  "slice": "CS3",
+  "title": "Run-level completeness verification (verified-sync)",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "9fab73f",
+  "tag": "run-20260801-171149-CS3",
+  "securityWall": {
+    "typecheck": "pass (full api exit 0)",
+    "eslint": "pass",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 28,
+    "note": "pure orchestrator (12) + mongo store (6); independently re-run"
+  },
+  "adversarialReview": {
+    "status": "approved",
+    "by": "fresh-context (2 rounds)",
+    "verdict": "APPROVE \u2014 truncation silent-miss CLOSED + regression-tested; CAS/injective-key/untilSkew/cap-warn sound, no new regression. 3 residuals all CS6-contract-enforced (pageTotal-honesty now written into the contract + maxPages>=1 guard added; visibility-monotonic cursor + untilSkewMs default-0 are documented CS6 obligations)."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "at": "2026-08-01T18:35:08Z",
+  "cs6ContractObligations": [
+    "enumerate complete-or-ok:false",
+    "pageTotal MUST be true complete window total",
+    "cursor visibility-monotonic OR untilSkewMs >= max publish lag",
+    "land throws on failure / landed:false only for a genuine duplicate",
+    "serialize one run per key"
+  ]
+}

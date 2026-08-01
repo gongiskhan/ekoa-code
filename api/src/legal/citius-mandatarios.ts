@@ -30,17 +30,50 @@
  *   5. Per-row source id — whether each notification row exposes its OWN stable id (a select
  *      checkbox / hidden value, a `data-*` / row id, or an open-notification link). `extractSourceId`
  *      reads it and `notificacaoRef` uses it VERBATIM as the dedup ref, so two content-identical
- *      notifications never collide. ONLY when a row exposes no id does ref fall back to a content
- *      hash — and then two content-identical notifications WOULD share a ref (a dedup MISS that
- *      silently drops one). If the first real snapshot shows no per-row id, that collision is a
- *      pinned risk whose backstop is the completeness reconciliation's count-check downstream (a
- *      dropped row surfaces as a count mismatch), not this parser.
+ *      notifications never collide. Only an IDENTIFYING id is trusted: a static/non-identifying token
+ *      (a checkbox `value="on"`) is rejected, and any id that turns out DUPLICATED across the page's
+ *      rows is dropped for the colliding rows (`parseInboxPage` pass 2) — so the verbatim-id path can
+ *      never make content-distinct rows clash on ref. ONLY when a row exposes no usable id does ref
+ *      fall back to a content hash — and then two content-identical notifications WOULD share a ref
+ *      (a dedup MISS that silently drops one). If the first real snapshot shows no per-row id, that
+ *      collision is a pinned risk whose backstop is the completeness reconciliation's count-check
+ *      downstream (a dropped row surfaces as a count mismatch), not this parser.
  */
 import { createHash } from 'node:crypto';
 import { cellText, decodeEntities } from './portal-html.js';
 
 /** PT-PT honest-failure copy (mirrors citius.ts's "indisponível" idiom). */
 const UNAVAILABLE = 'Caixa de correio Citius indisponível';
+
+/**
+ * POSITIVE-PROOF signals for the notifications grid. An empty inbox is NEVER inferred from "a
+ * header table with no rows" (a filter/search/legend/login/WAF table has exactly that shape) — it
+ * must be positively PROVEN by one of these, which is the whole anti-false-empty guarantee.
+ */
+
+/** A GridView-style notifications MARKER: a substring expected in the grid <table>'s id/class
+ *  (`ctl00_cph_gvNotificacoes`, a `.GridView`, …). Configurable; matched case-insensitively. */
+const GRID_MARKERS = ['gvnotific', 'notificac', 'gridview'] as const;
+
+/** Explicit empty-inbox messages (normalized + accent-stripped, matched as exact substrings). An
+ *  empty inbox typically renders one inside the grid (GridView EmptyDataTemplate). Configurable. */
+const EMPTY_INBOX_SIGNALS = [
+  'nao existem notificacoes',
+  'sem notificacoes',
+  'nenhuma notificacao',
+  'nao foram encontrad',
+] as const;
+
+/** A Citius process number ("1234/26.0T8LSB", "123/2026"): leading digits, a '/', more digits,
+ *  optionally a dotted alphanumeric suffix. A row's processo cell must have THIS shape to count as
+ *  a notification, so a filter panel's <input>/label row (empty or "Pesquisar" text) can't be one. */
+const PROCESS_NUMBER_RE = /^\d{1,7}\s*\/\s*\d{1,4}(?:\.[0-9a-z]+)*/i;
+
+/** Static / non-identifying `<input value=…>` tokens that must NOT be trusted as a per-row source
+ *  id (a checkbox `value="on"` is shared by every row) — see `isIdentifyingId` / `extractSourceId`. */
+const NON_IDENTIFYING_IDS = new Set([
+  'on', 'off', 'true', 'false', 'checked', 'selected', 'yes', 'no', 'sim', 'nao',
+]);
 
 /**
  * One inbox notification, METADATA ONLY. `documentoRef` is an inert captured string (the href /
@@ -79,12 +112,18 @@ export type ParseInboxResult =
 // no cheerio; liberal regex table walk).
 // ---------------------------------------------------------------------------
 
-/** Inner HTML of every `<table>` on the page. */
-function extractTables(html: string): string[] {
-  const out: string[] = [];
-  const re = /<table\b[^>]*>([\s\S]*?)<\/table>/gi;
+/** One `<table>`: its opening-tag attribute string (for the grid id/class marker) plus its inner HTML. */
+interface RawTable {
+  attrs: string;
+  inner: string;
+}
+
+/** Every `<table>` on the page, with its opening-tag attributes and its inner HTML. */
+function extractTables(html: string): RawTable[] {
+  const out: RawTable[] = [];
+  const re = /<table\b([^>]*)>([\s\S]*?)<\/table>/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) out.push(m[1] ?? '');
+  while ((m = re.exec(html)) !== null) out.push({ attrs: m[1] ?? '', inner: m[2] ?? '' });
   return out;
 }
 
@@ -139,29 +178,73 @@ function normalizeHeader(label: string): string {
 }
 
 /**
- * Canonical field a header label maps to via NORMALIZED EXACT-LABEL match — a cell counts as a
- * column ONLY when it EQUALS a known label, never as a substring. This is what stops a prose
- * error / session-expired page laid out as a table (cells like "contacte o suporte imediato" or
- * "…terminou nesta data") from being mistaken for the notifications grid via 'ato'/'data'
- * substrings. Returns '' when the cell is not a known column.
+ * OBSERVED-family labels (from the public Citius / registry pages) mapped to the canonical field,
+ * keyed by their NORMALIZED form (`normalizeHeader`). A header cell counts as a column ONLY when it
+ * EQUALS one of these keys, never as a substring — that exact-match is what stops a prose error /
+ * session-expired page laid out as a table (cells like "contacte o suporte imediato" or
+ * "…terminou nesta data") from being mistaken for the notifications grid via 'ato'/'data' substrings.
  */
+const OBSERVED_HEADER_LABELS: Record<string, string> = {
+  processo: 'processo',
+  data: 'data',
+  tribunal: 'tribunal',
+  ato: 'ato',
+  acto: 'ato',
+  documento: 'documento',
+  anexo: 'documento',
+};
+
+/**
+ * SPIKE — UNOBSERVED GUESSES. Realistic PT header VARIANTS the authenticated inbox MIGHT use, added
+ * so a real header doesn't stall the sync. Each is still matched EXACTLY after `normalizeHeader`
+ * (never as a substring). These are guesses, not observations — confirm/prune against the first
+ * real snapshot (see FIRST-REAL-ACCOUNT SPIKE). Keys are already in normalized form (the masculine
+ * ordinal 'º' survives `normalizeHeader`; accents/ç are stripped: 'notificação' -> 'notificacao').
+ */
+const SPIKE_HEADER_LABELS: Record<string, string> = {
+  'nº processo': 'processo',
+  'n.º processo': 'processo',
+  'numero do processo': 'processo',
+  'numero processo': 'processo',
+  'nº do processo': 'processo',
+  'data da notificacao': 'data',
+  'data notificacao': 'data',
+};
+
+const HEADER_LABELS: Record<string, string> = { ...OBSERVED_HEADER_LABELS, ...SPIKE_HEADER_LABELS };
+
+/** Canonical field a header label maps to via NORMALIZED EXACT-LABEL match; '' when not a column. */
 function fieldForHeader(label: string): string {
-  switch (normalizeHeader(label)) {
-    case 'processo':
-      return 'processo';
-    case 'data':
-      return 'data';
-    case 'tribunal':
-      return 'tribunal';
-    case 'ato':
-    case 'acto':
-      return 'ato';
-    case 'documento':
-    case 'anexo':
-      return 'documento';
-    default:
-      return '';
-  }
+  return HEADER_LABELS[normalizeHeader(label)] ?? '';
+}
+
+/** A Citius process number shape in a row's processo cell (see `PROCESS_NUMBER_RE`). */
+function isProcessNumber(text: string): boolean {
+  return PROCESS_NUMBER_RE.test(text.trim());
+}
+
+/** True when a `<table>`'s opening-tag attributes carry a GridView-style notifications marker
+ *  (id/class contains one of `GRID_MARKERS`) — the positive STRUCTURAL proof this IS the grid. */
+function hasGridMarker(tableAttrs: string): boolean {
+  const hay = tableAttrs.toLowerCase();
+  return GRID_MARKERS.some((m) => hay.includes(m));
+}
+
+/** True when a grid's inner HTML carries an explicit empty-inbox message (`EMPTY_INBOX_SIGNALS`,
+ *  normalized + accent-stripped) — the positive proof of a GENUINELY empty inbox, as distinct from
+ *  "a header table that merely happens to have no rows". */
+function hasEmptyInboxSignal(tableInner: string): boolean {
+  const text = normalizeHeader(cellText(tableInner));
+  return EMPTY_INBOX_SIGNALS.some((s) => text.includes(s));
+}
+
+/** A candidate per-row source id is IDENTIFYING only when it is not a static/non-identifying token
+ *  (`NON_IDENTIFYING_IDS`, e.g. a checkbox `value="on"`) and is long enough to be a plausible id. */
+function isIdentifyingId(v: string | undefined): v is string {
+  if (!v) return false;
+  const t = v.trim();
+  if (t.length < 2) return false;
+  return !NON_IDENTIFYING_IDS.has(t.toLowerCase());
 }
 
 /**
@@ -189,26 +272,27 @@ function attrValue(source: string, nameAlt: string): string | undefined {
  * content hash. This never fetches anything: every candidate is read out of the row's own markup.
  */
 function extractSourceId(rowAttrs: string, rowInner: string): string | undefined {
-  // 1) a checkbox / hidden input value in the row
+  // 1) a checkbox / hidden input value in the row (must be IDENTIFYING — a static `value="on"` is
+  //    rejected here, and any survivor that still collides across rows is dropped in parseInboxPage).
   const inputRe = /<input\b[^>]*>/gi;
   let im: RegExpExecArray | null;
   while ((im = inputRe.exec(rowInner)) !== null) {
     const tag = im[0];
     if (!/\btype\s*=\s*["']?(?:checkbox|hidden)["']?/i.test(tag)) continue;
     const v = attrValue(tag, 'value');
-    if (v) return v;
+    if (isIdentifyingId(v)) return v;
   }
   // 2) a data-* notification id (or a row id) on the <tr> itself
   const dataId = attrValue(rowAttrs, 'data-notif(?:icacao)?-?id|data-message-?id|data-msg-?id|data-id|data-key');
-  if (dataId) return dataId;
+  if (isIdentifyingId(dataId)) return dataId;
   const rowId = attrValue(rowAttrs, 'id');
-  if (rowId) return rowId;
+  if (isIdentifyingId(rowId)) return rowId;
   // 3) an id-bearing open-notification link (never the inert documento download href)
   const anchorRe = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
   let am: RegExpExecArray | null;
   while ((am = anchorRe.exec(rowInner)) !== null) {
     const href = decodeEntities(am[1] ?? am[2] ?? am[3] ?? '').trim();
-    if (href && /notific/i.test(href) && !/documento/i.test(href)) return href;
+    if (isIdentifyingId(href) && /notific/i.test(href) && !/documento/i.test(href)) return href;
   }
   return undefined;
 }
@@ -282,17 +366,20 @@ export function notificacaoRef(row: Omit<CitiusNotificacaoMeta, 'ref'>): string 
     .slice(0, 24);
 }
 
-/** A STRONG-grid candidate table already reduced to its parsed rows + its known-column count. */
+/** A positively-identified grid candidate reduced to its parsed rows + its known-column count. */
 interface GridCandidate {
   knownCount: number;
   rows: CitiusNotificacaoMeta[];
 }
 
 /**
- * STRONG grid identification for one header-candidate `<tr>`: the mapped columns must contain an
- * EXACT 'processo' column AND at least TWO known columns in total. Anything less is NOT the
- * notifications grid (a filter panel, a section-title row, or a prose error page laid out as a
- * table). Returns the per-index field map on success, `null` otherwise.
+ * Header-row identification for one candidate `<tr>`: the mapped columns must contain an EXACT
+ * 'processo' column AND at least TWO known columns in total. This is the NECESSARY header gate, not
+ * sufficient on its own — a filter/search panel can carry the same label row — so a table that
+ * passes here is only treated as the grid once it ALSO clears the positive-identification gate in
+ * `parseInboxPage` (marker / empty-message / a process-number-shaped data row). Anything that fails
+ * the exact-label test (a section-title row, a prose error page laid out as a table) is rejected
+ * outright here. Returns the per-index field map on success, `null` otherwise.
  */
 function identifyHeader(rowInner: string): string[] | null {
   const fieldByIndex = extractCells(rowInner).map((c) => fieldForHeader(cellText(c)));
@@ -302,25 +389,32 @@ function identifyHeader(rowInner: string): string[] | null {
 
 /**
  * Parses one caixa-de-correio (mandatários) inbox page into notification METADATA. A LIBERAL
- * header-keyed table walker (like `parsePublicacoes`), hardened against the two ways a naive walk
- * silently drops legal deadlines:
- *   - it scans ALL `<table>`s and, WITHIN each, the FIRST row that passes STRONG grid
- *     identification (`identifyHeader`) — skipping caption / colspan / decorative rows that merely
- *     mention "processo" in prose;
- *   - among the tables that pass, it picks the BEST grid (one WITH data rows beats one with none,
- *     then most known columns, then most data rows) rather than the first, so a filter / section
- *     table before the real GridView cannot shadow it.
- * Columns map BY HEADER LABEL (a reordered GridView still parses). Entity-decoded throughout.
+ * header-keyed table walker (like `parsePublicacoes`), hardened against the way a naive walk
+ * silently drops legal deadlines: it scans ALL `<table>`s and, WITHIN each, the FIRST row that
+ * passes header identification (`identifyHeader`) — skipping caption / colspan / decorative rows —
+ * then, among the POSITIVELY-IDENTIFIED grids, picks the BEST (one WITH data rows beats one with
+ * none, then most known columns, then most data rows) so a filter / section table before the real
+ * GridView cannot shadow it. Columns map BY HEADER LABEL (a reordered GridView still parses).
  *
- * THE ONE LIE THIS MUST NEVER TELL is a false empty — reporting `{ok:true, rows:[]}` ("inbox
- * complete, zero notifications") for a page that was actually a login redirect / error / empty
- * shell. So the ONLY `{ok:true, rows:[]}` outcome is a STRONGLY-identified grid that positively
- * has zero data rows. Concretely:
- *   - a hard error/maintenance marker (`looksUnavailable`), or empty/absent HTML -> `{ok:false}`.
- *   - a STRONG grid FOUND with data rows -> `{ok:true, rows:[...]}`.
- *   - a STRONG grid FOUND with zero data rows (a genuinely empty inbox; header present, e.g.
- *     GridView ShowHeaderWhenEmpty) -> `{ok:true, rows:[]}`.
- *   - NO strong grid anywhere (no table / login page / error shell / prose-as-table) -> `{ok:false}`.
+ * THE ONE LIE THIS MUST NEVER TELL is a FALSE EMPTY — `{ok:true, rows:[]}` ("inbox complete, zero
+ * notifications") for a page that was actually a login / WAF-challenge / session-expired / error /
+ * filter-search-chrome page. An empty inbox is therefore POSITIVELY PROVEN, never inferred from
+ * "a header table with no rows" (a filter/login/error table has exactly that shape). A table is a
+ * POSITIVELY-IDENTIFIED notifications grid only when it carries one of three positive signals: a
+ * GridView-style MARKER on the <table> (`hasGridMarker`), an explicit EMPTY-INBOX message within it
+ * (`hasEmptyInboxSignal`), OR >=1 PROCESS-NUMBER-SHAPED data row (`isProcessNumber`).
+ *
+ * THE DECISION RULE:
+ *   - `ok:true` WITH rows        ⇔ a positively-identified grid with >=1 process-number-shaped data row.
+ *   - `ok:true` rows:[]          ⇔ a positively-identified grid — one carrying a structural MARKER or
+ *                                  an explicit empty-inbox message — with ZERO process-number-shaped
+ *                                  data rows (a genuinely empty inbox).
+ *   - `ok:false` ('indisponível') ⇔ EVERYTHING ELSE: a hard error/maintenance marker or empty/absent
+ *                                  HTML; and any header-only filter / search / legend / login / WAF /
+ *                                  session table that has the right label TEXTS but NEITHER a data
+ *                                  row NOR a structural marker NOR an empty-inbox message.
+ * A filter/search/legend/error/login page satisfies NONE of the positive signals -> `ok:false`, the
+ * SAFE outcome (a dropped-deadline false empty is never worth risking over an honest "indisponível").
  */
 export function parseInboxPage(html: string): ParseInboxResult {
   if (!html || looksUnavailable(html)) {
@@ -329,11 +423,11 @@ export function parseInboxPage(html: string): ParseInboxResult {
 
   let best: GridCandidate | null = null;
 
-  for (const tableInner of extractTables(html)) {
-    const rows = extractRows(tableInner);
+  for (const table of extractTables(html)) {
+    const rows = extractRows(table.inner);
 
-    // The header is the FIRST row that passes strong grid identification (not merely the first
-    // row containing "processo"), so a caption / colspan row above the real <th> is skipped.
+    // The header is the FIRST row that passes header identification (not merely the first row
+    // containing "processo"), so a caption / colspan row above the real <th> is skipped.
     let headerIdx = -1;
     let fieldByIndex: string[] = [];
     for (let i = 0; i < rows.length; i++) {
@@ -344,10 +438,14 @@ export function parseInboxPage(html: string): ParseInboxResult {
         break;
       }
     }
-    if (headerIdx === -1) continue; // not the notifications grid
+    if (headerIdx === -1) continue; // no notifications-grid header in this table
 
     const idxOf = (field: string): number => fieldByIndex.indexOf(field);
-    const out: CitiusNotificacaoMeta[] = [];
+
+    // Pass 1: parse each data row. A row counts as a notification ONLY when its processo cell is
+    // PROCESS-NUMBER-SHAPED — so a filter panel's <input>/label row (empty or "Pesquisar" text) can
+    // never be miscounted. Each row's candidate source id is captured for the pass-2 collision resolve.
+    const parsed: { base: Omit<CitiusNotificacaoMeta, 'ref' | 'sourceId'>; candidateId: string | undefined }[] = [];
 
     for (const row of rows.slice(headerIdx + 1)) {
       const cells = extractCells(row.inner);
@@ -363,7 +461,7 @@ export function parseInboxPage(html: string): ParseInboxResult {
       };
 
       const processo = textAt('processo');
-      if (!processo) continue; // a data row must have a processo; guards template/summary rows
+      if (!isProcessNumber(processo)) continue; // not a notification (label / <input> / prose / summary row)
 
       const tribunal = textAt('tribunal');
       const ato = textAt('ato');
@@ -381,28 +479,48 @@ export function parseInboxPage(html: string): ParseInboxResult {
         }
       }
 
-      const sourceId = extractSourceId(row.attrs, row.inner);
-
-      const base: Omit<CitiusNotificacaoMeta, 'ref'> = {
+      const base: Omit<CitiusNotificacaoMeta, 'ref' | 'sourceId'> = {
         processo,
         data: textAt('data'),
         temDocumento,
         ...(tribunal ? { tribunal } : {}),
         ...(ato ? { ato } : {}),
         ...(documentoRef ? { documentoRef } : {}),
-        ...(sourceId ? { sourceId } : {}),
       };
-      out.push({ ref: notificacaoRef(base), ...base });
+      parsed.push({ base, candidateId: extractSourceId(row.attrs, row.inner) });
     }
 
+    // Pass 2: a candidate source id DUPLICATED across this grid's rows is non-identifying — drop it
+    // for the colliding rows so ref falls back to the content hash. This means the verbatim-id path
+    // can NEVER introduce a collision worse than the documented id-less hash residual (SPIKE #5): a
+    // static/aliased id shared by content-distinct rows degrades to the hash, not a cross-row clash.
+    const idCounts = new Map<string, number>();
+    for (const p of parsed) {
+      if (p.candidateId) idCounts.set(p.candidateId, (idCounts.get(p.candidateId) ?? 0) + 1);
+    }
+
+    const out: CitiusNotificacaoMeta[] = parsed.map(({ base, candidateId }) => {
+      const sourceId = candidateId && idCounts.get(candidateId) === 1 ? candidateId : undefined;
+      const withId: Omit<CitiusNotificacaoMeta, 'ref'> = sourceId ? { ...base, sourceId } : { ...base };
+      return { ref: notificacaoRef(withId), ...withId };
+    });
+
+    // POSITIVELY-IDENTIFIED grid gate: a structural marker, an explicit empty-inbox message, OR
+    // >=1 process-number-shaped data row. A header-only filter / search / legend / login / WAF /
+    // session table with NONE of these is NOT the grid — skipping it (rather than treating it as an
+    // empty inbox) is the whole anti-false-empty guarantee.
+    const positivelyIdentified =
+      hasGridMarker(table.attrs) || hasEmptyInboxSignal(table.inner) || out.length > 0;
+    if (!positivelyIdentified) continue;
+
     const candidate: GridCandidate = { knownCount: new Set(fieldByIndex.filter(Boolean)).size, rows: out };
-    // BEST among strong grids: a table WITH data rows outranks one with none (so a strong-but-empty
-    // decorative / filter grid cannot shadow the real one), then most known columns, then most rows.
+    // BEST among identified grids: a table WITH data rows outranks one with none (so a marker-only
+    // empty grid cannot shadow the real one), then most known columns, then most rows.
     if (best === null || isBetterGrid(candidate, best)) best = candidate;
   }
 
   if (best === null) {
-    // No STRONG notifications grid anywhere -> honestly unavailable, NOT a false empty.
+    // No positively-identified notifications grid anywhere -> honestly unavailable, NOT a false empty.
     return { ok: false, error: UNAVAILABLE };
   }
 

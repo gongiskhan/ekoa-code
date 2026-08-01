@@ -1,0 +1,44 @@
+{
+  "slice": "CS1",
+  "title": "Caixa Citius inbox parser + speculative fixtures",
+  "kind": "api",
+  "status": "needs-work",
+  "checkpointCommit": "fd51617",
+  "tag": "run-20260801-171149-CS1",
+  "securityWall": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "chokepoint": "clean",
+    "garrison": "clean",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 18,
+    "note": "173 legal tests green; independently re-run by orchestrator"
+  },
+  "adversarialReview": {
+    "status": "needs-work",
+    "by": "fresh-context re-review",
+    "attempt": 2,
+    "verdict": "false-empty STILL reachable via the exact-label variant: a filter/search/legend table with header-equal cells satisfies strong-grid id and (no rows) \u2192 ok:true rows:[] (verified: filter-only, login+filter, prose-exact). Fix attempt-2 closed the substring variant + CRIT-2 mechanism + caption-row; but empty must be POSITIVELY proven. Also NEW: sourceId value='on' non-uniqueness collides distinct rows; guard bypasses (alias/require/dynamic-import/XHR); exact-label brittle (N\u00ba Processo \u2192 ok:false). Attempt 3 (fresh context)."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  },
+  "at": "2026-08-01T18:16:14Z"
+}

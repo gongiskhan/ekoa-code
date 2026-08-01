@@ -1,0 +1,40 @@
+{
+  "slice": "CS2",
+  "title": "Mock Caixa Citius WebForms server",
+  "kind": "api-test-infra",
+  "status": "passed",
+  "checkpointCommit": "(fixed) run-20260801-171149-CS2",
+  "tag": "run-20260801-171149-CS2",
+  "securityWall": {
+    "eslint": "pass",
+    "gitleaks": "clean",
+    "typecheck": "pass (after @ts-expect-error fix)"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 7,
+    "note": "smoke test independently re-run: login/session/paging/hideUntilPass2/doc-hit-counter"
+  },
+  "adversarialReview": {
+    "status": "not-required",
+    "reason": "test-only infrastructure, not production code / not a security boundary; correctness pinned by the smoke test incl. the document-hit counter"
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "n/a",
+    "reason": "test harness"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "at": "2026-08-01T18:25:10Z"
+}

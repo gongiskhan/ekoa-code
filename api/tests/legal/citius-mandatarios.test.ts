@@ -215,6 +215,129 @@ describe('citius-mandatarios · parseInboxPage (empty vs unavailable — the ant
   });
 });
 
+describe('citius-mandatarios · false-empty regressions (reviewer inputs — each MUST be ok:false)', () => {
+  const expectUnavailable = (html: string): void => {
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('indisponível');
+  };
+
+  // A search/FILTER panel whose label row cells EQUAL Processo|Data|Tribunal over an <input> row,
+  // with NO real grid: the header gate passes on the label texts, but there are zero process-number-
+  // shaped data rows, no GridView marker, and no empty-inbox message → NOT the notifications grid.
+  // Previously this returned a FALSE EMPTY ({ok:true, rows:[]}).
+  it('filter panel only (label row over an <input> row) is ok:false', () => {
+    expectUnavailable(
+      [
+        '<html><body>',
+        '<table class="filtros">',
+        '  <tr><td>Processo</td><td>Data</td><td>Tribunal</td></tr>',
+        '  <tr><td><input type="text" name="proc" /></td><td><input type="text" name="dt" /></td>',
+        '      <td><input type="text" name="trib" /></td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // The same filter panel with <th> labels and a "Pesquisar" submit row.
+  it('filter panel with <th> labels + a Pesquisar submit row is ok:false', () => {
+    expectUnavailable(
+      [
+        '<html><body>',
+        '<table class="pesquisa">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td><input type="text" /></td><td><input type="text" /></td>',
+        '      <td><input type="submit" value="Pesquisar" /></td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // A login form + a search table with <th>Processo</th><th>Data</th><th>Tribunal</th> and an input row.
+  it('login form + search table (th labels + input row) is ok:false', () => {
+    expectUnavailable(
+      [
+        '<html><body>',
+        '<form action="Login.aspx"><input type="text" id="txtUserName" />',
+        '  <input type="password" id="txtUserPass" /></form>',
+        '<table class="pesquisa">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td><input type="text" name="p" /></td><td><input type="text" name="d" /></td>',
+        '      <td><input type="text" name="t" /></td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // An error/session page whose cells literally EQUAL "Processo" / "Data" (so the header gate
+  // passes) but whose only data row is prose, not a process number.
+  it('prose error/session page with cells that equal the labels is ok:false', () => {
+    expectUnavailable(
+      [
+        '<html><body>',
+        '<h1>Sessao terminada</h1>',
+        '<table>',
+        '  <tr><td>Processo</td><td>Data</td></tr>',
+        '  <tr><td>A sua sessao expirou. Volte a autenticar-se.</td><td>-</td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // A WAF / session-challenge page with search chrome but no grid (no marker, no empty message,
+  // no process-number-shaped row).
+  it('WAF/session challenge page with search chrome but no grid is ok:false', () => {
+    expectUnavailable(
+      [
+        '<html><head><script>var ___utmvc = "waf-token";</script></head><body>',
+        '<h1>A validar o seu acesso...</h1>',
+        '<table class="searchbox">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td><input type="text" /></td><td><input type="text" /></td><td><input type="text" /></td></tr>',
+        '</table>',
+        '</body></html>',
+      ].join('\n'),
+    );
+  });
+
+  // The positive counterpart: the SAME header-only-with-no-rows shape, but the grid carries a
+  // GridView marker AND an explicit empty-inbox message → the ONE legitimate empty (positively
+  // proven, not inferred).
+  it('a marker+empty-message grid with zero rows is the ONE legitimate empty (ok:true rows:[])', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+        '  <tr class="rgEmpty"><td colspan="5">Nao existem notificacoes na caixa de correio.</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toEqual([]);
+  });
+
+  // A structural marker ALONE (no empty message) with zero rows is also a positively-identified
+  // empty grid — proves rule 1(b) independently of the empty-message signal.
+  it('a marker-only grid with zero rows is ok:true rows:[] (structural-marker positive proof)', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toEqual([]);
+  });
+});
+
 describe('citius-mandatarios · detectPagingMode', () => {
   it("GET pager (?page=N) -> 'get' (even with the __doPostBack script present)", () => {
     expect(detectPagingMode(load('inbox-get-p1.html'))).toBe('get');
@@ -279,6 +402,49 @@ describe('citius-mandatarios · notificacaoRef (per-row source id, hash fallback
     expect(new Set(res.rows.map((r) => r.ref)).size).toBe(2);
   });
 
+  // sourceId NON-UNIQUENESS (reviewer): two content-DISTINCT rows sharing a STATIC value="on" must
+  // NOT collide on ref. "on" is non-identifying, so both drop to the content hash; distinct content
+  // → distinct refs. The verbatim-id path can never introduce a collision worse than the id-less hash.
+  it('two content-distinct rows sharing value="on" get distinct refs via hash fallback', () => {
+    const html =
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+        '  <tr><td><input type="checkbox" name="sel" value="on" />4001/26.0T8LSB</td><td>2026-07-10</td>',
+        '      <td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+        '  <tr><td><input type="checkbox" name="sel" value="on" />4002/26.1T8PRT</td><td>2026-07-11</td>',
+        '      <td>Tribunal do Porto</td><td>Notificacao</td><td>&nbsp;</td></tr>',
+      ].join('\n') + '\n</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+    // the static value="on" is rejected as non-identifying → no sourceId, hash-fallback refs
+    expect(res.rows.map((r) => r.sourceId)).toEqual([undefined, undefined]);
+    expect(res.rows.every((r) => /^[0-9a-f]{24}$/.test(r.ref))).toBe(true);
+    expect(new Set(res.rows.map((r) => r.ref)).size).toBe(2);
+  });
+
+  // Even an identifying-LOOKING id that is DUPLICATED across content-distinct rows is dropped for the
+  // colliding rows (pass 2), so the verbatim-id path can never make content-distinct rows clash.
+  it('a duplicated per-row id is dropped for the colliding rows (distinct content → distinct refs)', () => {
+    const html =
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th></tr>',
+        '  <tr><td><input type="hidden" value="55555" />5001/26.0T8LSB</td><td>2026-07-12</td>',
+        '      <td>Tribunal de Lisboa</td><td>Citacao</td><td>&nbsp;</td></tr>',
+        '  <tr><td><input type="hidden" value="55555" />5002/26.1T8PRT</td><td>2026-07-13</td>',
+        '      <td>Tribunal do Porto</td><td>Notificacao</td><td>&nbsp;</td></tr>',
+      ].join('\n') + '\n</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+    expect(res.rows.map((r) => r.sourceId)).toEqual([undefined, undefined]);
+    expect(new Set(res.rows.map((r) => r.ref)).size).toBe(2);
+  });
+
   it('two content-identical rows with DISTINCT source ids get DISTINCT refs (HIGH ref-collision)', () => {
     const withId = (id: string): Omit<CitiusNotificacaoMeta, 'ref'> => ({
       processo: '3333/26.0T8LSB',
@@ -324,13 +490,24 @@ describe('citius-mandatarios · notificacaoRef (per-row source id, hash fallback
 });
 
 describe('citius-mandatarios · structural metadata-only guard (no document fetch)', () => {
-  // The guard bans not a fixed NAME set but the SHAPE of any network read: a bare fetch() call,
-  // an import of any http/fetch machinery, and reading a response body. So a later
-  // `fetch(row.documentoRef).then((r) => r.text())` is caught even under a novel name.
+  // A defense-in-depth TRIPWIRE — not a proof that EVERY conceivable network read is caught. It
+  // flags the SHAPES a document-fetch would take: a fetch() call OR a bareword `fetch` alias, an
+  // import of any http/fetch machinery, a require()/dynamic import() of it, an XMLHttpRequest, or
+  // reading a response body. So a later `fetch(row.documentoRef).then((r) => r.text())`, or a
+  // `const grab = fetch;` alias, is caught even under a novel name.
   const FETCH_CALL_RE = /\bfetch\s*\(/;
   const NET_IMPORT_RE =
     /from\s+['"](?:node:)?(?:https?|undici)['"]|from\s+['"][^'"]*(?:url-fetcher|fetch)[^'"]*['"]|\bguardedFetch\b|\bfetchImpl\b/i;
   const RESP_BODY_RE = /\.(?:arrayBuffer|blob|text)\s*\(/;
+  // Bareword-reference / aliasing + alternative network entrypoints. Matched against the module with
+  // comments stripped, so the word "fetch" in a doc comment is not a false positive.
+  const BAREWORD_FETCH_RE = /\bfetch\b/;
+  const REQUIRE_RE = /\brequire\s*\(/;
+  const DYN_IMPORT_RE = /\bimport\s*\(/;
+  const XHR_RE = /\bXMLHttpRequest\b/;
+
+  /** MODULE_SRC with block + line comments stripped (doc comments legitimately mention "fetch"). */
+  const MODULE_CODE = MODULE_SRC.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
 
   it('the module makes no bare fetch() call, imports no http/fetch machinery, reads no response body', () => {
     expect(MODULE_SRC).not.toMatch(FETCH_CALL_RE);
@@ -343,13 +520,26 @@ describe('citius-mandatarios · structural metadata-only guard (no document fetc
     expect(MODULE_SRC).not.toMatch(/\.arrayBuffer\s*\(/);
   });
 
+  it('the module CODE references no bareword fetch/alias, no require()/import(), no XMLHttpRequest', () => {
+    expect(MODULE_CODE).not.toMatch(BAREWORD_FETCH_RE);
+    expect(MODULE_CODE).not.toMatch(REQUIRE_RE);
+    expect(MODULE_CODE).not.toMatch(DYN_IMPORT_RE);
+    expect(MODULE_CODE).not.toMatch(XHR_RE);
+  });
+
   it('those guard matchers actually FIRE on planted violations (non-tautological)', () => {
     const plantedFetch = 'const bytes = await fetch(row.documentoRef).then((r) => r.arrayBuffer());';
     expect(plantedFetch).toMatch(FETCH_CALL_RE);
     expect(plantedFetch).toMatch(RESP_BODY_RE);
+    expect(plantedFetch).toMatch(BAREWORD_FETCH_RE);
 
     const plantedTextRead = 'const body = await resp.text();';
     expect(plantedTextRead).toMatch(RESP_BODY_RE);
+
+    // a bareword `fetch` reference / alias with NO call parens — caught by BAREWORD, missed by CALL
+    const plantedFetchAlias = 'const grab = fetch;';
+    expect(plantedFetchAlias).toMatch(BAREWORD_FETCH_RE);
+    expect(plantedFetchAlias).not.toMatch(FETCH_CALL_RE);
 
     const plantedFetchImport = "import { guardedFetch } from '../net/url-fetcher.js';";
     expect(plantedFetchImport).toMatch(NET_IMPORT_RE);
@@ -357,6 +547,13 @@ describe('citius-mandatarios · structural metadata-only guard (no document fetc
     expect(plantedHttpsImport).toMatch(NET_IMPORT_RE);
     const plantedUndiciImport = "import { request } from 'undici';";
     expect(plantedUndiciImport).toMatch(NET_IMPORT_RE);
+
+    const plantedRequire = "const https = require('node:https');";
+    expect(plantedRequire).toMatch(REQUIRE_RE);
+    const plantedDynImport = "const m = await import('node:https');";
+    expect(plantedDynImport).toMatch(DYN_IMPORT_RE);
+    const plantedXhr = 'const x = new XMLHttpRequest();';
+    expect(plantedXhr).toMatch(XHR_RE);
   });
 
   it('defines no function that fetches/downloads/opens a document', () => {
