@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
 import { parseInboxPage } from '../../src/legal/citius-mandatarios.js';
+// @ts-expect-error - JS mock helper, no d.ts
 import { startMockCitius } from './mock-citius-webforms-server.mjs';
 
 let mock: Awaited<ReturnType<typeof startMockCitius>>;
