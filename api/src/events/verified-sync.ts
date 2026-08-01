@@ -41,6 +41,12 @@
  *       truncated at `maxPages`) OR supplies `pageTotal` (so the count check can independently prove
  *       the sweep). Now ENFORCED by the `clean` gate: a clean-but-truncated pass with neither proof
  *       is `incomplete`, not `complete`, so the watermark cannot advance past unpaged items.
+ *       When supplied, `pageTotal` MUST be the source's TRUE, COMPLETE count of items in the window
+ *       `[since, until]` — never a per-page subset, a stale figure, or a capped/estimated total. The
+ *       count check trusts it absolutely (a matching `pageTotal` certifies completeness and overrides
+ *       `reachedEnd`), so a source that under-reports the total re-opens the silent-miss this module
+ *       closes. A connector that cannot compute the true window total MUST omit `pageTotal` and rely
+ *       on `reachedEnd`. CS6 MUST test its `pageTotal` producer against this clause.
  *
  *   (2) #visibility-monotonic - the enumeration cursor MUST be monotonic in VISIBILITY, not in
  *       item-timestamp. An item must NEVER become visible to `enumerate` AFTER the window ceiling
@@ -177,6 +183,10 @@ const DEFAULT_MAX_PAGES = 50;
 export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<SyncRunReport> {
   const { enumerate, land, store, clock, recordLesson } = input;
   const maxPages = input.maxPages ?? DEFAULT_MAX_PAGES;
+  // A window swept in <1 page cannot be proven complete by reachedEnd; reject rather than risk a
+  // vacuous 'complete'. (Only harmful paired with a lying enumerate, which #complete-or-ok:false
+  // forbids — but fail loudly here rather than trust the seam.)
+  if (maxPages < 1) throw new Error('runVerifiedSync: maxPages must be >= 1');
   const untilSkewMs = input.untilSkewMs ?? 0;
 
   const startClock = clock();
