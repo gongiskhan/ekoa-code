@@ -6,6 +6,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`secretregistry-serialized-credentials-in-plaintext`** (FIXED 2026-08-01, HIGH, credential
+  disclosure — found while WRITING a test for it, not by the test passing). `SecretRegistry`
+  (`api/src/security/redaction.ts`) keeps its state in a `Map`/`Set`, so `JSON.stringify(registry)`
+  renders `{}` — which is what made a "no credential value escapes" assertion look sound. But
+  `orderedSecrets()` MEMOISES into `orderedCache`, a plain array of `{handle, value, forms}`. So the
+  FIRST `redact()` call converts any registry into an object that `JSON.stringify`s every live
+  credential in plaintext, base64/urlencoded forms included. Registries ride on the results of
+  `typistLogin`, `deliverSecretToDaemon` and `ensureSession`, and those results are logged, written
+  into automation step records, and pushed onto SSE — so a registry that had done its job once could
+  serialise the credential it exists to hide. FIXED at the class: a `toJSON()` returning counts only
+  (`{secrets, unmaskable}`) plus a `nodejs.util.inspect.custom` hook, which also hardens the
+  pre-existing bridge callers. Test ordering is the proof: it calls `redact()` FIRST and only then
+  asserts `JSON.stringify` / `util.inspect` are clean.
+  LESSON: an assertion that passes because of an incidental representation detail (a Map
+  stringifying to `{}`) is not a proof. The sentinel-based test only became real when it drove the
+  registry through the path that populates the cache.
+
 - **`app-sso-graph-tokens-flat-unscoped-crypto`** (OPEN 2026-08-01, MEDIUM, crypto-at-rest — found by
   the B1 fresh-context adversarial review, out of that slice's scope). `api/src/integrations/app-sso.ts`
   stores Microsoft Graph OAuth tokens in `session.graphTokensEnc` (`app-sso-sessions.ts:36`) via the

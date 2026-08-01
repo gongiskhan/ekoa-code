@@ -165,6 +165,10 @@ type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'vi
  */
 export function isDefinitionVisibleTo(doc: VisibilityView, actor: Actor): boolean {
   if (doc.visibility === 'global') return true; // cross-org tier
+  // The SAME empty-string hazard as the userId branch below, one field over: an org-less actor
+  // (a broken row, or a seam that defaulted `orgId` to '') must not become "same org" as an
+  // org-less document. Both sides must name a real tenant before they can be equal.
+  if (doc.orgId === '' || actor.orgId === '') return false;
   if (doc.orgId !== actor.orgId) return false; // NEVER another org's private/org row
   // OWN-ROW BRANCH, with the empty-userId hole closed (A2 review F3). Several server-side readers
   // are built as org-scoped SYSTEM actors carrying `userId: ''` (platform-call, the poll rail), and
@@ -235,8 +239,8 @@ export class IntegrationDefinitionStore {
     }
     // An author identity is required and may never be the empty string: `isDefinitionVisibleTo`
     // treats a non-empty match as "own row", and org-scoped system actors carry `userId: ''`.
-    if (input.userId === '') {
-      throw new IntegrationDefinitionStoreError('INVALID', 'a definition must name a real author (userId)');
+    if (input.userId === '' || input.orgId === '') {
+      throw new IntegrationDefinitionStoreError('INVALID', 'a definition must name a real owning org and author (orgId, userId)');
     }
     const onConflict = opts.onConflict ?? 'reject';
     const nowIso = this.nowIso();

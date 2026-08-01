@@ -240,6 +240,12 @@ export class ListenerSupervisor {
       {
         id: trigger._id,
         integrationKey: trigger.integrationKey,
+        // A2/F5: the poll rail resolves the integration package TENANT-SCOPED, and that scoping is
+        // dead code unless the org travels with the trigger. `TriggerDoc` carries both fields as
+        // REQUIRED, so passing them costs nothing and is what makes the listener read this org's
+        // package instead of whatever is in the process-wide runtime tier.
+        orgId: trigger.orgId,
+        ...(trigger.ownerUserId ? { ownerUserId: trigger.ownerUserId } : {}),
         ...(trigger.pollConfig?.actionName ? { pollActionName: trigger.pollConfig.actionName } : {}),
       },
       {

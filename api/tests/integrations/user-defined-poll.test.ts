@@ -55,7 +55,11 @@ const REAL_INTEGRATIONS = join(__dirname, '..', '..', 'assets', 'integrations');
 const NOW = '2026-07-27T10:00:00.000Z';
 const ORG = 'orgA';
 const OWNER = 'user-owner';
-const TRIGGER = { id: 'trg-ud-1', integrationKey: 'poll-demo' };
+// A2: a listener trigger resolves its integration package TENANT-SCOPED, so a real TriggerDoc's
+// orgId/ownerUserId (both REQUIRED fields on it) travel with the poll. A trigger without an org is
+// refused outright rather than resolved against the process-wide runtime tier, so the fixture
+// carries what production always has.
+const TRIGGER = { id: 'trg-ud-1', integrationKey: 'poll-demo', orgId: ORG, ownerUserId: OWNER };
 const API_KEY = 'demo-secret-key-value';
 
 let mem: MongoMemoryServer;
@@ -543,7 +547,7 @@ describe('user-defined poll — honest degrade when the transport does not exist
 
   it('an IMAP listener tick THROWS the honest reason: nothing enqueued, no cursor, no HTTP call', async () => {
     const t = fakeFetch(() => mkResponse(200, JSON.stringify({ messages: [], next_uid: '1' })));
-    const imapTrigger = { id: 'trg-imap', integrationKey: 'imap' };
+    const imapTrigger = { id: 'trg-imap', integrationKey: 'imap', orgId: ORG, ownerUserId: OWNER };
 
     await expect(pollUserDefinedSource(imapTrigger, realDeps(t.fn)))
       .rejects.toThrow(/not available in this version/);
@@ -564,11 +568,22 @@ describe('user-defined poll — honest degrade when the transport does not exist
 });
 
 describe('pollUserDefinedSource — package/listenerConfig validation', () => {
+  it('REFUSES a trigger with no org rather than resolving a package unscoped (A2/F5)', async () => {
+    // The pre-A2 behaviour here was a fall-through to the sync disk registry, which reads the MERGED
+    // cache — baseline PLUS the process-wide runtime tier any tenant can write. An org-less trigger
+    // is a broken row (TriggerDoc.orgId is required), so it must fail loudly into the supervisor's
+    // backoff rather than quietly poll whatever package happens to be on the box.
+    const t = respondWith({});
+    await expect(pollUserDefinedSource({ id: 'trg-noorg', integrationKey: 'poll-demo' }, realDeps(t.fn)))
+      .rejects.toThrow(/carries no orgId/);
+    expect(await queuedRows()).toHaveLength(0);
+  });
+
   it('names the missing piece when the integration is not a pollable listener source', async () => {
     const t = respondWith({});
-    await expect(pollUserDefinedSource({ id: 'trg-x', integrationKey: 'slack' }, realDeps(t.fn)))
+    await expect(pollUserDefinedSource({ id: 'trg-x', integrationKey: 'slack', orgId: ORG, ownerUserId: OWNER }, realDeps(t.fn)))
       .rejects.toThrow(/has no listenerConfig/);
-    await expect(pollUserDefinedSource({ id: 'trg-x', integrationKey: 'nope-not-installed' }, realDeps(t.fn)))
+    await expect(pollUserDefinedSource({ id: 'trg-x', integrationKey: 'nope-not-installed', orgId: ORG, ownerUserId: OWNER }, realDeps(t.fn)))
       .rejects.toThrow(/has no installed package/);
     expect(await queuedRows()).toHaveLength(0);
   });

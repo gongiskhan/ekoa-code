@@ -55,7 +55,7 @@
  * reused from platform-poll.ts so both sources hand the composition root the same enqueue shape.
  */
 
-import { getDefinition, type IntegrationListenerConfig } from '../definitions.js';
+import { type IntegrationListenerConfig } from '../definitions.js';
 import { resolveDefinition, actorForOwnedRow } from '../definition-registry.js';
 import type { EnqueueInput, EnqueueResult } from './platform-poll.js';
 
@@ -244,14 +244,21 @@ export async function pollUserDefinedSource(
  * A2: TENANT-SCOPED when the trigger row carries its org. The read actor is built from the row
  * itself (`actorForOwnedRow`) — the owner when the row names one, otherwise the org system actor,
  * which by construction can only ever see `org` + `global` rows of that same org and never another
- * user's private definition. A row with no org falls back to the disk baseline (see the trigger
- * type's note).
+ * user's private definition.
+ *
+ * A row with NO org is refused outright. It used to fall through to the sync disk `getDefinition`,
+ * which reads the MERGED cache — baseline plus the process-wide runtime tier any tenant can write —
+ * i.e. exactly the cross-tenant fallback the tenant-scoped registry exists to forbid, reached by the
+ * one path whose comment claimed it was reading "the baseline" (A2 review F5). `TriggerDoc.orgId` is
+ * a required field and the supervisor now passes it, so an org-less trigger is a broken row, not a
+ * tenant: fail closed and let the backoff surface it rather than poll on someone else's package.
  */
 async function resolveListenerConfig(trigger: UserDefinedPollTrigger): Promise<IntegrationListenerConfig> {
   const integrationKey = trigger.integrationKey;
-  const def = trigger.orgId
-    ? await resolveDefinition(actorForOwnedRow(trigger.orgId, trigger.ownerUserId), integrationKey)
-    : getDefinition(integrationKey);
+  if (!trigger.orgId) {
+    throw new Error(`listener trigger "${trigger.id}" carries no orgId — refusing to resolve an integration package unscoped`);
+  }
+  const def = await resolveDefinition(actorForOwnedRow(trigger.orgId, trigger.ownerUserId), integrationKey);
   if (!def) throw new Error(`integration "${integrationKey}" has no installed package — the listener cannot poll`);
   const cfg = def.listenerConfig;
   if (!cfg) throw new Error(`integration "${integrationKey}" has no listenerConfig — it is not a pollable listener source`);

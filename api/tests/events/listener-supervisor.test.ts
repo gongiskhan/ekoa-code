@@ -1,9 +1,13 @@
 /**
  * Listener supervisor (2A-S1; ported + extended from ekoa-dev listener-supervisor.test.ts).
  *
- * The supervisor is DEPS-INJECTED, so this test drives it entirely with in-memory stubs (no
- * Mongo/Express): a fake listener set, an in-memory cursor store + enqueue with UNIQUE dedup, and a
- * stubbed platform call. It proves:
+ * The supervisor is DEPS-INJECTED, so this test drives it with in-memory stubs (a fake listener set,
+ * an in-memory cursor store + enqueue with UNIQUE dedup, a stubbed platform call). ONE real
+ * dependency is unavoidable since A2: the user-defined branch resolves its integration package
+ * TENANT-SCOPED, so it reads the definition store — hence the in-memory Mongo below. That is the
+ * point, not an inconvenience: the listener must read the package THIS org can see (the tenant row
+ * if it has one, else the shipped baseline), never whatever a process-wide runtime tier holds.
+ * It proves:
  *   - start()/stop() against an empty listener set is a no-op (does not throw) — dev parity;
  *   - a platform listener polls across ticks and enqueues into the injected queue, and stop()
  *     halts all further work (cancel-safe: no enqueue after stop);
@@ -16,12 +20,24 @@
  *     (tests/integrations/user-defined-poll.test.ts, over the real executor + stores).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
+import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { ListenerSupervisor, type SupervisorTrigger } from '../../src/events/listener-supervisor.js';
 import type { EnqueueInput, EnqueueResult, PlatformCallResult } from '../../src/integrations/event-sources/platform-poll.js';
 import type { UserIntegrationCallResult } from '../../src/integrations/event-sources/user-defined-poll.js';
 
 const NOW = '2026-06-19T09:00:00Z';
+
+let mem: MongoMemoryServer;
+beforeAll(async () => {
+  mem = await createMem();
+  await connectMongo(mem.getUri(), 'ekoa_listener_supervisor');
+}, 60_000);
+afterAll(async () => {
+  await closeMongo();
+  await mem.stop();
+});
 
 function graphResponse(messages: Array<{ id: string; receivedDateTime: string }>): PlatformCallResult {
   return { success: true, status: 200, data: { value: messages } };
