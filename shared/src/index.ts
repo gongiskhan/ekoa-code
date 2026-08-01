@@ -39,6 +39,9 @@ export * from './descriptor.js';
 export * from './common.js';
 export * from './errors.js';
 export * from './events.js';
+// Completeness-verified sync (slice CS3) - an INTERNAL data contract (SyncRunReport), schema-only
+// like events.ts/voice.ts: NO descriptor map, NOT in ALL_ENDPOINTS, never a REST/OpenAPI surface.
+export * from './sync.js';
 export * from './auth.js';
 export * from './users.js';
 export * from './org.js';

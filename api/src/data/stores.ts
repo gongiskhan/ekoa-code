@@ -257,3 +257,15 @@ export const webhookAudit = new Store<Doc>('webhook_audit');
  *  runtime (events/listener-state.ts) owns the typed accessors; the supervisor advances the cursor
  *  ONLY after every polled item is durably enqueued, so a crash re-polls rather than drops. */
 export const listenerState = new Store<Doc>('listener_state');
+/** Per-action completeness-verification state (slice CS3): one row per
+ *  `(orgId, integrationKey, actionKey)` (`_id` = `${orgId}::${integrationKey}::${actionKey}`),
+ *  holding the durable watermark, the bounded seen-set, and the incomplete/failure streaks. The
+ *  two-pass orchestrator (events/verified-sync.ts) owns the discipline; the typed accessors live in
+ *  events/sync-state.ts, which WRAPS this collection (mirrors listenerState/listener-state.ts).
+ *  Untyped `Store<Doc>` here — the typed `SyncStateDoc` lives in events/ (a higher tier than data/). */
+export const syncState = new Store<Doc>('sync_state');
+/** Capped per-key history of `SyncRunReport`s (slice CS3): the audit trail of every verified-sync
+ *  run (`_id` = the report id; `stateKey` indexes back to the syncState row). Written + pruned by
+ *  events/sync-state.ts's `persistSyncReport`. Untyped `Store<Doc>` (the report shape is the shared
+ *  contract in shared/src/sync.ts). */
+export const syncReports = new Store<Doc>('sync_reports');
