@@ -133,6 +133,12 @@ export const memories = new Store<Doc>('memories');
 export const artifacts = new Store<Doc>('artifacts');
 export const slugs = new Store<Doc>('slugs');
 export const integrationConfigs = new Store<Doc>('integration_configs');
+/** Tenant-scoped integration DEFINITION store (slice A1). The private-by-default, org/global-tiered
+ *  home for integration package definitions — the additive storage foundation A2 rewires the
+ *  file-based registry (integrations/definitions.ts) onto. Untyped `Store<Doc>` here, exactly like
+ *  its sibling `integrationConfigs`; the typed document shape (`IntegrationDefinitionDoc`) and the
+ *  actor-scoped resolver live in integrations/definition-store.ts, which WRAPS this collection. */
+export const integrationDefinitions = new Store<Doc>('integration_definitions');
 /** Integration-builder chat sessions (ch03 §3.8.14). PERSISTED — the old cortex builder kept an
  *  in-memory Map that died on restart; load-by-key durability requires a store. Holds the running
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */

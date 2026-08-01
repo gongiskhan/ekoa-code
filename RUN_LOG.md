@@ -819,3 +819,10 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - Cause is STICKY (expired token), so per Part 3 "one retry max / sticky-cause" the codex gates are marked unavailable RUN-WIDE rather than retried per slice — no budget burned on a deterministic failure.
 - EFFECT: every per-slice codexSliceReview records {status:degraded, reason:codex-unavailable, actualModel:null} — does NOT block a slice (the fresh-context adversarial review + independent adversarial test still run, decorrelated by context). The run-level codexCheckpoint (Phase 5) is an external blocker: a full-bar 'passed' cannot be claimed without it, so absent other blockers the terminal verdict is a REDUCED-BAR pass (codexSlice:off/degraded, codexCheckpoint:degraded) or completed-with-blockers — named openly in LANDING, never a silent skip or faked approve.
 - Operator remediation to restore the gate: provide a Codex/OpenAI API key (CODEX auth), then a resumed run re-enables the cross-model passes.
+
+### GATE 2026-08-01T17:49:35Z run=20260801-171149-672a8f14 slice=B1 FINAL — status=passed (reduced bar: codexSlice degraded)
+- adversarialReview: CLEAN on all 5 acceptance criteria (fresh-context, decorrelated). 1 MEDIUM (rotation-test tested the primitive not the writers) + 1 LOW (.mjs stubs) — both addressed in b483c6d; determinism-ratchet source guard added (fails if any of the 4 credential files reverts to flat crypto). New OPEN finding logged: app-sso-graph-tokens-flat-unscoped-crypto (out of B1 scope).
+- codexSliceReview: DEGRADED (codex-unavailable) — see run-wide DECISION; does not block the slice.
+- adversarialTest: kind-conditional (api) → batched run-level pass deferred to Phase 5.
+- design/walkthrough: skipped (kind-conditional, api slice).
+- checkpoint: commit b483c6d, tag run-20260801-171149-B1 (moved). GATE B1: passed.

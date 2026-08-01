@@ -2,8 +2,8 @@
   "slice": "B1",
   "title": "End the credential v1/v2 crypto split",
   "kind": "api",
-  "status": "in-review",
-  "checkpointCommit": "3483c28",
+  "status": "passed",
+  "checkpointCommit": "b483c6d",
   "tag": "run-20260801-171149-B1",
   "securityWall": {
     "typecheck": "pass",
@@ -23,16 +23,30 @@
       "ciphertext-v2-migration",
       "zoho-sign"
     ],
-    "note": "230 integrations/events + 34 crypto/zoho all green"
+    "note": "230 integrations/events + 34 crypto/zoho all green",
+    "cases": 6
   },
   "adversarialReview": {
-    "status": "running",
-    "by": "fresh-context general-purpose"
+    "status": "clean",
+    "by": "fresh-context general-purpose",
+    "verdict": "clean on all 5 acceptance criteria; 1 MEDIUM (test-honesty) + 1 LOW addressed; app-sso finding logged"
   },
   "codexSliceReview": {
     "status": "degraded",
     "reason": "codex-unavailable",
     "actualModel": null
   },
-  "at": "2026-08-01T17:43:46Z"
+  "at": "$NOW",
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api slice \u2192 batched run-level pass at Phase 5)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind-conditional"
+  }
 }
