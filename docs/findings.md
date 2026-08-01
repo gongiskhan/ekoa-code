@@ -6,6 +6,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`npm-ci-has-been-broken-on-main`** (FIXED 2026-08-01, HIGH, build — found by a staging deploy
+  failing, not by CI, because CI is the thing it breaks). `npm ci` refused the committed lockfile:
+  `@napi-rs/wasm-runtime` requires `@emnapi/core@^2.0.0-alpha.3` while the lock hoisted `1.10.0`
+  with no nested entry. **`npm ci` is the first step of the CI lane**, so the lane cannot have been
+  passing.
+  ATTRIBUTION, measured per commit rather than assumed: `f5ad86b` (pre-merge, this line of work)
+  **passes**; `1984ac0` (pre-merge `origin/main`) **fails**; every commit after the merge fails
+  because the merge resolved `package-lock.json` to theirs. So it arrived with the Cofre line and
+  the merge carried it forward.
+  WHY IT SURVIVED: every offender is an OPTIONAL `wasm32-wasi` platform package. `npm install`
+  skips optional deps for other platforms and reports success; `npm ci` validates the whole tree
+  including them and refuses. Local development uses `npm install`, so only a clean-machine
+  install — CI, and a Docker build — ever sees it.
+  FIXED surgically: drop the `@emnapi` / `@napi-rs/wasm-runtime` entries and let npm re-resolve —
+  9 entries, all inside those subtrees, every override intact (`fast-uri 3.1.4`, `postcss 8.5.24`,
+  `sharp 0.35.3`, `next 16.2.12`).
+  REJECTED, and worth recording because it looks like the obvious fix: a wholesale
+  `rm package-lock.json && npm install`. It produced a lock npm accepts, and moved 99 top-level
+  packages — several BACKWARDS past deliberate security overrides. `package.json` pins
+  `fast-uri: ^3.1.4`; the regenerated tree took `fast-uri 3.0.0-3.1.3` and the audit gate went red
+  with 7 unaccepted high advisories, while a Next downgrade broke web lint. Valid to npm, wrong for
+  this repo.
+  THE SHARPER LESSON: a first attempt also dropped the root `picomatch`. **`npm ci` passed anyway**,
+  and eslint then died at runtime with `Cannot find module 'picomatch'` — `micromatch` resolves it
+  from the root. A green `npm ci` is NOT proof the tree works, and `npm ci --dry-run` is weaker
+  still. Verify a lockfile change with a real `npm ci` followed by lint + typecheck + the suite.
+
 - **`thirty-specs-budgeted-waits-they-could-never-use`** (FIXED 2026-08-01, HIGH, test-estate — the
   single largest cause of this estate's "flakiness"). `playwright.config.ts` set no `timeout`, so
   Playwright's **30s default per-test cap** applied, while **30 of the 76 specs** budget individual
