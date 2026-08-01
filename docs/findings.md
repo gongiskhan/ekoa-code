@@ -19,19 +19,39 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   skips optional deps for other platforms and reports success; `npm ci` validates the whole tree
   including them and refuses. Local development uses `npm install`, so only a clean-machine
   install — CI, and a Docker build — ever sees it.
-  FIXED surgically: drop the `@emnapi` / `@napi-rs/wasm-runtime` entries and let npm re-resolve —
-  9 entries, all inside those subtrees, every override intact (`fast-uri 3.1.4`, `postcss 8.5.24`,
-  `sharp 0.35.3`, `next 16.2.12`).
+  FIXED (second attempt — the first, `a65f758`, did NOT work and said it did; see below): resolve
+  FRESH with `node_modules` deleted as well, so npm reads the REGISTRY instead of what is on disk.
+  That is the whole difference: with a tree present, `npm install` preserves installed versions and
+  produces a lock that only reconciles against that tree; with it gone, resolution is clean. Result:
+  57 packages up, 2 down, every override honoured (`fast-uri 3.1.5`, `postcss 8.5.25`,
+  `next 16.2.12`), no Agent SDK or Playwright regression.
+  A SECOND defect surfaced underneath: the fresh lock silently omitted FOUR packages that
+  `eslint@9.39.5` declares — `@eslint/config-array`, `@eslint/config-helpers`, `@humanfs/node`,
+  `@humanwhocodes/retry`. npm will not add them on repeated installs, because the ROOT pins
+  `eslint@8` and the `@eslint/*` scope then resolves against the wrong major, so v9's own deps fall
+  through. Found by enumerating all 34 of eslint 9's declared deps against the lock rather than
+  fixing them one crash at a time. They are now declared explicitly in `web/package.json` at the
+  versions eslint itself asks for — making an existing requirement explicit, not inventing one.
   REJECTED, and worth recording because it looks like the obvious fix: a wholesale
   `rm package-lock.json && npm install`. It produced a lock npm accepts, and moved 99 top-level
   packages — several BACKWARDS past deliberate security overrides. `package.json` pins
   `fast-uri: ^3.1.4`; the regenerated tree took `fast-uri 3.0.0-3.1.3` and the audit gate went red
   with 7 unaccepted high advisories, while a Next downgrade broke web lint. Valid to npm, wrong for
   this repo.
-  THE SHARPER LESSON: a first attempt also dropped the root `picomatch`. **`npm ci` passed anyway**,
-  and eslint then died at runtime with `Cannot find module 'picomatch'` — `micromatch` resolves it
-  from the root. A green `npm ci` is NOT proof the tree works, and `npm ci --dry-run` is weaker
-  still. Verify a lockfile change with a real `npm ci` followed by lint + typecheck + the suite.
+  THE SHARPER LESSON, in three parts, because each cost a wrong conclusion:
+  1. A first attempt dropped the root `picomatch`. **`npm ci` passed anyway**, then eslint died at
+     runtime with `Cannot find module 'picomatch'` — `micromatch` resolves it from the root. A green
+     `npm ci` is not proof the tree WORKS.
+  2. Worse, `a65f758` claimed to fix this and did not. It was verified against probe directories
+     holding only the root `package.json` + lockfile and NO workspace manifests, so npm could not
+     resolve the workspaces at all and its errors were artefacts of the probe. **A workspace repo's
+     lockfile can only be tested in a probe carrying every workspace manifest** — the same set the
+     Dockerfile COPYs. Build the probe wrong and it will lie in both directions.
+  3. `npm test` can exit 1 with every test passing: `fs.inotify.max_user_instances` is 128 on this
+     host, and chokidar's watchers throw `EMFILE` once it is exhausted (105 long-lived headless
+     chromium processes from a parallel tool held 96). All 3376 tests passed; only watcher creation
+     failed. Check `/proc/sys/fs/inotify/max_user_instances` before reading that exit code as a
+     regression.
 
 - **`thirty-specs-budgeted-waits-they-could-never-use`** (FIXED 2026-08-01, HIGH, test-estate — the
   single largest cause of this estate's "flakiness"). `playwright.config.ts` set no `timeout`, so
