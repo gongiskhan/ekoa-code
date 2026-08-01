@@ -41,6 +41,8 @@ const userA1: Actor = { userId: 'userA1', orgId: 'orgA', role: 'user' };
 const userA2: Actor = { userId: 'userA2', orgId: 'orgA', role: 'user' };
 const adminA: Actor = { userId: 'adminA', orgId: 'orgA', role: 'org-admin' };
 const userB1: Actor = { userId: 'userB1', orgId: 'orgB', role: 'user' };
+/** A platform super-admin (the only role that may toggle the cross-org `global` tier). */
+const superAdmin: Actor = { userId: 'root', orgId: 'orgA', role: 'super-admin' };
 
 /** A deterministic clock so `createdAt` ordering (the global-pick tiebreak) is stable. */
 let clock = 0;
@@ -219,5 +221,66 @@ describe('integration definition visibility: setVisibility is owner-or-admin gat
     expect((await store.setVisibility(priv._id, userB1, 'global')).verdict).toBe('notfound');
     // The author still holds it throughout.
     expect((await store.getForActor(userA1, 'reports'))?.visibility).toBe('private');
+  });
+});
+
+describe('integration definition visibility: the global tier is super-admin only (brief lock)', () => {
+  it('a base owner and an org-admin CANNOT promote a row to global; only super-admin can', async () => {
+    const own = await store.create(draft('orgA', 'userA1', 'gcal', 'org'));
+
+    // The owner (role user) may flip private<->org freely, but NOT to global.
+    expect((await store.setVisibility(own._id, userA1, 'global')).verdict).toBe('forbidden');
+    // Even the org-admin cannot self-publish across every tenant.
+    expect((await store.setVisibility(own._id, adminA, 'global')).verdict).toBe('forbidden');
+    // It stayed org-confined — no cross-org exposure leaked through.
+    expect(await store.getForActor(userB1, 'gcal')).toBeNull();
+    expect((await store.getById(own._id))?.visibility).toBe('org');
+
+    // The super-admin IS the review gate: it may promote to global, and then every org resolves it.
+    expect((await store.setVisibility(own._id, superAdmin, 'global')).verdict).toBe('ok');
+    expect((await store.getForActor(userB1, 'gcal'))?._id).toBe(own._id);
+
+    // And demotion FROM global is likewise super-admin only (a base owner cannot silently unpublish).
+    expect((await store.setVisibility(own._id, userA1, 'org')).verdict).toBe('forbidden');
+    expect((await store.setVisibility(own._id, superAdmin, 'org')).verdict).toBe('ok');
+    expect(await store.getForActor(userB1, 'gcal')).toBeNull();
+  });
+
+  it('super-admin write reach spans orgs, but only over rows it can see (a global)', async () => {
+    // orgB owns a global 'x'; the super-admin (in orgA) can see and re-gate it.
+    const bGlobal = await store.create(draft('orgB', 'userB1', 'x', 'global'));
+    expect((await store.getForActor(userA1, 'x'))?._id).toBe(bGlobal._id); // cross-org visible
+
+    // super-admin demotes orgB's global to org-confined; the demotion is honored cross-org.
+    expect((await store.setVisibility(bGlobal._id, superAdmin, 'org')).verdict).toBe('ok');
+    expect(await store.getForActor(userA1, 'x')).toBeNull(); // no longer cross-org visible
+
+    // But a foreign org's PRIVATE row remains invisible even to super-admin's write (no oracle):
+    const bPriv = await store.create(draft('orgB', 'userB1', 'secret', 'private'));
+    // super-admin is in orgA; a private orgB row is not visible to it → notfound, not a write.
+    expect((await store.setVisibility(bPriv._id, superAdmin, 'org')).verdict).toBe('notfound');
+    expect((await store.getById(bPriv._id))?.visibility).toBe('private'); // untouched
+  });
+});
+
+describe('integration definition uniqueness: the composite id is injective', () => {
+  it('org/key pairs that a naive separator-join would collide stay distinct', () => {
+    // The classic separator collision: 'a:b' + 'c' vs 'a' + 'b:c'. JSON-encoding the tuple avoids it.
+    expect(definitionIdFor('a', 'b:c')).not.toBe(definitionIdFor('a:b', 'c'));
+    // Keys/orgs carrying the JSON structural characters themselves do not collide either.
+    const pairs: Array<[string, string]> = [
+      ['a', 'b'],
+      ['a"', 'b'],
+      ['a', '"b'],
+      ['a', 'b","c'],
+      ['a', 'b]'],
+      ['a],[', 'b'],
+      ['', 'b'],
+      ['a', ''],
+    ];
+    const ids = pairs.map(([o, k]) => definitionIdFor(o, k));
+    expect(new Set(ids).size).toBe(pairs.length); // all distinct
+    // ...and it is stable for the same input (deterministic).
+    expect(definitionIdFor('a', 'b]')).toBe(definitionIdFor('a', 'b]'));
   });
 });

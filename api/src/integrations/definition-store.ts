@@ -269,11 +269,19 @@ export class IntegrationDefinitionStore {
    * Change a definition's visibility, owner-or-admin gated (`canWriteDefinition`). A row the actor
    * may not even see answers `notfound`, byte-for-byte with a genuinely missing one — a caller who
    * cannot READ a private definition cannot probe for it with a write either.
+   *
+   * THE `global` TIER IS SUPER-ADMIN ONLY (brief lock: global visibility is the super-admin review
+   * gate). Enforced here at the single store chokepoint, not just at the E1 route, so no caller — the
+   * route, the D3 copy-on-author path, or any future one — can self-publish a tenant's definition to
+   * every org, or silently un-publish a shared one. A base owner may still flip their own row between
+   * `private` and `org` freely; only promotion TO or demotion FROM `global` needs super-admin.
    */
   async setVisibility(id: string, actor: Actor, visibility: DefinitionVisibility): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
     if (!canWriteDefinition(row, actor)) return { verdict: 'forbidden' };
+    const touchesGlobal = visibility === 'global' || row.visibility === 'global';
+    if (touchesGlobal && actor.role !== 'super-admin') return { verdict: 'forbidden' };
     const updated = await this.store.update(id, (cur) => ({ ...cur, visibility, updatedAt: this.nowIso() }));
     return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
   }
