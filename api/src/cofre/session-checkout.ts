@@ -55,7 +55,12 @@ function metaOf(item: CofreItemDoc): SessionMetadata | undefined {
  */
 export function reestablishRouteFor(item: CofreItemDoc): ReestablishRoute {
   const meta = metaOf(item);
-  if (!meta) return 'attended';
+  // A row whose metadata is absent OR INCOMPLETE reads as unknown provenance. The incomplete case
+  // is real, not theoretical: `markSessionUnhealthy` stamps `healthy:false` onto whatever metadata a
+  // row has, including none, and a pre-metadata row edited that way arrives here with no
+  // `establishedBy`. Reading `.kind` off it used to throw — the one failure mode this function must
+  // not have, since its whole job is to answer conservatively when it cannot tell.
+  if (!meta?.establishedBy || !meta.boundEgress) return 'attended';
   if (meta.establishedBy.kind === 'machine') {
     // Established ON a machine. If it was also bound to that machine's residential egress it is
     // the card/attended shape; a plain machine-established session is a typist login.

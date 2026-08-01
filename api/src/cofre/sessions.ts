@@ -18,6 +18,7 @@
  * portals flag. The router reads this at checkout (WS-I).
  */
 import type { Actor, SessionMetadata } from '@ekoa/shared';
+import { hostMatchesOrigin } from '../security/origin-binding.js';
 import { mintCofreItem } from './items.js';
 import { cofreItems } from './store.js';
 import type { CofreItemDoc } from './types.js';
@@ -103,6 +104,63 @@ export function originsFromStorageState(storageState: unknown): string[] {
     }
   }
   return [...out];
+}
+
+/** The bare host of an origin written either as a host or as a full URL. */
+function hostOf(origin: string): string {
+  const trimmed = origin.trim().toLowerCase();
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(trimmed)) {
+    try {
+      return new URL(trimmed).hostname;
+    } catch {
+      /* not a URL after all — fall through to the authority split */
+    }
+  }
+  return (trimmed.split('/')[0] ?? '').split(':')[0] ?? '';
+}
+
+/**
+ * The actor's `session` items replayable against `origin`, most recently created first.
+ *
+ * WHY THIS LIVES HERE rather than at the call site. `cofre/store.ts` is lint-fenced (the
+ * `COFRE_STORE_BAN` rule): nothing outside this module may reach the raw handles, precisely so the
+ * owner-scoping predicate is written once. A caller that wants "the session for this portal" would
+ * otherwise re-derive both the scoping and the origin match, which is the drift the fence exists to
+ * prevent — so the query belongs on the module's own surface.
+ *
+ * Matching uses `hostMatchesOrigin`, the SAME rule `unwrap()` enforces at use time. Two different
+ * "is this the same site" rules that can disagree would mean a session this function hands back is
+ * one `unwrap()` then refuses, which reads as an unexplained failure rather than a binding problem.
+ *
+ * Newest first is deliberate: when several captures exist for one portal the freshest is the one
+ * most likely still healthy, and checkout stops at the first that passes.
+ */
+export async function findSessionItemsForOrigin(actor: Actor, origin: string): Promise<CofreItemDoc[]> {
+  const host = hostOf(origin);
+  if (!host) return [];
+  const items = await cofreItems.listVisible(actor, { type: 'session' });
+  return items
+    .filter((item) => item.boundOrigins.some((allowed) => hostMatchesOrigin(host, allowed)))
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+}
+
+/**
+ * Persist "this session is no longer good" (G-4 health-on-use).
+ *
+ * `session-checkout.ts` has a PURE `markUnhealthy(item)` that returns an edited doc; this is the
+ * write. They are deliberately separate: checkout stays a pure decision the tests can drive
+ * exhaustively, and only a caller that actually observed a rejection persists the verdict.
+ *
+ * Returns false when the item is not the actor's (uniform not-found, never an existence oracle).
+ */
+export async function markSessionUnhealthy(actor: Actor, itemId: string): Promise<boolean> {
+  const item = await cofreItems.getVisible(actor, itemId);
+  if (!item) return false;
+  await cofreItems.raw.update(itemId, (cur) => {
+    const doc = cur as CofreItemDoc;
+    return { ...doc, sessionMetadata: { ...(doc.sessionMetadata ?? {}), healthy: false } };
+  });
+  return true;
 }
 
 /** Is this session item past its expiry? Health drives re-establishment (G-4). */

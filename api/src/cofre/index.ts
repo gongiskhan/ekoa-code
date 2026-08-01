@@ -38,9 +38,19 @@ export {
 export {
   captureSessionToCofre,
   originsFromStorageState,
+  findSessionItemsForOrigin,
+  markSessionUnhealthy,
   sessionIsExpired,
   DEFAULT_SESSION_TTL_MS,
   type CaptureSessionInput,
 } from './sessions.js';
+
+export {
+  checkoutSession,
+  reestablishRouteFor,
+  markUnhealthy,
+  type CheckoutDecision,
+  type ReestablishRoute,
+} from './session-checkout.js';
 
 export type { CofreItemDoc, CofreGrantDoc } from './types.js';
