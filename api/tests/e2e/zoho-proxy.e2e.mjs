@@ -243,7 +243,7 @@ const backend = zoho.makeZohoSignBackend({
     ownerUserId === 'admin' && currentFields
       ? { _id: 'cfg-admin', enabled: true, credentialsCiphertext: JSON.stringify(currentFields) }
       : null,
-  decrypt: (c) => c,
+  decrypt: async (c) => c,
   renderHtmlToPdf: async () => Buffer.from('%PDF-1.4 stub rendered'),
   persistOwnerCredentialUpdates: async (configId, _cur, updates) => { persisted.push({ configId, updates }); },
 });

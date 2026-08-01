@@ -6,6 +6,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`app-sso-graph-tokens-flat-unscoped-crypto`** (OPEN 2026-08-01, MEDIUM, crypto-at-rest — found by
+  the B1 fresh-context adversarial review, out of that slice's scope). `api/src/integrations/app-sso.ts`
+  stores Microsoft Graph OAuth tokens in `session.graphTokensEnc` (`app-sso-sessions.ts:36`) via the
+  flat, UNSCOPED `encrypt`/`decrypt` (app-sso.ts ~574/624/635) — a plaintext-at-rest credential blob
+  with no org binding, the same class B1 just closed on `integration_configs.credentialsCiphertext`
+  but a DIFFERENT field, so genuinely outside B1. CLOSE BY: move this field onto
+  `envelopeEncrypt`/`envelopeDecrypt` scoped to the session's org (same treatment as B1), with a v2
+  assertion; fold into the B2 Cofre/WS-C slice or a dedicated follow-up. Do NOT let "integration_configs
+  done" read as "all integration credentials done".
+
 - **`runtime-integration-packages-are-global`** (OPEN 2026-08-01, HIGH, tenancy/confidentiality -
   found by the integrations-unification discovery gate, `docs/INTEGRATIONS_UNIFICATION_AUDIT.md`).
   User-created integration packages have NO ownership model: any authenticated user of any org

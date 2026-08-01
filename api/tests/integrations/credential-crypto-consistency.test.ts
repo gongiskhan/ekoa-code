@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { encrypt, decrypt, envelopeEncrypt, envelopeDecrypt, ciphertextVersion } from '../../src/data/crypto.js';
+
+const src = (rel: string) => readFileSync(fileURLToPath(new URL(`../../src/${rel}`, import.meta.url)), 'utf8');
 
 /**
  * REGRESSION SUITE — the integration-credential crypto split (B1, run 20260801-171149).
@@ -67,5 +71,35 @@ describe('integration credential crypto — one scheme (B1)', () => {
   it('a v2 row is org-bound — it does not decrypt under another org', async () => {
     const stored = await envelopeEncrypt(BUNDLE, ORG_A);
     await expect(zohoDecryptSeam(stored, ORG_B)).rejects.toThrow();
+  });
+
+  // Determinism ratchet: the round-trip cases above test the crypto PRIMITIVE, so a writer reverting
+  // to flat `encrypt`/`decrypt` (the exact pre-B1 bug in all four integration-credential files)
+  // would still pass them. This source guard catches that class mechanically — it fails the moment
+  // any of those files calls the flat v1 functions again, whichever writer regresses. Mirrors the
+  // memvault-isolation grep-gate house pattern (assert the property in the source, not just at runtime).
+  it('no integration-credential file calls flat encrypt()/decrypt() (guards against a v1 regression)', () => {
+    const FILES = [
+      'integrations/action-executor.ts',
+      'integrations/platform-oauth.ts',
+      'integrations/pipedream.ts',
+      'integrations/zoho-sign.ts',
+    ];
+    // Match a DIRECT call to the flat crypto-module functions: `encrypt(` / `decrypt(` as a bare
+    // identifier. The lookbehind excludes member access — `envelopeEncrypt(`/`envelopeDecrypt(` (the
+    // safe scheme) AND injected seams like `deps.decrypt(` (wired to envelopeDecrypt in server.ts,
+    // verified). The flat-crypto danger is only ever an import-and-call of the module's own fns.
+    const flatCall = /(?<![.\w])(?:encrypt|decrypt)\(/;
+    // sanity: the matcher fires on a planted flat call, and does NOT on the safe forms (non-tautology).
+    expect(flatCall.test('const x = encrypt(y);')).toBe(true);
+    expect(flatCall.test('const x = await envelopeEncrypt(y, org);')).toBe(false);
+    expect(flatCall.test('await deps.decrypt(ct, org);')).toBe(false);
+    for (const f of FILES) {
+      const offenders = src(f)
+        .split('\n')
+        .map((line, i) => ({ line: line.replace(/\/\/.*$/, ''), n: i + 1 }))
+        .filter((l) => flatCall.test(l.line));
+      expect(offenders, `${f} still calls flat encrypt()/decrypt(): lines ${offenders.map((o) => o.n).join(',')}`).toEqual([]);
+    }
   });
 });

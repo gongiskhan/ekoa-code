@@ -1,0 +1,38 @@
+{
+  "slice": "B1",
+  "title": "End the credential v1/v2 crypto split",
+  "kind": "api",
+  "status": "in-review",
+  "checkpointCommit": "3483c28",
+  "tag": "run-20260801-171149-B1",
+  "securityWall": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "chokepoint": "clean",
+    "encryptionKey": "clean",
+    "garrison": "clean",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "suites": [
+      "credential-crypto-consistency (6 new)",
+      "integrations (230)",
+      "events",
+      "envelope-encryption",
+      "ciphertext-v2-migration",
+      "zoho-sign"
+    ],
+    "note": "230 integrations/events + 34 crypto/zoho all green"
+  },
+  "adversarialReview": {
+    "status": "running",
+    "by": "fresh-context general-purpose"
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "at": "2026-08-01T17:43:46Z"
+}

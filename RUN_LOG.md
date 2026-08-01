@@ -805,3 +805,17 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - gatesConfig: deliberateRed ON, mutation ON (run ≥ 3 slices); all gates ON (no operator flags).
 - plan: docs/autothing/runs/20260801-171149-672a8f14/{RUN_SPEC.md,FLOW_PLAN.md}. Two Plan architects (core 13 slices + Citius 8 slices), merged into one 6-wave topological table.
 - max-slice check: largest slice D3=8 (at the ≤8 cap, not split); all others ≤7.
+
+### GATE 2026-08-01T17:43:46Z run=20260801-171149-672a8f14 slice=B1 (End credential crypto split)
+- deterministic wall: typecheck PASS (api src+test); eslint PASS (8 files); chokepoint/encryption-key/garrison/gitleaks CLEAN.
+- test: PASS — 6 new regression cases (credential-crypto-consistency) + 230 integrations/events + 34 crypto/zoho, all green. Committed re-runnable assertion: api/tests/integrations/credential-crypto-consistency.test.ts.
+- test-bug fixed (no ceiling cost): platform.test.ts asserted stored creds via flat decrypt; now reads via envelopeDecrypt(ct,'orgA') + asserts v2 at rest. Root cause: production correctly writes v2 now.
+- checkpoint: commit 3483c28, tag run-20260801-171149-B1. Model: claude-fable-5 (implement).
+- security-boundary slice ⇒ fresh-context adversarial review + codex slice review both dispatched (verdicts pending).
+
+### DECISION 2026-08-01T17:44:30Z run=20260801-171149-672a8f14 — codex cross-model gate UNAVAILABLE (run-wide)
+- codex exec fails auth: refresh_token_reused / token_expired (ChatGPT OAuth). This is the G8 credit/auth-death mode.
+- Self-unblock attempted + refused: cannot re-auth. Reusing Claude Code's own Anthropic login for codex is forbidden (user memory: separate credential); a Codex/OpenAI API key requires operator credentials not present in this environment.
+- Cause is STICKY (expired token), so per Part 3 "one retry max / sticky-cause" the codex gates are marked unavailable RUN-WIDE rather than retried per slice — no budget burned on a deterministic failure.
+- EFFECT: every per-slice codexSliceReview records {status:degraded, reason:codex-unavailable, actualModel:null} — does NOT block a slice (the fresh-context adversarial review + independent adversarial test still run, decorrelated by context). The run-level codexCheckpoint (Phase 5) is an external blocker: a full-bar 'passed' cannot be claimed without it, so absent other blockers the terminal verdict is a REDUCED-BAR pass (codexSlice:off/degraded, codexCheckpoint:degraded) or completed-with-blockers — named openly in LANDING, never a silent skip or faked approve.
+- Operator remediation to restore the gate: provide a Codex/OpenAI API key (CODEX auth), then a resumed run re-enables the cross-model passes.

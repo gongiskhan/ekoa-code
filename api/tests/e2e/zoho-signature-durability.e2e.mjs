@@ -258,7 +258,7 @@ try {
       ownerUserId === 'admin' && currentFields
         ? { _id: 'cfg-admin', enabled: true, credentialsCiphertext: JSON.stringify(currentFields) }
         : null,
-    decrypt: (c) => c,
+    decrypt: async (c) => c,
     renderHtmlToPdf: async (html) => {
       htmlRendered += 1;
       return Buffer.from(`%PDF-1.4 rendered(${(html || '').length} chars)`);
