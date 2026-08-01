@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { integrationConfigs, activityLogs } from '../../src/data/stores.js';
-import { decrypt } from '../../src/data/crypto.js';
+import { envelopeDecrypt, ciphertextVersion } from '../../src/data/crypto.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { refreshDefinitions } from '../../src/integrations/definitions.js';
 import {
@@ -138,7 +138,9 @@ describe('platform OAuth callback (state machine)', () => {
     expect(row?.credentialsCiphertext).toBeTruthy();
     // Stored at rest as ciphertext, not plaintext; decrypts to the token bundle.
     expect(row!.credentialsCiphertext).not.toContain('atk-1');
-    const tokens = JSON.parse(decrypt(row!.credentialsCiphertext!)) as { access_token: string; email: string };
+    // B1: platform tokens are now written under the org-bound v2 envelope (was flat v1).
+    expect(ciphertextVersion(row!.credentialsCiphertext!)).toBe('v2');
+    const tokens = JSON.parse(await envelopeDecrypt(row!.credentialsCiphertext!, 'orgA')) as { access_token: string; email: string };
     expect(tokens.access_token).toBe('atk-1');
     expect(tokens.email).toBe('user@acme.pt');
   });

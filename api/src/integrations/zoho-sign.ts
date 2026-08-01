@@ -492,8 +492,10 @@ export interface ZohoSignDeps {
   /** Resolve the owner's connected `zoho-sign` config (own row wins, else org-shared).
    *  Root: integrations service.findConfigForOwner. */
   findConfigForOwner: (orgId: string, ownerUserId: string, key: string) => Promise<ZohoSignConfigRow | null>;
-  /** Decrypt a credential ciphertext. Root: data/crypto.decrypt. */
-  decrypt: (ciphertext: string) => string;
+  /** Decrypt a credential ciphertext under its org-bound envelope. Root: data/crypto.envelopeDecrypt
+   *  (reads v1 rows transparently). B1: was flat `decrypt`, which threw on a v2 row written by the
+   *  normal POST /integrations/configs path — a latent unreadable-config bug. */
+  decrypt: (ciphertext: string, orgId: string) => Promise<string>;
   /** Render self-contained HTML → PDF bytes. Root: apps/pdf.renderHtmlToPdf (INJECTED
    *  because integrations/ may not import apps/). */
   renderHtmlToPdf: (html: string) => Promise<Buffer>;
@@ -543,7 +545,7 @@ async function resolveOwnerZohoContext(deps: ZohoSignDeps, ownerUserId?: string)
   if (!config || !config.enabled || config.needsReauth || !config.credentialsCiphertext) return null;
   let fields: Record<string, unknown>;
   try {
-    fields = JSON.parse(deps.decrypt(config.credentialsCiphertext)) as Record<string, unknown>;
+    fields = JSON.parse(await deps.decrypt(config.credentialsCiphertext, orgId)) as Record<string, unknown>;
   } catch {
     return null;
   }

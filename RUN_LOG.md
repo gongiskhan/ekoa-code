@@ -790,3 +790,18 @@ Prior run journal archived at tag `archive/pre-docs-cleanup-2026-07` (commit ae8
 - api 236 files / 2340 passed / 1 skipped / 0 FAILED (the 2339 baseline plus the consent regression test, reconciling exactly). garrison 159/159 across 8 files. shared 60/60. CLI 74/74.
 - typecheck 0, lint 0 errors, gate:sast 0, chokepoint-grep 0, garrison-grep 0, gate:openapi 0, gate:client-drift 0, gitleaks 0, validate-fitting PASS x3.
 - Terminal state: PASSED at a REDUCED BAR. gates-disabled: codex-slice, codex-checkpoint (operator-disabled mid-run for speed, after the credentials were already dead). Cross-model decorrelation is genuinely absent from this run, and the verdict says so rather than rounding up.
+
+## RUN-START 2026-08-01T17:12:27Z run=20260801-171149-672a8f14
+- brief: Integrations, unified — one Integration entity exposing Actions (api-call|bash-cli|browser-steps backing), integration-execution capability (user-or-key) with execute-or-author self-extension + locked guardrails, sharing (private-by-default + super-admin global toggle + publish scrub), prerequisite tenancy/Cofre slices, first proof = Caixa Citius read-only metadata sync with completeness verification. Spec: docs/decisions.md 2026-08-01 + docs/INTEGRATIONS_UNIFICATION_AUDIT.md.
+- session: 672a8f14 model=claude-fable-5 effort=ultracode host=dev-madrid
+- profile: build (operator-stated; sizing confirms at Phase 1) turnCap=250 (pre-sizing)
+- gatesConfig: all true (no operator flags)
+- preflight: asciinema 2.4.0, agg 1.9.0, codex 0.144.5, gitleaks 8.30.1, semgrep 1.168.0, node v20.19.4, playwright 1.62.1, ffmpeg present (banner-on-stderr)
+- operator decision carried in: Citius sync fetches notification METADATA ONLY (no document opens) — document-open is a later, separately confirmed action.
+
+### DECISION 2026-08-01T17:30:57Z run=20260801-171149-672a8f14 — sizing
+- profile: **build** (21 slices, ~120 sizing pts) — replaces the pre-sizing placeholder.
+- turnCap: resized 250 → **1680** = max(300, 80×21). Runaway brake, not a schedule.
+- gatesConfig: deliberateRed ON, mutation ON (run ≥ 3 slices); all gates ON (no operator flags).
+- plan: docs/autothing/runs/20260801-171149-672a8f14/{RUN_SPEC.md,FLOW_PLAN.md}. Two Plan architects (core 13 slices + Citius 8 slices), merged into one 6-wave topological table.
+- max-slice check: largest slice D3=8 (at the ≤8 cap, not split); all others ≤7.

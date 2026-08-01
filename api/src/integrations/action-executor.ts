@@ -21,7 +21,7 @@ import { getDefinition, type IntegrationActionHttpConfig } from './definitions.j
 import { guardedFetch } from '../services/url-fetcher.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
 import { integrationConfigs } from '../data/stores.js';
-import { encrypt, envelopeDecrypt } from '../data/crypto.js';
+import { envelopeEncrypt, envelopeDecrypt } from '../data/crypto.js';
 import {
   interpolate,
   interpolateObj,
@@ -259,7 +259,9 @@ async function persistProviderCredentialUpdates(
   try {
     const merged: Record<string, unknown> = { ...currentFields, ...updates };
     delete merged.storageState;
-    const ciphertext = encrypt(JSON.stringify(merged));
+    // Cofre B-4 / B1: re-encrypt under the SAME org-bound v2 envelope the reader uses. Writing a
+    // flat v1 blob here (the pre-B1 bug) silently downgraded a v2 row on every rotation.
+    const ciphertext = await envelopeEncrypt(JSON.stringify(merged), config.orgId);
     await integrationConfigs.update(config._id, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
   } catch (err) {
     console.warn(`[action-executor] failed to persist rotated credentials for ${config.integrationKey}: ${err instanceof Error ? err.message : String(err)}`);

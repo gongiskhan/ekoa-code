@@ -148,6 +148,7 @@ import {
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
+  type IntegrationConfigDoc,
   callPlatformIntegration,
   findConfigForOwner,
   integrationPrefetch,
@@ -172,7 +173,7 @@ import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './
 import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
-import { decrypt, encrypt, envelopeDecrypt } from './data/crypto.js';
+import { envelopeDecrypt, envelopeEncrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -979,12 +980,18 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const zohoBackend = makeZohoSignBackend({
     getOwnerOrgId: async (ownerUserId) => (await users.get(ownerUserId))?.orgId ?? null,
     findConfigForOwner,
-    decrypt,
+    // B1: org-bound envelope, reads v1 rows transparently. Was flat `decrypt`, which threw on a
+    // v2 config written by POST /integrations/configs (the latent unreadable-zoho-config bug).
+    decrypt: (ciphertext, orgId) => envelopeDecrypt(ciphertext, orgId),
     renderHtmlToPdf,
     persistOwnerCredentialUpdates: async (configId, currentFields, updates) => {
       const merged: Record<string, unknown> = { ...currentFields, ...updates };
       delete merged.storageState;
-      const ciphertext = encrypt(JSON.stringify(merged));
+      // Rotation must re-encrypt under the SAME org-bound envelope the reader uses; the config's
+      // own org scopes the DEK, so a rotated row stays readable and never downgrades to flat v1.
+      const target = (await integrationConfigs.get(configId)) as IntegrationConfigDoc | null;
+      if (!target) return;
+      const ciphertext = await envelopeEncrypt(JSON.stringify(merged), target.orgId);
       await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
     },
     recordAgreement: recordZohoAgreement,

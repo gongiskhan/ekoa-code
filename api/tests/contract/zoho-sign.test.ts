@@ -190,7 +190,7 @@ beforeAll(async () => {
                 credentialsCiphertext: JSON.stringify({ client_id: CID, client_secret: SECRET, refresh_token: 'rt-1', dc: 'com' }),
               }
             : null,
-        decrypt: (c) => c,
+        decrypt: async (c: string) => c,
         renderHtmlToPdf: async () => Buffer.from('%PDF-1.4 rendered'),
       }),
     }),

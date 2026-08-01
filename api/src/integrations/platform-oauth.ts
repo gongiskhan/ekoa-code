@@ -22,7 +22,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { integrationConfigs } from '../data/stores.js';
-import { encrypt, decrypt } from '../data/crypto.js';
+import { envelopeEncrypt, envelopeDecrypt } from '../data/crypto.js';
 import { logActivity, type ActivityActor } from '../data/activity.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import type { Actor } from '@ekoa/shared';
@@ -356,7 +356,7 @@ export async function getValidPlatformTokens(orgId: string, provider: PlatformPr
   const row = await getOrgRow(orgId, provider);
   if (!row || !row.enabled || !row.credentialsCiphertext) throw new PlatformNotConnectedError(provider, false);
   if (row.needsReauth) throw new PlatformNotConnectedError(provider, true);
-  const tokens = JSON.parse(decrypt(row.credentialsCiphertext)) as OAuthTokens;
+  const tokens = JSON.parse(await envelopeDecrypt(row.credentialsCiphertext, row.orgId)) as OAuthTokens;
   const expiresAt = new Date(tokens.expires_at).getTime();
   if (deps.now() <= expiresAt - 60_000) return tokens; // still valid (60s skew)
   return refreshAndPersist(row, provider, tokens, deps);
@@ -378,9 +378,10 @@ async function doRefreshAndPersist(row: IntegrationConfigDoc, provider: Platform
   try {
     const refreshed = await refreshTokens(cfg, provider, current.refresh_token, http, deps.now());
     refreshed.email = current.email;
+    const refreshedCiphertext = await envelopeEncrypt(JSON.stringify(refreshed), row.orgId);
     await integrationConfigs.update(row._id, (cur) => ({
       ...cur,
-      credentialsCiphertext: encrypt(JSON.stringify(refreshed)),
+      credentialsCiphertext: refreshedCiphertext,
       needsReauth: false,
     }));
     return refreshed;
@@ -391,7 +392,7 @@ async function doRefreshAndPersist(row: IntegrationConfigDoc, provider: Platform
       const fresh = (await integrationConfigs.get(row._id)) as IntegrationConfigDoc | null;
       if (fresh?.credentialsCiphertext && fresh.credentialsCiphertext !== row.credentialsCiphertext) {
         try {
-          return JSON.parse(decrypt(fresh.credentialsCiphertext)) as OAuthTokens;
+          return JSON.parse(await envelopeDecrypt(fresh.credentialsCiphertext, row.orgId)) as OAuthTokens;
         } catch {
           /* fall through to dead-flag */
         }
@@ -485,9 +486,10 @@ export async function completeCallback(
   } catch {
     /* userinfo is best-effort; a connection with no email is still valid */
   }
+  const tokenCiphertext = await envelopeEncrypt(JSON.stringify(tokens), row.orgId);
   await integrationConfigs.update(row._id, (cur) => ({
     ...cur,
-    credentialsCiphertext: encrypt(JSON.stringify(tokens)),
+    credentialsCiphertext: tokenCiphertext,
     email: email || undefined,
     enabled: true,
     needsReauth: false,
@@ -513,7 +515,7 @@ export async function platformStatus(actor: Actor, providerRaw: string): Promise
   const row = await getOrgRow(actor.orgId, provider);
   if (!row || !row.credentialsCiphertext || row.needsReauth) return { connected: false };
   try {
-    const tokens = JSON.parse(decrypt(row.credentialsCiphertext)) as OAuthTokens;
+    const tokens = JSON.parse(await envelopeDecrypt(row.credentialsCiphertext, row.orgId)) as OAuthTokens;
     return { connected: true, email: tokens.email || row.email || undefined, expiresAt: tokens.expires_at };
   } catch {
     return { connected: false };
@@ -551,7 +553,7 @@ export async function listPlatform(actor: Actor): Promise<Array<{ provider: Plat
     let email: string | undefined = row.email || undefined;
     if (!email) {
       try {
-        email = (JSON.parse(decrypt(row.credentialsCiphertext)) as OAuthTokens).email || undefined;
+        email = (JSON.parse(await envelopeDecrypt(row.credentialsCiphertext, row.orgId)) as OAuthTokens).email || undefined;
       } catch {
         out.push({ provider, connected: false });
         continue;

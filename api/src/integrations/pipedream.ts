@@ -17,7 +17,7 @@
  */
 
 import { integrationConfigs, orgs } from '../data/stores.js';
-import { encrypt, decrypt } from '../data/crypto.js';
+import { envelopeEncrypt, envelopeDecrypt } from '../data/crypto.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { SsrfError } from '../services/url-safety.js';
 import { checkAllowance, recordTokenEvent } from '../billing/index.js';
@@ -102,7 +102,7 @@ async function loadPipedreamConfig(orgId: string): Promise<PipedreamConfig | nul
     return null;
   }
   try {
-    const creds = JSON.parse(decrypt(row.credentialsCiphertext)) as Record<string, unknown>;
+    const creds = JSON.parse(await envelopeDecrypt(row.credentialsCiphertext, row.orgId)) as Record<string, unknown>;
     if (!creds.clientId || !creds.clientSecret || !creds.projectId) return null;
     return {
       clientId: String(creds.clientId),
@@ -165,7 +165,7 @@ export async function savePipedreamConfig(
   input: { clientId: string; clientSecret: string; projectId: string; environment?: string },
 ): Promise<{ id: string; configured: boolean }> {
   const environment = input.environment || 'production';
-  const ciphertext = encrypt(JSON.stringify({ clientId: input.clientId, clientSecret: input.clientSecret, projectId: input.projectId, environment }));
+  const ciphertext = await envelopeEncrypt(JSON.stringify({ clientId: input.clientId, clientSecret: input.clientSecret, projectId: input.projectId, environment }), actor.orgId);
   const id = configRowId(actor.orgId);
   const existing = (await integrationConfigs.get(id)) as IntegrationConfigDoc | null;
   if (existing && existing.orgId === actor.orgId) {
