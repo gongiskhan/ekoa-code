@@ -8,6 +8,7 @@ import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
+import { managedAutomationId } from '../../src/automation/integration-automations.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import {
   KnowledgeSource, CrawlStartResponse, CrawlStatusResponse, RefreshScheduleResponse,
@@ -161,17 +162,20 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     expect(missing.status).toBe(404);
 
     // citius ships 4 automation-bound actions with repo-authored templates: provisioning
-    // materializes them as org automations with deterministic `citius-<template>` ids.
+    // materializes them as org automations under the deterministic, ORG-SCOPED managed id
+    // (C1 — the id used to be `citius-<template>` for every tenant, so the second org to
+    // provision the package silently got nothing).
     const res = await authed('/api/v1/integrations/citius/provision-automations', t, { method: 'POST' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ProvisionAutomationsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect(body.provisioned).toBe(true);
     expect(body.created).toBe(4);
-    const rows = body.actions as Array<{ provisioned: boolean; automationId: string | null; automationName: string | null }>;
+    const rows = body.actions as Array<{ provisioned: boolean; automationId: string | null; automationName: string | null; automationTemplate: string | null }>;
     expect(rows.filter((row) => row.provisioned)).toHaveLength(4);
     for (const row of rows.filter((r) => r.provisioned)) {
-      expect(String(row.automationId)).toMatch(/^citius-/);
+      // The caller is u1 of orgA: the id is the tenant's own, derived from (org, key, template).
+      expect(row.automationId).toBe(managedAutomationId('orgA', 'citius', String(row.automationTemplate)));
       expect(row.automationName).toBeTruthy();
     }
 

@@ -49,7 +49,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   an isolation suite of the memvault class; interim mitigation if needed sooner: filter the list
   endpoint by creator org. Planned as a prerequisite slice of the unification build.
 
-- **`integration-provision-id-not-org-scoped`** (OPEN 2026-08-01, MEDIUM, correctness/tenancy -
+- **`integration-provision-id-not-org-scoped`** (FIXED 2026-08-02, MEDIUM, correctness/tenancy -
   found by the same discovery gate). `provisionIntegrationAutomations` materialises package
   templates as automations with deterministic id `<integrationKey>-<templateKey>` and NO org
   component (`api/src/automation/integration-automations.ts:54`); `Store.insert` swallows the
@@ -59,6 +59,17 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   wants for "authored actions land in the acting tenant's own copy", so it must be org-safe
   before it is reused. CLOSE BY: org-scoped deterministic id + a test provisioning the same
   package from two orgs and asserting both copies exist and are tenant-invisible to each other.
+  FIXED (run 20260801-171149, slice C1): `managedAutomationId(orgId, integrationKey, templateKey)`
+  is now `sha256(JSON.stringify([...]))` — the house injective composite-id discipline, not a `-`
+  join (both keys may contain `-`, so a join is NOT injective). The swallowed `insert` result is
+  checked: a refused insert reads the row and updates in place when it is this org's, and throws
+  rather than corrupt another tenant's. COMPAT: the existing-row lookup joins on
+  `source.{integrationKey,templateKey}`, never on `_id`, so a pre-C1 row keeps its original id and
+  is refreshed in place — ids are live references (triggers, run history, dashboard backlinks) and
+  are never renumbered. Regression proof: reverting the id to the old join fails 4 of the 8 new
+  cases. The two-org case, the tenant-invisibility case, the legacy-row compat case and the
+  id-injectivity case are all committed (`api/tests/automation/integration-automations.test.ts`),
+  plus an HTTP-level pin in `api/tests/contract/f5-ui-endpoints.test.ts`.
 
 - **`attended-ceremony-docblock-false-premise`** (OPEN 2026-08-01, LOW, docs/design - found by
   the discovery gate's web-research pass; full sourcing in

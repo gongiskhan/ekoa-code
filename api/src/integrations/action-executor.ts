@@ -12,12 +12,22 @@
  * a recorded decision. (The transport is injectable so tests fake it without a live call.)
  *
  * This is the function the automation engine's `integration` step calls for a non-platform key.
- * Auth types executed: `api_key`, `none` (OAuth2/service_account are platform-only). An
- * `automationBinding` action delegates to the injected automation-backed handler (the seam the
- * lead wires to automation/); absent that, it returns a coded, non-throwing result.
+ * Auth types executed: `api_key`, `none` (OAuth2/service_account are platform-only).
+ *
+ * BACKING DISPATCH (C1). Which of the unified Action model's backings an action carries is decided
+ * ONCE, by `resolveBackingType` (definitions.ts), never re-derived here: `api-call` takes the HTTP
+ * path below, `browser-steps` and a materialised `bash-cli` both delegate to the injected
+ * automation-backed handler (the seam the lead wires to automation/); absent that seam, or for an
+ * unbound `bash-cli`, the result is a coded, non-throwing refusal. There is deliberately NO
+ * server-side CLI runner: bash runs on the user's paired machine, which the automation engine owns.
  */
 
-import { type IntegrationActionHttpConfig } from './definitions.js';
+import {
+  resolveBackingType,
+  IntegrationActionBackingTypeError,
+  type IntegrationActionBackingType,
+  type IntegrationActionHttpConfig,
+} from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
@@ -57,6 +67,11 @@ export type IntegrationErrorCode =
   | 'credential_invalid'
   | 'unsupported_auth_type'
   | 'unsupported_transport'
+  // C1, the unified Action model's backing discriminator: the package is malformed
+  // (`invalid_backing_type`) vs the backing is real but not executable from here
+  // (`unsupported_backing_type`). Distinct because the fixes are distinct.
+  | 'invalid_backing_type'
+  | 'unsupported_backing_type'
   | 'invalid_base_url'
   | 'transient_5xx'
   | 'client_4xx'
@@ -139,6 +154,28 @@ export async function executeUserIntegrationAction(
       error: `action "${input.actionName}" on ${input.integrationKey} needs the "${transport}" transport, which is not available in this version — this executor runs HTTP-backed and automation-backed actions only`,
     };
   }
+  // BACKING GATE (C1). `resolveBackingType` is the ONE derivation of "how does this action run";
+  // an ABSENT `backingType` reproduces the historical precedence exactly (binding beats httpConfig).
+  // Resolved HERE, alongside the transport gate and before any credential is decrypted, because a
+  // malformed or unrunnable backing must be refused without ever touching the owner's secrets.
+  let backingType: IntegrationActionBackingType;
+  try {
+    backingType = resolveBackingType(action);
+  } catch (err) {
+    if (!(err instanceof IntegrationActionBackingTypeError)) throw err;
+    return { success: false, code: 'invalid_backing_type', error: `${err.message} (integration ${input.integrationKey})` };
+  }
+  // BASH NEVER RUNS ON THE CORTEX HOST. A bash-cli action executes on the user's PAIRED machine
+  // through the automation engine's `local_command` step, so it is runnable here only once it has
+  // been materialised as an automation and bound (`automationBinding`) — then it takes the same
+  // seam as a browser-steps action. Unbound, it is refused; there is no server-side CLI runner.
+  if (backingType === 'bash-cli' && !action.automationBinding) {
+    return {
+      success: false,
+      code: 'unsupported_backing_type',
+      error: `action "${input.actionName}" on ${input.integrationKey} is bash-cli-backed and is not bound to an automation — bash runs on the user's paired machine through the automation engine, never on the Cortex host`,
+    };
+  }
   if (!action.httpConfig && !action.automationBinding) {
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };
   }
@@ -181,8 +218,11 @@ export async function executeUserIntegrationAction(
   }
   const resolvedFields = { ...credentialFields, ...computedFields };
 
-  // automationBinding takes precedence over any httpConfig; delegate to the injected handler.
-  if (action.automationBinding) {
+  // BACKING DISPATCH (C1). `browser-steps` and a MATERIALISED `bash-cli` both run through the one
+  // automation seam (the engine owns the paired machine and the browser alike); `api-call` is the
+  // HTTP path below. With no explicit `backingType` this is byte-for-byte the previous rule —
+  // an `automationBinding` took precedence over any `httpConfig`, and still derives `browser-steps`.
+  if (backingType === 'browser-steps' || backingType === 'bash-cli') {
     if (!deps.runAutomationBackedAction) {
       return { success: false, code: 'automation_required', error: `action "${input.actionName}" is automation-backed and requires the automation seam` };
     }
@@ -195,6 +235,8 @@ export async function executeUserIntegrationAction(
     });
   }
 
+  // `api-call`: guaranteed to carry an httpConfig — an EXPLICIT api-call without one is refused by
+  // `resolveBackingType`, and a DERIVED one without either shape by the guard above.
   const httpConfig = action.httpConfig!;
   const { stringVars, rawVars } = buildVars(input.args, resolvedFields);
   // The credential VALUES (stored + resolver-minted, e.g. a fresh access_token) —

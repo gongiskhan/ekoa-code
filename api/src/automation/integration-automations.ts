@@ -3,14 +3,22 @@
  *
  * An integration package may bind actions to automation TEMPLATES (repo-authored JSON under the
  * package's `automations/` dir: name, description, inputSchema, engine-native steps). This module
- * materializes those templates as REAL automations with a DETERMINISTIC id
- * (`<integrationKey>-<templateKey>`) so re-provisioning UPDATES instead of duplicating, and
- * projects the per-action status rows the dashboard's session panel renders
- * (shared SessionCaptureStatus.actions).
+ * materializes those templates as REAL automations with a DETERMINISTIC id (`managedAutomationId`)
+ * so re-provisioning UPDATES instead of duplicating, and projects the per-action status rows the
+ * dashboard's session panel renders (shared SessionCaptureStatus.actions).
+ *
+ * TENANCY (C1, finding `integration-provision-id-not-org-scoped`). The deterministic id used to be
+ * `<integrationKey>-<templateKey>` with NO org component, and `Store.insert`'s duplicate-`_id`
+ * refusal (data/store.ts — returns false) went unchecked. The first org to provision a template
+ * therefore OWNED that id, and every other org provisioning the same shipped package silently got
+ * nothing: no row, no error, `created` counted anyway. The id is now hashed over
+ * (orgId, integrationKey, templateKey) so each tenant materializes its own copy, and a refused
+ * insert falls through to the update-in-place path instead of being swallowed.
  *
  * automation/ may not import integrations/ (sibling modules): the caller (routes) resolves the
  * definition + template payloads and passes them in.
  */
+import { createHash } from 'node:crypto';
 import { automations } from '../data/stores.js';
 import type { Actor } from '@ekoa/shared';
 import type { Automation, AutomationInputField, Step, StepType } from './types.js';
@@ -51,8 +59,27 @@ export interface SessionActionRow {
   provisioned: boolean;
 }
 
-export function managedAutomationId(integrationKey: string, templateKey: string): string {
-  return `${integrationKey}-${templateKey}`;
+/**
+ * The deterministic `_id` of an org's managed automation for one package template.
+ *
+ * ORG-SCOPED: two tenants provisioning the same shipped template land on different ids, so each
+ * gets its own row (see the module header). Hashed over the JSON-ENCODED tuple rather than joined
+ * with a separator, the house discipline of `definitionIdFor` (integrations/definition-store.ts)
+ * and `runDedupeId` (automation/service.ts): JSON.stringify escapes quotes and backslashes, so the
+ * encoding is injective for ANY three strings — a `-`-join is only injective while no component
+ * can contain a `-`, which is false for both an integrationKey and a templateKey.
+ */
+export function managedAutomationId(orgId: string, integrationKey: string, templateKey: string): string {
+  return createHash('sha256').update(JSON.stringify([orgId, integrationKey, templateKey])).digest('hex');
+}
+
+/** A managed-automation id is held by a row this org may not write. Loud by design: the previous
+ *  behaviour was to swallow the refusal and report a provision that never happened. */
+export class ManagedAutomationProvisionError extends Error {
+  constructor(readonly automationId: string, message: string) {
+    super(message);
+    this.name = 'ManagedAutomationProvisionError';
+  }
 }
 
 type StoredAutomation = Automation & { orgId: string; visibility?: 'private' | 'org' };
@@ -101,6 +128,13 @@ export async function sessionActionRows(actor: Actor, integrationKey: string, bi
  * the template is the source of truth for managed automations); a missing one is created under
  * its deterministic id. Bindings without a template payload are skipped (counted by the caller
  * via the returned rows: they stay `provisioned: false`).
+ *
+ * COMPAT with pre-C1 rows. The existing-row lookup joins on (orgId, `source.integrationKey`,
+ * `source.templateKey`) — NOT on the id — so a row provisioned under the OLD
+ * `<integrationKey>-<templateKey>` id is still found for its own org and refreshed IN PLACE, under
+ * its original id. Nothing is renumbered: an id is a live reference (triggers, run history, the
+ * dashboard backlink), so old rows keep theirs and only NEW rows are minted org-scoped. The old id
+ * was globally unique per (integrationKey, templateKey), so at most one org can be holding one.
  */
 export async function provisionIntegrationAutomations(
   actor: Actor,
@@ -113,36 +147,67 @@ export async function provisionIntegrationAutomations(
   let updated = 0;
 
   for (const b of bindings) {
-    if (!b.template) continue;
-    const id = managedAutomationId(integrationKey, b.templateKey);
+    const template = b.template;
+    if (!template) continue;
+    const id = managedAutomationId(actor.orgId, integrationKey, b.templateKey);
+    /** Refresh a stored row from the template (the source of truth), re-stamping its provenance. */
+    const refresh = (cur: StoredAutomation): StoredAutomation => ({
+      ...cur,
+      name: template.name,
+      description: template.description ?? '',
+      steps: templateSteps(template),
+      ...(template.inputSchema ? { inputSchema: template.inputSchema } : {}),
+      source: { integrationKey, templateKey: b.templateKey },
+      updatedAt: now,
+    });
+
     const current = existing.get(b.templateKey);
     if (current) {
-      await automations.update(current.id, (cur) => ({
-        ...cur,
-        name: b.template!.name,
-        description: b.template!.description ?? '',
-        steps: templateSteps(b.template!),
-        ...(b.template!.inputSchema ? { inputSchema: b.template!.inputSchema } : {}),
-        updatedAt: now,
-      }) as never);
+      // Found by provenance, so this covers a legacy row under the OLD id just as well as a
+      // current one — `current.id` is whatever that row was minted with.
+      await automations.update(current.id, refresh as never);
       updated++;
-    } else {
-      const doc: StoredAutomation = {
-        id,
-        name: b.template.name,
-        description: b.template.description ?? '',
-        steps: templateSteps(b.template),
-        ...(b.template.inputSchema ? { inputSchema: b.template.inputSchema } : {}),
-        ownerUserId: actor.userId,
-        orgId: actor.orgId,
-        visibility: 'org',
-        source: { integrationKey, templateKey: b.templateKey },
-        createdAt: now,
-        updatedAt: now,
-      };
-      await automations.insert({ _id: id, ...doc } as never);
-      created++;
+      continue;
     }
+
+    const doc: StoredAutomation = {
+      id,
+      name: template.name,
+      description: template.description ?? '',
+      steps: templateSteps(template),
+      ...(template.inputSchema ? { inputSchema: template.inputSchema } : {}),
+      ownerUserId: actor.userId,
+      orgId: actor.orgId,
+      visibility: 'org',
+      source: { integrationKey, templateKey: b.templateKey },
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (await automations.insert({ _id: id, ...doc } as never)) {
+      created++;
+      continue;
+    }
+
+    // The id is TAKEN while the provenance lookup saw nothing — a row whose `source` stamp was
+    // lost, or a concurrent provision of the same template that won the race. NEVER a silent
+    // no-op (that swallowed refusal is the bug this slice closes): fall through to update-in-place.
+    const clash = (await automations.get(id)) as StoredAutomation | null;
+    if (!clash) {
+      // Deleted between the refused insert and this read; the id is free again.
+      await automations.put({ _id: id, ...doc } as never);
+      created++;
+      continue;
+    }
+    if (clash.orgId !== actor.orgId) {
+      // Unreachable by construction (the id hashes the orgId in) — so if it ever happens the id
+      // derivation is broken, and writing would corrupt another tenant's automation. Fail loudly.
+      throw new ManagedAutomationProvisionError(
+        id,
+        `managed automation id for ${integrationKey}/${b.templateKey} is held by another org — refusing to overwrite`,
+      );
+    }
+    await automations.update(id, refresh as never);
+    updated++;
   }
 
   return { created, updated, rows: await sessionActionRows(actor, integrationKey, bindings) };

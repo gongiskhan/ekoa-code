@@ -58,6 +58,18 @@ export interface IntegrationActionAutomationBinding {
   automationTemplate?: string;
 }
 
+/**
+ * HOW an action is executed — the unified Action model's backing discriminator (decisions.md
+ * 2026-08-01: "an action's backing type is one of api-call, mcp-call, bash-cli, browser-steps").
+ * Only the three this build can execute or refuse coherently are modelled here; `mcp-call` lands
+ * with the slice that implements it, and adding it is additive (this union is not on the wire).
+ *
+ * NOT the same axis as `transport`, which names the WIRE PROTOCOL of an api-call action (`http`,
+ * `imap`, …). An action is refused for an unimplemented transport and for an unimplemented backing
+ * independently, with distinct codes.
+ */
+export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps';
+
 export interface IntegrationAction {
   actionName: string;
   description: string;
@@ -67,6 +79,17 @@ export interface IntegrationAction {
   httpConfig?: IntegrationActionHttpConfig;
   automationBinding?: IntegrationActionAutomationBinding;
   /**
+   * The action's BACKING — how it runs. ABSENT ⇒ derived from the action's shape by
+   * `resolveBackingType`, which reproduces today's behaviour byte for byte, so the field is
+   * additive and migration-free (no shipped package declares it yet). Declare it only to state
+   * something the shape cannot: a `bash-cli` action, or an api-call action that must NOT be
+   * re-read as automation-backed because it also carries a binding.
+   *
+   * An EXPLICIT value that contradicts the shape is a package defect, never a hint to guess
+   * around — see `resolveBackingType`.
+   */
+  backingType?: IntegrationActionBackingType;
+  /**
    * Wire protocol the action needs. ABSENT ⇒ `'http'` (every shipped action today), so this is
    * additive and migration-free. A package may declare a protocol the executor does not implement
    * (the `imap` package declares `'imap'`); `executeUserIntegrationAction` then refuses the action
@@ -74,6 +97,66 @@ export interface IntegrationAction {
    * returning a fabricated empty result (2A-S4).
    */
   transport?: string;
+}
+
+/**
+ * A package declares a `backingType` its own shape cannot support. Thrown by `resolveBackingType`
+ * and mapped by the executor onto the coded `invalid_backing_type` refusal — the definition module
+ * stays free of the executor's error vocabulary (the executor imports this module, never the
+ * reverse).
+ */
+export class IntegrationActionBackingTypeError extends Error {
+  constructor(
+    readonly actionName: string,
+    readonly declaredBackingType: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'IntegrationActionBackingTypeError';
+  }
+}
+
+/**
+ * The ONE resolver for "how does this action run" — every caller asks this, nobody re-derives it.
+ *
+ * DERIVATION (no explicit `backingType`), exactly today's executor precedence:
+ *   - an `automationBinding` ⇒ `browser-steps` (a bound action delegates to the automation seam,
+ *     and that binding has always won over any `httpConfig` on the same action);
+ *   - otherwise ⇒ `api-call` (the `httpConfig` path). An action with NEITHER shape also derives
+ *     `api-call`: it is unexecutable, and the api-call branch is where the executor has always
+ *     refused it, with the same code and the same message as before this field existed.
+ *
+ * EXPLICIT: validated against the shape, never guessed around. `api-call` needs an `httpConfig`
+ * to call; `browser-steps` needs the `automationBinding` naming the steps to run; `bash-cli` must
+ * NOT carry an `httpConfig` (it runs a command on the user's paired machine, not an HTTP request).
+ * A contradiction — or a value outside the union, which an unvalidated `config.json` can carry —
+ * throws `IntegrationActionBackingTypeError`.
+ */
+export function resolveBackingType(action: IntegrationAction): IntegrationActionBackingType {
+  const declared = action.backingType;
+  if (declared === undefined) return action.automationBinding ? 'browser-steps' : 'api-call';
+
+  const refuse = (why: string): never => {
+    throw new IntegrationActionBackingTypeError(
+      action.actionName,
+      String(declared),
+      `action "${action.actionName}" declares backingType "${String(declared)}" but ${why}`,
+    );
+  };
+  if (declared === 'api-call') {
+    return action.httpConfig ? 'api-call' : refuse('carries no httpConfig — an api-call action must declare the request it makes');
+  }
+  if (declared === 'browser-steps') {
+    return action.automationBinding
+      ? 'browser-steps'
+      : refuse('carries no automationBinding — a browser-steps action must name the automation that runs its steps');
+  }
+  if (declared === 'bash-cli') {
+    return action.httpConfig
+      ? refuse('carries an httpConfig — a bash-cli action runs a command on the paired machine, never an HTTP request')
+      : 'bash-cli';
+  }
+  return refuse('that is not a backing type this version implements');
 }
 
 export interface IntegrationEvent {
