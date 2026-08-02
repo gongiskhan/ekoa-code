@@ -1037,3 +1037,146 @@ describe('citius-mandatarios · round-5 regressions (walker seams under the stru
     expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
   });
 });
+
+describe('citius-mandatarios · round-5b regressions (non-markup contexts + truncated structure)', () => {
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+  const ROW1 = '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>';
+  const ROW2 = '<tr><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>';
+  const ROW3 = '<tr><td>9012/26.2T8CBR</td><td>2026-06-18</td><td>Coimbra</td></tr>';
+
+  // ---- R6-1: </table> in non-markup contexts reached a FALSE EMPTY ----
+
+  it('R6-1a: "</table>" inside a quoted attribute value never truncates the grid (was ok:true rows=[])', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td title="</table>">1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      ROW2 +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  it('R6-1b: a script document.write("</table>") template never truncates the grid (was ok:true rows=[])', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<script>document.write("</table>")</script>' +
+      ROW1 +
+      ROW2 +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+  });
+
+  // ---- R6-2: phantom / unterminated <table> openers hid rows from a POPULATED verdict ----
+
+  it('R6-2a: an unclosed junk <table> between rows poisons the page instead of silently dropping rows 2-3', () => {
+    const html = GRID_OPEN + HEADER + ROW1 + '<table class="junk">' + ROW2 + ROW3 + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // never {ok:true, rows:[ROW1]}
+  });
+
+  it('R6-2b: a phantom "<table>" inside an attribute value never hides the following rows', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      ROW1 +
+      '<tr><td><span title="<table>">x</span> 5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      ROW3 +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT', '9012/26.2T8CBR']);
+  });
+
+  it('R6-2c: an unterminated MARKED grid (payload cut mid-grid) is ok:false, never a "complete" populated read', () => {
+    const html = GRID_OPEN + HEADER + ROW1 + ROW2; // no </table> — trailing rows may be missing
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- R6-3: the comment strip crossed attribute values and deleted rows ----
+
+  it('R6-3: "<!--" and "-->" split across two attribute values never delete the rows between them', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td title="<!--">1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      ROW2 +
+      '<tr><td title="-->">9012/26.2T8CBR</td><td>2026-06-18</td><td>Coimbra</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT', '9012/26.2T8CBR']);
+  });
+
+  // ---- R6-4: rows fabricated from script templates under ok:true ----
+
+  it('R6-4: a client-side row template inside <script> can never fabricate a phantom notification', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      ROW1 +
+      '<script>var tpl = "<tr><td>999/2026</td><td>2026-01-01</td><td>Fake</td></tr>";</script>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB']);
+  });
+
+  // ---- R6-5: a structurally truncated payload proves nothing ----
+
+  it('R6-5a: an unterminated comment before the data rows is ok:false (truncated payload), never an empty', () => {
+    const html = GRID_OPEN + HEADER + '<!-- ' + ROW1 + ROW2 + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('R6-5b: an unterminated comment AFTER complete rows still marks the payload truncated (ok:false)', () => {
+    const html = GRID_OPEN + HEADER + ROW1 + ROW2 + ROW3 + '</table><!-- trailing';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- R6-6: MM/YYYY month fragments invented into a processo ----
+
+  it('R6-6a: a zero-padded month fragment ("notificada em 06/2026") is never a processo — marked grid poisons', () => {
+    const html =
+      GRID_OPEN + HEADER + '<tr><td>notificada em 06/2026</td><td>2026-06-16</td><td>Lisboa</td></tr>' + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('R6-6b: a genuine unpadded bare serial (6/2026) still parses', () => {
+    const html = GRID_OPEN + HEADER + '<tr><td>6/2026</td><td>2026-06-16</td><td>Lisboa</td></tr>' + '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.processo).toBe('6/2026');
+  });
+
+  // ---- R6-7: a phantom "<tr>" in an attribute value silently dropped an optional field ----
+
+  it('R6-7: title="<tr>" on a trailing cell keeps the tribunal field intact', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td title="<tr>">Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.tribunal).toBe('Lisboa');
+  });
+
+  // ---- The interactive-control rail survives the masking (textarea CONTENT masked, tag kept) ----
+
+  it('a marked empty grid whose <textarea> contains "</table>" is still disqualified by the control, not truncated', () => {
+    const html = GRID_OPEN + HEADER + '<textarea></table></textarea>' + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+});
