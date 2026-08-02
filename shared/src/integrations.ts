@@ -134,6 +134,44 @@ export const ProvisionAutomationsResponse = z.object({
 });
 export type ProvisionAutomationsResponse = z.infer<typeof ProvisionAutomationsResponse>;
 
+/* --- Definition sharing (slice E1) ---------------------------------------------------------- */
+
+/**
+ * The visibility a TENANT may set on its own integration definition. Deliberately a TWO-value
+ * enum: `global` is the cross-org tier and a super-admin review gate, so the wire contract of the
+ * tenant route cannot even EXPRESS "publish to every org" — a `{"visibility":"global"}` body is a
+ * 400 at the schema, before any handler or store gate is consulted. The only route to `global` is
+ * the separate super-admin toggle below.
+ *
+ * Declared here rather than reusing `common.ts`'s `Visibility` so the exclusion is local and
+ * load-bearing: this contract must not widen because some other domain's sharing model gains a
+ * tier.
+ */
+export const TenantDefinitionVisibility = z.enum(['private', 'org']);
+export type TenantDefinitionVisibility = z.infer<typeof TenantDefinitionVisibility>;
+
+/** The full three-tier visibility a definition can REPORT (the read side does include `global`). */
+export const DefinitionVisibility = z.enum(['private', 'org', 'global']);
+export type DefinitionVisibility = z.infer<typeof DefinitionVisibility>;
+
+export const SetDefinitionVisibilityRequest = z.object({ visibility: TenantDefinitionVisibility });
+export type SetDefinitionVisibilityRequest = z.infer<typeof SetDefinitionVisibilityRequest>;
+
+export const SetDefinitionGlobalRequest = z.object({ global: z.boolean() });
+export type SetDefinitionGlobalRequest = z.infer<typeof SetDefinitionGlobalRequest>;
+
+/**
+ * Both sharing writes answer the same echo: the house `ok` flag plus the visibility now stored.
+ * The definition VIEW is deliberately NOT the response — the read projection drops the storage
+ * envelope (`_id`, `orgId`, `userId`, `visibility`) on purpose, so it cannot report the one field
+ * these routes change.
+ */
+export const DefinitionVisibilityResponse = z.object({
+  ok: z.literal(true),
+  visibility: DefinitionVisibility,
+});
+export type DefinitionVisibilityResponse = z.infer<typeof DefinitionVisibilityResponse>;
+
 export const integrationsEndpoints = {
   list: {
     method: 'GET',
@@ -196,5 +234,30 @@ export const integrationsEndpoints = {
     path: '/api/v1/integrations/:key/provision-automations',
     auth: 'user',
     response: ProvisionAutomationsResponse,
+  },
+  /**
+   * The TENANT sharing surface: an owner (or their org-admin) flips their own definition between
+   * `private` and `org`. `auth: 'user'` and NOT `user-or-key` on purpose — an agent holding a
+   * gateway key must never be able to re-gate a tenant's sharing on the tenant's behalf.
+   */
+  setVisibility: {
+    method: 'PATCH',
+    path: '/api/v1/integrations/definitions/:id/visibility',
+    auth: 'user',
+    request: SetDefinitionVisibilityRequest,
+    response: DefinitionVisibilityResponse,
+  },
+  /**
+   * The cross-org `global` tier — the human review gate. `auth: 'super-admin'` matches the route's
+   * `requireRole('super-admin')` mount and the `artifacts.setFeatured` precedent (the other
+   * super-admin-only publish toggle). Not `user-or-key`: a key-bearing agent can never publish a
+   * definition to every org.
+   */
+  setGlobal: {
+    method: 'POST',
+    path: '/api/v1/integrations/definitions/:id/global',
+    auth: 'super-admin',
+    request: SetDefinitionGlobalRequest,
+    response: DefinitionVisibilityResponse,
   },
 } as const satisfies DomainDescriptorMap;

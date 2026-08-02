@@ -183,6 +183,14 @@ const COVERED = new Set<string>([
   // an auth class adds no descriptor, so the pinned count is untouched by them. Covering exactly
   // the two NEW descriptors restores EXPECTED_PENDING_COUNT to its pin.
   'knowledge.searchKnowledge', 'knowledge.readKnowledgeDoc',
+  // slice E1 - the integration-definition SHARING surface this slice ADDS
+  // (integrations-visibility.test.ts: a real app + two orgs, the owner's private<->org flip, the
+  // same-org peer's byte-identical 404 for a private row and 403 for an org row, another org's
+  // uniform 404, the base user AND the org-admin refused `global` THROUGH THE ROUTE, the
+  // super-admin publish that then resolves cross-org and its demotion, and the shared error
+  // envelope on every non-2xx). Two NEW descriptors, two COVERED entries: the pinned
+  // EXPECTED_PENDING_COUNT below is unchanged.
+  'integrations.setVisibility', 'integrations.setGlobal',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

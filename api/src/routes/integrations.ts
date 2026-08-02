@@ -6,11 +6,16 @@
  * Persistence via the integrations service; definitions via the registry (ch02 §2.7).
  */
 import { Router, type Response } from 'express';
-import type { Actor } from '@ekoa/shared';
+import { type Actor, SetDefinitionVisibilityRequest, SetDefinitionGlobalRequest } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
+import {
+  integrationDefinitionStore,
+  type DefinitionVisibility,
+  type SetVisibilityResult,
+} from '../integrations/definition-store.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import { z } from 'zod';
@@ -38,6 +43,23 @@ async function automationBindings(actor: Actor, key: string): Promise<ProvisionB
 
 const CreateConfig = z.object({ integrationKey: z.string(), configValues: z.record(z.unknown()), name: z.string().optional() });
 const UpdateConfig = z.object({ enabled: z.boolean().optional(), configValues: z.record(z.unknown()).optional() });
+
+/**
+ * Map the definition store's write verdict onto the house error envelope — the ONE place both
+ * sharing routes below answer from, so the two can never drift apart:
+ *   `notfound`  -> 404 NOT_FOUND, byte-for-byte with a genuinely missing id. A row the caller
+ *                  cannot READ answers this too: a write must not become an existence oracle for
+ *                  a private definition the caller was never allowed to see.
+ *   `forbidden` -> 403 FORBIDDEN. The caller can see the row but may not rewrite it (a same-org
+ *                  peer of an `org` row), or the write touches the super-admin-only `global` tier.
+ *   `ok`        -> the visibility now stored, echoed straight off the persisted document rather
+ *                  than off the request, so the response can only ever report the real state.
+ */
+function sendVisibility(res: Response, result: SetVisibilityResult): void {
+  if (result.verdict === 'notfound') return notFound(res);
+  if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+  res.json({ ok: true, visibility: result.doc.visibility });
+}
 
 export function integrationsRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
@@ -71,6 +93,53 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
   // is therefore the disk baseline's, deliberately NOT the caller's visible set.
   r.post('/refresh', requireRole('org-admin', 'super-admin'), (_req: AuthedRequest, res: Response) => {
     res.json(refreshDefinitions());
+  });
+
+  // --- Definition SHARING (slice E1) ---------------------------------------------------------
+  //
+  // Both routes are a thin, validated shell over the ONE gate: `integrationDefinitionStore`'s
+  // `setVisibility` (definition-store.ts), which already enforces the owner-or-admin write gate,
+  // the no-existence-oracle `notfound`, and "the `global` tier is super-admin only, on promotion
+  // AND on demotion". The gate is NOT re-implemented here; nothing below re-derives visibility.
+  //
+  // A2 CARRY-FORWARD: the acting tenant is `actorOf(req)` — off the verified JWT — and NOTHING
+  // else. Neither route reads `orgId` or `userId` from the request body; there is no body field
+  // that could name another tenant, and the `:id` is resolved by the store under that actor.
+
+  /**
+   * PATCH /api/v1/integrations/definitions/:id/visibility -> { ok, visibility } (auth: user).
+   * The TENANT surface: an owner (or their org-admin) shares their own definition with the org, or
+   * pulls it back to private. `SetDefinitionVisibilityRequest` is a two-value enum, so a body
+   * asking for `global` is a 400 at the schema — the tenant route cannot publish cross-org, and
+   * that fact is in the wire contract rather than only in a handler branch. A caller who already
+   * owns a `global` row still cannot demote it here: the store answers `forbidden` unless they are
+   * a super-admin, which is why the demotion direction is gated too.
+   */
+  r.patch('/definitions/:id/visibility', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, SetDefinitionVisibilityRequest, req.body);
+    if (!body) return;
+    const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), body.visibility);
+    sendVisibility(res, result);
+  });
+
+  /**
+   * POST /api/v1/integrations/definitions/:id/global -> { ok, visibility } (auth: super-admin).
+   * The cross-org publish toggle — the brief's human REVIEW GATE. `requireRole('super-admin')` is
+   * defense in depth, mirroring `artifacts.ts`'s featured-flag route: the store enforces the same
+   * bar on both directions, so a regression in either layer alone cannot publish a tenant's
+   * definition to every org.
+   */
+  r.post('/definitions/:id/global', requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, SetDefinitionGlobalRequest, req.body);
+    if (!body) return;
+    // DEMOTION TARGET: un-publishing returns the row to `org`, NOT to `private`. `global` is a tier
+    // the authoring org's members were already reading, so dropping straight to `private` would
+    // additionally revoke the author's own org — a second, unasked-for change. `org` is the
+    // narrowest tier that only undoes the cross-org publication; the owner can then go `private`
+    // themselves through the tenant route above.
+    const target: DefinitionVisibility = body.global ? 'global' : 'org';
+    const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target);
+    sendVisibility(res, result);
   });
 
   // --- Configs CRUD -------------------------------------------------------------------------
