@@ -216,6 +216,13 @@ export interface IntegrationPackageConfig {
 
 /** A definition as returned by GET /api/v1/integrations (full action shapes). */
 export interface IntegrationDefinition {
+  /** The stored definition's id — present ONLY for a tenant row of the reading actor's own org
+   *  (E1 review F3: the sharing routes key on it, so a client must be able to learn it; a
+   *  cross-org `global` row omits it, since the id is derivable from (orgId, key)). Absent on the
+   *  shipped disk baseline, which has no stored row. */
+  id?: string;
+  /** The sharing tier — same own-org-only rule as `id`. Absent for baseline + foreign rows. */
+  visibility?: 'private' | 'org' | 'global';
   key: string;
   /** Alias of `key`, kept for compatibility with callers keyed on `integrationKey`. */
   integrationKey: string;

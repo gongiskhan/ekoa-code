@@ -14,7 +14,7 @@ import {
   definitionIdFor,
   type DefinitionVisibility,
 } from '../../src/integrations/definition-store.js';
-import { DefinitionVisibilityResponse, ErrorEnvelope } from '@ekoa/shared';
+import { DefinitionVisibilityResponse, ErrorEnvelope, TenantDefinitionVisibility, integrationsEndpoints } from '@ekoa/shared';
 
 /**
  * Slice E1 — the definition SHARING surface, exercised through the REAL app.
@@ -281,5 +281,101 @@ describe('E1 — both sharing routes are mounted and closed by default', () => {
     await expectEnvelope(await api(`/api/v1/integrations/definitions/${DEF_ID}/visibility`, null, { method: 'PATCH', body: JSON.stringify({ visibility: 'private' }) }), 401, 'UNAUTHENTICATED');
     await expectEnvelope(await api(`/api/v1/integrations/definitions/${DEF_ID}/global`, null, { method: 'POST', body: JSON.stringify({ global: true }) }), 401, 'UNAUTHENTICATED');
     expect(await storedVisibility(DEF_ID)).toBe('org');
+  });
+});
+
+/**
+ * E1 REVIEW RESPONSE — the trapdoor, the launch pad, and the addressability gap.
+ *
+ * A fresh-context review proved escalation and the existence oracle clean, but found that a
+ * super-admin of ANY org could PATCH a foreign PUBLISHED row down to `private` through the tenant
+ * route: destructive (the AUTHORING org lost its own definition too) and unrecoverable by the actor,
+ * who could no longer see the now-private foreign row to undo it — defeating, through the sibling
+ * route, the very invariant the `/global` route documents. It also found that publishing a `private`
+ * row would WIDEN it on demotion (which lands on `org`), and that a conforming client could discover
+ * neither its own definition's id nor its current tier.
+ */
+describe('E1 review — un-publish lands on org, publish launches from org, own rows are addressable', () => {
+  it('a foreign super-admin CANNOT trapdoor a published row down to private', async () => {
+    await seedDefinition('org');
+    const rootA = await tokenFor('rootA');
+    const rootB = await tokenFor('rootB');
+    await expectOk(await setGlobal(rootA, DEF_ID, true), 'global');
+
+    // rootB is a super-admin of ANOTHER org: it can SEE the global row and may re-gate it...
+    await expectEnvelope(await setVisibility(rootB, DEF_ID, 'private'), 403, 'FORBIDDEN');
+    // ...and the row is untouched — org A has NOT lost its own definition.
+    expect(await storedVisibility(DEF_ID)).toBe('global');
+
+    // The supported un-publish still works and lands on the reversible tier.
+    await expectOk(await setGlobal(rootB, DEF_ID, false), 'org');
+    expect(await storedVisibility(DEF_ID)).toBe('org');
+  });
+
+  it('publishing launches from org only — a PRIVATE row cannot be published (no silent widening)', async () => {
+    // TWO shapes, because they fail for DIFFERENT and both-correct reasons.
+    // (1) A private row authored by someone else is INVISIBLE even to a super-admin (the read gate
+    //     has no platform exception), so a publish attempt cannot distinguish it from a missing id.
+    await seedDefinition('private');
+    const rootA = await tokenFor('rootA');
+    const ownerA = await tokenFor('ownerA');
+    await expectEnvelope(await setGlobal(rootA, DEF_ID, true), 404, 'NOT_FOUND');
+    expect(await storedVisibility(DEF_ID)).toBe('private');
+
+    // (2) The reachable case the launch-pad rule exists for: the AUTHOR is themselves a super-admin,
+    //     so they CAN see their own private row. Demotion lands on `org`, so publishing from
+    //     `private` would expose the row to the whole authoring org on the way back down — refuse it
+    //     at the launch pad rather than remember a prior tier.
+    const ownId = (await integrationDefinitionStore.create(
+      {
+        orgId: 'orgA', userId: 'rootA', visibility: 'private', key: `${KEY}-root`,
+        displayName: 'root-authored', configSchema: [], actions: [], skillMd: '# r', declaredOrigins: [],
+      },
+      { onConflict: 'replace' },
+    ))._id;
+    await expectEnvelope(await setGlobal(rootA, ownId, true), 403, 'FORBIDDEN');
+    expect(await storedVisibility(ownId)).toBe('private');
+
+    // Shared with the org first, the same publish succeeds — and demotion is exactly reversible.
+    await expectOk(await setVisibility(rootA, ownId, 'org'), 'org');
+    await expectOk(await setGlobal(rootA, ownId, true), 'global');
+    await expectOk(await setGlobal(rootA, ownId, false), 'org');
+
+    // The owner's own private row is still theirs to share the ordinary way.
+    await expectOk(await setVisibility(ownerA, DEF_ID, 'org'), 'org');
+  });
+
+  it('a client can discover its OWN definition id + tier; a foreign global row reveals neither', async () => {
+    await seedDefinition('org');
+    const rootA = await tokenFor('rootA');
+    await expectOk(await setGlobal(rootA, DEF_ID, true), 'global');
+
+    const listFor = async (who: string): Promise<Array<Record<string, unknown>>> => {
+      const res = await api('/api/v1/integrations', await tokenFor(who));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { items?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>;
+      return Array.isArray(body) ? body : (body.items ?? []);
+    };
+
+    // Own org: the listing carries the id these routes key on, and the current tier.
+    const mine = (await listFor('ownerA')).find((d) => d.key === KEY);
+    expect(mine, 'the author must see their own definition').toBeTruthy();
+    expect(mine?.id).toBe(DEF_ID);
+    expect(mine?.visibility).toBe('global');
+
+    // Another org resolves the PUBLISHED definition but learns neither field: the id is derivable
+    // from (orgId, key), so exposing it would expose the authoring org.
+    const theirs = (await listFor('userB')).find((d) => d.key === KEY);
+    expect(theirs, 'a global definition must resolve cross-org').toBeTruthy();
+    expect(theirs?.id).toBeUndefined();
+    expect(theirs?.visibility).toBeUndefined();
+  });
+
+  it('the descriptors DECLARE what the routes enforce (contract, not just behaviour)', () => {
+    expect(integrationsEndpoints.setGlobal.auth).toBe('super-admin');
+    expect(integrationsEndpoints.setVisibility.auth).toBe('user');
+    // Exactly two members: this enum IS the wire-level refusal of a cross-org publish, which is
+    // what makes the 400 a contract guarantee rather than an implementation detail.
+    expect(TenantDefinitionVisibility.options).toEqual(['private', 'org']);
   });
 });

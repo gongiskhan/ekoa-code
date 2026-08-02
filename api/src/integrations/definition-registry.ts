@@ -83,8 +83,16 @@ export function actorForOwnedRow(orgId: string, ownerUserId?: string): Actor {
  * is TRUE for every stored row: the Mongo tier only ever holds authored/forked/migrated packages,
  * while the shipped read-only packages remain the disk baseline (`userCreated: false`).
  */
-export function definitionFromDoc(doc: IntegrationDefinitionDoc): IntegrationDefinition {
+export function definitionFromDoc(doc: IntegrationDefinitionDoc, actor?: Actor): IntegrationDefinition {
+  // ADDRESSABILITY, scoped to the actor's OWN org (E1 review F3). The sharing routes key on the
+  // store `_id`, and the tier they change is `visibility` — yet this projection dropped both, so a
+  // conforming client could neither name its own definition nor read back its current tier, and the
+  // only way to get an id was to re-derive the hash client-side. Both fields are now projected, but
+  // ONLY for a row of the actor's own org: a cross-org `global` row must still not reveal its
+  // author or its id (the id is derivable from `(orgId, key)`, so leaking it leaks the org).
+  const own = actor !== undefined && doc.orgId === actor.orgId;
   return redactSecrets<IntegrationDefinition>({
+    ...(own ? { id: doc._id, visibility: doc.visibility } : {}),
     key: doc.key,
     integrationKey: doc.key, // the alias the catalog seam + builder key on
     displayName: doc.displayName,
@@ -116,7 +124,7 @@ export async function resolveDefinition(
   store: DefinitionStoreReader = integrationDefinitionStore,
 ): Promise<IntegrationDefinition | null> {
   const doc = await store.getForActor(actor, key);
-  if (doc) return definitionFromDoc(doc);
+  if (doc) return definitionFromDoc(doc, actor);
   return getBaselineDefinition(key);
 }
 
@@ -162,7 +170,7 @@ export async function listDefinitionsFor(
   // IN PLACE, so a tenant row shadows its baseline without reordering the list.
   const merged = new Map<string, IntegrationDefinition>();
   for (const def of listBaselineDefinitions()) merged.set(def.key, def);
-  for (const [key, doc] of chosen) merged.set(key, definitionFromDoc(doc));
+  for (const [key, doc] of chosen) merged.set(key, definitionFromDoc(doc, actor));
   return [...merged.values()];
 }
 

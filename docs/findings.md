@@ -6,6 +6,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`artifact-family-test-leaks-watchers`** (OPEN 2026-08-02, MEDIUM, test-estate — found by an
+  adversarial reviewer running the contract lane, not by the lane failing informatively).
+  `npm run test --workspace api -- --run tests/contract` reports **all tests passing** and then
+  **exits 1** on ~11 unhandled `EMFILE ... watch` rejections from chokidar attributed to
+  `api/tests/contract/artifact-family.test.ts`. `ulimit -n` is over a million, so this is inotify
+  WATCHER/INSTANCE exhaustion, not a file-descriptor cap — that suite creates watchers it never
+  closes. Consequence, and the reason it is worth a row: a green contract lane cannot be claimed
+  honestly from that command's exit code, so the failure teaches everyone to ignore exit 1 there —
+  exactly the habit that hides a real red. Related but distinct from the pre-existing
+  `fs.inotify.max_user_instances` note in `npm-ci-has-been-broken-on-main` (that one was another
+  process's browsers; this is our own suite leaking). CLOSE BY: close the watchers in that suite's
+  teardown (or stub the watcher), then assert the lane exits 0.
+
 - **`secretregistry-serialized-credentials-in-plaintext`** (FIXED 2026-08-01, HIGH, credential
   disclosure — found while WRITING a test for it, not by the test passing). `SecretRegistry`
   (`api/src/security/redaction.ts`) keeps its state in a `Map`/`Set`, so `JSON.stringify(registry)`

@@ -324,11 +324,50 @@ export class IntegrationDefinitionStore {
   async setVisibility(id: string, actor: Actor, visibility: DefinitionVisibility): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    const verdict = this.visibilityWriteVerdict(row, actor, visibility);
+    if (verdict) return verdict;
+    // RE-ASSERT INSIDE THE MUTATOR (E1 review F4b). `Store.update` is CAS with retry: it re-reads
+    // `cur` on each attempt, so the row it finally writes may be in a state that was never the one
+    // authorised above (e.g. an org-admin's in-flight demotion landing after a super-admin promoted
+    // the row to `global`). Judging the gate again against `cur` closes that interleave; a state
+    // that no longer passes aborts the write by returning `cur` unchanged.
+    let raced = false;
+    const updated = await this.store.update(id, (cur) => {
+      if (this.visibilityWriteVerdict(cur as IntegrationDefinitionDoc, actor, visibility)) {
+        raced = true;
+        return cur;
+      }
+      return { ...cur, visibility, updatedAt: this.nowIso() };
+    });
+    if (raced) return { verdict: 'forbidden' };
+    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /**
+   * The write rules for a visibility transition, or `null` when it is allowed. Extracted so the
+   * pre-check and the in-mutator re-check (F4b) can never diverge.
+   */
+  private visibilityWriteVerdict(
+    row: IntegrationDefinitionDoc,
+    actor: Actor,
+    visibility: DefinitionVisibility,
+  ): { verdict: 'forbidden' } | null {
     if (!canWriteDefinition(row, actor)) return { verdict: 'forbidden' };
     const touchesGlobal = visibility === 'global' || row.visibility === 'global';
     if (touchesGlobal && actor.role !== 'super-admin') return { verdict: 'forbidden' };
-    const updated = await this.store.update(id, (cur) => ({ ...cur, visibility, updatedAt: this.nowIso() }));
-    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+    // UN-PUBLISHING LANDS ON `org`, NEVER `private` (E1 review F1). A super-admin is a platform
+    // role and can write any row it can see — and it can see every `global` row, including other
+    // orgs'. Without this rule, `PATCH .../visibility {"private"}` on a foreign published row was a
+    // destructive one-way trapdoor: the authoring org ALSO lost its own definition, and the actor
+    // could no longer see the row (now private in a foreign org) to undo it. `org` is the narrowest
+    // tier that returns the row to exactly the people who had it before publication.
+    if (row.visibility === 'global' && visibility === 'private') return { verdict: 'forbidden' };
+    // PUBLISH ONLY WHAT THE AUTHORING ORG ALREADY SHARES (E1 review F4). Nothing records the
+    // pre-publish tier, so a later demotion lands on `org` and would WIDEN a row that was `private`
+    // before it was published. Requiring `org` as the launch pad makes demotion exactly reversible
+    // and keeps a private draft from being exposed to its own org as a side effect of publishing.
+    if (visibility === 'global' && row.visibility !== 'org') return { verdict: 'forbidden' };
+    return null;
   }
 }
 
