@@ -272,3 +272,32 @@ describe('executeUserIntegrationAction: dispatch on the resolved backing', () =>
     expect(res.error).toBe('action "no_shape" has no httpConfig — only HTTP-backed actions are executable');
   });
 });
+/**
+ * C1 REVIEW RESPONSE — the contradiction rule is applied SYMMETRICALLY.
+ * bash-cli + httpConfig was refused while browser-steps + httpConfig passed silently, leaving dead
+ * request config on an action nothing would ever dial. A shape the backing cannot use is a package
+ * defect whichever backing declares it.
+ */
+describe('C1 review — a browser-steps action may not carry dead httpConfig', () => {
+  it('refuses an explicit browser-steps action that also declares an httpConfig', () => {
+    expect(() =>
+      resolveBackingType({
+        actionName: 'contradictory',
+        description: 'x',
+        mutates: false,
+        backingType: 'browser-steps',
+        automationBinding: { automationId: 'a1' },
+        httpConfig: { method: 'GET', baseUrl: 'https://example.test', path: '/' },
+      }),
+    ).toThrow(/also carries an httpConfig/);
+  });
+
+  it('still accepts a browser-steps action with only its binding, and DERIVES the same for both shapes', () => {
+    const bindingOnly = { actionName: 'ok', description: 'x', mutates: false, backingType: 'browser-steps' as const, automationBinding: { automationId: 'a1' } };
+    expect(resolveBackingType(bindingOnly)).toBe('browser-steps');
+    // Derivation (no explicit backingType) is UNCHANGED for the both-shapes action — the binding
+    // still wins, exactly as before C1. Only an EXPLICIT declaration is held to the stricter rule.
+    const both = { actionName: 'both', description: 'x', mutates: false, automationBinding: { automationId: 'a1' }, httpConfig: { method: 'GET' as const, baseUrl: 'https://example.test', path: '/' } };
+    expect(resolveBackingType(both)).toBe('browser-steps');
+  });
+});

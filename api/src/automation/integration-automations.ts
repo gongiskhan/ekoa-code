@@ -165,9 +165,14 @@ export async function provisionIntegrationAutomations(
     if (current) {
       // Found by provenance, so this covers a legacy row under the OLD id just as well as a
       // current one — `current.id` is whatever that row was minted with.
-      await automations.update(current.id, refresh as never);
-      updated++;
-      continue;
+      // CHECK THE RESULT (C1 review F1): `Store.update` answers null when the row is gone, and
+      // counting an update that never happened is the same swallowed-write-result bug this slice
+      // set out to kill — it would report `updated: 1` beside `provisioned: false`. If the row
+      // vanished between the provenance read and the write, fall through and re-create it.
+      if (await automations.update(current.id, refresh as never)) {
+        updated++;
+        continue;
+      }
     }
 
     const doc: StoredAutomation = {
@@ -206,8 +211,21 @@ export async function provisionIntegrationAutomations(
         `managed automation id for ${integrationKey}/${b.templateKey} is held by another org — refusing to overwrite`,
       );
     }
-    await automations.update(id, refresh as never);
-    updated++;
+    // ADOPT the orphan, and NORMALISE it (C1 review F2): a row that lost its `source` stamp may
+    // also carry a stale `visibility`/`ownerUserId`, and a freshly-provisioned managed automation is
+    // always org-visible and stamped to the provisioning actor. Without this, two orgs in the same
+    // situation end up with differently-visible managed automations for the same package.
+    const adopt = (cur: StoredAutomation): StoredAutomation => ({
+      ...refresh(cur),
+      ownerUserId: actor.userId,
+      orgId: actor.orgId,
+      visibility: 'org',
+    });
+    if (await automations.update(id, adopt as never)) updated++;
+    else {
+      await automations.put({ _id: id, ...doc } as never); // vanished mid-flight; the id is org-private
+      created++;
+    }
   }
 
   return { created, updated, rows: await sessionActionRows(actor, integrationKey, bindings) };

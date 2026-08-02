@@ -928,7 +928,10 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   which no lookup resolves; ekoa-dev rewrote that id to the per-owner provisioned id inside the
   USER SANDBOX COPY of the package (integration-storage.ts), and ekoa-code deliberately descoped
   per-user sandbox packages, so the shipped binding never matches the org's provisioned automation
-  (`managedAutomationId(key, templateKey)` = `citius-<template>`). The failure surfaces as
+  (`managedAutomationId(orgId, key, templateKey)` — SINCE C1 (run 20260801-171149) this is 3-arg
+  and returns `sha256(JSON.stringify([orgId, key, templateKey]))`; the 2-arg `citius-<template>`
+  form recorded here no longer exists, and any remediation must resolve the id per-org or follow
+  the `source.{integrationKey,templateKey}` provenance instead of hardcoding a literal). The failure surfaces as
   `unknown_automation: citius-notificacoes-template`. This equally breaks the automation
   `integration` step, i.e. it is NOT specific to the listener rail; two committed assertions
   currently pin the placeholder value (`api/tests/contract/integration-definitions.test.ts`,

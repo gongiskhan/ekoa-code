@@ -147,9 +147,16 @@ export function resolveBackingType(action: IntegrationAction): IntegrationAction
     return action.httpConfig ? 'api-call' : refuse('carries no httpConfig — an api-call action must declare the request it makes');
   }
   if (declared === 'browser-steps') {
-    return action.automationBinding
-      ? 'browser-steps'
-      : refuse('carries no automationBinding — a browser-steps action must name the automation that runs its steps');
+    if (!action.automationBinding) {
+      return refuse('carries no automationBinding — a browser-steps action must name the automation that runs its steps');
+    }
+    // The contradiction rule is applied SYMMETRICALLY (C1 review F3): bash-cli + httpConfig was
+    // refused while browser-steps + httpConfig passed silently, leaving dead request config on the
+    // action that nothing would ever dial. A shape the backing cannot use is a package defect
+    // whichever backing declares it — say so at parse time rather than let it rot.
+    return action.httpConfig
+      ? refuse('also carries an httpConfig — a browser-steps action runs its steps through an automation, so the request config is dead weight')
+      : 'browser-steps';
   }
   if (declared === 'bash-cli') {
     return action.httpConfig
