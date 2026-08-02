@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { triggers, webhookAudit } from '../data/stores.js';
 import { envelopeDecrypt, decrypt, encrypt } from '../data/crypto.js';
-import { getDefinition, findConfigForOwner } from '../integrations/index.js';
+import { resolveDefinition, actorForOwnedRow, findConfigForOwner, type IntegrationDefinition } from '../integrations/index.js';
 import { enqueue } from './queue.js';
 import { wakeDelivery } from './delivery.js';
 import { deleteListenerCursor } from './listener-state.js';
@@ -127,9 +127,25 @@ export interface IngressResult {
  *  provider's OWN credentials the owner stored (Meta signs WhatsApp webhooks with the app secret). */
 type WebhookSecretSource = 'trigger' | { credentialField: string };
 
-/** The trigger's integration declaration of `webhookConfig.secretSource`, or undefined. */
-function secretSourceFor(integrationKey: string): WebhookSecretSource | undefined {
-  const src = getDefinition(integrationKey)?.webhookConfig?.secretSource;
+/**
+ * The definition that steers the trigger's webhook POLICY (secretSource / getCallback), resolved
+ * TENANT-SCOPED under the trigger's OWNER (A3, A2-residual 2: these two reads were the last
+ * consumers of the process-wide merged disk cache, so any tenant's runtime package could steer
+ * every other tenant's webhook verification). The trigger row carries the verified owner — the
+ * same (org, user) the secret resolver below reads the credential for.
+ *
+ * FAIL CLOSED on an org-less trigger (the listener-supervisor precedent, A2 F4/F5): post-A2 the
+ * org IS the read actor, and an actor with no org matches every `global` row — a broken row must
+ * refuse, never resolve somebody. The `{ ok: false }` arm is the caller's 500, not a null policy.
+ */
+async function webhookPolicyFor(t: TriggerDoc): Promise<{ ok: true; def: IntegrationDefinition | null } | { ok: false }> {
+  if (!t.orgId) return { ok: false };
+  return { ok: true, def: await resolveDefinition(actorForOwnedRow(t.orgId, t.ownerUserId), t.integrationKey) };
+}
+
+/** The definition's declaration of `webhookConfig.secretSource`, or undefined. */
+function secretSourceOf(def: IntegrationDefinition | null): WebhookSecretSource | undefined {
+  const src = def?.webhookConfig?.secretSource;
   if (src === 'trigger') return 'trigger';
   if (src && typeof src === 'object' && typeof (src as { credentialField?: unknown }).credentialField === 'string') {
     return { credentialField: (src as { credentialField: string }).credentialField };
@@ -198,10 +214,12 @@ export async function handleIngress(triggerId: string, rawBody: Buffer, signatur
   // 1. Signature FIRST (invariant 9 step 2 ordering). The expected secret is the trigger's own
   // generated secret UNLESS the integration declares `secretSource:{credentialField}` — Meta signs
   // every WhatsApp webhook with the app secret, so the owner's stored `app_secret` is the ONLY
-  // secret that can verify it. An unresolvable secret fails CLOSED (500, nothing enqueued): we
+  // secret that can verify it. The policy read is tenant-scoped under the trigger's owner (A3);
+  // an org-less trigger and an unresolvable secret both fail CLOSED (500, nothing enqueued): we
   // never fall back to the trigger secret or to an empty key, which would make forged deliveries
   // verifiable. The message names no credential and carries no secret material.
-  const secret = await resolveWebhookSecret(t, secretSourceFor(t.integrationKey));
+  const policy = await webhookPolicyFor(t);
+  const secret = policy.ok ? await resolveWebhookSecret(t, secretSourceOf(policy.def)) : null;
   if (secret === null) {
     await audit(triggerId, 'rejected_other', deps);
     return { status: 500, body: { error: { code: 'INTERNAL', message: 'Segredo de verificação indisponível.' } }, outcome: 'rejected_other' };
@@ -237,9 +255,9 @@ interface GetCallbackConfig {
   responseBody?: string;
 }
 
-/** The trigger's integration declares a query-param GET callback, or null. */
-export function getCallbackConfigFor(integrationKey: string): GetCallbackConfig | null {
-  const def = getDefinition(integrationKey);
+/** The definition declares a query-param GET callback, or null. The definition is resolved by the
+ *  caller through `webhookPolicyFor` — tenant-scoped, never the process-wide cache (A3). */
+export function getCallbackConfigOf(def: IntegrationDefinition | null): GetCallbackConfig | null {
   const cb = def?.webhookConfig?.getCallback as GetCallbackConfig | undefined;
   return cb && typeof cb.keyParam === 'string' ? cb : null;
 }
@@ -259,7 +277,15 @@ export async function handleGetCallbackIngress(
 ): Promise<IngressResult | null> {
   const t = (await triggers.get(triggerId)) as TriggerDoc | null;
   if (!t) return null; // caller falls through to the handshake path (uniform 404 there)
-  const cb = getCallbackConfigFor(t.integrationKey);
+  // Tenant-scoped policy read (A3). An org-less trigger cannot even determine WHETHER this is a
+  // getCallback integration — fail closed with an audited 500, never a silent fall-through that
+  // would hand the request to the handshake path against a broken row.
+  const policy = await webhookPolicyFor(t);
+  if (!policy.ok) {
+    await audit(triggerId, 'rejected_other', deps);
+    return { status: 500, body: { error: { code: 'INTERNAL', message: 'Segredo do callback indisponível.' } }, outcome: 'rejected_other' };
+  }
+  const cb = getCallbackConfigOf(policy.def);
   if (!cb) return null;
   const responseBody = cb.responseBody ?? 'OK';
 
