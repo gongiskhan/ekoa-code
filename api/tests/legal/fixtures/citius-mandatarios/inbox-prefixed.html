@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+</head>
+<body>
+  <form name="aspnetForm" method="post" action="./CaixaCorreio.aspx" id="aspnetForm">
+    <input type="hidden" name="__VIEWSTATE" value="/wEPDwUKMTk4NzY1NDMyMA9kFgJmD2QWAgIBD2QWAk" />
+    <input type="hidden" name="__EVENTVALIDATION" value="/wEdAAQb1aQk" />
+    <h1>Caixa de correio &ndash; Notificações</h1>
+    <!-- ROUND-4 P4/P8 (the DANGEROUS defect): a POPULATED inbox whose processo cells are prefixed
+         "Processo n.º ..." prose. Attempt-4's whole-cell anchored regex parsed ZERO rows here and
+         the page decayed toward the false-empty side - silent data loss. Substring (per-token)
+         extraction must parse BOTH rows and record the CANONICAL number, not the prefixed prose. -->
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr>
+        <th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th>
+      </tr>
+      <tr class="rgRow">
+        <td><input type="hidden" id="ctl00_cph_gvNotificacoes_ctl02_hfNotifId" value="14260" />Processo n.º 1234/26.0T8LSB</td>
+        <td>2026-06-20</td>
+        <td>Tribunal Judicial da Comarca de Lisboa</td>
+        <td>Citação</td>
+        <td><a href="Documento.aspx?docId=jkl012&amp;t=not">Descarregar</a></td>
+      </tr>
+      <tr class="rgAltRow">
+        <td><input type="hidden" id="ctl00_cph_gvNotificacoes_ctl03_hfNotifId" value="14261" />Processo n.º 45/26.7T8ABC-A</td>
+        <td>2026-06-21</td>
+        <td>Tribunal Judicial da Comarca de Braga</td>
+        <td>Notificação</td>
+        <td>&nbsp;</td>
+      </tr>
+    </table>
+  </form>
+</body>
+</html>

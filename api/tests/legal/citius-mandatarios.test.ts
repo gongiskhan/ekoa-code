@@ -106,11 +106,12 @@ describe('citius-mandatarios · parseInboxPage (rows + metadata)', () => {
     expect(res.rows[0]).toMatchObject({ processo: '3456/26.3T8FAR', ato: 'Notificação' });
   });
 
-  // round-3 DEFECT 2 (false-positive rows): a European date in the processo cell must NOT be counted
-  // as a notification — the old unanchored PROCESS_NUMBER_RE accepted 15/06/2026 (a DD/MM/YYYY date
-  // has TWO '/', a Citius number exactly one). Real Citius numbers (with a lettered court code, or
-  // the bare NNNN/YYYY form) are still counted. The grid carries the gv marker so it is identified.
-  it('a DD/MM/YYYY date in the processo cell is not counted; real process numbers still are', () => {
+  // round-3 DEFECT 2 (false-positive rows), UPDATED to the attempt-5 semantics: a European date in
+  // a processo cell must never be EXTRACTED as a process number (the date guard survives the move
+  // to substring extraction). Attempt 4 dropped such rows SILENTLY and returned the parseable
+  // subset — the partial-parse data loss attempt 5 forbids — so this marked grid, whose data rows
+  // do NOT all parse, is now an honest ok:false: never a subset, and NEVER an empty.
+  it('a marked grid with DD/MM/YYYY dates in processo cells is ok:false — never a silent subset', () => {
     const res = parseInboxPage(
       [
         '<table id="ctl00_cph_gvNotificacoes">',
@@ -122,9 +123,25 @@ describe('citius-mandatarios · parseInboxPage (rows + metadata)', () => {
         '</table>',
       ].join('\n'),
     );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('indisponível');
+  });
+
+  // The positive counterpart: when EVERY data row carries a real process number (lettered court
+  // code or the bare NNNN/YYYY form), the grid parses fully and returns them all.
+  it('a grid where every row is a real process number parses fully (both Citius forms)', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Tribunal de Lisboa</td></tr>',
+        '  <tr><td>123/2026</td><td>2026-06-17</td><td>Tribunal de Coimbra</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // both dates dropped; only the two real process numbers counted
     expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '123/2026']);
   });
 });
@@ -344,8 +361,8 @@ describe('citius-mandatarios · false-empty regressions (reviewer inputs — eac
     expect(res.rows).toEqual([]);
   });
 
-  // A structural marker ALONE (no empty message) with zero rows is also a positively-identified
-  // empty grid — proves rule 1(b) independently of the empty-message signal.
+  // A structural marker ALONE (no empty message) with zero DATA ROWS is also a structurally-proven
+  // empty grid — attempt-5 classification 3 holds independently of the empty-message signal.
   it('a marker-only grid with zero rows is ok:true rows:[] (structural-marker positive proof)', () => {
     const res = parseInboxPage(
       [
@@ -408,6 +425,227 @@ describe('citius-mandatarios · false-empty regressions (reviewer inputs — eac
         '</div>',
       ].join('\n'),
     );
+  });
+});
+
+describe('citius-mandatarios · round-4 regressions (the attempt-5 structural redesign)', () => {
+  const expectUnavailable = (html: string): void => {
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('indisponível');
+  };
+
+  // The SAFETY HIERARCHY is pinned in the module docblock (and enforced behaviourally by every
+  // case below): false-empty is the catastrophic outcome; a partial parse presented as complete is
+  // equally forbidden; when uncertain the parser says indisponível.
+  it('the module docblock pins the safety hierarchy (false-empty catastrophic; uncertain => indisponível)', () => {
+    expect(MODULE_SRC).toMatch(/SAFETY HIERARCHY/);
+    expect(MODULE_SRC).toMatch(/FALSE EMPTY/i);
+    expect(MODULE_SRC).toMatch(/indisponível/);
+  });
+
+  // ---- P1/P6: the dropped /gridview/i marker2 -----------------------------------------------
+
+  // The committed fixture: an ERROR panel styled with the portal's GridView skin class and a
+  // label-equal header, zero data rows. Attempt-4's unanchored /gridview/i marker2 read this as a
+  // structurally-proven EMPTY inbox (a false empty). With marker2 DROPPED, a class alone proves
+  // nothing: ok:false. (Rides the real latin1 decode path like every portal page.)
+  it('P1/P6 fixture: gridview-classed error chrome is ok:false, never a false empty', () => {
+    expectUnavailable(load('chrome-gridview-error.html'));
+  });
+
+  // Inline variant: a bare GridView-classed table with a header and nothing else (the minimal
+  // marker2 evasion) also proves nothing.
+  it('P1/P6: a header-only table with class="GridView" and zero data rows is ok:false', () => {
+    expectUnavailable(
+      '<table class="GridView"><tr><th>Processo</th><th>Data</th></tr></table>',
+    );
+  });
+
+  // A GridView-CLASSED (unmarked-id) table whose data actually parses is still recognised through
+  // the DATA path — dropping marker2 lost no populated-inbox coverage.
+  it('P1/P6 counterpart: a gridview-classed table with fully-parsing data rows still parses', () => {
+    const res = parseInboxPage(
+      [
+        '<table class="GridView" id="tblLista">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>8888/26.0T8LSB</td><td>2026-06-25</td><td>Tribunal de Lisboa</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['8888/26.0T8LSB']);
+  });
+
+  // ---- P3/P9: the broadened interactive-control disqualifier --------------------------------
+
+  // The committed fixture: session-expired login chrome inside a gv-marked table whose only
+  // controls are a <select> + <button> (no <input> anywhere). Attempt-4's input-only check saw a
+  // marked, "input-free" table with zero parsed rows and called it EMPTY. Now: ok:false.
+  it('P3/P9 fixture: gv-marked login chrome with select/button controls is ok:false', () => {
+    expectUnavailable(load('chrome-login-select.html'));
+  });
+
+  // Each interactive-control shape DISQUALIFIES the empty verdict on an otherwise
+  // structurally-perfect empty grid (gv marker, header, zero data rows).
+  const markedShell = (control: string): string =>
+    [
+      '<table id="ctl00_cph_gvNotificacoes">',
+      '  <tr><th>Processo</th><th>Data</th></tr>',
+      `  <tr><td colspan="2">Autentique-se novamente. ${control}</td></tr>`,
+      '</table>',
+    ].join('\n');
+
+  it('P3/P9: a <select> inside the marked table blocks the empty verdict', () => {
+    expectUnavailable(markedShell('<select name="perfil"><option>Mandatário</option></select>'));
+  });
+  it('P3/P9: a <button> inside the marked table blocks the empty verdict', () => {
+    expectUnavailable(markedShell('<button type="submit">Entrar</button>'));
+  });
+  it('P3/P9: a <textarea> inside the marked table blocks the empty verdict', () => {
+    expectUnavailable(markedShell('<textarea name="obs"></textarea>'));
+  });
+  it('P3/P9: a contenteditable region inside the marked table blocks the empty verdict', () => {
+    expectUnavailable(markedShell('<div contenteditable="true">escreva aqui</div>'));
+  });
+  it('P3/P9: an <input> in the HEADER row blocks the empty verdict (header no longer exempt)', () => {
+    expectUnavailable(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th><input type="checkbox" name="chkAll" /></th><th>Processo</th><th>Data</th></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+  });
+
+  // ---- P4/P8 (the dangerous one): substring process-number extraction -----------------------
+
+  // The committed fixture: a POPULATED inbox whose processo cells read "Processo n.º <number>".
+  // Attempt-4's whole-cell anchored match parsed ZERO rows here — silent loss of real
+  // notifications. Substring extraction must parse BOTH rows and record the CANONICAL number.
+  it('P4/P8 fixture: "Processo n.º …"-prefixed cells parse, with the canonical number extracted', () => {
+    const res = parseInboxPage(load('inbox-prefixed.html'));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+    expect(res.rows[0]).toMatchObject({
+      processo: '1234/26.0T8LSB', // canonical — not the "Processo n.º …" cell prose
+      data: '2026-06-20',
+      tribunal: 'Tribunal Judicial da Comarca de Lisboa',
+      ato: 'Citação',
+      temDocumento: true,
+    });
+    expect(res.rows[0]!.documentoRef).toBe('Documento.aspx?docId=jkl012&t=not');
+    expect(res.rows[0]!.sourceId).toBe('14260');
+    expect(res.rows[0]!.ref).toBe('14260');
+    expect(res.rows[1]).toMatchObject({
+      processo: '45/26.7T8ABC-A', // the -A apenso suffix survives extraction
+      temDocumento: false,
+    });
+    expect(res.rows[1]!.sourceId).toBe('14261');
+  });
+
+  // Glued-prefix variants: a recognised label prefix stuck to the number in one token still
+  // resolves; the extraction never invents a number from an arbitrary alien token.
+  it('P4/P8: glued prefixes (nº1234/…, Proc.1234/…) and trailing punctuation still parse', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>nº1234/26.0T8LSB</td><td>2026-06-26</td><td>Tribunal de Lisboa</td></tr>',
+        '  <tr><td>Proc.567/2026.</td><td>2026-06-27</td><td>Tribunal do Porto</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '567/2026']);
+  });
+
+  // The date guard SURVIVES the substring move: a prose cell whose only slash-y token is a
+  // DD/MM/YYYY date yields no extraction — and because this marked grid then has an unparseable
+  // data row, the page is ok:false (never a row keyed on a date, never an empty).
+  it('P4/P8 guard: a date inside prose ("Notificada em 15/06/2026") is never extracted', () => {
+    expectUnavailable(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>Notificada em 15/06/2026</td><td>2026-06-15</td><td>Tribunal de Lisboa</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+  });
+
+  // ---- parse failure is never empty and never a subset --------------------------------------
+
+  // The committed fixture: the real marked grid with TWO data rows, only ONE of which parses.
+  // Attempt 4 would have returned the parseable subset (silent loss of the second notification);
+  // an empty verdict would be worse. Attempt-5 rule 2: ok:false, honestly indisponível.
+  it('partial-parse fixture: a marked grid where not all data rows parse is ok:false', () => {
+    const res = parseInboxPage(load('inbox-partial-unparseable.html'));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('indisponível');
+  });
+
+  // Parse-failure precedence is pinned: a poisoned marked grid makes the WHOLE page ok:false even
+  // when another table parses fully — completeness cannot be claimed for a page whose (apparent)
+  // real grid could not be read completely. Availability is sacrificed; data loss never is.
+  it('a poisoned marked grid forces ok:false even alongside a fully-parsing table', () => {
+    expectUnavailable(
+      [
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>7777/26.0T8LSB</td><td>2026-06-22</td><td>Tribunal de Lisboa</td></tr>',
+        '  <tr><td>???</td><td>2026-06-23</td><td>Tribunal do Porto</td></tr>',
+        '</table>',
+        '<table id="tblResumo">',
+        '  <tr><th>Processo</th><th>Data</th></tr>',
+        '  <tr><td>9999/26.0T8LSB</td><td>2026-06-24</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+  });
+
+  // An UNMARKED table with unparseable "data" rows is ambiguous chrome: it proves nothing, and in
+  // particular it does NOT poison a page whose real marked grid parses fully.
+  it('an unmarked ambiguous table does not poison a fully-parsing real grid', () => {
+    const res = parseInboxPage(
+      [
+        '<table class="pesquisa">',
+        '  <tr><td>Processo</td><td>Data</td></tr>',
+        '  <tr><td>A sua pesquisa não devolveu resultados</td><td>-</td></tr>',
+        '</table>',
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>6666/26.0T8LSB</td><td>2026-06-28</td><td>Tribunal de Lisboa</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['6666/26.0T8LSB']);
+  });
+
+  // A marked EMPTY grid coexisting with a populated grid never shadows it (precedence: populated
+  // beats proven-empty) — the empty verdict can never eat real rows.
+  it('a structurally-proven empty grid never shadows a populated one on the same page', () => {
+    const res = parseInboxPage(
+      [
+        '<table id="ctl00_cph_gvNotificacoesArquivadas">',
+        '  <tr><th>Processo</th><th>Data</th></tr>',
+        '</table>',
+        '<table id="ctl00_cph_gvNotificacoes">',
+        '  <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>',
+        '  <tr><td>5555/26.0T8LSB</td><td>2026-06-29</td><td>Tribunal de Lisboa</td></tr>',
+        '</table>',
+      ].join('\n'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['5555/26.0T8LSB']);
   });
 });
 

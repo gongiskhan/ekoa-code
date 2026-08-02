@@ -25,8 +25,31 @@ path (`decodeHtml`).
 | `inbox-get-p1.html` | Inbox page 1, GET-addressable paging (`?page=N`). Two rows; one with an attached document link, one without. Each row carries a **per-row source id** (a hidden `<input value="…">` inside the processo cell) that `extractSourceId` reads and `notificacaoRef` uses verbatim as the dedup ref. |
 | `inbox-get-p2.html` | Inbox page 2, GET paging, with **columns deliberately reordered** (Data before Processo) to prove header-keyed mapping. Row carries a per-row source id. |
 | `inbox-postback.html` | Inbox with a WebForms `__doPostBack(...,'Page$N')` pager. Row carries a per-row source id. |
-| `inbox-empty.html` | The real notifications table present (header row) with **zero data rows** — a genuinely empty inbox, which must parse to `ok:true rows:[]`, never an error. |
+| `inbox-empty.html` | The real notifications table present (header row) with **zero structural data rows** — a genuinely empty inbox, which must parse to `ok:true rows:[]`, never an error. |
 | `error.html` | An unavailable/maintenance page (no notifications table) — must parse to `ok:false 'indisponível'`. |
+| `inbox-prefixed.html` | **Round-4 P4/P8 (the dangerous defect):** a POPULATED inbox whose processo cells are prefixed `Processo n.º …`. The attempt-4 whole-cell anchored match parsed zero rows here (silent data loss); per-token substring extraction must parse both rows and record the **canonical** number. |
+| `inbox-partial-unparseable.html` | **Attempt-5 rule 2:** the real marked grid with two data rows of which only one parses — must be `ok:false` (never the parseable subset, never an empty). |
+| `chrome-gridview-error.html` | **Round-4 P1/P6:** error chrome styled with a `GridView` skin class + a label-equal header and zero data rows. Attempt-4's unanchored `/gridview/i` marker2 read it as a proven empty (false empty); with marker2 dropped it must be `ok:false`. |
+| `chrome-login-select.html` | **Round-4 P3/P9:** session-expired login chrome inside a gv-marked table whose only controls are a `<select>` + `<button>` (no `<input>`), which evaded the input-only disqualifier. The broadened interactive-control disqualifier must make it `ok:false`. |
+
+## The verdict rule (attempt-5 structural redesign)
+
+The parser never infers anything from "zero rows PARSED" (the round-4 root flaw — it conflates a
+genuinely empty inbox, a parse failure, and page chrome). Per header-passing table it counts
+**structural data rows** (a `<tr>` after the header with >=2 cells; a single-colspan
+EmptyDataTemplate/pager/footer row is not one) and classifies:
+
+1. **Populated grid** — every structural data row parses (its processo cell *contains* a Citius
+   process number; dates are guarded out). Fully-parsing data identifies the grid by content.
+2. **Parse failure** — a gv-marked table with data rows where **not all** parse: the whole page is
+   `ok:false`. Never the parseable subset, never an empty.
+3. **Proven empty** — a gv-marked table with **zero** structural data rows and **no** interactive
+   control (input/select/button/textarea/contenteditable) anywhere in it. The only way an empty
+   verdict arises.
+
+Page precedence: parse-failure > populated > proven-empty > `ok:false`. The safety hierarchy is
+pinned in the module docblock: a false empty is the catastrophic outcome; when uncertain the
+parser says *indisponível*.
 
 ## Per-row source id and the dedup contract
 

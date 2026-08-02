@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+</head>
+<body>
+  <!-- ROUND-4 P1/P6: error CHROME styled with the portal's GridView skin. The table carries
+       class="GridView" (attempt-4's unanchored marker2 /gridview/i matched it) and a header row
+       whose cells equal the Processo/Data/Tribunal labels, but it is an ERROR panel, not the
+       notifications grid: zero structural data rows, only a prose colspan message. Attempt 4
+       returned a FALSE EMPTY here; the verdict must be ok:false 'indisponível'. Deliberately
+       avoids the hard looksUnavailable markers so the MARKER rule (not the error heuristic) is
+       what this fixture exercises. -->
+  <div id="painelAviso">
+    <h1>Caixa de correio</h1>
+    <table class="GridView" id="tblAvisoNotif">
+      <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>
+      <tr><td colspan="3">Não foi possível apresentar as notificações neste momento. Volte a tentar mais tarde.</td></tr>
+    </table>
+  </div>
+</body>
+</html>

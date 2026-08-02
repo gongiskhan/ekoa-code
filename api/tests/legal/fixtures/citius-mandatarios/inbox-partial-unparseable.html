@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Caixa de Correio (Mandatários)</title>
+</head>
+<body>
+  <form name="aspnetForm" method="post" action="./CaixaCorreio.aspx" id="aspnetForm">
+    <input type="hidden" name="__VIEWSTATE" value="/wEPDwUKMTk4NzY1NDMyMA9kFgJmD2QWAgIBD2QWAl" />
+    <input type="hidden" name="__EVENTVALIDATION" value="/wEdAAQb1aRl" />
+    <h1>Caixa de correio &ndash; Notificações</h1>
+    <!-- ATTEMPT-5 rule 2 (parse failure is never empty, never a subset): the REAL marked grid with
+         TWO structural data rows, of which only the FIRST parses - the second row's processo cell
+         is an unrecognised shape. Returning the one parseable row would silently drop the other
+         notification; returning empty would be the catastrophic false empty. The only honest
+         verdict is ok:false 'indisponível'. -->
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr>
+        <th>Processo</th><th>Data</th><th>Tribunal</th><th>Ato</th><th>Documento</th>
+      </tr>
+      <tr class="rgRow">
+        <td><input type="hidden" id="ctl00_cph_gvNotificacoes_ctl02_hfNotifId" value="14270" />7777/26.0T8LSB</td>
+        <td>2026-06-22</td>
+        <td>Tribunal Judicial da Comarca de Lisboa</td>
+        <td>Citação</td>
+        <td>&nbsp;</td>
+      </tr>
+      <tr class="rgAltRow">
+        <td><input type="hidden" id="ctl00_cph_gvNotificacoes_ctl03_hfNotifId" value="14271" />Processo confidencial - consulte o tribunal</td>
+        <td>2026-06-23</td>
+        <td>Tribunal Judicial da Comarca do Porto</td>
+        <td>Notificação</td>
+        <td>&nbsp;</td>
+      </tr>
+    </table>
+  </form>
+</body>
+</html>

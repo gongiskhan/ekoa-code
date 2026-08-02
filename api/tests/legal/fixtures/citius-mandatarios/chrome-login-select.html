@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <title>Citius - Área de Mandatários :: Autenticação</title>
+</head>
+<body>
+  <!-- ROUND-4 P3/P9: session-expired LOGIN chrome inside a table whose id carries the REAL
+       GridView marker (the shell re-uses the container id) and a header row equal to the grid
+       labels - but the re-auth controls are a <select> + <button>, NO <input> anywhere, which
+       evaded attempt-4's input-only disqualifier and produced a FALSE EMPTY. The broadened
+       interactive-control disqualifier (input/select/button/textarea/contenteditable) must make
+       this ok:false 'indisponível'. -->
+  <form name="aspnetForm" method="post" action="./Login.aspx" id="aspnetForm">
+    <h1>A sua sessão terminou</h1>
+    <table id="ctl00_cph_gvNotificacoes" class="rgMasterTable">
+      <tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>
+      <tr class="loginShell"><td colspan="3">
+        Autentique-se novamente para consultar as notificações.
+        <select name="ctl00$cph$ddlPerfil">
+          <option>Mandatário</option>
+          <option>Administrador de insolvência</option>
+        </select>
+        <button type="submit" name="ctl00$cph$btnEntrar">Entrar</button>
+      </td></tr>
+    </table>
+  </form>
+</body>
+</html>
