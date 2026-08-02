@@ -48,8 +48,11 @@
  *      a live LIVELOCK risk. CS4/CS6 MUST confirm the real empty-state markup on first real
  *      access, and (see the CS4/CS6 note by PROCESS_NUMBER_RE) key the inbox off the authenticated
  *      page identity, not the header. Likewise a real grid that embeds a filter/pager row with
- *      >=2 <td>s INSIDE the grid table (RadGrid-style) would read "indisponível" until CS4
- *      confirms and the fixtures are updated — again the safe direction.
+ *      >=2 DIRECT <td>s would read "indisponível" until CS4 confirms and the fixtures are updated
+ *      — again the safe direction. (RadGrid-style chrome that wraps its controls in a NESTED
+ *      table is handled structurally: nested tables are stripped from the outer grid's own rows —
+ *      round-5 F1 — so such a command row degrades to a single-colspan non-data row and the grid
+ *      still parses.)
  *
  * SAFETY HIERARCHY (pinned; the round-4 root-flaw redesign — attempt 5):
  *   1. A FALSE EMPTY (`{ok:true, rows:[]}` for a page that was NOT a genuinely empty inbox) is the
@@ -65,6 +68,18 @@
  *   grid), a PARSE FAILURE (data rows exist but do not all parse -> ok:false), and PAGE CHROME
  *   (login / error / filter / WAF pages -> ok:false). "Zero rows parsed" proves NONE of them, and
  *   no verdict here is ever inferred from it.
+ *
+ * ROUND-5 SEAM HARDENING (the fresh-context review of attempt 5 confirmed the redesign but broke
+ * the WALKERS it stands on; each fix is pinned by a "round-5" regression test):
+ *   F1 nested-`</table>` truncation — tables are now paired DEPTH-AWARE to their matching close,
+ *      HTML comments are stripped first, and nested tables are stripped from the outer grid's own
+ *      structural rows (they classify as their own tables instead).
+ *   F2 the interactive-control disqualifier scans the table's ENTIRE inner HTML, not just its
+ *      `<tr>`s — a control in a <caption> / direct child / after the last row blocks EMPTY too.
+ *   F3 rows (and cells) split on OPENERS: `</tr>`/`</td>` are optional end tags, and the lazy
+ *      close-tag match silently merged the row after an omitted `</tr>` into the previous one.
+ *   F4 the bare `NNNN/YYYY` process-number form requires a full 4-digit year, so a `DD/MM`
+ *      fragment (`15/06`) or a 2-digit prose ref (`123/26`) can never be invented into a processo.
  */
 import { createHash } from 'node:crypto';
 import { cellText, decodeEntities } from './portal-html.js';
@@ -109,6 +124,12 @@ const GRID_MARKER_RE = /(?:^|[^a-z0-9])gv[\w-]*notific/i;
  * date has TWO '/', so the single literal '/' plus the `$` anchor structurally rejects it (and
  * `isProcessNumber` guards the exact date shape explicitly, belt-and-braces).
  *
+ * The BARE form requires a FULL 4-DIGIT year (round-5 F4): a 2-digit bare year (`15/06`, `123/26`)
+ * is indistinguishable from a DD/MM day-month fragment or a prose reference, and under substring
+ * extraction it would be INVENTED into a canonical processo — masking the row's parse failure with
+ * wrong data. The lettered court-code form keeps 2-digit years (`1234/26.0T8LSB`): the letter
+ * requirement already excludes every date shape.
+ *
  * Applied PER WHITESPACE-DELIMITED TOKEN of the processo cell by `extractProcessNumber` (round-4
  * P4/P8): the anchors bound the TOKEN, not the whole cell, so a cell prefixed "Processo n.º
  * 1234/26.0T8LSB" still parses while a date token (`15/06/2026`) — whose inner fragment `06/2026`
@@ -122,7 +143,7 @@ const GRID_MARKER_RE = /(?:^|[^a-z0-9])gv[\w-]*notific/i;
  * (the CaixaCorreio.aspx endpoint reached with a valid session), not merely this header/column
  * shape, so such a page can never be parsed as the notifications inbox.
  */
-const PROCESS_NUMBER_RE = /^\d{1,7}\/(?:\d{1,4}\.\d+[a-z][a-z0-9]*(?:-[a-z0-9]+)?|\d{2,4})$/i;
+const PROCESS_NUMBER_RE = /^\d{1,7}\/(?:\d{1,4}\.\d+[a-z][a-z0-9]*(?:-[a-z0-9]+)?|\d{4})$/i;
 
 /** A European DD/MM/YYYY (or D/M/YY) date — the shape DEFECT 2 must keep OUT of the processo cell.
  *  It carries TWO '/' where a Citius number has exactly one; an explicit guard in `isProcessNumber`. */
@@ -177,13 +198,58 @@ interface RawTable {
   inner: string;
 }
 
-/** Every `<table>` on the page, with its opening-tag attributes and its inner HTML. */
+/**
+ * Every `<table>` on the page — NESTED tables included, each with its opening-tag attributes and
+ * its inner HTML spanning to its MATCHING `</table>` (depth-aware pairing — round-5 F1). The
+ * previous lazy-regex walk ended a table at the FIRST `</table>` in document order, so a nested
+ * table (RadGrid command/filter chrome between header and data rows, an icon table inside a cell)
+ * TRUNCATED the grid fragment and every row after it vanished from the structural proof — a
+ * reachable FALSE EMPTY and a reachable silent subset. A stray `</table>` closes the innermost
+ * open table (how a browser recovers); an unterminated `<table>` spans to end-of-input (liberal —
+ * a junk tail can only ADD chrome that blocks an empty verdict, never hide a data row).
+ */
 function extractTables(html: string): RawTable[] {
   const out: RawTable[] = [];
-  const re = /<table\b([^>]*)>([\s\S]*?)<\/table>/gi;
+  const tokenRe = /<table\b([^>]*)>|<\/table\s*>/gi;
+  const open: { attrs: string; contentStart: number }[] = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) out.push({ attrs: m[1] ?? '', inner: m[2] ?? '' });
+  while ((m = tokenRe.exec(html)) !== null) {
+    if (m[0].charAt(1) !== '/') {
+      open.push({ attrs: m[1] ?? '', contentStart: tokenRe.lastIndex });
+    } else if (open.length > 0) {
+      const o = open.pop()!;
+      out.push({ attrs: o.attrs, inner: html.slice(o.contentStart, m.index) });
+    }
+  }
+  while (open.length > 0) {
+    const o = open.pop()!;
+    out.push({ attrs: o.attrs, inner: html.slice(o.contentStart) });
+  }
   return out;
+}
+
+/** The table's OWN inner HTML with nested `<table>…</table>` blocks removed (depth-aware), so a
+ *  nested chrome/icon table can never contribute phantom rows, cells, or row-splits to the OUTER
+ *  grid's structural classification (round-5 F1). Nested tables still surface as their own entries
+ *  from `extractTables` and are classified independently on their own structure. */
+function stripNestedTables(tableInner: string): string {
+  const tokenRe = /<table\b[^>]*>|<\/table\s*>/gi;
+  let depth = 0;
+  let keptFrom = 0;
+  let own = '';
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(tableInner)) !== null) {
+    if (m[0].charAt(1) !== '/') {
+      if (depth === 0) own += tableInner.slice(keptFrom, m.index);
+      depth++;
+    } else if (depth > 0) {
+      depth--;
+      if (depth === 0) keptFrom = tokenRe.lastIndex;
+    }
+  }
+  if (depth === 0) own += tableInner.slice(keptFrom);
+  // depth > 0: an unterminated NESTED table — its whole tail is nested content, excluded from OWN rows.
+  return own;
 }
 
 /** One `<tr>`: its opening-tag attribute string (for `data-*` / `id` on the row) plus its inner HTML. */
@@ -192,22 +258,45 @@ interface RawRow {
   inner: string;
 }
 
-/** Every `<tr>` inside a table fragment, with its opening-tag attributes and its inner HTML. */
+/**
+ * Every `<tr>` inside a table fragment, with its opening-tag attributes and its inner HTML. Rows
+ * are split on `<tr>` OPENERS (round-5 F3): `</tr>` is an OPTIONAL end tag in HTML, and the
+ * previous lazy `<tr>…</tr>` match swallowed the row FOLLOWING an omitted `</tr>` into the current
+ * row's trailing cells — the merged row still "parsed", so the swallowed notification vanished
+ * SILENTLY from a populated verdict. A row's content ends at its own `</tr>` (anything between it
+ * and the next opener is inter-row junk) or at the next `<tr>` opener, matching spec recovery.
+ */
 function extractRows(tableInner: string): RawRow[] {
   const out: RawRow[] = [];
-  const re = /<tr\b([^>]*)>([\s\S]*?)<\/tr>/gi;
+  const openRe = /<tr\b([^>]*)>/gi;
+  const opens: { attrs: string; index: number; contentStart: number }[] = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(tableInner)) !== null) out.push({ attrs: m[1] ?? '', inner: m[2] ?? '' });
+  while ((m = openRe.exec(tableInner)) !== null) {
+    opens.push({ attrs: m[1] ?? '', index: m.index, contentStart: openRe.lastIndex });
+  }
+  for (let i = 0; i < opens.length; i++) {
+    const end = i + 1 < opens.length ? opens[i + 1]!.index : tableInner.length;
+    const inner = tableInner.slice(opens[i]!.contentStart, end).replace(/<\/tr\s*>[\s\S]*$/i, '');
+    out.push({ attrs: opens[i]!.attrs, inner });
+  }
   return out;
 }
 
 /** Raw inner HTML of every `<td>`/`<th>` cell inside a row fragment (kept RAW so the documento
- *  column can be inspected for an anchor before its text is collapsed). */
+ *  column can be inspected for an anchor before its text is collapsed). Cells split on OPENERS —
+ *  `</td>`/`</th>` are optional end tags (the same omitted-end-tag family as round-5 F3), so an
+ *  omitted close under the old lazy match merged neighbouring cells and shifted every column
+ *  mapping after it. A cell ends at its own close tag or at the next cell opener. */
 function extractCells(rowInner: string): string[] {
   const out: string[] = [];
-  const re = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
+  const openRe = /<t[dh]\b[^>]*>/gi;
+  const opens: { index: number; contentStart: number }[] = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(rowInner)) !== null) out.push(m[1] ?? '');
+  while ((m = openRe.exec(rowInner)) !== null) opens.push({ index: m.index, contentStart: openRe.lastIndex });
+  for (let i = 0; i < opens.length; i++) {
+    const end = i + 1 < opens.length ? opens[i + 1]!.index : rowInner.length;
+    out.push(rowInner.slice(opens[i]!.contentStart, end).replace(/<\/t[dh]\s*>[\s\S]*$/i, ''));
+  }
   return out;
 }
 
@@ -339,15 +428,17 @@ function hasGridMarker(tableAttrs: string): boolean {
  *  region) evaded the disqualifier and produced a false empty. */
 const INTERACTIVE_CONTROL_RE = /<(?:input|select|button|textarea)\b|\bcontenteditable\b/i;
 
-/** True when the table carries ANY interactive control — in its own attributes or in ANY row,
- *  the header row INCLUDED (attempt 4 skipped the header, leaving a header-row control as an
- *  evasion). A genuine empty grid is a header + an optional EmptyDataTemplate message row and
- *  NOTHING interactive; a table with controls is login/filter/search chrome and can NEVER prove
- *  an empty inbox. (A real empty grid with a select-all header checkbox would read "indisponível"
- *  until CS4 confirms the real markup — the safe direction; see SPIKE #6.) */
-function hasInteractiveControl(tableAttrs: string, rows: RawRow[]): boolean {
-  if (INTERACTIVE_CONTROL_RE.test(tableAttrs)) return true;
-  return rows.some((r) => INTERACTIVE_CONTROL_RE.test(r.attrs) || INTERACTIVE_CONTROL_RE.test(r.inner));
+/** True when the table carries ANY interactive control — in its own attributes or ANYWHERE in its
+ *  ENTIRE inner HTML (round-5 F2): the previous per-`<tr>` scan missed a control in a `<caption>`,
+ *  as a direct child of `<table>` before the first row, or after the last `</tr>` — each a false
+ *  empty on a marked header-only grid. The whole-inner test is strictly stronger and includes the
+ *  header row (attempt 4's evasion) and nested-table chrome by construction. A genuine empty grid
+ *  is a header + an optional EmptyDataTemplate message row and NOTHING interactive; a table with
+ *  controls is login/filter/search chrome and can NEVER prove an empty inbox. (A real empty grid
+ *  with a select-all header checkbox would read "indisponível" until CS4 confirms the real markup
+ *  — the safe direction; see SPIKE #6.) */
+function hasInteractiveControl(table: RawTable): boolean {
+  return INTERACTIVE_CONTROL_RE.test(table.attrs) || INTERACTIVE_CONTROL_RE.test(table.inner);
 }
 
 /** A candidate per-row source id is IDENTIFYING only when it is not a static/non-identifying token
@@ -545,12 +636,20 @@ export function parseInboxPage(html: string): ParseInboxResult {
     return { ok: false, error: UNAVAILABLE };
   }
 
+  // HTML comments are stripped up front (round-5 F1): a `</table>` inside a comment is not markup,
+  // but the regex-based structural walkers below would otherwise truncate the grid at it and every
+  // row after the comment would vanish from the structural proof.
+  const page = html.replace(/<!--[\s\S]*?-->/g, '');
+
   let bestPopulated: GridCandidate | null = null;
   let provenEmpty = false;
   let parseFailure = false;
 
-  for (const table of extractTables(html)) {
-    const rows = extractRows(table.inner);
+  for (const table of extractTables(page)) {
+    // Structural rows are the table's OWN rows: nested chrome/icon tables are stripped first so
+    // they cannot inject phantom rows or split a data row (round-5 F1); they are classified as
+    // their own tables by the outer loop instead.
+    const rows = extractRows(stripNestedTables(table.inner));
 
     // The header is the FIRST row that passes header identification (not merely the first row
     // containing "processo"), so a caption / colspan row above the real <th> is skipped.
@@ -623,11 +722,14 @@ export function parseInboxPage(html: string): ParseInboxResult {
 
     const marked = hasGridMarker(table.attrs);
 
-    // CLASSIFICATION 3 — zero structural data rows: a PROVEN EMPTY only with the structural marker
-    // and no interactive control anywhere in the table; otherwise the table proves nothing (a
-    // header-only filter / legend / login shell) and is skipped.
+    // CLASSIFICATION 3 — zero structural data rows: a PROVEN EMPTY only with the structural marker,
+    // no interactive control anywhere in the ENTIRE table (round-5 F2 — caption / direct-child /
+    // after-last-row controls included), and NO nested <table> at all (round-5: an empty GridView
+    // renders a header + optional EmptyDataTemplate row and nothing else, so nested-table content
+    // inside a marked zero-data-row grid is unmodelled chrome — never an empty proof). Otherwise
+    // the table proves nothing (a header-only filter / legend / login shell) and is skipped.
     if (dataRowCount === 0) {
-      if (marked && !hasInteractiveControl(table.attrs, rows)) provenEmpty = true;
+      if (marked && !hasInteractiveControl(table) && !/<table\b/i.test(table.inner)) provenEmpty = true;
       continue;
     }
 
@@ -666,13 +768,13 @@ export function parseInboxPage(html: string): ParseInboxResult {
     return { ok: false, error: UNAVAILABLE };
   }
   if (bestPopulated !== null) {
-    const pageTotal = detectPageTotal(html);
+    const pageTotal = detectPageTotal(page);
     return pageTotal !== undefined
       ? { ok: true, rows: bestPopulated.rows, pageTotal }
       : { ok: true, rows: bestPopulated.rows };
   }
   if (provenEmpty) {
-    const pageTotal = detectPageTotal(html);
+    const pageTotal = detectPageTotal(page);
     return pageTotal !== undefined ? { ok: true, rows: [], pageTotal } : { ok: true, rows: [] };
   }
 

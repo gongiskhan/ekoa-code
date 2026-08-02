@@ -877,3 +877,163 @@ describe('citius-mandatarios · structural metadata-only guard (no document fetc
     expect(MODULE_SRC).not.toMatch(/documentoRef\s*\)[\s\S]{0,40}\.arrayBuffer/);
   });
 });
+
+describe('citius-mandatarios · round-5 regressions (walker seams under the structural redesign)', () => {
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+
+  // ---- F1: nested-`</table>` truncation (CRITICAL — reachable false empty + silent subset) ----
+
+  it('F1a: a nested chrome table between header and data rows never truncates the grid (was false empty)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td colspan="3"><table class="filterbar"><tr><td>Filtro rapido</td></tr></table></td></tr>' +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Tribunal de Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+  });
+
+  it('F1b: an icon table nested inside a data cell never swallows the following rows (was a silent subset)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '<tr><td><table class="ico"><tr><td>!</td></tr></table> 5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      '<tr><td>9012/26.2T8CBR</td><td>2026-06-18</td><td>Coimbra</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT', '9012/26.2T8CBR']);
+  });
+
+  it('F1c: an HTML comment containing </table> is not markup and never truncates the grid (was false empty)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<!-- legacy markup: </table> -->' +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+  });
+
+  it('F1d: a marked zero-data-row grid containing a NESTED table is never a proven empty (unmodelled chrome)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td colspan="3"><table class="legend"><tr><td>Cor</td><td>Significado</td></tr></table></td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false);
+  });
+
+  // ---- F2: interactive control OUTSIDE every <tr> (CRITICAL — evaded the disqualifier) ----
+
+  it('F2a: a <select> in the grid <caption> blocks the empty verdict', () => {
+    const html =
+      GRID_OPEN +
+      '<caption>Pesquisar: <select name="ctl00$cph$ddlFiltro"><option>Todas</option></select></caption>' +
+      '<tr><th>Processo</th><th>Data</th></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F2b: an <input> as a direct child of <table> (before the first row) blocks the empty verdict', () => {
+    const html = GRID_OPEN + '<input type="text" name="q">' + '<tr><th>Processo</th><th>Data</th></tr>' + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F2c: a <button> after the last </tr> blocks the empty verdict', () => {
+    const html = GRID_OPEN + '<tr><th>Processo</th><th>Data</th></tr>' + '<button>Actualizar</button>' + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- F3: omitted </tr> (HIGH — merged rows silently dropped a notification) ----
+
+  it('F3: an omitted </tr> (legal per the HTML spec) still yields one row per <tr> opener', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td>' + // </tr> omitted
+      '<tr><td>123/2026</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '123/2026']);
+  });
+
+  it('F3-cells: an omitted </td> never merges neighbouring cells (columns stay mapped)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB<td>2026-06-16<td>Lisboa</tr>' + // all </td> omitted
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+    expect(res.rows[0]!.data).toBe('2026-06-16');
+    expect(res.rows[0]!.tribunal).toBe('Lisboa');
+  });
+
+  // ---- F4: 2-digit bare year invented a processo out of a date fragment / prose ref (MEDIUM) ----
+
+  it('F4a: a DD/MM fragment ("Citada a 15/06") is never extracted as a processo — the marked grid is ok:false', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>Citada a 15/06</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false); // the row does not parse and the marked grid poisons the page
+  });
+
+  it('F4b: a 2-digit bare-year prose ref ("Ref. interna 123/26 do tribunal") is never extracted', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>Ref. interna 123/26 do tribunal</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F4c: the 4-digit bare form (123/2026) and the 2-digit LETTERED form (1234/26.0T8LSB) both still parse', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>123/2026</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '<tr><td>Processo n.º 1234/26.0T8LSB</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['123/2026', '1234/26.0T8LSB']);
+  });
+
+  // ---- The layout-wrapper direction of F1: a grid NESTED inside chrome still parses ----
+
+  it('F1e: the notifications grid nested inside an outer layout table is still found and parsed', () => {
+    const html =
+      '<table class="layout"><tr><td>' +
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>' +
+      '</td></tr></table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+  });
+});
