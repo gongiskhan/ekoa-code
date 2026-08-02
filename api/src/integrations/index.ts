@@ -25,7 +25,6 @@ export {
   integrationSkillMd,
   integrationAutomationTemplate,
   reservedIntegrationKeys,
-  writeRuntimePackage,
   type IntegrationDefinition,
   type IntegrationPackageConfig,
   type IntegrationAction,
@@ -33,6 +32,15 @@ export {
   type IntegrationConfigField,
   type ActiveIntegrationCatalog,
 } from './definitions.js';
+// A3 — the builder save path (Mongo, private-by-default; the disk runtime writer is retired) and
+// the one-shot boot import of the frozen legacy runtime tier (Rule 10, review 2026-08-15).
+export { saveAuthoredDefinition, type SaveAuthoredResult } from './definition-save.js';
+export {
+  importLegacyRuntimePackages,
+  LEGACY_RUNTIME_ORG,
+  LEGACY_RUNTIME_USER,
+  type LegacyImportReport,
+} from './legacy-runtime-import.js';
 // A2 — the MERGED (tenant Mongo in front of the disk baseline) async read API. Every caller that
 // holds an actor reads definitions through this, not through the raw disk functions above.
 export {

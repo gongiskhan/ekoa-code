@@ -5,7 +5,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { integrationConfigs } from '../../src/data/stores.js';
+import { integrationConfigs, integrationDefinitions } from '../../src/data/stores.js';
+import { integrationDefinitionStore } from '../../src/integrations/definition-store.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { refreshDefinitions } from '../../src/integrations/definitions.js';
 import { createConfig } from '../../src/integrations/service.js';
@@ -94,6 +95,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await integrationConfigs.deleteMany({});
+  await integrationDefinitions.deleteMany({});
 });
 
 async function connectAcme(userId: string, apiKey: string, opts: { enabled?: boolean } = {}) {
@@ -236,5 +238,77 @@ describe('executeUserIntegrationAction (G8, ch03 §3.8.13)', () => {
     const res = await executeUserIntegrationAction({ orgId: 'orgA', ownerUserId: 'u1', integrationKey: 'acme', actionName: 'no_http', args: {} });
     expect(res.success).toBe(false);
     expect(res.code).toBe('unsupported_auth_type');
+  });
+});
+
+/**
+ * ACTOR ASSERTIONS at the executor's definition-resolution seam (A3, the A2 TEST-GAP: every seam
+ * fake ignored the actor, so a wrong actor compiled and passed). The executor's read actor is
+ * `{userId: input.ownerUserId, orgId: input.orgId}`; these cases make a WRONG actor fail: the
+ * definition seeded in Mongo is visibility-discriminating, so only the true owner pair resolves it.
+ */
+describe('executeUserIntegrationAction resolves the definition AS THE OWNER (tenant-scoped)', () => {
+  it("the owner's PRIVATE definition executes for the owner and is unknown_integration for a same-org peer", async () => {
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgA', userId: 'u-owner', visibility: 'private', key: 'owner-tool',
+        configSchema: [], skillMd: '# owner-tool',
+        actions: [{ actionName: 'go', description: 'g', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://owner.example', path: '/go' } }],
+        authType: 'none',
+      },
+      { actor: { userId: 'u-owner', orgId: 'orgA', role: 'user' } },
+    );
+    const ff = fakeFetch(() => mkResponse(200, '{"ok":true}'));
+
+    // The owner pair resolves + executes the private definition…
+    const mine = await executeUserIntegrationAction(
+      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'owner-tool', actionName: 'go', args: {} },
+      { fetchImpl: ff.fn },
+    );
+    expect(mine.success).toBe(true);
+    expect(ff.calls[0]!.url).toContain('https://owner.example');
+
+    // …a same-org PEER pair does not (the actor is real, not a formality)…
+    const peer = await executeUserIntegrationAction(
+      { orgId: 'orgA', ownerUserId: 'u-peer', integrationKey: 'owner-tool', actionName: 'go', args: {} },
+      { fetchImpl: ff.fn },
+    );
+    expect(peer.success).toBe(false);
+    expect(peer.code).toBe('unknown_integration');
+    // …and neither does another ORG carrying the owner's userId (both halves are load-bearing).
+    const foreign = await executeUserIntegrationAction(
+      { orgId: 'orgB', ownerUserId: 'u-owner', integrationKey: 'owner-tool', actionName: 'go', args: {} },
+      { fetchImpl: ff.fn },
+    );
+    expect(foreign.success).toBe(false);
+    expect(foreign.code).toBe('unknown_integration');
+    expect(ff.calls).toHaveLength(1); // only the owner's call went out
+  });
+
+  it("the owner's private row SHADOWS a shipped key for the owner only — the peer keeps the baseline shape", async () => {
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgA', userId: 'u-owner', visibility: 'private', key: 'acme',
+        configSchema: [], skillMd: '# acme override', authType: 'none',
+        actions: [{ actionName: 'list_things', description: 'l', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://tenant-acme.example', path: '/things' } }],
+      },
+      { actor: { userId: 'u-owner', orgId: 'orgA', role: 'user' } },
+    );
+    await connectAcme('u-peer', 'peer-key');
+    const ff = fakeFetch(() => mkResponse(200, '{}'));
+
+    const owner = await executeUserIntegrationAction(
+      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'acme', actionName: 'list_things', args: {} },
+      { fetchImpl: ff.fn },
+    );
+    expect(owner.success).toBe(true);
+    expect(ff.calls[0]!.url).toContain('https://tenant-acme.example'); // the TENANT shape ran
+
+    const peer = await executeUserIntegrationAction(
+      { orgId: 'orgA', ownerUserId: 'u-peer', integrationKey: 'acme', actionName: 'list_things', args: {} },
+      { fetchImpl: ff.fn },
+    );
+    expect(peer.success).toBe(true);
+    expect(ff.calls[1]!.url).toContain('https://api.acme.example'); // the BASELINE shape ran
   });
 });

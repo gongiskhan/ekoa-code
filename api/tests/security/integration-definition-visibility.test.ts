@@ -63,9 +63,16 @@ const draft = (
   configSchema: [],
   actions: [],
   skillMd: `# ${key}\n`,
-  declaredOrigins: [],
   ...extra,
 });
+
+/** Create as the row's own author (A3: the actor is mandatory at the store seam; a `global` draft
+ *  carries the super-admin bar the store now enforces on the create path too). */
+const createRow = (input: IntegrationDefinitionCreate, onConflict?: 'reject' | 'replace') =>
+  store.create(input, {
+    actor: { userId: input.userId, orgId: input.orgId, role: input.visibility === 'global' ? 'super-admin' : 'user' },
+    ...(onConflict ? { onConflict } : {}),
+  });
 
 const keysVisibleTo = async (actor: Actor): Promise<string[]> =>
   (await store.listForActor(actor)).map((d) => d.key).sort();
@@ -87,7 +94,7 @@ beforeEach(async () => {
 
 describe('integration definition visibility: private is author-only', () => {
   it('a PRIVATE definition is invisible to a same-org peer, the org-admin, and another org', async () => {
-    const created = await store.create(draft('orgA', 'userA1', 'crm', 'private'));
+    const created = await createRow(draft('orgA', 'userA1', 'crm', 'private'));
     // Structural: the id is derived from (orgId, key), not random.
     expect(created._id).toBe(definitionIdFor('orgA', 'crm'));
 
@@ -109,7 +116,7 @@ describe('integration definition visibility: private is author-only', () => {
   });
 
   it('an ORG definition is visible to every member of its org but confined to that org', async () => {
-    const created = await store.create(draft('orgA', 'userA1', 'erp', 'org'));
+    const created = await createRow(draft('orgA', 'userA1', 'erp', 'org'));
 
     for (const member of [userA1, userA2, adminA]) {
       expect((await store.getForActor(member, 'erp'))?._id, member.userId).toBe(created._id);
@@ -121,7 +128,7 @@ describe('integration definition visibility: private is author-only', () => {
   });
 
   it('a GLOBAL definition is visible across orgs', async () => {
-    const created = await store.create(draft('orgA', 'userA1', 'weather', 'global'));
+    const created = await createRow(draft('orgA', 'userA1', 'weather', 'global'));
 
     for (const anyone of [userA1, userA2, adminA, userB1]) {
       expect((await store.getForActor(anyone, 'weather'))?._id, anyone.userId).toBe(created._id);
@@ -132,8 +139,8 @@ describe('integration definition visibility: private is author-only', () => {
 
 describe('integration definition visibility: cross-org isolation', () => {
   it('getForActor NEVER returns another org\'s private (or org-confined) row', async () => {
-    const bPrivate = await store.create(draft('orgB', 'userB1', 'billing', 'private'));
-    const bOrg = await store.create(draft('orgB', 'userB1', 'ledger', 'org'));
+    const bPrivate = await createRow(draft('orgB', 'userB1', 'billing', 'private'));
+    const bOrg = await createRow(draft('orgB', 'userB1', 'ledger', 'org'));
 
     // orgB's own user resolves both...
     expect((await store.getForActor(userB1, 'billing'))?._id).toBe(bPrivate._id);
@@ -149,8 +156,8 @@ describe('integration definition visibility: cross-org isolation', () => {
 
   it('a same-org peer\'s PRIVATE row does not shadow a cross-org GLOBAL of the same key', async () => {
     // orgA member userA1 authors a PRIVATE 'maps'; orgB publishes a GLOBAL 'maps'.
-    await store.create(draft('orgA', 'userA1', 'maps', 'private', { displayName: 'A private maps' }));
-    const global = await store.create(draft('orgB', 'userB1', 'maps', 'global', { displayName: 'B global maps' }));
+    await createRow(draft('orgA', 'userA1', 'maps', 'private', { displayName: 'A private maps' }));
+    const global = await createRow(draft('orgB', 'userB1', 'maps', 'global', { displayName: 'B global maps' }));
 
     // userA1 (the author) still gets their OWN private row for 'maps'.
     expect((await store.getForActor(userA1, 'maps'))?.displayName).toBe('A private maps');
@@ -162,9 +169,9 @@ describe('integration definition visibility: cross-org isolation', () => {
 
 describe('integration definition visibility: org-scoped uniqueness', () => {
   it('two orgs may each own the SAME key; a second row for the same (org, key) is refused', async () => {
-    const aCrm = await store.create(draft('orgA', 'userA1', 'crm', 'org', { displayName: 'A CRM' }));
+    const aCrm = await createRow(draft('orgA', 'userA1', 'crm', 'org', { displayName: 'A CRM' }));
     // A second org creating the SAME key does not collide.
-    const bCrm = await store.create(draft('orgB', 'userB1', 'crm', 'org', { displayName: 'B CRM' }));
+    const bCrm = await createRow(draft('orgB', 'userB1', 'crm', 'org', { displayName: 'B CRM' }));
 
     expect(aCrm._id).not.toBe(bCrm._id);
     expect(aCrm._id).toBe(definitionIdFor('orgA', 'crm'));
@@ -177,7 +184,7 @@ describe('integration definition visibility: org-scoped uniqueness', () => {
     // A SECOND definition for (orgA, 'crm') collides and is refused (default onConflict).
     let err: unknown;
     try {
-      await store.create(draft('orgA', 'userA2', 'crm', 'private'));
+      await createRow(draft('orgA', 'userA2', 'crm', 'private'));
     } catch (e) {
       err = e;
     }
@@ -187,9 +194,9 @@ describe('integration definition visibility: org-scoped uniqueness', () => {
     expect((await store.getById(definitionIdFor('orgA', 'crm')))?.displayName).toBe('A CRM');
 
     // `replace` is the explicit opt-in, and keeps the stable (org, key) id.
-    const replaced = await store.create(
+    const replaced = await createRow(
       draft('orgA', 'userA1', 'crm', 'org', { displayName: 'A CRM v2' }),
-      { onConflict: 'replace' },
+      'replace',
     );
     expect(replaced._id).toBe(aCrm._id);
     expect(replaced.displayName).toBe('A CRM v2');
@@ -199,7 +206,7 @@ describe('integration definition visibility: org-scoped uniqueness', () => {
 
 describe('integration definition visibility: setVisibility is owner-or-admin gated', () => {
   it('flipping visibility flips resolution, and a hidden row is indistinguishable from a missing one', async () => {
-    const priv = await store.create(draft('orgA', 'userA1', 'reports', 'private'));
+    const priv = await createRow(draft('orgA', 'userA1', 'reports', 'private'));
 
     // A same-org peer cannot even distinguish the private row from a missing one, so cannot flip it.
     expect((await store.setVisibility(priv._id, userA2, 'org')).verdict).toBe('notfound');
@@ -226,7 +233,7 @@ describe('integration definition visibility: setVisibility is owner-or-admin gat
 
 describe('integration definition visibility: the global tier is super-admin only (brief lock)', () => {
   it('a base owner and an org-admin CANNOT promote a row to global; only super-admin can', async () => {
-    const own = await store.create(draft('orgA', 'userA1', 'gcal', 'org'));
+    const own = await createRow(draft('orgA', 'userA1', 'gcal', 'org'));
 
     // The owner (role user) may flip private<->org freely, but NOT to global.
     expect((await store.setVisibility(own._id, userA1, 'global')).verdict).toBe('forbidden');
@@ -248,7 +255,7 @@ describe('integration definition visibility: the global tier is super-admin only
 
   it('super-admin write reach spans orgs, but only over rows it can see (a global)', async () => {
     // orgB owns a global 'x'; the super-admin (in orgA) can see and re-gate it.
-    const bGlobal = await store.create(draft('orgB', 'userB1', 'x', 'global'));
+    const bGlobal = await createRow(draft('orgB', 'userB1', 'x', 'global'));
     expect((await store.getForActor(userA1, 'x'))?._id).toBe(bGlobal._id); // cross-org visible
 
     // super-admin demotes orgB's global to org-confined; the demotion is honored cross-org.
@@ -256,7 +263,7 @@ describe('integration definition visibility: the global tier is super-admin only
     expect(await store.getForActor(userA1, 'x')).toBeNull(); // no longer cross-org visible
 
     // But a foreign org's PRIVATE row remains invisible even to super-admin's write (no oracle):
-    const bPriv = await store.create(draft('orgB', 'userB1', 'secret', 'private'));
+    const bPriv = await createRow(draft('orgB', 'userB1', 'secret', 'private'));
     // super-admin is in orgA; a private orgB row is not visible to it → notfound, not a write.
     expect((await store.setVisibility(bPriv._id, superAdmin, 'org')).verdict).toBe('notfound');
     expect((await store.getById(bPriv._id))?.visibility).toBe('private'); // untouched

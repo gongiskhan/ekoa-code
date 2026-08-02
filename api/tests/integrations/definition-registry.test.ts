@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Actor } from '@ekoa/shared';
@@ -84,9 +84,15 @@ const draft = (
   configSchema: [],
   actions: [{ actionName: 'tenant_action', description: 'tenant-authored', mutates: true }],
   skillMd: `# ${key}\nTENANT BODY (${orgId})\n`,
-  declaredOrigins: [],
   ...extra,
 });
+
+/** Create as the row's own author (A3: the actor is mandatory at the store seam; a `global` draft
+ *  needs the super-admin bar the store enforces on the create path too). */
+const createRow = (input: IntegrationDefinitionCreate) =>
+  store.create(input, {
+    actor: { userId: input.userId, orgId: input.orgId, role: input.visibility === 'global' ? 'super-admin' : 'user' },
+  });
 
 const keysOf = async (actor: Actor): Promise<string[]> =>
   (await listDefinitionsFor(actor, store)).map((d) => d.key).sort();
@@ -136,7 +142,7 @@ describe('resolveDefinition — the tenant tier resolves in FRONT of the disk ba
   });
 
   it("an org-visible tenant row SHADOWS the baseline for its own org, and NOT for another org", async () => {
-    await store.create(draft('orgA', 'userA1', 'demo-base', 'org'));
+    await createRow(draft('orgA', 'userA1', 'demo-base', 'org'));
 
     // Author and same-org peer both get the tenant row.
     for (const actor of [userA1, userA2]) {
@@ -154,7 +160,7 @@ describe('resolveDefinition — the tenant tier resolves in FRONT of the disk ba
   });
 
   it("a same-org peer's PRIVATE row does not shadow the baseline for the peer", async () => {
-    await store.create(draft('orgA', 'userA1', 'demo-base', 'private'));
+    await createRow(draft('orgA', 'userA1', 'demo-base', 'private'));
 
     expect((await resolveDefinition(userA1, 'demo-base', store))!.userCreated).toBe(true); // author
     expect((await resolveDefinition(userA2, 'demo-base', store))!.userCreated).toBe(false); // peer → baseline
@@ -162,7 +168,7 @@ describe('resolveDefinition — the tenant tier resolves in FRONT of the disk ba
   });
 
   it('a GLOBAL row authored in one org resolves for every org', async () => {
-    await store.create(draft('orgA', 'userA1', 'shared-global', 'global'));
+    await createRow(draft('orgA', 'userA1', 'shared-global', 'global'));
 
     for (const actor of [userA1, userA2, userB1]) {
       const def = await resolveDefinition(actor, 'shared-global', store);
@@ -177,7 +183,7 @@ describe('resolveDefinition — the tenant tier resolves in FRONT of the disk ba
   });
 
   it("another org's PRIVATE row is invisible and has no baseline to fall back on → null", async () => {
-    await store.create(draft('orgB', 'userB1', 'orgb-secret', 'private'));
+    await createRow(draft('orgB', 'userB1', 'orgb-secret', 'private'));
 
     expect(await resolveDefinition(userB1, 'orgb-secret', store)).toBeTruthy(); // the author DOES see it
     expect(await resolveDefinition(userA1, 'orgb-secret', store)).toBeNull();
@@ -187,7 +193,7 @@ describe('resolveDefinition — the tenant tier resolves in FRONT of the disk ba
 
 describe('listDefinitionsFor — union of the visible tenant rows and the disk baseline, deduped by key', () => {
   it('the TENANT row wins over a baseline of the same key, exactly once, for its own org only', async () => {
-    await store.create(draft('orgA', 'userA1', 'demo-base', 'org'));
+    await createRow(draft('orgA', 'userA1', 'demo-base', 'org'));
 
     const mine = await listDefinitionsFor(userA1, store);
     const shadowed = mine.filter((d) => d.key === 'demo-base');
@@ -205,9 +211,9 @@ describe('listDefinitionsFor — union of the visible tenant rows and the disk b
   });
 
   it("another org's private and org-scoped rows NEVER appear, while its global row does", async () => {
-    await store.create(draft('orgB', 'userB1', 'orgb-secret', 'private'));
-    await store.create(draft('orgB', 'userB1', 'orgb-shared', 'org'));
-    await store.create(draft('orgB', 'userB1', 'orgb-published', 'global'));
+    await createRow(draft('orgB', 'userB1', 'orgb-secret', 'private'));
+    await createRow(draft('orgB', 'userB1', 'orgb-shared', 'org'));
+    await createRow(draft('orgB', 'userB1', 'orgb-published', 'global'));
 
     expect(await keysOf(userA1)).toEqual(['baseline-only', 'demo-base', 'listen-base', 'orgb-published']);
     // …pinned against the owning org, so the nulls above are the gate firing, not empty data.
@@ -217,16 +223,16 @@ describe('listDefinitionsFor — union of the visible tenant rows and the disk b
   });
 
   it("a same-org peer's private row is hidden from the peer's list but not the author's", async () => {
-    await store.create(draft('orgA', 'userA1', 'a1-private', 'private'));
+    await createRow(draft('orgA', 'userA1', 'a1-private', 'private'));
 
     expect(await keysOf(userA1)).toContain('a1-private');
     expect(await keysOf(userA2)).not.toContain('a1-private');
   });
 
   it('the org system actor sees org + global rows and never a private one', async () => {
-    await store.create(draft('orgA', 'userA1', 'a1-private', 'private'));
-    await store.create(draft('orgA', 'userA1', 'a1-shared', 'org'));
-    await store.create(draft('orgB', 'userB1', 'orgb-published', 'global'));
+    await createRow(draft('orgA', 'userA1', 'a1-private', 'private'));
+    await createRow(draft('orgA', 'userA1', 'a1-shared', 'org'));
+    await createRow(draft('orgB', 'userB1', 'orgb-published', 'global'));
 
     const keys = (await listDefinitionsFor(systemActorForOrg('orgA'), store)).map((d) => d.key);
     expect(keys).toContain('a1-shared');
@@ -237,7 +243,7 @@ describe('listDefinitionsFor — union of the visible tenant rows and the disk b
 
 describe('resolveSkillMd — the tenant body wins over the shipped one', () => {
   it('prefers the tenant row for its own org and leaves the baseline to everyone else', async () => {
-    await store.create(draft('orgA', 'userA1', 'demo-base', 'org'));
+    await createRow(draft('orgA', 'userA1', 'demo-base', 'org'));
 
     expect(await resolveSkillMd(userA1, 'demo-base', store)).toContain('TENANT BODY (orgA)');
     expect(await resolveSkillMd(userA1, 'demo-base', store)).not.toContain('BASELINE BODY');
@@ -248,11 +254,30 @@ describe('resolveSkillMd — the tenant body wins over the shipped one', () => {
     expect(await resolveSkillMd(userA1, 'baseline-only', store)).toContain('BASELINE ONLY BODY');
     expect(await resolveSkillMd(userA1, 'nope-not-a-key', store)).toBeNull();
   });
+
+  it('SCRUBS a stored body on read — a pasted credential never rides into an agent prompt (A2 F7)', async () => {
+    // Composed at runtime so the credential-shaped sentinel is never a literal (gitleaks stays sharp).
+    const pasted = ['sk-live-', 'PASTEDSECRET99887766'].join('');
+    await createRow(draft('orgA', 'userA1', 'noted', 'private', {
+      skillMd: [
+        '# noted',
+        'Useful notes.',
+        `api_key: ${pasted}`, // the author pasted their real key into the doc
+        'Call with `Authorization: Bearer {{api_key}}`.', // a TEMPLATE example must survive
+      ].join('\n'),
+    }));
+
+    const body = await resolveSkillMd(userA1, 'noted', store);
+    expect(body).toContain('Useful notes.');
+    expect(body).not.toContain(pasted);
+    expect(body).toContain('[REDACTED]');
+    expect(body).toContain('Bearer {{api_key}}'); // the scrub is value-anchored, not name-phobic
+  });
 });
 
 describe('activeCatalogFor — the activeCatalog projection over the actor-visible set', () => {
   it('projects the merged set, tenant actions included and baseline listener events preserved', async () => {
-    await store.create(draft('orgA', 'userA1', 'demo-base', 'org'));
+    await createRow(draft('orgA', 'userA1', 'demo-base', 'org'));
 
     const mine = await activeCatalogFor(userA1, store);
     const demo = mine.find((e) => e.key === 'demo-base');
@@ -269,20 +294,22 @@ describe('activeCatalogFor — the activeCatalog projection over the actor-visib
 });
 
 /**
- * THE LEAK THIS SLICE EXISTS TO CLOSE (A2 review F1).
+ * THE LEAK A2 CLOSED ON THE READ PATH — AND A3 CLOSED AT THE SOURCE (A2 review F1).
  *
- * The disk registry loads TWO tiers into one cache: the shipped baseline, and a process-wide RUNTIME
- * directory that any authenticated user of any org can write through the builder. A tenant-scoped
- * registry that falls back to that MERGED cache closes nothing — a miss for org A walks straight into
- * org B's authored package, including its action `baseUrl`s, which the origin resolver turns into a
- * credential-egress allow-list. A review proved exactly that with a probe; these cases pin the fix
- * (the fallback reads BASELINE-ONLY) so it cannot silently regress.
+ * The disk registry used to load TWO tiers into one cache: the shipped baseline, and a
+ * process-wide RUNTIME directory that any authenticated user of any org could write through the
+ * builder. A tenant-scoped registry falling back to that MERGED cache closes nothing — a miss for
+ * org A walks straight into org B's authored package, including its action `baseUrl`s, which the
+ * origin resolver turns into a credential-egress allow-list. A2 narrowed the fallback to
+ * BASELINE-ONLY; A3 froze the tier entirely (`load()` never reads it — definitions-runtime.test.ts
+ * pins every sync surface). These cases keep the registry-level guarantee non-tautological: the
+ * hostile package IS ON DISK, and no actor can reach it through any registry read.
  */
 describe('the runtime tier is NOT a fallback (cross-tenant definition leak)', () => {
   const RUNTIME_KEY = 'orgb-authored';
 
   beforeEach(() => {
-    // What `PUT /integration-builder/package` writes today: one global directory, keyed only by
+    // What the retired builder writer used to produce: one global directory, keyed only by
     // integration key, with no org anywhere in the path.
     const dir = join(dataDir, 'integrations', 'runtime', RUNTIME_KEY);
     mkdirSync(dir, { recursive: true });
@@ -297,9 +324,11 @@ describe('the runtime tier is NOT a fallback (cross-tenant definition leak)', ()
   });
 
   it('another org can neither resolve nor list a runtime-tier package', async () => {
-    // Non-tautology: the package IS loaded on this box — the merged disk cache has it...
-    expect(listDefinitions().some((d) => d.key === RUNTIME_KEY)).toBe(true);
-    // ...and it is NOT reachable through the tenant-scoped registry, for anyone.
+    // Non-tautology: the hostile package IS on the box (on disk)…
+    expect(existsSync(join(dataDir, 'integrations', 'runtime', RUNTIME_KEY, 'config.json'))).toBe(true);
+    // …the frozen tier is no longer even loaded into the sync cache (A3)…
+    expect(listDefinitions().some((d) => d.key === RUNTIME_KEY)).toBe(false);
+    // …and it is NOT reachable through the tenant-scoped registry, for anyone.
     for (const who of [userA1, userA2, userB1]) {
       expect(await resolveDefinition(who, RUNTIME_KEY, store), who.userId).toBeNull();
       expect(await keysOf(who), who.userId).not.toContain(RUNTIME_KEY);
@@ -317,9 +346,8 @@ describe('the runtime tier is NOT a fallback (cross-tenant definition leak)', ()
   });
 
   it('a runtime package that COLLIDES with a shipped key cannot masquerade as the baseline', async () => {
-    // The nastiest shape: the merged disk cache lets runtime SHADOW baseline on a key collision, so
-    // a baseline-only read built as "look in the merged cache, then check the key-set" would hand
-    // back the USER-AUTHORED package for a shipped key. Write one and prove the baseline body wins.
+    // The nastiest shape: pre-A3 the merged disk cache let runtime SHADOW baseline on a key
+    // collision. Write one and prove the shipped package wins on every registry read.
     const dir = join(dataDir, 'integrations', 'runtime', 'demo-base');
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -332,9 +360,10 @@ describe('the runtime tier is NOT a fallback (cross-tenant definition leak)', ()
     writeFileSync(join(dir, 'SKILL.md'), '# demo-base\nHIJACKED BODY\n');
     refreshDefinitions();
     try {
-      // The merged cache IS shadowed (non-tautology: the hijack really is loaded)...
-      expect(listDefinitions().find((d) => d.key === 'demo-base')!.displayName).toBe('HIJACKED');
-      // ...and the tenant-scoped registry still answers with the SHIPPED package.
+      // Non-tautology: the hijack really is on disk — and since A3 not even the sync cache loads it.
+      expect(existsSync(join(dir, 'config.json'))).toBe(true);
+      expect(listDefinitions().find((d) => d.key === 'demo-base')!.displayName).not.toBe('HIJACKED');
+      // The tenant-scoped registry answers with the SHIPPED package.
       const def = await resolveDefinition(userA1, 'demo-base', store);
       expect(def!.displayName).not.toBe('HIJACKED');
       expect(def!.actions.map((a) => a.httpConfig?.baseUrl)).not.toContain('https://attacker.example');

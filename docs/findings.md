@@ -46,7 +46,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   assertion; fold into the B2 Cofre/WS-C slice or a dedicated follow-up. Do NOT let "integration_configs
   done" read as "all integration credentials done".
 
-- **`runtime-integration-packages-are-global`** (OPEN 2026-08-01, HIGH, tenancy/confidentiality -
+- **`runtime-integration-packages-are-global`** (FIXED 2026-08-02, HIGH, tenancy/confidentiality -
   found by the integrations-unification discovery gate, `docs/INTEGRATIONS_UNIFICATION_AUDIT.md`).
   User-created integration packages have NO ownership model: any authenticated user of any org
   saves via the builder (`api/src/routes/integration-builder.ts:210`, `requireAuth` only, any
@@ -61,6 +61,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   tenant-scoped definition storage (Mongo via `OwnerVisibilityScoped`) with private-by-default +
   an isolation suite of the memvault class; interim mitigation if needed sooner: filter the list
   endpoint by creator org. Planned as a prerequisite slice of the unification build.
+  FIXED (run 20260801-171149): READ path by A2 (tenant-scoped registry, baseline-only fallback,
+  probe-verified across all four entry points incl. the baseline-key collision); WRITE path by A3
+  - builder saves land in `integration_definitions` private-by-default stamped from the verified
+  actor (`definition-save.ts`), the disk runtime tier is FROZEN and retired from every sync read
+  (load/refresh-keys/integrationSkillMd/integrationAutomationTemplate are baseline-only, so the
+  org-admin refresh no longer enumerates other tenants' keys), the events webhook-policy reads
+  resolve tenant-scoped under the trigger's owner and fail closed org-less, and the legacy on-disk
+  packages were imported once at boot as journaled `global`/`legacy-runtime` rows (Rule-10 review
+  2026-08-15, decisions.md 2026-08-02). Pinned by: `tests/security/integration-definition-visibility`
+  (store isolation), `tests/integrations/definition-save.test.ts` (private-by-default + actor
+  stamping), `tests/integrations/definitions-runtime.test.ts` (frozen tier, every sync surface),
+  `tests/integrations/refresh-enumeration.test.ts` (route-level enumeration closed),
+  `tests/integrations/legacy-runtime-import.test.ts` (import semantics + drift comparator),
+  `tests/events/webhook-policy-scope.test.ts` (owner-scoped webhook policy).
 
 - **`integration-provision-id-not-org-scoped`** (FIXED 2026-08-02, MEDIUM, correctness/tenancy -
   found by the same discovery gate). `provisionIntegrationAutomations` materialises package

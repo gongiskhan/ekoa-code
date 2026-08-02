@@ -24,9 +24,10 @@ import { z } from 'zod';
  * Join a definition's automation-bound actions with their template payloads (the provisioner
  * and the session rows both consume this; automation/ never imports integrations/).
  *
- * A2: the DEFINITION is resolved tenant-scoped; the TEMPLATE body still comes off disk
- * (`integrationAutomationTemplate`) because automation templates are package FILES that have not
- * moved to the database — A3 owns that move.
+ * A2/A3: the DEFINITION is resolved tenant-scoped; the TEMPLATE body still comes off disk
+ * (`integrationAutomationTemplate`) because automation templates are package FILES only shipped
+ * with BASELINE packages — and since A3 that lookup is baseline-only (the retired runtime tier is
+ * never probed on this tenant response path).
  */
 async function automationBindings(actor: Actor, key: string): Promise<ProvisionBinding[]> {
   const def = await resolveDefinition(actor, key);
@@ -87,10 +88,11 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
   });
 
   // POST /api/v1/integrations/refresh -> { count, keys } (auth: org-admin, 'refresh-registry').
-  // SCOPE (A2): this reloads the PROCESS-WIDE DISK registry (api/assets/integrations + the runtime
-  // tier) and nothing else. It does not read, write or invalidate any tenant definition document —
-  // those are read per request straight off Mongo and need no refresh. The reported {count, keys}
-  // is therefore the disk baseline's, deliberately NOT the caller's visible set.
+  // SCOPE (A3): this reloads the SHIPPED BASELINE packages (api/assets/integrations) and nothing
+  // else — the disk runtime tier is retired, so the reported {count, keys} is the same shipped set
+  // for every caller and can no longer enumerate other tenants' authored keys (A2-residual 1).
+  // It does not read, write or invalidate any tenant definition document — those are read per
+  // request straight off Mongo and need no refresh.
   r.post('/refresh', requireRole('org-admin', 'super-admin'), (_req: AuthedRequest, res: Response) => {
     res.json(refreshDefinitions());
   });

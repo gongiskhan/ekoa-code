@@ -10,16 +10,25 @@
  * httpConfig/automationBinding/passCredentials/mutates, webhookConfig, listenerConfig,
  * authType, configSchema) alongside SKILL.md / history.json which the registry ignores.
  *
- * Ported (read-only subset) from cortex/src/services/integration-storage.ts. Explicitly
- * DEFERRED to G8 (the execution stack): per-user sandbox skills, runtime overrides, saves /
- * mutations, conversation history, and the connect/provision flows.
+ * Ported (read-only subset) from cortex/src/services/integration-storage.ts.
+ *
+ * THE DISK RUNTIME TIER IS RETIRED (slice A3). Builder saves land in the tenant-scoped Mongo
+ * store (`definition-save.ts`, private-by-default); the legacy on-disk runtime packages
+ * (`<dataDir>/integrations/runtime/<key>/`) are imported ONCE at boot as `visibility:'global'`,
+ * `origin:'legacy-runtime'` rows (`legacy-runtime-import.ts` — RUN_SPEC 20260801 assumption 3,
+ * Rule-10 review 2026-08-15 in docs/decisions.md) and the directory is FROZEN: nothing writes it,
+ * and NO read below folds it into the cache any more. That merged cache was one process-wide
+ * directory any authenticated user of any org could write, which made every reader of it a
+ * cross-tenant leak (A2 review F1); every function here is now BASELINE-ONLY by construction —
+ * the merged-vs-baseline split (`getBaselineDefinition` et al.) is kept as API so the registry's
+ * fallback contract stays explicit, but the two views now hold the same shipped set.
  *
  * These are PACKAGE definitions, not org configs — they hold no credential VALUES. A
  * defensive redaction pass (redactSecrets) still runs over every projection so a
  * credential-named field can never leave the registry, belt-and-braces.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -267,9 +276,28 @@ export interface ActiveIntegrationCatalog {
  * Credential-VALUE key names. Anchored so structural fields survive: `secret` (the
  * configSchema boolean flag), `secretSource`, `verifySignature`, `credentialField`,
  * `responseSecretPath` are all NOT credential values and are left intact.
+ *
+ * A3 (A2 review F7): broadened with the header-shaped names the original set missed —
+ * `authorization`, `token`, `x-api-key`, `signature` (and `auth`/`api`-token variants). These
+ * names legitimately appear as httpConfig HEADER keys whose values are `{{...}}` TEMPLATES
+ * ("Authorization": "Bearer {{access_token}}" in the shipped stripe/slack/zoho packages) that
+ * carry no secret and MUST survive, or the executor would send "[REDACTED]" as the header —
+ * hence the template exemption in `redactSecrets` below.
  */
 const SECRET_KEY_RE =
-  /^(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token)$/i;
+  /^(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature)$/i;
+
+/**
+ * A string value under a credential-named key that is a pure INTERPOLATION TEMPLATE: it names a
+ * credential field (`{{api_key}}`) rather than carrying a value. The residue outside the
+ * placeholders must not itself look like a pasted token — a scheme word ("Bearer ",
+ * "Zoho-oauthtoken ") passes, `"Bearer sk-live-<28 chars>"` does not.
+ */
+function isCredentialTemplate(v: unknown): boolean {
+  if (typeof v !== 'string' || !/\{\{[^{}]+\}\}/.test(v)) return false;
+  const residue = v.replace(/\{\{[^{}]+\}\}/g, '');
+  return !/[A-Za-z0-9+/=_.-]{20,}/.test(residue);
+}
 
 /**
  * Deep-clone a value, redacting any property whose key names a credential value.
@@ -285,11 +313,33 @@ export function redactSecrets<T>(value: T): T {
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) ? '[REDACTED]' : redactSecrets(v);
+      out[k] = SECRET_KEY_RE.test(k) && !isCredentialTemplate(v) ? '[REDACTED]' : redactSecrets(v);
     }
     return out as unknown as T;
   }
   return value;
+}
+
+/**
+ * Deterministic FREE-TEXT scrub for stored knowledge bodies (SKILL.md / lessons) read back into an
+ * agent prompt (A2 review F7: `resolveSkillMd` returned a tenant-authored body verbatim, so a
+ * credential the author pasted into their doc would ride into every future prompt). This is the
+ * READ-path floor only — the strict publish-time scrub (deterministic floor + one chokepoint model
+ * pass into a frozen snapshot) is slice E2's.
+ *
+ * Two passes, both value-anchored so documentation of field NAMES survives:
+ *   1. `<secret-name>: value` / `<secret-name>=value` — the value token is redacted unless it is a
+ *      `{{template}}` placeholder (docs legitimately show `Authorization: Bearer {{access_token}}`).
+ *   2. `Bearer|Basic <long token>` — a pasted credential after an auth scheme word.
+ */
+const SECRET_LINE_RE =
+  /\b(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature)(\s*[:=]\s*)(?!\{\{)("?[A-Za-z0-9+/=_.-]{8,}"?)/gi;
+const BEARER_VALUE_RE = /\b(bearer|basic)\s+(?!\{\{)[A-Za-z0-9+/=_.-]{16,}/gi;
+
+export function scrubSecretText(body: string): string {
+  return body
+    .replace(SECRET_LINE_RE, (_m, key: string, sep: string) => `${key}${sep}[REDACTED]`)
+    .replace(BEARER_VALUE_RE, (_m, scheme: string) => `${scheme} [REDACTED]`);
 }
 
 // ============================================
@@ -297,20 +347,16 @@ export function redactSecrets<T>(value: T): T {
 // ============================================
 
 let cache: Map<string, IntegrationDefinition> | null = null;
-/** Keys that come from the read-only BASELINE tier (api/assets/integrations). Rebuilt by load().
- *  The reserved-key set the builder guards against (a user integration may not shadow a shipped
- *  one) is derived from this + the pipedream row — not from the whole cache, which now also holds
- *  runtime (user-created) packages. */
+/** Keys of the read-only BASELINE tier (api/assets/integrations). Rebuilt by load(). The
+ *  reserved-key set the builder guards against (a user integration may not claim a shipped key)
+ *  is derived from this + the pipedream row. */
 let baselineKeys = new Set<string>();
 /**
- * The BASELINE tier as its OWN map, not a key-set view over `cache`.
- *
- * `load()` writes both tiers into one map and lets runtime SHADOW baseline on a key collision, so
- * for a colliding key `cache.get(key)` is the RUNTIME object while `baselineKeys.has(key)` is still
- * true. A baseline-only read built as "look in `cache`, then check the key-set" would therefore hand
- * back the user-authored package for exactly the key an attacker would choose (A2 review F1, the
- * predicted residual). The builder's reserved-key guard makes that write hard, but the READ must not
- * depend on the write path holding — so the shipped packages are kept in a map of their own.
+ * The BASELINE tier as its OWN map. Since A3 retired the disk runtime tier from `load()`, `cache`
+ * and `baselineCache` hold the SAME shipped set — the separate map (and the baseline-only
+ * accessors below) are KEPT deliberately: they are the A2-review contract that the registry's
+ * fallback can only ever read shipped packages, and they make any future second tier opt-in at
+ * the accessor level instead of silently folded into every reader (the A2 F1 leak shape).
  */
 let baselineCache = new Map<string, IntegrationDefinition>();
 
@@ -328,9 +374,14 @@ function dataDir(): string {
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 
-/** Root of the RUNTIME tier: user-created integration packages the builder saves
- *  (`<dataDir>/integrations/runtime/<key>/`). Shadows baseline on key collision. */
-function runtimeDir(): string {
+/**
+ * Root of the FROZEN legacy runtime tier (`<dataDir>/integrations/runtime/<key>/`) — the directory
+ * the builder used to save user packages into before A3 moved that write path to the tenant-scoped
+ * Mongo store. Nothing writes it any more and nothing here READS it into the cache; its packages
+ * are imported once at boot by `legacy-runtime-import.ts` (which is why the accessor survives) and
+ * the directory is removed at the Rule-10 review date (2026-08-15, docs/decisions.md).
+ */
+export function legacyRuntimeDir(): string {
   return join(dataDir(), 'integrations', 'runtime');
 }
 
@@ -379,21 +430,20 @@ function loadTier(root: string, userCreated: boolean, next: Map<string, Integrat
     if (!d.isDirectory()) continue;
     const def = loadOne(join(root, d.name), userCreated);
     if (def) {
-      next.set(def.key, def); // later tiers overwrite earlier ones (runtime shadows baseline)
+      next.set(def.key, def);
       keys.add(def.key);
     }
   }
 }
 
-/** (Re)load every package directory from disk into a fresh cache: baseline first, then runtime
- *  (which shadows baseline on key collision, §8.3.2 rule 2). */
+/** (Re)load the BASELINE package directories from disk into a fresh cache. The disk runtime tier
+ *  is deliberately NOT loaded (A3): its packages live in Mongo since the boot import, and folding
+ *  a world-writable directory into the process-wide cache was the A2 F1 cross-tenant leak. */
 function load(): Map<string, IntegrationDefinition> {
   const next = new Map<string, IntegrationDefinition>();
   const baseKeys = new Set<string>();
   loadTier(integrationsDir(), false, next, baseKeys);
-  // Snapshot the baseline BEFORE the runtime tier shadows anything into `next`.
   baselineCache = new Map(next);
-  loadTier(runtimeDir(), true, next, new Set<string>());
   cache = next;
   baselineKeys = baseKeys;
   return next;
@@ -420,20 +470,16 @@ export function getDefinition(key: string): IntegrationDefinition | null {
 }
 
 /**
- * BASELINE-ONLY reads — the shipped, repo-authored packages, with the process-wide RUNTIME tier
- * excluded.
+ * BASELINE-ONLY reads — the shipped, repo-authored packages.
  *
- * Why this exists (A2 review, F1). The runtime tier is ONE global directory that any authenticated
- * user of any org can write through the builder, and `load()` folds it into the same cache as the
- * shipped packages. So `getDefinition`/`listDefinitions` — which read that merged cache — hand one
- * tenant's authored package to every other tenant. That is the very leak the tenant-scoped registry
- * exists to close, and a fallback to the MERGED cache silently reopened it: the definition-registry
- * would fall through a tenant miss straight into another tenant's runtime package, including its
- * action `baseUrl`s, which the origin resolver turns into a credential-egress allow-list.
- *
- * The tenant-scoped registry therefore falls back to THESE, never to the merged cache. Runtime-tier
- * packages stay reachable only through the paths that already existed for them (the builder's own
- * routes) until A3 moves that write path into Mongo and retires the tier entirely.
+ * Why this exists (A2 review, F1). The disk runtime tier was ONE global directory that any
+ * authenticated user of any org could write through the builder, and `load()` used to fold it
+ * into the same cache as the shipped packages — so every reader of the merged cache handed one
+ * tenant's authored package (including its action `baseUrl`s, which the origin resolver turns
+ * into a credential-egress allow-list) to every other tenant. The tenant-scoped registry
+ * therefore falls back to THESE accessors, never to the merged view. Since A3 retired the runtime
+ * tier from `load()` entirely, the two views coincide — the split is kept as the explicit
+ * contract (see the module header).
  */
 export function getBaselineDefinition(key: string): IntegrationDefinition | null {
   ensure(); // populates baselineCache
@@ -450,7 +496,7 @@ export function listBaselineDefinitions(): IntegrationDefinition[] {
 export function baselineSkillMd(key: string): string | null {
   ensure(); // populates baselineCache (a cold cache must not answer null for a real baseline key)
   if (!baselineCache.has(key)) return null;
-  const p = join(integrationsDir(), key, 'SKILL.md'); // the BASELINE dir only, never runtimeDir()
+  const p = join(integrationsDir(), key, 'SKILL.md'); // the BASELINE dir only, never the legacy runtime dir
   if (!existsSync(p)) return null;
   try {
     return readFileSync(p, 'utf8');
@@ -460,86 +506,54 @@ export function baselineSkillMd(key: string): string | null {
 }
 
 /**
- * The integration package's knowledge SKILL.md (raw markdown), or null when the package has
- * none. The definitions registry deliberately ignores SKILL.md (config.json is the runtime
- * contract); this is the ON-DEMAND knowledge surface the agents pull through `load_context`
- * as `integration-<key>`. Only a KNOWN definition key resolves — the key never touches the
- * filesystem unvalidated.
- */
-/**
  * An integration package's automation TEMPLATE (`<package>/automations/<templateKey>.json`):
- * the repo-authored blueprint the provisioner materializes as a managed automation. Runtime
- * tier wins over baseline (same shadowing rule as the definitions). Both path segments are
- * validated (the templateKey never touches the filesystem unvalidated); a malformed file
- * returns null (counted by the caller, never fatal).
+ * the repo-authored blueprint the provisioner materializes as a managed automation. BASELINE
+ * ONLY (A3, A2-residual 3): this used to probe the runtime dir FIRST on a tenant response path,
+ * i.e. a world-writable directory could steer any org's provisioned automation steps. Templates
+ * are package FILES only shipped with baseline packages (the retired runtime writer never wrote
+ * an `automations/` dir), so baseline-only is the whole truth. Both path segments are validated
+ * (the templateKey never touches the filesystem unvalidated); a malformed file returns null
+ * (counted by the caller, never fatal).
  */
 export function integrationAutomationTemplate(
   key: string,
   templateKey: string,
 ): { templateKey: string; name: string; description?: string; inputSchema?: { fields: Array<{ name: string; description: string; required: boolean; defaultValue?: string }> }; steps: Array<Record<string, unknown>> } | null {
-  if (!ensure().has(key) || !/^[a-z0-9][a-z0-9-]{0,48}$/.test(templateKey)) return null;
-  for (const root of [runtimeDir(), integrationsDir()]) {
-    const p = join(root, key, 'automations', `${templateKey}.json`);
-    if (!existsSync(p)) continue;
-    try {
-      const raw = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
-      if (typeof raw.name !== 'string' || !Array.isArray(raw.steps)) return null;
-      return {
-        templateKey,
-        name: raw.name,
-        ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
-        ...(raw.inputSchema && typeof raw.inputSchema === 'object' ? { inputSchema: raw.inputSchema as never } : {}),
-        steps: raw.steps as Array<Record<string, unknown>>,
-      };
-    } catch {
-      return null;
-    }
+  ensure(); // populates baselineCache
+  if (!baselineCache.has(key) || !/^[a-z0-9][a-z0-9-]{0,48}$/.test(templateKey)) return null;
+  const p = join(integrationsDir(), key, 'automations', `${templateKey}.json`);
+  if (!existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+    if (typeof raw.name !== 'string' || !Array.isArray(raw.steps)) return null;
+    return {
+      templateKey,
+      name: raw.name,
+      ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
+      ...(raw.inputSchema && typeof raw.inputSchema === 'object' ? { inputSchema: raw.inputSchema as never } : {}),
+      steps: raw.steps as Array<Record<string, unknown>>,
+    };
+  } catch {
+    return null;
   }
-  return null;
 }
 
+/** The SHIPPED package's SKILL.md, baseline only (A3 — alias of `baselineSkillMd`, kept for its
+ *  existing callers). Tenant knowledge bodies are served by the registry's `resolveSkillMd`. */
 export function integrationSkillMd(key: string): string | null {
-  if (!ensure().has(key)) return null;
-  // Runtime wins over baseline (a user-created package shadows a shipped one of the same key).
-  for (const p of [join(runtimeDir(), key, 'SKILL.md'), join(integrationsDir(), key, 'SKILL.md')]) {
-    if (!existsSync(p)) continue;
-    try {
-      return readFileSync(p, 'utf8');
-    } catch {
-      /* try the next tier */
-    }
-  }
-  return null;
+  return baselineSkillMd(key);
 }
-
-/** Regex for a well-formed integration key, enforced at write time (mirrors the builder parser). */
-const RUNTIME_KEY_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
 
 /**
  * The keys a user-created integration may NOT claim: every BASELINE definition key plus the
- * reserved `pipedream` connect row. The integration builder rejects a generated/edited package
- * whose key collides with this set (unless the session is editing that very key), so a user
- * integration can never shadow a shipped one or the platform Pipedream row (§3.8.14/§3.8.16).
+ * reserved `pipedream` connect row. The builder parser AND the Mongo save path
+ * (`definition-save.ts`) both refuse a package whose key collides with this set — since A3 with
+ * NO loaded-session exemption, so a shipped key can never be shadowed through the builder
+ * (§3.8.14/§3.8.16; A2-residual 4).
  */
 export function reservedIntegrationKeys(): Set<string> {
   ensure(); // populates baselineKeys
   return new Set<string>([...baselineKeys, PIPEDREAM_INTEGRATION_KEY]);
-}
-
-/**
- * Persist a user-created integration package into the RUNTIME tier
- * (`<dataDir>/integrations/runtime/<key>/{config.json,SKILL.md}`) and refresh the registry so the
- * new definition is immediately resolvable (list/getDefinition/integrationSkillMd). `integrations/`
- * owns this filesystem write (the builder route calls it). The key shape is re-validated here as a
- * belt-and-braces guard even though the builder already checked it. Returns the reload summary.
- */
-export function writeRuntimePackage(key: string, config: Record<string, unknown>, skillMd: string): { count: number; keys: string[] } {
-  if (!RUNTIME_KEY_RE.test(key)) throw new Error(`invalid integration key: ${JSON.stringify(key)}`);
-  const dir = join(runtimeDir(), key);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-  writeFileSync(join(dir, 'SKILL.md'), skillMd, 'utf8');
-  return refreshDefinitions();
 }
 
 /** The action + event catalog for every loaded definition (unfiltered; the route joins
@@ -554,7 +568,13 @@ export function activeCatalog(): ActiveIntegrationCatalog[] {
   }));
 }
 
-/** Force a reload from disk (POST /api/v1/integrations/refresh). */
+/**
+ * Force a reload from disk (POST /api/v1/integrations/refresh). Since A3 the reported
+ * `{count, keys}` is the shipped BASELINE set only — the same for every caller. It used to fold
+ * in the runtime tier, which made this org-admin route a cross-tenant KEY ENUMERATION (every
+ * tenant's authored package keys, A2-residual 1); tenant definitions live in Mongo, are read per
+ * request, and need no refresh.
+ */
 export function refreshDefinitions(): { count: number; keys: string[] } {
   const m = load();
   return { count: m.size, keys: Array.from(m.keys()).sort() };

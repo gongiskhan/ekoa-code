@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, orgs, billingAccounts, tokenEvents, integrationConfigs, integrationBuilderSessions } from '../../src/data/stores.js';
+import { users, orgs, billingAccounts, tokenEvents, integrationConfigs, integrationBuilderSessions, integrationDefinitions } from '../../src/data/stores.js';
+import { definitionIdFor, type IntegrationDefinitionDoc } from '../../src/integrations/definition-store.js';
 import { setCredential, __resetCredentialsForTests } from '../../src/llm/credentials.js';
 import { __setTransportForTests, __resetTransportForTests } from '../../src/llm/client.js';
 import { makeFakeTransport } from '../agents/_fake-transport.js';
@@ -27,9 +28,10 @@ import {
 
 /**
  * PR4 — the AI integration builder (ch03 §3.8.14). Contract coverage for the four endpoints against
- * the shared schemas, with a fake chokepoint transport scripting the model's two fenced blocks. The
- * runtime tier writes into an isolated EKOA_DATA_DIR; the test route runs against an ephemeral local
- * HTTP server (no live call).
+ * the shared schemas, with a fake chokepoint transport scripting the model's two fenced blocks.
+ * A3: saves land in the tenant-scoped Mongo definition store (private-by-default); EKOA_DATA_DIR is
+ * still isolated so the suite can PROVE the retired disk runtime tier stays untouched. The test
+ * route runs against an ephemeral local HTTP server (no live call).
  */
 let mem: MongoMemoryServer; let seq = 0; let server: Server; let port: number; let dataDir: string;
 const savedDataEnv = process.env.EKOA_DATA_DIR;
@@ -87,8 +89,8 @@ function modelReply(key: string, baseUrl: string): string {
   ].join('\n');
 }
 
-async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user') {
-  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId: 'orgA', active: true });
+async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user', orgId = 'orgA') {
+  await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role, orgId, active: true });
   setActivation(id, { active: true, billingLocked: false });
 }
 const tokenFor = async (u: string) => (await login(u, 'pw123456', false, deps)).token;
@@ -115,10 +117,8 @@ afterAll(async () => {
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
   __resetTransportForTests(); __resetCredentialsForTests();
-  for (const s of [users, orgs, billingAccounts, tokenEvents, integrationConfigs, integrationBuilderSessions]) await s.deleteMany({});
+  for (const s of [users, orgs, billingAccounts, tokenEvents, integrationConfigs, integrationBuilderSessions, integrationDefinitions]) await s.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'Org A', displayName: 'Org A', createdAt: 'x' } as never);
-  // Drop any runtime package a prior test wrote, and reload the registry from disk.
-  rmSync(join(dataDir, 'integrations', 'runtime'), { recursive: true, force: true });
   refreshDefinitions();
   await setCredential({ mode: 'oauth', secret: 'tok' });
 });
@@ -157,7 +157,7 @@ describe('POST /api/v1/integration-builder/chat', () => {
 });
 
 describe('PUT /api/v1/integration-builder/package (save)', () => {
-  it('writes the runtime package, registers it userCreated, and configures the org with credentials', async () => {
+  it('saves the package as the actor\'s OWN Mongo definition, PRIVATE by default, and configures the org with credentials (A3)', async () => {
     __setTransportForTests(makeFakeTransport({ oneShotText: modelReply('weather-api', 'https://api.weather.example') }));
     await mkUser('admin', 'org-admin');
     const t = await tokenFor('admin');
@@ -176,10 +176,28 @@ describe('PUT /api/v1/integration-builder/package (save)', () => {
     expect(save.saved).toBe(true);
     expect(save.configured).toBe(true);
 
-    // Runtime package on disk + in the registry as userCreated.
-    expect(existsSync(join(dataDir, 'integrations', 'runtime', 'weather-api', 'config.json'))).toBe(true);
-    expect(existsSync(join(dataDir, 'integrations', 'runtime', 'weather-api', 'SKILL.md'))).toBe(true);
-    expect(getDefinition('weather-api')?.userCreated).toBe(true);
+    // The definition landed in the tenant-scoped store, stamped from the VERIFIED ACTOR (never a
+    // body field), private-by-default, with authored provenance.
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'weather-api'))) as IntegrationDefinitionDoc | null;
+    expect(row).toBeTruthy();
+    expect(row!.orgId).toBe('orgA');
+    expect(row!.userId).toBe('admin');
+    expect(row!.visibility).toBe('private');
+    expect(row!.origin?.kind).toBe('authored');
+    expect(row!.skillMd).toContain('# Weather API');
+
+    // NOTHING touched the retired disk runtime tier, and the process-wide sync cache never sees
+    // the tenant definition (the leak surface A3 closed).
+    expect(existsSync(join(dataDir, 'integrations', 'runtime'))).toBe(false);
+    expect(getDefinition('weather-api')).toBeNull();
+
+    // The saving user resolves their definition through the tenant-scoped list route…
+    const mine = (await readJson(await authed('/api/v1/integrations', t))) as { items?: Array<{ key: string }> };
+    expect((mine.items ?? []).some((d) => d.key === 'weather-api')).toBe(true);
+    // …and ANOTHER ORG's user does not (isolation, memvault class).
+    await mkUser('outsider', 'user', 'orgB');
+    const theirs = (await readJson(await authed('/api/v1/integrations', await tokenFor('outsider')))) as { items?: Array<{ key: string }> };
+    expect((theirs.items ?? []).some((d) => d.key === 'weather-api')).toBe(false);
 
     // Org config created (credentials encrypted at rest, never echoed).
     const configs = await integrationConfigs.find({ orgId: 'orgA', integrationKey: 'weather-api' });
@@ -187,7 +205,7 @@ describe('PUT /api/v1/integration-builder/package (save)', () => {
     expect(JSON.stringify(configs[0])).not.toContain('k-123456');
   });
 
-  it('rejects a save whose key collides with a reserved key (4xx envelope)', async () => {
+  it('rejects a save whose key collides with a reserved key (4xx envelope), writing NOTHING', async () => {
     await mkUser('admin', 'org-admin');
     const t = await tokenFor('admin');
     const config = {
@@ -201,6 +219,7 @@ describe('PUT /api/v1/integration-builder/package (save)', () => {
     expect(res.status).toBe(400);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
     expect(existsSync(join(dataDir, 'integrations', 'runtime', 'pipedream'))).toBe(false);
+    expect(await integrationDefinitions.get(definitionIdFor('orgA', 'pipedream'))).toBeNull();
   });
 });
 

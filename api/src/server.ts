@@ -155,6 +155,7 @@ import {
   resolveDefinition,
   listDefinitionsFor,
   resolveSkillMd,
+  importLegacyRuntimePackages,
 } from './integrations/index.js';
 import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
@@ -1144,6 +1145,19 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
       if (removed > 0) console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs`);
     })
     .catch(() => {});
+
+  // A3 — one-shot import of the FROZEN legacy disk runtime tier into the tenant-scoped definition
+  // store (`visibility:'global'`, `origin:'legacy-runtime'` — RUN_SPEC assumption 3; Rule-10 review
+  // 2026-08-15). Idempotent per key via the content-hash comparator; a changed disk file after
+  // import is reported as DRIFT and never overwrites the Mongo row (Mongo wins). Resilient on a
+  // fresh box (no runtime directory → empty report).
+  const legacy = await importLegacyRuntimePackages();
+  if (legacy.imported.length + legacy.skipped.length + legacy.drift.length + legacy.errors.length > 0) {
+    console.log(
+      `[legacy-runtime-import] imported ${legacy.imported.length}, unchanged ${legacy.skipped.length}, drift ${legacy.drift.length}, errors ${legacy.errors.length}`,
+    );
+    for (const e of legacy.errors) console.warn(`[legacy-runtime-import] '${e.key}': ${e.error}`);
+  }
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;

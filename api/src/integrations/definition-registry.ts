@@ -11,9 +11,11 @@
  *      their org's shared rows, and the cross-org `global` tier. Resolved by
  *      `IntegrationDefinitionStore.getForActor`, which is the ONE visibility gate (A1); this module
  *      never re-derives it and never reads a row by id.
- *   2. BASELINE (disk, `api/assets/integrations/**` + the runtime tier) — the SHIPPED packages.
- *      A global, read-only tier visible to every org, exactly as before this slice. A3 retires the
- *      disk tier; until then it stays the fallback so shipped behaviour is byte-for-byte preserved.
+ *   2. BASELINE (disk, `api/assets/integrations/**`) — the SHIPPED packages. A global, read-only
+ *      tier visible to every org (RUN_SPEC assumption 2: deploy-versioned with code, never seeded
+ *      into Mongo). The legacy disk RUNTIME tier is gone from every read path since A3: its
+ *      packages were imported at boot as `global` rows of tier 1 (legacy-runtime-import.ts) and
+ *      the directory is frozen.
  *
  * A tenant row SHADOWS a baseline package of the same key FOR THAT TENANT ONLY. Another org keeps
  * seeing the baseline — which is precisely the cross-tenant listing leak this slice closes on the
@@ -42,6 +44,7 @@ import {
   listBaselineDefinitions,
   baselineSkillMd,
   redactSecrets,
+  scrubSecretText,
   type IntegrationDefinition,
   type ActiveIntegrationCatalog,
 } from './definitions.js';
@@ -178,6 +181,11 @@ export async function listDefinitionsFor(
  * The integration's knowledge SKILL.md, TENANT FIRST. When a stored row resolves, ITS body is the
  * answer — including an empty one: a tenant that replaced the shipped knowledge must not silently
  * get the shipped body back. Only when no stored row resolves does the disk baseline answer.
+ *
+ * A STORED body is scrubbed on the way out (A2 review F7): this string rides verbatim into agent
+ * prompts (the `load_context` seam), and a user-authored doc can carry a pasted credential.
+ * `scrubSecretText` is the deterministic read-path floor; the strict publish-time scrub into a
+ * frozen snapshot is slice E2's. The BASELINE body is repo-authored and reviewed — served as-is.
  */
 export async function resolveSkillMd(
   actor: Actor,
@@ -185,7 +193,7 @@ export async function resolveSkillMd(
   store: DefinitionStoreReader = integrationDefinitionStore,
 ): Promise<string | null> {
   const doc = await store.getForActor(actor, key);
-  if (doc) return doc.skillMd ?? null;
+  if (doc) return doc.skillMd == null ? null : scrubSecretText(doc.skillMd);
   return baselineSkillMd(key);
 }
 

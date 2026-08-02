@@ -78,14 +78,15 @@ async function mkUser(id: string, orgId: string, role: 'super-admin' | 'org-admi
   setActivation(id, { active: true, billingLocked: false });
 }
 
-/** Seed org A's definition, authored by `ownerA`, at the given tier. */
+/** Seed org A's definition, authored by `ownerA`, at the given tier. The seeding actor is the
+ *  author (a `global` seed needs the super-admin bar the store enforces on create too — A3). */
 async function seedDefinition(visibility: DefinitionVisibility): Promise<string> {
   const doc = await integrationDefinitionStore.create(
     {
       orgId: 'orgA', userId: 'ownerA', visibility, key: KEY,
-      displayName: 'E1 Sharing Probe', configSchema: [], actions: [], skillMd: '# probe', declaredOrigins: [],
+      displayName: 'E1 Sharing Probe', configSchema: [], actions: [], skillMd: '# probe',
     },
-    { onConflict: 'replace' },
+    { actor: { userId: 'ownerA', orgId: 'orgA', role: visibility === 'global' ? 'super-admin' : 'user' }, onConflict: 'replace' },
   );
   return doc._id;
 }
@@ -329,9 +330,9 @@ describe('E1 review — un-publish lands on org, publish launches from org, own 
     const ownId = (await integrationDefinitionStore.create(
       {
         orgId: 'orgA', userId: 'rootA', visibility: 'private', key: `${KEY}-root`,
-        displayName: 'root-authored', configSchema: [], actions: [], skillMd: '# r', declaredOrigins: [],
+        displayName: 'root-authored', configSchema: [], actions: [], skillMd: '# r',
       },
-      { onConflict: 'replace' },
+      { actor: { userId: 'rootA', orgId: 'orgA', role: 'super-admin' }, onConflict: 'replace' },
     ))._id;
     await expectEnvelope(await setGlobal(rootA, ownId, true), 403, 'FORBIDDEN');
     expect(await storedVisibility(ownId)).toBe('private');

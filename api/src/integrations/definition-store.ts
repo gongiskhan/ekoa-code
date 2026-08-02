@@ -55,6 +55,11 @@ export interface IntegrationDefinitionOrigin {
   /** The org that owned the source (recorded for a cross-org fork). */
   sourceOrgId?: string;
   forkedAt?: string;
+  /** `legacy-runtime` rows only (A3): content hash of the imported disk package at import time —
+   *  the Rule-10 comparator's baseline. A later boot whose disk hash differs reports DRIFT and
+   *  never overwrites the row (Mongo wins; it may have been edited/republished). */
+  importHash?: string;
+  importedAt?: string;
 }
 
 /** A scrubbed, publishable snapshot of a definition (credential VALUES already removed upstream). */
@@ -106,11 +111,15 @@ export interface IntegrationDefinitionFields {
   sessionConnect?: IntegrationSessionConnectConfig;
   webhookConfig?: IntegrationWebhookConfig;
   listenerConfig?: IntegrationListenerConfig;
-  /** Origins the definition may talk to (egress allow-list carried from the package). */
-  declaredOrigins: string[];
   origin?: IntegrationDefinitionOrigin;
   publishedSnapshot?: IntegrationDefinitionPublishedSnapshot;
 }
+// NOTE (A3, A2-residual 6): the A1 doc carried a `declaredOrigins: string[]` field that NOTHING
+// ever read — the one egress truth is the definition's action `httpConfig.baseUrl`s, derived at
+// use by the ONE origin-resolver seam (server.ts setIntegrationOriginResolver). A stored
+// allow-list nothing enforces is a lie waiting to be trusted, so the field is REMOVED rather than
+// wired up; slice B2 re-points the resolver at Cofre per-item `boundOrigins` (docs/decisions.md
+// 2026-08-02). Existing rows carrying the property are harmless (untyped extra data, never read).
 
 /**
  * A stored integration definition: the domain fields plus the store envelope (`_id`, `_rev`) and
@@ -219,23 +228,44 @@ export class IntegrationDefinitionStore {
   /**
    * Create a definition. Enforces one row per (orgId, key) via the deterministic `_id` insert:
    *   - `onConflict: 'reject'` (default) → throws `IntegrationDefinitionStoreError('DUPLICATE')`;
-   *   - `onConflict: 'replace'`          → overwrites the existing row, preserving its `createdAt`.
+   *   - `onConflict: 'replace'`          → overwrites the existing row, preserving its `createdAt`
+   *     — gated on `canWriteDefinition` against the EXISTING row, and the row's `visibility` must
+   *     be carried through unchanged (`setVisibility` is the one visibility chokepoint).
+   *
+   * THE ACTOR IS MANDATORY (A3, A2-residual 5). The old optional-actor escape hatch meant every
+   * gate below was one forgotten argument away from off: an actor-less create could mint a
+   * `global` row, or a row in any org. Now every write names who is writing, and a non-super-admin
+   * may only create inside their OWN org — role `user` only as THEMSELVES, an `org-admin` may
+   * also preserve a same-org peer's authorship on a replace (mirroring `canWriteDefinition`).
+   * Platform-level migration (the boot legacy import) carries an explicit super-admin actor and
+   * is journaled, not an ambient bypass.
    */
   async create(
     input: IntegrationDefinitionCreate,
-    opts: { onConflict?: 'reject' | 'replace'; actor?: Actor } = {},
+    opts: { actor: Actor; onConflict?: 'reject' | 'replace' },
   ): Promise<IntegrationDefinitionDoc> {
+    const { actor } = opts;
     // THE GLOBAL TIER IS SUPER-ADMIN ONLY — on CREATE as well as on setVisibility (A2 review F2).
     // Gating only the transition left the front door open: `create({visibility:'global'})` published
     // to every org in one step, and A2 made that load-bearing (a global row is the resolution for
-    // every org without its own, and the source of their credential-egress origins). `actor` is
-    // optional so internal seeding/migration can mint a reviewed global deliberately, but ANY caller
-    // that passes an actor is held to the same super-admin bar as the toggle.
-    if (input.visibility === 'global' && opts.actor && opts.actor.role !== 'super-admin') {
+    // every org without its own, and the source of their credential-egress origins).
+    if (input.visibility === 'global' && actor.role !== 'super-admin') {
       throw new IntegrationDefinitionStoreError(
         'FORBIDDEN',
         'only a super-admin may create a globally-visible integration definition',
       );
+    }
+    // ACTOR/ROW CONGRUENCE. A non-super-admin writes only inside their own org, and a plain user
+    // only as themselves — the seam refuses a forged owner instead of trusting every caller to
+    // stamp the row from the verified JWT (the route rule "never read orgId from a body", enforced
+    // one layer down).
+    if (actor.role !== 'super-admin') {
+      if (input.orgId !== actor.orgId) {
+        throw new IntegrationDefinitionStoreError('FORBIDDEN', 'a definition may only be created in the acting user\'s own organisation');
+      }
+      if (actor.role !== 'org-admin' && input.userId !== actor.userId) {
+        throw new IntegrationDefinitionStoreError('FORBIDDEN', 'a definition may only be authored as the acting user');
+      }
     }
     // An author identity is required and may never be the empty string: `isDefinitionVisibleTo`
     // treats a non-empty match as "own row", and org-scoped system actors carry `userId: ''`.
@@ -260,7 +290,20 @@ export class IntegrationDefinitionStore {
         `an integration definition for key '${input.key}' already exists in this org`,
       );
     }
-    const existing = await this.store.get(_id);
+    const existing = (await this.store.get(_id)) as IntegrationDefinitionDoc | null;
+    // REPLACE IS A WRITE ON THE EXISTING ROW and is gated as one: without this, a same-org user
+    // whose insert collided with a peer's PRIVATE row would silently overwrite it.
+    if (existing && !canWriteDefinition(existing, actor)) {
+      throw new IntegrationDefinitionStoreError('FORBIDDEN', 'not allowed to overwrite the existing definition for this key');
+    }
+    // A replace that CHANGES the tier is a visibility transition and is judged by THE SAME rule
+    // as `setVisibility` (`visibilityWriteVerdict` — one rule, two doors): an owner may move
+    // between private/org, but nothing can smuggle a row into or out of the super-admin-gated
+    // `global` tier through the replace door.
+    if (existing && existing.visibility !== input.visibility
+      && this.visibilityWriteVerdict(existing, actor, input.visibility)) {
+      throw new IntegrationDefinitionStoreError('FORBIDDEN', 'this visibility transition is not allowed for the acting user');
+    }
     return this.store.put({
       ...doc,
       createdAt: existing?.createdAt ?? doc.createdAt,

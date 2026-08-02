@@ -2,7 +2,8 @@
  * Integration-builder router (ch03 §3.8.14). The four-endpoint contract:
  *   POST /api/v1/integration-builder/chat     — one builder chat turn (agents/integration-builder)
  *   GET  /api/v1/integration-builder/package  — load the user's session for an integration key
- *   PUT  /api/v1/integration-builder/package  — save the generated package to the runtime tier
+ *   PUT  /api/v1/integration-builder/package  — save the generated package (tenant-scoped Mongo
+ *                                               definition, private-by-default — slice A3)
  *   POST /api/v1/integration-builder/test     — execute one action against the supplied credentials
  *
  * All four are `auth: 'user'` (any authenticated user; no role gate). Non-2xx bodies are the shared
@@ -31,7 +32,7 @@ import {
 import { validateConfig } from '../agents/integration-builder-parser.js';
 import {
   reservedIntegrationKeys,
-  writeRuntimePackage,
+  saveAuthoredDefinition,
   resolveDefinition,
   resolveSkillMd,
   createConfig,
@@ -171,12 +172,15 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
       // No live session: rebuild an editable one from the saved package, when the key exists.
       // A2: resolved TENANT-SCOPED, so the builder loads the actor's OWN definition when they have
       // one and the shipped baseline otherwise — never another tenant's package of the same key.
-      // The SAVE path below still writes the disk runtime tier; A3 moves it to the store.
+      // A3: `loadedKey` is pinned ONLY for a STORED (tenant) definition. Loading a shipped
+      // BASELINE package still opens an editable session, but the reserved key stays reserved —
+      // the old exemption let that session re-save (clobber) the shipped key; now the parser flags
+      // the collision and the user forks under a distinct key (A2-residual 4).
       const def = await resolveDefinition(actor, integrationKey);
       if (!def) return notFound(res);
       session = await createSession(actor, deps, {
         integrationKey,
-        loadedKey: integrationKey,
+        ...(def.userCreated ? { loadedKey: integrationKey } : {}),
         currentPackage: definitionToConfig(def),
         currentSkillMd: (await resolveSkillMd(actor, integrationKey)) ?? '',
       });
@@ -203,14 +207,21 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
       return sendError(res, 'VALIDATION_FAILED', 'Nenhum pacote para guardar.');
     }
 
-    const errors = validateConfig(config, {
-      reservedKeys: reservedIntegrationKeys(),
-      ...(session?.loadedKey ? { loadedKey: session.loadedKey } : {}),
-    });
+    // A3: NO loadedKey exemption on save — a reserved (shipped) key is refused even for a session
+    // that loaded it, so a builder save can never shadow a baseline package (A2-residual 4).
+    const errors = validateConfig(config, { reservedKeys: reservedIntegrationKeys() });
     if (errors.length > 0) return sendError(res, 'VALIDATION_FAILED', 'Pacote inválido.', { errors });
 
+    // A3: the save lands in the tenant-scoped Mongo store, PRIVATE BY DEFAULT, stamped from the
+    // verified actor (the retired disk runtime tier was one world-readable directory). Sharing is
+    // the explicit E1 surface, never a save side effect.
     const key = config.integrationKey;
-    writeRuntimePackage(key, config as unknown as Record<string, unknown>, skillMd);
+    const saved = await saveAuthoredDefinition(actor, config, skillMd);
+    if (!saved.ok) {
+      return saved.code === 'key_taken' || saved.code === 'published_row'
+        ? sendError(res, 'FORBIDDEN', saved.message)
+        : sendError(res, 'VALIDATION_FAILED', 'Pacote inválido.', { errors: [saved.message] });
+    }
 
     // Auto-configure the org integration when the save carries credentials, so it lands `configured`.
     const creds = (body.testCredentials ?? body.configValues) as Record<string, unknown> | undefined;
