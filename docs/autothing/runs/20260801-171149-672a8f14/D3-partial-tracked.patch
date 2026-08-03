@@ -1,0 +1,399 @@
+diff --git a/api/src/integrations/definitions.ts b/api/src/integrations/definitions.ts
+index 2d3babb..fce5817 100644
+--- a/api/src/integrations/definitions.ts
++++ b/api/src/integrations/definitions.ts
+@@ -79,6 +79,59 @@ export interface IntegrationActionAutomationBinding {
+  */
+ export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps';
+ 
++/** One deterministic guardrail an authored action was judged against (see `authored-action.ts`). */
++export interface IntegrationActionAuthoringCheck {
++  name: string;
++  ok: boolean;
++  /** Why it failed. Never carries a credential value: the checks are about SHAPE, not content. */
++  detail?: string;
++}
++
++/** The verdict of the whole guardrail suite, frozen onto the action at authoring time. */
++export interface IntegrationActionAuthoringVerification {
++  verifiedAt: string;
++  passed: boolean;
++  checks: IntegrationActionAuthoringCheck[];
++}
++
++/**
++ * PROVENANCE OF A PLATFORM-AUTHORED ACTION (slice D3 — `achieve`).
++ *
++ * An action carrying this record was written by the platform (`integration-achieve.ts`), not by a
++ * human at design time. That distinction is load-bearing rather than decorative:
++ *
++ *   - `state: 'provisional'` — the action is persisted with `mutates: true` WHATEVER the draft
++ *     declared, so it meets C2's write gate on EVERY rail (capability route, automation step,
++ *     listener tick, agent tool) before it can run once. `achieve` additionally never
++ *     auto-executes a provisional action, so the platform can never author-and-run in one call.
++ *   - `state: 'trusted'` — a human who may WRITE the definition promoted it (`POST
++ *     …/actions/:actionName/trust`, `auth: 'user'`), echoing the shape they were shown. Promotion
++ *     is what lets `declaredMutates` take effect, so a trusted READ auto-runs again (criterion 6).
++ *
++ * `shape` is the `actionShape` fingerprint of the executable content that was verified. It is the
++ * record's INTEGRITY tie: `isTrustedAction` demotes a `trusted` record whose shape no longer
++ * matches the action's current bytes, so re-authoring an action drops it back to provisional
++ * without anybody remembering to reset a flag.
++ *
++ * An action with NO record is trusted by construction: shipped packages and human builder saves
++ * behave exactly as they did before this slice (Rule 7, additive).
++ */
++export interface IntegrationActionAuthoring {
++  state: 'provisional' | 'trusted';
++  /** The user whose `achieve` call produced it (server-stamped from the verified actor). */
++  authoredBy: string;
++  authoredAt: string;
++  /** The goal it was authored to satisfy — scrubbed free text, capped. Provenance, never input. */
++  goal: string;
++  /** What the draft claimed about mutation. Only a promotion lets this take effect. */
++  declaredMutates: boolean;
++  /** `actionShape(integrationKey, action)` at authoring time — the integrity tie (see above). */
++  shape: string;
++  verification: IntegrationActionAuthoringVerification;
++  trustedBy?: string;
++  trustedAt?: string;
++}
++
+ export interface IntegrationAction {
+   actionName: string;
+   description: string;
+@@ -106,6 +159,13 @@ export interface IntegrationAction {
+    * returning a fabricated empty result (2A-S4).
+    */
+   transport?: string;
++  /**
++   * Present ONLY on an action the platform authored (slice D3). ABSENT ⇒ the action was written by
++   * a human — a shipped package, a builder save, a legacy import — and is trusted by construction,
++   * so every existing package behaves exactly as before (Rule 7, additive). See
++   * `IntegrationActionAuthoring` and `integrations/authored-action.ts`.
++   */
++  authoring?: IntegrationActionAuthoring;
+ }
+ 
+ /**
+diff --git a/api/src/integrations/integration-capability.ts b/api/src/integrations/integration-capability.ts
+index 2bf45d2..0faf1f1 100644
+--- a/api/src/integrations/integration-capability.ts
++++ b/api/src/integrations/integration-capability.ts
+@@ -36,6 +36,26 @@
+  * tenant's package and then run it under whatever credential the empty user pair finds. A broken
+  * principal is not a tenant.
+  *
++ * ================================ WHOSE DEFINITION THIS IS (slice D3) =======================
++ * THE CATALOG AND THE EXECUTE RESOLVE THE SAME PACKAGE, AS THE SAME PRINCIPAL. They did not.
++ *
++ * The 2026-08-03 credential fix made EXECUTION resolve a definition as the credential's CUSTODIAN
++ * (`definitionActorForCredential`), because for an ORG-SHARED config the reader is not the person
++ * whose ceremony produced the bundle — and resolving as the reader let any org member author the
++ * contract their admin's secret is spent under. That fix landed on both executor rails and was
++ * routed to this file as a COHERENCE residual: `getIntegrationCapability` still resolved as
++ * `ctx.actor`, so a peer's catalog could list the actions of their OWN private package while the
++ * very next execute ran the custodian's. Security held (the executor is the gate), but the read
++ * and the write disagreed about what the integration IS, which is how a client is told one thing
++ * and handed another — and it is how the next reader of this file concludes the reader-resolution
++ * is the correct one.
++ *
++ * `resolveCapabilityDefinition` is now the ONE resolution both this module and
++ * `integration-achieve.ts` use, and it mirrors the executor's order exactly: read the config row
++ * first, derive the custodian from it, resolve the definition as THAT principal. Nothing is
++ * re-derived here — `definitionActorForCredential` is imported, not copied — and an incoherent
++ * (actor, config) pair fails closed rather than resolving as somebody.
++ *
+  * ================================ WHAT THE PROJECTION MAY REVEAL ============================
+  * The definition itself is projected by `definitionFromDoc` (A2), unchanged and NOT re-derived
+  * here: it drops the storage envelope, exposes `id`/`visibility` only for a row of the caller's OWN
+@@ -57,12 +77,14 @@ import { resolveDefinition } from './definition-registry.js';
+ // imported: it belongs to the executor, and importing it here would put a second copy of the
+ // decision one keystroke away from the rail that must inherit it.
+ import { actionRequiresConsent, describeAction, liveApprovalFor } from './action-consent.js';
++import { authoringStateOf } from './authored-action.js';
++import { definitionActorForCredential } from './credential-cofre.js';
+ import {
+   executeUserIntegrationAction,
+   type ExecuteIntegrationActionResult,
+   type ExecutorDeps,
+ } from './action-executor.js';
+-import { findConfigForOwner } from './service.js';
++import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
+ 
+ /** The per-action capability row (shared/src/integrations.ts `IntegrationCapabilityAction`). */
+ export interface CapabilityActionView {
+@@ -74,6 +96,16 @@ export interface CapabilityActionView {
+   shape: string;
+   requiresApproval: boolean;
+   approved: boolean;
++  /**
++   * Who wrote this action (slice D3). `none` — a human did (a shipped package, a builder save);
++   * `provisional` — the platform authored it via `achieve` and no person has confirmed it, so it
++   * is stored as a write and `achieve` will not run it; `trusted` — a person promoted it.
++   *
++   * Derived, never stored twice: `authoringStateOf` demotes a `trusted` record whose fingerprint
++   * no longer matches the action's bytes, so a re-authored action reads as provisional here for
++   * exactly the same reason the executor's gate re-prompts for it.
++   */
++  authoringState: 'none' | 'provisional' | 'trusted';
+ }
+ 
+ /** The capability view of one integration (shared/src/integrations.ts `IntegrationCapability`). */
+@@ -137,6 +169,44 @@ function backingOf(action: IntegrationAction): string {
+   }
+ }
+ 
++/** What one capability-scoped resolution produced: the definition, the config row it was resolved
++ *  THROUGH, and the principal it was resolved AS. All three are what `achieve` needs too. */
++export interface ResolvedCapabilityDefinition {
++  definition: IntegrationDefinition;
++  config: IntegrationConfigDoc | null;
++  /** The credential's CUSTODIAN — see the module header. Equals the actor when there is no
++   *  org-shared credential in play, which is the ordinary case. */
++  definitionActor: Actor;
++}
++
++/**
++ * THE ONE CAPABILITY-SIDE RESOLUTION, in the executor's own order (D3, closing the coherence
++ * residual the credential fix routed here).
++ *
++ *   1. fail closed on a principal that names no tenant;
++ *   2. read the CONFIG ROW — the same owner-scoped lookup `executeUserIntegrationAction` performs,
++ *      so `connected` cannot drift from the executor's `not_connected`/`disabled` either;
++ *   3. derive the custodian with `definitionActorForCredential` (imported, never re-derived);
++ *   4. resolve the definition AS THAT PRINCIPAL through A2's tenant-scoped registry.
++ *
++ * An incoherent (actor, config) pair — the executor's `credential_invalid` case — answers
++ * `not_found` here rather than resolving as somebody: "we could not determine whose package this
++ * is" must never collapse into "resolve an arbitrary one". A key the actor cannot see resolves to
++ * null exactly as a key that does not exist does; one verdict for both, on purpose.
++ */
++export async function resolveCapabilityDefinition(
++  actor: Actor,
++  integrationKey: string,
++): Promise<CapabilityOutcome<ResolvedCapabilityDefinition>> {
++  if (!hasTenant(actor)) return { ok: false, refusal: 'no_tenant' };
++  const config = await findConfigForOwner(actor.orgId, actor.userId, integrationKey);
++  const definitionActor = definitionActorForCredential(actor, config);
++  if (!definitionActor) return { ok: false, refusal: 'not_found' };
++  const definition = await resolveDefinition(definitionActor, integrationKey);
++  if (!definition) return { ok: false, refusal: 'not_found' };
++  return { ok: true, value: { definition, config, definitionActor } };
++}
++
+ /**
+  * Project ONE integration onto its capability view.
+  *
+@@ -148,15 +218,9 @@ export async function getIntegrationCapability(
+   ctx: CapabilityContext,
+   integrationKey: string,
+ ): Promise<CapabilityOutcome<CapabilityView>> {
+-  if (!hasTenant(ctx.actor)) return { ok: false, refusal: 'no_tenant' };
+-
+-  // A2's tenant-scoped registry, under the verified actor. A key the actor cannot see resolves to
+-  // null exactly as a key that does not exist does.
+-  const def = await resolveDefinition(ctx.actor, integrationKey);
+-  if (!def) return { ok: false, refusal: 'not_found' };
+-
+-  // The SAME owner-scoped lookup the executor performs, so `connected` cannot drift from it.
+-  const config = await findConfigForOwner(ctx.actor.orgId, ctx.actor.userId, integrationKey);
++  const resolved = await resolveCapabilityDefinition(ctx.actor, integrationKey);
++  if (!resolved.ok) return resolved;
++  const { definition: def, config } = resolved.value;
+   const connected = config ? config.enabled !== false : def.authType === 'none';
+ 
+   const actions: CapabilityActionView[] = [];
+@@ -182,6 +246,7 @@ export async function getIntegrationCapability(
+       shape: descriptor.shape,
+       requiresApproval,
+       approved: live !== null,
++      authoringState: authoringStateOf(integrationKey, action),
+     });
+   }
+ 
+diff --git a/shared/src/integrations.ts b/shared/src/integrations.ts
+index 27dab62..b0e4e27 100644
+--- a/shared/src/integrations.ts
++++ b/shared/src/integrations.ts
+@@ -336,6 +336,21 @@ export const IntegrationCapabilityAction = z.object({
+   requiresApproval: z.boolean(),
+   /** Advisory (see above): a live approval of the caller's covers this exact shape right now. */
+   approved: z.boolean(),
++  /**
++   * WHO WROTE THIS ACTION (slice D3), because a caller deciding whether to invoke something should
++   * know whether a person ever looked at it.
++   *
++   *   `none`        — a human did: a shipped package, a builder save, a legacy import. Behaves
++   *                   exactly as it always has (Rule 7).
++   *   `provisional` — the platform authored it through `achieve` and nobody has confirmed it. It
++   *                   is stored as a WRITE whatever it claimed, so `requiresApproval` is true for
++   *                   it even if it only reads, and `achieve` refuses to run it.
++   *   `trusted`     — a person who may write the definition promoted it (`POST …/trust`).
++   *
++   * Additive and optional so every existing client keeps parsing (Rule 7); a client that does not
++   * read it is not misled by it, because the gate is `requiresApproval` either way.
++   */
++  authoringState: z.enum(['none', 'provisional', 'trusted']).optional(),
+ });
+ export type IntegrationCapabilityAction = z.infer<typeof IntegrationCapabilityAction>;
+ 
+@@ -414,6 +429,103 @@ export const IntegrationActionConsentRequest = z.object({
+ });
+ export type IntegrationActionConsentRequest = z.infer<typeof IntegrationActionConsentRequest>;
+ 
++/* --- `achieve`: EXECUTE-OR-AUTHOR (slice D3) -------------------------------------------------- */
++
++/**
++ * A goal, in the caller's own words, scoped to ONE integration.
++ *
++ * WHY THE SCOPE IS AN INTEGRATION AND NOT THE WHOLE CATALOG: everything that makes this capability
++ * safe is a property of one integration — whose credential is spent, which hosts that credential is
++ * bound to, whose definition governs it, which tenant's copy an authored action lands in. A
++ * catalog-wide `achieve` would have to pick the integration BEFORE any of those questions has an
++ * answer, and the picking would be the least constrained part of the call.
++ *
++ * `args` are the arguments for the action that ends up running. They are passed through to the
++ * executor unchanged and, like every other capability request, name no org, user or owner.
++ */
++export const AchieveIntegrationGoalRequest = z.object({
++  goal: z.string().min(1).max(2000),
++  args: z.record(z.unknown()).optional(),
++});
++export type AchieveIntegrationGoalRequest = z.infer<typeof AchieveIntegrationGoalRequest>;
++
++/** One deterministic guardrail an authored action was judged against. `detail` describes the SHAPE
++ *  problem (a host, a template variable, a name), never any content of the caller's credentials. */
++export const AuthoredActionCheck = z.object({
++  name: z.string(),
++  ok: z.boolean(),
++  detail: z.string().optional(),
++});
++export type AuthoredActionCheck = z.infer<typeof AuthoredActionCheck>;
++
++/**
++ * The frozen verdict of the whole guardrail suite. Returned because a caller being handed a NEW
++ * action deserves to see what was actually checked before it was stored — and because "which
++ * checks did this pass, and when" is a property of the artifact, not of the request.
++ */
++export const AuthoredActionVerification = z.object({
++  verifiedAt: IsoTimestamp,
++  passed: z.boolean(),
++  checks: z.array(AuthoredActionCheck),
++});
++export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerification>;
++
++/**
++ * What `achieve` did. THREE outcomes, and the split matters to a client's control flow:
++ *
++ *   `executed` — an existing TRUSTED action satisfied the goal and was run through the same gated
++ *                executor every other rail uses. `result` is the ordinary execute body, including a
++ *                failed one (a remote 500 is an answer about the remote system).
++ *   `authored` — nothing satisfied it, so one action was written, VERIFIED and persisted as
++ *                PROVISIONAL. It has NOT run and cannot run yet: `requiresApproval` is always true
++ *                for it, and a person must promote it (`POST …/trust`) before `achieve` will pick
++ *                it. `forked` says the action landed in a fresh COPY of a globally-published
++ *                integration, in the caller's own tenant.
++ *   `refused`   — the call was addressed and admitted and then declined, with a machine-readable
++ *                `code`. Distinct from a 404 (not addressable) and from a 403 write-gate refusal
++ *                (which is the same `awaiting_consent` envelope the execute endpoint returns, so a
++ *                client handles the gate in ONE place rather than two).
++ */
++export const AchieveIntegrationGoalResponse = z.object({
++  outcome: z.enum(['executed', 'authored', 'refused']),
++  /** The action that ran, or the action that was written. Absent on a refusal. */
++  actionName: z.string().optional(),
++  /** `executed` only — the same body `POST …/execute` returns. */
++  result: ExecuteIntegrationActionResponse.optional(),
++  /** `authored` only. Always `provisional`: this endpoint cannot mint a trusted action. */
++  state: z.literal('provisional').optional(),
++  forked: z.boolean().optional(),
++  verification: AuthoredActionVerification.optional(),
++  requiresApproval: z.literal(true).optional(),
++  /** `refused` only — the machine-readable reason and its human-readable statement. */
++  code: z.string().optional(),
++  message: z.string().optional(),
++  /** `verification_failed` — the guardrails that were not met, in words a caller can act on. */
++  violations: z.array(z.string()).optional(),
++  /** `ambiguous_goal` / `provisional_match` — the actions the goal could have meant. */
++  candidates: z.array(z.string()).optional(),
++});
++export type AchieveIntegrationGoalResponse = z.infer<typeof AchieveIntegrationGoalResponse>;
++
++/**
++ * `shape` is REQUIRED for the same reason `ApproveIntegrationActionRequest` requires it: the human
++ * confirms the action they were SHOWN. If it was re-authored between the render and the click, the
++ * answer is about a different action and the promotion is refused.
++ */
++export const TrustAuthoredActionRequest = z.object({ shape: z.string() });
++export type TrustAuthoredActionRequest = z.infer<typeof TrustAuthoredActionRequest>;
++
++export const TrustAuthoredActionResponse = z.object({
++  ok: z.literal(true),
++  actionName: z.string(),
++  state: z.literal('trusted'),
++  /** The action's `mutates` NOW — the value the draft declared, which promotion is what enables.
++   *  A `true` here means the action still meets the write gate on every run; a `false` means it is
++   *  a read and will auto-run, which is precisely what the person just took responsibility for. */
++  mutates: z.boolean(),
++});
++export type TrustAuthoredActionResponse = z.infer<typeof TrustAuthoredActionResponse>;
++
+ export const integrationsEndpoints = {
+   /**
+    * The definition list — the CAPABILITY DISCOVERY endpoint since D1.
+@@ -626,4 +738,54 @@ export const integrationsEndpoints = {
+     /** An action may legitimately call a slow remote; the executor's own ceiling is 30s. */
+     timeoutMs: 60_000,
+   },
++
++  /* --- `achieve` (slice D3) ------------------------------------------------------------------ */
++
++  /**
++   * EXECUTE-OR-AUTHOR: state a goal. If an action already satisfies it, it runs; if none does, one
++   * is authored, verified and persisted as PROVISIONAL.
++   *
++   * `auth: 'user-or-key'` — this is the capability an outside agent actually wants, and every call
++   * still identifies a user (Rule 4). Everything that could be dangerous about handing an agent a
++   * code-writing endpoint is closed on the SERVER side rather than by withholding the endpoint:
++   *
++   *   - THE WRITE GATE IS INHERITED. The execute arm goes through `executeUserIntegrationAction`,
++   *     so an unapproved `mutates` action answers the SAME 403 + `awaiting_consent` envelope as
++   *     `executeAction` above, with nothing sent and no credential read.
++   *   - AN AUTHORED ACTION IS STORED AS A WRITE whatever it claimed about itself, so it meets that
++   *     gate on every rail, and `achieve` refuses to run a provisional action at all. The platform
++   *     cannot author an action and then run it.
++   *   - AND THE KEY CANNOT PROMOTE IT: `trustAction` below is `auth: 'user'`. An agent refused at
++   *     the gate cannot hand itself the state that un-gates it — the same rule as `approveAction`.
++   *
++   * The timeout matches `executeAction`'s and covers the drafting turn as well, since either arm
++   * may be the one that runs.
++   */
++  achieve: {
++    method: 'POST',
++    path: '/api/v1/integrations/:key/achieve',
++    auth: 'user-or-key',
++    params: IntegrationKeyParams,
++    request: AchieveIntegrationGoalRequest,
++    response: AchieveIntegrationGoalResponse,
++    timeoutMs: 60_000,
++  },
++
++  /**
++   * PROMOTE an authored action from provisional to trusted — the human half of `achieve`.
++   *
++   * `auth: 'user'` and emphatically NOT `user-or-key`, for exactly the reason C2 gave for the three
++   * consent descriptors and C3 gave for lessons: `achieve` is key-reachable, so if this were too, a
++   * key-bearing agent could author an action and then bless its own work in the next request. A
++   * gate that grants its own exemption is not a gate. Widening an auth class later is additive
++   * under Rule 7; narrowing one is not, so narrow is the reversible direction.
++   */
++  trustAction: {
++    method: 'POST',
++    path: '/api/v1/integrations/:key/actions/:actionName/trust',
++    auth: 'user',
++    params: IntegrationActionParams,
++    request: TrustAuthoredActionRequest,
++    response: TrustAuthoredActionResponse,
++  },
+ } as const satisfies DomainDescriptorMap;
