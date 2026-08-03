@@ -336,6 +336,21 @@ export const IntegrationCapabilityAction = z.object({
   requiresApproval: z.boolean(),
   /** Advisory (see above): a live approval of the caller's covers this exact shape right now. */
   approved: z.boolean(),
+  /**
+   * WHO WROTE THIS ACTION (slice D3), because a caller deciding whether to invoke something should
+   * know whether a person ever looked at it.
+   *
+   *   `none`        — a human did: a shipped package, a builder save, a legacy import. Behaves
+   *                   exactly as it always has (Rule 7).
+   *   `provisional` — the platform authored it through `achieve` and nobody has confirmed it. It
+   *                   is stored as a WRITE whatever it claimed, so `requiresApproval` is true for
+   *                   it even if it only reads, and `achieve` refuses to run it.
+   *   `trusted`     — a person who may write the definition promoted it (`POST …/trust`).
+   *
+   * Additive and optional so every existing client keeps parsing (Rule 7); a client that does not
+   * read it is not misled by it, because the gate is `requiresApproval` either way.
+   */
+  authoringState: z.enum(['none', 'provisional', 'trusted']).optional(),
 });
 export type IntegrationCapabilityAction = z.infer<typeof IntegrationCapabilityAction>;
 
@@ -413,6 +428,103 @@ export const IntegrationActionConsentRequest = z.object({
   shape: z.string(),
 });
 export type IntegrationActionConsentRequest = z.infer<typeof IntegrationActionConsentRequest>;
+
+/* --- `achieve`: EXECUTE-OR-AUTHOR (slice D3) -------------------------------------------------- */
+
+/**
+ * A goal, in the caller's own words, scoped to ONE integration.
+ *
+ * WHY THE SCOPE IS AN INTEGRATION AND NOT THE WHOLE CATALOG: everything that makes this capability
+ * safe is a property of one integration — whose credential is spent, which hosts that credential is
+ * bound to, whose definition governs it, which tenant's copy an authored action lands in. A
+ * catalog-wide `achieve` would have to pick the integration BEFORE any of those questions has an
+ * answer, and the picking would be the least constrained part of the call.
+ *
+ * `args` are the arguments for the action that ends up running. They are passed through to the
+ * executor unchanged and, like every other capability request, name no org, user or owner.
+ */
+export const AchieveIntegrationGoalRequest = z.object({
+  goal: z.string().min(1).max(2000),
+  args: z.record(z.unknown()).optional(),
+});
+export type AchieveIntegrationGoalRequest = z.infer<typeof AchieveIntegrationGoalRequest>;
+
+/** One deterministic guardrail an authored action was judged against. `detail` describes the SHAPE
+ *  problem (a host, a template variable, a name), never any content of the caller's credentials. */
+export const AuthoredActionCheck = z.object({
+  name: z.string(),
+  ok: z.boolean(),
+  detail: z.string().optional(),
+});
+export type AuthoredActionCheck = z.infer<typeof AuthoredActionCheck>;
+
+/**
+ * The frozen verdict of the whole guardrail suite. Returned because a caller being handed a NEW
+ * action deserves to see what was actually checked before it was stored — and because "which
+ * checks did this pass, and when" is a property of the artifact, not of the request.
+ */
+export const AuthoredActionVerification = z.object({
+  verifiedAt: IsoTimestamp,
+  passed: z.boolean(),
+  checks: z.array(AuthoredActionCheck),
+});
+export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerification>;
+
+/**
+ * What `achieve` did. THREE outcomes, and the split matters to a client's control flow:
+ *
+ *   `executed` — an existing TRUSTED action satisfied the goal and was run through the same gated
+ *                executor every other rail uses. `result` is the ordinary execute body, including a
+ *                failed one (a remote 500 is an answer about the remote system).
+ *   `authored` — nothing satisfied it, so one action was written, VERIFIED and persisted as
+ *                PROVISIONAL. It has NOT run and cannot run yet: `requiresApproval` is always true
+ *                for it, and a person must promote it (`POST …/trust`) before `achieve` will pick
+ *                it. `forked` says the action landed in a fresh COPY of a globally-published
+ *                integration, in the caller's own tenant.
+ *   `refused`   — the call was addressed and admitted and then declined, with a machine-readable
+ *                `code`. Distinct from a 404 (not addressable) and from a 403 write-gate refusal
+ *                (which is the same `awaiting_consent` envelope the execute endpoint returns, so a
+ *                client handles the gate in ONE place rather than two).
+ */
+export const AchieveIntegrationGoalResponse = z.object({
+  outcome: z.enum(['executed', 'authored', 'refused']),
+  /** The action that ran, or the action that was written. Absent on a refusal. */
+  actionName: z.string().optional(),
+  /** `executed` only — the same body `POST …/execute` returns. */
+  result: ExecuteIntegrationActionResponse.optional(),
+  /** `authored` only. Always `provisional`: this endpoint cannot mint a trusted action. */
+  state: z.literal('provisional').optional(),
+  forked: z.boolean().optional(),
+  verification: AuthoredActionVerification.optional(),
+  requiresApproval: z.literal(true).optional(),
+  /** `refused` only — the machine-readable reason and its human-readable statement. */
+  code: z.string().optional(),
+  message: z.string().optional(),
+  /** `verification_failed` — the guardrails that were not met, in words a caller can act on. */
+  violations: z.array(z.string()).optional(),
+  /** `ambiguous_goal` / `provisional_match` — the actions the goal could have meant. */
+  candidates: z.array(z.string()).optional(),
+});
+export type AchieveIntegrationGoalResponse = z.infer<typeof AchieveIntegrationGoalResponse>;
+
+/**
+ * `shape` is REQUIRED for the same reason `ApproveIntegrationActionRequest` requires it: the human
+ * confirms the action they were SHOWN. If it was re-authored between the render and the click, the
+ * answer is about a different action and the promotion is refused.
+ */
+export const TrustAuthoredActionRequest = z.object({ shape: z.string() });
+export type TrustAuthoredActionRequest = z.infer<typeof TrustAuthoredActionRequest>;
+
+export const TrustAuthoredActionResponse = z.object({
+  ok: z.literal(true),
+  actionName: z.string(),
+  state: z.literal('trusted'),
+  /** The action's `mutates` NOW — the value the draft declared, which promotion is what enables.
+   *  A `true` here means the action still meets the write gate on every run; a `false` means it is
+   *  a read and will auto-run, which is precisely what the person just took responsibility for. */
+  mutates: z.boolean(),
+});
+export type TrustAuthoredActionResponse = z.infer<typeof TrustAuthoredActionResponse>;
 
 export const integrationsEndpoints = {
   /**
@@ -625,5 +737,55 @@ export const integrationsEndpoints = {
     response: ExecuteIntegrationActionResponse,
     /** An action may legitimately call a slow remote; the executor's own ceiling is 30s. */
     timeoutMs: 60_000,
+  },
+
+  /* --- `achieve` (slice D3) ------------------------------------------------------------------ */
+
+  /**
+   * EXECUTE-OR-AUTHOR: state a goal. If an action already satisfies it, it runs; if none does, one
+   * is authored, verified and persisted as PROVISIONAL.
+   *
+   * `auth: 'user-or-key'` — this is the capability an outside agent actually wants, and every call
+   * still identifies a user (Rule 4). Everything that could be dangerous about handing an agent a
+   * code-writing endpoint is closed on the SERVER side rather than by withholding the endpoint:
+   *
+   *   - THE WRITE GATE IS INHERITED. The execute arm goes through `executeUserIntegrationAction`,
+   *     so an unapproved `mutates` action answers the SAME 403 + `awaiting_consent` envelope as
+   *     `executeAction` above, with nothing sent and no credential read.
+   *   - AN AUTHORED ACTION IS STORED AS A WRITE whatever it claimed about itself, so it meets that
+   *     gate on every rail, and `achieve` refuses to run a provisional action at all. The platform
+   *     cannot author an action and then run it.
+   *   - AND THE KEY CANNOT PROMOTE IT: `trustAction` below is `auth: 'user'`. An agent refused at
+   *     the gate cannot hand itself the state that un-gates it — the same rule as `approveAction`.
+   *
+   * The timeout matches `executeAction`'s and covers the drafting turn as well, since either arm
+   * may be the one that runs.
+   */
+  achieve: {
+    method: 'POST',
+    path: '/api/v1/integrations/:key/achieve',
+    auth: 'user-or-key',
+    params: IntegrationKeyParams,
+    request: AchieveIntegrationGoalRequest,
+    response: AchieveIntegrationGoalResponse,
+    timeoutMs: 60_000,
+  },
+
+  /**
+   * PROMOTE an authored action from provisional to trusted — the human half of `achieve`.
+   *
+   * `auth: 'user'` and emphatically NOT `user-or-key`, for exactly the reason C2 gave for the three
+   * consent descriptors and C3 gave for lessons: `achieve` is key-reachable, so if this were too, a
+   * key-bearing agent could author an action and then bless its own work in the next request. A
+   * gate that grants its own exemption is not a gate. Widening an auth class later is additive
+   * under Rule 7; narrowing one is not, so narrow is the reversible direction.
+   */
+  trustAction: {
+    method: 'POST',
+    path: '/api/v1/integrations/:key/actions/:actionName/trust',
+    auth: 'user',
+    params: IntegrationActionParams,
+    request: TrustAuthoredActionRequest,
+    response: TrustAuthoredActionResponse,
   },
 } as const satisfies DomainDescriptorMap;

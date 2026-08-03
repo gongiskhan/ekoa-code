@@ -47,6 +47,7 @@ export const OPERATIONS = {
   'automations.resumeRun': { method: 'POST', path: '/api/v1/automations/runs/{id}/resume', domain: 'automations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
   'automations.revokeApprovedCommand': { method: 'POST', path: '/api/v1/automations/approved-commands/revoke', domain: 'automations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
   'automations.stepFeedback': { method: 'POST', path: '/api/v1/automations/runs/{id}/steps/{stepId}/feedback', domain: 'automations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'integrations.achieve': { method: 'POST', path: '/api/v1/integrations/{key}/achieve', domain: 'integrations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 60000 },
   'integrations.executeAction': { method: 'POST', path: '/api/v1/integrations/{key}/actions/{actionName}/execute', domain: 'integrations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 60000 },
   'integrations.getIntegration': { method: 'GET', path: '/api/v1/integrations/{key}', domain: 'integrations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
   'integrations.list': { method: 'GET', path: '/api/v1/integrations', domain: 'integrations', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },

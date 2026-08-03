@@ -79,6 +79,59 @@ export interface IntegrationActionAutomationBinding {
  */
 export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps';
 
+/** One deterministic guardrail an authored action was judged against (see `authored-action.ts`). */
+export interface IntegrationActionAuthoringCheck {
+  name: string;
+  ok: boolean;
+  /** Why it failed. Never carries a credential value: the checks are about SHAPE, not content. */
+  detail?: string;
+}
+
+/** The verdict of the whole guardrail suite, frozen onto the action at authoring time. */
+export interface IntegrationActionAuthoringVerification {
+  verifiedAt: string;
+  passed: boolean;
+  checks: IntegrationActionAuthoringCheck[];
+}
+
+/**
+ * PROVENANCE OF A PLATFORM-AUTHORED ACTION (slice D3 — `achieve`).
+ *
+ * An action carrying this record was written by the platform (`integration-achieve.ts`), not by a
+ * human at design time. That distinction is load-bearing rather than decorative:
+ *
+ *   - `state: 'provisional'` — the action is persisted with `mutates: true` WHATEVER the draft
+ *     declared, so it meets C2's write gate on EVERY rail (capability route, automation step,
+ *     listener tick, agent tool) before it can run once. `achieve` additionally never
+ *     auto-executes a provisional action, so the platform can never author-and-run in one call.
+ *   - `state: 'trusted'` — a human who may WRITE the definition promoted it (`POST
+ *     …/actions/:actionName/trust`, `auth: 'user'`), echoing the shape they were shown. Promotion
+ *     is what lets `declaredMutates` take effect, so a trusted READ auto-runs again (criterion 6).
+ *
+ * `shape` is the `actionShape` fingerprint of the executable content that was verified. It is the
+ * record's INTEGRITY tie: `isTrustedAction` demotes a `trusted` record whose shape no longer
+ * matches the action's current bytes, so re-authoring an action drops it back to provisional
+ * without anybody remembering to reset a flag.
+ *
+ * An action with NO record is trusted by construction: shipped packages and human builder saves
+ * behave exactly as they did before this slice (Rule 7, additive).
+ */
+export interface IntegrationActionAuthoring {
+  state: 'provisional' | 'trusted';
+  /** The user whose `achieve` call produced it (server-stamped from the verified actor). */
+  authoredBy: string;
+  authoredAt: string;
+  /** The goal it was authored to satisfy — scrubbed free text, capped. Provenance, never input. */
+  goal: string;
+  /** What the draft claimed about mutation. Only a promotion lets this take effect. */
+  declaredMutates: boolean;
+  /** `actionShape(integrationKey, action)` at authoring time — the integrity tie (see above). */
+  shape: string;
+  verification: IntegrationActionAuthoringVerification;
+  trustedBy?: string;
+  trustedAt?: string;
+}
+
 export interface IntegrationAction {
   actionName: string;
   description: string;
@@ -106,6 +159,13 @@ export interface IntegrationAction {
    * returning a fabricated empty result (2A-S4).
    */
   transport?: string;
+  /**
+   * Present ONLY on an action the platform authored (slice D3). ABSENT ⇒ the action was written by
+   * a human — a shipped package, a builder save, a legacy import — and is trusted by construction,
+   * so every existing package behaves exactly as before (Rule 7, additive). See
+   * `IntegrationActionAuthoring` and `integrations/authored-action.ts`.
+   */
+  authoring?: IntegrationActionAuthoring;
 }
 
 /**

@@ -227,6 +227,17 @@ const COVERED = new Set<string>([
   // lesson prose does). Two NEW descriptors, two COVERED entries: EXPECTED_PENDING_COUNT is
   // unchanged.
   'integrations.getLessons', 'integrations.setLessons',
+  // slice D3 - `achieve` (EXECUTE-OR-AUTHOR) and the human promotion behind it
+  // (integrations-achieve.test.ts: a real app + a real gateway key; the execute arm answering the
+  // SAME 403 `awaiting_consent` envelope the execute endpoint answers with ZERO upstream requests;
+  // the author arm returning `outcome: 'authored'` with its verification and NOTHING run; the
+  // authored action refusing to run on the direct rail afterwards; the KEY's failure to promote
+  // its own work at `POST .../trust` while a JWT succeeds; the shape-mismatch refusal; the uniform
+  // 404 for an integration the caller cannot see; and the admission walk over the router's own
+  // stack, which now declares `post /:key/achieve` as the third capability route and everything
+  // else as key-closed). Two NEW descriptors, two COVERED entries: the pinned
+  // EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.achieve', 'integrations.trustAction',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

@@ -452,7 +452,16 @@ describe('every execute leaves exactly one audit row, and it carries no payload'
 
 describe('admission boundary: every route of the integrations router, enumerated from the router itself', () => {
   /** The three routes D1 declares `user-or-key`. Everything else must refuse a gateway key. */
-  const CAPABILITY_ROUTES = new Set(['get /', 'get /:key', 'post /:key/actions/:actionName/execute']);
+  // D3 adds `post /:key/achieve` to the key-reachable set. The census is deliberately a HAND-KEPT
+  // list checked against the descriptors below in BOTH directions, so adding a capability route
+  // without declaring its class (or declaring one without mounting it) fails here rather than
+  // shipping a route nobody accounted for.
+  const CAPABILITY_ROUTES = new Set([
+    'get /',
+    'get /:key',
+    'post /:key/actions/:actionName/execute',
+    'post /:key/achieve',
+  ]);
 
   /** Walk the real router's layer stack — a new route is picked up here automatically. */
   function routesOf(): Array<{ method: string; path: string }> {

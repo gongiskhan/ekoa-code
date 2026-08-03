@@ -281,6 +281,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/{key}/achieve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/v1/integrations/{key}/achieve */
+        post: operations["integrations.achieve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/{key}/actions/{actionName}/execute": {
         parameters: {
             query?: never;
@@ -440,6 +457,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AchieveIntegrationGoalRequest: {
+            args?: {
+                [key: string]: unknown;
+            };
+            goal: string;
+        };
+        AchieveIntegrationGoalResponse: {
+            actionName?: string;
+            candidates?: string[];
+            code?: string;
+            forked?: boolean;
+            message?: string;
+            /** @enum {string} */
+            outcome: "executed" | "authored" | "refused";
+            /** @constant */
+            requiresApproval?: true;
+            result?: components["schemas"]["ExecuteIntegrationActionResponse"];
+            /** @constant */
+            state?: "provisional";
+            verification?: components["schemas"]["AuthoredActionVerification"];
+            violations?: string[];
+        };
         ApprovedCommand: {
             createdAt?: components["schemas"]["IsoTimestamp"];
             description?: string;
@@ -449,6 +488,16 @@ export interface components {
         };
         ApprovedCommandListResponse: {
             items: components["schemas"]["ApprovedCommand"][];
+        };
+        AuthoredActionCheck: {
+            detail?: string;
+            name: string;
+            ok: boolean;
+        };
+        AuthoredActionVerification: {
+            checks: components["schemas"]["AuthoredActionCheck"][];
+            passed: boolean;
+            verifiedAt: components["schemas"]["IsoTimestamp"];
         };
         Automation: {
             createdAt?: components["schemas"]["IsoTimestamp"];
@@ -553,6 +602,8 @@ export interface components {
         IntegrationCapabilityAction: {
             actionName: string;
             approved: boolean;
+            /** @enum {string} */
+            authoringState?: "none" | "provisional" | "trusted";
             backingType: string;
             description: string;
             requiresApproval: boolean;
@@ -2391,6 +2442,104 @@ export interface operations {
             };
             /** @description Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate limited by the per-key capability window (`RATE_LIMITED`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error (`INTERNAL`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    "integrations.achieve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AchieveIntegrationGoalRequest"];
+            };
+        };
+        responses: {
+            /** @description Success. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AchieveIntegrationGoalResponse"];
+                };
+            };
+            /** @description Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`). */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

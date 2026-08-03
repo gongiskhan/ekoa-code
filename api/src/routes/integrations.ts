@@ -33,6 +33,8 @@ import {
   SetDefinitionGlobalRequest,
   ApproveIntegrationActionRequest,
   ExecuteIntegrationActionRequest,
+  AchieveIntegrationGoalRequest,
+  TrustAuthoredActionRequest,
   IntegrationActionParams,
   IntegrationKeyParams,
   SetIntegrationLessonsRequest,
@@ -56,6 +58,11 @@ import {
   type CapabilityContext,
   type CapabilityRefusal,
 } from '../integrations/integration-capability.js';
+import {
+  achieveIntegrationGoal,
+  trustAuthoredAction,
+  type ActionDrafter,
+} from '../integrations/integration-achieve.js';
 import {
   integrationDefinitionStore,
   type DefinitionVisibility,
@@ -118,8 +125,13 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
 function capabilityCtxOf(
   req: AuthedRequest,
   res: Response,
-  deps: { now: () => number; genId: () => string; runAutomationBackedAction?: AutomationBackedHandler },
-): CapabilityContext {
+  deps: {
+    now: () => number;
+    genId: () => string;
+    runAutomationBackedAction?: AutomationBackedHandler;
+    draftAction?: ActionDrafter;
+  },
+): CapabilityContext & { draftAction?: ActionDrafter } {
   const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
   return {
     actor: actorOf(req),
@@ -127,6 +139,9 @@ function capabilityCtxOf(
     ...(p ? { principal: { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } } : {}),
     ...(req.user?.username ? { username: req.user.username } : {}),
     ...(deps.runAutomationBackedAction ? { runAutomationBackedAction: deps.runAutomationBackedAction } : {}),
+    // D3: the AUTHORING seam, bound once by the composition root exactly like the automation one.
+    // Absent, `achieve` still executes and refuses to author (`authoring_unavailable`).
+    ...(deps.draftAction ? { draftAction: deps.draftAction } : {}),
   };
 }
 
@@ -150,6 +165,8 @@ export function integrationsRouter(deps: {
   genId: () => string;
   /** The automation seam the composition root binds ONCE and hands to every executor rail. */
   runAutomationBackedAction?: AutomationBackedHandler;
+  /** The AUTHORING seam (D3): one drafting turn on D2's shared authoring core. */
+  draftAction?: ActionDrafter;
 }): Router {
   const r = Router();
 
@@ -336,6 +353,54 @@ export function integrationsRouter(deps: {
     res.json(wire.body);
   });
 
+  /**
+   * POST /api/v1/integrations/:key/achieve -> AchieveIntegrationGoalResponse (slice D3).
+   *
+   * EXECUTE-OR-AUTHOR. The handler is a shell: validate, call `achieveIntegrationGoal` once, map
+   * the outcome. Every guardrail lives in the module, so none of them can be re-decided per route.
+   *
+   * THE WRITE GATE IS THE SAME ONE, ON THE SAME WIRE. The execute arm returns an executor result,
+   * and an unapproved `mutates` action comes back with `code: 'awaiting_consent'` — which this
+   * handler answers with the IDENTICAL 403 envelope `/execute` above answers, through the same
+   * `capabilityWireOutcome` mapping. A client therefore handles the gate in ONE place rather than
+   * learning a second dialect for this endpoint, and there is no path here that could answer 200
+   * for a write nobody approved.
+   *
+   * A REFUSAL IS A 200 CARRYING `outcome: 'refused'`, not an error envelope, and that is deliberate:
+   * "no action fits and I could not write one because the host is not bound" is an ANSWER about the
+   * caller's integration, exactly like a remote 4xx is an answer about the remote system (the same
+   * argument `/execute` makes for returning failed results at 200). The two cases that are NOT
+   * answers stay envelopes: unaddressable is a 404, and no-tenant is a 403.
+   */
+  r.post('/:key/achieve', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const body = parseBody(res, AchieveIntegrationGoalRequest, req.body ?? {});
+    if (!body) return;
+    const out = await achieveIntegrationGoal(
+      capabilityCtxOf(req, res, deps),
+      params.data.key,
+      body.goal,
+      body.args ?? {},
+    );
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    const result = out.value;
+    if (result.outcome === 'executed') {
+      const wire = capabilityWireOutcome(result.result);
+      if (wire.kind === 'not_found') return notFound(res);
+      if (wire.kind === 'awaiting_consent') {
+        return sendError(
+          res,
+          'FORBIDDEN',
+          'Esta ação altera dados e precisa da autorização do titular antes de correr.',
+          { code: 'awaiting_consent', consentRequest: wire.consentRequest },
+        );
+      }
+      return res.json({ outcome: 'executed', actionName: result.actionName, result: wire.body });
+    }
+    res.json(result);
+  });
+
   // ===========================================================================================
   // TIER 2 (part 2) — everything below is PLATFORM-SESSION ONLY. The blanket is the SAFE DEFAULT
   // for any route appended later: a new handler added past this line inherits `requireAuth`
@@ -443,6 +508,41 @@ export function integrationsRouter(deps: {
       req.params.actionName as string,
     );
     res.json({ ok: true, revoked });
+  });
+
+  /**
+   * POST /api/v1/integrations/:key/actions/:actionName/trust -> { ok, actionName, state, mutates }.
+   *
+   * PROMOTE an action `achieve` authored, from provisional to trusted (slice D3). It sits BELOW the
+   * `requireAuth` blanket on purpose, and that position is the point: `achieve` is `user-or-key`,
+   * so if a gateway key could reach this route an agent would author an action and bless its own
+   * work in the next request. Same rule, same place in this file, as the three consent routes above.
+   *
+   * The gates are `trustAuthoredAction`'s, not this handler's. The four verdicts that are not `ok`
+   * map to the house envelope the way the rest of this domain does — a row the caller cannot see
+   * and a row that does not exist answer the same 404, and the three body-shaped refusals answer
+   * `VALIDATION_FAILED` with a message that says which, exactly as `approveAction` does for its own
+   * shape mismatch (`shared/src/errors.ts` has no generic CONFLICT, and widening it is a
+   * contract-wide change that does not belong to this slice).
+   */
+  r.post('/:key/actions/:actionName/trust', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const body = parseBody(res, TrustAuthoredActionRequest, req.body);
+    if (!body) return;
+    const out = await trustAuthoredAction(actorOf(req), params.data.key, params.data.actionName, body.shape);
+    switch (out.verdict) {
+      case 'notfound': return notFound(res);
+      case 'forbidden': return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+      case 'shape_mismatch':
+        return sendError(res, 'VALIDATION_FAILED', 'A ação mudou desde que foi apresentada. Reveja e confirme de novo.');
+      case 'not_authored':
+        return sendError(res, 'VALIDATION_FAILED', 'Esta ação foi escrita por uma pessoa e não precisa de ser confirmada.');
+      case 'unverified':
+        return sendError(res, 'VALIDATION_FAILED', 'Esta ação mudou desde que foi verificada — peça de novo o objetivo para a reescrever.');
+      default:
+        return res.json({ ok: true, actionName: out.actionName, state: out.state, mutates: out.mutates });
+    }
   });
 
   // --- Per-integration LESSONS (slice C3) -----------------------------------------------------

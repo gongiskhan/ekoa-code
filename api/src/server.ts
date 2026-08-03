@@ -116,6 +116,12 @@ import {
   setCatalog,
   sweepOrphans,
 } from './agents/index.js';
+// D3 — the AUTHORING seam for `achieve`. A DEEP import of the shared authoring core, the same one
+// `automation/planner.ts` takes: the core's only dependency is the chokepoint, and the builder's
+// adapter (which pulls in billing/, the agent seams and the builder session store) is deliberately
+// not on this path. `integrations/` is tier 3 and may not import it, which is why it arrives here
+// as a typed callback rather than an upward import.
+import { authorWithRepair } from './agents/authoring-core.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
 import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
 // G8 — automation engine + integrations execution layer + delivery targets + canvas.
@@ -146,6 +152,7 @@ import {
   sweepExpiredScreenshots,
   type RunEventEmitter,
 } from './automation/index.js';
+import { type ActionDrafter } from './integrations/integration-achieve.js';
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
@@ -902,7 +909,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // `automation_required` on the capability rail alone, i.e. one rail quietly behaving differently
   // from the other three. This is a WIRING argument, not a second executor: no consent check, no
   // credential read and no dispatch decision lives at this call site.
-  app.use('/api/v1/integrations', integrationsRouter({ ...deps, runAutomationBackedAction }));
+  // D3: `achieve` (execute-or-author) is on this router, so the composition root also binds the
+  // AUTHORING seam. It is ONE LINE on purpose — everything that decides what gets STORED (the
+  // prompt, the parse, the deterministic guardrail suite, the fork, the provisional state) lives
+  // in `integrations/integration-achieve.ts`, so nothing security-relevant sits in a lambda here.
+  // `emptyReply: 'unavailable'` is the planner's rule rather than the builder's: an empty reply to
+  // "write me an action" is a transport failing quietly, never an action.
+  const draftAction: ActionDrafter = (input) => authorWithRepair({ ...input, emptyReply: 'unavailable' });
+  app.use('/api/v1/integrations', integrationsRouter({ ...deps, runAutomationBackedAction, draftAction }));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
   app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));

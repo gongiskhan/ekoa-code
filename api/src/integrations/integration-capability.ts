@@ -36,6 +36,26 @@
  * tenant's package and then run it under whatever credential the empty user pair finds. A broken
  * principal is not a tenant.
  *
+ * ================================ WHOSE DEFINITION THIS IS (slice D3) =======================
+ * THE CATALOG AND THE EXECUTE RESOLVE THE SAME PACKAGE, AS THE SAME PRINCIPAL. They did not.
+ *
+ * The 2026-08-03 credential fix made EXECUTION resolve a definition as the credential's CUSTODIAN
+ * (`definitionActorForCredential`), because for an ORG-SHARED config the reader is not the person
+ * whose ceremony produced the bundle — and resolving as the reader let any org member author the
+ * contract their admin's secret is spent under. That fix landed on both executor rails and was
+ * routed to this file as a COHERENCE residual: `getIntegrationCapability` still resolved as
+ * `ctx.actor`, so a peer's catalog could list the actions of their OWN private package while the
+ * very next execute ran the custodian's. Security held (the executor is the gate), but the read
+ * and the write disagreed about what the integration IS, which is how a client is told one thing
+ * and handed another — and it is how the next reader of this file concludes the reader-resolution
+ * is the correct one.
+ *
+ * `resolveCapabilityDefinition` is now the ONE resolution both this module and
+ * `integration-achieve.ts` use, and it mirrors the executor's order exactly: read the config row
+ * first, derive the custodian from it, resolve the definition as THAT principal. Nothing is
+ * re-derived here — `definitionActorForCredential` is imported, not copied — and an incoherent
+ * (actor, config) pair fails closed rather than resolving as somebody.
+ *
  * ================================ WHAT THE PROJECTION MAY REVEAL ============================
  * The definition itself is projected by `definitionFromDoc` (A2), unchanged and NOT re-derived
  * here: it drops the storage envelope, exposes `id`/`visibility` only for a row of the caller's OWN
@@ -57,12 +77,14 @@ import { resolveDefinition } from './definition-registry.js';
 // imported: it belongs to the executor, and importing it here would put a second copy of the
 // decision one keystroke away from the rail that must inherit it.
 import { actionRequiresConsent, describeAction, liveApprovalFor } from './action-consent.js';
+import { authoringStateOf } from './authored-action.js';
+import { definitionActorForCredential } from './credential-cofre.js';
 import {
   executeUserIntegrationAction,
   type ExecuteIntegrationActionResult,
   type ExecutorDeps,
 } from './action-executor.js';
-import { findConfigForOwner } from './service.js';
+import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
 
 /** The per-action capability row (shared/src/integrations.ts `IntegrationCapabilityAction`). */
 export interface CapabilityActionView {
@@ -74,6 +96,16 @@ export interface CapabilityActionView {
   shape: string;
   requiresApproval: boolean;
   approved: boolean;
+  /**
+   * Who wrote this action (slice D3). `none` — a human did (a shipped package, a builder save);
+   * `provisional` — the platform authored it via `achieve` and no person has confirmed it, so it
+   * is stored as a write and `achieve` will not run it; `trusted` — a person promoted it.
+   *
+   * Derived, never stored twice: `authoringStateOf` demotes a `trusted` record whose fingerprint
+   * no longer matches the action's bytes, so a re-authored action reads as provisional here for
+   * exactly the same reason the executor's gate re-prompts for it.
+   */
+  authoringState: 'none' | 'provisional' | 'trusted';
 }
 
 /** The capability view of one integration (shared/src/integrations.ts `IntegrationCapability`). */
@@ -137,6 +169,44 @@ function backingOf(action: IntegrationAction): string {
   }
 }
 
+/** What one capability-scoped resolution produced: the definition, the config row it was resolved
+ *  THROUGH, and the principal it was resolved AS. All three are what `achieve` needs too. */
+export interface ResolvedCapabilityDefinition {
+  definition: IntegrationDefinition;
+  config: IntegrationConfigDoc | null;
+  /** The credential's CUSTODIAN — see the module header. Equals the actor when there is no
+   *  org-shared credential in play, which is the ordinary case. */
+  definitionActor: Actor;
+}
+
+/**
+ * THE ONE CAPABILITY-SIDE RESOLUTION, in the executor's own order (D3, closing the coherence
+ * residual the credential fix routed here).
+ *
+ *   1. fail closed on a principal that names no tenant;
+ *   2. read the CONFIG ROW — the same owner-scoped lookup `executeUserIntegrationAction` performs,
+ *      so `connected` cannot drift from the executor's `not_connected`/`disabled` either;
+ *   3. derive the custodian with `definitionActorForCredential` (imported, never re-derived);
+ *   4. resolve the definition AS THAT PRINCIPAL through A2's tenant-scoped registry.
+ *
+ * An incoherent (actor, config) pair — the executor's `credential_invalid` case — answers
+ * `not_found` here rather than resolving as somebody: "we could not determine whose package this
+ * is" must never collapse into "resolve an arbitrary one". A key the actor cannot see resolves to
+ * null exactly as a key that does not exist does; one verdict for both, on purpose.
+ */
+export async function resolveCapabilityDefinition(
+  actor: Actor,
+  integrationKey: string,
+): Promise<CapabilityOutcome<ResolvedCapabilityDefinition>> {
+  if (!hasTenant(actor)) return { ok: false, refusal: 'no_tenant' };
+  const config = await findConfigForOwner(actor.orgId, actor.userId, integrationKey);
+  const definitionActor = definitionActorForCredential(actor, config);
+  if (!definitionActor) return { ok: false, refusal: 'not_found' };
+  const definition = await resolveDefinition(definitionActor, integrationKey);
+  if (!definition) return { ok: false, refusal: 'not_found' };
+  return { ok: true, value: { definition, config, definitionActor } };
+}
+
 /**
  * Project ONE integration onto its capability view.
  *
@@ -148,15 +218,9 @@ export async function getIntegrationCapability(
   ctx: CapabilityContext,
   integrationKey: string,
 ): Promise<CapabilityOutcome<CapabilityView>> {
-  if (!hasTenant(ctx.actor)) return { ok: false, refusal: 'no_tenant' };
-
-  // A2's tenant-scoped registry, under the verified actor. A key the actor cannot see resolves to
-  // null exactly as a key that does not exist does.
-  const def = await resolveDefinition(ctx.actor, integrationKey);
-  if (!def) return { ok: false, refusal: 'not_found' };
-
-  // The SAME owner-scoped lookup the executor performs, so `connected` cannot drift from it.
-  const config = await findConfigForOwner(ctx.actor.orgId, ctx.actor.userId, integrationKey);
+  const resolved = await resolveCapabilityDefinition(ctx.actor, integrationKey);
+  if (!resolved.ok) return resolved;
+  const { definition: def, config } = resolved.value;
   const connected = config ? config.enabled !== false : def.authType === 'none';
 
   const actions: CapabilityActionView[] = [];
@@ -182,6 +246,7 @@ export async function getIntegrationCapability(
       shape: descriptor.shape,
       requiresApproval,
       approved: live !== null,
+      authoringState: authoringStateOf(integrationKey, action),
     });
   }
 

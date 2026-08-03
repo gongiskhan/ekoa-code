@@ -2021,6 +2021,133 @@
         }
       }
     },
+    "/api/v1/integrations/{key}/achieve": {
+      "post": {
+        "operationId": "integrations.achieve",
+        "summary": "POST /api/v1/integrations/{key}/achieve",
+        "tags": [
+          "integrations"
+        ],
+        "x-ekoa-domain": "integrations",
+        "x-ekoa-endpoint": "achieve",
+        "x-ekoa-auth": "user-or-key",
+        "x-ekoa-timeout-ms": 60000,
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AchieveIntegrationGoalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AchieveIntegrationGoalResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/integrations/{key}/actions/{actionName}/execute": {
       "post": {
         "operationId": "integrations.executeAction",
@@ -3242,6 +3369,79 @@
       }
     },
     "schemas": {
+      "AchieveIntegrationGoalRequest": {
+        "type": "object",
+        "properties": {
+          "goal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "args": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "additionalProperties": false
+      },
+      "AchieveIntegrationGoalResponse": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "executed",
+              "authored",
+              "refused"
+            ]
+          },
+          "actionName": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ExecuteIntegrationActionResponse"
+          },
+          "state": {
+            "type": "string",
+            "const": "provisional"
+          },
+          "forked": {
+            "type": "boolean"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/AuthoredActionVerification"
+          },
+          "requiresApproval": {
+            "type": "boolean",
+            "const": true
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
       "ApprovedCommand": {
         "type": "object",
         "properties": {
@@ -3272,6 +3472,48 @@
         },
         "required": [
           "items"
+        ],
+        "additionalProperties": false
+      },
+      "AuthoredActionCheck": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "AuthoredActionVerification": {
+        "type": "object",
+        "properties": {
+          "verifiedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthoredActionCheck"
+            }
+          }
+        },
+        "required": [
+          "verifiedAt",
+          "passed",
+          "checks"
         ],
         "additionalProperties": false
       },
@@ -3650,6 +3892,14 @@
           },
           "approved": {
             "type": "boolean"
+          },
+          "authoringState": {
+            "type": "string",
+            "enum": [
+              "none",
+              "provisional",
+              "trusted"
+            ]
           }
         },
         "required": [
