@@ -323,12 +323,14 @@ function isNotRendered(el: P5Element): boolean {
  * `background:url(display:none)` or a commented-out declaration.
  */
 function hidesContent(style: string): boolean {
-  return style.split(';').some((decl) => {
+  // CSS comments are stripped first and `collapse` is a hiding value too (final-verification R1/R2:
+  // `visibility:collapse` and `display:/*x*/none` both hide in a browser and both fabricated a row).
+  return style.replace(/\/\*[\s\S]*?\*\//g, '').split(';').some((decl) => {
     const idx = decl.indexOf(':');
     if (idx < 0) return false;
     const prop = decl.slice(0, idx).trim().toLowerCase();
     const value = decl.slice(idx + 1).replace(/!\s*important\s*$/i, '').trim().toLowerCase();
-    return (prop === 'display' && value === 'none') || (prop === 'visibility' && value === 'hidden');
+    return (prop === 'display' && value === 'none') || (prop === 'visibility' && (value === 'hidden' || value === 'collapse'));
   });
 }
 
@@ -370,6 +372,20 @@ function sanitizeTree(root: P5ParentNode): void {
       stack.push(child);
     }
   }
+}
+
+/**
+ * Does this table carry NOTIFICATION DATA, judged by CONTENT rather than by the id marker? True
+ * when any row has >=2 direct cells and one of them CONTAINS a process number. The marker is a
+ * documented guess (SPIKE #6), so every poison rule that gated on it alone left a door open; a
+ * process number is the one thing page chrome never carries, which is why legend/filter/menu and
+ * layout tables stay neutral under this test.
+ */
+function looksLikeNotificationData(rows: P5Element[]): boolean {
+  return rows.some((row) => {
+    const cells = rowCells(row);
+    return cells.length >= 2 && cells.some((c) => extractProcessNumber(cellText(serialize(c))) !== undefined);
+  });
 }
 
 /** Every `<table>` element in the document, nested ones included (each nested table surfaces as
@@ -884,18 +900,28 @@ function parseInboxPageInner(html: string): ParseInboxResult {
     const tableAttrs = attrsString(table);
     const marked = hasGridMarker(tableAttrs);
 
-    // ROUND-5C rule 3 — the `terminated` rule. A table whose end tag is ABSENT from the source
-    // was never explicitly closed: the payload was cut mid-grid, or a phantom/sibling opener
-    // stole its close (the spec implies-closes a table when a sibling <table> opens — the R6-2a
-    // probe). A truncated structure can never prove empty NOR claim a complete populated read:
-    // a MARKED one IS the grid and poisons the page; an unmarked one proves nothing.
     const loc = table.sourceCodeLocation;
+    const rows = ownRows(table);
+
+    // IS THIS NOTIFICATION DATA, whatever its id says? The marker is a GUESS (SPIKE #6 — the real
+    // portal may omit `gv…notific` entirely), so gating the poison rules on it left three doors
+    // open that the final verification proved reachable with ordinary two-table WebForms pages:
+    // a frozen-header layout whose BODY table is unmarked (parser said `{ok:true, rows:[]}` for a
+    // page rendering two notifications), and a split "por ler" / "lidas" inbox whose second table
+    // does not fully parse (parser returned the first table as the COMPLETE inbox). Content is the
+    // reliable signal: a row of >=2 direct cells one of whose cells CONTAINS A PROCESS NUMBER is
+    // notification data. Legend, filter, menu and layout tables carry no process numbers, so they
+    // stay neutral and the realistic-page pass rate is unchanged.
+    const carriesNotifications = marked || looksLikeNotificationData(rows);
+
+    // The `terminated` rule. A table whose end tag is ABSENT was never explicitly closed: the
+    // payload was cut mid-grid, or a phantom/sibling opener stole its close (the spec
+    // implies-closes a table when a sibling <table> opens). A truncated structure can never prove
+    // empty NOR claim a complete populated read.
     if (!loc?.startTag || !loc.endTag) {
-      if (marked) parseFailure = true;
+      if (carriesNotifications) parseFailure = true;
       continue;
     }
-
-    const rows = ownRows(table);
 
     // The header is the FIRST row that passes header identification (not merely the first row
     // containing "processo"), so a caption / colspan row above the real <th> is skipped.
@@ -917,7 +943,7 @@ function parseInboxPageInner(html: string): ParseInboxResult {
       // controls — then proved the inbox EMPTY. `{ok:true, rows:[]}` for a page rendering two
       // notifications. A marked table IS the grid; rows we cannot read mean the page cannot be
       // read. Unmarked headerless tables still prove nothing (they are ordinary page chrome).
-      if (marked && rows.some((r) => rowCells(r).length >= 2)) parseFailure = true;
+      if (carriesNotifications && rows.some((r) => rowCells(r).length >= 2)) parseFailure = true;
       continue;
     }
 
@@ -1028,18 +1054,20 @@ function parseInboxPageInner(html: string): ParseInboxResult {
         // empty). Any hiding marker in the slice therefore blocks the empty proof outright: masked
         // content may legitimately vanish from a POPULATED read, but it can never help prove that
         // there is nothing to read.
-        !/\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden|<template\b/i.test(innerRaw)
+        !/(?:\shidden(?=[\s=>/])|display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|<template\b)/i.test(innerRaw)
       ) {
         provenEmpty = true;
       }
       continue;
     }
 
-    // CLASSIFICATION 2 — data rows exist but NOT all parse: on a MARKED grid that is a parse
-    // failure (poisons the page verdict — never a subset, never an empty); on an unmarked table it
-    // is ambiguous chrome and proves nothing.
+    // CLASSIFICATION 2 — data rows exist but NOT all parse. This poisons the page whenever the
+    // table CARRIES NOTIFICATIONS (marked, or content-proven by a parsed row) — never a subset,
+    // never an empty. The old marker-only guard is what let a split "por ler" / "lidas" inbox
+    // return the first table as the complete inbox whenever the second table did not fully parse.
+    // A table where NOTHING parsed and no marker claims it is ambiguous chrome and proves nothing.
     if (parsed.length < dataRowCount) {
-      if (marked) parseFailure = true;
+      if (marked || parsed.length > 0) parseFailure = true;
       continue;
     }
 

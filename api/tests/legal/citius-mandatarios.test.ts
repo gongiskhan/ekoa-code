@@ -1735,3 +1735,108 @@ describe('citius-mandatarios · round-5c verification round 3 (mask escapes + mu
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(500);
   });
 });
+
+describe('citius-mandatarios · final verification (the marker is a guess; content decides)', () => {
+  // The verifier's own reproducers: ordinary two-table WebForms pages, no injection, no malformed
+  // markup. Both preconditions are documented as EXPECTED first-real-access conditions (the gv
+  // marker may be absent, the header labels are unobserved guesses), so a table the parser cannot
+  // key is the LIKELY case; all that is additionally needed is a second table on the page.
+
+  it('V1: a frozen-header layout whose BODY table is unmarked never proves the inbox empty', () => {
+    const html =
+      '<form action="CaixaCorreio.aspx">' +
+      '<div class="grid-head"><table id="ctl00_cph_gvNotificacoes">' +
+      '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr></table></div>' +
+      '<div class="grid-body"><table class="tbl-notificacoes">' +
+      '<tr><td>1234/26.0T8LSB</td><td>01/07/2026</td><td>Tribunal de Lisboa</td></tr>' +
+      '<tr><td>45/26.7T8ABC-A</td><td>02/07/2026</td><td>Tribunal do Porto</td></tr>' +
+      '</table></div></form>';
+    expect(parseInboxPage(html).ok).toBe(false); // was {ok:true, rows:[]} for a 2-notification page
+  });
+
+  it('V2: the same shape with an UNMODELLED header on the body table is equally not empty', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr></table>' +
+      '<table class="corpo"><tr><th>Ref.ª do processo</th><th>Recebida em</th><th>Juízo</th></tr>' +
+      '<tr><td>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr></table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('V3: an unterminated first table over a notification-bearing second table is not empty', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+      '<table class="corpo"><tr><td>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr></table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('V4: a split por-ler/lidas inbox whose second table does not fully parse is never a subset', () => {
+    const html =
+      '<h2>Notificações por ler</h2>' +
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+      '<tr><td>1111/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr></table>' +
+      '<h2>Notificações lidas</h2>' +
+      '<table class="lidas">' +
+      '<tr><td>2222/26.0T8LSB</td><td>20/06/2026</td><td>Porto</td></tr>' +
+      '<tr><td>3333/26.0T8LSB</td><td>19/06/2026</td><td>Braga</td></tr></table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was ok:true rows=[1111/26.0T8LSB] as the WHOLE inbox
+  });
+
+  it('V5: chrome tables carrying NO process number stay neutral (the content test is not a blanket poison)', () => {
+    const html =
+      '<table class="legenda"><tr><td>Cor</td><td>Significado</td></tr><tr><td>Azul</td><td>Por ler</td></tr></table>' +
+      '<table class="filtros"><tr><td>Filtro</td><td>Todas</td></tr></table>' +
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+      '<tr><td>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr></table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB']);
+  });
+
+  it('V6: an UNMARKED single grid (the marker absent, as SPIKE #6 allows) still parses', () => {
+    const html =
+      '<table class="tbl-notificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+      '<tr><td>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr>' +
+      '<tr><td>45/26.7T8ABC-A</td><td>02/07/2026</td><td>Porto</td></tr></table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(2);
+  });
+
+  // R1/R2: hiding spellings that a browser honours but the declaration parser missed.
+
+  it('R1: visibility:collapse hides content (it fabricated a row before)', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+      '<tr><td><span style="visibility:collapse">9999/2099</span>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+  });
+
+  it('R2: CSS comments inside a declaration do not defeat the hiding check', () => {
+    for (const style of ['display:/*x*/none', 'display:none/*x*/', '/*a;b*/display:none']) {
+      const html =
+        '<table id="ctl00_cph_gvNotificacoes"><tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>' +
+        `<tr><td><span style="${style}">9999/2099</span>1234/26.0T8LSB</td><td>01/07/2026</td><td>Lisboa</td></tr>` +
+        '</table>';
+      const res = parseInboxPage(html);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+    }
+  });
+
+  it('a Bootstrap class="hidden-xs" no longer blocks the legitimate empty proof', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes"><tr><th class="hidden-xs">Processo</th><th>Data</th></tr>' +
+      '<tr><td colspan="2">Não existem notificações.</td></tr></table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(0);
+  });
+});
