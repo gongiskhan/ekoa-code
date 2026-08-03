@@ -117,6 +117,23 @@ export async function mintIntegrationCredentialItem(
 }
 
 /**
+ * The outcome of a rotation attempt. Three-way, and the third value is the whole reason:
+ *   - `updated`  the item was re-encrypted in place.
+ *   - `stale`    no item of that id is REACHABLE to anyone (deleted), or it is this actor's own
+ *                item under a different link (a wrong id on the config row). Minting a replacement
+ *                is correct: it orphans nothing and it unsticks a user who deleted their own item
+ *                from the Cofre and then re-typed their credentials.
+ *   - `foreign`  an item of that id EXISTS but belongs to someone else. Minting a replacement here
+ *                would silently re-point the config's custody at the new writer AND strand the
+ *                original owner's item, still auto-granted and still bound, joined to nothing —
+ *                exactly the orphan standing unlock `discardIntegrationCredentialItem` exists to
+ *                prevent, one door over. Reachable in the ordinary org-shared case: two org-admins
+ *                share a config and the second rotates its credentials. The caller keeps the
+ *                existing join and the comparator reports the divergence instead.
+ */
+export type CredentialRotation = 'updated' | 'stale' | 'foreign';
+
+/**
  * Re-encrypt an existing integration item with rotated credential values (and refresh its origin
  * binding), WITHOUT touching its grants.
  *
@@ -126,7 +143,11 @@ export async function mintIntegrationCredentialItem(
  * consequence is stated plainly rather than hidden: rotating the credentials of a locked integration
  * leaves it locked, and the Cofre UI is where it is unlocked again.
  *
- * Returns false (uniform not-found) when the item is not the actor's or its link disagrees.
+ * The `foreign` verdict needs a RAW existence read, which is legitimate only inside this module (the
+ * `COFRE_STORE_BAN` fence). It is not an existence oracle: nothing outside gets to ask "does item X
+ * exist" — the answer only ever decides whether the CALLER mints a replacement for its own config,
+ * and the returned verdict is not derived from any id the caller chose freely (the id comes off a
+ * server-stamped join).
  */
 export async function updateIntegrationCredentialValue(
   actor: Actor,
@@ -135,9 +156,10 @@ export async function updateIntegrationCredentialValue(
   values: Record<string, unknown>,
   boundOrigins: string[],
   now = Date.now(),
-): Promise<boolean> {
+): Promise<CredentialRotation> {
   const item = await cofreItems.getVisible(actor, itemId);
-  if (!item || !linkMatches(item, link)) return false;
+  if (!item) return (await cofreItems.raw.get(itemId)) ? 'foreign' : 'stale';
+  if (!linkMatches(item, link)) return 'stale';
   const valueCiphertext = await envelopeEncrypt(serialiseBundle(values), item.orgId);
   await cofreItems.raw.update(itemId, (cur) => ({
     ...(cur as CofreItemDoc),
@@ -145,7 +167,7 @@ export async function updateIntegrationCredentialValue(
     ...(boundOrigins.length > 0 ? { boundOrigins } : {}),
     updatedAt: new Date(now).toISOString(),
   }));
-  return true;
+  return 'updated';
 }
 
 /**

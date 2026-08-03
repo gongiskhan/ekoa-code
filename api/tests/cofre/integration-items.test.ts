@@ -248,7 +248,7 @@ describe('rotating credentials', () => {
     const rotated = ['sk', 'live', 'B2JOIN', 'ROTATED'].join('-');
     expect(
       await updateIntegrationCredentialValue(alice, item._id, linkA, { api_key: rotated }, ['api2.crm.example']),
-    ).toBe(true);
+    ).toBe('updated');
     const out = await unwrapForIntegration(alice, item._id, linkA, { kind: 'http', origin: 'api2.crm.example' });
     expect(out.fields).toEqual({ api_key: rotated });
     expect(out.itemId).toBe(item._id);
@@ -260,7 +260,7 @@ describe('rotating credentials', () => {
     const rotated = ['sk', 'live', 'B2JOIN', 'ROTATED2'].join('-');
     expect(
       await updateIntegrationCredentialValue(alice, item._id, linkA, { api_key: rotated }, ['api.crm.example']),
-    ).toBe(true);
+    ).toBe('updated');
     await expect(
       unwrapForIntegration(alice, item._id, linkA, { kind: 'http', origin: 'api.crm.example' }),
     ).rejects.toBeInstanceOf(CofreLockedError);
@@ -268,11 +268,26 @@ describe('rotating credentials', () => {
 
   it('refuses to rotate an item that is not the actor\'s or whose link disagrees', async () => {
     const item = await connectCrm();
-    expect(await updateIntegrationCredentialValue(bob, item._id, linkA, { api_key: OTHER_KEY }, ['x.test'])).toBe(false);
-    expect(await updateIntegrationCredentialValue(alice, item._id, linkB, { api_key: OTHER_KEY }, ['x.test'])).toBe(false);
+    // ANOTHER USER'S item: `foreign`. The caller must NOT mint a replacement — that would strand
+    // this still-granted item with nothing joined to it (the org-shared two-admins case).
+    expect(await updateIntegrationCredentialValue(bob, item._id, linkA, { api_key: OTHER_KEY }, ['x.test'])).toBe(
+      'foreign',
+    );
+    // The actor's OWN item under a different link: `stale`, so a fresh mint orphans nobody.
+    expect(await updateIntegrationCredentialValue(alice, item._id, linkB, { api_key: OTHER_KEY }, ['x.test'])).toBe(
+      'stale',
+    );
     // …and the stored value is untouched by either refusal.
     const out = await unwrapForIntegration(alice, item._id, linkA, { kind: 'http', origin: 'api.crm.example' });
     expect(out.fields).toEqual({ api_key: API_KEY });
+  });
+
+  it('an id naming NOTHING is `stale`, not `foreign` — a deleted item must not stick the config', async () => {
+    const item = await connectCrm();
+    await discardIntegrationCredentialItem(alice, item._id, linkA);
+    expect(await updateIntegrationCredentialValue(alice, item._id, linkA, { api_key: OTHER_KEY }, ['x.test'])).toBe(
+      'stale',
+    );
   });
 });
 

@@ -166,15 +166,27 @@ export async function mintOrRefreshCredentialShadow(
   try {
     const boundOrigins = await declaredOriginsForIntegration(actor, config.integrationKey);
     if (config.cofreItemId) {
-      const refreshed = await updateIntegrationCredentialValue(
+      const rotation = await updateIntegrationCredentialValue(
         actor,
         config.cofreItemId,
         link,
         values,
         boundOrigins,
       );
-      // A stale/foreign/mismatched id falls through to a fresh mint rather than being trusted.
-      if (refreshed) return config.cofreItemId;
+      if (rotation === 'updated') return config.cofreItemId;
+      if (rotation === 'foreign') {
+        // The item belongs to ANOTHER user — the org-shared case: two org-admins share the config
+        // and the second one rotates it. Minting a replacement would move custody to the writer AND
+        // strand the first admin's item, still auto-granted, joined to nothing. Keep the join; the
+        // comparator now reports `drift` to the owner and `shadow_unreachable` to the writer, which
+        // is the honest description of what just happened and is what the 2026-08-15 review needs.
+        console.warn(
+          `[credential-cofre] WS-C shadow not rotated for ${config.integrationKey}: the joined item belongs to another user (org-shared custody); the join is left intact`,
+        );
+        return config.cofreItemId;
+      }
+      // `stale` — the id names nothing reachable, or one of this actor's own items under a
+      // different link. A fresh mint orphans nobody and unsticks a config whose item was deleted.
     }
     if (boundOrigins.length === 0) return null;
     const item = await mintIntegrationCredentialItem(actor, {

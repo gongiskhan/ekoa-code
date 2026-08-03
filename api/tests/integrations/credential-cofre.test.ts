@@ -142,6 +142,31 @@ describe('the shadow write follows every config write', () => {
     expect(report.status).toBe('match');
   });
 
+  it('a rotation by a DIFFERENT org-admin keeps the join and orphans nothing', async () => {
+    const adminB: Actor = { userId: 'adminB', orgId: 'orgA', role: 'org-admin' };
+    await defineIntegration(adminA, 'crm', ['https://api.crm.example/v1']);
+    await integrationDefinitionStore.setVisibility(
+      (await integrationDefinitionStore.getForActor(adminA, 'crm'))!._id,
+      adminA,
+      'org',
+    );
+    const cfg = await createConfig(adminA, { integrationKey: 'crm', configValues: { api_key: API_KEY } }, deps);
+    const originalItemId = cfg.cofreItemId!;
+
+    const result = await updateConfig(adminB, cfg._id, { configValues: { api_key: ROTATED } });
+    expect(result.verdict).toBe('ok');
+    // The join is UNCHANGED — no second item was minted, so adminA's still-granted item cannot be
+    // left joined to nothing (the orphan standing unlock the delete path exists to prevent).
+    expect(result.config!.cofreItemId).toBe(originalItemId);
+    expect(await listCofreItems(adminB)).toHaveLength(0);
+    expect(await listCofreItems(adminA)).toHaveLength(1);
+    // The divergence is REPORTED rather than hidden: the shadow still holds the pre-rotation bundle.
+    expect((await compareCredentialShadow(adminA, result.config!, { api_key: ROTATED })).status).toBe('drift');
+    expect((await compareCredentialShadow(adminB, result.config!, { api_key: ROTATED })).status).toBe(
+      'shadow_unreachable',
+    );
+  });
+
   it('disconnect destroys the item and its grant', async () => {
     await defineIntegration(alice, 'crm', ['https://api.crm.example/v1']);
     await createConfig(alice, { integrationKey: 'crm', configValues: { api_key: API_KEY } }, deps);
