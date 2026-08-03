@@ -207,9 +207,15 @@ describe('importLegacyRuntimePackages', () => {
     // visibility projected, so the E1 sharing surface can address it). The pre-review suite
     // stopped before these assertions: retirement was a one-way trapdoor (list(super)=[],
     // setVisibility → notfound for EVERY actor) recoverable only by DB surgery.
-    const retired = await store.getForActor(superAdmin, 'legacy-crm');
+    // Addressability is on the REVIEW surface only (re-review MEDIUM-1/2): `getForActor` is the
+    // EXECUTION/prompt resolver and must never answer a retired row — it cannot see the shipped
+    // baseline tier, so answering there displaced a live shipped package and let a planner plan
+    // against a package the executor refuses.
+    expect(await store.getForActor(superAdmin, 'legacy-crm')).toBeNull();
+    const retired = await store.getRetiredForReview(superAdmin, 'legacy-crm');
     expect(retired?._id).toBe(id);
     expect(retired?.visibility).toBe('org');
+    expect(await store.getRetiredForReview(userA, 'legacy-crm')).toBeNull();
     expect((await store.listForActor(superAdmin)).some((d) => d._id === id)).toBe(true);
     const listed = (await listDefinitionsFor(superAdmin, store)).find((d) => d.key === 'legacy-crm');
     expect(listed?.id).toBe(id);

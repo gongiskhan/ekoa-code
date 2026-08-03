@@ -366,15 +366,29 @@ export class IntegrationDefinitionStore {
       );
       return globals[0] ?? null;
     }
-    // LAST resort, super-admin only: a RETIRED sentinel-org row (demoted off `global`, so the
-    // globals query above no longer finds it). Ordered after the global tier so a retired row can
-    // never shadow a live resolution — it answers only when nothing else holds the key (A3 review
-    // F1: retired must stay readable, not become preferred).
-    if (actor.role === 'super-admin') {
-      const sentinel = await this.store.get(definitionIdFor(LEGACY_RUNTIME_ORG, key));
-      if (sentinel && isDefinitionVisibleTo(sentinel, actor)) return sentinel;
-    }
+    // NO sentinel fallback here (A3 re-review MEDIUM-1/MEDIUM-2). `getForActor` is the EXECUTION
+    // and PROMPT resolver — `resolveDefinition`, `resolveSkillMd`, `activeCatalogFor`, the planner
+    // catalog and the origin-resolver seam all come through it — and it cannot see the shipped
+    // BASELINE tier, which lives one layer up in `definition-registry.ts`. Answering a retired row
+    // here therefore DISPLACED the shipped package for a super-admin whenever a release shipped a
+    // key an imported legacy row occupied (list and resolve openly disagreed), and let a planner
+    // plan against a retired package the executor then refuses. Retirement is honoured
+    // consistently instead: a retired row is reachable ONLY through the REVIEW surface —
+    // `listForActor` (discovery) and `isDefinitionVisibleTo` (which `setVisibility` consults to
+    // restore it) — never through a resolution that feeds execution or a model.
     return null;
+  }
+
+  /**
+   * A RETIRED sentinel-org row by key, for the super-admin REVIEW surface only (A3 review F1's
+   * reversibility requirement, re-scoped by the re-review). Deliberately NOT consulted by
+   * `getForActor`: nothing that resolves a definition for execution, egress or a prompt may see a
+   * retired row.
+   */
+  async getRetiredForReview(actor: Actor, key: string): Promise<IntegrationDefinitionDoc | null> {
+    if (actor.role !== 'super-admin') return null;
+    const sentinel = await this.store.get(definitionIdFor(LEGACY_RUNTIME_ORG, key));
+    return sentinel && isDefinitionVisibleTo(sentinel, actor) ? sentinel : null;
   }
 
   /** Every definition `actor` may see: own org rows they can read (own any-visibility + org-shared)

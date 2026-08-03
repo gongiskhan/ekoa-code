@@ -286,11 +286,18 @@ describe('resolveSkillMd — the tenant body wins over the shipped one', () => {
   it('resolveSkillMdRaw preserves EXACT bytes of scrub-triggering-but-legitimate prose (A3 review F3)', async () => {
     // The reviewer's probe: ordinary documentation that the egress scrub redacts. The editable
     // view must hand it back untouched, byte for byte.
-    const legit = 'authorization: required\nSee docs.\n';
+    const pasted = ['sk', 'live', 'REALVALUE12345'].join('_'); // composed, never a literal
+    const legit = `authorization: required\napi_key: ${pasted}\nSee docs.\n`;
     await createRow(draft('orgA', 'userA1', 'legit-doc', 'private', { skillMd: legit }));
     expect(await resolveSkillMdRaw(userA1, 'legit-doc', store)).toBe(legit);
-    // The PROMPT view of the same row is scrubbed — the two views must not be conflated.
-    expect(await resolveSkillMd(userA1, 'legit-doc', store)).toBe('authorization: [REDACTED]\nSee docs.\n');
+    // The PROMPT view of the same row redacts the PASTED SECRET but leaves the prose alone
+    // (re-review LOW-3: the old scrub shredded every word after a credential-named key, so
+    // `authorization: required` came back `[REDACTED]` — a fidelity loss, and the reason this
+    // test previously asserted the destruction as if it were correct).
+    const scrubbed = await resolveSkillMd(userA1, 'legit-doc', store);
+    expect(scrubbed).toContain('authorization: required');
+    expect(scrubbed).not.toContain(pasted);
+    expect(scrubbed).toContain('[REDACTED]');
   });
 });
 

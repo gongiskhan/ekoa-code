@@ -309,12 +309,55 @@ const PLACEHOLDER_SRC = String.raw`\{\{[^{}]+\}\}`;
 function isCredentialTemplate(v: unknown): boolean {
   if (typeof v !== 'string' || !new RegExp(PLACEHOLDER_SRC).test(v)) return false;
   const residue = v.replace(new RegExp(PLACEHOLDER_SRC, 'g'), ' ');
-  return residue
-    .split(/[^A-Za-z0-9+/=_.-]+/)
-    // 16 chars covers every real scheme word ("Bearer", "Basic", "Zoho-oauthtoken") while keeping
-    // even an all-letters pasted secret out of scheme-word clothing; strictly stronger than the
-    // old 20-char floor (any 20+ char word fails the cap on top of everything else).
-    .every((w) => w === '' || /^[A-Za-z][A-Za-z-]{0,15}$/.test(w) || /^[+/=_.-]{1,8}$/.test(w));
+  return !residue.split(TOKEN_SPLIT_RE).some((w) => looksLikePastedSecret(w));
+}
+
+/** Token boundaries for residue/prose scanning: everything outside the secret alphabet. */
+const TOKEN_SPLIT_RE = /[^A-Za-z0-9+/=_.-]+/;
+
+/**
+ * Vendor credential PREFIXES that identify a pasted live key regardless of length or entropy —
+ * the shapes that are unmistakably a secret and nothing else.
+ */
+const CREDENTIAL_PREFIX_RE =
+  /^(?:sk|pk|rk)_(?:live|test)_|^(?:ghp|gho|ghu|ghs|ghr)_|^github_pat_|^xox[baprs]-|^AKIA|^ASIA|^AIza|^ya29\.|^eyJ[A-Za-z0-9_-]{8,}/;
+
+/**
+ * Is this residue/prose token a PASTED LITERAL SECRET (as opposed to an auth-scheme word, a
+ * parameter name, or ordinary prose)?
+ *
+ * A3 RE-REVIEW HIGH-1 — the F4 tightening ("residue must be scheme-like words: letters/hyphens,
+ * <=16 chars") was far too strict and BROKE REAL INTEGRATIONS ON THE WIRE: any digit-bearing
+ * scheme word failed it, so `AWS4-HMAC-SHA256 {{signature}}`, `OAuth oauth_consumer_key="{{k}}"`,
+ * `Bearer {{sig}}; charset=utf-8`, `Signature keyId="{{k}}",algorithm="rsa-sha256"` and
+ * `ApiKey-v1 {{api_key}}` were all redacted — and `action-executor.ts` then sent the literal
+ * string `[REDACTED]` as the request's auth header. The shipped-package property test could not
+ * catch it because every breaking shape is TENANT-authored.
+ *
+ * The rule is now about the SHAPE OF A SECRET rather than the shape of a scheme word:
+ *   - a known vendor credential prefix (`sk_live_…`, `ghp_…`, `AKIA…`, a JWT) — always a secret;
+ *   - a long opaque run (>=24 chars in the secret alphabet) — no scheme word or English word is;
+ *   - a >=12-char run mixing UPPER + lower + digit — the entropy signature of a generated key
+ *     (`sk_live_9aXbZ`, `ghp_16C7e42F292c69`), while `ApiKey-v1` (9) and `AWS4-HMAC-SHA256`
+ *     (no lowercase) and `rsa-sha256` (no uppercase) stay clear;
+ *   - a base64 run with padding, or a >=24-char hex run.
+ * KNOWN RESIDUAL (accepted, recorded): a SHORT low-entropy literal beside a placeholder still
+ * rides the exemption (`{{name}} hunter2`). Catching it would re-break the scheme words above;
+ * the defence in depth for it is E2's strict publish-time scrub, not this exemption.
+ */
+function looksLikePastedSecret(token: string): boolean {
+  const t = token.replace(/^["']+|["']+$/g, '');
+  if (t.length < 8) return false;
+  if (CREDENTIAL_PREFIX_RE.test(t)) return true;
+  if (t.length >= 24) return true;
+  if (/^[A-Za-z0-9+/]{16,}={1,2}$/.test(t)) return true; // padded base64
+  if (t.length >= 12 && /[a-z]/.test(t) && /[A-Z]/.test(t) && /[0-9]/.test(t)) return true;
+  // A long OPAQUE SEGMENT between `_`/`-`/`.` delimiters. Scheme words are built from short
+  // dictionary segments (`AWS4-HMAC-SHA256`, `rsa-sha256`, `ApiKey-v1`), whereas a generated key
+  // carries one long random run even when the whole token is lowercase (`tok_9f8e7d6c5b4a3210`).
+  return t
+    .split(/[_.-]+/)
+    .some((seg) => seg.length >= 12 && (/^[0-9a-f]+$/i.test(seg) || (/[A-Za-z]/.test(seg) && /[0-9]/.test(seg))));
 }
 
 /**
@@ -357,30 +400,36 @@ export function redactSecrets<T>(value: T): T {
  *   2. `Bearer|Basic <long token>` — a pasted credential after an auth scheme word, with the same
  *      per-token rule for the same reason.
  */
-const SECRET_RUN_SRC = String.raw`"?[A-Za-z0-9+/=_.-]{8,}"?`;
-const SECRET_LINE_RE = new RegExp(
-  String.raw`\b(${SECRET_KEY_NAMES})(\s*[:=][ \t]*)((?:${PLACEHOLDER_SRC}|${SECRET_RUN_SRC})(?:[ \t]+(?:${PLACEHOLDER_SRC}|${SECRET_RUN_SRC}))*)`,
-  'gi',
-);
-const SECRET_VALUE_TOKEN_RE = new RegExp(String.raw`${PLACEHOLDER_SRC}|(${SECRET_RUN_SRC})`, 'g');
-const BEARER_RUN_SRC = String.raw`[A-Za-z0-9+/=_.-]{16,}`;
-const BEARER_VALUE_RE = new RegExp(
-  String.raw`\b(bearer|basic)((?:[ \t]+(?:${PLACEHOLDER_SRC}|${BEARER_RUN_SRC}))+)`,
-  'gi',
-);
-const BEARER_TOKEN_RE = new RegExp(String.raw`${PLACEHOLDER_SRC}|(${BEARER_RUN_SRC})`, 'g');
+/** The value of a credential-named key runs to END OF LINE (A3 re-review LOW-2): bounding it to a
+ *  whitespace-joined token sequence let every other joiner (`,` `;` `|` `"` `=` …) carry a literal
+ *  past the scrub. The line is then scanned token-by-token, so widening the capture cannot
+ *  over-redact — only a token that `looksLikePastedSecret` is touched. */
+const SECRET_LINE_RE = new RegExp(String.raw`\b(${SECRET_KEY_NAMES})(\s*[:=][ \t]*)([^\n\r]*)`, 'gi');
+/** An auth scheme word followed by its value, likewise to end of line and likewise token-scanned. */
+const BEARER_VALUE_RE = /\b(bearer|basic)([ \t]+[^\n\r]*)/gi;
 
-/** Redact the literal runs of a matched value sequence, keeping `{{placeholders}}` intact. */
-function redactLiteralTokens(value: string, tokenRe: RegExp): string {
-  return value.replace(tokenRe, (whole, literal: string | undefined) => (literal !== undefined ? '[REDACTED]' : whole));
+/**
+ * Redact the SECRET-SHAPED tokens of a matched value, keeping `{{placeholders}}`, scheme words and
+ * ordinary prose intact.
+ *
+ * A3 RE-REVIEW LOW-2/LOW-3: the previous pass matched a whitespace-joined SEQUENCE of "runs", which
+ * was wrong in both directions — any other joiner escaped it entirely (`,` `;` `|` `=` `"` newline
+ * … so `api_key: {{n}},sk_live_…` walked straight through), while inside a matched sequence EVERY
+ * run was redacted, so plain documentation came back shredded (`token: documentation explains
+ * everything` -> three `[REDACTED]`s). Scanning tokens with the shared `looksLikePastedSecret`
+ * predicate fixes both: joiners no longer matter because tokens are found wherever they sit, and a
+ * word only redacts when it actually looks like a pasted credential.
+ */
+function redactSecretTokens(value: string): string {
+  return value.replace(/\{\{[^{}]+\}\}|[A-Za-z0-9+/=_.-]+/g, (tok) =>
+    (tok.startsWith('{{') ? tok : looksLikePastedSecret(tok) ? '[REDACTED]' : tok));
 }
 
 export function scrubSecretText(body: string): string {
   return body
     .replace(SECRET_LINE_RE, (_m, key: string, sep: string, value: string) =>
-      `${key}${sep}${redactLiteralTokens(value, SECRET_VALUE_TOKEN_RE)}`)
-    .replace(BEARER_VALUE_RE, (_m, scheme: string, rest: string) =>
-      `${scheme}${redactLiteralTokens(rest, BEARER_TOKEN_RE)}`);
+      `${key}${sep}${redactSecretTokens(value)}`)
+    .replace(BEARER_VALUE_RE, (_m, scheme: string, rest: string) => `${scheme}${redactSecretTokens(rest)}`);
 }
 
 // ============================================

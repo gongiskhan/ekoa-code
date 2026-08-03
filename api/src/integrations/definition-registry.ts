@@ -229,7 +229,16 @@ export async function resolveSkillMdRaw(
   store: DefinitionStoreReader = integrationDefinitionStore,
 ): Promise<string | null> {
   const doc = await store.getForActor(actor, key);
-  if (doc) return doc.skillMd ?? null;
+  if (doc) {
+    // OWN-ORG ROWS ONLY (A3 re-review HIGH-2). `getForActor` legitimately answers another org's
+    // `global` row and a same-org PEER's `org`-shared row; serving those RAW removed the A2-review
+    // F7 anti-exfiltration floor and handed a foreign author's pasted credential to the reader in
+    // plaintext. The raw view exists solely so an OWNER's edit cycle cannot round-trip a redaction
+    // into their own stored document — a foreign row is a FORK source, so no round trip can
+    // destroy the original and the scrub costs nothing there.
+    const own = doc.orgId === actor.orgId;
+    return doc.skillMd == null ? null : own ? doc.skillMd : scrubSecretText(doc.skillMd);
+  }
   return baselineSkillMd(key);
 }
 
