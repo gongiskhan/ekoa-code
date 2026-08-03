@@ -1,0 +1,50 @@
+ M RUN_LOG.md
+ M api/src/integrations/definitions.ts
+ M api/src/integrations/integration-capability.ts
+ M api/src/routes/integrations.ts
+ M api/src/server.ts
+ M api/tests/SUITE_LEDGER.json
+ M api/tests/contract/integrations-capability.test.ts
+ M api/tests/contract/schema-coverage.test.ts
+ M clients/cortex-cli/src/generated/cortex-v1.d.ts
+ M clients/cortex-cli/src/generated/operations.ts
+ M docs/autothing/friction-log.md
+ M docs/autothing/runs/20260801-171149-672a8f14/slices/CS1/gate-status.json
+ M docs/decisions.md
+ M docs/diagrams/02-module-map.excalidraw
+ M docs/diagrams/05-data-model.excalidraw
+ M docs/openapi/cortex.v1.json
+ M shared/src/integrations.ts
+ M web/tsconfig.json
+?? api/src/integrations/authored-action.ts
+?? api/src/integrations/integration-achieve.ts
+?? api/tests/contract/integrations-achieve.test.ts
+?? api/tests/integrations/integration-achieve.test.ts
+?? api/tests/security/authored-action-guardrails.test.ts
+?? api/tests/security/capability-catalog-custodian.test.ts
+?? docs/autothing/runs/20260801-171149-672a8f14/PAUSED-worktree.txt
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/A2/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/C1/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/CS5/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/E1/
+?? drills/pages/os.yml
+?? tests/drills/activate.spec.ts
+?? tests/drills/authcheck.spec.ts
+?? web/e2e/integration-achieve.spec.ts
+9ca069e feat(integrations): per-integration lessons - raw to the editor, scrubbed to the prompt (C3)
+--- untracked D3 files:
+?? api/src/integrations/authored-action.ts
+?? api/src/integrations/integration-achieve.ts
+?? api/tests/contract/integrations-achieve.test.ts
+?? api/tests/integrations/integration-achieve.test.ts
+?? api/tests/security/authored-action-guardrails.test.ts
+?? api/tests/security/capability-catalog-custodian.test.ts
+?? docs/autothing/runs/20260801-171149-672a8f14/PAUSED-worktree.txt
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/A2/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/C1/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/CS5/
+?? docs/autothing/runs/20260801-171149-672a8f14/slices/E1/
+?? drills/pages/os.yml
+?? tests/drills/activate.spec.ts
+?? tests/drills/authcheck.spec.ts
+?? web/e2e/integration-achieve.spec.ts
