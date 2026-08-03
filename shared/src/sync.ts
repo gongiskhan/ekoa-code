@@ -93,3 +93,62 @@ export const SyncRunReport = z.object({
   error: z.string().optional(),
 });
 export type SyncRunReport = z.infer<typeof SyncRunReport>;
+
+/**
+ * ADDITIVE (slice CS6, Rule 7). What ONE sync attempt returns to an operator surface.
+ *
+ * Still transport-agnostic and still not an endpoint descriptor: no provider, URL or network shape
+ * is named here, and this file is still absent from `ALL_ENDPOINTS`. What it adds is the shape the
+ * first sync rail (`api/src/routes/sync.ts`, dashboard-auth + flag) answers with, so that response
+ * has a NAMED shared schema to be contract-tested against rather than an ad-hoc object.
+ *
+ * THE POINT OF THE UNION: a run that never happened is not a run that failed. Session establishment
+ * can end in "a person is required" or "there is no compatible way out of the network", and in
+ * NEITHER case did the verification machinery execute — so neither carries a `SyncRunReport`, and
+ * neither is allowed to look like the `failed` outcome, which means "the machinery ran and the
+ * transport broke". That distinction is the same one `SyncOutcome` makes one level down, kept
+ * intact one level up.
+ */
+export const SyncRunOutcome = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('ran'),
+    /** How the transport session was obtained for this run. */
+    session: z.enum(['reused', 'reestablished']),
+    /** TRUE when the source killed the session mid-run and its stored credential was retired, so
+     *  the NEXT run re-establishes. Surfaced here because a `failed` report cannot carry it. */
+    sessionMarkedUnhealthy: z.boolean(),
+    report: SyncRunReport,
+  }),
+  z.object({
+    status: z.literal('needs-human'),
+    /** Which ceremony a person must perform. */
+    route: z.enum(['attended', 'relay']),
+    reason: z.string(),
+    /** TRUE when a credential was actually SUBMITTED getting here. A caller must NOT retry a
+     *  `true` without human input — the lock-out policies of the sources this targets are
+     *  unobserved and unforgiving. */
+    attempted: z.boolean(),
+  }),
+  z.object({
+    status: z.literal('needs-egress'),
+    required: z.object({ kind: z.literal('residential'), pairingId: z.string() }),
+  }),
+]);
+export type SyncRunOutcome = z.infer<typeof SyncRunOutcome>;
+
+/** ADDITIVE (slice CS6). The durable per-action sync state an operator surface reads: where the
+ *  watermark stands, how the last run ended, how long a proved-partial or failing streak has run,
+ *  and the last report in full. `latest` is absent when no run has been recorded yet. */
+export const SyncStateView = z.object({
+  watermark: z.string().nullable(),
+  lastRunAt: IsoTimestamp.optional(),
+  lastOutcome: SyncOutcome.optional(),
+  consecutiveIncomplete: Count,
+  consecutiveFailures: Count,
+  /** Size of the bounded dedup ledger — an operator signal, not the refs themselves. */
+  seenRefs: Count,
+  /** Items durably landed for this sync so far. */
+  landed: Count,
+  latest: SyncRunReport.optional(),
+});
+export type SyncStateView = z.infer<typeof SyncStateView>;
