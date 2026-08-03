@@ -92,7 +92,9 @@ function stubTransport(
   return async (url, init) => {
     const u = new URL(url);
     const fromQuery = Number(u.searchParams.get('page') ?? '1') || 1;
-    const fromBody = /Page\$(\d+)/.exec(init.body ?? '')?.[1];
+    // the postback body is form-URL-ENCODED (`Page%242`), so it is decoded before it is read —
+    // a raw regex over the encoded body silently re-serves page 1 and reads as a clamping pager
+    const fromBody = /Page\$(\d+)/.exec(new URLSearchParams(init.body ?? '').get('__EVENTARGUMENT') ?? '')?.[1];
     const page = fromBody ? Number(fromBody) : fromQuery;
     recorded?.push({ url, method: init.method, cookie: init.headers.Cookie, body: init.body });
     const out = pageHtml(page);
@@ -716,7 +718,406 @@ describe('citius-mandatarios-http · throttle', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. METADATA ONLY — structural
+// 6. COMPLETENESS HONESTY — the round-6 fresh-context review
+//
+// `complete` maps to CS6's `reachedEnd:true`, which lets `verified-sync.ts` advance the watermark:
+// a FALSE `complete` silently loses legal notifications for ever. The reviewer's 56 probes found
+// six real pagers that each walked ONE page and certified the sweep, because the recogniser only
+// ever matched a literal `?p=N` / `?page=N` in a quoted href and only ever inspected POSTBACK
+// anchors. Each block below drives a REAL two-page portal: page 2 exists and carries a second
+// notification, so "complete after one request" is provably a lost notification and not a shape
+// that happened to have nothing behind it.
+// ---------------------------------------------------------------------------
+
+/** One notification row, addressable so page 1 and page 2 are distinguishable. */
+const gridRow = (n: string): string =>
+  `<tr><td>${n}/26.0T8LSB</td><td>2026-06-15</td><td>Lisboa</td><td>Citação</td><td>&nbsp;</td></tr>`;
+/** The pager page 2 renders: a link BACK to page 1 and its own number as a label (WebForms). */
+const PAGE_2_PAGER = '<a href="CaixaCorreio.aspx?page=1">1</a><span class="cur">2</span>';
+
+/** A portal with a REAL page 2, whose page 1 renders `pager`. Page 2 is the last page. */
+function twoPagePortal(pager: string, recorded?: RecordedRequest[]): CitiusTransport {
+  return stubTransport(
+    (page) => (page === 1 ? gridPage(gridRow('1234'), pager) : gridPage(gridRow('5678'), PAGE_2_PAGER)),
+    recorded,
+  );
+}
+
+const OFFLINE: Pick<Parameters<typeof enumerateInbox>[0], 'baseUrl' | 'boundOrigins'> =
+  { baseUrl: 'https://portal.example', boundOrigins: ['portal.example'] };
+
+async function walkTwoPagePortal(
+  pager: string,
+  recorded: RecordedRequest[] = [],
+  extra: Partial<Parameters<typeof enumerateInbox>[0]> = {},
+): Promise<CitiusInboxEnumeration> {
+  return enumerateInbox(
+    { sessionState: offlineState('cs4'), ...OFFLINE, ...extra },
+    { transport: twoPagePortal(pager, recorded), sleep: async () => {} },
+  );
+}
+
+describe('citius-mandatarios-http · a truncated sweep is never COMPLETE (round-6 CRITICAL-1)', () => {
+  it('NON-VACUITY: the very same portal, with the ONE pager shape the old recogniser knew, walks both pages', async () => {
+    const recorded: RecordedRequest[] = [];
+    const out = await walkTwoPagePortal('<a href="CaixaCorreio.aspx?page=2">2</a>', recorded);
+    expect(out.status).toBe('complete');
+    expect(out.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.0T8LSB']);
+    expect(recorded).toHaveLength(2);
+  });
+
+  // ---- the shapes that used to certify a one-page sweep -------------------------------------
+  // (a) an ENTITY-ENCODED `&`: the pager is drivable once hrefs are decoded, so the walk must
+  //     actually REACH page 2 — not merely refuse to say `complete`.
+  it.each([
+    ['&amp;', '<a href="CaixaCorreio.aspx?o=d&amp;page=2">2</a>'],
+    ['&#38;', '<a href="CaixaCorreio.aspx?o=d&#38;page=2">2</a>'],
+  ])('an %s-encoded multi-parameter pager href is decoded and page 2 is really fetched', async (_label, pager) => {
+    const recorded: RecordedRequest[] = [];
+    const out = await walkTwoPagePortal(pager, recorded);
+    expect(out.status).toBe('complete');
+    expect(out.rows).toHaveLength(2); // the second notification was NOT lost
+    expect(recorded).toHaveLength(2);
+    // the raw markup does NOT contain the literal the old recogniser looked for — the decode is
+    // load-bearing, not incidental
+    expect(pager).not.toMatch(/[?&]p(?:age)?=2/);
+  });
+
+  // (b) pagers this module cannot DRIVE. It must refuse `complete`, keep page 1's rows, and name
+  //     the refusal as the high-confidence one (a control inside the pager region).
+  it.each([
+    ['a page parameter it does not know', '<a href="CaixaCorreio.aspx?pagina=2">2</a>'],
+    ['a labelled GET next link', '<a href="CaixaCorreio.aspx?pg=2">Seguinte &gt;&gt;</a>'],
+    ['an image-only next control', '<a href="CaixaCorreio.aspx?idx=2"><img alt="Seguinte" src="n.gif"></a>'],
+    ['a script-driven next link', '<a href="#" onclick="goPage(2)">Próxima</a>'],
+    ['a submit-button next control', '<input type="submit" name="ctl00$cph$btnNext" value="Seguinte"/>'],
+  ])('%s is INCOMPLETE (pager-unrecognised), never complete', async (_label, pager) => {
+    const recorded: RecordedRequest[] = [];
+    const out = await walkTwoPagePortal(pager, recorded);
+    expect(out.status).not.toBe('complete');
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+    expect(out.rows).toHaveLength(1); // page 1's notification is real and is kept
+    expect(recorded).toHaveLength(1);
+  });
+
+  it('THE FLOOR: a full last page with no pager account of itself cannot be complete', async () => {
+    // A pager control this module recognises as neither numeric nor next-labelled. Nothing says
+    // "there is more" — and nothing proves there is not, because the grid came back FULL.
+    const pager = '<div class="pager"><a href="CaixaCorreio.aspx?dir=next"><img src="n.gif"></a></div>';
+    const full = await enumerateInbox(
+      { sessionState: offlineState('floor'), ...OFFLINE, pageSize: 1 },
+      { transport: stubTransport(() => gridPage(gridRow('1234'), pager)), sleep: async () => {} },
+    );
+    expect(full.status).toBe('incomplete');
+    if (full.status !== 'incomplete') return;
+    expect(full.reason).toBe('page-full-no-pager');
+    expect(full.rows).toHaveLength(1);
+  });
+
+  it('…and the floor does NOT over-fire: a grid under the page size, or a pager that accounts for the page, is complete', async () => {
+    const pager = '<div class="pager"><a href="CaixaCorreio.aspx?dir=next"><img src="n.gif"></a></div>';
+    // same page, same pager — but the grid is not full, so nothing is suspicious
+    const notFull = await enumerateInbox(
+      { sessionState: offlineState('floor2'), ...OFFLINE, pageSize: 5 },
+      { transport: stubTransport(() => gridPage(gridRow('1234'), pager)), sleep: async () => {} },
+    );
+    expect(notFull.status).toBe('complete');
+
+    // full grid, but the pager NAMES page 1 and nothing beyond it: that is the end, stated
+    const accounted = await enumerateInbox(
+      { sessionState: offlineState('floor3'), ...OFFLINE, pageSize: 1 },
+      {
+        transport: stubTransport(() =>
+          gridPage(gridRow('1234'), '<div class="pager">Páginas: <span class="cur">1</span></div>')),
+        sleep: async () => {},
+      },
+    );
+    expect(accounted.status).toBe('complete');
+  });
+});
+
+describe('citius-mandatarios-http · pageParam is really wired (round-6 CRITICAL-2)', () => {
+  /** A portal whose pager parameter is `pagina`, with a real second page behind it. */
+  function paginaPortal(recorded: RecordedRequest[]): CitiusTransport {
+    return async (url, init) => {
+      recorded.push({ url, method: init.method, cookie: init.headers.Cookie, body: init.body });
+      const page = Number(new URL(url).searchParams.get('pagina') ?? '1') || 1;
+      const html = page === 1
+        ? gridPage(gridRow('1234'), '<a href="CaixaCorreio.aspx?pagina=2">2</a>')
+        : gridPage(gridRow('5678'), '<a href="CaixaCorreio.aspx?pagina=1">1</a><span class="cur">2</span>');
+      const buf = Buffer.from(html, 'latin1');
+      return {
+        status: 200,
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'text/html; charset=iso-8859-1' }),
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+      };
+    };
+  }
+
+  it('configuring pageParam makes the portal drivable — the SPIKE #2 mitigation is a config change', async () => {
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('cfg'), ...OFFLINE, pageParam: 'pagina' },
+      { transport: paginaPortal(recorded), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+    expect(out.rows).toHaveLength(2);
+    expect(recorded).toHaveLength(2);
+    expect(new URL(recorded[1]!.url).searchParams.get('pagina')).toBe('2');
+  });
+
+  it('…and WITHOUT it the same portal is INCOMPLETE, never a silently truncated complete', async () => {
+    const out = await enumerateInbox(
+      { sessionState: offlineState('cfg2'), ...OFFLINE },
+      { transport: paginaPortal([]), sleep: async () => {} },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+  });
+});
+
+describe('citius-mandatarios-http · the pager scans are scoped, and cry-wolf is named apart (round-6 HIGH)', () => {
+  /** A row whose OWN links carry page-ish parameters — ordinary inbox content, not a pager. */
+  const noisyRow =
+    '<tr><td><a href="Ver.aspx?page=2">1234/26.0T8LSB</a></td><td>2026-06-15</td><td>Lisboa</td>' +
+    '<td>Citação</td><td><a href="Documento.aspx?docId=abc&amp;p=3">Descarregar</a></td></tr>';
+
+  it('a page parameter inside a ROW link neither advertises a page nor causes a phantom fetch', async () => {
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('h1'), ...OFFLINE },
+      { transport: stubTransport(() => gridPage(noisyRow, ''), recorded), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+    expect(recorded).toHaveLength(1);           // no phantom page-2 request
+    expect(out.advertisedPageCount).toBeUndefined(); // and no bogus advertised count from `&p=3`
+  });
+
+  it('a Page$ token inside a <script>, and a help link in page prose, do not block complete', async () => {
+    const chrome =
+      '<script type="text/javascript">var tpl = "Page$" + n; // pager template</script>' +
+      '<p class="ajuda"><a href="/ajuda/paginacao.html">Como usar a página seguinte</a></p>';
+    const out = await enumerateInbox(
+      { sessionState: offlineState('h2'), ...OFFLINE },
+      { transport: stubTransport(() => gridPage(gridRow('1234'), '') + chrome), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+  });
+
+  it('a next-shaped control OUTSIDE the pager region is pager-ambiguous, not pager-unrecognised', async () => {
+    // the pager region itself says "one page"; the next-ish control is loose page chrome
+    const body = gridPage(gridRow('1234'), '<span class="cur">1</span>')
+      + '<div class="toolbar"><a href="Relatorio.aspx?ver=2">Seguinte</a></div>';
+    const out = await enumerateInbox(
+      { sessionState: offlineState('h3'), ...OFFLINE },
+      { transport: stubTransport(() => body), sleep: async () => {} },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    // fail-closed either way, but the operator can tell this apart from a real pager refusal
+    expect(out.reason).toBe('pager-ambiguous');
+    expect(out.rows).toHaveLength(1);
+  });
+});
+
+describe('citius-mandatarios-http · the postback BODY is allowlisted (round-6 MEDIUM 1)', () => {
+  it('replays only the WebForms state fields and drops everything else the page seeded', async () => {
+    const seeded =
+      '<input type="hidden" name="__VIEWSTATEGENERATOR" value="C2EE9ABB" />' +
+      '<input type="hidden" name="__LASTFOCUS" value="" />' +
+      '<input type="hidden" name="__SCROLLPOSITIONX" value="0" />' +
+      '<input type="hidden" name="ctl00$cph$hdnAbrirDocumento" value="abc123" />' +
+      '<input type="hidden" name="ctl00$cph$hdnComando" value="DownloadTodos" />';
+    const pager = (n: number) =>
+      `<a href="javascript:__doPostBack('ctl00$cph$gvNotificacoes','Page$${n}')">${n}</a>`;
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('m1'), ...OFFLINE },
+      {
+        transport: stubTransport(
+          (page) => (page === 1
+            ? gridPage(gridRow('1234'), `${seeded}${pager(1)}${pager(2)}`)
+            : gridPage(gridRow('5678'), `${seeded}${pager(1)}<span class="cur">2</span>`)),
+          recorded,
+        ),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('complete');
+    expect(recorded).toHaveLength(2);
+    const body = new URLSearchParams(recorded[1]!.body ?? '');
+    // what a WebForms server needs, and what this module generated
+    expect(body.get('__VIEWSTATE')).toBeTruthy();
+    expect(body.get('__VIEWSTATEGENERATOR')).toBe('C2EE9ABB');
+    expect(body.get('__EVENTVALIDATION')).toBeTruthy();
+    expect(body.get('__SCROLLPOSITIONX')).toBe('0');
+    expect(body.get('__EVENTTARGET')).toBe('ctl00$cph$gvNotificacoes');
+    expect(body.get('__EVENTARGUMENT')).toBe('Page$2');
+    // …and NOTHING the page tried to hand back to itself
+    expect(body.get('ctl00$cph$hdnAbrirDocumento')).toBeNull();
+    expect(body.get('ctl00$cph$hdnComando')).toBeNull();
+    expect(recorded[1]!.body).not.toContain('DownloadTodos');
+    // non-vacuity: the page really did offer those fields
+    expect(parseHiddenFields(seeded)['ctl00$cph$hdnComando']).toBe('DownloadTodos');
+  });
+});
+
+describe('citius-mandatarios-http · login detection agrees with the 401/403 decision (round-6 MEDIUM 2)', () => {
+  /** A WAF challenge (SPIKE #7): a 200 the parser refuses, that happens to carry a password field. */
+  const wafChallenge =
+    '<!DOCTYPE html><html><head><title>Verificação</title></head><body>' +
+    '<h1>A verificar o seu navegador</h1>' +
+    '<form method="post" action="/_Incapsula_Resource?SWCGHOECIU=2"><input type="password" name="chk" /></form>' +
+    '</body></html>';
+
+  it('a challenge page carrying a bare password field is INCOMPLETE — it never spends a login attempt', async () => {
+    expect(parseInboxPage(wafChallenge).ok).toBe(false); // the premise, pinned
+    const out = await enumerateInbox(
+      { sessionState: offlineState('m2'), ...OFFLINE },
+      { transport: stubTransport(() => wafChallenge), sleep: async () => {} },
+    );
+    expect(out.status).not.toBe('session-dead');
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('page-unparseable');
+  });
+
+  it('…but a password field on a form that POSTS TO AUTHENTICATION still is session-dead', async () => {
+    const realLogin = wafChallenge.replace('/_Incapsula_Resource?SWCGHOECIU=2', '/portal/Login.aspx');
+    expect(realLogin).not.toContain('txtUser'); // no pinned control id: the AND branch is what fires
+    const out = await enumerateInbox(
+      { sessionState: offlineState('m2b'), ...OFFLINE },
+      { transport: stubTransport(() => realLogin), sleep: async () => {} },
+    );
+    expect(out.status).toBe('session-dead');
+    if (out.status !== 'session-dead') return;
+    expect(out.detectedBy).toBe('login-page');
+  });
+});
+
+describe('citius-mandatarios-http · the small refusals (round-6 LOW)', () => {
+  it('a FOREIGN error wearing the CREDENTIAL_ORIGIN_REFUSED code never echoes its message', async () => {
+    const foreign = Object.assign(new Error('cookie ASP.NET_SessionId=nao-repetir rejeitada'), {
+      code: 'CREDENTIAL_ORIGIN_REFUSED',
+    });
+    const out = await enumerateInbox(
+      { sessionState: offlineState('l1'), ...OFFLINE },
+      { transport: async () => { throw foreign; }, sleep: async () => {} },
+    );
+    expect(out.status).toBe('failed');
+    if (out.status !== 'failed') return;
+    expect(out.error).not.toContain('nao-repetir');
+    expect(JSON.stringify(out)).not.toContain('nao-repetir');
+    expect(out.error).toBe('erro de transporte (Error)');
+  });
+
+  it('a Set-Cookie whose Domain is not the request host (or a parent) is never replayed', async () => {
+    const recorded: RecordedRequest[] = [];
+    const transport: CitiusTransport = async (url, init) => {
+      recorded.push({ url, method: init.method, cookie: init.headers.Cookie });
+      const page = Number(new URL(url).searchParams.get('page') ?? '1') || 1;
+      const html = page === 1
+        ? gridPage(gridRow('1234'), '<a href="CaixaCorreio.aspx?page=2">2</a>')
+        : gridPage(gridRow('5678'), PAGE_2_PAGER);
+      const buf = Buffer.from(html, 'latin1');
+      const headers = new Headers({ 'Content-Type': 'text/html; charset=iso-8859-1' });
+      if (page === 1) {
+        headers.append('Set-Cookie', 'intruso=nao; Domain=outro.example; path=/');
+        headers.append('Set-Cookie', 'waf=sim; Domain=portal.example; path=/');
+      }
+      return {
+        status: 200,
+        ok: true,
+        headers,
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+      };
+    };
+    await enumerateInbox({ sessionState: offlineState('l2'), ...OFFLINE }, { transport, sleep: async () => {} });
+    expect(recorded).toHaveLength(2);
+    expect(recorded[1]!.cookie).not.toContain('intruso');
+    expect(recorded[1]!.cookie).toContain('waf=sim'); // non-vacuous: a legitimate rotation DID land
+
+    // HONEST NOTE ON THIS ASSERTION: because this connector only ever requests ONE url, the
+    // SEND-side matcher (`domainMatches` in `cookieHeaderFor`) already withholds that cookie, so
+    // the assertion above cannot on its own prove the ABSORB-side RFC 6265 §5.3 rejection exists.
+    // It is belt-and-braces — a jar entry a future multi-host change would replay — so it is pinned
+    // structurally instead of pretended to be observable here.
+    expect(/function absorbSetCookies[\s\S]*?\n}/.exec(MODULE_SRC)?.[0] ?? '').toMatch(/domainMatches\(host,/);
+  });
+
+  it('sends one cookie per NAME, longest path first (RFC 6265 §5.4)', async () => {
+    const recorded: RecordedRequest[] = [];
+    await enumerateInbox(
+      {
+        sessionState: {
+          cookies: [
+            { name: 'sess', value: 'raiz', domain: 'portal.example', path: '/' },
+            { name: 'sess', value: 'especifico', domain: 'portal.example', path: '/habilus/myhabilus' },
+          ],
+        },
+        ...OFFLINE,
+      },
+      { transport: stubTransport(() => loadFixture('inbox-empty.html'), recorded), sleep: async () => {} },
+    );
+    expect(recorded[0]!.cookie).toBe('sess=especifico');
+  });
+
+  it('a response DECLARING a length above the cap is refused before its body is read', async () => {
+    let bodyRead = false;
+    const out = await enumerateInbox(
+      { sessionState: offlineState('l3'), ...OFFLINE },
+      {
+        transport: async () => ({
+          status: 200,
+          ok: true,
+          headers: new Headers({ 'Content-Type': 'text/html', 'Content-Length': String(64 * 1024 * 1024) }),
+          arrayBuffer: async () => { bodyRead = true; return new ArrayBuffer(0); },
+        }),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('failed');
+    if (out.status !== 'failed') return;
+    expect(out.error).toContain('acima do limite');
+    expect(bodyRead).toBe(false);
+  });
+
+  it('the default origin binding comes from baseUrl, so an absolute inboxPath cannot redefine it', async () => {
+    const transportCalls: string[] = [];
+    const out = await enumerateInbox(
+      {
+        sessionState: offlineState('l4', 'outra.example'),
+        baseUrl: 'https://portal.example',
+        inboxPath: 'https://outra.example/CaixaCorreio.aspx', // an absolute path wins the URL resolve…
+        // …and NO boundOrigins, so the binding is the derived one
+      },
+      { transport: async (url) => { transportCalls.push(url); throw new Error('unreachable'); }, sleep: async () => {} },
+    );
+    expect(out.status).toBe('failed');
+    if (out.status !== 'failed') return;
+    expect(out.error).toContain('not a bound origin');
+    expect(transportCalls).toEqual([]);
+  });
+
+  it('a redirect whose LOGIN target hides in the query string is FAILED (SPIKE #1, pinned not fixed)', async () => {
+    const out = await enumerateInbox(
+      { sessionState: offlineState('l5'), ...OFFLINE },
+      {
+        transport: stubTransport(() => ({ status: 302, location: '/?ReturnUrl=%2fLogin.aspx' })),
+        sleep: async () => {},
+      },
+    );
+    // `failed` spends nothing; `session-dead` would spend a login attempt on a pathname guess
+    expect(out.status).toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. METADATA ONLY — structural
 // ---------------------------------------------------------------------------
 
 describe('citius-mandatarios-http · structural metadata-only guard', () => {
@@ -778,6 +1179,21 @@ describe('citius-mandatarios-http · structural metadata-only guard', () => {
     expect(out).not.toHaveProperty('pageTotal');
     expect(out.advertisedPageCount).toBe(3); // a PAGE count, and named like one
     expect(JSON.stringify(out)).not.toContain('pageTotal');
+  });
+
+  it('the CS6 wiring contract names every collision across the seam, so CS6 cannot re-open one', () => {
+    // The reviewer independently confirmed the `pageTotal` hazard and the mitigation; these are the
+    // instructions that have to SURVIVE into CS6, and the docblock is where CS6 will read them.
+    const contract = MODULE_SRC.slice(
+      MODULE_SRC.indexOf('CS6 WIRING CONTRACT'),
+      MODULE_SRC.indexOf('FIRST-REAL-ACCOUNT SPIKE'),
+    );
+    expect(contract.length).toBeGreaterThan(500); // the slice really landed on the contract
+    expect(contract).toMatch(/MUST OMIT CS3's `pageTotal`\s*\n?\s*\*?\s*ENTIRELY/);
+    expect(contract).toMatch(/NOT SYNTHESISE ONE FROM `rows\.length`/);
+    expect(contract).toMatch(/`pages` HERE is `CitiusPageOutcome\[\]`/);
+    expect(contract).toMatch(/`EnumerateResult\.result\.pages` upstream is a NUMBER/);
+    expect(contract).toMatch(/MUST\s*\n?\s*\*?\s*FORWARD the window's bound/);
   });
 });
 
