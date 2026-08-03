@@ -169,7 +169,20 @@ export interface RunVerifiedSyncInput {
   land: (item: EnumeratedItem) => Promise<{ landed: boolean }>;
   store: SyncStateStore;
   clock: () => Date;
-  /** Optional no-op seam for a future "lesson"/telemetry sink; never load-bearing. */
+  /**
+   * The LESSONS seam (declared CS3, made real CS8). Called ONCE per run, AFTER the report is durably
+   * persisted and after the durable state has already moved (or deliberately not moved), so it can
+   * neither change what the run decided nor observe it before it is final.
+   *
+   * NEVER LOAD-BEARING, and that is now structural rather than a promise: a sink that THROWS is
+   * caught here (see `recordLessonSafely`) and the report is still returned. A telemetry write must
+   * not be able to turn a proved-complete run - watermark already advanced, items already landed -
+   * into a thrown error at the caller, which is what would reach an operator as "the sync failed".
+   * That would make the audit trail lie in exactly the place this whole rail exists to be honest.
+   *
+   * `events/sync-lessons.ts` provides the durable implementation (`makeSyncLessonRecorder(key)`);
+   * `legal/citius-sync.ts` wires it and adds the observations only the connector can see.
+   */
   recordLesson?: (report: SyncRunReport) => void | Promise<void>;
 }
 
@@ -335,8 +348,30 @@ export async function runVerifiedSync(input: RunVerifiedSyncInput): Promise<Sync
   };
 
   await store.saveReport(report);
-  if (recordLesson) await recordLesson(report);
+  await recordLessonSafely(recordLesson, report, input.syncKey);
   return report;
+}
+
+/**
+ * Run the lessons sink without letting it fail the run. The report is already persisted and the
+ * cursor has already made its decision by the time this is called, so there is nothing left for a
+ * throw to protect: it would only replace a truthful answer with an exception. Swallow it, say so
+ * loudly, and hand the caller the report the run actually produced.
+ */
+async function recordLessonSafely(
+  recordLesson: RunVerifiedSyncInput['recordLesson'],
+  report: SyncRunReport,
+  syncKey: string,
+): Promise<void> {
+  if (!recordLesson) return;
+  try {
+    await recordLesson(report);
+  } catch (err) {
+    console.warn(
+      `[verified-sync] lessons sink failed for ${syncKey} (report ${report.id}); the run itself is ` +
+        `unaffected: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /** Build + persist the `failed` report and bump the failure streak. Nothing else moves. */
@@ -376,6 +411,6 @@ async function finishFailed(
   };
   await input.store.bumpFailure(report.error ?? ctx.error);
   await input.store.saveReport(report);
-  if (input.recordLesson) await input.recordLesson(report);
+  await recordLessonSafely(input.recordLesson, report, input.syncKey);
   return report;
 }

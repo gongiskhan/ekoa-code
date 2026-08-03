@@ -33,7 +33,7 @@
 import { createHash } from 'node:crypto';
 import { syncState, syncReports } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
-import type { SyncRunReport } from '@ekoa/shared';
+import { SyncRunReport } from '@ekoa/shared';
 import type { SeenRef, SyncStateSnapshot, SyncStateStore } from './verified-sync.js';
 
 export type { SeenRef } from './verified-sync.js';
@@ -81,9 +81,33 @@ export const REPORT_HISTORY_CAP = 50;
  * JSON-encoded and hashed, exactly as `definitionIdFor` (integrations/definition-store.ts) argues for
  * its own composite id: no separator can collide, and the id is stable across runs. */
 export function syncStateId(key: SyncStateKey): string {
+  assertScopedKey(key);
   return createHash('sha256')
     .update(JSON.stringify([key.orgId, key.integrationKey, key.actionKey]))
     .digest('hex');
+}
+
+/**
+ * FAIL CLOSED ON IDENTITY (slice CS8), at the one chokepoint every durable path funnels through.
+ *
+ * A blank component is not a narrower key, it is a DIFFERENT key that several callers can land on:
+ * `('', 'citius', 'sync')` is the same row for every org that failed to supply one. `legal/
+ * citius-sync.ts` already refuses an empty actor at its own edge; putting the same refusal HERE means
+ * a future caller - a poller, an operator script, a second connector - cannot reach the state row,
+ * the report history or the lesson store with a half-built key at all. There is no legitimate
+ * unscoped sync: every one of these components names a tenant, an integration or (on the Citius rail)
+ * a mandatario, and merging two of them merges two watermarks.
+ */
+function assertScopedKey(key: SyncStateKey): void {
+  for (const [name, value] of [
+    ['orgId', key?.orgId],
+    ['integrationKey', key?.integrationKey],
+    ['actionKey', key?.actionKey],
+  ] as const) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(`syncStateId: refusing an unscoped sync key (${name} is empty)`);
+    }
+  }
 }
 
 function defaultDoc(key: SyncStateKey): SyncStateDoc {
@@ -194,22 +218,50 @@ function dateKey(s: string): number {
   return Number.isNaN(d) ? -Infinity : d;
 }
 
-/** On `complete`: advance the watermark, absorb `newSeen`, reset BOTH streaks. CAS-guarded. */
+/**
+ * On `complete`: advance the watermark, absorb `newSeen`, reset BOTH streaks. CAS-guarded.
+ *
+ * The advance is MONOTONIC (CS8): a proposed watermark that is strictly OLDER than the stored one is
+ * refused and the current value kept. The cursor is a promise that everything below it has been seen;
+ * moving it backwards silently re-opens a window that was already proved swept, and the only things
+ * that propose one are a clock that stepped back (NTP, a container start, a manual `until`) - never a
+ * fact about the source. Applied ONLY when both values parse as dates: the cursor is documented as an
+ * OPAQUE string, and inventing an ordering for one this module cannot read would be a second guess of
+ * exactly the kind hazard 5 in `legal/citius-sync.ts` was written about. For an opaque cursor the
+ * caller's word is final.
+ */
 export async function advanceWatermark(
   key: SyncStateKey,
   watermark: string,
   newSeen: SeenRef[],
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  await mutateState(key, (cur) => ({
-    ...cur,
-    watermark,
-    seenRefs: pruneSeen([...cur.seenRefs, ...newSeen], watermark),
-    lastRunAt: nowIso,
-    lastOutcome: 'complete',
-    consecutiveIncomplete: 0,
-    consecutiveFailures: 0,
-  }));
+  await mutateState(key, (cur) => {
+    const next = forwardWatermark(cur.watermark, watermark);
+    return {
+      ...cur,
+      watermark: next,
+      seenRefs: pruneSeen([...cur.seenRefs, ...newSeen], next),
+      lastRunAt: nowIso,
+      lastOutcome: 'complete',
+      consecutiveIncomplete: 0,
+      consecutiveFailures: 0,
+    };
+  });
+}
+
+/** The greater of the two when both are readable instants; otherwise the proposed value. */
+export function forwardWatermark(current: string | null, proposed: string): string {
+  if (current === null) return proposed;
+  const a = Date.parse(current);
+  const b = Date.parse(proposed);
+  if (Number.isNaN(a) || Number.isNaN(b)) return proposed; // opaque cursor: not ours to order
+  if (b >= a) return proposed;
+  console.warn(
+    `[sync-state] refusing to move a watermark BACKWARDS (${current} -> ${proposed}); keeping the ` +
+      'later value. A backwards cursor re-opens a window that was already proved swept.',
+  );
+  return current;
 }
 
 /** On `incomplete`: absorb refs into the seen-set; the watermark STAYS put. CAS-guarded. */
@@ -280,6 +332,49 @@ export async function persistSyncReport(key: SyncStateKey, report: SyncRunReport
   if (rows.length > REPORT_HISTORY_CAP) {
     for (const r of rows.slice(REPORT_HISTORY_CAP)) await syncReports.delete(r._id);
   }
+}
+
+/**
+ * THE GRADUATION READ (slice CS8): the most recent run's report for one key, or `undefined`.
+ *
+ * CS6 answered this inline inside `readCitiusSyncState`. It is lifted here because "which report is
+ * the latest" is a property of the report HISTORY, not of the Citius rail - a second sync producer
+ * inherits the same three answers rather than re-deciding them - and because the three answers are
+ * each a judgement that deserves to be stated once, in the file that owns the collection:
+ *
+ *   WHICH ONE IS "LATEST" - the greatest `startedAt`, with `endedAt` then `_id` as DETERMINISTIC
+ *   tie-breaks. Ties are not hypothetical: a caller running on a fixed clock (every test does) writes
+ *   reports that share `startedAt` to the millisecond, and an unbroken tie makes "latest" whatever
+ *   Mongo happened to return - a read that answers differently on two calls with no writes between
+ *   them. Ordering by START (not by end) is what makes `latest` mean "the most recent RUN": a long
+ *   run that started first is still the earlier run, however late it finished.
+ *
+ *   WHEN THERE IS NONE - `undefined`, and the caller omits the field. A key with no history has never
+ *   run; that is a fact, not an error, and it is exactly what a first-ever read must say.
+ *
+ *   WHEN THE NEWEST ROW IS AN OLDER SHAPE - it is `safeParse`d and DROPPED (CS6's precedent: an
+ *   answer this chain cannot vouch for is not given). It is deliberately NOT backfilled from the next
+ *   valid row: `latest` names THE MOST RECENT RUN, and serving the run before it under that name is a
+ *   worse lie than serving nothing - it would show a `complete` from three runs ago while the row's
+ *   own `lastOutcome` says `failed`, i.e. a view that contradicts itself. The state row (`lastRunAt`,
+ *   `lastOutcome`, the streak counters) is the authority on how the last run ENDED and is unaffected
+ *   by a report the contract can no longer read, so dropping the detail loses detail, not the truth.
+ *   The drop is logged rather than swallowed: a report the current contract cannot read is a
+ *   migration signal, and `pruneSeen`'s cap-overflow warning is the precedent for surfacing one from
+ *   a module with no telemetry seam.
+ */
+export async function latestSyncReport(key: SyncStateKey): Promise<SyncRunReport | undefined> {
+  const stateKey = syncStateId(key); // fails closed on a blank component
+  const rows = await syncReports.find({ stateKey }, { startedAt: -1, endedAt: -1, _id: -1 });
+  const head = rows[0];
+  if (!head) return undefined;
+  const parsed = SyncRunReport.safeParse(head);
+  if (parsed.success) return parsed.data;
+  console.warn(
+    `[sync-state] latest report ${String(head._id)} for ${stateKey} does not validate against the ` +
+      `current SyncRunReport contract; serving no latest report rather than an unvalidated one`,
+  );
+  return undefined;
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   type CitiusSyncInput,
 } from '../../src/legal/citius-sync.js';
 import type { EnumeratedItem, SeenRef, SyncStateSnapshot, SyncStateStore } from '../../src/events/verified-sync.js';
+import type { SyncLessonContext, SyncLessonInput } from '../../src/events/sync-lessons.js';
 import type { EnsureSessionResult } from '../../src/automation/session-establishment.js';
 
 const MODULE_PATH = fileURLToPath(new URL('../../src/legal/citius-sync.ts', import.meta.url));
@@ -134,16 +135,27 @@ function harness(
   enumerateInputs: EnumerateInboxInput[];
   establish: ReturnType<typeof vi.fn>;
   markUnhealthy: ReturnType<typeof vi.fn>;
+  lessons: SyncLessonInput[];
+  lessonCalls: SyncLessonContext[];
 } {
   const store = over.store ?? fakeStore();
   const landed: EnumeratedItem[] = [];
   const enumerateInputs: EnumerateInboxInput[] = [];
   const establish = vi.fn(async () => over.session ?? reused());
   const markUnhealthy = vi.fn(async () => true);
+  // The lessons SEAM, injected: this suite stays Mongo-free, and what a run claims to have learned
+  // is observable as a value rather than inferred from a store.
+  const lessons: SyncLessonInput[] = [];
+  const lessonCalls: SyncLessonContext[] = [];
   let pass = 0;
   const deps: CitiusSyncDeps = {
     establishSession: establish,
     markSessionUnhealthy: markUnhealthy,
+    recordLesson: async (batch, ctx) => {
+      lessons.push(...batch);
+      lessonCalls.push(ctx);
+      return [];
+    },
     enumerate: async (input: EnumerateInboxInput) => {
       enumerateInputs.push(input);
       const w = walks[Math.min(pass, walks.length - 1)]!;
@@ -157,7 +169,10 @@ function harness(
   const input: CitiusSyncInput = {
     actor: ACTOR, runId: 'run1', baseUrl: 'https://portal.example', ...over.input,
   };
-  return { run: () => syncCitiusNotifications(input, deps), store, landed, enumerateInputs, establish, markUnhealthy };
+  return {
+    run: () => syncCitiusNotifications(input, deps),
+    store, landed, enumerateInputs, establish, markUnhealthy, lessons, lessonCalls,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +181,7 @@ function harness(
 
 describe('citius-sync · the pageTotal collision stays closed (CS4 finding, CS3 contract)', () => {
   it('a COMPLETE walk maps to reachedEnd:true with NO pageTotal property at all', () => {
-    const out = toEnumerateResult(complete([row(1), row(2)], 3), null);
+    const out = toEnumerateResult(complete([row(1), row(2)], 3));
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.result.reachedEnd).toBe(true);
@@ -179,7 +194,7 @@ describe('citius-sync · the pageTotal collision stays closed (CS4 finding, CS3 
     // exact move that would certify a truncated sweep as complete.
     const walk = incomplete([row(1)], 1);
     expect(walk.advertisedPageCount).toBe(9);
-    const out = toEnumerateResult(walk, null);
+    const out = toEnumerateResult(walk);
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect('pageTotal' in out.result).toBe(false);
@@ -206,7 +221,7 @@ describe('citius-sync · the pageTotal collision stays closed (CS4 finding, CS3 
 
 describe('citius-sync · pages is a NUMBER and maxPages is the WINDOW\'s', () => {
   it('maps pagesWalked (not the per-page outcome array, not a row count) into result.pages', () => {
-    const out = toEnumerateResult(complete([row(1), row(2), row(3)], 7), null);
+    const out = toEnumerateResult(complete([row(1), row(2), row(3)], 7));
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.result.pages).toBe(7);
@@ -412,10 +427,10 @@ describe('citius-sync · identity fails closed and never widens', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. THE WINDOW — a filter that can only ever fail OPEN
+// 6. THE DATE CELL, and hazard 5: NO date comparison survives in this module
 // ---------------------------------------------------------------------------
 
-describe('citius-sync · date normalisation and the lower-bound window filter', () => {
+describe('citius-sync · date normalisation', () => {
   it.each([
     ['2026-06-15', '2026-06-15T00:00:00.000Z'],
     ['2026-06-15 14:03', '2026-06-15T14:03:00.000Z'],
@@ -430,42 +445,76 @@ describe('citius-sync · date normalisation and the lower-bound window filter', 
     (raw) => { expect(citiusItemDate(raw)).toBe(raw); },
   );
 
-  it('filters rows below the inclusive watermark, and keeps the boundary row', () => {
+  // An EXPLICIT offset used to be discarded, so a portal rendering local time was recorded (and
+  // shown to a lawyer) an hour or more away from the instant it stated.
+  it.each([
+    ['2026-08-03T14:03:00+01:00', '2026-08-03T13:03:00.000Z'],
+    ['2026-08-03T14:03:00-03:00', '2026-08-03T17:03:00.000Z'],
+    ['2026-08-03T14:03:00+0100', '2026-08-03T13:03:00.000Z'],
+    ['2026-08-03T14:03:00Z', '2026-08-03T14:03:00.000Z'],
+    ['03-08-2026 00:30+01:00', '2026-08-02T23:30:00.000Z'],
+  ])('honours an explicit timezone offset: %s -> %s', (raw, iso) => {
+    expect(citiusItemDate(raw)).toBe(iso);
+  });
+
+  it('a cell with NO offset is still read as UTC (the documented, unobserved assumption)', () => {
+    expect(citiusItemDate('2026-08-03 14:03')).toBe('2026-08-03T14:03:00.000Z');
+  });
+});
+
+/**
+ * HAZARD 5. CS6 filtered rows by `itemDate >= watermark`, comparing a MIDNIGHT-UTC date-only cell
+ * against a mid-day wall-clock cursor. A notification dated the same day as the last complete run
+ * was dropped from BOTH passes, so the passes agreed, the run was certified `complete`, and the
+ * watermark advanced past a row that had never landed and never could. The fix is that no date
+ * comparison exists here at all: dedup is by REFERENCE, which is exact.
+ */
+describe('citius-sync · hazard 5 — every captured row is handed over, whatever the cursor says', () => {
+  it('a row dated BELOW the watermark is still enumerated (the coordinate systems no longer meet)', () => {
     const out = toEnumerateResult(
       complete([
-        row(1, { ref: 'old', data: '2026-01-01' }),
-        row(2, { ref: 'edge', data: '2026-06-01' }),
-        row(3, { ref: 'new', data: '2026-07-01' }),
+        row(1, { ref: 'ancient', data: '2020-01-01' }),
+        row(2, { ref: 'today-midnight', data: '2026-06-01' }),
+        row(3, { ref: 'newer', data: '2026-07-01' }),
       ]),
-      '2026-06-01T00:00:00.000Z',
     );
     expect(out.ok).toBe(true);
     if (!out.ok) return;
-    expect(out.result.items.map((i) => i.ref)).toEqual(['edge', 'new']);
+    expect(out.result.items.map((i) => i.ref)).toEqual(['ancient', 'today-midnight', 'newer']);
   });
 
-  it('KEEPS a row whose date it cannot place — a dropped row is a silent miss, a kept one is a re-land', () => {
-    const out = toEnumerateResult(
-      complete([row(1, { ref: 'weird', data: 'terça-feira' }), row(2, { ref: 'old', data: '2026-01-01' })]),
-      '2026-06-01T00:00:00.000Z',
-    );
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
-    expect(out.result.items.map((i) => i.ref)).toEqual(['weird']);
+  it('THE EXACT LOST-NOTIFICATION SHAPE: a same-day row survives a mid-day cursor', async () => {
+    // watermark 09:00 on 15 June; a notification whose cell is the DATE 15 June normalises to
+    // 00:00Z that day. Under the old filter it vanished from both passes and was never landed.
+    const store = fakeStore({ watermark: '2026-06-15T09:00:00.000Z' });
+    const sameDay = complete([row(1, { ref: 'same-day', data: '15-06-2026' })]);
+    const h = harness([sameDay, sameDay], { store });
+    const out = await h.run();
+
+    expect(h.landed.map((i) => i.ref)).toEqual(['same-day']);
+    expect(out.status).toBe('ran');
+    if (out.status !== 'ran') return;
+    expect(out.report.landed).toBe(1);
+    expect(out.report.verification.pass1.itemsSeen).toBe(1);
   });
 
-  it('an un-parseable WATERMARK disables the filter entirely rather than dropping everything', () => {
-    const out = toEnumerateResult(complete([row(1), row(2)]), 'cursor-opaco');
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
-    expect(out.result.items).toHaveLength(2);
+  it('the module SOURCE holds no date comparison against the cursor any more', () => {
+    expect(MODULE_CODE).not.toMatch(/withinWindow/);
+    expect(MODULE_CODE).not.toMatch(/sinceIso/);
   });
 
-  it('there is NO upper bound: a row newer than the ceiling lands now rather than vanishing', () => {
-    const out = toEnumerateResult(complete([row(1, { ref: 'future', data: '2099-01-01' })]), null);
+  it('a row NEWER than the ceiling is enumerated too: there is no upper bound either', () => {
+    const out = toEnumerateResult(complete([row(1, { ref: 'future', data: '2099-01-01' })]));
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.result.items.map((i) => i.ref)).toEqual(['future']);
+  });
+
+  it('a row whose date is UNREADABLE is enumerated with its cell verbatim, never dropped', () => {
+    const out = toEnumerateResult(complete([row(1, { ref: 'weird', data: 'terça-feira' })]));
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.items.map((i) => [i.ref, i.itemDate])).toEqual([['weird', 'terça-feira']]);
   });
 });
 

@@ -388,3 +388,95 @@ describe('runVerifiedSync — seen-set absorb across runs', () => {
     expect(new Set(store.state.seenRefs.map((r) => r.ref))).toEqual(new Set(['A', 'C']));
   });
 });
+
+// --- CS8: the lessons seam ------------------------------------------------------------------------
+
+/**
+ * `recordLesson` is the once-per-run hook CS3 declared and CS8 made real. Two properties matter and
+ * both are about it NOT being load-bearing:
+ *
+ *   it is called on BOTH terminal paths (a failed run usually has the most to teach), exactly once,
+ *   with the report the caller is about to receive; and
+ *
+ *   a sink that THROWS cannot break the run. By the time it is called the report is persisted and
+ *   the watermark has already made its decision, so a throw could only replace a truthful answer
+ *   with an exception - which would reach an operator as "the sync failed" for a sync that did not.
+ */
+describe('runVerifiedSync — recordLesson (CS8 lessons seam)', () => {
+  it('is called ONCE with the completed report, after the durable state has already moved', async () => {
+    const log: string[] = [];
+    const store = makeFakeStore({}, log);
+    const seen: SyncRunReport[] = [];
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        enumerate: async () => okResult(items(A)),
+        recordLesson: (r) => {
+          log.push('recordLesson');
+          seen.push(r);
+        },
+      }),
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(report);
+    expect(seen[0]!.outcome).toBe('complete');
+    // AFTER the watermark advance and AFTER the report was saved: a sink can never observe (nor
+    // influence) a run mid-decision.
+    expect(log.indexOf('recordLesson')).toBeGreaterThan(log.indexOf('persist:advanceWatermark'));
+    expect(log.indexOf('recordLesson')).toBeGreaterThan(log.indexOf('persist:saveReport'));
+    expect(log.filter((l) => l === 'recordLesson')).toHaveLength(1);
+  });
+
+  it('is called on the FAILED path too, with the failed report', async () => {
+    const store = makeFakeStore();
+    const seen: SyncRunReport[] = [];
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        enumerate: async () => ({ ok: false, error: 'transporte morreu' }),
+        recordLesson: (r) => {
+          seen.push(r);
+        },
+      }),
+    );
+
+    expect(report.outcome).toBe('failed');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.outcome).toBe('failed');
+    expect(seen[0]!.error).toBe('transporte morreu');
+  });
+
+  it('a THROWING sink does not fail a complete run: the report is still returned and the watermark still moved', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        enumerate: async () => okResult(items(A)),
+        recordLesson: () => {
+          throw new Error('lesson store unreachable');
+        },
+      }),
+    );
+
+    expect(report.outcome).toBe('complete');
+    expect(store.state.watermark).toBe(CLOCK_ISO);
+    SyncRunReport.parse(report);
+  });
+
+  it('a sink that REJECTS is equally harmless on the failed path', async () => {
+    const store = makeFakeStore();
+    const report = await runVerifiedSync(
+      baseInput({
+        store,
+        enumerate: async () => ({ ok: false, error: 'rede' }),
+        recordLesson: async () => {
+          await Promise.reject(new Error('sink down'));
+        },
+      }),
+    );
+
+    expect(report.outcome).toBe('failed');
+    expect(store.state.consecutiveFailures).toBe(1);
+  });
+});

@@ -11,6 +11,7 @@ import {
   bumpIncomplete,
   bumpFailure,
   persistSyncReport,
+  latestSyncReport,
   pruneSeen,
   SEEN_HARD_CAP,
   REPORT_HISTORY_CAP,
@@ -257,5 +258,141 @@ describe('persistSyncReport', () => {
 
     expect(await syncReports.get(`report-${total - 1}`)).not.toBeNull(); // newest kept
     expect(await syncReports.get('report-0')).toBeNull(); // oldest pruned
+  });
+});
+
+// --- CS8: fail-closed identity + the graduation read ----------------------------------------------
+
+/**
+ * `syncStateId` is the one chokepoint every durable sync path funnels through - the state row, the
+ * report history, the lesson store. A blank component is not a narrower key, it is a key several
+ * callers land on together, so it is refused here rather than at each caller's edge.
+ */
+describe('syncStateId — fails closed on an unscoped key (CS8)', () => {
+  it.each([
+    ['orgId', { orgId: '', integrationKey: 'citius', actionKey: 'sync' }],
+    ['integrationKey', { orgId: 'org1', integrationKey: '   ', actionKey: 'sync' }],
+    ['actionKey', { orgId: 'org1', integrationKey: 'citius', actionKey: '' }],
+  ])('refuses a key whose %s is empty', (name, key) => {
+    expect(() => syncStateId(key as SyncStateKey)).toThrow(new RegExp(`${name} is empty`));
+  });
+
+  it('the refusal reaches every durable path, not just the id helper', async () => {
+    const bad = { orgId: '', integrationKey: 'citius', actionKey: 'sync' } as SyncStateKey;
+    await expect(readSyncState(bad)).rejects.toThrow(/unscoped sync key/);
+    await expect(latestSyncReport(bad)).rejects.toThrow(/unscoped sync key/);
+    await expect(bumpFailure(bad, 'x')).rejects.toThrow(/unscoped sync key/);
+  });
+
+  it('a fully-scoped key is unaffected', () => {
+    expect(syncStateId(KEY)).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+/**
+ * THE GRADUATION READ. Three semantics, each pinned: which row is "latest", what "none" answers, and
+ * what happens to a row the current contract can no longer read.
+ */
+describe('latestSyncReport — the graduation read (CS8)', () => {
+  function report(over: Partial<SyncRunReport> & Pick<SyncRunReport, 'id' | 'startedAt'>): SyncRunReport {
+    return {
+      syncKey: syncStateId(KEY),
+      orgId: KEY.orgId,
+      endedAt: over.startedAt,
+      outcome: 'complete',
+      window: { since: null, until: over.startedAt },
+      verification: {
+        pass1: { pages: 1, itemsSeen: 0, newRefs: 0, reachedEnd: true },
+        pass2: { pages: 1, itemsSeen: 0, refsOnlyInPass2: [], reachedEnd: true },
+        maxPages: 50,
+      },
+      landed: 0,
+      duplicatesSuppressed: 0,
+      sessionEvents: [],
+      ...over,
+    };
+  }
+
+  it('NONE: a key that has never run answers undefined, not an empty report', async () => {
+    expect(await latestSyncReport(KEY)).toBeUndefined();
+  });
+
+  it('LATEST: the greatest startedAt wins, whatever order the rows were written in', async () => {
+    await persistSyncReport(KEY, report({ id: 'mid', startedAt: '2026-07-30T12:00:00.000Z' }));
+    await persistSyncReport(KEY, report({ id: 'newest', startedAt: '2026-07-30T13:00:00.000Z' }));
+    await persistSyncReport(KEY, report({ id: 'oldest', startedAt: '2026-07-30T11:00:00.000Z' }));
+
+    expect((await latestSyncReport(KEY))?.id).toBe('newest');
+  });
+
+  it('LATEST is by START, not by end: a long run that started first is still the earlier run', async () => {
+    await persistSyncReport(
+      KEY,
+      report({ id: 'started-first-ended-last', startedAt: '2026-07-30T11:00:00.000Z', endedAt: '2026-07-30T23:00:00.000Z' }),
+    );
+    await persistSyncReport(
+      KEY,
+      report({ id: 'started-later', startedAt: '2026-07-30T12:00:00.000Z', endedAt: '2026-07-30T12:00:30.000Z' }),
+    );
+
+    expect((await latestSyncReport(KEY))?.id).toBe('started-later');
+  });
+
+  it('a startedAt TIE is broken DETERMINISTICALLY (a fixed clock makes ties routine, not exotic)', async () => {
+    const t = '2026-07-30T12:00:00.000Z';
+    await persistSyncReport(KEY, report({ id: 'aaa', startedAt: t, endedAt: t }));
+    await persistSyncReport(KEY, report({ id: 'zzz', startedAt: t, endedAt: t }));
+
+    const first = await latestSyncReport(KEY);
+    const second = await latestSyncReport(KEY);
+    expect(first?.id).toBe(second?.id); // the same answer twice, with no writes between
+    expect(first?.id).toBe('zzz'); // _id descending is the documented last tie-break
+  });
+
+  it('SCOPE: another key\'s history is invisible, however recent it is', async () => {
+    const other: SyncStateKey = { ...KEY, actionKey: JSON.stringify(['sync', 'colleague']) };
+    await persistSyncReport(KEY, report({ id: 'mine', startedAt: '2026-07-30T10:00:00.000Z' }));
+    await persistSyncReport(other, { ...report({ id: 'theirs', startedAt: '2026-07-30T23:00:00.000Z' }), syncKey: syncStateId(other) });
+
+    expect((await latestSyncReport(KEY))?.id).toBe('mine');
+    expect((await latestSyncReport(other))?.id).toBe('theirs');
+  });
+
+  it('STALE SHAPE: a newest row the contract cannot read is DROPPED and NOT backfilled from the row before it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await persistSyncReport(KEY, report({ id: 'valid-older', startedAt: '2026-07-30T11:00:00.000Z' }));
+      // A row an older (or newer) schema wrote: `outcome` is not in the current enum.
+      await syncReports.insert({
+        _id: 'stale-newest',
+        stateKey: syncStateId(KEY),
+        syncKey: syncStateId(KEY),
+        orgId: KEY.orgId,
+        startedAt: '2026-07-30T12:00:00.000Z',
+        endedAt: '2026-07-30T12:00:00.000Z',
+        outcome: 'partially-complete',
+        window: { since: null, until: '2026-07-30T12:00:00.000Z' },
+        landed: 0,
+        duplicatesSuppressed: 0,
+        sessionEvents: [],
+      });
+
+      // NOT `valid-older`: `latest` names THE MOST RECENT RUN, and serving the run before it under
+      // that name would contradict the state row's own lastOutcome. Nothing is the honest answer.
+      expect(await latestSyncReport(KEY)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/stale-newest/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('NON-VACUITY: the same stale row, made valid, IS served — so the drop was the parse, not the query', async () => {
+    await syncReports.insert({
+      _id: 'now-valid',
+      stateKey: syncStateId(KEY),
+      ...report({ id: 'now-valid', startedAt: '2026-07-30T12:00:00.000Z' }),
+    });
+    expect((await latestSyncReport(KEY))?.id).toBe('now-valid');
   });
 });

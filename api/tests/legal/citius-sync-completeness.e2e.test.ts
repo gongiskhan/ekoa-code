@@ -34,7 +34,7 @@
  *     onto this module is proved in `citius-sync.test.ts`; wiring a headless browser in here would
  *     test Playwright, not completeness.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
@@ -258,4 +258,102 @@ describe('CS6 e2e · COMPLETE -> INCOMPLETE -> COMPLETE against the mock portal'
     expect(retired).toEqual(['cofre-item-citius']);
     expect(await watermark()).toBe(before);
   }, 90_000);
+});
+
+/**
+ * CS8 REGRESSION — THE DEFAULT CEILING, which is the only ceiling the shipped route can produce.
+ *
+ * The sequence above pins `until` explicitly, and every value it pins sits BELOW every mock row's
+ * date. That made the lower-bound window filter a no-op for the entire headline proof: the proof
+ * could not have failed on this, and a proof that cannot fail is not a proof. `routes/sync.ts`'s
+ * request body has no `until` field at all, so production always took the DEFAULT ceiling
+ * (`clock() - untilSkewMs`) - and against that ceiling the filter compared a mid-day wall-clock
+ * instant with a MIDNIGHT-UTC date-only cell and dropped real notifications from both passes,
+ * certifying `complete` and advancing the cursor past them for ever.
+ *
+ * This is the reviewer's reproduction, committed: no `until` anywhere, only a clock that moves.
+ */
+describe('CS8 e2e · a notification arriving under the DEFAULT ceiling is never lost (hazard 5)', () => {
+  const wmActor = { userId: 'mandataria-wm', orgId: 'firma-wm', role: 'user' as const };
+  const wmScope = { actor: wmActor };
+
+  /** A sync with NO `until`: the ceiling is whatever the clock says, exactly as the route produces. */
+  async function runAtClock(clockIso: string): Promise<Awaited<ReturnType<typeof syncCitiusNotifications>>> {
+    const session = await establishedSession();
+    return syncCitiusNotifications(
+      { actor: wmActor, runId: `wm-${clockIso}`, baseUrl: mock.baseUrl, inboxPath: mock.inboxPath, throttleMs: 0 },
+      {
+        establishSession: async () => session,
+        markSessionUnhealthy: async () => true,
+        enumerateDeps: { transport: liveTransport, sleep: async () => {} },
+        clock: () => new Date(clockIso),
+      },
+    );
+  }
+
+  it('run 1 sets a mid-day cursor; the notification that arrives next STILL LANDS', async () => {
+    // ---- RUN 1 at 09:00 -> complete, cursor = 2026-07-30T09:00:00.000Z (a WALL-CLOCK instant) ----
+    const first = await runAtClock('2026-07-30T09:00:00.000Z');
+    expect(first.status).toBe('ran');
+    if (first.status !== 'ran') return;
+    expect(first.report.outcome).toBe('complete');
+    const seededCount = first.report.verification.pass1.itemsSeen;
+    expect(seededCount).toBeGreaterThan(0);
+    expect(first.report.landed).toBe(seededCount);
+
+    const cursor = (await readSyncState(syncStateKeyFor(wmScope))).watermark;
+    expect(cursor).toBe('2026-07-30T09:00:00.000Z');
+    // The cursor really is ABOVE every row's normalised date - i.e. the shape that used to lose
+    // rows is genuinely set up here, not assumed.
+    expect(Date.parse(cursor!)).toBeGreaterThan(Date.parse('2026-07-07T00:00:00.000Z'));
+    expect((await readCitiusSyncState(wmScope)).landed).toBe(seededCount);
+
+    // ---- a NEW notification appears, dated (as the portal dates them) with a DATE, no time -------
+    mock.scenario({ cmd: 'addItems', count: 1 });
+
+    // ---- RUN 2 at 15:00, still no explicit `until` ----------------------------------------------
+    const second = await runAtClock('2026-07-30T15:00:00.000Z');
+    expect(second.status).toBe('ran');
+    if (second.status !== 'ran') return;
+    expect(second.report.outcome).toBe('complete');
+
+    // THE ASSERTION THE OLD CODE FAILED: the run SAW the new row and LANDED it.
+    expect(second.report.verification.pass1.itemsSeen).toBe(seededCount + 1);
+    expect(second.report.landed).toBe(1);
+    // the already-landed rows came back through the idempotent land as suppressed duplicates (the
+    // seen-set's 7-day prune horizon sits below these synthetic dates) - visible, and not data loss
+    expect(second.report.duplicatesSuppressed).toBe(seededCount);
+
+    const afterSecond = await readCitiusSyncState(wmScope);
+    expect(afterSecond.landed).toBe(seededCount + 1);
+    expect((await readSyncState(syncStateKeyFor(wmScope))).watermark).toBe('2026-07-30T15:00:00.000Z');
+
+    // ---- RUN 3 at 18:00: nothing new, nothing lost, and the cursor keeps moving forward ---------
+    const third = await runAtClock('2026-07-30T18:00:00.000Z');
+    expect(third.status).toBe('ran');
+    if (third.status !== 'ran') return;
+    expect(third.report.outcome).toBe('complete');
+    expect(third.report.landed).toBe(0);
+    expect((await readCitiusSyncState(wmScope)).landed).toBe(seededCount + 1);
+  }, 120_000);
+
+  it('the cursor never moves BACKWARDS, even when the clock does', async () => {
+    const before = (await readSyncState(syncStateKeyFor(wmScope))).watermark;
+    expect(before).toBe('2026-07-30T18:00:00.000Z');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // An NTP step, a container restart, a hand-set clock: a run that proposes an EARLIER ceiling.
+      const out = await runAtClock('2026-07-30T06:00:00.000Z');
+      expect(out.status).toBe('ran');
+      if (out.status !== 'ran') return;
+      expect(out.report.outcome).toBe('complete');
+      // The run is honest about the window IT swept…
+      expect(out.report.window.until).toBe('2026-07-30T06:00:00.000Z');
+      // …and the durable cursor refuses to go back, because everything below it was proved swept.
+      expect((await readSyncState(syncStateKeyFor(wmScope))).watermark).toBe('2026-07-30T18:00:00.000Z');
+    } finally {
+      warn.mockRestore();
+    }
+  }, 120_000);
 });

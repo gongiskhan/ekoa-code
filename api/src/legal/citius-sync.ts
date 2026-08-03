@@ -26,8 +26,9 @@
  *   ZERO — with the counter driven to 1 and reset inside the same test, so the assertion cannot
  *   pass vacuously against a counter that never worked.
  *
- * ============================ THE FOUR HAZARDS THIS TRANSLATION AVOIDS ===========================
- * All four are silent. Each has a test whose only job is to keep it closed.
+ * ============================ THE FIVE HAZARDS THIS TRANSLATION AVOIDS ===========================
+ * All five are silent, and the fifth was LIVE until CS8. Each has a test whose only job is to keep
+ * it closed.
  *
  *   1. `pageTotal` IS TWO DIFFERENT QUANTITIES (CS4's finding, confirmed by its reviewer). CS1's
  *      `pageTotal` is a count of PAGES; CS3's `EnumerateResult.pageTotal` is documented as the
@@ -59,6 +60,37 @@
  *      machinery failure anywhere. The action key therefore CARRIES THE ACTOR, and it is composed
  *      with `JSON.stringify` rather than a separator join, because a raw `::` join is not injective
  *      (`syncStateId`'s own docblock makes the same argument for the same reason).
+ *
+ *   5. TWO COORDINATE SYSTEMS, ONE COMPARISON (found by CS6's fresh-context review; fixed in CS8, and
+ *      it was a LIVE silent miss). CS3 treats the cursor as an OPAQUE string and never compares it to
+ *      an item's date. CS6 introduced that comparison - a lower-bound window filter, `itemDate >=
+ *      watermark` - and the two sides were not in the same coordinate system: the watermark is
+ *      `clock() - untilSkewMs`, a WALL-CLOCK INSTANT, while a DATE-ONLY portal cell (`15-06-2026`,
+ *      the shape the fixtures and the mock actually use) normalises to MIDNIGHT UTC. After one
+ *      complete run at 09:00 the cursor sits mid-day; every later notification dated that same day
+ *      arrives at 00:00Z, i.e. BELOW the cursor. It was filtered out of BOTH passes, so the passes
+ *      agreed, both reached the end, no count check existed, the run was certified `complete` - and
+ *      the watermark advanced AGAIN, past a notification that had never been landed and now never
+ *      could be. No machinery failed anywhere. That is precisely the class this workstream exists to
+ *      prevent, and it was reachable through the shipped route, whose request body cannot even set
+ *      `until`.
+ *
+ *      THE FIX IS TO DELETE THE COMPARISON, not to bound it. `untilSkewMs` cannot repair it (for a
+ *      date-only cell the ceiling would have to be held before midnight of the newest notification's
+ *      day - a skew that grows without bound), and any repair keeps two coordinate systems in one
+ *      expression while the date format is still UNOBSERVED (SPIKE A). So the window is now LOWER
+ *      BOUND ONLY IN NAME: every row the walk captured is handed to `runVerifiedSync`, which dedups
+ *      by REFERENCE against the seen-set - an exact comparison between two values of the same kind -
+ *      and lands idempotently by deterministic id. `window.since` is still recorded on the report as
+ *      evidence of what the run believed it was sweeping.
+ *
+ *      WHAT THAT COSTS, honestly: rows older than the seen-set's prune horizon (`watermark - 7 days`)
+ *      are re-landed on every run. Each is one idempotent insert that returns "already present" and
+ *      shows up as `duplicatesSuppressed`, never as data movement. It costs nothing on the network -
+ *      the connector has no server-side window filter (CS4 SPIKE #5) and re-walks from page 1 anyway,
+ *      so the filter never saved a single request. A date filter may return once the format, the
+ *      portal's timezone and its ordering are OBSERVED, and it must then be expressed entirely in the
+ *      item-date coordinate system (a cursor derived from item dates), never against a wall clock.
  *
  * ================================= THE OUTCOME MAPPING (CS4 -> CS3) ==============================
  * Written out in CS4's docblock, traced through `runVerifiedSync` by its reviewer, and implemented
@@ -105,33 +137,72 @@
  * never defaulted. Every one of them is part of a key that scopes state: an empty component would
  * silently merge two tenants' (or two lawyers') watermarks, seen-sets and landed rows into one row.
  *
+ * ================================= SERIALIZED PER KEY (#serialize) ===============================
+ * CS3's contract clause #serialize says at most one verified sync per key runs at a time, and its
+ * completeness reasoning assumes it. CS6 shipped the route that makes concurrency reachable (two
+ * POSTs, or a poll overlapping a manual run) without implementing it. Every run now queues on
+ * `withSyncLock(syncStateId(key))`, so two runs for one actor are strictly sequential and two actors
+ * never queue behind each other. The lock is PROCESS-LOCAL and says so: see
+ * `events/sync-serialize.ts` for what that does and does not buy.
+ *
  * ================================== FIRST-REAL-ACCOUNT SPIKE ====================================
  * CS1 owns the PARSE unknowns and CS4 the TRANSPORT ones. This module adds exactly one:
  *
- *   A. THE DATE FORMAT of the `data` cell is unobserved. `citiusItemDate` recognises ISO
- *      (`2026-06-15[ 14:03]`) and the Portuguese `dd-mm-yyyy` / `dd/mm/yyyy` forms and normalises
- *      them to ISO; ANYTHING ELSE is passed through verbatim and treated as un-windowable, so an
- *      unrecognised date can never DROP a row (the window filter fails OPEN — a kept row costs one
- *      idempotent re-land, a dropped row is the silent miss this whole proof exists to prevent).
- *      Note the direct consequence: until the real format is known, the lower-bound window filter
- *      may be a no-op and every run re-walks the whole inbox. That is the safe direction, and it is
- *      what CS4's SPIKE #5 already assumes (there is no server-side window filter).
+ *   A. THE DATE FORMAT of the `data` cell is unobserved, AND SO IS THE PORTAL'S TIMEZONE.
+ *      `citiusItemDate` recognises ISO (`2026-06-15[ 14:03[:05][Z|+01:00]]`) and the Portuguese
+ *      `dd-mm-yyyy` / `dd/mm/yyyy` forms, honours an EXPLICIT offset, and reads a cell with no
+ *      offset as UTC. ANYTHING ELSE is passed through verbatim. Nothing FILTERS on this value any
+ *      more (hazard 5), so an unrecognised - or mis-zoned - date can no longer drop a row; what it
+ *      still affects is the `itemDate` persisted on the landed row and shown to a lawyer, and the
+ *      seen-set's 7-day prune horizon, which absorbs an error of a day comfortably. FIRST REAL
+ *      ACCESS MUST CAPTURE a `data` cell verbatim, including whether it carries a time at all and in
+ *      which zone. Until then this value is a normalised reading, not an exact instant.
+ *
+ * ================================ WHAT A RUN LEARNED (slice CS8) ================================
+ * The SPIKE lists above are the shape of the risk BEFORE first access. First access ANSWERS some of
+ * them - inside one run, at a portal nobody can re-query afterwards - so the answers are recorded
+ * through the `recordLesson` SEAM (`events/sync-lessons.ts`) rather than narrated to a log:
+ *
+ *   WHAT is recorded: the walk's own verdicts (a shape the parser refused, a pager idiom this
+ *   connector cannot drive, a per-page status), the session's behaviour (died mid-walk and how it
+ *   was detected, needed re-establishing, was retired), and the ONE thing only the verification can
+ *   see - a reference the second pass revealed and the first did not, which is the #visibility-
+ *   monotonic evidence that says `untilSkewMs` is too small. Each carries the SPIKE it answers.
+ *
+ *   WHAT IS NOT: any notification metadata. The producers read STATUS fields and never `rows`, so no
+ *   row - and above all no reference to a document - can reach the lesson store at all. The
+ *   late-visible lesson records a COUNT, never the references themselves.
+ *
+ *   WHEN: once per run, from `runVerifiedSync`'s own hook, on the completed AND the failed path -
+ *   a failed run usually has the most to teach. NOT on `needs-human` / `needs-egress`: a run that
+ *   never established a session learned nothing about the INBOX, and CS6's rule that such an attempt
+ *   writes nothing stays a single testable statement rather than one with an exception.
+ *
+ *   AND IT IS NEVER READ BACK. A lesson does not change how the next run walks the portal; acting on
+ *   one is a reviewed code or configuration change, which is exactly what a SPIKE entry describes.
  */
 import { createHash } from 'node:crypto';
-import {
+import type {
+  Actor,
   SyncRunReport,
-  type Actor,
-  type SyncSessionEvent,
-  type SyncStateView,
+  SyncSessionEvent,
+  SyncStateView,
 } from '@ekoa/shared';
 import { Store, type Doc } from '../data/store.js';
-import { syncReports } from '../data/stores.js';
 import {
+  latestSyncReport,
   makeSyncStateStore,
   readSyncState,
   syncStateId,
   type SyncStateKey,
 } from '../events/sync-state.js';
+import { withSyncLock } from '../events/sync-serialize.js';
+import {
+  makeSyncLessonRecorder,
+  type SyncLessonInput,
+  type SyncLessonKind,
+  type SyncLessonRecorder,
+} from '../events/sync-lessons.js';
 import {
   runVerifiedSync,
   type EnumeratedItem,
@@ -143,6 +214,8 @@ import {
   CITIUS_MANDATARIOS_BASE_URL,
   enumerateInbox,
   type CitiusInboxEnumeration,
+  type CitiusIncompleteReason,
+  type CitiusPageOutcome,
   type EnumerateInboxDeps,
   type EnumerateInboxInput,
 } from './citius-mandatarios-http.js';
@@ -254,8 +327,16 @@ export interface CitiusSyncDeps {
   /** The land seam. Defaults to the deterministic-id insert below. */
   land?: (item: EnumeratedItem) => Promise<{ landed: boolean }>;
   clock?: () => Date;
-  /** CS3's optional telemetry sink; never load-bearing (CS8 wires the real one). */
-  recordLesson?: (report: SyncRunReport) => void | Promise<void>;
+  /**
+   * THE LESSONS SEAM (CS8). Defaults to the durable per-actor recorder
+   * (`events/sync-lessons.ts#makeSyncLessonRecorder`), injected so this module never reaches for a
+   * store and so a test can watch what a run claims to have learned without a database.
+   *
+   * NEVER LOAD-BEARING: it is invoked from `runVerifiedSync`'s own once-per-run hook, AFTER the
+   * report is persisted and the watermark has already made its decision, and a sink that throws is
+   * swallowed there. Nothing in this module reads a lesson back.
+   */
+  recordLesson?: SyncLessonRecorder;
 }
 
 /**
@@ -295,22 +376,42 @@ function hostOf(raw: string): string {
   }
 }
 
-const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/;
-const PT_DATE_RE = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/;
+const TZ = String.raw`(?:\s*(Z|z|[+-]\d{2}:?\d{2}))?`;
+const ISO_DATE_RE = new RegExp(String.raw`^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?${TZ})?`);
+const PT_DATE_RE = new RegExp(
+  String.raw`^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?${TZ})?`,
+);
 
 /**
  * Normalise a portal date cell to an ISO instant, or return it VERBATIM when the shape is not one
  * of the two recognised ones (SPIKE A). Verbatim is the safe answer: `pruneSeen` deliberately keeps
- * un-parseable dates, and the window filter below deliberately keeps rows it cannot place.
+ * un-parseable dates.
+ *
+ * AN EXPLICIT OFFSET IS HONOURED (CS8, from CS6's review). A cell rendered as `2026-08-03T14:03+01:00`
+ * used to come back as `14:03Z` - an hour of pure invention, in a field that is persisted on the
+ * landed row and shown to a lawyer, and that `pruneSeen` measures against the watermark. A cell with
+ * NO offset is still read as UTC, which is a documented ASSUMPTION and not a fact: the portal's
+ * rendering timezone is unobserved (SPIKE A), and nothing downstream may treat this value as exact
+ * to the hour until it is.
  */
 export function citiusItemDate(raw: string | undefined): string {
   const s = (raw ?? '').trim();
   if (!s) return '';
   const iso = ISO_DATE_RE.exec(s);
-  if (iso) return utcIso(Number(iso[1]), Number(iso[2]), Number(iso[3]), iso[4], iso[5], iso[6]) ?? s;
+  if (iso) return utcIso(Number(iso[1]), Number(iso[2]), Number(iso[3]), iso[4], iso[5], iso[6], iso[7]) ?? s;
   const pt = PT_DATE_RE.exec(s);
-  if (pt) return utcIso(Number(pt[3]), Number(pt[2]), Number(pt[1]), pt[4], pt[5], pt[6]) ?? s;
+  if (pt) return utcIso(Number(pt[3]), Number(pt[2]), Number(pt[1]), pt[4], pt[5], pt[6], pt[7]) ?? s;
   return s;
+}
+
+/** Minutes to SUBTRACT from a wall-clock reading to reach UTC. `undefined` (no offset stated) and
+ *  `Z` both mean zero - see the assumption in `citiusItemDate`. */
+function offsetMinutes(raw: string | undefined): number {
+  if (!raw || raw === 'Z' || raw === 'z') return 0;
+  const m = /^([+-])(\d{2}):?(\d{2})$/.exec(raw);
+  if (!m) return 0;
+  const magnitude = Number(m[2]) * 60 + Number(m[3]);
+  return m[1] === '-' ? -magnitude : magnitude;
 }
 
 /** Build an ISO instant, or `undefined` when the components are not a real calendar date. */
@@ -321,31 +422,15 @@ function utcIso(
   hh?: string,
   mm?: string,
   ss?: string,
+  tz?: string,
 ): string | undefined {
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return undefined;
   const ms = Date.UTC(y, mo - 1, d, Number(hh ?? 0), Number(mm ?? 0), Number(ss ?? 0));
   const dt = new Date(ms);
-  // Reject a rolled-over date (31-02 becoming 03-03) rather than inventing a day.
+  // Reject a rolled-over date (31-02 becoming 03-03) rather than inventing a day. Checked BEFORE the
+  // offset is applied, so a legitimate shift across midnight is not mistaken for an invalid date.
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return undefined;
-  return dt.toISOString();
-}
-
-/**
- * The window filter, LOWER BOUND ONLY and FAIL-OPEN.
- *
- * `since` is the stored watermark and is INCLUSIVE (CS3 re-sees the boundary item every run and
- * dedups it against the seen-set). A row whose date this module cannot place — or a watermark that
- * is not a date — is KEPT: dropping a row invents a silent miss, while keeping one costs a single
- * idempotent re-land. There is deliberately no UPPER bound: the connector has no server-side window
- * filter (CS4 SPIKE #5), so a row newer than the ceiling is landed now and simply re-seen next run;
- * filtering it out would buy nothing and add a second place a row can vanish.
- */
-function withinWindow(itemDate: string, since: string | null): boolean {
-  if (!since) return true;
-  const from = Date.parse(since);
-  const at = Date.parse(itemDate);
-  if (Number.isNaN(from) || Number.isNaN(at)) return true;
-  return at >= from;
+  return new Date(ms - offsetMinutes(tz) * 60_000).toISOString();
 }
 
 /** The typed metadata record, or `undefined` when the payload is not one. */
@@ -404,7 +489,6 @@ async function landNotification(
  */
 export function toEnumerateResult(
   walk: CitiusInboxEnumeration,
-  since: string | null,
   opts: { sessionEvents?: readonly SyncSessionEvent[] } = {},
 ): EnumerateResult {
   if (walk.status === 'session-dead') {
@@ -415,12 +499,12 @@ export function toEnumerateResult(
   }
   if (walk.status === 'failed') return { ok: false, error: walk.error };
 
-  const items: EnumeratedItem[] = [];
-  for (const row of walk.rows) {
-    const itemDate = citiusItemDate(row.data);
-    if (!withinWindow(itemDate, since)) continue;
-    items.push({ ref: row.ref, itemDate, payload: row });
-  }
+  // EVERY row the walk captured is handed over. HAZARD 5 (below) is why there is no date filter here.
+  const items: EnumeratedItem[] = walk.rows.map((row) => ({
+    ref: row.ref,
+    itemDate: citiusItemDate(row.data),
+    payload: row,
+  }));
   return {
     ok: true,
     result: {
@@ -437,6 +521,150 @@ export function toEnumerateResult(
   };
 }
 
+// ============================== WHAT A RUN LEARNED (CS8) ========================================
+// Every Citius slice shipped a SPIKE list of things nobody has observed against a real account. A
+// run is where some of those get answered, at a portal that cannot be re-queried afterwards, so the
+// answers are recorded through the lessons seam instead of being narrated to a log.
+//
+// THE PRODUCERS READ STATUS, NEVER ROWS. Everything below is derived from a walk's outcome fields
+// (its status, its incomplete reason, its per-page outcome/note/status) and from the run report's
+// own verification block. No notification metadata is read here and none can therefore reach the
+// lesson store - which is what keeps the metadata-only argument true of the new collection too.
+
+/** How each of CS4's proved-partial reasons files as knowledge, and what it tells the reader to do.
+ *  The SPIKE numbers are CS4's, so a lesson points at the checklist entry it answers. */
+const INCOMPLETE_LESSONS: Record<CitiusIncompleteReason, { kind: SyncLessonKind; detail: string }> = {
+  'page-unparseable': {
+    kind: 'parse',
+    detail:
+      'O parser recusou uma página do inbox (forma desconhecida). Capturar o HTML em bruto: as regras conservadoras de CS1 só se relaxam com evidência (SPIKE #11).',
+  },
+  'max-pages': {
+    kind: 'completeness',
+    detail:
+      'A varredura atingiu o limite de páginas com mais páginas por ler. Não há filtro de janela do lado do servidor (SPIKE #5): subir maxPages ou plumbar um filtro de data.',
+  },
+  'page-count-disagreement': {
+    kind: 'pager',
+    detail:
+      'O paginador anunciou mais páginas do que a varredura alcançou. Confirmar o idioma do paginador antes de confiar num complete (SPIKE #3).',
+  },
+  'pager-unrecognised': {
+    kind: 'pager',
+    detail:
+      'Dentro da região do paginador existe um controlo que significa "mais páginas" e que este conector não sabe accionar. É o sinal de truncatura de maior confiança (SPIKE #3).',
+  },
+  'pager-ambiguous': {
+    kind: 'pager',
+    detail:
+      'Um sinal do tipo "mais páginas" apareceu FORA da região do paginador. É o propenso a falso alarme: se se repetir, capturar o markup em vez de alargar uma guarda (SPIKE #3).',
+  },
+  'page-full-no-pager': {
+    kind: 'pager',
+    detail:
+      'A última página veio CHEIA, a página mostrou markup de paginação e esse markup não explicava todas as páginas lidas. É o FLOOR a disparar (SPIKE #14).',
+  },
+  'pager-unavailable': {
+    kind: 'pager',
+    detail:
+      'Uma página de postback não expôs alvo ou estado legível, por isso a página seguinte é inalcançável. Confirmar a estabilidade do alvo e do __EVENTVALIDATION entre páginas (SPIKE #4).',
+  },
+  'repeat-page': {
+    kind: 'pager',
+    detail:
+      'Uma página voltou a servir linhas já vistas nesta varredura: o paginador está a saturar ou a ciclar. Confirmar como o portal trata um número de página fora do intervalo (SPIKE #3).',
+  },
+};
+
+/** How each non-ok per-page outcome files. Closed set, so the signature stays machine-stable. */
+const PAGE_OUTCOME_LESSONS: Record<Exclude<CitiusPageOutcome['outcome'], 'ok'>, SyncLessonKind> = {
+  unparseable: 'parse',
+  login: 'session',
+  'http-error': 'transport',
+  'transport-error': 'transport',
+  refused: 'transport',
+};
+
+/** What ONE walk taught, from its status fields alone. */
+function lessonsFromWalk(walk: CitiusInboxEnumeration): SyncLessonInput[] {
+  const out: SyncLessonInput[] = [];
+  if (walk.status === 'incomplete') {
+    const filed = INCOMPLETE_LESSONS[walk.reason];
+    out.push({
+      kind: filed.kind,
+      signature: `walk-incomplete:${walk.reason}`,
+      detail: filed.detail,
+      page: walk.pagesWalked,
+    });
+  } else if (walk.status === 'session-dead') {
+    out.push({
+      kind: 'session',
+      signature: `session-dead:${walk.detectedBy}`,
+      detail:
+        'O portal terminou a sessão a meio da varredura. Quanto dura uma sessão de mandatário e o que a mata (sessão concorrente?) é a SPIKE #9; a assinatura diz COMO foi detectada (SPIKE #1).',
+      page: walk.atPage,
+    });
+  } else if (walk.status === 'failed') {
+    out.push({
+      kind: 'transport',
+      signature: `walk-failed:${walk.error}`,
+      detail: walk.error,
+      page: walk.atPage,
+    });
+  }
+  for (const p of walk.pages) {
+    if (p.outcome === 'ok') continue;
+    out.push({
+      kind: PAGE_OUTCOME_LESSONS[p.outcome],
+      signature: `page-${p.outcome}${p.status === undefined ? '' : `:${p.status}`}`,
+      detail: p.note ?? `Página ${p.page}: ${p.outcome}.`,
+      page: p.page,
+    });
+  }
+  return out;
+}
+
+/** What the RUN taught - things no single walk can see, because they are the verification's own
+ *  discoveries and the session's own lifecycle. */
+function lessonsFromRun(
+  report: SyncRunReport,
+  session: 'reused' | 'reestablished',
+  sessionMarkedUnhealthy: boolean,
+): SyncLessonInput[] {
+  const out: SyncLessonInput[] = [];
+  const lateRefs = report.verification.pass2.refsOnlyInPass2.length;
+  if (lateRefs > 0) {
+    // The reconciliation earning its keep, and the single most actionable thing this rail can learn:
+    // the source made an item visible AFTER the pass that should have seen it. Deliberately a COUNT
+    // and never the refs themselves - a notification reference is client data, and it would also
+    // mint a new lesson row on every run.
+    out.push({
+      kind: 'completeness',
+      signature: 'reconciliation:late-visible-items',
+      detail:
+        `A segunda passagem revelou ${lateRefs} referência(s) que a primeira não viu na MESMA janela: ` +
+        'a fonte publica depois do seu próprio timestamp. Subir untilSkewMs acima do atraso máximo de publicação (contrato #visibility-monotonic).',
+    });
+  }
+  if (session === 'reestablished') {
+    out.push({
+      kind: 'session',
+      signature: 'session-reestablished',
+      detail:
+        'A sessão guardada já não servia e foi restabelecida por login. As ocorrências deste registo medem com que frequência o portal exige novo login.',
+    });
+  }
+  if (sessionMarkedUnhealthy) {
+    out.push({
+      kind: 'session',
+      signature: 'session-retired-mid-run',
+      detail:
+        'A sessão morreu a meio da varredura e o item do Cofre foi marcado como não saudável, para a PRÓXIMA execução voltar a estabelecer (nunca a meio - CS5).',
+    });
+  }
+  return out;
+}
+
 /**
  * Run ONE completeness-verified Caixa Citius notification sync for one actor.
  *
@@ -448,7 +676,18 @@ export async function syncCitiusNotifications(
   input: CitiusSyncInput,
   deps: CitiusSyncDeps,
 ): Promise<CitiusSyncOutcome> {
+  // The key is computed (and REFUSED, if unscopeable) OUTSIDE the lock: an unscopeable request must
+  // throw immediately rather than queue behind someone else's sync.
   const key = syncStateKeyFor(input);
+  return withSyncLock(syncStateId(key), () => runOneCitiusSync(key, input, deps));
+}
+
+/** One sync attempt, already serialized on its key (#serialize). */
+async function runOneCitiusSync(
+  key: SyncStateKey,
+  input: CitiusSyncInput,
+  deps: CitiusSyncDeps,
+): Promise<CitiusSyncOutcome> {
   const clock = deps.clock ?? ((): Date => new Date());
   const enumerate = deps.enumerate ?? enumerateInbox;
   const baseUrl = input.baseUrl ?? CITIUS_MANDATARIOS_BASE_URL;
@@ -487,6 +726,9 @@ export async function syncCitiusNotifications(
   // ---- 2. THE WALK, adapted onto the verification passes -----------------------------------------
   let sessionMarkedUnhealthy = false;
   let firstPassDone = false;
+  // What the walks taught, gathered as they happen and handed over ONCE, from the run-completion
+  // hook, so a lesson is only ever recorded for a run that produced a report.
+  const walkLessons: SyncLessonInput[] = [];
 
   const runEnumerate = async (window: EnumerateWindow): Promise<EnumerateResult> => {
     const walk = await enumerate(
@@ -505,6 +747,8 @@ export async function syncCitiusNotifications(
       deps.enumerateDeps ?? {},
     );
 
+    walkLessons.push(...lessonsFromWalk(walk));
+
     if (walk.status === 'session-dead' && !sessionMarkedUnhealthy) {
       // Record the observation; do NOT re-establish. CS5's caller contract: a mid-run re-login is
       // how an account is locked. The NEXT run's `ensureSession` sees `unhealthy` and routes.
@@ -515,12 +759,13 @@ export async function syncCitiusNotifications(
     // The session lifecycle is reported ONCE, on the first pass that can carry it (CS3 only accepts
     // events on an `ok:true` result — see the KNOWN LIMITATION in the module header).
     const events = firstPassDone ? [] : [sessionEvent as 'reused' | 'reestablished'];
-    const mapped = toEnumerateResult(walk, window.sinceIso, { sessionEvents: events });
+    const mapped = toEnumerateResult(walk, { sessionEvents: events });
     if (mapped.ok) firstPassDone = true;
     return mapped;
   };
 
   const nowIso = clock().toISOString();
+  const recordLesson = deps.recordLesson ?? makeSyncLessonRecorder(key);
   const report = await runVerifiedSync({
     syncKey: syncKeyOf(key),
     orgId: key.orgId,
@@ -532,7 +777,16 @@ export async function syncCitiusNotifications(
     land: deps.land ?? ((item) => landNotification(key, item, nowIso)),
     store: deps.store ?? makeSyncStateStore(key),
     clock,
-    ...(deps.recordLesson === undefined ? {} : { recordLesson: deps.recordLesson }),
+    // The once-per-run hook, on BOTH the completed and the failed path. A failed run is the one that
+    // most often has something to teach (a status, a refusal, a dead session), so it must not be the
+    // one that records nothing.
+    recordLesson: async (finished: SyncRunReport) => {
+      await recordLesson([...walkLessons, ...lessonsFromRun(finished, sessionEvent, sessionMarkedUnhealthy)], {
+        observedAt: clock().toISOString(),
+        reportId: finished.id,
+        outcome: finished.outcome,
+      });
+    },
   });
 
   return { status: 'ran', session: sessionEvent, sessionItemId, sessionMarkedUnhealthy, report };
@@ -541,23 +795,22 @@ export async function syncCitiusNotifications(
 /**
  * Read the durable state for one actor's Citius sync, plus its latest report.
  *
- * The report is `safeParse`d before it is returned: a history row written by an older shape is
- * dropped rather than served as if it validated. That is the same honesty rule the rest of the
- * Citius chain runs on — an answer this module cannot vouch for is not given.
+ * The "latest report" half GRADUATED in CS8 into `events/sync-state.ts#latestSyncReport`, where the
+ * collection lives: which row is latest (greatest `startedAt`, deterministically tie-broken), what
+ * `none` means, and what happens to a row an older schema wrote (`safeParse`, then DROPPED rather
+ * than backfilled from the row before it) are properties of the report history, not of this rail.
+ * Both were already CS6's answers; what changed is that a second sync producer now inherits them
+ * instead of re-deciding them, and that they are stated once, next to the data.
  */
 export async function readCitiusSyncState(input: CitiusSyncScope): Promise<SyncStateView> {
   const key = syncStateKeyFor(input);
   const doc = await readSyncState(key);
-  const rows = await syncReports.find({ stateKey: syncStateId(key) }, { startedAt: -1 });
   const landed = (await citiusNotifications.find({
     orgId: key.orgId,
     integrationKey: key.integrationKey,
     actionKey: key.actionKey,
   })).length;
-  // `safeParse` before it is served: a history row written by an older shape is DROPPED rather than
-  // handed out as if it validated. Same honesty rule the rest of the Citius chain runs on.
-  const head = rows.length ? SyncRunReport.safeParse(rows[0]) : undefined;
-  const parsed = head?.success ? head.data : undefined;
+  const parsed = await latestSyncReport(key);
   return {
     watermark: doc.watermark,
     ...(doc.lastRunAt === undefined ? {} : { lastRunAt: doc.lastRunAt }),
