@@ -65,5 +65,30 @@ export {
   integrationDefinitionStore,
   IntegrationDefinitionStore,
   type IntegrationDefinitionDoc,
+  type IntegrationDefinitionPublishedSnapshot,
+  type PublishModelPassRecord,
   type DefinitionVisibility,
 } from './definition-store.js';
+// E2 — the publish scrub: deterministic floor + one chokepoint model pass into a FROZEN snapshot
+// other orgs read, plus its dry-run preview. `applyPublishFloor`/`publishedViewOf` are the pure
+// read-time half; `previewPublish`/`publishDefinition` are the two doors the route layer mounts.
+export {
+  applyPublishFloor,
+  scrubForPublish,
+  scrubPublishText,
+  previewPublish,
+  publishDefinition,
+  publishedViewOf,
+  publishableContentOf,
+  packageConfigFromDoc,
+  isPublishSafeCredentialValue,
+  looksLikeLiteralSecret,
+  PUBLISH_SCRUB_VERSION,
+  type PublishableContent,
+  type PublishScrubOptions,
+  type PublishScrubResult,
+  type PublishRedaction,
+  type PublishPreviewResult,
+  type PublishResult,
+  type PublishModelPass,
+} from './publish-scrub.js';

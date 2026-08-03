@@ -79,14 +79,46 @@ export interface IntegrationDefinitionOrigin {
   importedAt?: string;
 }
 
-/** A scrubbed, publishable snapshot of a definition (credential VALUES already removed upstream). */
+/**
+ * How the ONE chokepoint model pass went for a given publish (slice E2). Recorded ON the snapshot,
+ * durably, because "was this artifact inspected by the second net, or only by the deterministic
+ * floor?" is a property of the published artifact, not of the request that produced it. `skipped`
+ * (a caller asked for floor-only) is deliberately distinct from `failed` (the model was reachable
+ * or not, and did not answer) — collapsing them would hide an outage behind a policy choice.
+ */
+export interface PublishModelPassRecord {
+  status: 'applied' | 'skipped' | 'failed';
+  reason?: string;
+  spansApplied?: number;
+}
+
+/**
+ * A scrubbed, FROZEN snapshot of a definition — what every OTHER organisation reads once the row is
+ * published (`publish-scrub.ts`; RUN_SPEC 20260801 criterion 8).
+ *
+ * WHERE IT LIVES AND HOW RE-PUBLISH SUPERSEDES: here, on the definition document, in ONE field.
+ * That is the whole supersede protocol — a definition has exactly one live snapshot, a re-publish
+ * REPLACES it wholesale (never merges, never appends a version chain that readers would have to
+ * choose between), and the replaced snapshot's stamp is recorded in `supersedes` so the lineage of
+ * a published artifact is visible without keeping the superseded bytes around. A separate
+ * snapshots collection was rejected for the same reason A1 rejected a separate actions collection:
+ * the snapshot has no lifecycle independent of its definition (it is written, superseded and
+ * deleted with it), and a second document is a second thing that can be missing.
+ */
 export interface IntegrationDefinitionPublishedSnapshot {
   scrubbedAt: string;
   scrubbedBy: string;
+  /** The floor's ruleset version (`PUBLISH_SCRUB_VERSION`) this artifact was scrubbed under. */
+  scrubVersion: number;
   /** The scrubbed package config at publish time (the ONE canonical package shape). */
   config: IntegrationPackageConfig;
   skillMd: string;
   lessons?: string;
+  modelPass: PublishModelPassRecord;
+  /** How many redactions the scrub made — the audit counterpart of the preview's report. */
+  redactionCount: number;
+  /** The stamp of the snapshot this one replaced, when this is a re-publish. */
+  supersedes?: { scrubbedAt: string; scrubbedBy: string };
 }
 
 /**
@@ -130,6 +162,16 @@ export interface IntegrationDefinitionFields {
   listenerConfig?: IntegrationListenerConfig;
   origin?: IntegrationDefinitionOrigin;
   publishedSnapshot?: IntegrationDefinitionPublishedSnapshot;
+  /**
+   * THE AUTHOR-INITIATED SUBMIT-FOR-REVIEW STATE (slice E2, closing the E1 review's F2, deferred
+   * here as a product decision). Cross-org publication is a super-admin act, but the A1 read gate
+   * correctly denies a super-admin who is not a member of the org any sight of that org's rows —
+   * which left the review gate INERT for platform staff who are not org members. E1's reviewer
+   * named the fix precisely: an author-initiated submit state, NOT a super-admin read exception.
+   * Presence of this field is that submission, and it is the ONLY thing that puts a tenant row in
+   * front of a non-member platform reviewer (`isDefinitionVisibleTo`).
+   */
+  publishRequest?: { requestedBy: string; requestedAt: string; note?: string };
 }
 // NOTE (A3, A2-residual 6): the A1 doc carried a `declaredOrigins: string[]` field that NOTHING
 // ever read — the one egress truth is the definition's action `httpConfig.baseUrl`s, derived at
@@ -181,7 +223,8 @@ export function definitionIdFor(orgId: string, key: string): string {
   return createHash('sha256').update(JSON.stringify([orgId, key])).digest('hex');
 }
 
-type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'>;
+type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
+  Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
 
 /**
  * Can `actor` SEE this definition? The single read predicate, shared by `getForActor` and
@@ -199,6 +242,14 @@ export function isDefinitionVisibleTo(doc: VisibilityView, actor: Actor): boolea
   // every role — it is scoped to the one platform-owned org that, by construction, holds no
   // tenant's data (its rows were the world-readable pre-A3 disk tier).
   if (actor.role === 'super-admin' && doc.orgId === LEGACY_RUNTIME_ORG) return true;
+  // THE SUBMIT-FOR-REVIEW WINDOW (E2, closing E1 review F2). A super-admin who is not a member of
+  // the authoring org sees an `org`-shared row ONLY while that org is asking to publish it. The
+  // authority runs from the AUTHOR outward — nothing here lets platform staff browse a tenant's
+  // packages, a `private` row is never in scope (submission requires `org`, and this branch
+  // re-checks the tier rather than trusting the write path), and withdrawing the request closes the
+  // window again. The alternative E1's reviewer rejected — relaxing the 404 for super-admins — would
+  // have made every tenant's private authoring visible to the platform by default.
+  if (actor.role === 'super-admin' && doc.visibility === 'org' && doc.publishRequest !== undefined) return true;
   // The SAME empty-string hazard as the userId branch below, one field over: an org-less actor
   // (a broken row, or a seam that defaulted `orgId` to '') must not become "same org" as an
   // org-less document. Both sides must name a real tenant before they can be equal.
@@ -329,8 +380,19 @@ export class IntegrationDefinitionStore {
       && this.visibilityWriteVerdict(existing, actor, input.visibility)) {
       throw new IntegrationDefinitionStoreError('FORBIDDEN', 'this visibility transition is not allowed for the acting user');
     }
+    // THE PUBLICATION RECORD IS NOT CALLER CONTENT (E2). A replace rewrites the package the caller
+    // supplied; `publishedSnapshot` and `publishRequest` are records of PLATFORM decisions about the
+    // row, and a content write that silently dropped them would take a `global` row back to serving
+    // its LIVE content cross-org (the snapshot is what `definition-registry` reads for a foreign
+    // org) and would revoke the org's standing review request as a side effect of an edit. Carried
+    // forward unless the caller states them explicitly, so `definition-save.ts`'s own preservation
+    // becomes belt-and-braces instead of the only thing holding it.
     return this.store.put({
       ...doc,
+      ...(doc.publishedSnapshot === undefined && existing?.publishedSnapshot !== undefined
+        ? { publishedSnapshot: existing.publishedSnapshot } : {}),
+      ...(doc.publishRequest === undefined && existing?.publishRequest !== undefined
+        ? { publishRequest: existing.publishRequest } : {}),
       createdAt: existing?.createdAt ?? doc.createdAt,
       updatedAt: nowIso,
     });
@@ -419,6 +481,12 @@ export class IntegrationDefinitionStore {
    * route, the D3 copy-on-author path, or any future one — can self-publish a tenant's definition to
    * every org, or silently un-publish a shared one. A base owner may still flip their own row between
    * `private` and `org` freely; only promotion TO or demotion FROM `global` needs super-admin.
+   *
+   * THE PUBLISHED SNAPSHOT IS DELIBERATELY NOT CLEARED ON DEMOTION (E2). Nobody reads it while the
+   * row is not `global`, and keeping it makes the failure mode of a re-promotion through THIS route
+   * (rather than through `publishSnapshot`) the SAFE one: cross-org readers get the previously
+   * scrubbed, reviewed artifact instead of the row's live, only-floor-scrubbed content. Clearing it
+   * would turn an un-publish/re-publish cycle into a way to widen what other orgs read.
    */
   async setVisibility(id: string, actor: Actor, visibility: DefinitionVisibility): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
@@ -443,6 +511,133 @@ export class IntegrationDefinitionStore {
   }
 
   /**
+   * SUBMIT FOR REVIEW — the author (or their org-admin) asking the platform to publish their
+   * definition cross-org. This is the ONLY door that puts a tenant row in front of a non-member
+   * super-admin, and it is opened from inside the tenant.
+   *
+   * The row must already be `org`: the same launch pad `visibilityWriteVerdict` requires for the
+   * publish itself, so a submission can never expose a `private` draft that the author's own
+   * colleagues cannot see. Re-submitting an already-submitted row re-stamps it (idempotent, and the
+   * note can be corrected) rather than answering an error.
+   */
+  async requestPublish(id: string, actor: Actor, note?: string): Promise<SetVisibilityResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    if (!canWriteDefinition(row, actor) || row.visibility !== 'org') return { verdict: 'forbidden' };
+    let raced = false;
+    const updated = await this.store.update(id, (cur) => {
+      const doc = cur as IntegrationDefinitionDoc;
+      if (!canWriteDefinition(doc, actor) || doc.visibility !== 'org') { raced = true; return cur; }
+      return {
+        ...cur,
+        publishRequest: { requestedBy: actor.userId, requestedAt: this.nowIso(), ...(note !== undefined ? { note } : {}) },
+        updatedAt: this.nowIso(),
+      };
+    });
+    if (raced) return { verdict: 'forbidden' };
+    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /**
+   * WITHDRAW the submission, closing the review window again. Refused while the row is `global`:
+   * a published row is already visible to every org, so "withdraw" there would only strip the
+   * reviewer's ability to UN-publish it — the un-publish is the way back, and it keeps the request
+   * standing so the transition remains exactly reversible (E1 review F1's rule).
+   */
+  async withdrawPublishRequest(id: string, actor: Actor): Promise<SetVisibilityResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    // Only a member of the authoring org may withdraw — a platform reviewer must not be able to
+    // remove the org's own request (and thereby its record that the org ever asked).
+    if (!canWriteDefinition(row, actor) || row.orgId !== actor.orgId || row.visibility === 'global') {
+      return { verdict: 'forbidden' };
+    }
+    let raced = false;
+    const updated = await this.store.update(id, (cur) => {
+      const doc = cur as IntegrationDefinitionDoc;
+      if (!canWriteDefinition(doc, actor) || doc.orgId !== actor.orgId || doc.visibility === 'global') { raced = true; return cur; }
+      const { publishRequest: _dropped, ...rest } = doc;
+      return { ...rest, updatedAt: this.nowIso() };
+    });
+    if (raced) return { verdict: 'forbidden' };
+    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /** The platform REVIEW QUEUE: every `org` row whose tenant has asked for cross-org publication.
+   *  Super-admin only, and deliberately NOT folded into `listForActor` — the review queue is its own
+   *  surface, and a submitted row must never masquerade as a definition the reviewer's org holds. */
+  async listPublishRequests(actor: Actor): Promise<IntegrationDefinitionDoc[]> {
+    if (actor.role !== 'super-admin') return [];
+    return (await this.store.find({ visibility: 'org' })).filter((row) => row.publishRequest !== undefined);
+  }
+
+  /**
+   * PUBLISH: stamp the FROZEN scrubbed snapshot and move the row to `global`, in ONE gated CAS
+   * write (slice E2). The two must land together — a `global` row whose snapshot is missing serves
+   * cross-org readers its LIVE content through the read-time floor, and a snapshot on a row that
+   * never went global is dead weight. Judged by exactly the same `visibilityWriteVerdict` as
+   * `setVisibility`, in the pre-check AND inside the mutator (the E1 F4b re-assert), so publishing
+   * grants no authority the visibility chokepoint does not already grant: super-admin only, and the
+   * row must already be `org`.
+   *
+   * `supersedes` is stamped HERE, from `cur` inside the mutator, so the recorded lineage is the
+   * snapshot actually replaced by this write rather than the one the caller happened to read first.
+   */
+  async publishSnapshot(
+    id: string,
+    actor: Actor,
+    snapshot: Omit<IntegrationDefinitionPublishedSnapshot, 'supersedes'>,
+  ): Promise<SetVisibilityResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    const verdict = this.visibilityWriteVerdict(row, actor, 'global');
+    if (verdict) return verdict;
+    let raced = false;
+    const updated = await this.store.update(id, (cur) => {
+      const doc = cur as IntegrationDefinitionDoc;
+      if (this.visibilityWriteVerdict(doc, actor, 'global')) {
+        raced = true;
+        return cur;
+      }
+      const prior = doc.publishedSnapshot;
+      return {
+        ...cur,
+        visibility: 'global',
+        publishedSnapshot: {
+          ...snapshot,
+          ...(prior ? { supersedes: { scrubbedAt: prior.scrubbedAt, scrubbedBy: prior.scrubbedBy } } : {}),
+        },
+        updatedAt: this.nowIso(),
+      };
+    });
+    if (raced) return { verdict: 'forbidden' };
+    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /**
+   * Would `actor` be allowed to publish `id` right now? The SAME verdict `publishSnapshot` will
+   * reach, exposed so the publish flow can refuse before paying for a model call. It is a cheap
+   * pre-check, never the gate: `publishSnapshot` re-judges everything, twice.
+   */
+  async publishPrecheck(id: string, actor: Actor): Promise<SetVisibilityResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    return this.visibilityWriteVerdict(row, actor, 'global') ?? { verdict: 'ok', doc: row };
+  }
+
+  /**
+   * The row `actor` may WRITE, or the no-existence-oracle refusal. The admission set of the DRY-RUN
+   * publish preview: an author (or their org-admin) must be able to see what publication would
+   * expose before asking for it, and `canWriteDefinition` is exactly the set that can already read
+   * the row's raw bytes — so the preview reveals strictly less than they hold already.
+   */
+  async getWritableForActor(id: string, actor: Actor): Promise<SetVisibilityResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    return canWriteDefinition(row, actor) ? { verdict: 'ok', doc: row } : { verdict: 'forbidden' };
+  }
+
+  /**
    * The write rules for a visibility transition, or `null` when it is allowed. Extracted so the
    * pre-check and the in-mutator re-check (F4b) can never diverge.
    */
@@ -461,11 +656,26 @@ export class IntegrationDefinitionStore {
     // could no longer see the row (now private in a foreign org) to undo it. `org` is the narrowest
     // tier that returns the row to exactly the people who had it before publication.
     if (row.visibility === 'global' && visibility === 'private') return { verdict: 'forbidden' };
+    // A NON-MEMBER MAY ONLY MOVE A ROW BETWEEN `org` AND `global` (E2). The two ways an actor can
+    // reach a row of an org they do not belong to — a `global` row and the submit-for-review window
+    // above — both exist for ONE purpose: deciding cross-org publication. Letting that reach also
+    // take a tenant's row to `private` would re-open the exact trapdoor E1's review closed (F1): the
+    // authoring org loses its own definition, and the platform actor can no longer see the row to
+    // undo it. Publishing and un-publishing stay exactly inverse; nothing else is on offer.
+    if (row.orgId !== actor.orgId && visibility === 'private') return { verdict: 'forbidden' };
     // PUBLISH ONLY WHAT THE AUTHORING ORG ALREADY SHARES (E1 review F4). Nothing records the
     // pre-publish tier, so a later demotion lands on `org` and would WIDEN a row that was `private`
     // before it was published. Requiring `org` as the launch pad makes demotion exactly reversible
     // and keeps a private draft from being exposed to its own org as a side effect of publishing.
-    if (visibility === 'global' && row.visibility !== 'org') return { verdict: 'forbidden' };
+    //
+    // NARROWED FROM `!== 'org'` TO `=== 'private'` (E2). The rule is about the LAUNCH PAD, and
+    // `global -> global` is not a launch: it is a RE-PUBLISH, which is how a published definition
+    // gets a fresh scrubbed snapshot after the author's row moves on. Forbidding it made the
+    // published artifact unrefreshable — a row could only ever be scrubbed once, and correcting a
+    // published snapshot would have meant un-publishing (breaking every consumer) and publishing
+    // again. The demotion argument above is untouched: the pre-publish tier of a re-published row is
+    // still `org`, because that is the only tier it can have been promoted from.
+    if (visibility === 'global' && row.visibility === 'private') return { verdict: 'forbidden' };
     return null;
   }
 }

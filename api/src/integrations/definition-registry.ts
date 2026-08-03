@@ -54,6 +54,7 @@ import {
   LEGACY_RUNTIME_ORG,
   type IntegrationDefinitionDoc,
 } from './definition-store.js';
+import { publishedViewOf } from './publish-scrub.js';
 
 /**
  * The slice of the A1 store this module needs: the two ACTOR-SCOPED reads. Deliberately narrow —
@@ -127,11 +128,32 @@ export function canEditDefinitionRaw(
 }
 
 /**
+ * THE ONE CROSS-ORG READ RULE (slice E2). A row belonging to ANOTHER organisation — which the A1
+ * visibility gate means is always a `global`, i.e. PUBLISHED, row — is read through its FROZEN
+ * PUBLISHED SNAPSHOT, never through its live fields. That is what publishing is for: the author's
+ * row keeps moving, published readers keep reading the artifact a super-admin reviewed.
+ *
+ * Applied HERE, at the one projection every reader funnels through, rather than at the call sites:
+ * `resolveDefinition`, `listDefinitionsFor` and `activeCatalogFor` feed the executor, the planner
+ * catalog and — through `declaredOriginsForIntegration` — the credential-EGRESS allow-list, so a
+ * per-caller rule would eventually miss one of them and let a foreign author's live `baseUrl` widen
+ * a consuming org's egress after review. `resolveSkillMd` applies the same rule to the body.
+ *
+ * A row of the actor's OWN org is untouched: its author is entitled to their own live content, and
+ * the existing read-path scrub (`redactSecrets` below / `scrubSecretText`) still runs on it.
+ */
+export function crossOrgView(doc: IntegrationDefinitionDoc, actor?: Actor): IntegrationDefinitionDoc {
+  if (actor !== undefined && sameOrg(doc.orgId, actor.orgId)) return doc;
+  return publishedViewOf(doc);
+}
+
+/**
  * Project a stored definition onto the canonical `IntegrationDefinition` read shape. `userCreated`
  * is TRUE for every stored row: the Mongo tier only ever holds authored/forked/migrated packages,
  * while the shipped read-only packages remain the disk baseline (`userCreated: false`).
  */
-export function definitionFromDoc(doc: IntegrationDefinitionDoc, actor?: Actor): IntegrationDefinition {
+export function definitionFromDoc(rawDoc: IntegrationDefinitionDoc, actor?: Actor): IntegrationDefinition {
+  const doc = crossOrgView(rawDoc, actor);
   // ADDRESSABILITY, scoped to the actor's OWN org (E1 review F3). The sharing routes key on the
   // store `_id`, and the tier they change is `visibility` — yet this projection dropped both, so a
   // conforming client could neither name its own definition nor read back its current tier, and the
@@ -259,7 +281,11 @@ export async function resolveSkillMd(
   key: string,
   store: DefinitionStoreReader = integrationDefinitionStore,
 ): Promise<string | null> {
-  const doc = await store.getForActor(actor, key);
+  const raw = await store.getForActor(actor, key);
+  // CROSS-ORG BODIES COME FROM THE FROZEN SNAPSHOT (E2 — see `crossOrgView`): a published body is
+  // what a reviewer approved, and it has already been through the strict publish floor and the
+  // model pass, which are both strictly wider than the read-path scrub applied below.
+  const doc = raw ? crossOrgView(raw, actor) : null;
   if (doc) return doc.skillMd == null ? null : scrubSecretText(doc.skillMd);
   return baselineSkillMd(key);
 }
@@ -282,10 +308,15 @@ export async function resolveSkillMdRaw(
   key: string,
   store: DefinitionStoreReader = integrationDefinitionStore,
 ): Promise<string | null> {
-  const doc = await store.getForActor(actor, key);
-  if (doc) {
-    const raw = canEditDefinitionRaw(doc, actor);
-    return doc.skillMd == null ? null : raw ? doc.skillMd : scrubSecretText(doc.skillMd);
+  const stored = await store.getForActor(actor, key);
+  if (stored) {
+    // `canEditDefinitionRaw` already refuses every row that is `global` or outside the actor's org,
+    // so a byte-exact read can never reach a published or foreign body; the scrubbed branch goes
+    // through the SAME cross-org view as `resolveSkillMd` so publishing cannot be turned into a new
+    // way to read another org's raw content (E2 brief, point 5).
+    if (canEditDefinitionRaw(stored, actor)) return stored.skillMd == null ? null : stored.skillMd;
+    const doc = crossOrgView(stored, actor);
+    return doc.skillMd == null ? null : scrubSecretText(doc.skillMd);
   }
   return baselineSkillMd(key);
 }

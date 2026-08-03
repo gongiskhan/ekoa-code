@@ -284,12 +284,19 @@ export interface ActiveIntegrationCatalog {
  * carry no secret and MUST survive, or the executor would send "[REDACTED]" as the header —
  * hence the template exemption in `redactSecrets` below.
  */
-const SECRET_KEY_NAMES =
+export const SECRET_KEY_NAMES =
   'api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature';
 const SECRET_KEY_RE = new RegExp(`^(${SECRET_KEY_NAMES})$`, 'i');
 
+/** Does this OBJECT KEY name a credential VALUE? The one vocabulary (`SECRET_KEY_NAMES`), exported
+ *  as a predicate so the strict publish-time floor (`publish-scrub.ts`) asks the same question
+ *  rather than carrying a second copy of the list (Rule 1). */
+export function isCredentialKeyName(key: string): boolean {
+  return SECRET_KEY_RE.test(key);
+}
+
 /** An `{{interpolation}}` placeholder — the shape a template names a credential field with. */
-const PLACEHOLDER_SRC = String.raw`\{\{[^{}]+\}\}`;
+export const PLACEHOLDER_SRC = String.raw`\{\{[^{}]+\}\}`;
 
 /**
  * A string value under a credential-named key that is a pure INTERPOLATION TEMPLATE: it names a
@@ -313,7 +320,7 @@ function isCredentialTemplate(v: unknown): boolean {
 }
 
 /** Token boundaries for residue/prose scanning: everything outside the secret alphabet. */
-const TOKEN_SPLIT_RE = /[^A-Za-z0-9+/=_.-]+/;
+export const TOKEN_SPLIT_RE = /[^A-Za-z0-9+/=_.-]+/;
 
 /**
  * Vendor credential PREFIXES that identify a pasted live key regardless of length or entropy —
@@ -345,7 +352,7 @@ const CREDENTIAL_PREFIX_RE =
  * rides the exemption (`{{name}} hunter2`). Catching it would re-break the scheme words above;
  * the defence in depth for it is E2's strict publish-time scrub, not this exemption.
  */
-function looksLikePastedSecret(token: string): boolean {
+export function looksLikePastedSecret(token: string): boolean {
   const t = token.replace(/^["']+|["']+$/g, '');
   if (t.length < 8) return false;
   if (CREDENTIAL_PREFIX_RE.test(t)) return true;
@@ -361,24 +368,65 @@ function looksLikePastedSecret(token: string): boolean {
 }
 
 /**
- * Deep-clone a value, redacting any property whose key names a credential value.
+ * The two knobs of the credential walk below. Extracted (E2) so the STRICT publish-time floor
+ * (`publish-scrub.ts`) drives the SAME deep walk as the read-path scrub instead of forking a second
+ * traversal that can drift from this one (Rule 1 — one implementation). The read path binds the
+ * defaults; publish binds a stricter template predicate plus a per-string transform.
+ */
+export interface SecretWalkRules {
+  /** Does a value under a CREDENTIAL-NAMED key survive whole? Default: `isCredentialTemplate`. */
+  credentialValueSurvives(value: unknown): boolean;
+  /** Applied to every string that was NOT wholly redacted. `key` is the owning property name (for
+   *  an array element, the array's own property name), so a rule can treat a string under a
+   *  credential-named key differently from ordinary prose without re-walking the document.
+   *  Default: identity. */
+  transformString?: (value: string, path: string, key: string) => string;
+  /** Notified for each WHOLE-value redaction, with the dotted path and the removed length. Never
+   *  the removed TEXT: the publish report is served back to an author and must not mint a second
+   *  surface carrying credential material. */
+  onRedact?: (path: string, removedChars: number) => void;
+}
+
+const DEFAULT_WALK_RULES: SecretWalkRules = { credentialValueSurvives: isCredentialTemplate };
+
+/** Dotted/indexed child path, kept human-readable for the publish report (`actions[0].headers.x`). */
+function childPath(path: string, key: string): string {
+  return path === '' ? key : `${path}.${key}`;
+}
+
+/**
+ * Deep-clone a value, redacting any property whose key names a credential value, under `rules`.
  *
  * Exported (A2) so the tenant-scoped Mongo tier in `definition-registry.ts` runs the SAME scrub on
  * its projection as this disk tier runs on its own — one implementation of the rule, never a second
  * copy that can drift from `SECRET_KEY_RE`.
  */
-export function redactSecrets<T>(value: T): T {
+export function redactSecretsWith<T>(value: T, rules: SecretWalkRules, path = '', key = ''): T {
   if (Array.isArray(value)) {
-    return value.map((v) => redactSecrets(v)) as unknown as T;
+    return value.map((v, i) => redactSecretsWith(v, rules, `${path}[${i}]`, key)) as unknown as T;
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) && !isCredentialTemplate(v) ? '[REDACTED]' : redactSecrets(v);
+      const p = childPath(path, k);
+      if (SECRET_KEY_RE.test(k) && !rules.credentialValueSurvives(v)) {
+        rules.onRedact?.(p, typeof v === 'string' ? v.length : JSON.stringify(v ?? null).length);
+        out[k] = '[REDACTED]';
+      } else {
+        out[k] = redactSecretsWith(v, rules, p, k);
+      }
     }
     return out as unknown as T;
   }
+  if (typeof value === 'string' && rules.transformString) {
+    return rules.transformString(value, path, key) as unknown as T;
+  }
   return value;
+}
+
+/** The READ-PATH scrub: the walk above with the default (egress-grade) rules. */
+export function redactSecrets<T>(value: T): T {
+  return redactSecretsWith(value, DEFAULT_WALK_RULES);
 }
 
 /**
@@ -425,11 +473,31 @@ function redactSecretTokens(value: string): string {
     (tok.startsWith('{{') ? tok : looksLikePastedSecret(tok) ? '[REDACTED]' : tok));
 }
 
-export function scrubSecretText(body: string): string {
+/**
+ * Walk the two CREDENTIAL-VALUE POSITIONS of a free-text body — the value of a credential-named
+ * key, and the value after an auth scheme word — rewriting each with `rewriteValue`.
+ *
+ * Extracted (E2) so the strict publish-time text floor reuses the SAME notion of "where a
+ * credential value sits in prose" as the read-path scrub, and only substitutes the per-value rule.
+ * A second copy of these two regexes is exactly how the two floors would silently diverge.
+ */
+export function scrubSecretTextWith(
+  body: string,
+  /** `position` names WHICH credential position matched: `key-value` is the value of a
+   *  credential-named key (the whole value is the credential's), `scheme` is the text after an auth
+   *  scheme word, where the scheme itself has already been consumed and the tail may be ordinary
+   *  prose ("Use Bearer {{token}} here."). A rule that is strict about bare words must know the
+   *  difference, or it shreds the sentence around the example. */
+  rewriteValue: (value: string, position: 'key-value' | 'scheme') => string,
+): string {
   return body
     .replace(SECRET_LINE_RE, (_m, key: string, sep: string, value: string) =>
-      `${key}${sep}${redactSecretTokens(value)}`)
-    .replace(BEARER_VALUE_RE, (_m, scheme: string, rest: string) => `${scheme}${redactSecretTokens(rest)}`);
+      `${key}${sep}${rewriteValue(value, 'key-value')}`)
+    .replace(BEARER_VALUE_RE, (_m, scheme: string, rest: string) => `${scheme}${rewriteValue(rest, 'scheme')}`);
+}
+
+export function scrubSecretText(body: string): string {
+  return scrubSecretTextWith(body, redactSecretTokens);
 }
 
 // ============================================
