@@ -90,7 +90,10 @@ suites' job). Conventions and the versioning rule: [api-contract.md](./api-contr
 **8. The provider stays boring.** It authenticates, meters, routes, and logs. It never interprets prompt content,
 injects context, or executes side effects on the caller's behalf. A direct-provider fallback always exists.
 *Gate:* the egress chokepoint invariant ([architecture.md](./architecture.md)) plus `scripts/chokepoint-grep.sh`
-(`npm run gate:chokepoint`, in CI): no Anthropic reference may appear outside `api/src/llm/`. Server-side there
+(`npm run gate:chokepoint`, in CI): across every first-party source root, no `@anthropic-ai` scope and no provider
+host may appear in any case outside `api/src/llm/` (a broad lowercase `anthropic` token catches split-string
+evasion; the capitalised proper noun and the `ANTHROPIC_*` wiring identifiers are deliberately not banned - see
+`docs/findings.md` `F-2026-08-03-chokepoint-gate-bypasses`). Server-side there
 is deliberately no bypass, so the fallback is a client-side story: the consumer re-selects a provider without the
 Cortex base URL.
 

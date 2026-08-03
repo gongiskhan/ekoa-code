@@ -16,7 +16,7 @@ import { ChatRunEvent, ChatRun, ChatRunCreateResponse } from '@ekoa/shared';
 
 const RUN_ID = 'run-thinking-e2e';
 const ANSWER = 'Sou o Agente EKOA, o assistente da plataforma.';
-const LEAK = /\b(claude|anthropic|sonnet)\b/i;
+const LEAK = /\b(claude|anthropic|sonnet)\b/i; // chokepoint-gate-allow (assertion needle: the name must be ABSENT from the DOM)
 
 const SSE_EVENTS = [
   { type: 'ready', runId: RUN_ID },
@@ -68,7 +68,8 @@ test.describe('chat thinking channel', () => {
       const w = window as unknown as { __engineLeaks: string[] };
       w.__engineLeaks = [];
       const scan = (text: string | null) => {
-        if (text && /\b(claude|anthropic|sonnet)\b/i.test(text)) w.__engineLeaks.push(text.slice(0, 200));
+        // DOM sentinel needle: it records the engine name so the spec FAILS on it.
+        if (text && /\b(claude|anthropic|sonnet)\b/i.test(text)) w.__engineLeaks.push(text.slice(0, 200)); // chokepoint-gate-allow
       };
       const observer = new MutationObserver((mutations) => {
         for (const m of mutations) {

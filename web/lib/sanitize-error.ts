@@ -12,7 +12,10 @@
 
 const PROVIDER_LEAK_MARKERS: readonly string[] = [
   'claude',
-  'anthropic',
+  // The leak DENYLIST needle — it keeps the provider name OUT of the UI. Product code, but
+  // enforcement, not consumption: removing it would disable the client-side provider-leak
+  // sentinel, i.e. weaken the very invariant the chokepoint gate exists to protect.
+  'anthropic', // chokepoint-gate-allow
   'does not have access to claude',
   'organization does not have access',
   'please login again or contact your administrator',

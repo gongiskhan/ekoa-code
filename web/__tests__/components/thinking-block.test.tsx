@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ThinkingBlock } from '@/components/chat/thinking-block';
 
-const LEAK = /claude|anthropic|sonnet/i;
+const LEAK = /claude|anthropic|sonnet/i; // chokepoint-gate-allow (needle of an ABSENCE assertion: the name must never reach the DOM)
 
 describe('ThinkingBlock', () => {
   it('renders expanded while live, with the shimmering thinking label', () => {

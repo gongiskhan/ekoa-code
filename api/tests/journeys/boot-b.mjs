@@ -34,10 +34,28 @@
  * ENV:
  *   EKOA_LLM_DIRECT=1   point the LLM chokepoint base URL straight at https://api.anthropic.com  (chokepoint-gate-allow)
  *                       (otherwise the config default chokepoint route is used).
- *                       chokepoint-gate-allow: this sets LLM_CHOKEPOINT_BASE_URL — the
- *                       CHOKEPOINT'S OWN destination, i.e. the sanctioned external-chokepoint
- *                       topology llm/credentials.ts implements — never a route around it, and
- *                       this harness is an operator-driven dev boot, not product code.
+ *
+ *                       WHAT IT ACTUALLY DOES — read this before setting it. An earlier version of
+ *                       this note justified the gate marker by calling the URL "the CHOKEPOINT'S
+ *                       OWN destination … never a route around it". That was FALSE. Setting it is
+ *                       a REAL BYPASS of the egress chokepoint:
+ *                         - api/src/config.ts:297 feeds LLM_CHOKEPOINT_BASE_URL to
+ *                           llm/credentials.ts:isLocalGatewayChokepoint(), which is true ONLY for a
+ *                           loopback host. Pointed at the provider it is FALSE.
+ *                         - so buildSubprocessEnv (llm/credentials.ts:387,395) stops injecting the
+ *                           boot-provisioned GATEWAY key and injects the REAL MODEL CREDENTIAL
+ *                           instead (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY = the secret), and
+ *                           sets the subprocess's ANTHROPIC_BASE_URL to the provider.
+ *                       Every SDK subprocess then talks to the provider directly carrying the model
+ *                       secret: no gateway, no anonymisation pipeline, no attribution or metering —
+ *                       verbatim what CLAUDE.md's egress-chokepoint rule forbids.
+ *
+ *                       It survives as an OPT-IN DEV POSTURE, not a shipped bypass: default off,
+ *                       this file is an operator-driven journey harness that product code never
+ *                       imports, and no CI lane sets it. Its one use is watching live token
+ *                       streaming in dev, which the gateway path buffers by design. Do not point it
+ *                       at real tenant data and never wire it into anything shipped. Recorded in
+ *                       docs/findings.md so it is discoverable rather than buried in this marker.
  *
  * Ports (fixed to match the run-ekoa-code driver's contract): api=:4211 (internal), proxy=:4111,
  * web=:3000.
@@ -221,8 +239,10 @@ function bootApi() {
     JWT_SECRET,
     EKOA_ADMIN_USERNAME: 'admin',
     EKOA_ADMIN_PASSWORD: 'tmp12345',
-    // chokepoint-gate-allow: see the EKOA_LLM_DIRECT note in the module header — the chokepoint's
-    // own base URL under an explicit opt-in, not a bypass.
+    // The opt-in EKOA_LLM_DIRECT dev posture. It DOES bypass the chokepoint (the subprocess gets
+    // the real model credential and the provider base URL, so no gateway / anonymisation /
+    // metering) — see the EKOA_LLM_DIRECT note in the module header and docs/findings.md. Default
+    // off, dev harness only, set by no CI lane.
     ...(DIRECT ? { LLM_CHOKEPOINT_BASE_URL: 'https://api.anthropic.com' } : {}), // chokepoint-gate-allow
   };
   const child = spawn('node', [entry], { cwd: join(ROOT, 'api'), env, stdio: 'inherit' });

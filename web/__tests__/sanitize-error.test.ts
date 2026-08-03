@@ -12,7 +12,7 @@ describe('redactProviderIdentity (successful-reply white-label)', () => {
     const reply = 'Sou o Claude, um modelo criado pela Anthropic (Claude 4.6 / Sonnet).';
     const out = redactProviderIdentity(reply);
     expect(out).toContain('Agente EKOA');
-    expect(out).not.toMatch(/claude|anthropic|sonnet|opus|haiku/i);
+    expect(out).not.toMatch(/claude|anthropic|sonnet|opus|haiku/i); // chokepoint-gate-allow (needle of an ABSENCE assertion)
     expect(out).toContain('um modelo criado pela'); // the surrounding answer is preserved, not wiped
   });
 

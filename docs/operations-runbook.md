@@ -55,8 +55,10 @@ database is created fresh on every boot and discarded on exit. Only disk state s
 
 `npm run ci:lane` is the single per-PR gate. In order it runs: `lint` (ESLint over the repo plus the
 web lint - this is where the import-boundary and no-`@anthropic-ai` rules fire); `gate:chokepoint`
-(`scripts/chokepoint-grep.sh` - fails the build if `anthropic` appears in any source outside
-`api/src/llm/`, catching raw fetches the import rule cannot see); `gate:encryption-key` and
+(`scripts/chokepoint-grep.sh` - over every first-party source root, fails the build if
+`@anthropic-ai` or the provider host appears IN ANY CASE outside `api/src/llm/`, plus a broad
+lowercase `anthropic` token as a split-string net, catching raw fetches the import rule cannot see;
+a declared scan root that is not a directory also fails, since it would otherwise be reported clean); `gate:encryption-key` and
 `gate:garrison` (the other grep guards); `typecheck` (all workspaces); `test` (all workspaces -
 unit + contract suites under vitest); and finally `build` (shared, api, web) with
 `NEXT_PUBLIC_API_URL` defaulted to `http://localhost:4111`.

@@ -2079,3 +2079,83 @@ empty (visible in the OS-mode walkthrough, classic beats). Real user-created art
 timestamps; the fix is either seeding createdAt in the dev fixtures or formatDate falling back
 to a dash for missing dates. Surfaced by the walkthrough vision pass; needs a deterministic
 close (unit on formatDate fallback) or a written dismissal.
+
+## F-2026-08-03-chokepoint-gate-bypasses (FIXED)
+
+The chokepoint grep gate (`scripts/chokepoint-grep.sh`, `npm run gate:chokepoint`, in CI) was
+bypassable four ways after the widening recorded above. A fresh-context verifier reproduced each by
+running the real script; each was re-reproduced before the fix and re-run after. All four are closed
+and pinned by `api/tests/security/grep-gates.test.ts`, which executes the REAL script against
+planted violations. Revert-verified: five scripted reversions, each turning the matching case red.
+
+- **`chokepoint-marker-smuggled-into-a-path`** (FIXED 2026-08-03, CRITICAL, gate bypass). The
+  allow-marker was filtered with `grep -v 'chokepoint-gate-allow'` over the whole
+  `path:line:content` output line, so the marker matched in the PATH as well as the content:
+  `api/tests/chokepoint-gate-allow/p.ts` (a DIRECTORY) or `api/tests/x/chokepoint-gate-allow.ts` (a
+  FILE) exempted itself, and a directory exempted an unbounded subtree. That defeated both
+  properties the marker was introduced with: exemption is one LINE, and `grep -rn` over content
+  enumerates every exemption. FIXED: an awk filter splits `path:line:content` and matches the marker
+  against the CONTENT ONLY (path exemptions are matched against the PATH field, anchored). Pinned by
+  "the allow-marker cannot be smuggled into a DIRECTORY name" / "... into a FILE name".
+
+- **`chokepoint-gate-was-case-sensitive`** (FIXED 2026-08-03, CRITICAL, gate bypass). The needle had
+  no `-i` while the script's own comment claimed "case-insensitive", so
+  `https://api.Anthropic.com/v1/messages` passed the gate. DNS is case-insensitive, so that URL
+  resolves and works: exactly the raw-fetch class the gate exists to catch. `'@ANTHROPIC-ai/sdk'`
+  and `'ANTHROPIC.COM'` passed too. Worse, the two exemption filters used `-iv`, so the
+  case-insensitivity was on the WRONG side of the fence: `api/src/LLM/` and `api/tests/LLM/`
+  inherited the chokepoint module's exemption. FIXED by splitting the gate into the two passes its
+  comment always claimed: PASS 1 matches the banned references themselves (`@anthropic-ai`,
+  `anthropic.com`) CASE-INSENSITIVELY over every root; PASS 2 is the broad lowercase `anthropic`
+  token as a split-string net. The path exemptions are now case-SENSITIVE and anchored. Pinned by
+  "an UPPER-CASE provider host fails", "an UPPER-CASE package scope and a bare upper-case host both
+  fail", and "the PATH exemptions are case-SENSITIVE".
+
+  KNOWN RESIDUAL, accepted deliberately: pass 2 stays case-SENSITIVE. The word legitimately appears
+  ~40 times outside `api/src/llm/` in two shapes that are not egress and cannot be removed - the
+  capitalised proper noun in doc comments and UI copy ("Anthropic-compatible clients", including
+  `shared/`, `server.ts` and the locales), and the SCREAMING_SNAKE env identifiers
+  `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`, of which `ANTHROPIC_BASE_URL`
+  is the mechanism CLAUDE.md MANDATES for pointing a subprocess AT the chokepoint. A case-insensitive
+  pass 2 would mean ~40 line markers, turning the marker into furniture and destroying the property
+  that `grep -rn chokepoint-gate-allow` is a short readable enumeration. The cost is that a literal
+  that is BOTH split AND mixed-case (`'api.' + 'Anthropic' + '.com'`) evades both passes; so does
+  charcode obfuscation, which no grep gate can see. The ESLint import ban and review are the other
+  layers. Pinned in the other direction too ("the sanctioned wiring identifier and prose do NOT trip
+  it"), so a future widening has to confront the trade-off rather than discover it.
+
+- **`chokepoint-gate-scanned-a-root-that-does-not-exist`** (FIXED 2026-08-03, HIGH, gate coverage).
+  The script scanned `web/src`, WHICH IS NOT A DIRECTORY (the real roots are `web/app`, `web/lib`,
+  `web/components`, `web/stores`, `web/hooks`, `web/locales`, `web/types`, plus `web/e2e`,
+  `web/__tests__`, `web/scripts`), while the comment the previous commit wrote claimed "so a raw
+  provider reference cannot hide in the frontend". Probes planted in `web/lib/` and `web/app/` both
+  passed. `scripts/`, `api/scripts`, `api/assets` (first-party served runtime bundles) and
+  `clients/` (a SHIPPED CLI workspace) were unscanned too. FIXED: the root list is now every
+  first-party source root, and - the actual root cause - A DECLARED ROOT THAT IS NOT A DIRECTORY NOW
+  FAILS THE GATE. A missing root used to be scanned as empty, i.e. reported clean; that is how
+  `web/src` hid the whole frontend for as long as it did. Widening surfaced 5 new hits, all in web
+  and all triaged as anti-leak enforcement (the token is the needle of a check that the name is
+  ABSENT): `web/lib/sanitize-error.ts` (the provider-leak denylist), `web/e2e/chat-thinking.spec.ts`
+  (x2), `web/__tests__/sanitize-error.test.ts`, `web/__tests__/components/thinking-block.test.tsx`.
+  Each got a same-line marker; no real violation was found and nothing was weakened to make it pass.
+  Pinned by "EVERY declared root is really scanned" (one probe per root), "a violation in the
+  FRONTEND, in scripts/ and in the shipped clients/ CLI fails on the real tree", "a DECLARED ROOT
+  THAT DOES NOT EXIST fails the gate" and "every declared root really exists in the repo".
+
+- **`ekoa-llm-direct-really-does-bypass-the-chokepoint`** (RECORDED 2026-08-03, MEDIUM, honest
+  labelling - NOT a shipped bypass, behaviour deliberately unchanged). `api/tests/journeys/boot-b.mjs`
+  justified its allow-marker by claiming `LLM_CHOKEPOINT_BASE_URL` is "the CHOKEPOINT'S OWN
+  destination ... never a route around it". That is FALSE, and the finding above repeats it.
+  `api/src/config.ts:297` feeds the variable to `llm/credentials.ts:isLocalGatewayChokepoint()`,
+  which is true ONLY for a loopback host; pointed at the provider it is false, so
+  `buildSubprocessEnv` (`llm/credentials.ts:387,395`) stops injecting the boot-provisioned GATEWAY
+  key and injects the REAL MODEL CREDENTIAL (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` = the
+  secret), and sets the subprocess's `ANTHROPIC_BASE_URL` to the provider. `EKOA_LLM_DIRECT=1`
+  therefore spawns SDK subprocesses pointed straight at the provider carrying the model secret: no
+  gateway, no anonymisation pipeline, no attribution or metering - verbatim what CLAUDE.md's
+  egress-chokepoint rule forbids. It is NOT a shipped bypass: opt-in, default off, in a dev journey
+  harness product code never imports, set by no CI lane (`grep -rn EKOA_LLM_DIRECT`), and its one
+  use is watching live token streaming that the gateway path buffers by design. Its BEHAVIOUR is
+  deliberately unchanged; what changed is that the comment now says what it does, at both marker
+  sites, and it is recorded here so it is discoverable rather than buried in a marker. If the dev
+  need for live streaming is ever solved on the gateway path, delete the flag.

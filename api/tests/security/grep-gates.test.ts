@@ -23,8 +23,18 @@
  * allowlist entry, and this is asserted by the matcher self-test.
  */
 import { describe, it, expect } from 'vitest';
-import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  readdirSync,
+  statSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  copyFileSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, relative, join, sep } from 'node:path';
@@ -154,24 +164,68 @@ describe('grep gate: no orphan `builder` role ref survives (H5)', () => {
  * a no-op, THESE fail - so the two tree scans above can never silently become vacuous.
  */
 /**
- * THE CHOKEPOINT GATE COVERS WHAT ITS COMMENT CLAIMS (D2 re-review LOW-3).
+ * THE CHOKEPOINT GATE COVERS WHAT ITS COMMENT CLAIMS (D2 re-review LOW-3, then the four bypasses a
+ * fresh-context verifier reproduced against the widened gate).
  *
- * `scripts/chokepoint-grep.sh` scanned `api/test` — a fixture directory holding only fake-daemon —
- * while its own comment claimed it covered "the test harness". The real suite (`api/tests`) was
- * never scanned, so a raw provider-host literal in a spec was invisible to CI. The path is fixed;
- * these cases pin the BEHAVIOUR rather than the script's text, by running the real script against
- * a planted violation. Revert the path and the first case goes green-when-it-should-be-red.
+ * History, each item now pinned below by a case that RUNS THE REAL SCRIPT against a planted
+ * violation (behaviour, not the script's text — revert the fix and the matching case goes red):
+ *   1. it scanned `api/test` (a fixture dir holding only fake-daemon) while claiming to cover the
+ *      test harness; the real suite `api/tests` was unscanned.
+ *   2. its allow-marker was filtered over the whole `path:line:content` output line, so a DIRECTORY
+ *      or FILE named `chokepoint-gate-allow` exempted an unbounded subtree — defeating both
+ *      properties the marker exists for (one-line granularity; `grep -rn` over content enumerates
+ *      every exemption).
+ *   3. it was case-SENSITIVE while its comment claimed case-insensitive, so a provider host spelled
+ *      with a capital A passed (DNS is case-insensitive, so that URL resolves) — and its exemption
+ *      filters were `-iv`, so `api/tests/LLM/` inherited the chokepoint suite's exemption. The
+ *      case-insensitivity was on the wrong side of the fence.
+ *   4. it scanned `web/src`, WHICH DOES NOT EXIST: the whole frontend, `scripts/` and the shipped
+ *      `clients/` CLI workspace were unscanned while the comment claimed the frontend was covered.
  *
- * The probe is written into the real tree (the script's roots are deliberately hardcoded — a gate
- * whose scan scope is settable from outside is a gate with a switch) under a dot-prefixed,
- * pid-unique directory, and removed in `finally`.
+ * TWO HARNESSES, deliberately:
+ *   - REAL TREE (the probe is written into the repo under a dot-prefixed, pid-unique directory and
+ *     removed in `finally`; the script's roots are hardcoded on purpose — a gate whose scan scope is
+ *     settable from outside is a gate with a switch). This is what proves the declared roots match
+ *     the ACTUAL repo layout, which is exactly what `web/src` got wrong.
+ *   - SANDBOX (a byte-for-byte copy of the real script executed against a synthetic tree under
+ *     os.tmpdir()). Used for the cases that cannot be run against the repo without mutating it —
+ *     per-root coverage of every declared root, and the missing-root failure itself.
  */
-describe('chokepoint grep gate: scope + exemption mechanism (D2 re-review LOW-3)', () => {
-  const GATE = resolve(ROOT, 'scripts/chokepoint-grep.sh');
+// Assembled from fragments, never written as literals, so THIS file does not trip the gate it
+// tests (api/tests is scanned and this file is not exempt).
+const TOKEN = ['anthrop', 'ic'].join('');
+const HOST = `https://api.${TOKEN}.com/v1/messages`;
+const GATE = resolve(ROOT, 'scripts/chokepoint-grep.sh');
+
+/**
+ * Every root `scripts/chokepoint-grep.sh` declares. Hardcoded here INDEPENDENTLY of the script, so
+ * dropping one from the script's ROOTS makes the per-root case below go red instead of silently
+ * un-scanning a subtree.
+ */
+const DECLARED_ROOTS = [
+  'api/src',
+  'api/test',
+  'api/tests',
+  'api/scripts',
+  'api/assets',
+  'shared/src',
+  'web/app',
+  'web/components',
+  'web/hooks',
+  'web/lib',
+  'web/locales',
+  'web/stores',
+  'web/types',
+  'web/e2e',
+  'web/__tests__',
+  'web/scripts',
+  'scripts',
+  'clients',
+];
+
+describe('chokepoint grep gate: real-tree scope + exemption mechanism', () => {
   const PROBE_DIR = resolve(ROOT, `api/tests/.chokepoint-gate-probe-${process.pid}`);
   const PROBE = join(PROBE_DIR, 'probe.ts');
-  // Assembled, never a literal, so THIS file does not trip the gate it is testing.
-  const HOST = ['https://api.', 'anthrop', 'ic.com/v1/messages'].join('');
 
   /** Run the real gate against `content` planted under api/tests; returns its exit status. */
   function gateStatusWith(content: string): { status: number; stdout: string } {
@@ -201,9 +255,159 @@ describe('chokepoint grep gate: scope + exemption mechanism (D2 re-review LOW-3)
     expect(status).not.toBe(0);
   });
 
+  it('a violation in the FRONTEND, in scripts/ and in the shipped clients/ CLI fails on the real tree', () => {
+    // The `web/src` bug in the flesh: these three roots exist in the repo and were entirely
+    // unscanned. One gate run, three probes, so the window in which the tree carries them is a
+    // single ~0.1s invocation. (The remaining roots are covered exhaustively in the sandbox suite.)
+    const dirs = ['web/lib', 'scripts', 'clients'].map((r) =>
+      resolve(ROOT, r, `.chokepoint-gate-probe-${process.pid}`),
+    );
+    try {
+      for (const d of dirs) {
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, 'probe.ts'), `export const u = '${HOST}';\n`);
+      }
+      const r = spawnSync('bash', [GATE], { cwd: ROOT, encoding: 'utf8' });
+      const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+      expect(r.status, `gate output:\n${out}`).not.toBe(0);
+      for (const root of ['web/lib', 'scripts', 'clients']) {
+        expect(out, `root ${root} is declared but its planted violation was not reported`).toContain(
+          `${root}/.chokepoint-gate-probe`,
+        );
+      }
+    } finally {
+      for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('every declared root really exists in the repo (a dangling root is scanned as empty)', () => {
+    const dangling = DECLARED_ROOTS.filter((r) => !existsSync(resolve(ROOT, r)));
+    expect(dangling, `declared scan roots that are not directories: ${dangling.join(', ')}`).toEqual([]);
+  });
+
   it('the gate is clean on the tree as it stands (the pre-existing hits were triaged, not ignored)', () => {
     const r = spawnSync('bash', [GATE], { cwd: ROOT, encoding: 'utf8' });
     expect(r.status, `${r.stdout ?? ''}${r.stderr ?? ''}`).toBe(0);
+  });
+});
+
+/**
+ * SANDBOX SUITE — the real script, byte-for-byte, executed against a synthetic tree in os.tmpdir().
+ * Hermetic (no repo mutation, no race with a concurrent lint/typecheck) and exhaustive: it can
+ * plant in EVERY declared root, and can delete a root to prove the missing-root failure.
+ */
+describe('chokepoint grep gate: bypass matrix (sandboxed copy of the real script)', () => {
+  /** A synthetic repo whose only content is the roots the gate declares. Caller removes it. */
+  function makeSandbox(roots: string[] = DECLARED_ROOTS): string {
+    const dir = mkdtempSync(join(tmpdir(), 'chokepoint-gate-'));
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    copyFileSync(GATE, join(dir, 'scripts', 'chokepoint-grep.sh'));
+    for (const r of roots) mkdirSync(join(dir, r), { recursive: true });
+    // The two exempt paths, so their case-sensitivity can be exercised.
+    if (roots.includes('api/src')) mkdirSync(join(dir, 'api/src/llm'), { recursive: true });
+    if (roots.includes('api/tests')) mkdirSync(join(dir, 'api/tests/llm'), { recursive: true });
+    return dir;
+  }
+
+  function runGate(dir: string): { status: number; out: string } {
+    const r = spawnSync('bash', [join(dir, 'scripts', 'chokepoint-grep.sh')], { cwd: dir, encoding: 'utf8' });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  }
+
+  /** Plant `files` (relative path -> content) in a fresh sandbox, run the gate, clean up. */
+  function gateWith(files: Record<string, string>, roots?: string[]): { status: number; out: string } {
+    const dir = makeSandbox(roots);
+    try {
+      for (const [rel, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(dir, rel)), { recursive: true });
+        writeFileSync(join(dir, rel), content);
+      }
+      return runGate(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const decl = (value: string) => `export const u = '${value}';\n`;
+
+  it('an empty sandbox is clean (the matrix below is not just "everything fails")', () => {
+    const { status, out } = gateWith({});
+    expect(status, out).toBe(0);
+  });
+
+  it('EVERY declared root is really scanned — one probe per root, all reported', () => {
+    const files: Record<string, string> = {};
+    for (const r of DECLARED_ROOTS) files[`${r}/zz-probe.ts`] = decl(HOST);
+    const { status, out } = gateWith(files);
+    expect(status, out).not.toBe(0);
+    for (const r of DECLARED_ROOTS) {
+      expect(out, `root ${r} is declared but its planted violation was NOT reported`).toContain(`${r}/zz-probe.ts`);
+    }
+  });
+
+  it('a DECLARED ROOT THAT DOES NOT EXIST fails the gate (the `web/src` class of blind spot)', () => {
+    const { status, out } = gateWith({}, DECLARED_ROOTS.filter((r) => r !== 'web/lib'));
+    expect(status, out).not.toBe(0);
+    expect(out).toContain('do not exist');
+    expect(out).toContain('web/lib');
+  });
+
+  it('the allow-marker cannot be smuggled into a DIRECTORY name', () => {
+    const { status, out } = gateWith({ 'api/tests/chokepoint-gate-allow/p.ts': decl(HOST) });
+    expect(status, out).not.toBe(0);
+    expect(out).toContain('api/tests/chokepoint-gate-allow/p.ts');
+  });
+
+  it('the allow-marker cannot be smuggled into a FILE name', () => {
+    const { status, out } = gateWith({ 'api/tests/x/chokepoint-gate-allow.ts': decl(HOST) });
+    expect(status, out).not.toBe(0);
+    expect(out).toContain('api/tests/x/chokepoint-gate-allow.ts');
+  });
+
+  it('the marker still exempts exactly its own line, and only its own line', () => {
+    const same = gateWith({ 'api/src/p.ts': `export const u = '${HOST}'; // chokepoint-gate-allow\n` });
+    expect(same.status, same.out).toBe(0);
+    const adjacent = gateWith({ 'api/src/p.ts': `// chokepoint-gate-allow\nexport const u = '${HOST}';\n` });
+    expect(adjacent.status, adjacent.out).not.toBe(0);
+  });
+
+  it('an UPPER-CASE provider host fails (DNS is case-insensitive, so that URL works)', () => {
+    const upper = `https://api.${['Anthrop', 'ic'].join('')}.com/v1/messages`;
+    const { status, out } = gateWith({ 'api/src/p.ts': decl(upper) });
+    expect(status, out).not.toBe(0);
+  });
+
+  it('an UPPER-CASE package scope and a bare upper-case host both fail', () => {
+    const scope = `@${['ANTHROP', 'IC'].join('')}-ai/sdk`;
+    const a = gateWith({ 'api/src/p.ts': `import x from '${scope}';\n` });
+    expect(a.status, a.out).not.toBe(0);
+    const host = ['ANTHROP', 'IC.COM'].join('');
+    const b = gateWith({ 'api/src/p.ts': decl(host) });
+    expect(b.status, b.out).not.toBe(0);
+  });
+
+  it('the PATH exemptions are case-SENSITIVE — api/src/LLM and api/tests/LLM inherit nothing', () => {
+    const src = gateWith({ 'api/src/LLM/p.ts': decl(HOST) });
+    expect(src.status, src.out).not.toBe(0);
+    const tests = gateWith({ 'api/tests/LLM/p.ts': decl(HOST) });
+    expect(tests.status, tests.out).not.toBe(0);
+    // ...while the real chokepoint module and its own suite ARE exempt.
+    const real = gateWith({ 'api/src/llm/p.ts': decl(HOST), 'api/tests/llm/p.ts': decl(HOST) });
+    expect(real.status, real.out).toBe(0);
+  });
+
+  it('a split-string literal is still caught by the broad token pass', () => {
+    const { status, out } = gateWith({ 'api/src/p.ts': `const u = 'api.' + '${TOKEN}.com';\n` });
+    expect(status, out).not.toBe(0);
+  });
+
+  it('the sanctioned wiring identifier and prose do NOT trip it (why pass 2 is case-sensitive)', () => {
+    // ANTHROPIC_BASE_URL is the mechanism CLAUDE.md MANDATES for pointing a subprocess AT the
+    // chokepoint, and the capitalised proper noun is prose; banning either would mean ~40 markers.
+    const env = gateWith({ 'api/src/p.ts': 'const e = { ANTHROPIC_BASE_URL: cfg.chokepoint };\n' });
+    expect(env.status, env.out).toBe(0);
+    const prose = gateWith({ 'api/src/p.ts': '// The Anthropic-compatible provider endpoint.\n' });
+    expect(prose.status, prose.out).toBe(0);
   });
 });
 
