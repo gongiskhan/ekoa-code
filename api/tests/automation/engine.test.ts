@@ -1198,6 +1198,11 @@ describe('write rails - the run pauses on an unapproved write', () => {
     expect(errors[0]).toMatch(/approval/);
     // The fixer is never asked: a non-recoverable record is refused by shouldAttemptFix.
     expect(hoisted.proposePatch).not.toHaveBeenCalled();
+    // …and the record SAYS non-recoverable, rather than relying on `integration` happening to be a
+    // step type the fixer declines today. Drop the `awaitingConsent` term from the engine's
+    // `recoverable` and this assertion is the one that notices.
+    const stored = [...hoisted.runs.values()][0] as { steps: Array<{ error?: { recoverable?: boolean } }> };
+    expect(stored.steps[0]!.error!.recoverable).toBe(false);
   });
 
   it('the same refusal in a REHEARSAL does not reach the self-heal fixer either', async () => {

@@ -136,14 +136,18 @@ describe('artifact recipe rail - integration.call', () => {
 
 describe('the composition root forwards what the gate needs', () => {
   const serverSrc = readFileSync(resolve(HERE, '../../src/server.ts'), 'utf8');
-  const platformSeam = serverSrc.slice(serverSrc.indexOf('setPlatformIntegrationCaller('));
+  // Wide enough to reach the seam body's RETURN statement; the two comment blocks in it push
+  // that line past a 1400-char window.
+  const platformSeam = serverSrc.slice(serverSrc.indexOf('setPlatformIntegrationCaller('), serverSrc.indexOf('setPlatformIntegrationCaller(') + 2400);
 
   it('the platform seam forwards the acting user, so an approval is findable', () => {
-    expect(platformSeam.slice(0, 1400)).toContain('actingUserId: pactor.userId');
+    expect(platformSeam).toContain('actingUserId: pactor.userId');
   });
 
   it('the platform seam forwards the CODE, so the engine can tell a refusal from a failure', () => {
-    expect(platformSeam.slice(0, 1400)).toContain('details: r.code');
+    // Matched on the RETURN STATEMENT, not on the substring: the comment above that line names
+    // `details: r.code` too, so a `toContain` here stayed green when the field itself was deleted.
+    expect(platformSeam).toMatch(/return \{ success: r\.success[^}]*details: r\.code/);
   });
 
   it('the LISTENER binding forwards NO acting user - an unattended poll cannot ride an approval', () => {
