@@ -58,8 +58,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   origins (scheme + host + port) rather than hosts, and whether subtree matching should be opt-in
   per item, then move the matcher with its suite.
 
-- **`ws-c-comparator-does-not-cover-the-action-executor-rail`** (OPEN 2026-08-03, MEDIUM, migration
-  evidence - raised as M1 by the B2 review, partially closed). B2 claimed the Rule-10 comparator ran
+- **`ws-c-comparator-does-not-cover-the-action-executor-rail`** (CLOSED 2026-08-03 by C2's 102f302,
+  MEDIUM, migration evidence - raised as M1 by the B2 review). RESOLUTION: the third rail was closed
+  independently and in parallel by slice C2, which wired `observeCredentialShadow` into
+  `action-executor.ts` (see its import and the call on the decrypt path). All three rails now feed
+  the Rule-10 sample, so the 2026-08-15 cutover is decided on an unbiased one. Recorded rather than
+  silently deleted because the entry was accurate when written: B2 correctly refused to reach into
+  another slice's live file and named the gap instead, and C2 closed it from its own side.
+  ORIGINAL FINDING FOLLOWS. B2 claimed the Rule-10 comparator ran
   on "every real credential read, per api_call step and per listener tick". It ran on ONE rail (the
   `setIntegrationCredentialLoader` seam, consumed only by `automation/executors/api-call.ts`). This
   response added the served-app Zoho Sign rail, so two of three are covered; the third,
