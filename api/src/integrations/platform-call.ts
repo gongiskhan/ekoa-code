@@ -12,9 +12,23 @@
  *
  * The generic user-defined integration runner is action-executor.ts; the two are deliberately
  * separate (different credential custody, different SSRF posture — ch09 invariant 8).
+ *
+ * ============================ THE WRITE GATE ON THIS RAIL (C2 follow-up) ======================
+ * C2 put `checkActionConsent` inside `executeUserIntegrationAction` - and named this file as the
+ * rail it does NOT cover. Everything routed here (the automation `integration` step, the artifact
+ * `integration.call` primitive, the listener supervisor's poll, chat prefetch, email hydration)
+ * reached the org's Gmail / Calendar / Drive / OneDrive with NO human confirmation whatsoever.
+ * `google-workspace send_email` auto-ran for any org member who could drive an automation.
+ *
+ * The gate is enforced HERE, in the one function every one of those rails calls, for the same
+ * reason C2 enforced its own in the executor rather than in the routers: a gate a caller has to
+ * remember is not a gate. `platformActionRequiresConsent` below is the derivation; the approval
+ * store, the shape and the fail-closed rule are C2's `action-consent.ts`, reused verbatim
+ * (Capability Contract rule 1 - one implementation).
  */
 
-import { type IntegrationActionHttpConfig } from './definitions.js';
+import { actionRequiresConsent, checkActionConsent, describeAction, type IntegrationActionConsentDescriptor } from './action-consent.js';
+import { type IntegrationAction, type IntegrationActionHttpConfig } from './definitions.js';
 import { resolveDefinition, systemActorForOrg } from './definition-registry.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { SsrfError } from '../services/url-safety.js';
@@ -31,6 +45,18 @@ export interface PlatformCallInput {
   integrationKey: string; // 'google-workspace' | 'microsoft-365'
   actionName: string;
   args: Record<string, unknown>;
+  /**
+   * The human this call is made ON BEHALF OF, and whose standing approval the write gate looks up.
+   *
+   * OPTIONAL, and its ABSENCE is a security decision rather than a convenience: a rail that cannot
+   * name a user cannot approve a write either, so a mutating action arriving with no acting user is
+   * refused outright (see the gate below). The unattended rails - the listener supervisor's poll,
+   * chat prefetch, email hydration - deliberately pass nothing: their actions are enumerations, and
+   * a poll that could send mail under a standing approval nobody is watching is exactly the trap
+   * door this closes. A trigger's `pollAction` may name ANY action of the package, which is what
+   * makes that surface worth refusing structurally rather than by convention.
+   */
+  actingUserId?: string;
 }
 
 export interface PlatformCallResult {
@@ -38,13 +64,77 @@ export interface PlatformCallResult {
   status?: number;
   data?: unknown;
   error?: string;
-  code?: 'unknown_integration' | 'unknown_action' | 'not_connected' | 'transport_error' | 'client_4xx' | 'transient_5xx';
+  code?:
+    | 'unknown_integration'
+    | 'unknown_action'
+    | 'not_connected'
+    // The action writes and no live human approval covers this exact shape. The SAME token
+    // `executeUserIntegrationAction` answers with, on purpose: one vocabulary for "a human has to
+    // answer before this proceeds", whichever rail asked.
+    | 'awaiting_consent'
+    | 'transport_error'
+    | 'client_4xx'
+    | 'transient_5xx';
+  /** Present ONLY with `code: 'awaiting_consent'` - what the human must be shown to answer. */
+  consentRequest?: IntegrationActionConsentDescriptor;
 }
 
 function keyToProvider(integrationKey: string): PlatformProvider | null {
   if (integrationKey === 'google-workspace') return 'google';
   if (integrationKey === 'microsoft-365') return 'microsoft';
   return null;
+}
+
+/**
+ * The READ actions of the two shipped platform packages - the ALLOWLIST the write gate derives
+ * `mutates` from.
+ *
+ * WHY AN ALLOWLIST AND NOT THE PACKAGE'S OWN `mutates` FIELD. Both are used (the derivation below
+ * requires them to AGREE), but the allowlist is the one that decides the fail-closed direction:
+ *
+ *  - `mutates` arrives from a `config.json` that is parsed, not schema-validated (definitions.ts),
+ *    resolved through the tenant-scoped definition registry. Making a `false` there sufficient
+ *    would make "may this send mail as the org?" answerable by whatever the registry returns.
+ *  - These are SHIPPED packages at fixed vendor hosts. Their action list is known at build time, so
+ *    the read set can be written down once and checked, rather than inferred at runtime.
+ *  - An action NOT NAMED HERE - a package bump adding one, a typo, a row that resolves under this
+ *    key from somewhere unexpected - is therefore MUTATING. Same direction as C2's
+ *    `mutates !== false`: the cost of being wrong is one dialog, not an unapproved write.
+ *
+ * Deliberately NOT derived from the action name: `read_email` and `modify_email` share a prefix,
+ * `complete_task` and `trash_email` read like neither, and a name-shaped heuristic is precisely the
+ * guess this rail cannot afford. `platform-action-mutation.test.ts` pins this table against the
+ * shipped `config.json` in BOTH directions, so a package bump that adds an action fails the suite
+ * instead of silently landing in the gated (or worse, the ungated) set.
+ */
+const PLATFORM_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  'google-workspace': new Set([
+    'list_emails', 'read_email', 'list_events', 'list_files', 'list_labels', 'list_drafts',
+    'read_sheet', 'get_file', 'list_task_lists', 'list_tasks',
+  ]),
+  'microsoft-365': new Set(['list_emails', 'read_email', 'list_events', 'list_files', 'list_sites']),
+};
+
+/** The read allowlist, for the drift test. Never mutated - the sets are module-private. */
+export function platformReadActions(integrationKey: string): ReadonlySet<string> | undefined {
+  return PLATFORM_READ_ACTIONS[integrationKey];
+}
+
+/**
+ * Does this platform action need a human before it runs?
+ *
+ * BOTH sources must say "read" for the answer to be no: the action is on the shipped read
+ * allowlist AND the resolved definition declares a literal `mutates: false` (C2's
+ * `actionRequiresConsent`). Either one saying otherwise - an unknown integration key, an unknown
+ * action, a `mutates` that is absent / `"false"` / `0` / null - gates the call.
+ */
+export function platformActionRequiresConsent(
+  integrationKey: string,
+  action: Pick<IntegrationAction, 'actionName' | 'mutates'>,
+): boolean {
+  const reads = PLATFORM_READ_ACTIONS[integrationKey];
+  if (!reads || !reads.has(action.actionName)) return true;
+  return actionRequiresConsent(action);
 }
 
 export async function callPlatformIntegration(input: PlatformCallInput, deps: OAuthDeps): Promise<PlatformCallResult> {
@@ -59,6 +149,49 @@ export async function callPlatformIntegration(input: PlatformCallInput, deps: OA
   const action = def?.actions.find((a) => a.actionName === input.actionName);
   if (!action?.httpConfig) {
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}` };
+  }
+
+  // WRITE GATE. Placed after the shape gates and BEFORE `getValidPlatformTokens`, so an unapproved
+  // write never causes the org's OAuth token to be decrypted, refreshed, or spent - the same
+  // ordering, and the same reasoning, as C2's gate in `executeUserIntegrationAction`. It has one
+  // visible consequence, and it is the intended one: an unapproved write on a platform that is not
+  // even connected answers `awaiting_consent` rather than `not_connected`, so the gate cannot be
+  // probed for connection state by a caller who has not been approved for the action.
+  //
+  // A READ (on the allowlist AND declared `mutates: false`) falls straight through with no store
+  // lookup, so every existing automation, listener poll, prefetch and hydration keeps behaving
+  // exactly as it did (Rule 7 additive).
+  if (platformActionRequiresConsent(input.integrationKey, action)) {
+    // `mutates` is forced true rather than passed through: the allowlist has already decided this
+    // is a write, and `checkActionConsent` must not be able to reach the "not_mutating" exit on a
+    // definition field the allowlist just overruled. The SHAPE is unaffected - `actionShape` hashes
+    // the backing, transport, httpConfig and binding, never `mutates` - so the fingerprint here is
+    // byte-identical to the one the approval route showed the human.
+    const gated: IntegrationAction = { ...action, mutates: true };
+    if (!input.actingUserId) {
+      // NOBODY TO ATTRIBUTE THIS TO. An approval is keyed on (org, USER, action, shape); a rail
+      // that names no user has no approval to find and never will. Refused rather than allowed,
+      // and refused rather than silently attributed to some org admin.
+      return {
+        success: false,
+        code: 'awaiting_consent',
+        error: `action "${input.actionName}" on ${input.integrationKey} writes and cannot run on an unattended rail - it needs a named human's approval`,
+        consentRequest: describeAction(input.integrationKey, gated),
+      };
+    }
+    const verdict = await checkActionConsent(
+      { orgId: input.orgId, userId: input.actingUserId },
+      input.integrationKey,
+      gated,
+    );
+    if (!verdict.allowed) {
+      return {
+        success: false,
+        code: 'awaiting_consent',
+        error: `action "${input.actionName}" on ${input.integrationKey} writes (${verdict.request.target}) and needs the owner's approval before it can run`,
+        consentRequest: verdict.request,
+      };
+    }
   }
 
   let accessToken: string;

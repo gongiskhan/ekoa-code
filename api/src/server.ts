@@ -446,10 +446,23 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       return { success: false, error: 'platform integration unavailable: the calling user has no organisation' };
     }
     const r = await callPlatformIntegration(
-      { orgId: owner.orgId, integrationKey: call.integrationKey, actionName: call.actionName, args: call.args },
+      {
+        orgId: owner.orgId,
+        integrationKey: call.integrationKey,
+        actionName: call.actionName,
+        args: call.args,
+        // THE ACTING HUMAN, forwarded so the platform write gate has an approval to look up.
+        // The seam's actor is the run/step owner; without it every mutating platform action on this
+        // rail would be refused as unattended and there would be no way to say yes (platform-call.ts).
+        // The LISTENER supervisor's own `callPlatform` binding below deliberately forwards nothing.
+        actingUserId: pactor.userId,
+      },
       { now: deps.now, genId: deps.genId },
     );
-    return { success: r.success, data: r.data, error: r.error };
+    // `details: r.code` mirrors the user-defined executor binding above: the engine classes an
+    // `awaiting_consent` refusal by its CODE, and dropping it here left the platform rail's refusal
+    // indistinguishable from an ordinary failure (retried, and fixer-visible).
+    return { success: r.success, data: r.data, error: r.error, details: r.code };
   });
   // 4. Decrypted credential fields for api_call auth injection (encrypted at rest, ch09).
   //

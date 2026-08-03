@@ -220,9 +220,26 @@ function normaliseInsertedStep(step: Step): Step {
 // Validation
 // ============================================================================
 
+/**
+ * The step types the fixer may author. THE FOUR THE PROMPT DOCUMENTS, and no more.
+ *
+ * `local_command`, `api_call` and `ekoa_action` were admitted here while `FIXER_SYSTEM` never
+ * offered them - so nothing legitimate produced them, and the only thing the allowance bought was a
+ * route around the write gates. The fixer is a MODEL reacting to a failure message and a screenshot,
+ * both of which come from the remote page: it is the most prompt-injectable authoring surface in
+ * the engine, and it must not be the one that can mint an effect.
+ *
+ * Concretely, a `replace_current` carrying `{"type":"api_call","apiRequest":{"method":"POST",
+ * "url":"…","authIntegrationKey":"…"}}` performed the write that the Action gate had just refused,
+ * with the owner's credentials injected. Both halves are now closed - `executors/api-call.ts` gates
+ * a mutating `api_call` wherever it came from, and the fixer cannot author one at all - because the
+ * defence that survives a change of mind about the other is the one worth having.
+ *
+ * Widening this set is a security decision: a step type belongs here only once the prompt teaches
+ * the fixer to emit it AND its executor gates its effect.
+ */
 const VALID_STEP_TYPES_FOR_PATCH: ReadonlySet<StepType> = new Set([
   'browser', 'verify', 'navigate', 'wait',
-  'local_command', 'api_call', 'ekoa_action',
 ]);
 
 function validatePatch(value: unknown): RehearsalPatch {
@@ -275,46 +292,9 @@ function validateStep(value: unknown): Step {
   if (type === 'wait') {
     step.durationMs = typeof s.durationMs === 'number' && s.durationMs > 0 ? s.durationMs : 1000;
   }
-  if (type === 'local_command' && s.commandTemplate && typeof s.commandTemplate === 'object') {
-    const ct = s.commandTemplate as Record<string, unknown>;
-    if (!Array.isArray(ct.argv) || ct.argv.length === 0 || !ct.argv.every((a) => typeof a === 'string')) {
-      throw new Error('fixer local_command step missing/invalid commandTemplate.argv');
-    }
-    step.commandTemplate = {
-      argv: ct.argv as string[],
-      cwd: typeof ct.cwd === 'string' ? ct.cwd : undefined,
-      timeoutMs: typeof ct.timeoutMs === 'number' ? ct.timeoutMs : undefined,
-      stdin: typeof ct.stdin === 'string' ? ct.stdin : undefined,
-    };
-  }
-  if (type === 'api_call' && s.apiRequest && typeof s.apiRequest === 'object') {
-    const a = s.apiRequest as Record<string, unknown>;
-    if (typeof a.method !== 'string' || typeof a.url !== 'string') {
-      throw new Error('fixer api_call step missing apiRequest.method or .url');
-    }
-    step.apiRequest = {
-      method: a.method as import('./types.js').ApiCallMethod,
-      url: a.url,
-      headers: a.headers && typeof a.headers === 'object'
-        ? Object.fromEntries(Object.entries(a.headers).filter(([, v]) => typeof v === 'string')) as Record<string, string>
-        : undefined,
-      body: typeof a.body === 'string' ? a.body : undefined,
-      bodyKind: typeof a.bodyKind === 'string' ? a.bodyKind as import('./types.js').ApiCallBodyKind : undefined,
-      timeoutMs: typeof a.timeoutMs === 'number' ? a.timeoutMs : undefined,
-      authIntegrationKey: typeof a.authIntegrationKey === 'string' ? a.authIntegrationKey : undefined,
-    };
-  }
-  if (type === 'ekoa_action' && s.ekoaAction && typeof s.ekoaAction === 'object') {
-    const e = s.ekoaAction as Record<string, unknown>;
-    if (typeof e.artifactSlug !== 'string' || typeof e.capabilityName !== 'string') {
-      throw new Error('fixer ekoa_action step missing ekoaAction.artifactSlug or .capabilityName');
-    }
-    step.ekoaAction = {
-      artifactSlug: e.artifactSlug,
-      capabilityName: e.capabilityName,
-      inputs: e.inputs && typeof e.inputs === 'object' ? (e.inputs as Record<string, unknown>) : {},
-    };
-  }
+  // NOTE: there is deliberately no `commandTemplate` / `apiRequest` / `ekoaAction` mapping here.
+  // Those step types are refused above, so any such field on a fixer patch is dropped rather than
+  // carried - a patch cannot smuggle an effect payload on a step type that will not execute it.
 
   return step;
 }

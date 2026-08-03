@@ -1,6 +1,23 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+
+/**
+ * `/test` now sends through `guardedFetch` (the SSRF fix on this rail), which - correctly - refuses
+ * the LOOPBACK mock this file binds to observe the outbound request. The wire-shape assertions
+ * below are about interpolation and the response contract, not about the guard, so the guard is
+ * stubbed here to a plain fetch. The guard's own behaviour is proved, against the route's real
+ * default and with no stub anywhere, in `api/tests/security/builder-test-ssrf.test.ts`.
+ */
+vi.mock('../../src/services/url-fetcher.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/url-fetcher.js')>();
+  return {
+    ...actual,
+    guardedFetch: (url: string, opts: { method?: string; headers?: Record<string, string>; body?: string } = {}) =>
+      fetch(url, { method: opts.method ?? 'GET', headers: opts.headers, body: opts.body }),
+  };
+});
+
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

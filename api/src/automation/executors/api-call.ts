@@ -7,8 +7,39 @@
  *
  * Template interpolation handles {{input.x}}, {{capture.x}}, and
  * {{integration.<key>.<field>}} for credential injection.
+ *
+ * ============================ THE WRITE GATE ON THIS RAIL ====================================
+ * C2 made a `mutates: true` INTEGRATION ACTION need a human. This step type reaches the same
+ * effect one step over: an `api_call` performs any HTTP method against any URL, with the same
+ * integration credentials injected, and was authorable by exactly the agent that would have been
+ * refused at the Action gate - the automation planner, the `achieve` author, and (until the same
+ * change) the rehearsal fixer's `replace_current`. A gate that is a property of the Action model
+ * and not of the EFFECT is not a gate.
+ *
+ * WHERE THE LINE IS DRAWN: the HTTP method. `GET`/`HEAD`/`OPTIONS` auto-run; every other method is
+ * a write and needs a human. That is the only signal a raw step carries that is about the effect
+ * rather than about the wording of a description - the RFC-7231 safe-method set is the direct
+ * analogue of `mutates`, it is not model-authored, and it cannot be talked around by naming the
+ * step "fetch the report".
+ *
+ * WHICH CONSENT STORE, AND WHY NOT `integrations/action-consent.ts` (Rule 1 in full). C2's module
+ * is the right one for an ACTION: it is keyed on (org, user, integrationKey, actionName, shape) and
+ * a human answers it on the integration's action-approvals surface. A raw `api_call` step is not an
+ * action of any integration - it appears in no definition - so `POST /integrations/:key/actions/
+ * :actionName/approval` resolves nothing for it and 404s. Gating this rail on that store would
+ * therefore be a BAN, not a gate: every mutating `api_call` refused forever with no reachable way
+ * to say yes. The engine already owns a STEP-level consent ceremony - pause the run, emit
+ * `awaiting_consent`, dialog with once / always / stop, `resolveConsent` on the handler - and that
+ * ceremony's "sempre" writes to `automation/consent.ts`'s `approved_commands` store. A step gate
+ * that pauses through it and then reads a DIFFERENT store makes "aprovar sempre" an infinite loop
+ * (the exact bug `runApprovedShapes` exists to prevent, one store over). So this reuses the
+ * automation tier's EXISTING consent module - no second implementation is written anywhere - and
+ * an `api_call` step is now confirmed the same way a `local_command` step has always been.
+ *
+ * The shape is namespaced `api_call:<sha256>`; see `apiCallConsentShape`.
  */
 
+import { createHash } from 'node:crypto';
 import type {
   Step,
   StepRecord,
@@ -24,6 +55,7 @@ import {
   loadIntegrationBoundOrigins,
 } from '../seams.js';
 import { assertOriginAllowed, CredentialOriginError } from '../../security/origin-binding.js';
+import { isCommandShapeApproved } from '../consent.js';
 import { guardedFetch } from '../../services/url-fetcher.js';
 import { SsrfError } from '../../services/url-safety.js';
 // Cofre R-6: one value-keyed masker for the whole repo. The private copy that used to live in this
@@ -34,6 +66,62 @@ import { secretRegistryFromFields } from '../../security/redaction.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
 const MAX_RESPONSE_BYTES = 1 * 1024 * 1024;
+
+/**
+ * The methods that auto-run: RFC 7231's safe set. Everything else is a write.
+ *
+ * `OPTIONS` is here because it is safe by definition (a preflight/capability probe) and excluding
+ * it would prompt for something that changes nothing. `TRACE` is not in the step vocabulary.
+ */
+const SAFE_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Does this step's method write? Fail-closed: an unrecognised/absent method is a write. */
+export function apiCallStepMutates(method: string | undefined): boolean {
+  return !SAFE_METHODS.has(String(method ?? '').toUpperCase());
+}
+
+/**
+ * The consent fingerprint of an `api_call` step - the analogue of `command-shape.ts` for HTTP.
+ *
+ * OVER THE TEMPLATE, NOT THE INTERPOLATED REQUEST, and deliberately the same choice C2's
+ * `actionShape` makes: the human approves an action's `httpConfig`, not one run's rendered URL. A
+ * shape over interpolated values would re-prompt on every run whose inputs differ by an id, which
+ * is the reliable way to train a user to click through the dialog. What the dialog therefore shows
+ * - and what is approved - is the template, variables visible.
+ *
+ * INCLUDED: the method, the URL template, the header templates, the body template + kind, and the
+ * `authIntegrationKey` (which credential is spent). Changing ANY of them is a different write:
+ * "POST /messages with body A" and "POST /messages with body B" differ only in a body template,
+ * exactly the case C2 names.
+ *
+ * NAMESPACED `api_call:` and hashed. Namespaced because this shape shares the `approved_commands`
+ * store with argv-derived command shapes and the two vocabularies must not collide; hashed because
+ * a URL template can carry a user's private path and the shape is what gets stored and listed.
+ * (A crafted argv could in principle spell an `api_call:<hex>` string - it would still have to be
+ * shown to a human and approved as a command, and would then only authorise executing a
+ * nonexistent binary; the collision is inert in both directions.)
+ */
+export function apiCallConsentShape(spec: {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  bodyKind?: string;
+  authIntegrationKey?: string;
+}): string {
+  const headers = Object.entries(spec.headers ?? {})
+    .map(([k, v]) => [k.toLowerCase(), v] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const tuple = JSON.stringify([
+    String(spec.method ?? '').toUpperCase(),
+    spec.url ?? '',
+    headers,
+    spec.body ?? null,
+    spec.bodyKind ?? null,
+    spec.authIntegrationKey ?? null,
+  ]);
+  return `api_call:${createHash('sha256').update(tuple).digest('hex')}`;
+}
 
 interface ExecuteApiCallArgs {
   step: Step;
@@ -58,7 +146,7 @@ interface ExecuteApiCallArgs {
 }
 
 export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<StepRecord> {
-  const { step, ctx, inputs, baseRecord, stepStart, finishRecord } = args;
+  const { step, index, ctx, inputs, baseRecord, stepStart, finishRecord } = args;
 
   const spec = step.apiRequest;
   if (!spec || !spec.url || !spec.method) {
@@ -66,6 +154,45 @@ export async function executeApiCallStep(args: ExecuteApiCallArgs): Promise<Step
       tier: 'cache',
       error: { message: `api_call step ${step.id} missing apiRequest.method or .url`, recoverable: false },
     });
+  }
+
+  // WRITE GATE (see the module header). BEFORE the credential load, so a write nobody approved
+  // never causes an integration credential to be decrypted - C2's ordering, and the reason the
+  // shape is over the template rather than the interpolated request.
+  //
+  // NON-RECOVERABLE on purpose. `shouldAttemptFix` refuses a non-recoverable record, so the
+  // self-heal fixer is never invited to "repair" a refusal by rewriting the very step that was
+  // refused; the engine turns this record into the run's consent pause instead.
+  if (apiCallStepMutates(spec.method)) {
+    const shape = apiCallConsentShape(spec);
+    const scope = { userId: ctx.ownerUserId, orgId: ctx.orgId, pairingId: null };
+    // A store that cannot be read is NOT an approval. `isCommandShapeApproved` already treats an
+    // unknown, legacy or expired row as a miss; this extends the same direction to the store being
+    // unreachable, so a database blip can never be the reason a write ran unapproved.
+    const approved =
+      ctx.runApprovedShapes?.has(shape) === true ||
+      (await isCommandShapeApproved(scope, shape).catch(() => false));
+    if (!approved) {
+      const target = `${spec.method} ${spec.url}`;
+      return finishRecord(baseRecord, 'failed', stepStart, {
+        tier: 'cache',
+        error: {
+          message: `este passo escreve (${target}) e precisa da sua autorização antes de correr`,
+          recoverable: false,
+          // The engine reads this to raise the run's consent pause. `argv` is the dialog's
+          // "what exactly will run?" detail - for HTTP that is the method and the URL TEMPLATE,
+          // which carries no interpolated secret (a credential only ever enters after this point).
+          details: {
+            kind: 'awaiting_consent',
+            stepIndex: index,
+            shape,
+            argv: [String(spec.method).toUpperCase(), spec.url],
+            description: `pedido HTTP ${target}${spec.authIntegrationKey ? ` com as credenciais de ${spec.authIntegrationKey}` : ''}`,
+            approvalScope: scope,
+          },
+        },
+      });
+    }
   }
 
   const timeoutMs = Math.min(spec.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);

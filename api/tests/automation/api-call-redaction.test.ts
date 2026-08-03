@@ -22,6 +22,12 @@ const ctx = (): RunContext => ({
   triggeredBy: 'user',
   visitedAutomationIds: new Set(),
   traceId: 't1',
+  // A mutating `api_call` step now needs a human first (the write rail C2's reviewer found). These
+  // specs are about the CREDENTIAL BOUNDARY, not the gate, and their non-idempotent cases would
+  // otherwise stop before a request is ever built. The run-scoped approval stands in for the user
+  // having answered the dialog; the gate itself is proved, by refusal, in
+  // `api/tests/security/api-call-write-gate.test.ts`.
+  runApprovedShapes: { has: () => true, add: () => undefined },
 });
 
 const baseRecord = (): StepRecord => ({ stepId: 's1', index: 0, description: 'call', status: 'running', tier: 'cache', durationMs: 0 } as unknown as StepRecord);

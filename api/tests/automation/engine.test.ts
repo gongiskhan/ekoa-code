@@ -1148,3 +1148,168 @@ describe('rehearseAutomation', () => {
     expect(hoisted.proposePatch.mock.calls.length).toBeLessThanOrEqual(5); // maxPatchesPerIndex
   });
 });
+
+// ---------------------------------------------------------------------------
+// The write rails: an unapproved write PAUSES the run, and the fixer is never
+// invited to route around the refusal.
+// ---------------------------------------------------------------------------
+
+/**
+ * C2 landed the gate; its reviewer found that the engine did not honour it. An `awaiting_consent`
+ * refusal came back as an ordinary failure (the pause branch keyed on `/not connected/i`), so the
+ * run reported `failed` - a state a caller retries - instead of "a human has to answer this", and
+ * on the step types the fixer does handle it was a live invitation to rewrite the refused step.
+ *
+ * These specs pin the two halves, per rail. Revert either and a named test here goes red.
+ */
+describe('write rails - the run pauses on an unapproved write', () => {
+  it('an integration step refused by the write gate pauses the run in awaiting_consent', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'send an invoice', type: 'integration',
+      integrationKey: 'slack', integrationAction: 'send_message',
+    }]));
+    // Exactly what `executeUserIntegrationAction` (and, since this slice, `callPlatformIntegration`)
+    // answers: the CODE on `details`, never a message the engine has to pattern-match.
+    setIntegrationActionExecutor(async () => ({
+      success: false,
+      error: 'action "send_message" on slack writes (POST https://slack.example/send) and needs the owner\'s approval before it can run',
+      details: 'awaiting_consent',
+    }));
+
+    const paused: Array<[string, string]> = [];
+    const errors: string[] = [];
+    const result = await runAutomation('auto-1', ctx(), {
+      emit: {
+        stepUpdate: () => {}, runComplete: () => {},
+        runError: (_id, e) => { errors.push(e); },
+        runPaused: (_id, reason, service) => { paused.push([reason, service]); },
+      },
+    });
+
+    expect(result.status).toBe('awaiting_consent');
+    expect(result.summary).toMatch(/approval/);
+    // NOT awaiting_integration, on either surface: "connect the integration" sends a user who has to
+    // APPROVE AN ACTION to the wrong place entirely, and the `paused` frame carries only a service
+    // name so it could say nothing else.
+    expect(result.status).not.toBe('awaiting_integration');
+    expect(paused).toEqual([]);
+    // The terminal frame carries the actionable message instead.
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/approval/);
+    // The fixer is never asked: a non-recoverable record is refused by shouldAttemptFix.
+    expect(hoisted.proposePatch).not.toHaveBeenCalled();
+  });
+
+  it('the same refusal in a REHEARSAL does not reach the self-heal fixer either', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'send an invoice', type: 'integration',
+      integrationKey: 'google-workspace', integrationAction: 'send_email',
+    }]));
+    setPlatformIntegrationCaller(async () => ({
+      success: false,
+      error: 'action "send_email" on google-workspace writes (POST https://gmail.googleapis.com/…) and needs the owner\'s approval before it can run',
+      details: 'awaiting_consent',
+    }));
+
+    const result = await rehearseAutomation('auto-1', ctx(), { goal: 'send it' });
+
+    expect(result.status).toBe('awaiting_consent');
+    expect(hoisted.proposePatch).not.toHaveBeenCalled();
+  });
+
+  it('a NON-mutating integration step still completes untouched (Rule 7)', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'list emails', type: 'integration',
+      integrationKey: 'google-workspace', integrationAction: 'list_emails',
+    }]));
+    setPlatformIntegrationCaller(async () => ({ success: true, data: { messages: [] } }));
+
+    const result = await runAutomation('auto-1', ctx(), {});
+    expect(result.status).toBe('completed');
+  });
+
+  it('an unapproved api_call step on an UNATTENDED run cancels - it never runs the request', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'post it', type: 'api_call',
+      apiRequest: { method: 'POST', url: 'https://api.example.com/send', body: '{"a":1}' },
+    } as never]));
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      // No resumeSignal - the listener/webhook shape. `waitForResumeOrCancel` answers false at once,
+      // so an unapproved write is refused rather than left hanging on a human who is not there.
+      const result = await runAutomation('auto-1', ctx(), {});
+      expect(result.status).toBe('cancelled');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(hoisted.proposePatch).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('an ATTENDED run raises the consent dialog and continues once the shape is approved', async () => {
+    const spec = { method: 'POST', url: 'https://api.example.com/send', body: '{"a":1}' };
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'post it', type: 'api_call', apiRequest: spec,
+    } as never]));
+
+    const { apiCallConsentShape } = await import('../../src/automation/executors/api-call.js');
+    const shape = apiCallConsentShape(spec);
+    const approvedThisRun = new Set<string>();
+    const asked: Array<{ shape: string; argv: string[]; description: string }> = [];
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    try {
+      const result = await runAutomation('auto-1', ctx({
+        // The handler's resolve-consent intent, in miniature: it banks the shape the RUN asked
+        // about and sets the resume flag.
+        resumeSignal: { shouldResume: () => approvedThisRun.has(shape), clear: () => {} },
+        runApprovedShapes: { has: (s) => approvedThisRun.has(s), add: (s) => { approvedThisRun.add(s); } },
+      }), {
+        emit: {
+          stepUpdate: () => {}, runComplete: () => {}, runError: () => {}, runPaused: () => {},
+          runAwaitingConsent: (_id, info) => {
+            asked.push({ shape: info.shape, argv: info.argv, description: info.description });
+            approvedThisRun.add(info.shape); // the human clicks "permitir uma vez"
+          },
+        },
+      });
+
+      // It ASKED - with the method and URL template the dialog shows - and only then ran.
+      expect(asked.length).toBe(1);
+      expect(asked[0]!.shape).toBe(shape);
+      expect(asked[0]!.argv).toEqual(['POST', 'https://api.example.com/send']);
+      expect(result.status).toBe('completed');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('a GET api_call step runs with no dialog at all (Rule 7)', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'read it', type: 'api_call',
+      apiRequest: { method: 'GET', url: 'https://api.example.com/things' },
+    } as never]));
+
+    const asked: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    try {
+      const result = await runAutomation('auto-1', ctx(), {
+        emit: {
+          stepUpdate: () => {}, runComplete: () => {}, runError: () => {}, runPaused: () => {},
+          runAwaitingConsent: (_id, info) => { asked.push(info.shape); },
+        },
+      });
+      expect(result.status).toBe('completed');
+      expect(asked).toEqual([]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});

@@ -2159,3 +2159,97 @@ planted violations. Revert-verified: five scripted reversions, each turning the 
   deliberately unchanged; what changed is that the comment now says what it does, at both marker
   sites, and it is recorded here so it is discoverable rather than buried in a marker. If the dev
   need for live streaming is ever solved on the gateway path, delete the flag.
+
+## F-2026-08-03-ungated-write-rails (C2 follow-up; four FIXED, one OPEN)
+
+The C2 fresh-context reviewer confirmed the Action write gate is solid on the rail it covers, then
+enumerated five more surfaces that reach the same effect with no gate at all. Four are closed here;
+the fifth is recorded OPEN because the complete fix belongs in a file this slice does not own.
+
+- **`platform-actions-were-completely-ungated`** (FIXED 2026-08-03, CRITICAL, unapproved writes on
+  the org's managed OAuth connection). `google-workspace` / `microsoft-365` short-circuit to
+  `callPlatformIntegration`, from `automation/engine.ts` (the `integration` step), the artifact
+  `integration.call` primitive, the listener supervisor's poll, chat prefetch and email hydration.
+  None of those paths consulted any approval, so RUN_SPEC criterion 6 - "a write requires human
+  confirmation" - was simply FALSE for the mailbox, calendar, Drive and OneDrive of every connected
+  org: 14 mutating Google actions (`send_email`, `send_email_simple`, `create_event`,
+  `update_event`, `delete_event`, `create_doc`, `write_doc`, `create_sheet`, `append_sheet`,
+  `modify_email`, `batch_modify_emails`, `trash_email`, `create_task`, `complete_task`) and 3
+  Microsoft ones (`send_email`, `create_event`, `create_file`), executable with zero confirmation by
+  any org member who could drive an automation or an artifact. FIXED by enforcing C2's
+  `checkActionConsent` inside `callPlatformIntegration` itself, keyed on a build-time allowlist of
+  READ actions that must AGREE with the definition's `mutates` (decisions.md 2026-08-03), before any
+  OAuth token is read. Pinned by `api/tests/security/platform-write-gate.test.ts` (19 cases:
+  allowlist-vs-shipped-package drift in both directions, fail-closed on unknown key/action/`mutates`,
+  refusal with no provider call, cross-org / cross-user / cross-action / TTL non-transferability,
+  reads still auto-running) and `api/tests/automation/platform-primitive-write-gate.test.ts` (the
+  artifact rail through the real seam body, plus the composition-root wiring guards).
+
+- **`api-call-steps-were-a-fifth-write-rail`** (FIXED 2026-08-03, HIGH, gate bypass by step type).
+  `automation/executors/api-call.ts` performed any HTTP method with `authIntegrationKey` credentials
+  injected and no consent check, so an agent refused at the Action gate could author the same write
+  as a step one type over. FIXED: a non-idempotent method (anything outside `GET`/`HEAD`/`OPTIONS`,
+  and an absent/unrecognised method) now needs a human, checked BEFORE the credential load so an
+  unapproved write never decrypts a secret, through the automation tier's existing consent module
+  (decisions.md 2026-08-03 for why not C2's store). Pinned by
+  `api/tests/security/api-call-write-gate.test.ts` (12 cases incl. "no credential read on refusal",
+  shape drift on url/body/header/method/credential/bodyKind, cross-user, cross-org, once-vs-always).
+  BEHAVIOUR CHANGE, deliberate: an existing automation with a POST/PUT/PATCH/DELETE `api_call` step
+  now asks once per shape - dialog on an attended run, refusal on an unattended one - instead of
+  running silently.
+
+- **`awaiting-consent-was-not-a-pause-and-the-fixer-could-rewrite-around-it`** (FIXED 2026-08-03,
+  HIGH). `engine.ts` paused only on `recoverable === false`, and the consent refusal's message does
+  not match `/not connected/i`, so an unapproved write ended the run as `failed` (a state a caller
+  retries) rather than as something a human is asked to answer. On the step types the fixer does
+  handle it was worse: `rehearsal.ts` let `replace_current` substitute an arbitrary `Step`,
+  INCLUDING an `api_call` performing the same write with no gate - the machinery meant to repair a
+  run could route around the gate that stopped it. FIXED in three places: both integration rails now
+  carry the executor's CODE on `details` (the composition root's platform binding previously dropped
+  it) and the engine classes the refusal structurally, not by prose; both refusals are
+  non-recoverable so `shouldAttemptFix` never invites the fixer; and the fixer's step vocabulary is
+  narrowed to the four types `FIXER_SYSTEM` actually documents. Pinned by the write-rail block in
+  `api/tests/automation/engine.test.ts` and the vocabulary block in
+  `api/tests/automation/rehearsal.test.ts` (incl. "an effect payload cannot ride along on an
+  accepted step type").
+
+- **`builder-test-endpoint-was-an-unguarded-egress`** (FIXED 2026-08-03, HIGH, SSRF). 
+  `POST /api/v1/integration-builder/test` ran a model-authored `httpConfig` on a BARE `fetch` while
+  its own docblock claimed it matched the action executor's `guardedFetch` posture. Any
+  authenticated user could point it at `http://169.254.169.254/`, loopback, or any RFC1918 address
+  the API host can reach. FIXED with `guardedFetch` + the no-echo refusal, no transport seam and no
+  environment exemption. Pinned by `api/tests/security/builder-test-ssrf.test.ts` (8 cases against
+  the route's real default). The WRITE-GATE half was deliberately not applied - see decisions.md
+  2026-08-03 for the argument (synchronous human caller, own session, caller-supplied credentials,
+  nothing stored spent; and gating an unsaved session package would be a ban, not a gate).
+
+- **`action-shape-does-not-cover-browser-steps-content`** (OPEN 2026-08-03, HIGH, consent bound to a
+  name rather than to a command). `actionShape` (integrations/action-consent.ts) hashes
+  `automationBinding` - i.e. the automation's ID - and never the STEPS that automation runs.
+  `provisionIntegrationAutomations` re-provisions the SAME deterministic org-scoped id from a
+  refreshed template and rewrites `steps` in place, so a package bump changes WHAT EXECUTES while
+  the human's approval still stands. That is exactly the "consent never approved the command called
+  deploy" failure the module's own docblock invokes: it holds for `httpConfig`, and not for the
+  automation backing. `bash-cli` is saved by the engine's separate `approved_commands` gate and, as
+  of this slice, an `api_call` step inside a provisioned automation is gated too - so the residual is
+  a swapped `browser`/`navigate`/`verify` sequence, which is precisely what a `browser-steps` action
+  is made of. NOT FIXED HERE because the fix belongs in `action-consent.ts`, C2's file and read-only
+  for this slice. THE FIX, precisely: make the bound automation's CONTENT part of the fingerprint -
+  either hash the provisioned automation's canonical `steps` into `actionShape`'s tuple alongside
+  `automationBinding` (needs the steps at gate time, i.e. a resolver the executor can call), or have
+  the provisioner stamp a content digest onto `automationBinding` (`actionShape` already hashes the
+  whole binding object, so the shape would follow with no change to the hash function at all). The
+  second is additive and cheaper; both make a package bump re-prompt, which is the correct direction.
+
+- **`no-wire-event-can-carry-a-pause-reason`** (OPEN 2026-08-03, LOW, honest labelling). A run that
+  halts because an integration WRITE needs approval persists `status: 'awaiting_consent'` (correct,
+  and what the run resource and Histórico show), but has no truthful terminal SSE frame: `paused`
+  carries only `{ service }` (`shared/src/events.ts`) and the dashboard maps it to
+  `awaiting_integration`, i.e. it would tell someone whose integration is connected and working to go
+  connect it; `awaiting_consent` carries `{ stepIndex, shape, argv, description }`, a COMMAND
+  consent whose "sempre" the dashboard answers into a store this gate does not read. The engine
+  therefore emits `error` with the message that names the action, the destination and the fact that
+  an approval is needed - true and actionable, at the cost of a live badge that reads "failed" while
+  the record reads `awaiting_consent`. THE FIX: `paused` gains an optional `reason` (additive under
+  Rule 7), the dashboard renders `awaiting_consent` distinctly and links to the integration's
+  action-approvals surface. Not done here: `shared/` is slice D1's live surface this wave.

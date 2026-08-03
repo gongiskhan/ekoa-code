@@ -49,6 +49,8 @@ import {
   type IntegrationActionHttpConfig,
 } from '../integrations/index.js';
 import { interpolate, interpolateObj, buildVars, findHeaderValue, formUrlEncode } from '../integrations/http-template.js';
+import { guardedFetch } from '../services/url-fetcher.js';
+import { SsrfError } from '../services/url-safety.js';
 
 /** Everything the editable package needs. The projected read shape (`IntegrationDefinition`) and
  *  the RAW stored row (`IntegrationDefinitionDoc`) both satisfy it with identical field types, so
@@ -126,9 +128,36 @@ const SavePackageBody = z.object({
 /**
  * Execute ONE action's httpConfig with request-supplied test credentials + input. This is the
  * builder's ephemeral test path: credentials come from the request, are NEVER logged or persisted,
- * and no encrypted config row is involved. User-defined integration actions call arbitrary
- * user-configured endpoints by design and are not SSRF-gated (spec §9 invariant 8), same posture
- * as the action executor — so a plain fetch is used.
+ * and no encrypted config row is involved.
+ *
+ * SSRF (closed here). The docblock used to claim this matched "the same posture as the action
+ * executor" - it did not. `action-executor.ts` sends through `guardedFetch` (its `fetchImpl`
+ * default) and, since C2, additionally asserts the credential's origin binding; this route issued a
+ * BARE `fetch` on a URL that comes out of a MODEL-authored builder session. That is a
+ * server-side request forgery primitive reachable by any authenticated user:
+ * `http://169.254.169.254/latest/meta-data/`, a container-network admin port, or anything else the
+ * API host can reach but the caller cannot. `guardedFetch` rejects private/loopback/link-local/
+ * metadata addresses (including a public name that RESOLVES to one) and refuses redirects into
+ * them, which is the posture the rest of the outbound estate already has.
+ *
+ * WHY THIS ROUTE IS NOT ALSO PUT BEHIND THE C2 WRITE GATE, stated so it is a decision rather than
+ * an omission. The gate exists because an action can be executed on a human's behalf while no human
+ * is present - by an automation step, a listener tick at 03:00, an agent tool call. None of those
+ * hold here: the caller is a logged-in human (`requireAuth`, platform JWT - never a gateway key),
+ * driving THEIR OWN builder session (`getOwnedSession`), against credentials they typed into THIS
+ * request. Nothing stored is spent and no identity is delegated, so there is no "who approved
+ * this?" to answer - the request itself is the answer. Gating it would also be a ban rather than a
+ * gate: a session package is typically UNSAVED, so it resolves in no definition, and
+ * `POST /integrations/:key/actions/:actionName/approval` would 404 for exactly the action the user
+ * is trying to test. The residual - an authenticated user can make the API host issue an arbitrary
+ * PUBLIC HTTP request - is the same residual the action executor carries by design (§9 invariant 8)
+ * and is now bounded by the same guard.
+ *
+ * There is DELIBERATELY no transport seam and no environment exemption. A test that wants to
+ * observe the outbound request has to bind a mock on loopback - which the guard, correctly,
+ * refuses - so the sanctioned move is to stub the guard in that test, never to teach the guard to
+ * let loopback through when it thinks it is being tested. The refusal itself is proved end to end
+ * in `api/tests/security/builder-test-ssrf.test.ts`, against this default and nothing else.
  */
 async function executeActionForTest(
   httpConfig: IntegrationActionHttpConfig,
@@ -163,10 +192,8 @@ async function executeActionForTest(
     body = contentType.includes('application/x-www-form-urlencoded') ? formUrlEncode(clean) : JSON.stringify(clean);
     if (!contentType) headers['Content-Type'] = 'application/json';
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const resp = await fetch(url.toString(), { method: httpConfig.method, headers, body, signal: controller.signal });
+    const resp = await guardedFetch(url.toString(), { method: httpConfig.method, headers, body, timeoutMs: 30_000 });
     const text = await resp.text();
     let data: unknown = text;
     try {
@@ -178,10 +205,12 @@ async function executeActionForTest(
       ? { success: true, statusCode: resp.status, response: data }
       : { success: false, statusCode: resp.status, response: data, error: `HTTP ${resp.status}${resp.statusText ? ` ${resp.statusText}` : ''}` };
   } catch (err) {
+    // An SSRF refusal never echoes the destination back: the URL is attacker-influenceable text and
+    // the reply would otherwise be a probe for what the API host can reach (action-executor.ts's
+    // rule, same wording).
+    if (err instanceof SsrfError) return { success: false, error: 'Pedido bloqueado por segurança.' };
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: /abort/i.test(msg) ? 'Tempo limite do pedido excedido.' : msg };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

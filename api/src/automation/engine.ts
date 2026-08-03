@@ -626,6 +626,58 @@ async function runOrRehearse(
       emit?.stepUpdate(redactStepRecord(record, ctx.secrets), runId);
 
       if (record.status === 'failed') {
+        // AWAITING-CONSENT PAUSE for an integration step (C2 follow-up). Checked BEFORE the
+        // awaiting-integration branch below, which would otherwise swallow it - both are
+        // non-recoverable integration failures, and reporting "connect the integration" to someone
+        // who has to APPROVE AN ACTION sends them to the wrong place.
+        //
+        // TERMINAL, not the blocking dialog `local_command`/`api_call` get. Those two pause on a
+        // shape the run itself asked about, and `resolveConsent` answers it through
+        // `approved_commands`. An integration action's approval lives in a different store, is
+        // keyed on the action rather than on this run, and is granted on the integration's own
+        // action-approvals surface: pausing the process to wait for an answer that arrives
+        // elsewhere would hold a listener tick open indefinitely, and offering the command dialog
+        // would bank the answer in a store this gate does not read (a re-prompt loop). So the run
+        // halts in `awaiting_consent` with the refusal on the step, the human approves the action,
+        // and they re-run.
+        //
+        // THE SSE TERMINAL EVENT IS `error`, CHOSEN AMONG BAD OPTIONS AND WORTH SAYING WHY. The
+        // `paused` frame carries ONLY a service name (`shared/events.ts`), and the dashboard maps it
+        // to `awaiting_integration` - i.e. it would tell someone whose integration is connected and
+        // working to go connect it, with no way to learn what actually happened. `error` carries the
+        // MESSAGE, which names the action, the destination and the fact that an approval is needed,
+        // so the live view says something true and actionable. The persisted run status is
+        // `awaiting_consent` either way, which is what the run resource and the history show. The
+        // right fix is a wire event that can carry a pause REASON; `shared/` is another slice's live
+        // surface this wave, so it is journaled in findings.md rather than done here.
+        const integrationConsent = extractAwaitingIntegrationConsent(record);
+        if (integrationConsent) {
+          await finalize(runId, automationId, 'awaiting_consent', stepRecords, startedAt);
+          emit?.runError(runId, record.error?.message ?? 'a write on this integration needs approval', stepRecords);
+          if (isRehearsal) {
+            await persistRefinedSteps(automation, workingSteps, isRehearsal);
+          }
+          return finalizeReturn({
+            runId,
+            status: 'awaiting_consent',
+            startedAt,
+            stepRecords,
+            message: record.error?.message ?? 'paused awaiting approval for a write',
+            isRehearsal,
+            refinedSteps: workingSteps,
+            rehearsalSummary: buildRehearsalSummary({
+              isRehearsal,
+              status: 'aborted',
+              fixerCallCount,
+              patchesApplied,
+              startedAt,
+              stuckAtIndex: i,
+              reason: 'awaiting approval',
+            }),
+            lastStepIndex: i,
+          });
+        }
+
         // Awaiting-integration pause path is shared between modes.
         if (record.error?.recoverable === false && step.type === 'integration') {
           await finalize(runId, automationId, 'awaiting_integration', stepRecords, startedAt, {
@@ -700,8 +752,14 @@ async function runOrRehearse(
         // pause_for_user). The resolve-consent intent on the handler
         // sets the resume flag after the user has approved (and
         // persisted the shape on their profile if "approve always").
+        //
+        // `api_call` joins it: a non-idempotent HTTP request is an effect on the user's behalf in
+        // exactly the way a shell command is, it is authored by the same planner (and used to be
+        // authorable by the fixer), and it now asks the same question through the same ceremony.
+        // On an UNATTENDED run there is no `resumeSignal`, so `waitForResumeOrCancel` answers false
+        // immediately and the run cancels - an unapproved write is refused rather than left hanging.
         const consentDetails = extractAwaitingConsent(record);
-        if (consentDetails && step.type === 'local_command') {
+        if (consentDetails && (step.type === 'local_command' || step.type === 'api_call')) {
           await automationRunStore.update(automationId, runId, {
             status: 'awaiting_consent',
             consentRequest: consentDetails,
@@ -1344,6 +1402,13 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
           });
         }
         if (!result.success) {
+          // THE WRITE GATE'S ANSWER, read structurally rather than from the message. Both
+          // integration rails carry the executor's code on `details` (the composition root maps
+          // `r.code` through), so an `awaiting_consent` refusal is recognised by its CODE - never
+          // by matching prose, which is exactly how this refusal used to be classed "recoverable"
+          // and handed on as if a retry could help.
+          const code = typeof result.details === 'string' ? result.details : undefined;
+          const awaitingConsent = code === 'awaiting_consent';
           // Differentiate "integration not connected" (awaiting_integration)
           // from other failures (recoverable; user can fix and retry).
           const notConnected = /not connected/i.test(result.error ?? '');
@@ -1351,8 +1416,18 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
             tier: 'cache',
             error: {
               message: result.error ?? 'integration call failed',
-              recoverable: !notConnected,
-              details: result.details,
+              // NEITHER is recoverable. A write nobody approved is not a transient failure, and a
+              // non-recoverable record is refused by `shouldAttemptFix` - so the self-heal fixer is
+              // never invited to route around the gate it just hit.
+              recoverable: !(notConnected || awaitingConsent),
+              details: awaitingConsent
+                ? {
+                    kind: 'awaiting_integration_consent',
+                    stepIndex: index,
+                    integrationKey: step.integrationKey,
+                    actionName: step.integrationAction,
+                  }
+                : result.details,
             },
           });
         }
@@ -2028,6 +2103,29 @@ function extractAwaitingConsent(record: StepRecord): ConsentRequest | null {
           },
         }
       : {}),
+  };
+}
+
+/**
+ * Detect the write gate's refusal on an `integration` step.
+ *
+ * A DISTINCT `kind` from the `local_command`/`api_call` `awaiting_consent` record, on purpose: that
+ * one carries a command SHAPE the run is awaiting and is answered through `resolveConsent` ->
+ * `approved_commands`. An integration action's approval is a different store on a different key,
+ * so letting this record enter the command-consent ceremony would show the user a dialog whose
+ * "sempre" writes an approval this gate never reads.
+ */
+function extractAwaitingIntegrationConsent(
+  record: StepRecord,
+): { stepIndex: number; integrationKey: string; actionName: string } | null {
+  const details = record.error?.details;
+  if (!details || typeof details !== 'object') return null;
+  const d = details as Record<string, unknown>;
+  if (d.kind !== 'awaiting_integration_consent') return null;
+  return {
+    stepIndex: typeof d.stepIndex === 'number' ? d.stepIndex : record.index,
+    integrationKey: typeof d.integrationKey === 'string' ? d.integrationKey : 'unknown',
+    actionName: typeof d.actionName === 'string' ? d.actionName : 'unknown',
   };
 }
 
