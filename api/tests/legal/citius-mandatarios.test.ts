@@ -1180,3 +1180,129 @@ describe('citius-mandatarios · round-5b regressions (non-markup contexts + trun
     expect(parseInboxPage(html).ok).toBe(false);
   });
 });
+
+describe('citius-mandatarios · round-5c regressions (spec-tokenizer divergences)', () => {
+  // The 5c verification round proved five WHATWG-tokenizer divergences remained in the hand-rolled
+  // lexing layer, each reaching a FALSE EMPTY, a SILENT SUBSET, or a FABRICATED row under ok:true.
+  // The structural layer is now a parse5 (spec) parse — every expectation here is BROWSER TRUTH:
+  // the rows a real browser would render are exactly the rows the parser returns, or the page is
+  // honestly ok:false. Inputs are pinned; they must never regress to empty/subset again.
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+  const ROW1 = '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>';
+  const ROW2 = '<tr><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>';
+  const ROW3 = '<tr><td>9012/26.2T8CBR</td><td>2026-06-18</td><td>Coimbra</td></tr>';
+
+  const expectRows = (html: string, processos: string[]): void => {
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(processos);
+  };
+
+  // ---- 5c-1: abrupt comment closes (<!-->, <!--->, --!>) were over-eaten to the next --> ----
+
+  it('5c-1a: an abrupt empty comment <!--> closes THERE (spec) — the rows after it all parse', () => {
+    const html = GRID_OPEN + HEADER + '<!-->' + ROW1 + ROW2 + '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  it('5c-1b: an abrupt <!---> comment closes THERE — the rows after it all parse', () => {
+    const html = GRID_OPEN + HEADER + '<!--->' + ROW1 + ROW2 + '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  it('5c-1c: an incorrectly-closed comment (--!>) ends THERE — a later real comment never swallows the rows between', () => {
+    // The old lexer did not recognise --!> as a close and ate forward to the NEXT -->, deleting
+    // ROW1 (a silent subset). Spec: the comment ends at --!>; the later <!-- legenda --> is its
+    // own comment; both rows survive.
+    const html = GRID_OPEN + HEADER + '<!-- aviso --!>' + ROW1 + '<!-- legenda -->' + ROW2 + '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  // ---- 5c-2: <script src="…"/> is NOT self-closing (HTML script never is) ----
+
+  it('5c-2: <script src="x.js"/> stays open to the REAL </script> — its document.write("</table>") never truncates', () => {
+    // The old lexer honoured the XHTML-style trailing solidus, left the script content UNMASKED,
+    // and the "</table>" inside it closed the grid after ROW1 (a silent subset). Spec: the
+    // self-closing flag is ignored on script; everything to the real </script> is script text.
+    const html =
+      GRID_OPEN +
+      HEADER +
+      ROW1 +
+      '<script src="x.js"/>document.write("</table>")</script>' +
+      ROW2 +
+      '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  // ---- 5c-3: a raw-text close matched by PREFIX (</scripty>) ended the mask early ----
+
+  it('5c-3: </scripty> does NOT end a script — the document.write("</table>") after it stays masked', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      ROW1 +
+      '<script>if (top) { } </scripty> document.write("</table>");</script>' +
+      ROW2 +
+      '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  // ---- 5c-4: the script double-escaped state was unmodeled ----
+
+  it('5c-4: the double-escaped shape <script><!-- … <script>…</script> … --></script> never truncates the grid', () => {
+    // Inside <script><!-- …, an inner "</script>" only exits the DOUBLE-escaped state (the outer
+    // script is still open), so the "</table>" after it is still script text. The old lexer ended
+    // the mask at the inner close and the "</table>" cut the grid to a subset.
+    const html =
+      GRID_OPEN +
+      HEADER +
+      ROW1 +
+      '<script><!-- document.write("<script>a</script>"); document.write("</table>"); --></script>' +
+      ROW2 +
+      '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  // ---- 5c-5: a stray quote in an UNQUOTED attribute value flipped the quote state ----
+
+  it('5c-5: stray quotes in unquoted attr values on two rows never swallow rows — all THREE parse', () => {
+    // Spec: a '"' inside an unquoted attribute value is a parse error consumed INTO the value; it
+    // never opens a quoted context. The old lexer flipped into quote state at the first stray
+    // quote and swallowed everything to the next one (rows lost under ok:true).
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr class=rgRow" align=left><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '<tr class=rgAlt" align=left><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      ROW3 +
+      '</table>';
+    expectRows(html, ['1234/26.0T8LSB', '5678/26.1T8PRT', '9012/26.2T8CBR']);
+  });
+
+  // ---- entity-encoded markup in cell TEXT is text, never structure ----
+
+  it('entity-encoded &lt;/table&gt; in cell text never becomes structure (and survives as visible text)', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>anexo &lt;/table&gt; citado</td></tr>' +
+      ROW2 +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT']);
+    expect(res.rows[0]!.tribunal).toBe('anexo </table> citado');
+  });
+
+  it('entity-encoded &lt;table&gt; in cell text never opens a phantom candidate grid', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>ver &lt;table&gt; em anexo</td></tr>' +
+      '</table>';
+    expectRows(html, ['1234/26.0T8LSB']);
+  });
+});

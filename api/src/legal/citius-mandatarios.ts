@@ -11,12 +11,12 @@
  * quote/attribute-order drift) so the first real snapshot needs a fixture swap, not a rewrite.
  *
  * OPERATOR-LOCKED, STRUCTURAL — metadata only, documents never opened:
- *   The sync this parser feeds fetches notification METADATA ONLY and NEVER opens a document.
- *   This module MUST NOT export (or define) any function that fetches, downloads, or opens a
- *   document. A `documentoRef` on a row is an INERT captured string — recorded so a human can
- *   later act on it, NEVER dereferenced by this codebase. There is no injected fetch seam, no
- *   network, nothing to enumerate here at all; the authenticated HTTP enumerate/session-replay
- *   half is a separate later slice (CS4), and CS6 assembles the two.
+ *   The sync this parser feeds reads notification METADATA ONLY and NEVER opens a document.
+ *   This module MUST NOT export (or define) any function that downloads or opens a document. A
+ *   `documentoRef` on a row is an INERT captured string — recorded so a human can later act on
+ *   it, NEVER dereferenced by this codebase. There is no injected network seam, no network,
+ *   nothing to enumerate here at all; the authenticated HTTP enumerate/session-replay half is a
+ *   separate later slice (CS4), and CS6 assembles the two.
  *
  * FIRST-REAL-ACCOUNT SPIKE (pinned unknowns to confirm against the first live snapshot — until
  * then every one is a guess encoded in the fixtures):
@@ -50,9 +50,9 @@
  *      page identity, not the header. Likewise a real grid that embeds a filter/pager row with
  *      >=2 DIRECT <td>s would read "indisponível" until CS4 confirms and the fixtures are updated
  *      — again the safe direction. (RadGrid-style chrome that wraps its controls in a NESTED
- *      table is handled structurally: nested tables are stripped from the outer grid's own rows —
- *      round-5 F1 — so such a command row degrades to a single-colspan non-data row and the grid
- *      still parses.)
+ *      table is handled structurally: a nested table classifies as its own candidate and never
+ *      contributes rows or cells to the outer grid — round-5 F1 — so such a command row degrades
+ *      to a single-colspan non-data row and the grid still parses.)
  *
  * SAFETY HIERARCHY (pinned; the round-4 root-flaw redesign — attempt 5):
  *   1. A FALSE EMPTY (`{ok:true, rows:[]}` for a page that was NOT a genuinely empty inbox) is the
@@ -69,37 +69,67 @@
  *   (login / error / filter / WAF pages -> ok:false). "Zero rows parsed" proves NONE of them, and
  *   no verdict here is ever inferred from it.
  *
- * ROUND-5 SEAM HARDENING (the fresh-context review of attempt 5 confirmed the redesign but broke
- * the WALKERS it stands on; each fix is pinned by a "round-5" regression test):
- *   F1 nested-`</table>` truncation — tables are now paired DEPTH-AWARE to their matching close,
- *      HTML comments are stripped first, and nested tables are stripped from the outer grid's own
- *      structural rows (they classify as their own tables instead).
- *   F2 the interactive-control disqualifier scans the table's ENTIRE inner HTML, not just its
- *      `<tr>`s — a control in a <caption> / direct child / after the last row blocks EMPTY too.
- *   F3 rows (and cells) split on OPENERS: `</tr>`/`</td>` are optional end tags, and the lazy
- *      close-tag match silently merged the row after an omitted `</tr>` into the previous one.
- *   F4 the bare `NNNN/YYYY` process-number form requires a full 4-digit year, so a `DD/MM`
- *      fragment (`15/06`) or a 2-digit prose ref (`123/26`) can never be invented into a processo.
+ * ROUND-5 / ROUND-5B (history, pinned by the committed regression suites): the fresh-context
+ * reviews of attempt 5 confirmed the structural redesign but broke the hand-rolled WALKERS it
+ * stood on — nested-`</table>` truncation, controls outside every `<tr>`, omitted end tags,
+ * 2-digit bare years (round 5, F1-F4); then `<table>`/`<!--` byte sequences honoured in contexts
+ * an HTML tokenizer treats as text — quoted attribute values, script raw text — plus phantom /
+ * unterminated openers and truncated payloads (round 5b, R6-1..R6-7). Each round patched the
+ * hand-rolled lexer; round 5c then proved five spec-tokenizer divergences REMAINED (abrupt
+ * comment closes `<!-->`/`<!--->`/`--!>` over-eaten to the next `-->`; `<script src/>` wrongly
+ * treated as self-closing; raw-text closes matched by PREFIX so `</scripty>` ended a mask; the
+ * script double-escaped state unmodeled; a stray quote in an unquoted attribute value flipping
+ * the quote state). Verdict, accepted: hand-rolled resynchronization after divergence is
+ * unfixable — use a spec parser or fail closed.
  *
- * ROUND-5B — the truncation CLASS closed at its ROOT (the re-review proved the F1 fix's own
- * tokenizer still trusted `<table>`/`</table>`/`<!--` BYTE SEQUENCES in contexts an HTML tokenizer
- * treats as text — quoted attribute values, script raw text — and that regex passes can never see
- * that context):
- *   R6-1/R6-3/R6-4/R6-7 `sanitizeForStructure` — ONE state-machine pass before any walking:
- *      comments recognised only in DATA state, script/style/textarea/title content masked, and
- *      `<`/`>` neutralized inside quoted attribute values, so no non-markup context can open or
- *      close structure (and no phantom row can be fabricated from a script template).
- *   R6-2 a table whose close tag was stolen or missing (`terminated:false`), or whose nested strip
- *      ended unbalanced, is a TRUNCATED structure: never classified — a marked one poisons the
- *      page (parse-failure), an unmarked one proves nothing. This supersedes the falsified
- *      "a junk tail is harmless" claim.
- *   R6-5 a structurally truncated payload (unterminated comment or tag at EOF) is ok:false
- *      outright — the server-side truth may have held rows the bytes no longer show.
- *   R6-6 the bare-form serial may not lead with '0', closing the `MM/YYYY` month-fragment shapes
- *      (01-09); 10-12/YYYY is irreducibly ambiguous with a real bare number and stays liberal.
+ * ROUND-5C — the structural layer is REBUILT ON parse5 (the canonical WHATWG HTML parser; what a
+ * browser actually renders is the truth every regression round was judged against). The HYBRID
+ * safety design:
+ *   1. TRUNCATION fails closed: the page is parsed with `sourceCodeLocationInfo` and a parse-error
+ *      collector; ANY error code starting `eof-` (eof-in-comment, eof-in-tag, eof-in-script-html-
+ *      comment-like-text, eof-in-cdata, eof-before-tag-name, …) marks the payload structurally
+ *      TRUNCATED -> ok:false outright (the round-5b R6-5 semantics: the server-side truth may have
+ *      held rows the bytes no longer show). Non-EOF parse errors are NOT corruption — spec
+ *      recovery matches what a browser renders.
+ *   2. The POSITIVE path (rows) is TREE-EXACT: every descendant `<table>` is a candidate (nested
+ *      ones surface as their own candidates — round-5 F1e); a table's OWN rows are its `<tr>`
+ *      descendants reached WITHOUT descending into a nested `<table>`; cells are a row's DIRECT
+ *      `<td>`/`<th>` children. Serialized fragments (parse5 `serialize`, innerHTML semantics) feed
+ *      the unchanged string helpers; the tree is sanitized first (`sanitizeTree`) so serialized
+ *      output is context-safe for them.
+ *   3. The `terminated` rule (round-5b R6-2) via source locations: a table whose
+ *      `sourceCodeLocation.endTag` is ABSENT was never explicitly closed — the payload was cut
+ *      mid-grid, or its close was stolen (the spec ALSO implies-closes a table when a sibling
+ *      `<table>` opens: exactly the R6-2a probe). Such a table is NEVER classified: gv-MARKED ->
+ *      parse failure (poisons the page, ok:false); unmarked -> proves nothing, skipped.
+ *   4. The NEGATIVE path (the EMPTY proof) OVER-APPROXIMATES on the RAW SOURCE SLICE, not the
+ *      tree — LOAD-BEARING, do not "simplify" to a tree walk: parse5 FOSTER-PARENTS content that
+ *      sits directly inside `<table>` but not in a cell (an `<input>`/`<button>` direct child is
+ *      hoisted OUT of the table element in the tree), so a tree-only control scan would re-open
+ *      round-5 F2 (a reachable false empty). Instead the ORIGINAL html between the table's start
+ *      tag end and end tag start is tested TEXTUALLY: PROVEN EMPTY requires gv-marked AND zero
+ *      structural data rows (tree) AND the raw slice carries no interactive control and no nested
+ *      `<table>` (a control hidden in script text or an attribute value still blocks EMPTY —
+ *      over-blocking is the SAFE direction and only ever affects the empty verdict, never a
+ *      populated read). The table's own attributes are tested for controls/contenteditable too.
+ *   5. Data-row structural rule unchanged: >=2 direct cells = data row; EVERY data row must parse
+ *      (its processo cell CONTAINS a process number) or a MARKED grid poisons the page; a
+ *      single-cell colspan row (EmptyDataTemplate / pager / footer) is non-data.
+ *   6. `detectPageTotal` / `detectPagingMode` / `looksUnavailable` keep reading the RAW html:
+ *      pager over-detection is the safe direction (a phantom pageTotal makes the sync look for
+ *      MORE pages, never fewer), and the unavailability markers are prose, not structure.
+ *   R6-6 stands unchanged: the bare-form serial may not lead with '0', closing the `MM/YYYY`
+ *   month-fragment shapes (01-09); 10-12/YYYY is irreducibly ambiguous with a real bare number
+ *   and stays liberal.
  */
 import { createHash } from 'node:crypto';
+import { defaultTreeAdapter, parse, serialize } from 'parse5';
+import type { DefaultTreeAdapterTypes } from 'parse5';
 import { cellText, decodeEntities } from './portal-html.js';
+
+type P5Element = DefaultTreeAdapterTypes.Element;
+type P5ParentNode = DefaultTreeAdapterTypes.ParentNode;
+type P5Template = DefaultTreeAdapterTypes.Template;
 
 /** PT-PT honest-failure copy (mirrors citius.ts's "indisponível" idiom). */
 const UNAVAILABLE = 'Caixa de correio Citius indisponível';
@@ -179,7 +209,7 @@ const NON_IDENTIFYING_IDS = new Set([
 /**
  * One inbox notification, METADATA ONLY. `documentoRef` is an inert captured string (the href /
  * token that WOULD address the document) — this module never dereferences it, and no function
- * here fetches a document.
+ * here reads a document.
  */
 export interface CitiusNotificacaoMeta {
   /**
@@ -193,7 +223,7 @@ export interface CitiusNotificacaoMeta {
   ato?: string;
   /** True when the row advertises an attached document (a link or a non-empty documento cell). */
   temDocumento: boolean;
-  /** INERT captured href/token for the document — never fetched by this codebase. */
+  /** INERT captured href/token for the document — never dereferenced by this codebase. */
   documentoRef?: string;
   /**
    * The row's own STABLE identifier as exposed by the portal (a select-checkbox / hidden input
@@ -209,241 +239,120 @@ export type ParseInboxResult =
   | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------
-// Zero-dependency HTML walkers (same discipline as citius.ts's parsePublicacoes:
-// no cheerio; liberal regex table walk).
+// ROUND-5C structural layer: a parse5 (WHATWG-spec) tree walk. The string
+// helpers further down are fed SERIALIZED fragments of the sanitized tree,
+// never raw source — the raw source is consulted only by the over-approximate
+// EMPTY disqualifier (rule 4) and the raw-html page-level heuristics (rule 6).
 // ---------------------------------------------------------------------------
 
 /**
- * Elements whose CONTENT is character data to an HTML tokenizer (raw text / RCDATA): a
- * `</table>` inside them is TEXT, not markup, but the regex walkers below would truncate the grid
- * at it (round-5b R6-1/R6-4 — script `document.write("</table>")` templates are classic legacy
- * WebForms). Their content is masked by `sanitizeForStructure`; the TAGS survive, so a
- * `<textarea>` still trips the interactive-control disqualifier.
+ * Elements whose CONTENT is character data to an HTML tokenizer (raw text / RCDATA): script /
+ * style / textarea / title. parse5 already tokenizes their content spec-exactly (round-5b R6-1/
+ * R6-4 and the round-5c divergences are handled structurally by the parser), but their content
+ * would SURVIVE into serialized fragments — script text is serialized raw, so a
+ * `document.write` template could leak into `cellText` output or fabricate an `<input>` for the
+ * source-id scan. `sanitizeTree` therefore EMPTIES these elements; the TAGS survive, so a
+ * `<textarea>` in a raw slice or in serialized output still reads as the interactive control it is.
  */
-const RAW_TEXT_ELEMENTS: readonly string[] = ['script', 'style', 'textarea', 'title'];
+const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set(['script', 'style', 'textarea', 'title']);
 
-interface SanitizedPage {
-  page: string;
-  /** True when the payload is structurally TRUNCATED (an unterminated comment or an unclosed tag
-   *  at EOF): the server-side truth may have held rows the bytes no longer show, so the page can
-   *  never prove anything — `parseInboxPage` answers ok:false outright (round-5b R6-5). */
-  corrupt: boolean;
+/**
+ * ONE normalization pass over the PARSED TREE before any serialization (round-5c). Structure is
+ * already fixed by the spec parse — this pass only makes the serialized fragments CONTEXT-SAFE
+ * for the regex string helpers below (`cellText`, `extractHref`, `extractSourceId`, `attrValue`):
+ *   - COMMENT nodes are dropped (comment data serializes raw, so `<!-- <input> -->` inside a row
+ *     could otherwise fabricate a control or leak prose into cell text — browser truth: comments
+ *     are not content);
+ *   - RAW-TEXT elements (script/style/textarea/title) are EMPTIED, tags kept (see
+ *     `RAW_TEXT_ELEMENTS`);
+ *   - `<`/`>` inside attribute VALUES are neutralized to `&lt;`/`&gt;` (parse5's serializer
+ *     escapes text nodes but, per the HTML serialization spec, NOT angle brackets in attribute
+ *     values — round-5b R6-1a's `title="</table>"` would otherwise re-enter serialized output as
+ *     a literal tag byte sequence). `decodeEntities` round-trips the value wherever it is
+ *     actually read.
+ */
+function sanitizeTree(root: P5ParentNode): void {
+  root.childNodes = root.childNodes.filter((c) => c.nodeName !== '#comment');
+  for (const child of root.childNodes) {
+    if (!defaultTreeAdapter.isElementNode(child)) continue;
+    for (const attr of child.attrs) {
+      attr.value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    if (RAW_TEXT_ELEMENTS.has(child.tagName)) {
+      child.childNodes = [];
+      continue;
+    }
+    sanitizeTree(child);
+    // parse5 serializes a <template>'s content, so it must be sanitized too.
+    if (child.tagName === 'template') sanitizeTree((child as P5Template).content);
+  }
+}
+
+/** Every `<table>` element in the document, nested ones included (each nested table surfaces as
+ *  its OWN candidate and never contributes rows to the outer grid — round-5 F1/F1e). */
+function collectTables(root: P5ParentNode): P5Element[] {
+  const out: P5Element[] = [];
+  const walk = (node: P5ParentNode): void => {
+    for (const child of node.childNodes) {
+      if (!defaultTreeAdapter.isElementNode(child)) continue;
+      if (child.tagName === 'table') out.push(child);
+      // A <template>'s content is deliberately NOT walked: browsers never render it, so a table
+      // inside one is not a candidate grid (and could never be the inbox).
+      walk(child);
+    }
+  };
+  walk(root);
+  return out;
 }
 
 /**
- * ONE context-aware pass over the raw HTML BEFORE any structural walking (round-5b): the regex
- * walkers below match `<table>`/`<tr>`/`<!--` BYTE SEQUENCES, but an HTML tokenizer only honours
- * them in DATA state — inside a quoted attribute value (`title="</table>"`), inside script/style/
- * textarea raw text, or inside a comment they are inert characters. Sequential regex passes can
- * never see that context (the round-5 comment-strip itself crossed attribute values — R6-3), so
- * this is a single left-to-right state machine that:
- *   - strips comments (`<!--` … `-->`) as a unit, recognised only in DATA state; an UNTERMINATED
- *     comment marks the page corrupt (spec parsers comment to EOF — a truncated payload);
- *   - masks the CONTENT of raw-text elements (script/style/textarea/title), keeping their tags;
- *   - neutralizes `<`/`>` inside quoted attribute values to `&lt;`/`&gt;` (round-tripped back by
- *     `decodeEntities` wherever a value is actually read), so an attribute can never open or
- *     close structure;
- *   - drops DOCTYPE / processing-instruction / bogus-comment constructs (`<!…>`, `<?…>`);
- *   - marks the page corrupt when a tag is still open at EOF.
+ * A table's OWN structural rows: its `<tr>` descendants (through the implied
+ * thead/tbody/tfoot) reached WITHOUT descending into a nested `<table>` — a nested chrome/icon
+ * table can never contribute phantom rows or row-splits to the outer grid (round-5 F1); it is
+ * classified independently by `collectTables`. The walk also never descends INTO a row: the spec
+ * guarantees a `<tr>` inside a cell belongs to a nested table (a bare `<tr>` in a cell
+ * implies-closes the current row instead).
  */
-function sanitizeForStructure(html: string): SanitizedPage {
-  const n = html.length;
-  const lower = html.toLowerCase();
-  let out = '';
-  let i = 0;
-  while (i < n) {
-    if (html[i] !== '<') {
-      out += html[i];
-      i++;
-      continue;
-    }
-    if (html.startsWith('<!--', i)) {
-      const end = html.indexOf('-->', i + 4);
-      if (end === -1) return { page: out, corrupt: true }; // unterminated comment: truncated payload
-      out += ' ';
-      i = end + 3;
-      continue;
-    }
-    if (html.startsWith('<!', i) || html.startsWith('<?', i)) {
-      const end = html.indexOf('>', i + 2);
-      if (end === -1) return { page: out, corrupt: true };
-      out += ' ';
-      i = end + 1;
-      continue;
-    }
-    const isClose = html[i + 1] === '/';
-    const nameStart = isClose ? i + 2 : i + 1;
-    if (!/[a-z]/i.test(html[nameStart] ?? '')) {
-      out += '&lt;'; // a stray '<' is text, never structure
-      i++;
-      continue;
-    }
-    // Copy the tag, neutralizing '<'/'>' inside quoted attribute values.
-    let tag = '';
-    let quote: string | null = null;
-    let closed = false;
-    let j = i;
-    while (j < n) {
-      const c = html[j]!;
-      if (quote !== null) {
-        if (c === quote) {
-          tag += c;
-          quote = null;
-        } else if (c === '<') tag += '&lt;';
-        else if (c === '>') tag += '&gt;';
-        else tag += c;
-      } else if (c === '"' || c === "'") {
-        quote = c;
-        tag += c;
-      } else if (c === '>') {
-        tag += c;
-        closed = true;
-        j++;
-        break;
-      } else if (c === '<' && j > i) {
-        tag += '&lt;'; // '<' inside an unquoted value / malformed tag is text
-      } else {
-        tag += c;
+function ownRows(table: P5Element): P5Element[] {
+  const out: P5Element[] = [];
+  const walk = (node: P5ParentNode): void => {
+    for (const child of node.childNodes) {
+      if (!defaultTreeAdapter.isElementNode(child)) continue;
+      if (child.tagName === 'table') continue;
+      if (child.tagName === 'tr') {
+        out.push(child);
+        continue;
       }
-      j++;
+      walk(child);
     }
-    if (!closed) return { page: out, corrupt: true }; // tag open at EOF: truncated payload
-    out += tag;
-    i = j;
-    if (!isClose) {
-      const nameMatch = /^<([a-z][a-z0-9]*)/i.exec(tag);
-      const name = nameMatch ? nameMatch[1]!.toLowerCase() : '';
-      if (RAW_TEXT_ELEMENTS.includes(name) && !/\/>$/.test(tag)) {
-        const closeIdx = lower.indexOf('</' + name, i);
-        if (closeIdx === -1) {
-          i = n; // raw text runs to EOF — masked entirely (spec behaviour)
-        } else {
-          out += ' ';
-          i = closeIdx;
-        }
-      }
-    }
-  }
-  return { page: out, corrupt: false };
+  };
+  walk(table);
+  return out;
 }
 
-/** One `<table>`: its opening-tag attribute string (for the grid id/class marker) plus its inner
- *  HTML, and whether its close tag was actually FOUND (`terminated`) — an unterminated table is a
- *  truncated structure that can never be trusted with a verdict (round-5b R6-2). */
-interface RawTable {
-  attrs: string;
-  inner: string;
-  terminated: boolean;
+/** A row's structural cells: its DIRECT `<td>`/`<th>` children (spec recovery already re-parents
+ *  the omitted-end-tag shapes — round-5 F3 — and a nested table's cells are never direct children). */
+function rowCells(row: P5Element): P5Element[] {
+  return row.childNodes.filter(
+    (c): c is P5Element => defaultTreeAdapter.isElementNode(c) && (c.tagName === 'td' || c.tagName === 'th'),
+  );
 }
 
 /**
- * Every `<table>` on the page — NESTED tables included, each with its opening-tag attributes and
- * its inner HTML spanning to its MATCHING `</table>` (depth-aware pairing — round-5 F1). The
- * previous lazy-regex walk ended a table at the FIRST `</table>` in document order, so a nested
- * table (RadGrid command/filter chrome between header and data rows, an icon table inside a cell)
- * TRUNCATED the grid fragment and every row after it vanished from the structural proof — a
- * reachable FALSE EMPTY and a reachable silent subset. A stray `</table>` closes the innermost
- * open table (how a browser recovers). An unterminated `<table>` spans to end-of-input and is
- * flagged `terminated:false` — round-5b R6-2 falsified the earlier "a junk tail is harmless"
- * claim (a phantom opener STEALS the real grid's close tag, and nested stripping then hides the
- * rows after it), so an unterminated table is NEVER classified: `parseInboxPage` poisons the page
- * when it is marked and skips it otherwise.
+ * An element's attributes re-joined as a `name="value"` string, so the attribute-string regex
+ * helpers (`GRID_MARKER_RE` via `hasGridMarker`, `attrValue`) keep working on tree nodes. Values
+ * are entity-escaped (`&` and `"`; angle brackets were already neutralized by `sanitizeTree`), so
+ * a value can never fabricate a quote boundary or a tag; `attrValue`'s `decodeEntities` restores
+ * the literal value on read.
  */
-function extractTables(html: string): RawTable[] {
-  const out: RawTable[] = [];
-  const tokenRe = /<table\b([^>]*)>|<\/table\s*>/gi;
-  const open: { attrs: string; contentStart: number }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = tokenRe.exec(html)) !== null) {
-    if (m[0].charAt(1) !== '/') {
-      open.push({ attrs: m[1] ?? '', contentStart: tokenRe.lastIndex });
-    } else if (open.length > 0) {
-      const o = open.pop()!;
-      out.push({ attrs: o.attrs, inner: html.slice(o.contentStart, m.index), terminated: true });
-    }
-  }
-  while (open.length > 0) {
-    const o = open.pop()!;
-    out.push({ attrs: o.attrs, inner: html.slice(o.contentStart), terminated: false });
-  }
-  return out;
+function attrsString(el: P5Element): string {
+  return el.attrs
+    .map((a) => `${a.name}="${a.value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`)
+    .join(' ');
 }
 
-/** The table's OWN inner HTML with nested `<table>…</table>` blocks removed (depth-aware), so a
- *  nested chrome/icon table can never contribute phantom rows, cells, or row-splits to the OUTER
- *  grid's structural classification (round-5 F1). Nested tables still surface as their own entries
- *  from `extractTables` and are classified independently on their own structure. `balanced:false`
- *  means a nested opener never closed inside this fragment — the stripped tail may HIDE data rows
- *  (round-5b R6-2), so an unbalanced table is never classified either. */
-function stripNestedTables(tableInner: string): { own: string; balanced: boolean } {
-  const tokenRe = /<table\b[^>]*>|<\/table\s*>/gi;
-  let depth = 0;
-  let keptFrom = 0;
-  let own = '';
-  let m: RegExpExecArray | null;
-  while ((m = tokenRe.exec(tableInner)) !== null) {
-    if (m[0].charAt(1) !== '/') {
-      if (depth === 0) own += tableInner.slice(keptFrom, m.index);
-      depth++;
-    } else if (depth > 0) {
-      depth--;
-      if (depth === 0) keptFrom = tokenRe.lastIndex;
-    }
-  }
-  if (depth === 0) own += tableInner.slice(keptFrom);
-  return { own, balanced: depth === 0 };
-}
-
-/** One `<tr>`: its opening-tag attribute string (for `data-*` / `id` on the row) plus its inner HTML. */
-interface RawRow {
-  attrs: string;
-  inner: string;
-}
-
-/**
- * Every `<tr>` inside a table fragment, with its opening-tag attributes and its inner HTML. Rows
- * are split on `<tr>` OPENERS (round-5 F3): `</tr>` is an OPTIONAL end tag in HTML, and the
- * previous lazy `<tr>…</tr>` match swallowed the row FOLLOWING an omitted `</tr>` into the current
- * row's trailing cells — the merged row still "parsed", so the swallowed notification vanished
- * SILENTLY from a populated verdict. A row's content ends at its own `</tr>` (anything between it
- * and the next opener is inter-row junk) or at the next `<tr>` opener, matching spec recovery.
- */
-function extractRows(tableInner: string): RawRow[] {
-  const out: RawRow[] = [];
-  const openRe = /<tr\b([^>]*)>/gi;
-  const opens: { attrs: string; index: number; contentStart: number }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = openRe.exec(tableInner)) !== null) {
-    opens.push({ attrs: m[1] ?? '', index: m.index, contentStart: openRe.lastIndex });
-  }
-  for (let i = 0; i < opens.length; i++) {
-    const end = i + 1 < opens.length ? opens[i + 1]!.index : tableInner.length;
-    const inner = tableInner.slice(opens[i]!.contentStart, end).replace(/<\/tr\s*>[\s\S]*$/i, '');
-    out.push({ attrs: opens[i]!.attrs, inner });
-  }
-  return out;
-}
-
-/** Raw inner HTML of every `<td>`/`<th>` cell inside a row fragment (kept RAW so the documento
- *  column can be inspected for an anchor before its text is collapsed). Cells split on OPENERS —
- *  `</td>`/`</th>` are optional end tags (the same omitted-end-tag family as round-5 F3), so an
- *  omitted close under the old lazy match merged neighbouring cells and shifted every column
- *  mapping after it. A cell ends at its own close tag or at the next cell opener. */
-function extractCells(rowInner: string): string[] {
-  const out: string[] = [];
-  const openRe = /<t[dh]\b[^>]*>/gi;
-  const opens: { index: number; contentStart: number }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = openRe.exec(rowInner)) !== null) opens.push({ index: m.index, contentStart: openRe.lastIndex });
-  for (let i = 0; i < opens.length; i++) {
-    const end = i + 1 < opens.length ? opens[i + 1]!.index : rowInner.length;
-    out.push(rowInner.slice(opens[i]!.contentStart, end).replace(/<\/t[dh]\s*>[\s\S]*$/i, ''));
-  }
-  return out;
-}
-
-/** First `href` inside a cell's raw HTML, entity-decoded. The captured value is INERT — it is
- *  stored as `documentoRef` and never dereferenced. */
+/** First `href` inside a cell's serialized HTML, entity-decoded. The captured value is INERT — it
+ *  is stored as `documentoRef` and never dereferenced. */
 function extractHref(cellHtml: string): string | undefined {
   const m = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(cellHtml);
   if (!m) return undefined;
@@ -524,7 +433,7 @@ const TOKEN_EDGE_PUNCT_RE = /^[\s"'«»()[\]{}.,;:!?]+|[\s"'«»()[\]{}.,;:!?]+$
 /** A recognised process-label prefix GLUED to the number in the same token (`nº1234/26.0T8LSB`,
  *  `Proc.1234/26`). ONLY this closed family is stripped — an arbitrary leading run of non-digits is
  *  NOT (stripping `ABC` off `ABC123/26` would extract a number from a token that is something
- *  else entirely; such a row stays UNPARSED and rule 2 of `parseInboxPage` makes that ok:false). */
+ *  else entirely; such a row stays UNPARSED and rule 5 of `parseInboxPage` makes that ok:false). */
 const TOKEN_PROCESS_PREFIX_RE = /^(?:processo|proc\.?|n\.?[ºo°]\.?)/i;
 
 /**
@@ -555,33 +464,26 @@ function extractProcessNumber(text: string): string | undefined {
   return undefined;
 }
 
-/** True when a `<table>`'s opening-tag attributes carry the GridView-STRUCTURAL notifications
- *  marker (`GRID_MARKER_RE`) — the positive STRUCTURAL identification of the grid. A bare
- *  `notificac` substring (a `pnl…`/`div…`/`menu…` filter/error container) does NOT qualify, and
- *  neither does a `GridView` skin CLASS (dropped attempt-4 marker2 — see `GRID_MARKER_RE`). */
+/** True when a `<table>`'s attribute string carries the GridView-STRUCTURAL notifications marker
+ *  (`GRID_MARKER_RE`) — the positive STRUCTURAL identification of the grid. A bare `notificac`
+ *  substring (a `pnl…`/`div…`/`menu…` filter/error container) does NOT qualify, and neither does
+ *  a `GridView` skin CLASS (dropped attempt-4 marker2 — see `GRID_MARKER_RE`). */
 function hasGridMarker(tableAttrs: string): boolean {
   return GRID_MARKER_RE.test(tableAttrs);
 }
 
-/** Interactive-control shapes that disqualify a table from the EMPTY verdict: any form control
- *  (`<input>` — hidden included, a genuine empty grid carries none — `<select>`, `<button>`,
- *  `<textarea>`) or an editable region (`contenteditable`). Round-4 P3/P9: attempt 4 checked
- *  `<input>` only, so login/filter chrome built from a <select>+<button> (or a contenteditable
- *  region) evaded the disqualifier and produced a false empty. */
+/**
+ * Interactive-control shapes that disqualify a table from the EMPTY verdict: any form control
+ * (`<input>` — hidden included, a genuine empty grid carries none — `<select>`, `<button>`,
+ * `<textarea>`) or an editable region (`contenteditable`). Round-4 P3/P9: attempt 4 checked
+ * `<input>` only, so login/filter chrome built from a <select>+<button> (or a contenteditable
+ * region) evaded the disqualifier and produced a false empty. Applied to the RAW SOURCE SLICE of
+ * the table (and its own attribute string) — see ROUND-5C rule 4 in the module docblock: the raw
+ * slice over-approximates (a control byte-sequence in script text or an attribute value still
+ * blocks EMPTY), which is the safe direction, and it survives parse5's foster-parenting of
+ * direct-child controls out of the table element (the round-5 F2 shapes).
+ */
 const INTERACTIVE_CONTROL_RE = /<(?:input|select|button|textarea)\b|\bcontenteditable\b/i;
-
-/** True when the table carries ANY interactive control — in its own attributes or ANYWHERE in its
- *  ENTIRE inner HTML (round-5 F2): the previous per-`<tr>` scan missed a control in a `<caption>`,
- *  as a direct child of `<table>` before the first row, or after the last `</tr>` — each a false
- *  empty on a marked header-only grid. The whole-inner test is strictly stronger and includes the
- *  header row (attempt 4's evasion) and nested-table chrome by construction. A genuine empty grid
- *  is a header + an optional EmptyDataTemplate message row and NOTHING interactive; a table with
- *  controls is login/filter/search chrome and can NEVER prove an empty inbox. (A real empty grid
- *  with a select-all header checkbox would read "indisponível" until CS4 confirms the real markup
- *  — the safe direction; see SPIKE #6.) */
-function hasInteractiveControl(table: RawTable): boolean {
-  return INTERACTIVE_CONTROL_RE.test(table.attrs) || INTERACTIVE_CONTROL_RE.test(table.inner);
-}
 
 /** A candidate per-row source id is IDENTIFYING only when it is not a static/non-identifying token
  *  (`NON_IDENTIFYING_IDS`, e.g. a checkbox `value="on"`) and is long enough to be a plausible id. */
@@ -607,14 +509,15 @@ function attrValue(source: string, nameAlt: string): string | undefined {
 
 /**
  * The row's own STABLE SOURCE ID as the portal exposes it — preferred over a content hash for
- * dedup so two content-identical notifications never collide. Looks, in priority order, for:
+ * dedup so two content-identical notifications never collide. Fed the row's re-joined attribute
+ * string (`attrsString`) and its SERIALIZED inner HTML. Looks, in priority order, for:
  *   1. a select-checkbox / hidden `<input>` value in the row (the classic WebForms GridView
  *      select-column key);
  *   2. a `data-*` notification id (or a row `id`) on the `<tr>` element itself;
  *   3. an id-bearing OPEN-notification link (an href naming a `notific…` endpoint) — never the
  *      inert documento download href.
  * Returns `undefined` when the row exposes none, in which case `notificacaoRef` falls back to a
- * content hash. This never fetches anything: every candidate is read out of the row's own markup.
+ * content hash. This is pure string reading over the row's own markup — nothing is dereferenced.
  */
 function extractSourceId(rowAttrs: string, rowInner: string): string | undefined {
   // 1) a checkbox / hidden input value in the row (must be IDENTIFYING — a static `value="on"` is
@@ -646,7 +549,8 @@ function extractSourceId(rowAttrs: string, rowInner: string): string | undefined
  * Heurística "página indisponível" (idioma de `citius.ts`'s `looksUnavailable`): marcadores
  * duros de erro/manutenção do WebForms que NUNCA aparecem numa caixa de correio real. Não usa a
  * ausência de `<form>` como sinal (a caixa TEM formulário) — a distinção real "sem tabela vs
- * tabela vazia" é feita pela procura da tabela de notificações, abaixo.
+ * tabela vazia" é feita pela procura da tabela de notificações, abaixo. Lê o html BRUTO
+ * (ROUND-5C rule 6): são marcadores de prosa, não estrutura.
  */
 function looksUnavailable(html: string): boolean {
   const h = html.toLowerCase();
@@ -665,7 +569,9 @@ function looksUnavailable(html: string): boolean {
 /**
  * Reads the paging total from the pager, if the page advertises one: the highest N across GET
  * links (`?page=N` / `?p=N`) and `__doPostBack(...,'Page$N')` postback links. `undefined` when no
- * pager is present (a single-page inbox).
+ * pager is present (a single-page inbox). Reads the RAW html (ROUND-5C rule 6): a phantom match
+ * in script text or a comment can only OVER-detect the total, which makes the sync look for MORE
+ * pages, never fewer — the safe direction.
  */
 function detectPageTotal(html: string): number | undefined {
   const nums: number[] = [];
@@ -679,7 +585,8 @@ function detectPageTotal(html: string): number | undefined {
 }
 
 /**
- * Classifies the pager so CS4 can drive it against the real portal.
+ * Classifies the pager so CS4 can drive it against the real portal. Raw html, same
+ * over-detection rationale as `detectPageTotal`.
  *  - a link carrying a GET page param (`href="...?page=N"` / `?p=N`) -> 'get'
  *  - a WebForms postback link (`href="javascript:__doPostBack(...)"` with call args) -> 'postback'
  *  - neither -> 'none'
@@ -718,16 +625,16 @@ interface GridCandidate {
 }
 
 /**
- * Header-row identification for one candidate `<tr>`: the mapped columns must contain an EXACT
- * 'processo' column AND at least TWO known columns in total. This is the NECESSARY header gate, not
- * sufficient on its own — a filter/search panel can carry the same label row — so a table that
- * passes here is only treated as the grid once it ALSO clears `parseInboxPage`'s decision rules
- * (every data row parses, or a structurally-proven empty). Anything that fails the exact-label test
- * (a section-title row, a prose error page laid out as a table) is rejected outright here. Returns
- * the per-index field map on success, `null` otherwise.
+ * Header-row identification for one candidate row's cells: the mapped columns must contain an
+ * EXACT 'processo' column AND at least TWO known columns in total. This is the NECESSARY header
+ * gate, not sufficient on its own — a filter/search panel can carry the same label row — so a
+ * table that passes here is only treated as the grid once it ALSO clears `parseInboxPage`'s
+ * decision rules (every data row parses, or a structurally-proven empty). Anything that fails the
+ * exact-label test (a section-title row, a prose error page laid out as a table) is rejected
+ * outright here. Returns the per-index field map on success, `null` otherwise.
  */
-function identifyHeader(rowInner: string): string[] | null {
-  const fieldByIndex = extractCells(rowInner).map((c) => fieldForHeader(cellText(c)));
+function identifyHeader(cells: P5Element[]): string[] | null {
+  const fieldByIndex = cells.map((c) => fieldForHeader(cellText(serialize(c))));
   const known = new Set(fieldByIndex.filter(Boolean));
   return known.has('processo') && known.size >= 2 ? fieldByIndex : null;
 }
@@ -738,16 +645,18 @@ function identifyHeader(rowInner: string): string[] | null {
  * silently drops legal deadlines: it scans ALL `<table>`s and, WITHIN each, the FIRST row that
  * passes header identification (`identifyHeader`) — skipping caption / colspan / decorative rows —
  * then classifies each header-passing table by its STRUCTURAL DATA ROWS (a `<tr>` after the header
- * with >=2 cells; a single-colspan EmptyDataTemplate / pager / footer row is structurally NOT a
- * data row). Columns map BY HEADER LABEL (a reordered GridView still parses).
+ * with >=2 direct cells; a single-colspan EmptyDataTemplate / pager / footer row is structurally
+ * NOT a data row). Columns map BY HEADER LABEL (a reordered GridView still parses).
  *
  * THE ONE LIE THIS MUST NEVER TELL is a FALSE EMPTY — `{ok:true, rows:[]}` ("inbox complete, zero
  * notifications") for a page that was actually a login / WAF-challenge / session-expired / error /
  * filter-search-chrome page — see the SAFETY HIERARCHY in the module docblock. The round-4 root
  * flaw was inferring verdicts from "zero rows PARSED", which conflates a genuinely empty inbox, a
- * parse failure, and page chrome. Attempt 5 separates them STRUCTURALLY:
+ * parse failure, and page chrome. Attempt 5 separates them STRUCTURALLY (and ROUND-5C grounds the
+ * structure in a spec parse — see the module docblock):
  *
- * PER-TABLE CLASSIFICATION (header-passing tables only; everything else is ignored):
+ * PER-TABLE CLASSIFICATION (header-passing, TERMINATED tables only; an unterminated table is
+ * never classified — ROUND-5C rule 3 — and everything else is ignored):
  *   1. POPULATED grid  — >=1 structural data row and EVERY data row parses (its processo cell
  *      contains a process number, `extractProcessNumber`). The grid marker is corroboration, not
  *      required: fully-parsing data identifies the grid by content.
@@ -755,10 +664,12 @@ function identifyHeader(rowInner: string): string[] | null {
  *      the grid, but it cannot be read completely, so the WHOLE PAGE is `ok:false` — returning the
  *      parseable subset would silently drop the rest, and returning empty would be the false empty.
  *      A NON-marked table with unparseable data rows is ambiguous chrome and merely proves nothing.
- *   3. PROVEN EMPTY    — a gv-MARKED table with ZERO structural data rows and NO interactive
- *      control anywhere in it (`hasInteractiveControl`: input/select/button/textarea/
- *      contenteditable — login/filter chrome can never be "empty"). This is the ONLY way an empty
- *      verdict arises: zero DATA ROWS proven structurally, never zero rows PARSED.
+ *   3. PROVEN EMPTY    — a gv-MARKED table with ZERO structural data rows whose RAW SOURCE SLICE
+ *      carries NO interactive control and NO nested `<table>` (ROUND-5C rule 4 — the
+ *      over-approximate raw-slice disqualifier: login/filter chrome can never be "empty", and an
+ *      empty GridView renders a header + optional EmptyDataTemplate row and nothing else). This
+ *      is the ONLY way an empty verdict arises: zero DATA ROWS proven structurally, never zero
+ *      rows PARSED.
  *
  * PAGE-LEVEL DECISION (in precedence order):
  *   - any PARSE-FAILURE table            -> `ok:false` ('indisponível') — even if another table
@@ -768,56 +679,63 @@ function identifyHeader(rowInner: string): string[] | null {
  *     known columns, then most rows — a marker-only empty grid can never shadow a populated one).
  *   - else any PROVEN-EMPTY grid         -> `ok:true, rows:[]` — the ONE legitimate empty.
  *   - else                               -> `ok:false` ('indisponível'): hard error/maintenance
- *     markers, empty/absent HTML, and every filter / search / legend / login / WAF / session /
- *     error page that has the right label TEXTS but neither fully-parsing data nor structural
- *     empty proof. The SAFE outcome — a dropped-deadline false empty is never worth risking over
- *     an honest "indisponível".
+ *     markers, a structurally TRUNCATED payload (ROUND-5C rule 1), empty/absent HTML, and every
+ *     filter / search / legend / login / WAF / session / error page that has the right label
+ *     TEXTS but neither fully-parsing data nor structural empty proof. The SAFE outcome — a
+ *     dropped-deadline false empty is never worth risking over an honest "indisponível".
  */
 export function parseInboxPage(html: string): ParseInboxResult {
   if (!html || looksUnavailable(html)) {
     return { ok: false, error: UNAVAILABLE };
   }
 
-  // ONE context-aware sanitizing pass before any structural walking (round-5b): comments are
-  // stripped in tokenizer DATA state only, script/style/textarea content is masked, and '<'/'>'
-  // inside quoted attribute values are neutralized — so no non-markup context can open or close
-  // structure for the regex walkers below. A structurally TRUNCATED payload (unterminated comment
-  // or tag at EOF) proves nothing and is honestly unavailable.
-  const { page, corrupt } = sanitizeForStructure(html);
-  if (corrupt) {
+  // ROUND-5C rule 1 — spec parse with the truncation tripwire. Any `eof-*` parse error means the
+  // payload ended INSIDE a construct (comment, tag, script text, CDATA): a structurally TRUNCATED
+  // payload whose server-side truth may have held rows the bytes no longer show. That can never
+  // prove anything — honestly unavailable (the round-5b R6-5 semantics). Non-EOF parse errors are
+  // recovered exactly as a browser would render them.
+  let truncated = false;
+  const document = parse(html, {
+    sourceCodeLocationInfo: true,
+    onParseError: (err) => {
+      if (err.code.startsWith('eof-')) truncated = true;
+    },
+  });
+  if (truncated) {
     return { ok: false, error: UNAVAILABLE };
   }
+
+  // Make serialized fragments context-safe for the string helpers (comments dropped, raw-text
+  // content masked, attribute-value angle brackets neutralized). Structure is untouched.
+  sanitizeTree(document);
 
   let bestPopulated: GridCandidate | null = null;
   let provenEmpty = false;
   let parseFailure = false;
 
-  for (const table of extractTables(page)) {
-    const marked = hasGridMarker(table.attrs);
+  for (const table of collectTables(document)) {
+    const tableAttrs = attrsString(table);
+    const marked = hasGridMarker(tableAttrs);
 
-    // Structural rows are the table's OWN rows: nested chrome/icon tables are stripped first so
-    // they cannot inject phantom rows or split a data row (round-5 F1); they are classified as
-    // their own tables by the outer loop instead.
-    const { own, balanced } = stripNestedTables(table.inner);
-
-    // Round-5b R6-2: an UNTERMINATED table (its close stolen by a phantom opener, or the payload
-    // cut mid-grid) or an UNBALANCED nested strip (a nested opener that never closed — the
-    // stripped tail may hide data rows) is a truncated structure. It can never prove empty NOR
-    // claim a complete populated read: a MARKED one IS the grid and poisons the page; an unmarked
-    // one proves nothing.
-    if (!table.terminated || !balanced) {
+    // ROUND-5C rule 3 — the `terminated` rule. A table whose end tag is ABSENT from the source
+    // was never explicitly closed: the payload was cut mid-grid, or a phantom/sibling opener
+    // stole its close (the spec implies-closes a table when a sibling <table> opens — the R6-2a
+    // probe). A truncated structure can never prove empty NOR claim a complete populated read:
+    // a MARKED one IS the grid and poisons the page; an unmarked one proves nothing.
+    const loc = table.sourceCodeLocation;
+    if (!loc?.startTag || !loc.endTag) {
       if (marked) parseFailure = true;
       continue;
     }
 
-    const rows = extractRows(own);
+    const rows = ownRows(table);
 
     // The header is the FIRST row that passes header identification (not merely the first row
     // containing "processo"), so a caption / colspan row above the real <th> is skipped.
     let headerIdx = -1;
     let fieldByIndex: string[] = [];
     for (let i = 0; i < rows.length; i++) {
-      const mapped = identifyHeader(rows[i]!.inner);
+      const mapped = identifyHeader(rowCells(rows[i]!));
       if (mapped) {
         headerIdx = i;
         fieldByIndex = mapped;
@@ -828,7 +746,7 @@ export function parseInboxPage(html: string): ParseInboxResult {
 
     const idxOf = (field: string): number => fieldByIndex.indexOf(field);
 
-    // Pass 1: walk the STRUCTURAL DATA ROWS (>=2 cells after the header; a single-colspan
+    // Pass 1: walk the STRUCTURAL DATA ROWS (>=2 direct cells after the header; a single-colspan
     // EmptyDataTemplate / pager / footer row is structurally not a data row) and parse each one. A
     // data row PARSES only when its processo cell CONTAINS a process number (`extractProcessNumber`
     // — substring, date-guarded). dataRowCount vs parsed.length is what separates a genuinely empty
@@ -838,13 +756,14 @@ export function parseInboxPage(html: string): ParseInboxResult {
     let dataRowCount = 0;
 
     for (const row of rows.slice(headerIdx + 1)) {
-      const cells = extractCells(row.inner);
+      const cells = rowCells(row);
       if (cells.length < 2) continue; // structurally NOT a data row (EmptyDataTemplate / footer / pager colspan)
       dataRowCount++;
 
+      const cellHtml = cells.map((c) => serialize(c)); // innerHTML per cell, context-safe (sanitizeTree)
       const rawAt = (field: string): string | undefined => {
         const i = idxOf(field);
-        return i >= 0 && i < cells.length ? cells[i] : undefined;
+        return i >= 0 && i < cellHtml.length ? cellHtml[i] : undefined;
       };
       const textAt = (field: string): string => {
         const raw = rawAt(field);
@@ -878,17 +797,30 @@ export function parseInboxPage(html: string): ParseInboxResult {
         ...(ato ? { ato } : {}),
         ...(documentoRef ? { documentoRef } : {}),
       };
-      parsed.push({ base, candidateId: extractSourceId(row.attrs, row.inner) });
+      parsed.push({ base, candidateId: extractSourceId(attrsString(row), serialize(row)) });
     }
 
-    // CLASSIFICATION 3 — zero structural data rows: a PROVEN EMPTY only with the structural marker,
-    // no interactive control anywhere in the ENTIRE table (round-5 F2 — caption / direct-child /
-    // after-last-row controls included), and NO nested <table> at all (round-5: an empty GridView
-    // renders a header + optional EmptyDataTemplate row and nothing else, so nested-table content
-    // inside a marked zero-data-row grid is unmodelled chrome — never an empty proof). Otherwise
-    // the table proves nothing (a header-only filter / legend / login shell) and is skipped.
+    // CLASSIFICATION 3 — zero structural data rows: a PROVEN EMPTY only with the structural marker
+    // and a clean RAW SOURCE SLICE (ROUND-5C rule 4): the ORIGINAL html between the table's start
+    // and end tags must carry no interactive control (round-5 F2 — caption / direct-child /
+    // after-last-row controls included, which the TREE cannot see: parse5 foster-parents them out
+    // of the table element) and no nested `<table>` (round-5 F1d — an empty GridView renders a
+    // header + optional EmptyDataTemplate row and nothing else, so nested-table content inside a
+    // marked zero-data-row grid is unmodelled chrome). The textual test over-approximates — a
+    // control byte-sequence in script text or an attribute value still blocks EMPTY — which is
+    // the safe direction and only ever affects the empty verdict, never a populated read. The
+    // table's own attributes are tested too (a contenteditable grid is chrome). Otherwise the
+    // table proves nothing (a header-only filter / legend / login shell) and is skipped.
     if (dataRowCount === 0) {
-      if (marked && !hasInteractiveControl(table) && !/<table\b/i.test(table.inner)) provenEmpty = true;
+      const innerRaw = html.slice(loc.startTag.endOffset, loc.endTag.startOffset);
+      if (
+        marked &&
+        !INTERACTIVE_CONTROL_RE.test(tableAttrs) &&
+        !INTERACTIVE_CONTROL_RE.test(innerRaw) &&
+        !/<table\b/i.test(innerRaw)
+      ) {
+        provenEmpty = true;
+      }
       continue;
     }
 
@@ -922,18 +854,19 @@ export function parseInboxPage(html: string): ParseInboxResult {
 
   // PAGE-LEVEL DECISION — precedence pinned in the docblock: parse-failure > populated > proven-empty.
   if (parseFailure) {
-    // A marked grid whose data rows did not all parse: completeness cannot be claimed for this
-    // page. Never a subset, never an empty — honestly unavailable.
+    // A marked grid whose data rows did not all parse (or whose close tag was never found):
+    // completeness cannot be claimed for this page. Never a subset, never an empty — honestly
+    // unavailable.
     return { ok: false, error: UNAVAILABLE };
   }
   if (bestPopulated !== null) {
-    const pageTotal = detectPageTotal(page);
+    const pageTotal = detectPageTotal(html);
     return pageTotal !== undefined
       ? { ok: true, rows: bestPopulated.rows, pageTotal }
       : { ok: true, rows: bestPopulated.rows };
   }
   if (provenEmpty) {
-    const pageTotal = detectPageTotal(page);
+    const pageTotal = detectPageTotal(html);
     return pageTotal !== undefined ? { ok: true, rows: [], pageTotal } : { ok: true, rows: [] };
   }
 
