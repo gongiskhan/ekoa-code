@@ -1458,3 +1458,135 @@ describe('citius-mandatarios · round-5c verification regressions (the semantic 
     expect(res.rows[0]!.ref).toBe('REAL-ID-1');
   });
 });
+
+describe('citius-mandatarios · round-5c verification round 2 (F-A/F-B/F-C + the depth cliff)', () => {
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+
+  // ---- F-A (HIGH, regression): an UNMARKED table with pre-header rows must poison, not vanish ----
+
+  it('F-A: a split inbox (unread + read, neither marked) never returns the read table as the whole inbox', () => {
+    const html =
+      '<table id="tblNaoLidas">' +
+      '<tr><td>Nao lidas</td><td>2 notificacoes</td></tr>' + // 2-cell section row ABOVE the header
+      HEADER +
+      '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '<tr><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      '</table>' +
+      '<table id="tblLidas">' +
+      HEADER +
+      '<tr><td>910/2026</td><td>2026-06-10</td><td>Braga</td></tr>' +
+      '</table>';
+    // The browser renders THREE notifications. Returning only the read one would silently drop the
+    // two unread (the live deadlines) — the exact inversion the first form of the F1 fix caused.
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F-A2: an unmarked decoy table cannot claim the page when the real grid has pre-header rows', () => {
+    const html =
+      '<table id="tblInbox">' +
+      '<tr><td>Filtro</td><td>Todas</td></tr>' +
+      HEADER +
+      '<tr><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>' +
+      '</table>' +
+      '<table id="tblOutro">' + HEADER + '<tr><td>4321/26.9T8FAR</td><td>2026-06-01</td><td>Faro</td></tr></table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- F-B (HIGH): CSS/attribute-hidden content is not content ----
+
+  it('F-B1: display:none content never replaces the rendered process number', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><span style="display:none">9999/2026</span>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+  });
+
+  it('F-B2: visibility:hidden and the hidden attribute are equally not content', () => {
+    for (const wrap of ['<span style="visibility:hidden">9999/2026</span>', '<span hidden>9999/2026</span>']) {
+      const html =
+        GRID_OPEN + HEADER + `<tr><td>${wrap}1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>` + '</table>';
+      const res = parseInboxPage(html);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+    }
+  });
+
+  it('F-B3: hidden inputs/anchors inside hidden markup never fabricate sourceId or documentoRef', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes">' +
+      '<tr><th>Processo</th><th>Data</th><th>Documento</th></tr>' +
+      '<tr><td><span style="display:none"><input type="hidden" value="HIDDEN-ID"></span>1234/26.0T8LSB</td>' +
+      '<td>2026-06-16</td>' +
+      '<td><span hidden><a href="Doc.aspx?d=HIDDEN">x</a></span></td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.sourceId).toBeUndefined();
+    expect(res.rows[0]!.ref).not.toBe('HIDDEN-ID');
+    expect(res.rows[0]!.documentoRef).toBeUndefined();
+    expect(res.rows[0]!.temDocumento).toBe(false);
+  });
+
+  it('F-B4: a hidden-content cell that renders NO process number poisons rather than fabricating one', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><span style="display:none">9999/2026</span>Sem número</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- F-C (MEDIUM): an assignment inside another attribute's value is not an attribute ----
+
+  it('F-C: onclick JS containing ".value=1" never becomes the row source id', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes">' +
+      HEADER +
+      '<tr><td><input type="checkbox" name="ctl00$cph$chkSel" ' +
+      'onclick="document.getElementById(\'hdn\').value=1;" value="14235">1234/26.0T8LSB</td>' +
+      '<td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.sourceId).toBe('14235'); // was '1;' — a silently wrong dedup identity
+    expect(res.rows[0]!.ref).toBe('14235');
+  });
+
+  it('F-C2: a value= assignment smuggled inside an id attribute never wins', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes">' +
+      HEADER +
+      '<tr><td><input type="checkbox" id="chk value=EVIL-1" value="14235">1234/26.0T8LSB</td>' +
+      '<td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.sourceId).toBe('14235');
+  });
+
+  // ---- the depth cliff: refused cheaply, not merely survived ----
+
+  it('a pathologically deep payload is refused QUICKLY (no multi-minute parse)', () => {
+    const html = '<div>'.repeat(60000) + GRID_OPEN + HEADER + '</table>';
+    const started = process.hrtime.bigint();
+    const res = parseInboxPage(html);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(res.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(2000); // parse5 alone took ~25s at this depth
+  });
+
+  it('an oversized payload is refused without parsing', () => {
+    const html = GRID_OPEN + HEADER + '<tr><td>x</td><td>y</td></tr>'.repeat(1) + 'z'.repeat(9 * 1024 * 1024);
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+});

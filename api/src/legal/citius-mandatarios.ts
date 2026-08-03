@@ -290,6 +290,42 @@ const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set([
  *     a literal tag byte sequence). `decodeEntities` round-trips the value wherever it is
  *     actually read.
  */
+/**
+ * Is this element NOT RENDERED as content by a browser (round-5c verification F-B)? The masking
+ * rule the docblock states is "what the RENDERER does not show", and the tokenizer's raw-text set
+ * is only half of that. The CSS/attribute-driven half leaked in 100 of 100 of the verifier's
+ * probes — and far more idiomatically for WebForms than `<template>` ever was:
+ *   `<td><span style="display:none">9999/2026</span>1234/26.0T8LSB</td>`
+ * returned the HIDDEN number as the notification's `processo`, silently REPLACING the real one,
+ * and hidden `<input>`/`<a>` inside such a span fabricated `sourceId` (the dedup identity) and
+ * `documentoRef` on a cell that renders blank.
+ * `<details>` is deliberately NOT here: its body is real content a user can reveal.
+ */
+function isNotRendered(el: P5Element): boolean {
+  for (const attr of el.attrs) {
+    const name = attr.name.toLowerCase();
+    if (name === 'hidden') return true;
+    if (name === 'style' && /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:;|$)/i.test(attr.value)) {
+      return true;
+    }
+  }
+  // A <dialog> shows nothing until opened; <canvas>/<video>/<audio>/<object> children are FALLBACK
+  // content for agents that cannot render the element, never the rendered cell text.
+  if (el.tagName === 'dialog') return !el.attrs.some((a) => a.name.toLowerCase() === 'open');
+  return NEVER_RENDERED_CHILDREN.has(el.tagName);
+}
+
+const NEVER_RENDERED_CHILDREN: ReadonlySet<string> = new Set([
+  'datalist',
+  'canvas',
+  'video',
+  'audio',
+  'object',
+  'embed',
+  'map',
+  'select',
+]);
+
 function sanitizeTree(root: P5ParentNode): void {
   // ITERATIVE (round-5c verification F2): a recursive walk overflowed the stack at ~3.7k nesting
   // depth and made `parseInboxPage` THROW where its contract says it must answer ok:false. parse5
@@ -303,7 +339,7 @@ function sanitizeTree(root: P5ParentNode): void {
       for (const attr of child.attrs) {
         attr.value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
       }
-      if (RAW_TEXT_ELEMENTS.has(child.tagName)) {
+      if (RAW_TEXT_ELEMENTS.has(child.tagName) || isNotRendered(child)) {
         child.childNodes = [];
         continue;
       }
@@ -528,11 +564,35 @@ function isIdentifyingId(v: string | undefined): v is string {
  * of acceptable attribute names. Returns `undefined` when absent or empty.
  */
 function attrValue(source: string, nameAlt: string): string | undefined {
-  const re = new RegExp(`\\b(?:${nameAlt})\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
-  const m = re.exec(source);
-  if (!m) return undefined;
-  const v = decodeEntities(m[1] ?? m[2] ?? m[3] ?? '').trim();
-  return v || undefined;
+  // ATTRIBUTE-BOUNDARY ANCHORED (round-5c verification F-C). The previous `\b(name)\s*=` scan read
+  // an assignment out of ANOTHER attribute's VALUE, so well-formed, spec-valid WebForms markup
+  // fabricated the dedup identity: `<input onclick="…getElementById('hdn').value=1;" value="14235">`
+  // yielded sourceId "1;" instead of "14235", and a per-row-varying poison produces silently wrong
+  // refs that the pass-2 collision resolve cannot catch. Attributes are now walked in order with
+  // quoted values skipped, so only a real attribute position can match.
+  const nameRe = new RegExp(`^(?:${nameAlt})$`, 'i');
+  for (const [name, value] of attributePairs(source)) {
+    if (!nameRe.test(name)) continue;
+    const v = decodeEntities(value).trim();
+    if (v) return v;
+  }
+  return undefined;
+}
+
+/** Walk a tag / attribute string as `[name, value]` pairs, honouring quoting so an `=` inside a
+ *  quoted value can never look like an attribute assignment. */
+function* attributePairs(source: string): Generator<[string, string]> {
+  const re = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+  // Skip a leading `<tagname` so the element name is never mistaken for an attribute.
+  re.lastIndex = /^\s*<\s*[a-z][^\s/>]*/i.exec(source)?.[0]?.length ?? 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    if (m[0] === '') {
+      re.lastIndex++;
+      continue;
+    }
+    yield [m[1] ?? '', m[2] ?? m[3] ?? m[4] ?? ''];
+  }
 }
 
 /**
@@ -713,10 +773,12 @@ function identifyHeader(cells: P5Element[]): string[] | null {
  *     dropped-deadline false empty is never worth risking over an honest "indisponível".
  */
 export function parseInboxPage(html: string): ParseInboxResult {
-  // NEVER THROWS (round-5c verification F2). Every structural walk below is iterative, but parse5's
-  // own `serialize` recurses, so a pathologically deep page can still overflow inside a library
-  // call. The contract this module is built on is that an unreadable page answers "indisponível" —
-  // an exception escaping into the sync rail is an unhandled outage, not an honest verdict.
+  // NEVER THROWS (round-5c verification F2). `sanitizeTree` is iterative, but `collectTables`,
+  // `ownRows` and parse5's own `serialize` all recurse, so a pathologically deep page can still
+  // overflow — this catch, not the iterative walk, is what actually holds the contract (an earlier
+  // docblock claimed otherwise and the verifier caught the inaccuracy). The depth/size guard in
+  // `parseInboxPageInner` refuses such a page earlier and far more cheaply; this remains the
+  // backstop. An exception escaping into the sync rail is an unhandled outage, not an honest verdict.
   try {
     return parseInboxPageInner(html);
   } catch {
@@ -724,8 +786,35 @@ export function parseInboxPage(html: string): ParseInboxResult {
   }
 }
 
+/** Bytes above which a page is refused unparsed. A real mandatários inbox page is tens of KB; the
+ *  cap only excludes payloads no portal renders. */
+const MAX_PAGE_BYTES = 8 * 1024 * 1024;
+/** Open-tag nesting above which a page is refused. parse5's parse is QUADRATIC in nesting depth
+ *  (round-5c verification, measured: 10k -> 0.74s, 60k -> 25.5s, 200k -> 312s of blocked event
+ *  loop), so a deep payload is a soft-DoS on a connector fed attacker-influenced HTML. Real portal
+ *  markup nests in the tens; 5k is far above any of it and below the measured cliff. */
+const MAX_TAG_DEPTH = 5000;
+
+/** Cheap pre-parse depth estimate: the maximum excess of open over close tags. Linear, no parse. */
+function exceedsTagDepth(html: string, limit: number): boolean {
+  let depth = 0;
+  const re = /<(\/?)[a-z][^\s/>]*/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (m[1] === '/') depth = depth > 0 ? depth - 1 : 0;
+    else if (++depth > limit) return true;
+  }
+  return false;
+}
+
 function parseInboxPageInner(html: string): ParseInboxResult {
   if (!html || looksUnavailable(html)) {
+    return { ok: false, error: UNAVAILABLE };
+  }
+  // Refuse a payload no portal renders BEFORE handing it to parse5 (round-5c verification: the
+  // never-throw try/catch made a deep page safe but not CHEAP — it still burned minutes of event
+  // loop first). An honest "indisponível" is the right answer for a page this shape.
+  if (html.length > MAX_PAGE_BYTES || exceedsTagDepth(html, MAX_TAG_DEPTH)) {
     return { ok: false, error: UNAVAILABLE };
   }
 
@@ -796,9 +885,17 @@ function parseInboxPageInner(html: string): ParseInboxResult {
     // A pre-header row with >=2 direct cells is therefore structurally indistinguishable from a
     // notification we failed to key, and resolves the only safe way: a MARKED grid is poisoned
     // (parse-failure -> ok:false, never empty, never a subset); an unmarked table proves nothing.
+    // POISONS REGARDLESS OF THE MARKER (round-5c verification F-A — a regression this very fix
+    // introduced in its first form): `continue`-ing on an UNMARKED table is not neutral, because a
+    // SIBLING table can then claim the page and its rows are returned as COMPLETE. The verifier's
+    // probe was a plausible split inbox (unread + read tables, neither gv-marked, a 2-cell section
+    // row above the unread header): the two UNREAD notifications — the live deadlines — were
+    // silently dropped and the single read row was returned as the whole inbox. A header-passing
+    // table with rows above its header means the header identification itself is in doubt, and
+    // that doubt is not confined to the table: it invalidates the page.
     const preHeaderDataRows = rows.slice(0, headerIdx).filter((r) => rowCells(r).length >= 2).length;
     if (preHeaderDataRows > 0) {
-      if (marked) parseFailure = true;
+      parseFailure = true;
       continue;
     }
 
