@@ -1590,3 +1590,148 @@ describe('citius-mandatarios · round-5c verification round 2 (F-A/F-B/F-C + the
     expect(parseInboxPage(html).ok).toBe(false);
   });
 });
+
+describe('citius-mandatarios · round-5c verification round 3 (mask escapes + multi-table page identity)', () => {
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+  const R = (p: string, d = '2026-06-16', t = 'Lisboa'): string => `<tr><td>${p}</td><td>${d}</td><td>${t}</td></tr>`;
+
+  // ---- F1 (regression): a hidden <template> took the mask early-exit, so its content survived ----
+
+  it('F1: <template hidden> content never reaches the row (its content lives in .content, not childNodes)', () => {
+    for (const open of ['<template hidden>', '<template style="display:none">', '<template style="visibility:hidden">']) {
+      const html =
+        GRID_OPEN +
+        HEADER +
+        `<tr><td>${open}<input type="hidden" value="TPL-ID"><a href="/doc/TPL.pdf">x</a>9999/2026</template>1234/26.0T8LSB</td>` +
+        '<td>2026-06-16</td><td>Lisboa</td></tr>' +
+        '</table>';
+      const res = parseInboxPage(html);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+      expect(res.rows[0]!.sourceId).toBeUndefined();
+      expect(res.rows[0]!.documentoRef).toBeUndefined();
+    }
+  });
+
+  // ---- F2: !important bypassed the hiding check ----
+
+  it('F2: every !important spelling of display:none still hides content', () => {
+    const spellings = [
+      'display:none !important',
+      'display:none!important',
+      'display : none !important',
+      'DISPLAY:NONE !IMPORTANT',
+      'display:none ! important',
+      'visibility:hidden !important',
+    ];
+    for (const style of spellings) {
+      const html =
+        GRID_OPEN +
+        HEADER +
+        `<tr><td><span style="${style}">9999/2026</span>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>` +
+        '</table>';
+      const res = parseInboxPage(html);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+    }
+  });
+
+  it('F2b: look-alike styles are NOT treated as hiding (no over-masking)', () => {
+    for (const style of ['display:none-x', 'background:url(display:none)', 'display:block', 'visibility:visible']) {
+      const html =
+        GRID_OPEN + HEADER + `<tr><td><span style="${style}">1234/26.0T8LSB</span></td><td>2026-06-16</td><td>Lisboa</td></tr>` + '</table>';
+      const res = parseInboxPage(html);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB');
+    }
+  });
+
+  // ---- F3 (catastrophic): frozen-header split table proved the inbox EMPTY ----
+
+  it('F3: a frozen-header GridView (header table + marked body table) never proves the inbox empty', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes_header">' + HEADER + '</table>' +
+      GRID_OPEN + R('111/26.0T8LSB') + R('222/26.0T8LSB', '2026-06-17', 'Porto') + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was {ok:true, rows:[]} for a 2-notification page
+  });
+
+  it('F3b: a marked body table whose header carries a sort glyph is a parse failure, not an empty', () => {
+    const html =
+      '<table id="gvNotificacoes_hdr"><tr><th>Processo &#9650;</th><th>Data &#9650;</th></tr></table>' +
+      GRID_OPEN + R('111/26.0T8LSB') + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  // ---- F4 (catastrophic): two populated grids, one silently discarded ----
+
+  it('F4: two populated grids never resolve to one table\'s rows as the whole inbox', () => {
+    const html =
+      '<table id="gvNotificacoesPorLer">' + HEADER + R('111/26.0T8LSB') + R('222/26.0T8LSB') + '</table>' +
+      '<table id="gvNotificacoesLidas">' + HEADER + R('333/26.0T8LSB') + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was rows=[111,222] — 333 silently dropped
+  });
+
+  it('F4b: the more-columns table cannot win and drop the unread notifications', () => {
+    const html =
+      '<table id="gvNotificacoesPorLer"><tr><th>Processo</th><th>Data</th></tr>' +
+      '<tr><td>111/26.0T8LSB</td><td>2026-06-16</td></tr></table>' +
+      '<table id="gvNotificacoesLidas">' + HEADER + R('333/26.0T8LSB') + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F4c: ONE populated grid beside non-grid chrome still parses (the rule is about rival GRIDS)', () => {
+    const html =
+      '<table class="filtros"><tr><td>Filtro</td><td>Todas</td></tr></table>' +
+      GRID_OPEN + HEADER + R('111/26.0T8LSB') + '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+  });
+
+  // ---- F5: masking must never make EMPTY easier to reach ----
+
+  it('F5: a hidden <tbody> holding rows can never prove the inbox empty', () => {
+    const html = GRID_OPEN + HEADER + '<tbody style="display:none">' + R('111/26.0T8LSB') + R('222/26.0T8LSB') + '</tbody></table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was {ok:true, rows:[]}
+  });
+
+  // ---- the depth guard must not refuse REAL pages ----
+
+  it('void elements and omitted end tags never trip the depth guard', () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => `<tr><td><img src="i.gif">${1000 + i}/26.0T8LSB<td>2026-06-16<td>Lisboa`).join('');
+    const html = GRID_OPEN + HEADER + rows + '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true); // a 1000-row grid with <img> per row was refused at 46 KB
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1000);
+  });
+
+  it('a flat run of 6000 void elements is not depth', () => {
+    const html = GRID_OPEN + HEADER + `<tr><td>${'<br>'.repeat(6000)}1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr></table>`;
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+  });
+
+  it('genuine deep nesting is still refused quickly', () => {
+    const html = '<div>'.repeat(60000) + GRID_OPEN + HEADER + '</table>';
+    const started = process.hrtime.bigint();
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false);
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(2000);
+  });
+
+  it('an oversized payload is refused WITHOUT parsing (time-asserted, so the cap discriminates)', () => {
+    const html = GRID_OPEN + HEADER + '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td></tr></table>' + '<b>x</b>'.repeat(1200000);
+    const started = process.hrtime.bigint();
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(false);
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(500);
+  });
+});

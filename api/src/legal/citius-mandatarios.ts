@@ -305,14 +305,31 @@ function isNotRendered(el: P5Element): boolean {
   for (const attr of el.attrs) {
     const name = attr.name.toLowerCase();
     if (name === 'hidden') return true;
-    if (name === 'style' && /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:;|$)/i.test(attr.value)) {
-      return true;
-    }
+    if (name === 'style' && hidesContent(attr.value)) return true;
   }
   // A <dialog> shows nothing until opened; <canvas>/<video>/<audio>/<object> children are FALLBACK
   // content for agents that cannot render the element, never the rendered cell text.
   if (el.tagName === 'dialog') return !el.attrs.some((a) => a.name.toLowerCase() === 'open');
   return NEVER_RENDERED_CHILDREN.has(el.tagName);
+}
+
+/**
+ * Does this inline `style` DECLARE the element away? Parsed as DECLARATIONS rather than pattern-
+ * matched on the raw attribute (round-5c verification round 3 F2): the previous regex required
+ * `;` or end-of-string immediately after the keyword, so the single most common real spelling —
+ * `display:none !important` — sailed straight through and a hidden number again REPLACED a real
+ * processo. Splitting on `;`/`:` and stripping a `!important` suffix covers every spelling
+ * (spacing, case, `! important`) without matching look-alikes like `display:none-x`,
+ * `background:url(display:none)` or a commented-out declaration.
+ */
+function hidesContent(style: string): boolean {
+  return style.split(';').some((decl) => {
+    const idx = decl.indexOf(':');
+    if (idx < 0) return false;
+    const prop = decl.slice(0, idx).trim().toLowerCase();
+    const value = decl.slice(idx + 1).replace(/!\s*important\s*$/i, '').trim().toLowerCase();
+    return (prop === 'display' && value === 'none') || (prop === 'visibility' && value === 'hidden');
+  });
 }
 
 const NEVER_RENDERED_CHILDREN: ReadonlySet<string> = new Set([
@@ -339,15 +356,18 @@ function sanitizeTree(root: P5ParentNode): void {
       for (const attr of child.attrs) {
         attr.value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
       }
+      // A <template>'s parsed content lives in `.content`, NEVER in `.childNodes` — so clearing
+      // childNodes alone is a no-op for it. This must happen BEFORE the mask branch below, or a
+      // `<template hidden>` / `<template style="display:none">` takes the `isNotRendered` early
+      // exit and its row template survives into serialize() (round-5c verification round 3 F1 — a
+      // regression the first form of the not-rendered mask introduced, reopening the closed
+      // <template> fabrication for its most idiomatic spelling).
+      if (child.tagName === 'template') (child as P5Template).content.childNodes = [];
       if (RAW_TEXT_ELEMENTS.has(child.tagName) || isNotRendered(child)) {
         child.childNodes = [];
         continue;
       }
       stack.push(child);
-      // parse5 serializes a <template>'s content, so it must be sanitized too — and its content is
-      // never RENDERED, so it is EMPTIED rather than merely sanitized (F3): a row template inside
-      // it must not reach `cellText` / `extractSourceId` / `extractHref`.
-      if (child.tagName === 'template') (child as P5Template).content.childNodes = [];
     }
   }
 }
@@ -795,12 +815,29 @@ const MAX_PAGE_BYTES = 8 * 1024 * 1024;
  *  markup nests in the tens; 5k is far above any of it and below the measured cliff. */
 const MAX_TAG_DEPTH = 5000;
 
-/** Cheap pre-parse depth estimate: the maximum excess of open over close tags. Linear, no parse. */
+/**
+ * Elements counted by the depth estimate: containers that genuinely NEST and always carry an
+ * explicit end tag. Everything else is excluded on purpose (round-5c verification round 3 — the
+ * first estimate counted `opens - closes` over ALL tags and was a TIME BOMB in the REFUSAL
+ * direction): VOID elements never close, so 5010 flat `<br>`/`<img>`/`<input>` refused a page whose
+ * real nesting depth was 4, and the table elements whose end tags the spec lets you OMIT
+ * (`</td>`, `</tr>` — the very shape this parser handles elsewhere) inflated it so far that an
+ * ordinary 1000-row grid was refused at 46 KB. Restricting the count to a known list also stops
+ * `i<n` inside a script from reading as an open tag.
+ */
+const DEPTH_COUNTED_ELEMENTS: ReadonlySet<string> = new Set([
+  'div', 'span', 'table', 'form', 'fieldset', 'section', 'article', 'nav', 'aside', 'main',
+  'header', 'footer', 'blockquote', 'a', 'b', 'i', 'u', 'em', 'strong', 'font', 'center',
+  'small', 'label', 'ul', 'ol', 'dl', 'figure', 'iframe', 'object', 'video', 'audio', 'picture',
+]);
+
+/** Cheap pre-parse nesting estimate over `DEPTH_COUNTED_ELEMENTS` only. Linear, no parse. */
 function exceedsTagDepth(html: string, limit: number): boolean {
   let depth = 0;
-  const re = /<(\/?)[a-z][^\s/>]*/gi;
+  const re = /<(\/?)([a-z][a-z0-9]*)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
+    if (!DEPTH_COUNTED_ELEMENTS.has((m[2] ?? '').toLowerCase())) continue;
     if (m[1] === '/') depth = depth > 0 ? depth - 1 : 0;
     else if (++depth > limit) return true;
   }
@@ -839,6 +876,7 @@ function parseInboxPageInner(html: string): ParseInboxResult {
   sanitizeTree(document);
 
   let bestPopulated: GridCandidate | null = null;
+  let populatedGrids = 0;
   let provenEmpty = false;
   let parseFailure = false;
 
@@ -871,7 +909,17 @@ function parseInboxPageInner(html: string): ParseInboxResult {
         break;
       }
     }
-    if (headerIdx === -1) continue; // no notifications-grid header in this table
+    if (headerIdx === -1) {
+      // A MARKED table carrying data rows we could not key (round-5c verification round 3 F3 —
+      // catastrophic). The bare `continue` here was the same "not neutral" mistake F-A described:
+      // a frozen-header GridView splits header and body across two tables, so the BODY table is
+      // gv-marked with rows but no header, and the header-only sibling — zero data rows, no
+      // controls — then proved the inbox EMPTY. `{ok:true, rows:[]}` for a page rendering two
+      // notifications. A marked table IS the grid; rows we cannot read mean the page cannot be
+      // read. Unmarked headerless tables still prove nothing (they are ordinary page chrome).
+      if (marked && rows.some((r) => rowCells(r).length >= 2)) parseFailure = true;
+      continue;
+    }
 
     // ROUND-5C VERIFICATION F1 — the CATASTROPHIC one. Only `rows.slice(headerIdx + 1)` is ever
     // parsed or counted, so every row ABOVE the identified header was invisible to BOTH the empty
@@ -972,7 +1020,15 @@ function parseInboxPageInner(html: string): ParseInboxResult {
         marked &&
         !INTERACTIVE_CONTROL_RE.test(tableAttrs) &&
         !INTERACTIVE_CONTROL_RE.test(innerRaw) &&
-        !/<table\b/i.test(innerRaw)
+        !/<table\b/i.test(innerRaw) &&
+        // NO HIDING MARKERS (round-5c verification round 3 F5). `dataRowCount` is counted on the
+        // MASKED tree while this proof reads the RAW slice, so hiding markup REDUCES the row count
+        // and makes EMPTY *easier* to reach — exactly inverting "over-blocking the empty verdict is
+        // the safe direction" (a `<tbody style="display:none">` holding two rows proved the inbox
+        // empty). Any hiding marker in the slice therefore blocks the empty proof outright: masked
+        // content may legitimately vanish from a POPULATED read, but it can never help prove that
+        // there is nothing to read.
+        !/\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden|<template\b/i.test(innerRaw)
       ) {
         provenEmpty = true;
       }
@@ -1003,12 +1059,20 @@ function parseInboxPageInner(html: string): ParseInboxResult {
       return { ref: notificacaoRef(withId), ...withId };
     });
 
+    // MORE THAN ONE populated grid means the page cannot be read completely (round-5c verification
+    // round 3 F4 — catastrophic silent subset). `isBetterGrid` picked one and DISCARDED the rest,
+    // so a split "por ler" / "lidas" inbox returned one table's rows as the whole inbox — and when
+    // the second table had more known columns, BOTH unread notifications were the ones dropped.
+    // Choosing between two candidate grids is a guess, and a wrong guess here loses legal
+    // deadlines; the page identity that would settle it (the authenticated CaixaCorreio endpoint)
+    // is CS4/CS6's to establish, and until then honest unavailability is the only safe answer.
+    populatedGrids++;
     const candidate: GridCandidate = { knownCount: new Set(fieldByIndex.filter(Boolean)).size, rows: out };
     if (bestPopulated === null || isBetterGrid(candidate, bestPopulated)) bestPopulated = candidate;
   }
 
   // PAGE-LEVEL DECISION — precedence pinned in the docblock: parse-failure > populated > proven-empty.
-  if (parseFailure) {
+  if (parseFailure || populatedGrids > 1) {
     // A marked grid whose data rows did not all parse (or whose close tag was never found):
     // completeness cannot be claimed for this page. Never a subset, never an empty — honestly
     // unavailable.
