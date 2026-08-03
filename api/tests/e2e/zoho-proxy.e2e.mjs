@@ -245,7 +245,9 @@ const backend = zoho.makeZohoSignBackend({
       : null,
   decrypt: async (c) => c,
   renderHtmlToPdf: async () => Buffer.from('%PDF-1.4 stub rendered'),
-  persistOwnerCredentialUpdates: async (configId, _cur, updates) => { persisted.push({ configId, updates }); },
+  // (configId, ownerUserId, currentFields, updates) — the owner rides along because the rotation
+  // now refreshes the WS-C Cofre shadow as well as the legacy column (B2 review H2).
+  persistOwnerCredentialUpdates: async (configId, ownerUserId, _cur, updates) => { persisted.push({ configId, ownerUserId, updates }); },
 });
 
 const GOOD_FIELDS = { client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: SEED_REFRESH, dc: 'com' };

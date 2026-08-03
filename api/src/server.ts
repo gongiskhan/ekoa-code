@@ -16,7 +16,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
-import { users, integrationConfigs, triggers } from './data/stores.js';
+import { users, triggers } from './data/stores.js';
 import { CollectionsEngine, sharedScope, appScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
@@ -148,9 +148,9 @@ import {
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
-  type IntegrationConfigDoc,
   callPlatformIntegration,
   findConfigForOwner,
+  persistRotatedCredentials,
   integrationPrefetch,
   resolveDefinition,
   listDefinitionsFor,
@@ -169,8 +169,8 @@ import { getSharedBrowser } from './services/browser-pool.js';
 // test, rather than a derivation written inline in the composition root where nothing can exercise it.
 import {
   egressOriginsForIntegration,
-  compareCredentialShadow,
-  reportCredentialShadow,
+  loadIntegrationCredentialFields,
+  observeCredentialShadow,
 } from './integrations/credential-cofre.js';
 import { setDeliveryTargets } from './events/delivery.js';
 import {
@@ -184,7 +184,7 @@ import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './
 import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
 import type { TriggerDoc } from './events/service.js';
-import { envelopeDecrypt, envelopeEncrypt } from './data/crypto.js';
+import { envelopeDecrypt } from './data/crypto.js';
 import { verifyRunner } from './apps/verify-runner.js';
 import { createBuildMechanics } from './apps/build-mechanics.js';
 import { logActivity } from './data/activity.js';
@@ -456,23 +456,21 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // api_call step interpolates, exactly as before. The Cofre item minted at connect is the SHADOW,
   // and every read compares the two so the 2026-08-15 review decides the cutover on measurements
   // rather than on hope. The comparison never changes what is returned and never throws.
-  setIntegrationCredentialLoader(async (integrationKey, ownerUserId) => {
-    const owner = (await users.get(ownerUserId)) as { orgId?: string } | null;
-    if (!owner?.orgId) return null;
-    const cfg = await findConfigForOwner(owner.orgId, ownerUserId, integrationKey);
-    if (!cfg?.credentialsCiphertext) return null;
-    try {
-      // Cofre B-4: org-bound v2 envelope; v1 rows still read (no flag day).
-      const values = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
-      const fields = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
-      reportCredentialShadow(
-        await compareCredentialShadow({ userId: ownerUserId, orgId: owner.orgId, role: 'user' }, cfg, fields),
-      );
-      return fields;
-    } catch {
-      return null;
-    }
-  });
+  // The BODY lives in `integrations/credential-cofre.ts` (`loadIntegrationCredentialFields`), not
+  // here: a lambda in the composition root cannot be exercised by a test, which is the A2 review's
+  // dead-code class, and the B2 review found the consequence — the comparator sat INSIDE the
+  // decrypt's `catch { return null }`, so any throw on the measurement path would have answered
+  // "integration not connected". This root wires the collaborators and nothing else.
+  const credentialReadDeps = {
+    resolveOwnerOrgId: async (ownerUserId: string) =>
+      ((await users.get(ownerUserId)) as { orgId?: string } | null)?.orgId ?? null,
+    findConfig: findConfigForOwner,
+    // Cofre B-4: org-bound v2 envelope; v1 rows still read (no flag day).
+    decrypt: (ciphertext: string, orgId: string) => envelopeDecrypt(ciphertext, orgId),
+  };
+  setIntegrationCredentialLoader((integrationKey, ownerUserId) =>
+    loadIntegrationCredentialFields(credentialReadDeps, integrationKey, ownerUserId),
+  );
   // 4b. Bound origins for that credential (Cofre R-2, invariant I6). The api_call step writes its
   // URL from a MODEL-authored template, so the destination and the credential have independent
   // provenance — which is why the credential, not the request, must name where it may go.
@@ -1014,8 +1012,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // fully LIVE provider. Every external dep is injected from this composition root —
   // HTML→PDF (integrations/ may NOT import apps/), the owner→org lookup (ResolvedAppScope
   // has no orgId, the same users-store lambda the legal portal seam uses at L661 above),
-  // config custody (findConfigForOwner + decrypt), credential persistence (re-encrypt +
-  // integrationConfigs CAS, mirroring the executor's persistProviderCredentialUpdates),
+  // config custody (findConfigForOwner + decrypt), credential persistence (the ONE
+  // rotation writer, service.persistRotatedCredentials - legacy column then WS-C shadow),
   // and (2B-S3) the requestId→proposta reverse-index write at send time (recordAgreement).
   // Built BEFORE the Adobe router so the pluggable /api/signature/send facade can route
   // `provider:'zoho-sign'` to this live backend (2B-S4 swap).
@@ -1026,15 +1024,30 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     // v2 config written by POST /integrations/configs (the latent unreadable-zoho-config bug).
     decrypt: (ciphertext, orgId) => envelopeDecrypt(ciphertext, orgId),
     renderHtmlToPdf,
-    persistOwnerCredentialUpdates: async (configId, currentFields, updates) => {
-      const merged: Record<string, unknown> = { ...currentFields, ...updates };
-      delete merged.storageState;
-      // Rotation must re-encrypt under the SAME org-bound envelope the reader uses; the config's
-      // own org scopes the DEK, so a rotated row stays readable and never downgrades to flat v1.
-      const target = (await integrationConfigs.get(configId)) as IntegrationConfigDoc | null;
-      if (!target) return;
-      const ciphertext = await envelopeEncrypt(JSON.stringify(merged), target.orgId);
-      await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
+    // BOTH STORES (B2 review H2). This lambda used to write `credentialsCiphertext` and nothing
+    // else, so a shadowed zoho-shaped row went to permanent `drift` on its first token refresh and
+    // a cutover would have replaced a fresh refresh_token with the connect-time one. The body is
+    // `service.persistRotatedCredentials` — a function a test can drive, not a root lambda.
+    persistOwnerCredentialUpdates: async (configId, ownerUserId, currentFields, updates) => {
+      await persistRotatedCredentials(configId, ownerUserId, currentFields, updates);
+    },
+    // The WS-C comparator on the served-app signature rail (B2 review M1): a real credential read
+    // that B2's "every read" claim did not actually cover.
+    observeCredentialRead: (orgId, ownerUserId, config, fields) => {
+      void observeCredentialShadow(
+        { userId: ownerUserId, orgId, role: 'user' },
+        {
+          _id: config._id,
+          orgId,
+          integrationKey: 'zoho-sign',
+          ...(config.ownerUserId !== undefined ? { ownerUserId: config.ownerUserId } : {}),
+          ...(config.cofreItemId !== undefined ? { cofreItemId: config.cofreItemId } : {}),
+          ...(config.credentialsCiphertext !== undefined
+            ? { credentialsCiphertext: config.credentialsCiphertext }
+            : {}),
+        },
+        fields,
+      );
     },
     recordAgreement: recordZohoAgreement,
   });

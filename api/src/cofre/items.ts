@@ -180,9 +180,24 @@ export async function listCofreItems(actor: Actor, now = Date.now()): Promise<Co
 export async function deleteCofreItem(actor: Actor, itemId: string): Promise<boolean> {
   const item = await cofreItems.getVisible(actor, itemId);
   if (!item) return false;
-  for (const g of await cofreGrants.listVisible(actor, { itemId })) {
+  await purgeCofreItem(item);
+  return true;
+}
+
+/**
+ * Destroy a RESOLVED item and every grant on it, whoever holds them.
+ *
+ * MODULE-INTERNAL (not re-exported from `cofre/index.ts`): it takes an item DOCUMENT, not an id, so
+ * it cannot be called without having already resolved — and therefore authorised — the row. The
+ * grants are read by the ITEM's owner rather than by the caller, because the one caller that is not
+ * the owner is `discardIntegrationCredentialItem` destroying the credential of an ORG-SHARED
+ * integration config on behalf of an admin who may delete that config (B2 review H1): an
+ * owner-scoped grant sweep there would delete the item and leave its `until_locked` grants behind,
+ * which is the orphan standing unlock this whole path exists to prevent.
+ */
+export async function purgeCofreItem(item: CofreItemDoc): Promise<void> {
+  for (const g of await cofreGrants.raw.find({ itemId: item._id, orgId: item.orgId })) {
     await cofreGrants.raw.delete(g._id);
   }
-  await cofreItems.raw.delete(itemId);
-  return true;
+  await cofreItems.raw.delete(item._id);
 }

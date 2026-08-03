@@ -484,6 +484,14 @@ export interface ZohoSignConfigRow {
   needsReauth?: boolean;
   /** Encrypted credential bundle (JSON of client_id/secret, refresh_token/grant_code, dc, ...). */
   credentialsCiphertext?: string;
+  /**
+   * WS-C custody fields, PASSED THROUGH and never read here (B2 review M1). This module makes no
+   * decision with them; they exist so the injected shadow observer below receives the row this
+   * function already loaded instead of paying a second store read on every signature call.
+   */
+  orgId?: string;
+  ownerUserId?: string;
+  cofreItemId?: string;
 }
 
 export interface ZohoSignDeps {
@@ -500,13 +508,34 @@ export interface ZohoSignDeps {
    *  because integrations/ may not import apps/). */
   renderHtmlToPdf: (html: string) => Promise<Buffer>;
   /** Persist rotated credential fields (grant_code → refresh_token) back into the saved
-   *  bundle. Root: re-encrypt merged fields + integrationConfigs.update. Best-effort; a
-   *  no-op default means an unsaved/builder context simply does not persist. */
+   *  bundle. Root: `integrations/service.persistRotatedCredentials`, which writes the legacy column
+   *  AND refreshes the WS-C shadow (B2 review H2: this used to write the legacy column only, so a
+   *  shadowed row drifted permanently from its first rotation). `ownerUserId` is carried because the
+   *  shadow refresh is an owner-scoped Cofre write, not a store update. Best-effort; a no-op default
+   *  means an unsaved/builder context simply does not persist. */
   persistOwnerCredentialUpdates?: (
     configId: string,
+    ownerUserId: string,
     currentFields: Record<string, unknown>,
     updates: Record<string, string>,
   ) => Promise<void>;
+  /**
+   * REPORT A LIVE CREDENTIAL READ to the WS-C Rule-10 comparator (B2 review M1). This is the
+   * served-app signature rail, and it is a REAL credential read that B2's census did not see: its
+   * claim was "every read", the comparator was wired into the automation seam only, and the
+   * 2026-08-15 cutover decision would have been made on a biased sample.
+   *
+   * Injected rather than imported for this module's standing reason (config custody is injected so
+   * `integrations/zoho-sign.ts` stays out of the mongodb import chain and drives under plain node),
+   * and SYNCHRONOUS-VOID so a measurement can never be awaited on the signature path. Default: a
+   * no-op, i.e. an unmeasured read, never a broken one.
+   */
+  observeCredentialRead?: (
+    orgId: string,
+    ownerUserId: string,
+    config: ZohoSignConfigRow,
+    fields: Record<string, string>,
+  ) => void;
   /** Record the requestId→proposta reverse index (2B-S3 agreement store). Default: no-op. */
   recordAgreement?: (ref: ZohoAgreementRef) => Promise<void>;
 }
@@ -528,6 +557,10 @@ export interface ZohoSignBackend {
 interface OwnerZohoContext {
   fields: Record<string, unknown>;
   configId: string;
+  /** The owner this context was resolved FOR, and their org — both needed by the rotation write and
+   *  the shadow observer, and both already known here, so neither is looked up a second time. */
+  ownerUserId: string;
+  orgId: string;
 }
 
 /**
@@ -549,7 +582,22 @@ async function resolveOwnerZohoContext(deps: ZohoSignDeps, ownerUserId?: string)
   } catch {
     return null;
   }
-  return { fields, configId: config._id };
+  // The WS-C comparator, on the rail it was missing from (B2 review M1). OUTSIDE the decrypt's
+  // `try` and inside its own, for the same reason the api_call rail keeps it outside: "the
+  // credential did not decrypt" and "measuring the credential failed" must not be the same answer.
+  if (deps.observeCredentialRead) {
+    try {
+      deps.observeCredentialRead(
+        orgId,
+        ownerUserId,
+        config,
+        Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, String(v)])),
+      );
+    } catch {
+      /* a measurement may never break the rail it measures */
+    }
+  }
+  return { fields, configId: config._id, ownerUserId, orgId };
 }
 
 interface ZohoCallContext {
@@ -568,7 +616,7 @@ async function ownerCallContext(deps: ZohoSignDeps, ownerUserId?: string): Promi
     ownerUserId,
     configId: ctx.configId,
     onCredentialUpdate: deps.persistOwnerCredentialUpdates
-      ? (updates) => deps.persistOwnerCredentialUpdates!(ctx.configId, ctx.fields, updates)
+      ? (updates) => deps.persistOwnerCredentialUpdates!(ctx.configId, ctx.ownerUserId, ctx.fields, updates)
       : undefined,
   });
   return { token, base: apiBase(ctx.fields.dc) };

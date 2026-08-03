@@ -31,13 +31,44 @@
  * NOTHING HERE RETURNS A VALUE EXCEPT `unwrapForIntegration`, and that one routes through
  * `unwrap()` — the single policy seam — so the four fail-closed grounds (tenancy, active grant,
  * origin binding, existence) apply to integration credentials exactly as they do to everything else.
+ *
+ * ================= ORG-SHARED CONFIG CUSTODY (B2 review, findings C1 + H1) =================
+ * An org-shared integration config (`ownerUserId == null`, org-admin-authored) is USED by every
+ * member of the org and DELETED by any org-admin, but its Cofre item belongs to the one admin who
+ * typed the credentials — items are owner-scoped and a credential is not a document (decisions.md
+ * 2026-07-27, sub-decision (a)). B2 shipped with that asymmetry unresolved and it was a hole in both
+ * directions: a peer's run fell back to the definition-derived origin list (the author-widenable
+ * artifact the slice exists to stop trusting), and a peer-admin's delete left the item alive with its
+ * `until_locked` grant intact.
+ *
+ * The three operations below therefore take an explicit `sharedConfig` flag, and the CALLER — which
+ * is the one that knows the config is org-shared and has already established custody of it — must
+ * pass it. What the flag widens is deliberately minimal and asymmetric:
+ *   - RESTRICTION and DESTRUCTION cross the owner boundary (which hosts the credential may reach,
+ *     whether a grant is live, and destroying the item with the config). None of these disclose a
+ *     value, and every one of them makes the peer's position STRICTER, never looser.
+ *   - DISCLOSURE does not. `unwrapForIntegration` stays owner-scoped with no flag at all, so the
+ *     2026-07-27 invariant stands where it was written: a peer still cannot read the admin's
+ *     credential, and the 2026-08-15 review still owns the question of whether the VALUE should
+ *     become org-reachable.
+ * The reach is bounded by the SERVER-STAMPED join, not by an id a caller chose: the item must carry
+ * `integrationLink == {integrationKey, configId}` of the very config the caller holds, and be in the
+ * caller's org. There is no id a client can supply that reaches an item joined to a config it does
+ * not already hold, so this is not an existence oracle and cannot be pointed at a personal item
+ * (a hand-minted item has no link at all — the wire schema cannot express one).
  */
 import type { Actor } from '@ekoa/shared';
 import { envelopeEncrypt } from '../data/crypto.js';
 import { cofreItems, cofreGrants } from './store.js';
-import { issueGrant, mintCofreItem, deleteCofreItem, type CofreDeps } from './items.js';
-import { isGrantActive, unwrap, CofreNotFoundError, type UnwrapOptions, type UsageContext } from './service.js';
-import type { CofreItemDoc, IntegrationItemLink } from './types.js';
+import { issueGrant, mintCofreItem, purgeCofreItem, type CofreDeps } from './items.js';
+import {
+  isGrantActive,
+  unwrapResolved,
+  CofreNotFoundError,
+  type UnwrapOptions,
+  type UsageContext,
+} from './service.js';
+import type { CofreItemDoc, CofreGrantDoc, IntegrationItemLink } from './types.js';
 
 /** The credential bundle an integration config holds: its config-field map, values as strings. */
 export type IntegrationCredentialFields = Record<string, string>;
@@ -82,6 +113,45 @@ export function fieldsFromBundle(plaintext: string): IntegrationCredentialFields
 function linkMatches(item: CofreItemDoc, link: IntegrationItemLink): boolean {
   const l = item.integrationLink;
   return l != null && l.integrationKey === link.integrationKey && l.configId === link.configId;
+}
+
+/**
+ * How far a caller's authority over the joined item reaches. `sharedConfig` is TRUE only when the
+ * config this link names is org-shared (`ownerUserId == null`) — see the module docblock for what
+ * that widens (restriction and destruction) and what it deliberately does not (disclosure).
+ */
+export interface IntegrationItemAccess {
+  sharedConfig?: boolean;
+  now?: number;
+}
+
+/**
+ * The item joined to `link`, resolved for this actor. Owner-scoped first, ALWAYS: an actor who owns
+ * the item takes the same path they always did. Only when that misses AND the caller declared an
+ * org-shared config does it fall through to the org-scoped read — and even then the link and the org
+ * must both agree, so the widening reaches exactly one row: the credential item of the very config
+ * the caller is holding.
+ */
+async function resolveJoinedItem(
+  actor: Actor,
+  itemId: string,
+  link: IntegrationItemLink,
+  access: IntegrationItemAccess,
+): Promise<CofreItemDoc | null> {
+  const own = await cofreItems.getVisible(actor, itemId);
+  if (own) return linkMatches(own, link) ? own : null;
+  if (!access.sharedConfig) return null;
+  const shared = await cofreItems.raw.get(itemId);
+  if (!shared || shared.orgId !== actor.orgId) return null;
+  return linkMatches(shared, link) ? shared : null;
+}
+
+/** Grants on an item, read for its OWNER. The lock a peer must respect on an org-shared config is
+ *  the owner's lock — grants are owner-scoped rows, so `listVisible(peer)` would answer the empty
+ *  list and a peer would read "locked" for a perfectly live credential. */
+async function grantsOnItem(item: CofreItemDoc): Promise<CofreGrantDoc[]> {
+  const rows = await cofreGrants.raw.find({ itemId: item._id, orgId: item.orgId });
+  return rows.filter((g) => g.userId === item.userId);
 }
 
 /**
@@ -155,13 +225,36 @@ export async function updateIntegrationCredentialValue(
   link: IntegrationItemLink,
   values: Record<string, unknown>,
   boundOrigins: string[],
-  now = Date.now(),
+  access: IntegrationItemAccess = {},
 ): Promise<CredentialRotation> {
-  const item = await cofreItems.getVisible(actor, itemId);
-  if (!item) return (await cofreItems.raw.get(itemId)) ? 'foreign' : 'stale';
-  if (!linkMatches(item, link)) return 'stale';
+  const own = await cofreItems.getVisible(actor, itemId);
+  if (own) {
+    if (!linkMatches(own, link)) return 'stale';
+    return rewriteValue(own, values, boundOrigins, access.now ?? Date.now());
+  }
+  const raw = await cofreItems.raw.get(itemId);
+  if (!raw) return 'stale';
+  // ORG-SHARED ROTATION (B2 review H2). The provider rotated a credential (Zoho's grant-code →
+  // refresh_token exchange) on a config whose item belongs to the admin who connected it. Writing
+  // the new bundle into that item is the only way the shadow stays in step; `foreign` here would
+  // mean permanent `drift` and, at cutover, a fresh refresh_token replaced by a burnt one. It is a
+  // WRITE of the credential the caller already holds in plaintext — it discloses nothing.
+  if (access.sharedConfig && raw.orgId === actor.orgId && linkMatches(raw, link)) {
+    return rewriteValue(raw, values, boundOrigins, access.now ?? Date.now());
+  }
+  return 'foreign';
+}
+
+/** Re-encrypt a RESOLVED item in place. Grants are untouched by construction: this function cannot
+ *  see them, which is what makes "a rotation never re-grants" a property rather than a promise. */
+async function rewriteValue(
+  item: CofreItemDoc,
+  values: Record<string, unknown>,
+  boundOrigins: string[],
+  now: number,
+): Promise<CredentialRotation> {
   const valueCiphertext = await envelopeEncrypt(serialiseBundle(values), item.orgId);
-  await cofreItems.raw.update(itemId, (cur) => ({
+  await cofreItems.raw.update(item._id, (cur) => ({
     ...(cur as CofreItemDoc),
     valueCiphertext,
     ...(boundOrigins.length > 0 ? { boundOrigins } : {}),
@@ -193,12 +286,18 @@ export async function findIntegrationCredentialItem(
  *                      switch, so the answer is REFUSE — never "fall back to something weaker".
  *                      This is what makes `lock = revoke` load-bearing during the WS-C shadow: the
  *                      legacy column still supplies the value, but the bytes have nowhere to go.
- *   - `unreachable` -> no item of this link is visible to this actor at all. NOT a refusal: during
- *                      the shadow, most configs have no item yet, and an ORG-SHARED config's item
- *                      belongs to the admin who typed it (Cofre items are owner-scoped, decisions.md
- *                      2026-07-27) — so a same-org peer legitimately sees nothing here and the
- *                      caller keeps the pre-WS-C binding. Conflating this with `locked` would have
- *                      broken every not-yet-migrated integration on the day this landed.
+ *   - `unreachable` -> no item of this link is reachable by this actor at all. NOT a refusal on its
+ *                      own: during the shadow most configs have no item yet, and the CALLER decides
+ *                      what that means (`egressOriginsForIntegration` refuses when a join exists and
+ *                      falls back to the declared list only when there is none). Conflating this
+ *                      with `locked` would have broken every not-yet-migrated integration on the day
+ *                      this landed.
+ *
+ * WITH `sharedConfig` the answer is the OWNER's, for the whole org: an org-shared config's peers get
+ * the hosts the admin bound at connect and are refused the moment the admin locks it (B2 review C1).
+ * The peer previously fell through to the definition-derived list, which is the author-widenable
+ * artifact this slice exists to stop trusting — so for that class the slice's acceptance criterion
+ * was not met at all until this flag existed.
  */
 export type IntegrationOriginScope =
   | { kind: 'granted'; origins: string[] }
@@ -209,12 +308,12 @@ export async function integrationOriginScope(
   actor: Actor,
   itemId: string,
   link: IntegrationItemLink,
-  now = Date.now(),
+  access: IntegrationItemAccess = {},
 ): Promise<IntegrationOriginScope> {
-  const item = await findIntegrationCredentialItem(actor, itemId, link);
+  const item = await resolveJoinedItem(actor, itemId, link, access);
   if (!item) return { kind: 'unreachable' };
-  const grants = await cofreGrants.listVisible(actor, { itemId });
-  if (!grants.some((g) => isGrantActive(g, { now }))) return { kind: 'locked' };
+  const grants = await grantsOnItem(item);
+  if (!grants.some((g) => isGrantActive(g, { now: access.now ?? Date.now() }))) return { kind: 'locked' };
   return { kind: 'granted', origins: [...item.boundOrigins] };
 }
 
@@ -245,25 +344,41 @@ export async function unwrapForIntegration(
   usage: UsageContext,
   opts: UnwrapOptions = {},
 ): Promise<{ itemId: string; fields: IntegrationCredentialFields }> {
+  // OWNER-SCOPED, WITH NO `sharedConfig` ESCAPE. This is the DISCLOSURE half, and the module
+  // docblock's asymmetry is enforced right here: a peer of an org-shared config may be restricted
+  // by the admin's item and may destroy it with the config, but may not read it.
   const item = await cofreItems.getVisible(actor, itemId);
   if (!item || !linkMatches(item, link)) throw new CofreNotFoundError();
-  const unwrapped = await unwrap(itemId, actor, usage, opts);
+  // `unwrapResolved` continues `unwrap()` at ground 2 on the row ground 1 just produced, rather
+  // than re-fetching it: same policy body, one read instead of two (B2 review L4).
+  const unwrapped = await unwrapResolved(item, actor, usage, opts);
   return { itemId: unwrapped.itemId, fields: fieldsFromBundle(unwrapped.value) };
 }
 
 /**
  * Disconnecting an integration destroys its credential item and every grant on it.
  *
- * `deleteCofreItem` removes the grants first, so there is no window in which a live grant outlives
+ * `purgeCofreItem` removes the grants first, so there is no window in which a live grant outlives
  * the item it opens, and no orphan standing unlock is left behind for a credential the user believes
- * they removed. Returns false when the item is not the actor's or the link disagrees.
+ * they removed. Returns false when the item is not reachable under this link.
+ *
+ * WITH `sharedConfig` it destroys the item even when another org member owns it (B2 review H1).
+ * Before that flag, admin B deleting admin A's org-shared config left A's item alive, still
+ * `until_locked`-granted, still bound, and joined to a config row that no longer exists — reachable
+ * by item id through `resolveEnvInjection` (`{kind:'process'}` needs no origin) and listed in A's own
+ * Cofre. That is verbatim the "standing unlock for a credential the user believes they removed"
+ * this function's comment already claimed to prevent. The authority is the caller's: `deleteConfig`
+ * has already run `canWriteConfig`, which is what makes an org-admin allowed to delete this config
+ * at all, and destroying its credential is strictly narrower than deleting the config itself.
  */
 export async function discardIntegrationCredentialItem(
   actor: Actor,
   itemId: string,
   link: IntegrationItemLink,
+  access: IntegrationItemAccess = {},
 ): Promise<boolean> {
-  const item = await findIntegrationCredentialItem(actor, itemId, link);
+  const item = await resolveJoinedItem(actor, itemId, link, access);
   if (!item) return false;
-  return deleteCofreItem(actor, itemId);
+  await purgeCofreItem(item);
+  return true;
 }

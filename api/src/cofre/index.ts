@@ -56,6 +56,7 @@ export {
   discardIntegrationCredentialItem,
   fieldsFromBundle,
   type IntegrationCredentialFields,
+  type IntegrationItemAccess,
   type IntegrationOriginScope,
   type MintIntegrationCredentialInput,
 } from './integration-items.js';

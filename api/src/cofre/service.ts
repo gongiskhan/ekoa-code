@@ -97,11 +97,30 @@ export async function unwrap(
   usage: UsageContext,
   opts: UnwrapOptions = {},
 ): Promise<UnwrappedCredential> {
-  const now = opts.now?.() ?? Date.now();
-
   // 1. Tenancy. A row outside the actor's scope reads as absent (uniform NOT_FOUND, never 403).
   const item = await cofreItems.getVisible(actor, itemId);
   if (!item) throw new CofreNotFoundError();
+  return unwrapResolved(item, actor, usage, opts);
+}
+
+/**
+ * Grounds 2-4 of `unwrap`, on an item the caller has ALREADY resolved through the owner-scoped
+ * repository. Module-internal (deliberately not on `cofre/index.ts`) and it takes the item
+ * DOCUMENT, not an id — so it cannot be reached without having passed ground 1, and it is not a
+ * second place where a credential can be decrypted, it is the same body entered one step later.
+ *
+ * It exists because `unwrapForIntegration` must inspect the item (its stamped `integrationLink`)
+ * BEFORE deciding to unwrap it, and re-fetching the same row inside `unwrap` made every integration
+ * credential read cost two `getVisible` calls for one decision (B2 review L4).
+ */
+export async function unwrapResolved(
+  item: CofreItemDoc,
+  actor: Actor,
+  usage: UsageContext,
+  opts: UnwrapOptions = {},
+): Promise<UnwrappedCredential> {
+  const now = opts.now?.() ?? Date.now();
+  const itemId = item._id;
 
   // 2. Grant. DEFAULT DENY — no grant, no value. There is no vault-wide unlock to fall back on.
   const grants = await cofreGrants.listVisible(actor, { itemId });

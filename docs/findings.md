@@ -6,6 +6,71 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`org-shared-config-peer-got-the-author-widened-origin-list`** (FIXED 2026-08-03, CRITICAL,
+  credential egress - found by the B2 fresh-context review, NOT by the suite, which pinned the
+  residual only in its harmless direction). B2 moved the credential-egress allow-list onto the Cofre
+  item's `boundOrigins` so an action authored after the connect could not widen it. For ORG-SHARED
+  configs it did not: the item belongs to the admin who typed the credentials, a same-org peer
+  resolved `unreachable`, and the resolver FELL THROUGH to the definition-derived list - the exact
+  artifact the slice exists to stop trusting. Probe, through the real `executeApiCallStep`: `bob`
+  (role `user`, owns nothing, typed nothing) resolved `["api.crm.example","exfil.example"]` and sent
+  the ADMIN's live key to `https://exfil.example/collect?k=...`, `status completed`. Not
+  cross-tenant and not a regression (pre-B2 everyone got that list), but the slice's acceptance
+  criterion was unmet for the whole class while the journal called the residual benign. FIXED by an
+  explicit `sharedConfig` reach through the server-stamped join (decisions.md 2026-08-03): a peer is
+  now bound by the admin's item and refused when the admin locks it, and a config with an
+  unresolvable join refuses instead of falling back. Pinned in
+  `api/tests/security/integration-credential-scope.test.ts` (the probe above, asserting fetch was
+  never called) and `api/tests/integrations/credential-cofre.test.ts` (the resolver, widened AFTER
+  the connect - the asymmetry the original pin was missing).
+  LESSON: the original test asserted the peer's list EQUALLED the connect-time host and never
+  widened the definition afterwards, so it passed with the hole fully open. A residual pinned only
+  in the direction where it is harmless is not pinned.
+
+- **`org-shared-config-delete-left-a-live-extractable-orphan`** (FIXED 2026-08-03, HIGH, credential
+  custody - same review). `deleteConfig` deletes every row the actor may WRITE, and an org-shared row
+  is writable by any org-admin; the shadow discard was owner-scoped. So admin B deleting admin A's
+  config left A's item alive (`unlocked_until_locked`, still bound, joined to a row that no longer
+  exists) and EXTRACTABLE: `resolveEnvInjection` unwraps by item id alone under `{kind:'process'}`
+  (no origin binding, no link check) and the id is in the owner's own `GET /cofre/items` - the probe
+  returned the plaintext credential in the injected env. `discardCredentialShadow` also returned
+  void and the caller discarded the boolean, so it happened with no log, no status and no trace.
+  FIXED: the discard reaches the owner's item for an org-shared config, `purgeCofreItem` sweeps the
+  grants for the ITEM's owner rather than the deleter, and the outcome is a
+  `discarded|absent|orphaned|error` status that both layers log. Pinned by the extraction probe
+  itself (`resolveEnvInjection` before -> plaintext, after the peer-admin's delete -> NOT_FOUND).
+  LESSON: `deleteCofreItem`'s comment claimed "no orphan standing unlock is left behind" and the
+  code was owner-scoped; the claim was true only for the case the tests exercised.
+
+- **`origin-binding-is-host-only-and-subdomain-wide`** (ACCEPTED 2026-08-03, LOW, by design for now -
+  raised as L3 by the B2 review). `hostMatchesOrigin` (`api/src/security/origin-binding.ts`) matches
+  a bound entry against a request host EXACTLY or as a parent domain of it, and it compares hosts
+  only. Consequences, stated plainly because B2 made `boundOrigins` THE credential-egress control
+  and it therefore inherits them: a bound `api.crm.example` also authorises `eu.api.crm.example` and
+  any OTHER PORT on the bound host, and the scheme is not part of the binding either. Whoever
+  controls a subdomain of a bound host, or any service on another port of it, is inside that
+  credential's blast radius. NOT tightened here: the matcher is shared with session items and the
+  pre-B2 declared-origin derivation, `security/origin-binding.ts` was outside this response's
+  ownership, and narrowing it is a behaviour change for every credential in the product rather than
+  a review fix. CHARACTERISED instead, so an undocumented widening cannot pass unnoticed:
+  `api/tests/security/integration-credential-scope.test.ts` pins that a look-alike sibling domain is
+  refused while a subdomain and an alternate port are SENT. CLOSE BY: decide whether the Cofre binds
+  origins (scheme + host + port) rather than hosts, and whether subtree matching should be opt-in
+  per item, then move the matcher with its suite.
+
+- **`ws-c-comparator-does-not-cover-the-action-executor-rail`** (OPEN 2026-08-03, MEDIUM, migration
+  evidence - raised as M1 by the B2 review, partially closed). B2 claimed the Rule-10 comparator ran
+  on "every real credential read, per api_call step and per listener tick". It ran on ONE rail (the
+  `setIntegrationCredentialLoader` seam, consumed only by `automation/executors/api-call.ts`). This
+  response added the served-app Zoho Sign rail, so two of three are covered; the third,
+  `integrations/action-executor.ts`, decrypts the config itself and is BOTH the integration-action
+  route and the listener rail (`event-sources/user-defined-poll.ts` polls through it), so listener
+  ticks are measured nowhere. It was slice C2's live surface and could not be touched here; the code
+  now names it as uncovered instead of implying coverage. CONSEQUENCE IF NOT CLOSED: the 2026-08-15
+  cutover decision is made on a biased sample - the rails that rotate credentials most are the ones
+  not being measured. CLOSE BY: call `observeCredentialShadow(actor, config, fields)` after
+  `decryptCredentialFields` in `action-executor.ts`, then re-read the census.
+
 - **`artifact-family-test-leaks-watchers`** (OPEN 2026-08-02, MEDIUM, test-estate — found by an
   adversarial reviewer running the contract lane, not by the lane failing informatively).
   `npm run test --workspace api -- --run tests/contract` reports **all tests passing** and then

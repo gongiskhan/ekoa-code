@@ -307,3 +307,101 @@ describe('disconnecting', () => {
     expect(await findIntegrationCredentialItem(alice, item._id, linkA)).not.toBeNull();
   });
 });
+
+/**
+ * THE ORG-SHARED CONFIG REACH (B2 review C1 + H1 + H2), at the Cofre's own surface.
+ *
+ * An org-shared config is used by the whole org and deletable by any org-admin, but its item belongs
+ * to the one admin who typed the credentials. The `sharedConfig` flag is what lets the config's other
+ * legitimate holders reach that item — and the asymmetry it encodes is the thing to pin: RESTRICTION
+ * and DESTRUCTION cross the owner boundary, DISCLOSURE never does.
+ *
+ * Every case below is also run WITHOUT the flag, because a widening that turns out to be
+ * unconditional would pass every assertion about what the flag enables.
+ */
+describe('the org-shared config reach', () => {
+  it('a PEER reads the owner\'s granted scope — but only when the config declares itself shared', async () => {
+    const item = await connectCrm();
+    expect(await integrationOriginScope(bob, item._id, linkA)).toEqual({ kind: 'unreachable' });
+    expect(await integrationOriginScope(bob, item._id, linkA, { sharedConfig: true })).toEqual({
+      kind: 'granted',
+      origins: ['api.crm.example'],
+    });
+  });
+
+  it('the OWNER\'s lock is the org\'s lock: a peer of a shared config is refused too', async () => {
+    const item = await connectCrm();
+    await lockItem(alice, item._id);
+    // Grants are owner-scoped rows, so reading them as the PEER would answer the empty list and
+    // call every live credential "locked". The scope reads the ITEM OWNER's grants, which is why
+    // this says `locked` because alice locked it, not because bob cannot see it.
+    expect(await integrationOriginScope(bob, item._id, linkA, { sharedConfig: true })).toEqual({ kind: 'locked' });
+  });
+
+  it('the reach is bounded by the JOIN and by the ORG — never by the id alone', async () => {
+    const item = await connectCrm();
+    // Another config's link: the item does not agree that it belongs to what is being asked for.
+    expect(await integrationOriginScope(bob, item._id, linkB, { sharedConfig: true })).toEqual({ kind: 'unreachable' });
+    // Another TENANT, with the flag set and the link correct: tenancy is not a flag away.
+    expect(await integrationOriginScope(carolOtherOrg, item._id, linkA, { sharedConfig: true })).toEqual({
+      kind: 'unreachable',
+    });
+    // A hand-minted item carries no link at all, so nothing reaches it through this door.
+    const manual = await mintCofreItem(alice, {
+      type: 'api_key',
+      label: 'Manual',
+      value: OTHER_KEY,
+      boundOrigins: ['api.crm.example'],
+    });
+    expect(await integrationOriginScope(bob, manual._id, linkA, { sharedConfig: true })).toEqual({
+      kind: 'unreachable',
+    });
+  });
+
+  it('DISCLOSURE stays owner-scoped: there is no shared-config path to the value', async () => {
+    const item = await connectCrm();
+    // The peer can be restricted by this item and can destroy it with the config, and still cannot
+    // read it: `unwrapForIntegration` takes no access flag, deliberately.
+    await expect(
+      unwrapForIntegration(bob, item._id, linkA, { kind: 'http', origin: 'api.crm.example' }),
+    ).rejects.toBeInstanceOf(CofreNotFoundError);
+    expect(await findIntegrationCredentialItem(bob, item._id, linkA)).toBeNull();
+    expect(await listCofreItems(bob)).toHaveLength(0);
+  });
+
+  it('a PEER\'s rotation rewrites the OWNER\'s item in place — custody never moves', async () => {
+    const item = await connectCrm();
+    expect(await updateIntegrationCredentialValue(bob, item._id, linkA, { api_key: OTHER_KEY }, [])).toBe('foreign');
+    expect(
+      await updateIntegrationCredentialValue(bob, item._id, linkA, { api_key: OTHER_KEY }, [], { sharedConfig: true }),
+    ).toBe('updated');
+
+    const { cofreItems, cofreGrants } = await import('../../src/cofre/store.js');
+    const stored = await cofreItems.raw.get(item._id);
+    expect(stored!.userId).toBe('alice'); // 46df997's property: a rotation never re-points custody
+    // The owner reads the rotated value back, so the shadow stayed in step instead of drifting.
+    const out = await unwrapForIntegration(alice, item._id, linkA, { kind: 'http', origin: 'api.crm.example' });
+    expect(out.fields).toEqual({ api_key: OTHER_KEY });
+    // …and the grant is untouched: a rotation must never silently undo a lock, whoever wrote it.
+    expect(await cofreGrants.listVisible(alice)).toHaveLength(1);
+  });
+
+  it('a PEER-ADMIN\'s discard destroys the owner\'s item AND its grants (no orphan standing unlock)', async () => {
+    const item = await connectCrm();
+    expect(await discardIntegrationCredentialItem(bob, item._id, linkA)).toBe(false);
+    expect(await discardIntegrationCredentialItem(bob, item._id, linkA, { sharedConfig: true })).toBe(true);
+
+    const { cofreItems, cofreGrants } = await import('../../src/cofre/store.js');
+    expect(await cofreItems.raw.get(item._id)).toBeNull();
+    // The grants are the half that matters: an item deleted with its `until_locked` grant left
+    // behind is the standing unlock, and the sweep runs for the ITEM's owner, not the deleter.
+    expect(await cofreGrants.raw.find({ itemId: item._id })).toHaveLength(0);
+    expect(await listCofreItems(alice)).toHaveLength(0);
+  });
+
+  it('a FOREIGN-TENANT discard destroys nothing, flag or no flag', async () => {
+    const item = await connectCrm();
+    expect(await discardIntegrationCredentialItem(carolOtherOrg, item._id, linkA, { sharedConfig: true })).toBe(false);
+    expect(await findIntegrationCredentialItem(alice, item._id, linkA)).not.toBeNull();
+  });
+});

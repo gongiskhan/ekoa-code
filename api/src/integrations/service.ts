@@ -167,6 +167,87 @@ export async function updateConfig(actor: Actor, id: string, patch: { enabled?: 
   return { verdict: 'ok', config };
 }
 
+/** What a provider-driven rotation did. `legacy_failed` means the rotated credential was NOT saved
+ *  at all, which for a one-time grant-code exchange is unrecoverable and must not be silent. */
+export type RotationOutcome = 'updated' | 'notfound' | 'legacy_failed';
+
+/**
+ * PERSIST A PROVIDER-ROTATED CREDENTIAL (both stores).
+ *
+ * A rotation is not a user edit: an OAuth refresh (Zoho's grant-code → refresh_token exchange)
+ * arrives mid-request, on behalf of the provider, for whichever owner is running. So it is
+ * deliberately NOT routed through `updateConfig` — that path enforces `canWriteConfig`, which would
+ * refuse a non-admin peer running against an org-shared config and silently drop a grant code that
+ * is already burnt.
+ *
+ * WHAT THIS FIXES (B2 review H2). The served-app Zoho backend's persistence lambda in `server.ts`
+ * wrote `credentialsCiphertext` directly and nothing else, bypassing the WS-C shadow entirely.
+ * Zoho-shaped rows are NOT in RUN_SPEC assumption 4's carve-out (`isReservedIntegrationRow` covers
+ * only platform-OAuth and pipedream), so a shadowed row went to permanent `drift` from its first
+ * rotation, and a 2026-08-15 cutover would have replaced a fresh `refresh_token` with the
+ * connect-time one. Both writes happen here now.
+ *
+ * ORDER: the legacy column FIRST. It is still the live read, so a shadow failure must never be able
+ * to lose a rotated credential; a legacy failure short-circuits before the shadow, keeping the two
+ * from diverging in the one direction that matters.
+ *
+ * ONE IMPLEMENTATION, ALMOST. `integrations/action-executor.ts` grew a sibling body for the same job
+ * on the action rail while this review was in flight, and that file belonged to another slice at the
+ * time. Converging the two on this function is the recorded follow-up (docs/decisions.md); the
+ * reserved-row predicate at least is shared already, through `shadowCredentials`.
+ */
+export async function persistRotatedCredentials(
+  configId: string,
+  ownerUserId: string,
+  currentFields: Record<string, unknown>,
+  updates: Record<string, string>,
+): Promise<RotationOutcome> {
+  const target = (await integrationConfigs.get(configId)) as IntegrationConfigDoc | null;
+  if (!target) return 'notfound';
+  const merged: Record<string, unknown> = { ...currentFields, ...updates };
+  // A captured browser session is never folded into the credentials bundle.
+  delete merged.storageState;
+  try {
+    // Rotation must re-encrypt under the SAME org-bound envelope the reader uses; the config's own
+    // org scopes the DEK, so a rotated row stays readable and never downgrades to a flat v1 blob.
+    const ciphertext = await envelopeEncrypt(JSON.stringify(merged), target.orgId);
+    await integrationConfigs.update(configId, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
+  } catch (err) {
+    console.warn(
+      `[integrations] failed to persist rotated credentials for ${target.integrationKey} (config ${configId}): ${err instanceof Error ? (err.constructor?.name ?? 'Error') : typeof err}`,
+    );
+    return 'legacy_failed';
+  }
+  // A ROTATION REFRESHES A SHADOW; IT DOES NOT PERFORM THE CONNECT CEREMONY. On an org-shared
+  // config with no item yet, the rotating user is whoever happened to be running — typically not
+  // the admin who typed the credentials — and minting here would put a fresh, auto-granted item
+  // (and therefore custody, and the lock switch) in that user's Cofre for a credential they never
+  // entered. The mint belongs to the human who types the credentials; this path either refreshes
+  // the item that ceremony produced or reports its absence.
+  if (!target.cofreItemId && target.ownerUserId == null) {
+    console.warn(
+      `[integrations] rotated ${target.integrationKey} (org-shared config ${configId}) has no WS-C shadow item to refresh; it stays shadow_absent until an admin re-saves the credentials`,
+    );
+    return 'updated';
+  }
+  try {
+    const actor: Actor = { userId: ownerUserId, orgId: target.orgId, role: 'user' };
+    const cofreItemId = await shadowCredentials(actor, target, merged);
+    // A first-ever mint has to be joined back onto the row, exactly as `createConfig` does; a
+    // refresh returns the id already on the row and this is a no-op write.
+    if (cofreItemId && cofreItemId !== target.cofreItemId) {
+      await integrationConfigs.update(configId, (cur) => ({ ...cur, cofreItemId }));
+    }
+  } catch (err) {
+    // The shadow may never break the rail it shadows. A failure here surfaces as `drift` /
+    // `shadow_absent` at the next comparator read, which is the signal the Rule-10 review reads.
+    console.warn(
+      `[integrations] WS-C shadow refresh failed after rotating ${target.integrationKey} (config ${configId}): ${err instanceof Error ? (err.constructor?.name ?? 'Error') : typeof err}`,
+    );
+  }
+  return 'updated';
+}
+
 export async function deleteConfig(actor: Actor, integrationKey: string): Promise<{ verdict: WriteVerdict }> {
   const rows = (await integrationConfigs.find({ orgId: actor.orgId, integrationKey })) as IntegrationConfigDoc[];
   if (rows.length === 0) return { verdict: 'notfound' };
@@ -177,7 +258,21 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     // first would strand an auto-granted `until_locked` item with no config to reach it from — a
     // standing unlock for a credential the user believes they removed, invisible to every code path
     // that navigates through the join.
-    await discardCredentialShadow(actor, c);
+    //
+    // The OUTCOME IS READ, not discarded (B2 review H1). An org-shared config is deletable by any
+    // org-admin but its item belongs to the admin who typed the credentials, so before the
+    // shared-config reach existed, admin B deleting admin A's config left A's item alive and
+    // granted — and because this call returned void and the result was dropped, that happened with
+    // no log line, no status and no trace of any kind. `discardCredentialShadow` now says what
+    // happened; the delete still proceeds (an undeletable config would be a worse failure than a
+    // reported orphan), and the surviving item is now the loudest thing in the log rather than the
+    // quietest.
+    const outcome = await discardCredentialShadow(actor, c);
+    if (outcome === 'orphaned' || outcome === 'error') {
+      console.warn(
+        `[integrations] deleting ${c.integrationKey} config ${c._id} left its credential item behind (${outcome}) — it must be locked or removed from the Cofre by its owner`,
+      );
+    }
     await integrationConfigs.delete(c._id);
   }
   return { verdict: 'ok' };
