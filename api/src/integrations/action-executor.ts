@@ -55,6 +55,7 @@
  * too (sampled, never throwing, outside the decrypt's own try).
  */
 
+import type { Actor } from '@ekoa/shared';
 import {
   resolveBackingType,
   IntegrationActionBackingTypeError,
@@ -63,8 +64,11 @@ import {
 } from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
 import { checkActionConsent, type IntegrationActionConsentDescriptor } from './action-consent.js';
-import { declaredOriginsForIntegration, linkForConfig, observeCredentialShadow } from './credential-cofre.js';
-import { integrationOriginScope } from '../cofre/index.js';
+import {
+  definitionActorForCredential,
+  resolveCredentialEgressBinding,
+  observeCredentialShadow,
+} from './credential-cofre.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { assertOriginAllowed, CredentialOriginError } from '../security/origin-binding.js';
 import { findConfigForOwner, persistRotatedCredentials, type IntegrationConfigDoc } from './service.js';
@@ -183,7 +187,33 @@ export async function executeUserIntegrationAction(
   // shadow refresh after a rotation — is taken under it, so none of them can resolve a tenant the
   // caller did not name.
   const actor = { userId: input.ownerUserId, orgId: input.orgId, role: 'user' } as const;
-  const def = await resolveDefinition(actor, input.integrationKey);
+
+  // THE CONFIG ROW IS READ FIRST, and that ordering is load-bearing (2026-08-03 review, CRITICAL-1).
+  // An integration definition resolves per (key, PRINCIPAL) — `getForActor` answers the reader's own
+  // `private` row before any `org`/`global`/baseline one — so "which package does this action come
+  // from" is not a fact about the key. Resolving it as the READER let a same-org peer with role
+  // `user` author, in their own private row, both the action that runs and the hosts the ORG-ADMIN's
+  // credential may be sent to. The row therefore has to be in hand before the definition is
+  // resolved, so the definition can be resolved as the credential's CUSTODIAN.
+  //
+  // NOTHING IS DECRYPTED HERE and no refusal moves: the write gate below still answers before
+  // `not_connected`/`disabled`, so an unapproved write still cannot probe connection state and
+  // still cannot cause a credential to be decrypted. What changed is one un-decrypted row read
+  // moving above a gate that never depended on it.
+  const config = await findConfigForOwner(input.orgId, input.ownerUserId, input.integrationKey);
+  const definitionActor = definitionActorForCredential(actor, config);
+  if (!definitionActor) {
+    // Fail closed on an incoherent (actor, config) pair — an org-less reader, or a row from another
+    // tenant. There is no principal to resolve the package as, and "resolve it as somebody" is the
+    // failure mode this whole change exists to remove.
+    return {
+      success: false,
+      code: 'credential_invalid',
+      error: `cannot establish the credential custodian for ${input.integrationKey}`,
+    };
+  }
+
+  const def = await resolveDefinition(definitionActor, input.integrationKey);
   if (!def) return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
 
   const action = def.actions.find((a) => a.actionName === input.actionName);
@@ -257,7 +287,6 @@ export async function executeUserIntegrationAction(
     };
   }
 
-  const config = await findConfigForOwner(input.orgId, input.ownerUserId, input.integrationKey);
   if (!config && def.authType !== 'none') {
     return { success: false, code: 'not_connected', error: `integration ${input.integrationKey} is not connected for this user` };
   }
@@ -331,11 +360,37 @@ export async function executeUserIntegrationAction(
   }
   const resolvedFields = { ...credentialFields, ...computedFields };
 
+  // THE BINDING IS RESOLVED BEFORE THE DISPATCH, NOT INSIDE ONE BRANCH OF IT (2026-08-03 review,
+  // MEDIUM-1). It used to sit below, on the `api-call` path only, so the automation-backed branch
+  // returned with the decrypted bundle in hand having consulted the Cofre grant not at all: a
+  // LOCKED item did not stop a `browser-steps` or materialised `bash-cli` action receiving the
+  // credentials. "Lock = revoke, load-bearing from day one" was therefore true of one of two
+  // dispatch branches while the docblock claimed one egress truth.
+  const binding = await resolveEgressBinding(actor, input.integrationKey, config);
+
   // BACKING DISPATCH (C1). `browser-steps` and a MATERIALISED `bash-cli` both run through the one
   // automation seam (the engine owns the paired machine and the browser alike); `api-call` is the
   // HTTP path below. With no explicit `backingType` this is byte-for-byte the previous rule —
   // an `automationBinding` took precedence over any `httpConfig`, and still derives `browser-steps`.
   if (backingType === 'browser-steps' || backingType === 'bash-cli') {
+    // WHAT THIS BRANCH GUARANTEES, EXACTLY. The GRANT half of the binding is enforced: a locked,
+    // revoked, stale or unresolvable credential is refused here and the bundle never leaves this
+    // function. The ORIGIN half is not enforceable from here and is not claimed to be — the
+    // destinations of a browser flow or a paired-machine command are the automation engine's, not a
+    // URL this module builds, so there is nothing here to check them against. The exposure that
+    // leaves is bounded by the engine: `automation/template-vars.ts` redacts
+    // `{{input.credentials…}}` out of model-visible text and the only field a browser step actually
+    // consumes is `storageState`.
+    //
+    // Refused BEFORE the seam check on purpose: a revoked credential must be refused whether or not
+    // the automation seam happens to be wired, so the two failures can never be confused.
+    if (binding.enforced && binding.origins.length === 0) {
+      return {
+        success: false,
+        code: 'origin_refused',
+        error: `the credential for ${input.integrationKey} is locked or no longer reachable — an automation-backed action may not be given it`,
+      };
+    }
     if (!deps.runAutomationBackedAction) {
       return { success: false, code: 'automation_required', error: `action "${input.actionName}" is automation-backed and requires the automation seam` };
     }
@@ -356,7 +411,6 @@ export async function executeUserIntegrationAction(
   // for value-based redaction in the failure summary and the returned data.
   const secretValues = Object.values(resolvedFields)
     .filter((v): v is string => typeof v === 'string' && v.length >= 4);
-  const binding = await resolveEgressBinding(actor, input.integrationKey, config);
   return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues, binding, input.integrationKey);
 }
 
@@ -367,64 +421,38 @@ export async function executeUserIntegrationAction(
  * host. B2's "lock = revoke, load-bearing from day one" was true for `api_call` steps and false
  * here, on the rail the listener supervisor and the automation `integration` step both use.)
  *
- * NEITHER PREDICATE IS RE-DERIVED. The item scope comes from `integrationOriginScope` (the Cofre's
- * own tenancy + link + grant check) and the declared-host list from
- * `declaredOriginsForIntegration` — the same two pieces `egressOriginsForIntegration` composes for
- * the `api_call` seam. What differs is the FALLBACK POLICY, deliberately, in exactly one case:
+ * NOTHING IS RE-DERIVED, AND NOTHING IS RE-DECIDED. C2 composed the same two primitives as the
+ * `api_call` seam but kept its own copy of the composition, and the two copies drifted where it
+ * mattered: this one resolved the declared-host fallback as the READER, so for an org-shared config
+ * with no Cofre item the allow-list was authored by whoever was running (2026-08-03 review,
+ * CRITICAL-1). The rule now lives ONCE, in `credential-cofre.resolveCredentialEgressBinding`, and
+ * this function is only its projection onto the shape `executeHttpAction` consumes:
  *
- *   item joined, GRANTED      -> ENFORCE the item's own `boundOrigins`: the hosts fixed at the
- *                                moment the human typed the credentials. An action authored or
- *                                edited afterwards cannot widen its own egress.
- *   item joined, LOCKED       -> REFUSE (empty allowlist). Lock is the kill switch; falling back
- *                                to a wider list would route around it. THIS is the probe B2's
- *                                reviewer landed.
- *   item joined, UNREACHABLE  -> REFUSE. With `sharedConfig` passed (below), an ORG-SHARED config's
- *                                item resolves like any other, so `unreachable` no longer means
- *                                "a peer is using the admin's config" — it means the join names
- *                                nothing this actor can reach, i.e. it is stale or tampered. There
- *                                is deliberately NO fallback to the definition-derived host list
- *                                here: that list is written by the same author as the action being
- *                                authorised, and this is the rail that runs with no human present.
- *   no item, hosts declared   -> ENFORCE the declared hosts.
- *   no item, none declared    -> UNBOUND: exactly the pre-C2 behaviour (SSRF guard only). This is
- *                                the templated-baseUrl case (`{{api_base}}`, `{{graph_base_url}}`,
- *                                `{{api_access_point}}` — zoho-sign, microsoft-365,
- *                                adobe-acrobat-sign), where the host comes from a credential field
- *                                at run time and the package declares no literal host to bind to.
- *                                Those integrations mint no Cofre item for the same reason
- *                                (`mintOrRefreshCredentialShadow` returns null on an empty
- *                                binding), so this is not a hole C2 opens; it is named here rather
- *                                than papered over, and closes the moment a templated host can be
- *                                bound at connect.
+ *   granted -> { enforced: true, origins }   enforce exactly those hosts
+ *   refused -> { enforced: true, origins: [] } enforce an empty list: `assertOriginAllowed` refuses
+ *   unbound -> { enforced: false, origins: [] } no item and no declared host — SSRF guard only
+ *
+ * THE `unbound` PROJECTION IS THIS RAIL'S ALONE. The api_call seam has no such branch (an empty
+ * allow-list simply refuses there), and it is retained here for the bare-templated-`baseUrl`
+ * packages — `{{api_base}}`, `{{api_access_point}}`, `{{graph_base_url}}` (zoho-sign,
+ * adobe-acrobat-sign, invoicexpress, whatsapp, ifthenpay) — where the host comes from a credential
+ * field at run time and the package declares no literal host to bind to. Those same packages mint
+ * no Cofre item for the same reason, so refusing here would take the whole class offline, the
+ * shipped signing rail included. What CRITICAL-1 changed is not whether this branch exists but who
+ * writes the definition it reads: the credential's custodian, never an arbitrary reader.
  */
 async function resolveEgressBinding(
-  actor: { userId: string; orgId: string; role: 'user' },
+  actor: Actor,
   integrationKey: string,
   config: IntegrationConfigDoc | null,
 ): Promise<{ enforced: boolean; origins: string[] }> {
-  try {
-    if (config?.cofreItemId) {
-      // `sharedConfig` is load-bearing, not a default: an org-shared config's item belongs to the
-      // admin who typed the credentials, so WITHOUT this flag every peer's run reads `unreachable`
-      // and the rail would either refuse them all or fall back to the author-widened list — the
-      // exact defect B2's review found one file over. With it, a peer resolves the SAME item and
-      // therefore the SAME lock the owner set.
-      const scope = await integrationOriginScope(actor, config.cofreItemId, linkForConfig(config), {
-        sharedConfig: config.ownerUserId == null,
-      });
-      if (scope.kind === 'granted') return { enforced: true, origins: scope.origins };
-      // `locked` or `unreachable`: refuse. A joined item that will not answer is a stale or
-      // tampered join, never a sharing arrangement — the sharing case now resolves above.
-      return { enforced: true, origins: [] };
-    }
-    const declared = await declaredOriginsForIntegration(actor, integrationKey);
-    return { enforced: declared.length > 0, origins: declared };
-  } catch (err) {
-    // A resolver failure must not silently widen the binding. Fail CLOSED with an empty allowlist
-    // that `assertOriginAllowed` refuses, rather than returning `enforced: false`.
-    console.warn(`[action-executor] origin resolution failed for ${integrationKey}: ${err instanceof Error ? err.message : String(err)}`);
-    return { enforced: true, origins: [] };
-  }
+  // No actor is passed for the definition: the shared rule derives it from the CONFIG ROW, with the
+  // same pure `definitionActorForCredential` this executor already used to resolve the action. One
+  // row in, one custodian out, both times — so the package an action comes from and the package its
+  // allow-list comes from cannot be two different packages.
+  const binding = await resolveCredentialEgressBinding(actor, config, integrationKey);
+  if (binding.kind === 'granted') return { enforced: true, origins: binding.origins };
+  return { enforced: binding.kind === 'refused', origins: [] };
 }
 
 // ============================================================================

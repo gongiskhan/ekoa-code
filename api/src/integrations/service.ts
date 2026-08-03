@@ -8,7 +8,11 @@ import { integrationConfigs } from '../data/stores.js';
 import { envelopeEncrypt } from '../data/crypto.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
-import { mintOrRefreshCredentialShadow, discardCredentialShadow } from './credential-cofre.js';
+import {
+  mintOrRefreshCredentialShadow,
+  discardCredentialShadow,
+  type CredentialShadowWrite,
+} from './credential-cofre.js';
 
 export interface IntegrationConfigDoc extends Doc {
   orgId: string;
@@ -25,6 +29,19 @@ export interface IntegrationConfigDoc extends Doc {
    * the join (docs/decisions.md).
    */
   cofreItemId?: string;
+  /**
+   * THE CREDENTIAL'S CUSTODIAN — the user whose credential-typing ceremony produced the bundle this
+   * row currently holds. Server-stamped from the verified actor by `createConfig` and by a
+   * credential-bearing `updateConfig` (both of which `canWriteConfig` already gates), NEVER read
+   * from a request body, and NEVER moved by `persistRotatedCredentials`.
+   *
+   * It exists because `ownerUserId` cannot answer "whose authority governs this credential" for an
+   * ORG-SHARED row — it is undefined there by definition — and something has to, since the
+   * definition that decides which hosts the credential may reach is resolved AS a principal. See
+   * `credential-cofre.ts: definitionActorForCredential` for the full reasoning and the exfiltration
+   * it closes. Deliberately NOT on `configSummary`: it is an internal custody fact, not client data.
+   */
+  custodianUserId?: string;
   needsReauth?: boolean;
   // --- Platform-integration (managed OAuth) rows only (G8, ch03 §3.8.15). Set on the
   //     org-scoped workspace-connection rows written by integrations/platform-oauth.ts;
@@ -83,6 +100,10 @@ export async function createConfig(actor: Actor, input: { integrationKey: string
     _id: id,
     orgId: actor.orgId,
     ownerUserId: actor.role === 'org-admin' ? undefined : actor.userId, // org-admin authors org-shared
+    // The ceremony's custodian, stamped from the VERIFIED actor. For an owner-scoped row this is
+    // the same person as `ownerUserId`; for an org-shared row it is the only record of who typed
+    // the credentials, and therefore of whose definition may govern them.
+    custodianUserId: actor.userId,
     integrationKey: input.integrationKey,
     name: input.name ?? input.integrationKey,
     enabled: true,
@@ -119,9 +140,10 @@ async function shadowCredentials(
   actor: Actor,
   doc: IntegrationConfigDoc,
   values: Record<string, unknown>,
+  write: CredentialShadowWrite = 'ceremony',
 ): Promise<string | null> {
   if (isReservedIntegrationRow(doc)) return null;
-  return mintOrRefreshCredentialShadow(actor, doc, values);
+  return mintOrRefreshCredentialShadow(actor, doc, values, write);
 }
 
 /** Get a config the actor may READ (own org + visible), else null → uniform 404. */
@@ -162,6 +184,11 @@ export async function updateConfig(actor: Actor, id: string, patch: { enabled?: 
     ...cur,
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
     ...(nextCiphertext ? { credentialsCiphertext: nextCiphertext } : {}),
+    // CUSTODY FOLLOWS THE CEREMONY, and only the ceremony. A credential re-save IS the ceremony
+    // repeated — `canWriteConfig` above already restricts an org-shared row's re-save to an
+    // org-admin, and `mintOrRefreshCredentialShadow` already mints under this writer — so the
+    // custodian stamp moves with it. Toggling `enabled` is not a ceremony and leaves it alone.
+    ...(patch.configValues ? { custodianUserId: actor.userId } : {}),
     ...(cofreItemId ? { cofreItemId } : {}),
   }))) as IntegrationConfigDoc;
   return { verdict: 'ok', config };
@@ -191,10 +218,17 @@ export type RotationOutcome = 'updated' | 'notfound' | 'legacy_failed';
  * to lose a rotated credential; a legacy failure short-circuits before the shadow, keeping the two
  * from diverging in the one direction that matters.
  *
- * ONE IMPLEMENTATION, ALMOST. `integrations/action-executor.ts` grew a sibling body for the same job
- * on the action rail while this review was in flight, and that file belonged to another slice at the
- * time. Converging the two on this function is the recorded follow-up (docs/decisions.md); the
- * reserved-row predicate at least is shared already, through `shadowCredentials`.
+ * ONE IMPLEMENTATION, FULL STOP. `integrations/action-executor.ts` briefly grew a sibling body for
+ * the same job on the action rail while B2's review was in flight; C2 deleted it and adopted this
+ * function (commit 102f302, journaled in 54e9131). There is no second rotation-persistence path.
+ *
+ * IT NEVER MOVES CUSTODY (2026-08-03 review, HIGH-1). The old guard here — `!target.cofreItemId &&
+ * target.ownerUserId == null` — described one shape of the problem rather than the rule, and missed
+ * the STALE JOIN: with `cofreItemId` set but the item deleted, the shadow write minted a fresh,
+ * auto-granted item holding the admin's bundle in the RUNNING user's Cofre and re-stamped the join
+ * (probed: `custody after stale re-save: u-admin2`). The guard is gone; the capability is gone
+ * instead. `write: 'rotation'` has no mint branch, does not touch `boundOrigins`, does not re-grant
+ * and does not re-stamp `custodianUserId` — a rotation refreshes a value and nothing else.
  */
 export async function persistRotatedCredentials(
   configId: string,
@@ -218,26 +252,15 @@ export async function persistRotatedCredentials(
     );
     return 'legacy_failed';
   }
-  // A ROTATION REFRESHES A SHADOW; IT DOES NOT PERFORM THE CONNECT CEREMONY. On an org-shared
-  // config with no item yet, the rotating user is whoever happened to be running — typically not
-  // the admin who typed the credentials — and minting here would put a fresh, auto-granted item
-  // (and therefore custody, and the lock switch) in that user's Cofre for a credential they never
-  // entered. The mint belongs to the human who types the credentials; this path either refreshes
-  // the item that ceremony produced or reports its absence.
-  if (!target.cofreItemId && target.ownerUserId == null) {
-    console.warn(
-      `[integrations] rotated ${target.integrationKey} (org-shared config ${configId}) has no WS-C shadow item to refresh; it stays shadow_absent until an admin re-saves the credentials`,
-    );
-    return 'updated';
-  }
+  // A ROTATION REFRESHES A SHADOW; IT DOES NOT PERFORM THE CONNECT CEREMONY. The rotating user is
+  // whoever happened to be running — typically not the admin who typed the credentials — so minting
+  // here would put a fresh, auto-granted item (and therefore custody, and the lock switch) in that
+  // user's Cofre for a credential they never entered. `write: 'rotation'` is what makes that
+  // unreachable rather than merely guarded against: it refreshes the item the ceremony produced, or
+  // it reports that there is none. Whichever it does, the join on the row is left exactly as found.
   try {
     const actor: Actor = { userId: ownerUserId, orgId: target.orgId, role: 'user' };
-    const cofreItemId = await shadowCredentials(actor, target, merged);
-    // A first-ever mint has to be joined back onto the row, exactly as `createConfig` does; a
-    // refresh returns the id already on the row and this is a no-op write.
-    if (cofreItemId && cofreItemId !== target.cofreItemId) {
-      await integrationConfigs.update(configId, (cur) => ({ ...cur, cofreItemId }));
-    }
+    await shadowCredentials(actor, target, merged, 'rotation');
   } catch (err) {
     // The shadow may never break the rail it shadows. A failure here surfaces as `drift` /
     // `shadow_absent` at the next comparator read, which is the signal the Rule-10 review reads.

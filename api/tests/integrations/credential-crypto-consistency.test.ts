@@ -54,8 +54,10 @@ describe('integration credential crypto — one scheme (B1)', () => {
   });
 
   it('rotation re-encrypts as v2 — never downgrades to flat v1', async () => {
-    // The rotation writers (action-executor.persistProviderCredentialUpdates, the zoho backend's
-    // persistOwnerCredentialUpdates, platform-oauth refresh) now compute envelopeEncrypt(merged, org).
+    // The rotation writers now compute envelopeEncrypt(merged, org). There is exactly ONE of them
+    // for user-defined integration configs — `service.persistRotatedCredentials` — since C2 deleted
+    // the executor's sibling body (`action-executor.persistProviderCredentialUpdates`, named here
+    // until 2026-08-03) and adopted it; platform-oauth refresh keeps its own, out of WS-C scope.
     const current = JSON.parse(await envelopeDecrypt(await envelopeEncrypt(BUNDLE, ORG_A), ORG_A)) as Record<string, unknown>;
     const rotated = await envelopeEncrypt(JSON.stringify({ ...current, refresh_token: 'rt-2' }), ORG_A);
     expect(ciphertextVersion(rotated)).toBe('v2'); // pre-B1 this was v1 (the downgrade)

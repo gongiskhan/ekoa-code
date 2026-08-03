@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -402,17 +403,53 @@ describe('entry path: the LISTENER rail (no human present) is gated too', () => 
   });
 });
 
-describe('entry path: the composition root still routes every rail through the gated executor', () => {
+describe('entry path: every rail still routes through the gated executor', () => {
   const serverSrc = readFileSync(join(__dirname, '..', '..', 'src', 'server.ts'), 'utf-8');
+  const capabilitySrc = readFileSync(join(__dirname, '..', '..', 'src', 'integrations', 'integration-capability.ts'), 'utf-8');
 
-  it('every executeUserIntegrationAction call site lives in server.ts and there is no second executor', () => {
-    // Two known seams: setIntegrationActionExecutor (the agent tool + the automation `integration`
-    // step) and callUserIntegration (the listener supervisor). A THIRD appearing without a test is
-    // exactly the drift this asserts against.
-    const sites = serverSrc.split('executeUserIntegrationAction(').length - 1;
-    expect(sites, 'server.ts executor call sites (update this suite when a rail is added)').toBe(2);
+  it('the executor has exactly THREE named call sites, each an inventoried rail', () => {
+    // Two in the composition root: setIntegrationActionExecutor (the agent tool + the automation
+    // `integration` step) and callUserIntegration (the listener supervisor). One in the D1
+    // capability core, which is the HTTP rail. A FOURTH appearing without a test is exactly the
+    // drift this asserts against — and a rail that grew its own gate is caught by the next case.
+    expect(serverSrc.split('executeUserIntegrationAction(').length - 1, 'server.ts executor call sites').toBe(2);
     expect(serverSrc).toContain('setIntegrationActionExecutor(');
     expect(serverSrc).toContain('callUserIntegration:');
+    expect(capabilitySrc.split('executeUserIntegrationAction(').length - 1, 'integration-capability.ts executor call sites').toBe(1);
+  });
+
+  it('THE WHOLE TREE, not just server.ts: no unaccounted file calls the executor', () => {
+    // WHY THIS EXISTS (2026-08-03 review, LOW). The assertion above counts occurrences IN
+    // `server.ts` only, so a brand-new rail added in ANY OTHER file contributed zero to that count
+    // and the guard stayed green while the funnel grew a door — which is the precise failure it was
+    // written to prevent. It had already happened: the capability router (slice D1) calls the
+    // executor from `integrations/integration-capability.ts`, invisible to the count.
+    //
+    // The invariant is NOT "only server.ts may call it" — a rail routing THROUGH the executor is
+    // exactly right, because that is how it inherits the write gate. The invariant is that every
+    // caller is ACCOUNTED FOR: an entry here is a claim that the rail was reviewed and is covered.
+    // A file missing from disk is fine (rails come and go); a file not on the list is not.
+    const ACCOUNTED_RAILS = [
+      'server.ts', // the composition root: the agent/automation seam + the listener supervisor
+      'integrations/action-executor.ts', // the executor itself (its own declaration)
+      'integrations/integration-capability.ts', // D1's public capability router — inherits the gate
+    ];
+    const src = join(__dirname, '..', '..', 'src');
+    const callers = spawnSync(
+      'grep',
+      ['-rlF', '--include=*.ts', 'executeUserIntegrationAction(', src],
+      { encoding: 'utf-8' },
+    ).stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((p) => relative(src, p))
+      .sort();
+    const unaccounted = callers.filter((f) => !ACCOUNTED_RAILS.includes(f));
+    expect(
+      unaccounted,
+      'a NEW rail calls executeUserIntegrationAction — add it here once its consent + credential-custody coverage is reviewed',
+    ).toEqual([]);
+    expect(callers).toContain('server.ts');
   });
 
   it('the gate is in the EXECUTOR, not bolted onto a caller: no rail carries its own consent check', () => {
@@ -422,9 +459,17 @@ describe('entry path: the composition root still routes every rail through the g
     const executorSrc = readFileSync(join(__dirname, '..', '..', 'src', 'integrations', 'action-executor.ts'), 'utf-8');
     expect(executorSrc).toContain('checkActionConsent(');
     expect(serverSrc).not.toContain('checkActionConsent');
-    // …and the check precedes the credential lookup in source order, which the behavioural test
-    // above proves at run time; asserted here too so a reorder is caught at the file it happens in.
-    expect(executorSrc.indexOf('checkActionConsent(')).toBeLessThan(executorSrc.indexOf('await findConfigForOwner('));
+    // …and the check precedes the DECRYPT in source order, which the behavioural tests above prove
+    // at run time; asserted here too so a reorder is caught at the file it happens in.
+    //
+    // IT IS THE DECRYPT, NOT THE ROW READ (2026-08-03 review, CRITICAL-1). The config row is now
+    // fetched ABOVE the gate, deliberately: the definition governing a credential has to be
+    // resolved as that credential's CUSTODIAN, and the custodian is a field on the row, so the row
+    // must be in hand before the package is resolved. Nothing about the gate's guarantee moved —
+    // no credential is decrypted before it, and `not_connected`/`disabled` still answer after it,
+    // so an unapproved caller still cannot probe connection state (pinned behaviourally above).
+    expect(executorSrc.indexOf('checkActionConsent(')).toBeLessThan(executorSrc.indexOf('await decryptCredentialFields('));
+    expect(executorSrc.indexOf('checkActionConsent(')).toBeLessThan(executorSrc.indexOf("code: 'not_connected'"));
   });
 });
 

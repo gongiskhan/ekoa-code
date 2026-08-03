@@ -44,10 +44,16 @@
  *    `cofre/integration-items.ts`. Until that landed, a peer of an org-shared config fell through to
  *    the definition-derived list, i.e. the author-widenable artifact this whole slice exists to stop
  *    trusting, and it was the ADMIN's credential that egressed to the author's new host.
+ *    WHAT WAS STILL RESIDUAL UNTIL 2026-08-03 (review CRITICAL-1): the peer's binding crossed the
+ *    owner boundary only when an ITEM existed. With no item both rails fell back to
+ *    `declaredOriginsForIntegration(READER, key)` — the definition as the READER resolves it — so
+ *    for the whole no-item org-shared class the allow-list was authored by the attacker after all,
+ *    one branch further down than B2's review looked. Closed by resolving the definition as the
+ *    credential's CUSTODIAN (`definitionActorForCredential`), on both rails, from one rule.
  * 2. RESERVED ROWS (platform-oauth / pipedream) are out of WS-C scope by RUN_SPEC assumption 4 and
  *    are filtered out by the CALLER (`integrations/service.ts`), which owns that predicate.
- * 3. THE RAILS THE COMPARATOR DOES NOT COVER, named rather than implied — see
- *    `observeCredentialShadow`.
+ * 3. THE `unbound` EGRESS BRANCH — no item and no literal declared host (the bare-templated-baseUrl
+ *    packages). Named in `resolveCredentialEgressBinding`, measured in docs/decisions.md.
  */
 import type { Actor } from '@ekoa/shared';
 import {
@@ -63,7 +69,7 @@ import {
   type IntegrationItemLink,
 } from '../cofre/index.js';
 import { originFromBaseUrl } from '../security/origin-binding.js';
-import { resolveDefinition } from './definition-registry.js';
+import { resolveDefinition, systemActorForOrg } from './definition-registry.js';
 
 /**
  * The part of an `IntegrationConfigDoc` this module needs. Structural rather than an import so the
@@ -80,6 +86,24 @@ export interface IntegrationCredentialConfig {
    * a deleter who does not own the item may still be the config's legitimate holder.
    */
   ownerUserId?: string;
+  /**
+   * THE CREDENTIAL'S CUSTODIAN: the user whose credential-typing ceremony produced the bundle this
+   * row currently holds (the connect, or a later deliberate credential re-save). Server-stamped
+   * from the verified actor, never accepted from a request body, and NEVER moved by a provider
+   * rotation — a rotation refreshes a value, it does not perform the ceremony.
+   *
+   * WHY IT EXISTS (2026-08-03 review, CRITICAL-1). `ownerUserId` answers "who may use this config",
+   * which for an ORG-SHARED row is the whole org and therefore names nobody. But the definition
+   * that governs the credential — its actions, and through them its egress allow-list — has to be
+   * resolved as SOMEONE, and resolving it as the READER let any org member author the contract
+   * their org-admin's secret is spent under. This field is the missing half: the identity the
+   * definition is resolved as, so the artifact authorising a credential is always one the
+   * credential's custodian could write. See `definitionActorForCredential`.
+   *
+   * Absent on rows written before this landed: those fall back to the ORG tier (`org` + `global` +
+   * baseline definitions only), which is the fail-closed direction — a re-save restores the stamp.
+   */
+  custodianUserId?: string;
   /** The WS-C join: the Cofre item shadowing this config's credentials. Server-stamped. */
   cofreItemId?: string;
   /** The legacy column — still the live read until the 2026-08-15 cutover. */
@@ -127,10 +151,83 @@ export async function declaredOriginsForIntegration(actor: Actor, integrationKey
 }
 
 /**
- * THE ORIGIN-RESOLVER BODY (the `setIntegrationOriginResolver` seam, re-pointed at the Cofre).
+ * WHO THE DEFINITION GOVERNING A CREDENTIAL IS RESOLVED AS (2026-08-03 review, CRITICAL-1).
  *
- * THE RULE, IN ONE LINE: a config that HAS a joined item is governed by that item, whoever is
- * reading. The fallback exists for configs that have NO item, and for nothing else.
+ * An integration definition is TENANT-scoped AND USER-scoped: `getForActor` answers the reader's
+ * own-org row (at any visibility, including `private`) before it answers `org`/`global`/baseline.
+ * So "resolve the definition" is not a fact about a key, it is a fact about a key AND a principal —
+ * and every credential-bearing path was passing the READER.
+ *
+ * THAT WAS THE HOLE. For an ORG-SHARED config (`ownerUserId == null`) the reader is not the
+ * credential's custodian. A same-org peer with role `user` could `PUT
+ * /api/v1/integration-builder/package` a PRIVATE row under the org-shared config's key (accepted
+ * whenever the org held no row for it — i.e. whenever the key resolved to a `global`/legacy-runtime
+ * publication or to nothing yet), and from then on THEIR definition decided both which action ran
+ * and — through `declaredOriginsForIntegration` — which hosts the ADMIN's credential could be sent
+ * to. Reproduced end to end through the documented wire surfaces: save `{"ok":true,"created":true}`,
+ * then `{"success":true}` with the org-admin's live key on the query string of `exfil.example`, on
+ * BOTH the action rail and the automation `api_call` rail. The "no item" precondition is ordinary
+ * rather than exotic: 5 of the 11 shipped packages declare a BARE templated `baseUrl`
+ * (`{{api_base}}`, `{{api_access_point}}`, `{{graph_base_url}}` — zoho-sign, adobe-acrobat-sign,
+ * invoicexpress, whatsapp, ifthenpay), which binds to nothing, so `mintOrRefreshCredentialShadow`
+ * returns null and there is no item to govern the read.
+ *
+ * THE RULE: the definition is resolved as the credential's CUSTODIAN, never as the reader.
+ *   - No config at all      -> the reader. There is no credential at stake to steal.
+ *   - Owner-scoped config   -> its owner, which `findConfigForOwner` already guarantees IS the
+ *                              reader. Unchanged behaviour, and the reader's role is preserved
+ *                              rather than flattened to `user`.
+ *   - Org-shared, stamped   -> `custodianUserId`: the admin whose ceremony produced the bundle.
+ *                              A peer therefore runs the definition the CUSTODIAN sees — which
+ *                              also repairs org-sharing, since a peer previously got
+ *                              `unknown_integration` for an admin-authored private package.
+ *   - Org-shared, unstamped -> the ORG tier (`systemActorForOrg`: `org` + `global` + baseline, and
+ *                              never any single user's `private` row). The fail-closed direction
+ *                              for rows written before the stamp existed; a credential re-save
+ *                              restores it.
+ *   - Anything incoherent   -> null, i.e. REFUSE. An actor with no org matches every `global` row
+ *                              (A2 review F4), so "we could not determine the custodian" must never
+ *                              collapse into "resolve as somebody".
+ *
+ * ROLE IS DELIBERATELY NOT CONSULTED. The obvious alternative — "trust the reader when the reader
+ * is an org-admin" — is unimplementable across the rails: the automation `api_call` seam builds its
+ * actor with `role: 'user'` hard-coded (`executors/api-call.ts`), so the same config would resolve
+ * differently on the two rails and the copy that lies about the role would be the permissive one.
+ * This rule reads only server-stamped row state, so both rails give the same answer.
+ */
+export function definitionActorForCredential(
+  reader: Actor,
+  config: IntegrationCredentialConfig | null,
+): Actor | null {
+  if (!reader.orgId) return null; // an org-less reader resolves every `global` row: refuse
+  if (!config) return reader;
+  if (!config.orgId || config.orgId !== reader.orgId) return null; // never cross a tenant boundary
+  const custodian = config.ownerUserId ?? config.custodianUserId;
+  if (!custodian) return systemActorForOrg(config.orgId);
+  return custodian === reader.userId ? reader : { userId: custodian, orgId: config.orgId, role: 'user' };
+}
+
+/**
+ * What egress this credential is bound to, as a THREE-WAY answer. Three-way because the two "no
+ * origins" outcomes mean opposite things and collapsing them is exactly how `lock = revoke` gets
+ * routed around:
+ *   - `granted` -> enforce these hosts and only these.
+ *   - `refused` -> enforce an EMPTY allow-list, i.e. nothing may be sent. The kill switch, a stale
+ *                  or tampered join, an incoherent custodian, or a resolver failure.
+ *   - `unbound` -> no item and no declared host: the pre-C2 posture (SSRF guard only). See the
+ *                  residual note below.
+ */
+export type CredentialEgressBinding =
+  | { kind: 'granted'; origins: string[] }
+  | { kind: 'refused' }
+  | { kind: 'unbound' };
+
+/**
+ * THE ONE EGRESS-BINDING RULE. Both credential-bearing rails call THIS — the automation `api_call`
+ * seam through `egressOriginsForIntegration` below, and the action executor through its own
+ * `resolveEgressBinding`. It used to be two copies of the rule in two files, and the copies
+ * disagreed in exactly the way that mattered: the executor's fallback resolved the declared hosts
+ * as the READER (CRITICAL-1 above). One implementation, two documented projections.
  *
  * Resolution order, and why each branch is what it is:
  *   1. The config holds a Cofre item with a LIVE grant -> the item's own `boundOrigins`. This is
@@ -138,19 +235,59 @@ export async function declaredOriginsForIntegration(actor: Actor, integrationKey
  *      cannot extend it. For an ORG-SHARED config the item is the admin author's, and the peer gets
  *      the admin's granted scope (see `cofre/integration-items.ts` on why a restriction may cross
  *      the owner boundary when a value may not).
- *   2. The item is joined but LOCKED, or joined and NOT REACHABLE -> `[]`, i.e. refuse. Lock is the
- *      kill switch. Unreachable-despite-a-join means the item was deleted out from under the config
- *      or the id was tampered with; falling back there would restore the wider list precisely when
- *      the narrower authority has gone missing. Re-saving the config re-mints and unsticks it.
- *   3. No item at all -> the pre-WS-C declared-origin derivation, unchanged. Additive: an
- *      integration that worked yesterday works today (Rule 7).
+ *   2. The item is joined but LOCKED, or joined and NOT REACHABLE -> `refused`. Lock is the kill
+ *      switch. Unreachable-despite-a-join means the item was deleted out from under the config or
+ *      the id was tampered with; falling back there would restore the wider list precisely when the
+ *      narrower authority has gone missing. Re-saving the config re-mints and unsticks it.
+ *   3. No item at all -> the declared-origin derivation, resolved AS THE CUSTODIAN
+ *      (`definitionActorForCredential`). Additive for the custodian — an integration that worked
+ *      yesterday works today (Rule 7) — and closed for everyone else.
  *
- * WHAT BRANCH 2 FIXES (B2 review C1). It used to fall through to branch 3 on `unreachable`, and for
- * the whole ORG-SHARED class that was every peer, every run: `bob`, role `user`, owning nothing and
- * having typed nothing, got the AUTHOR-WIDENED definition list for the ADMIN's credential — a host
- * added to the definition after the connect was sent the admin's secret, through the real
- * `executeApiCallStep`. Not cross-tenant and not a regression (pre-B2 everyone got that list), but
- * the slice's acceptance criterion was unmet for the entire class while the journal called it benign.
+ * THE RESIDUAL, NAMED HONESTLY. Branch 3 is still self-referential: the artifact being authorised
+ * (the definition's actions) and the artifact granting the authorisation (its declared hosts) are
+ * one file. What changed is WHO writes that file — it is now always a principal who could have
+ * connected the credential, never an arbitrary reader — and the `unbound` sub-case (no literal host
+ * declared at all) is unchanged from C2. Both close when a templated host can be bound at connect,
+ * or at the 2026-08-15 cutover when every config has an item. Failing closed on branch 3 today
+ * would take out every org-shared integration in the templated class, the shipped signing rail
+ * included; the blast-radius measurement is in docs/decisions.md.
+ */
+export async function resolveCredentialEgressBinding(
+  reader: Actor,
+  config: IntegrationCredentialConfig | null,
+  integrationKey: string,
+  now = Date.now(),
+): Promise<CredentialEgressBinding> {
+  try {
+    if (config?.cofreItemId) {
+      const scope = await integrationOriginScope(
+        reader,
+        config.cofreItemId,
+        linkForConfig(config),
+        accessForConfig(config, now),
+      );
+      return scope.kind === 'granted' ? { kind: 'granted', origins: scope.origins } : { kind: 'refused' };
+    }
+    const definitionActor = definitionActorForCredential(reader, config);
+    if (!definitionActor) return { kind: 'refused' };
+    const declared = await declaredOriginsForIntegration(definitionActor, integrationKey);
+    return declared.length > 0 ? { kind: 'granted', origins: declared } : { kind: 'unbound' };
+  } catch (err) {
+    // A resolver failure must never silently WIDEN a binding. `refused` (an empty allow-list every
+    // consumer treats as "send nothing"), never `unbound`.
+    console.warn(`[credential-cofre] egress binding resolution failed for ${integrationKey}: ${errorKind(err)}`);
+    return { kind: 'refused' };
+  }
+}
+
+/**
+ * THE ORIGIN-RESOLVER BODY (the `setIntegrationOriginResolver` seam, re-pointed at the Cofre).
+ *
+ * The api_call rail has NO unbound branch: `assertOriginAllowed` refuses an empty allow-list by
+ * construction, so `unbound` and `refused` both come back as `[]` here and the step fails. That is
+ * the pre-existing behaviour of this seam, restated rather than changed — the projection is written
+ * out so the difference from the executor's rail (which does have an unbound branch) is legible
+ * instead of implicit.
  *
  * `findConfigForOwner` is injected rather than imported so this module stays free of an import
  * cycle with `service.ts`, which calls the mint below.
@@ -162,16 +299,8 @@ export async function egressOriginsForIntegration(
   now = Date.now(),
 ): Promise<string[]> {
   const config = await findConfig(actor.orgId, actor.userId, integrationKey);
-  if (config?.cofreItemId) {
-    const scope = await integrationOriginScope(
-      actor,
-      config.cofreItemId,
-      linkForConfig(config),
-      accessForConfig(config, now),
-    );
-    return scope.kind === 'granted' ? scope.origins : [];
-  }
-  return declaredOriginsForIntegration(actor, integrationKey);
+  const binding = await resolveCredentialEgressBinding(actor, config, integrationKey, now);
+  return binding.kind === 'granted' ? binding.origins : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -179,30 +308,61 @@ export async function egressOriginsForIntegration(
 // ---------------------------------------------------------------------------
 
 /**
+ * WHICH WRITE IS ASKING (2026-08-03 review, HIGH-1). The two callers of the shadow write want
+ * genuinely different things, and until now they shared one body that did the stronger thing for
+ * both:
+ *   - `ceremony`  a HUMAN typed the credentials (connect, or a deliberate credential re-save,
+ *                 gated by `canWriteConfig`). May MINT — that is the consent ceremony — and
+ *                 re-derives the origin binding from the definition the writer sees, because the
+ *                 writer IS the custodian this write is establishing.
+ *   - `rotation`  a PROVIDER rotated a value mid-request, for whichever owner happened to be
+ *                 running (Zoho's grant-code -> refresh_token exchange). May ONLY refresh the value
+ *                 of an item that already exists. It never mints, never re-binds the origins and
+ *                 never re-grants: custody, egress scope and the lock switch all belong to the
+ *                 ceremony, and a rotation is not one.
+ */
+export type CredentialShadowWrite = 'ceremony' | 'rotation';
+
+/**
  * Mint (or refresh) the Cofre item shadowing this config's credentials. Returns the item id to
- * stamp onto the config row, or null when no item could be minted.
+ * stamp onto the config row, or null when no item could be written.
  *
- * NULL IS NOT AN ERROR AND IS NOT SWALLOWED SILENTLY: it means the integration declares no usable
- * host, so an origin-bound item would be refused at mint (`mintCofreItem` fails a `password`/
- * `api_key` with an empty binding by design — unbound is not unrestricted). Such an integration's
- * credential is equally refused on the api_call rail today, so the shadow simply has nothing to
- * hold; the comparator reports `shadow_absent` and the Rule-10 review sees the count.
+ * NULL IS NOT AN ERROR AND IS NOT SWALLOWED SILENTLY: on a `ceremony` it means the integration
+ * declares no usable host, so an origin-bound item would be refused at mint (`mintCofreItem` fails
+ * a `password`/`api_key` with an empty binding by design — unbound is not unrestricted). Such an
+ * integration's credential is equally refused on the api_call rail today, so the shadow simply has
+ * nothing to hold; the comparator reports `shadow_absent` and the Rule-10 review sees the count.
+ * On a `rotation` it means there was no reachable item to refresh, and the caller must leave the
+ * join exactly as it found it.
  *
  * A REFRESH KEEPS THE GRANT STATE (see `updateIntegrationCredentialValue`): rotating credentials
  * must not silently undo a lock the user set.
  *
- * Infrastructure failures are caught, logged and turned into null. The shadow must never be able to
- * break the connect flow it is shadowing — that is the whole point of a shadow — but a mint that
- * failed is visible both in the log and, later, as `shadow_absent` at every read.
+ * WHY A ROTATION MAY NOT MINT (HIGH-1). The old body's custody guard lived in the CALLER and was
+ * shaped `!cofreItemId && ownerUserId == null`, which reads as "an org-shared config with no item".
+ * It missed the case where the join names an item that no longer exists: the owner deletes their
+ * Cofre item (a supported `DELETE /cofre/items/:id`), `updateIntegrationCredentialValue` answers
+ * `stale`, and this function then minted a FRESH, auto-granted `until_locked` item holding the
+ * admin's bundle IN THE RUNNING USER'S OWN COFRE and re-stamped the join onto the row. Probed:
+ * `custody after stale re-save: u-admin2`. From that moment the new owner reads the value through
+ * `resolveEnvInjection` and holds the lock switch over a credential they never typed. The fix is
+ * not a wider guard — a guard's shape is the thing that keeps being wrong — it is removing the
+ * capability: a rotation has no mint branch to reach.
  */
 export async function mintOrRefreshCredentialShadow(
   actor: Actor,
   config: IntegrationCredentialConfig,
   values: Record<string, unknown>,
+  write: CredentialShadowWrite = 'ceremony',
 ): Promise<string | null> {
   const link = linkForConfig(config);
   try {
-    const boundOrigins = await declaredOriginsForIntegration(actor, config.integrationKey);
+    // A ROTATION NEVER RE-BINDS. `rewriteValue` leaves `boundOrigins` untouched for an empty list,
+    // so passing one is how "refresh the value, keep the scope the ceremony fixed" is expressed.
+    // It also closes the mirror image of CRITICAL-1 on the write side: without it, a rotation
+    // triggered by a peer would recompute the binding from the PEER's definition and write the
+    // widened list into the custodian's item, through the org-shared rotation path.
+    const boundOrigins = write === 'rotation' ? [] : await declaredOriginsForIntegration(actor, config.integrationKey);
     if (config.cofreItemId) {
       const rotation = await updateIntegrationCredentialValue(
         actor,
@@ -230,7 +390,21 @@ export async function mintOrRefreshCredentialShadow(
         return config.cofreItemId;
       }
       // `stale` — the id names nothing reachable, or one of this actor's own items under a
-      // different link. A fresh mint orphans nobody and unsticks a config whose item was deleted.
+      // different link. On a CEREMONY a fresh mint orphans nobody and unsticks a config whose item
+      // was deleted; on a ROTATION it would MOVE CUSTODY to whoever happened to be running, so the
+      // rotation stops here and says so (HIGH-1).
+      if (write === 'rotation') {
+        console.warn(
+          `[credential-cofre] WS-C shadow not refreshed for ${config.integrationKey} (config ${config._id}): the joined item is no longer reachable; a rotation never mints, so it stays shadow_unreachable until the credentials are re-saved`,
+        );
+        return null;
+      }
+    }
+    if (write === 'rotation') {
+      console.warn(
+        `[credential-cofre] WS-C shadow absent for ${config.integrationKey} (config ${config._id}): a rotation refreshes a shadow, it does not perform the connect ceremony — no item is minted`,
+      );
+      return null;
     }
     if (boundOrigins.length === 0) return null;
     const item = await mintIntegrationCredentialItem(actor, {
@@ -463,15 +637,17 @@ export const CREDENTIAL_SHADOW_SAMPLE_INTERVAL_MS = 60_000;
  * indistinguishable from "this integration is not connected" (B2 review L1).
  *
  * WHICH RAILS ACTUALLY REACH THIS — stated exactly, because B2's own claim ("every real credential
- * read, per api_call step and per listener tick") was wrong in both directions:
- *   - COVERED: the automation `api_call` rail (`loadIntegrationCredentialFields` below, wired into
- *     `setIntegrationCredentialLoader`) and the served-app Zoho Sign rail
- *     (`integrations/zoho-sign.ts`, through its injected `observeCredentialRead`).
- *   - NOT COVERED: `integrations/action-executor.ts`, which decrypts the config itself. That is
- *     BOTH the integration-action route and the listener rail (`event-sources/user-defined-poll.ts`
- *     polls through that executor), so listener ticks are not measured at all. It is a live surface
- *     of another slice at the time of writing and could not be touched here; the 2026-08-15 review
- *     must read the census as "the api_call and Zoho rails", not "every read".
+ * read, per api_call step and per listener tick") was wrong in both directions. All three rails are
+ * COVERED as of C2 (commit 102f302, journaled in 433aec1), so the 2026-08-15 census is drawn from
+ * an unbiased sample:
+ *   - the automation `api_call` rail (`loadIntegrationCredentialFields` below, wired into
+ *     `setIntegrationCredentialLoader`);
+ *   - the served-app Zoho Sign rail (`integrations/zoho-sign.ts`, through its injected
+ *     `observeCredentialRead`);
+ *   - `integrations/action-executor.ts`, which decrypts the config itself — and which is BOTH the
+ *     integration-action route and the listener rail (`event-sources/user-defined-poll.ts` polls
+ *     through that executor), so listener ticks are measured too. B2 named this one as NOT COVERED
+ *     because the file belonged to another slice at the time; C2 closed it.
  */
 export async function observeCredentialShadow(
   actor: Actor,
