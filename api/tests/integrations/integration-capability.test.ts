@@ -13,6 +13,7 @@ import {
   executeIntegrationCapabilityAction,
   getIntegrationCapability,
   type CapabilityContext,
+  type CapabilityOutcome,
 } from '../../src/integrations/integration-capability.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
 import type { ExecuteIntegrationActionResult } from '../../src/integrations/action-executor.js';
@@ -51,6 +52,16 @@ const PROBE_INTEGRATION = 'd1-capability-probe';
 const HOST = 'https://caps.example';
 
 const actor = (userId: string, orgId: string) => ({ userId, orgId, role: 'user' as const });
+
+/**
+ * Narrow a capability outcome to its value. A cast would have done the same job silently; this
+ * THROWS on a refusal, so a test that was meant to exercise the happy path fails saying which
+ * refusal it hit instead of reading `undefined` off a lie.
+ */
+function valueOf<T>(out: CapabilityOutcome<T>): T {
+  if (!out.ok) throw new Error(`expected an admitted outcome, got refusal: ${out.refusal}`);
+  return out.value;
+}
 
 /** A context with a SPY automation seam, so "did the action actually run" is observable. */
 function ctxWithSpy(userId: string, orgId: string): { ctx: CapabilityContext; calls: unknown[] } {
@@ -139,7 +150,7 @@ describe('the capability execute INHERITS the executor write gate', () => {
 
     const out = await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'submeter_peca', {});
     expect(out.ok).toBe(true);
-    const result = (out as { ok: true; value: ExecuteIntegrationActionResult }).value;
+    const result = valueOf(out);
     expect(result.success).toBe(false);
     expect(result.code).toBe('awaiting_consent');
     // The descriptor a human must be shown rides with the refusal — an agent that cannot reach a
@@ -156,7 +167,7 @@ describe('the capability execute INHERITS the executor write gate', () => {
     await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, boundWrite), 'always');
 
     const out = await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'submeter_peca', { numero: '123' });
-    const result = (out as { ok: true; value: ExecuteIntegrationActionResult }).value;
+    const result = valueOf(out);
     expect(result.success).toBe(true);
     expect(calls).toHaveLength(1);
     expect((calls[0] as { args: Record<string, unknown> }).args).toEqual({ numero: '123' });
@@ -167,7 +178,7 @@ describe('the capability execute INHERITS the executor write gate', () => {
     await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, boundWrite), 'always');
     const { ctx, calls } = ctxWithSpy('peerA', 'orgA');
 
-    const result = ((await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'submeter_peca', {})) as { ok: true; value: ExecuteIntegrationActionResult }).value;
+    const result = valueOf(await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'submeter_peca', {}));
     expect(result.code).toBe('awaiting_consent');
     expect(calls).toHaveLength(0);
   });
@@ -176,7 +187,7 @@ describe('the capability execute INHERITS the executor write gate', () => {
     await seed(PROBE_INTEGRATION, [boundRead, boundWrite]);
     const { ctx, calls } = ctxWithSpy('ownerA', 'orgA');
 
-    const result = ((await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'consultar', {})) as { ok: true; value: ExecuteIntegrationActionResult }).value;
+    const result = valueOf(await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'consultar', {}));
     expect(result.success).toBe(true);
     expect(calls).toHaveLength(1);
   });
@@ -187,7 +198,7 @@ describe('the capability execute INHERITS the executor write gate', () => {
     // would silently re-order that for this rail alone.
     await seed(PROBE_INTEGRATION, [httpWrite], { authType: 'api_key' });
     const { ctx } = ctxWithSpy('ownerA', 'orgA');
-    const result = ((await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'send_message', {})) as { ok: true; value: ExecuteIntegrationActionResult }).value;
+    const result = valueOf(await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'send_message', {}));
     expect(result.code).toBe('awaiting_consent');
   });
 });
@@ -297,7 +308,7 @@ describe('the capability projection', () => {
 
     const before = await getIntegrationCapability(ctx, PROBE_INTEGRATION);
     expect(before.ok).toBe(true);
-    const view = (before as { ok: true; value: { connected: boolean; actions: Array<Record<string, unknown>> } }).value;
+    const view = valueOf(before);
     // `api_key` with no config row: the executor would answer `not_connected`, so the read says so.
     expect(view.connected).toBe(false);
 
@@ -315,8 +326,8 @@ describe('the capability projection', () => {
 
     // Grant, and the SAME read now reports it — advisory state, read per call, never cached.
     await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, httpWrite), 'always');
-    const after = (await getIntegrationCapability(ctx, PROBE_INTEGRATION)) as { ok: true; value: { actions: Array<Record<string, unknown>> } };
-    expect(after.value.actions.find((a) => a.actionName === 'send_message')!.approved).toBe(true);
+    const after = valueOf(await getIntegrationCapability(ctx, PROBE_INTEGRATION));
+    expect(after.actions.find((a) => a.actionName === 'send_message')!.approved).toBe(true);
   });
 
   it('a malformed package is reported as `invalid`, never thrown out of the read', async () => {
@@ -326,19 +337,21 @@ describe('the capability projection', () => {
       { actionName: 'broken', description: 'contradiction', mutates: false, backingType: 'bash-cli', httpConfig: { method: 'GET', baseUrl: HOST, path: '/x' } } as IntegrationAction,
     ]);
     const { ctx } = ctxWithSpy('ownerA', 'orgA');
-    const view = ((await getIntegrationCapability(ctx, PROBE_INTEGRATION)) as { ok: true; value: { actions: Array<Record<string, unknown>> } }).value;
+    const view = valueOf(await getIntegrationCapability(ctx, PROBE_INTEGRATION));
     expect(view.actions[0]!.backingType).toBe('invalid');
   });
 
   it('a cross-org `global` row reveals no authorship: no id, no visibility, no org/user anywhere', async () => {
     await seed(PROBE_INTEGRATION, [boundRead], { orgId: 'orgFOREIGN', userId: 'authorFOREIGN', visibility: 'global' });
     const { ctx } = ctxWithSpy('ownerA', 'orgA');
-    const view = ((await getIntegrationCapability(ctx, PROBE_INTEGRATION)) as { ok: true; value: unknown }).value;
+    const view = valueOf(await getIntegrationCapability(ctx, PROBE_INTEGRATION));
 
     const serialized = JSON.stringify(view);
     expect(serialized).not.toContain('orgFOREIGN');
     expect(serialized).not.toContain('authorFOREIGN');
-    const integration = (view as { integration: Record<string, unknown> }).integration;
+    // `orgId`/`userId` are asserted ABSENT, so they are not on the projected type at all - the cast
+    // is what lets the test ask for a field the contract promises cannot be there.
+    const integration = view.integration as unknown as Record<string, unknown>;
     expect(integration.id).toBeUndefined();
     expect(integration.visibility).toBeUndefined();
     expect(integration.orgId).toBeUndefined();
@@ -348,7 +361,7 @@ describe('the capability projection', () => {
   it('the caller\'s OWN-ORG row stays addressable (E1 review F3): id + visibility are projected', async () => {
     await seed(PROBE_INTEGRATION, [boundRead], { visibility: 'org' });
     const { ctx } = ctxWithSpy('ownerA', 'orgA');
-    const view = ((await getIntegrationCapability(ctx, PROBE_INTEGRATION)) as { ok: true; value: { integration: Record<string, unknown> } }).value;
+    const view = valueOf(await getIntegrationCapability(ctx, PROBE_INTEGRATION));
     expect(typeof view.integration.id).toBe('string');
     expect(view.integration.visibility).toBe('org');
   });
