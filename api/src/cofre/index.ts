@@ -48,6 +48,19 @@ export {
 } from './sessions.js';
 
 export {
+  mintIntegrationCredentialItem,
+  updateIntegrationCredentialValue,
+  findIntegrationCredentialItem,
+  integrationOriginScope,
+  unwrapForIntegration,
+  discardIntegrationCredentialItem,
+  fieldsFromBundle,
+  type IntegrationCredentialFields,
+  type IntegrationOriginScope,
+  type MintIntegrationCredentialInput,
+} from './integration-items.js';
+
+export {
   checkoutSession,
   reestablishRouteFor,
   markUnhealthy,
@@ -55,4 +68,4 @@ export {
   type ReestablishRoute,
 } from './session-checkout.js';
 
-export type { CofreItemDoc, CofreGrantDoc } from './types.js';
+export type { CofreItemDoc, CofreGrantDoc, IntegrationItemLink } from './types.js';

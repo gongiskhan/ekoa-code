@@ -7,6 +7,27 @@ import type { Doc } from '../data/store.js';
 import type { CofreItemType, GrantScope, GrantDuration } from '@ekoa/shared';
 
 /**
+ * The INTEGRATION -> ITEM join (slice B2, WS-C).
+ *
+ * Stamped server-side at mint and never accepted from a wire body (`CofreItemCreateRequest` has no
+ * such field, and zod strips what it does not declare). It is the item's PROVENANCE, and it is what
+ * makes "an authored action cannot name a secret outside the integration's granted scope" checkable:
+ * a credential read names the (integrationKey, configId) it believes it is reading for, and the item
+ * refuses when its own link disagrees. Without it, a config row whose `cofreItemId` was tampered
+ * with — or an action authored under integration A pointing at integration B's item — would resolve
+ * to whatever item the id happened to name, and the only remaining gate would be ownership.
+ *
+ * Deliberately a plain pair of strings: `cofre/` must not import `integrations/` (it is the lower
+ * tier, consumed by it), so the join is expressed as data, not as a type dependency.
+ */
+export interface IntegrationItemLink {
+  /** The integration definition key the credential belongs to (`citius`, `stripe`, …). */
+  integrationKey: string;
+  /** The `integration_configs` row this item shadows (`IntegrationConfigDoc._id`). */
+  configId: string;
+}
+
+/**
  * A stored Cofre item.
  *
  * `valueCiphertext` uses the existing `data/crypto.ts` wire format
@@ -36,6 +57,10 @@ export interface CofreItemDoc extends Doc {
   sessionMetadata?: Record<string, unknown>;
   /** Set while a run holds the item — drives the live "Em utilização" state. */
   heldByRunId?: string;
+  /** Integration-minted items only (WS-C): which integration config this item holds the
+   *  credentials for. Absent on every hand-minted item, which is exactly what distinguishes the
+   *  auto-granted connect ceremony from an ordinary "store this password" mint. */
+  integrationLink?: IntegrationItemLink;
 }
 
 /**

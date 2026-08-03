@@ -13,7 +13,7 @@ import { assertGrantAllowedForItemType } from '@ekoa/shared';
 import { envelopeEncrypt } from '../data/crypto.js';
 import { cofreItems, cofreGrants } from './store.js';
 import { isGrantActive } from './service.js';
-import type { CofreItemDoc, CofreGrantDoc } from './types.js';
+import type { CofreItemDoc, CofreGrantDoc, IntegrationItemLink } from './types.js';
 
 export interface CofreDeps {
   now?: () => number;
@@ -38,6 +38,12 @@ export interface MintCofreItemInput {
   boundOrigins?: string[];
   identityPointer?: string;
   expiresAt?: string;
+  /**
+   * PROVENANCE, never caller-supplied (WS-C / B2). Set only by `mintIntegrationCredentialItem`;
+   * the wire schema `CofreItemCreateRequest` does not declare it, so the REST mint path cannot
+   * reach this field (zod strips undeclared keys) and a hand-minted item is always link-less.
+   */
+  integrationLink?: IntegrationItemLink;
 }
 
 /** Item types that are USED against a network origin and therefore must declare one. */
@@ -75,6 +81,7 @@ export async function mintCofreItem(
     updatedAt: now,
     ...(input.identityPointer ? { identityPointer: input.identityPointer } : {}),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    ...(input.integrationLink ? { integrationLink: input.integrationLink } : {}),
   } as CofreItemDoc;
   await cofreItems.raw.insert(doc as never);
   return doc;
@@ -160,6 +167,11 @@ export async function listCofreItems(actor: Actor, now = Date.now()): Promise<Co
       createdAt: item.createdAt,
       ...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
       ...(item.identityPointer ? { identityPointer: item.identityPointer } : {}),
+      // The integration JOIN, projected (B2/WS-C). An item auto-granted by a connect ceremony
+      // renders "Desbloqueada até bloquear"; without naming the integration it caused, that is a
+      // standing unlock the user cannot attribute to anything they did. The KEY only — the config
+      // id is storage detail with no meaning to a client.
+      ...(item.integrationLink ? { integrationKey: item.integrationLink.integrationKey } : {}),
     } satisfies CofreItem;
   });
 }

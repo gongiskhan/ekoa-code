@@ -92,6 +92,18 @@ export const CofreItem = z.object({
   expiresAt: z.string().optional(),
   /** certificate_identity only: the human-readable pointer ("cartão OA no computador do escritório"). */
   identityPointer: z.string().optional(),
+  /**
+   * Integration-minted items only (WS-C, slice B2): the integration whose connect ceremony minted
+   * this item. ADDITIVE and OPTIONAL (Rule 7) — absent on every hand-minted item, and a client that
+   * ignores it renders exactly what it rendered before.
+   *
+   * It exists because connecting an integration AUTO-ISSUES an `until_locked` grant (typing the
+   * credentials is the consent ceremony; listeners poll with no user present). An item that reads
+   * "Desbloqueada até bloquear" without naming what unlocked it is a standing unlock the user cannot
+   * attribute to anything they did — and the lock control is only meaningful if they can. The KEY
+   * only: never the config id, never anything value-shaped.
+   */
+  integrationKey: z.string().optional(),
 });
 export type CofreItem = z.infer<typeof CofreItem>;
 

@@ -164,7 +164,14 @@ import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
-import { originFromBaseUrl } from './security/origin-binding.js';
+// B2 (WS-C): the credential-egress allow-list and the credential SHADOW comparator both live in
+// integrations/credential-cofre.ts — one implementation, reachable from the seams below and from a
+// test, rather than a derivation written inline in the composition root where nothing can exercise it.
+import {
+  egressOriginsForIntegration,
+  compareCredentialShadow,
+  reportCredentialShadow,
+} from './integrations/credential-cofre.js';
 import { setDeliveryTargets } from './events/delivery.js';
 import {
   configureListenerSupervisor,
@@ -444,6 +451,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     return { success: r.success, data: r.data, error: r.error };
   });
   // 4. Decrypted credential fields for api_call auth injection (encrypted at rest, ch09).
+  //
+  // B2 (WS-C, Rule 10): this is still the LIVE read — `credentialsCiphertext` decides what the
+  // api_call step interpolates, exactly as before. The Cofre item minted at connect is the SHADOW,
+  // and every read compares the two so the 2026-08-15 review decides the cutover on measurements
+  // rather than on hope. The comparison never changes what is returned and never throws.
   setIntegrationCredentialLoader(async (integrationKey, ownerUserId) => {
     const owner = (await users.get(ownerUserId)) as { orgId?: string } | null;
     if (!owner?.orgId) return null;
@@ -452,34 +464,33 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     try {
       // Cofre B-4: org-bound v2 envelope; v1 rows still read (no flag day).
       const values = JSON.parse(await envelopeDecrypt(cfg.credentialsCiphertext, cfg.orgId)) as Record<string, unknown>;
-      return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
+      const fields = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
+      reportCredentialShadow(
+        await compareCredentialShadow({ userId: ownerUserId, orgId: owner.orgId, role: 'user' }, cfg, fields),
+      );
+      return fields;
     } catch {
       return null;
     }
   });
   // 4b. Bound origins for that credential (Cofre R-2, invariant I6). The api_call step writes its
   // URL from a MODEL-authored template, so the destination and the credential have independent
-  // provenance; the integration's own declared base URL is the interim binding until Cofre items
-  // carry per-item `boundOrigins` (WS-C). An integration with no usable declared host resolves to
-  // an EMPTY list, and the seam refuses on empty — unbound never means unrestricted.
-  // A2: resolved TENANT-SCOPED under the RUN's actor. The binding logic is unchanged — the allowed
-  // origins are still derived from the definition's own action baseUrls, and an integration with no
-  // usable declared host still resolves EMPTY so the seam refuses (unbound never means unrestricted,
-  // and an integration the actor cannot see resolves to null → empty → refuse).
-  setIntegrationOriginResolver(async (integrationKey, actor) => {
-    const def = await resolveDefinition(actor, integrationKey);
-    if (!def) return [];
-    const origins = new Set<string>();
-    for (const action of Object.values(def.actions ?? {})) {
-      const baseUrl = (action as { httpConfig?: { baseUrl?: string } }).httpConfig?.baseUrl;
-      if (!baseUrl) continue;
-      // A templated host (`{{region}}.api.example.com`) cannot be pinned at this layer; skip it
-      // rather than binding to a pattern that would match more than it should.
-      const host = originFromBaseUrl(baseUrl);
-      if (host) origins.add(host);
-    }
-    return [...origins];
-  });
+  // provenance — which is why the credential, not the request, must name where it may go.
+  //
+  // B2: RE-POINTED AT THE COFRE, and this half is NOT a shadow. When the integration's credentials
+  // are a Cofre item, the allow-list is that item's own `boundOrigins` — the hosts bound in at the
+  // moment the human typed the credentials — and it is EMPTY (i.e. refuse) the moment the grant is
+  // revoked, which is what makes "lock = revoke" real on this rail. The previous derivation (the
+  // definition's own action baseUrls, A2's tenant-scoped read) remains only as the fallback for a
+  // config with no item: an integration that worked yesterday works today (Rule 7 additive).
+  //
+  // WHY THE CHANGE. The old allow-list was derived from the very artifact an agent or a user
+  // AUTHORS, so adding an action pointing at `attacker.example` widened that credential's own
+  // egress in the same edit — the authorised artifact and the authorising artifact were one file.
+  // The item's binding is fixed by the connect ceremony and an authored action cannot extend it.
+  setIntegrationOriginResolver((integrationKey, actor) =>
+    egressOriginsForIntegration(actor, integrationKey, findConfigForOwner, deps.now()),
+  );
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {
     const all = await listVisibleMemories({ userId: q.ownerUserId, orgId: q.orgId, role: 'user' });
