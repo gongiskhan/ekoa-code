@@ -980,6 +980,79 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   the attended signed-in-connector follow-up run per BRIEF §8 run-2 note); a windowed cursor +
   idempotent event write is the follow-up hardening.
 
+- **`builder-raw-view-wider-than-the-save-path`** (FIXED 2026-08-03, HIGH, credential disclosure
+  (intra-tenant) — found by the D2 fresh-context re-review probing 37 scenarios over real HTTP, not
+  by a test failing). D2's round-trip fix (`editablePackageFor`,
+  `api/src/routes/integration-builder.ts`) gated the RAW, byte-exact package on
+  `doc.orgId === actor.orgId` — strictly WIDER than the set `PUT /package` accepts, and the same
+  too-wide predicate sat in `resolveSkillMdRaw` (`api/src/integrations/definition-registry.ts`). Two
+  principals with NO write reach were handed a plaintext `Authorization` header (and the raw
+  SKILL.md) that answered `[REDACTED]` before D2: a plain `user` peer over a peer's `org`-shared row
+  (PUT 403 `key_taken`), and ANY reader of an OWN-ORG `global` row including its author (PUT 403
+  `published_row`). Intra-tenant, so not the cross-org class — but a credential read with no edit to
+  protect is a pure exposure, and the A3 re-review had already named this shape (`getForActor`
+  legitimately answers a same-org peer's `org` row); A3's fix closed only the CROSS-ORG half of it.
+  FIXED: one exported predicate, `canEditDefinitionRaw` (definition-registry.ts) =
+  `visibility !== 'global' && sameOrg && canWriteDefinition`, i.e. literally
+  `saveAuthoredDefinition`'s admission set, used by BOTH raw projections so the config half and the
+  skillMd half of one editable package cannot drift again. Pinned by
+  `api/tests/contract/integration-builder.test.ts` ("GET /package raw projection == the PUT
+  admission set": the two negatives each asserted alongside their 403 AND the stored bytes being
+  unchanged, plus the org-admin POSITIVE so the gate is the save set and not merely "narrower") and
+  `api/tests/integrations/definition-registry.test.ts` ("resolveSkillMdRaw is gated on the SAVE
+  path"). Revert-verified: 3 registry cases + 2 contract cases go red on the old predicate.
+
+- **`raw-view-predicate-was-a-follow-up-nobody-could-find`** (FIXED 2026-08-03, LOW, process —
+  found by the D2 fresh-context re-review). D2's decision entry claimed the duplication of the raw
+  view's own-org rule across the route and the registry was "recorded as a follow-up", but there was
+  no `docs/findings.md` row, no gate-status marker and no sentence in `docs/decisions.md` saying so.
+  A follow-up nobody can find is not recorded — and in this case the un-recorded duplication was the
+  exact thing that let the HIGH above exist in two places at once. FIXED by removing the
+  duplication rather than tracking it (`canEditDefinitionRaw`, one implementation, two call sites)
+  and by this row. LESSON: "recorded as a follow-up" is a claim about an artifact; if the artifact
+  is not named, the claim is false.
+
+- **`orgless-actor-can-be-same-org-as-an-orgless-row`** (FIXED-WHERE-REACHABLE 2026-08-03, LOW,
+  tenancy predicate — found by the D2 fresh-context re-review, probe S4). Three sites compared org
+  ids with a bare `===` while only one had the guard. `isDefinitionVisibleTo`
+  (`api/src/integrations/definition-store.ts:202-205`) hardened exactly this ("an org-less actor
+  must not become 'same org' as an org-less document") but its `visibility === 'global'` branch
+  returns BEFORE that guard, so an org-less actor reading an org-less `global` row reached the
+  downstream same-org derivations with `'' === ''` and got the foreign row's plaintext
+  `Authorization` back. FIXED at both derivations this change owns: `sameOrg()` in
+  definition-registry.ts now guards `canEditDefinitionRaw` (hence both raw projections) and
+  `definitionFromDoc`'s `id`/`visibility` projection. Pinned by the registry case "an ORG-LESS actor
+  never becomes 'same org' as an ORG-LESS row", which inserts a `orgId: ''` row UNDER the store
+  (`create` refuses to mint one) and asserts the row still RESOLVES (global is cross-org, by design)
+  while yielding no storage envelope and no byte-exact body.
+  RESIDUE, deliberate and stated: the ordering inside `isDefinitionVisibleTo` is NOT changed — that
+  file was outside this change's ownership, and on inspection the ordering is also correct on its
+  own terms (a `global` row IS visible cross-org, so the guard does not belong on that branch). The
+  invariant that matters is that no DOWNSTREAM "this row is mine" derivation may be reached with two
+  empty strings; that is now one guarded helper. Reachability stays low either way (registration
+  always mints an org, and `IntegrationDefinitionStore.create` rejects `orgId === ''`), so the
+  remaining exposure is a malformed/legacy row inserted around the store. CLOSE FULLY BY: auditing
+  the other `orgId ===` comparisons outside integrations/ against the same helper.
+
+- **`chokepoint-gate-never-scanned-the-test-suite`** (FIXED 2026-08-03, MEDIUM, gate coverage —
+  found by the D2 fresh-context re-review; pre-existing, not D2's). `scripts/chokepoint-grep.sh`
+  scanned `api/test` — a fixture directory holding only `fake-daemon` — while its own comment
+  claimed it covered "the test harness". `api/tests` (the actual suite) was never scanned, so ~9
+  provider references across 7 spec files were invisible to the gate and a genuine raw
+  `api.anthropic.com` in a spec would have been too. FIXED: both paths are scanned. The pre-existing
+  hits were TRIAGED, not grandfathered — every one turned out to ENFORCE the rule rather than break
+  it, and each is exempted at the narrowest granularity that fits it: `api/tests/llm/` by PATH (the
+  chokepoint module's own suite, mirroring the `api/src/llm/` exemption one-for-one — it must be
+  able to name the SDK it mocks), and five individual LINES by the `chokepoint-gate-allow` marker
+  (four anti-leak assertions that the token is ABSENT, plus the `boot-b.mjs` journey harness's
+  opt-in `EKOA_LLM_DIRECT` posture, which sets `LLM_CHOKEPOINT_BASE_URL` — the CHOKEPOINT's own
+  destination, the sanctioned external-chokepoint topology `llm/credentials.ts` implements — never a
+  route around it). No real violation was found. Pinned by
+  `api/tests/security/grep-gates.test.ts` ("chokepoint grep gate: scope + exemption mechanism"),
+  which runs the REAL script against a planted violation under `api/tests` and asserts it goes red,
+  that the marker exempts only its OWN line, and that the tree is currently clean. Revert-verified:
+  restoring the `api/test`-only path turns two of those red.
+
 ### Part B live proof + walkthrough (run 20260717-190134-9d4c1cbf)
 
 - **`answer-channel-preamble-leak`** (OPEN, MEDIUM, quality). A live chat turn's sheet revision 1

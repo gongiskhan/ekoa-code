@@ -124,10 +124,11 @@ describe('G2 panel-runtime asset - compiles clean + self-mounts + egress-clean',
 
   it('carries NO provider reference (egress hygiene)', async () => {
     const { code } = await buildPanelRuntime({ write: false });
-    // A single case-insensitive `anthropic` absence check covers BOTH banned forms
-    // (`@anthropic-ai` and `api.anthropic.com` each contain the token). The needle is
-    // split so this test file stays clean of the literal token the chokepoint grep
-    // gate scans for.
+    // chokepoint-gate-allow (x2, this comment only): a single case-insensitive `anthropic`
+    // absence check covers BOTH banned forms — `@anthropic-ai` and `api.anthropic.com` each  (chokepoint-gate-allow)
+    // contain the token. The needle itself is still assembled at runtime; the gate now scans
+    // api/tests (D2 re-review LOW-3), so the explanation is exempted where it is written
+    // rather than being reworded into something vaguer.
     const ANTHROPIC = 'anthrop' + 'ic';
     expect(new RegExp(ANTHROPIC, 'i').test(code)).toBe(false);
   }, 60_000);

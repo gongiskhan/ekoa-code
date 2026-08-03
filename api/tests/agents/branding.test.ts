@@ -6,7 +6,9 @@ import { redactEngineIdentity, StreamingIdentityRedactor } from '../../src/agent
  * thinking — commentary self-identifies as the engine, so branding.ts is the wire defence.
  * Kept in sync with web/lib/sanitize-error.ts `redactProviderIdentity` (the client-side net).
  */
-const LEAK = /claude|anthropic|sonnet|opus|haiku/i;
+// chokepoint-gate-allow: the needle of an ABSENCE assertion — this suite proves the vendor
+// name never reaches the wire, so it is the gate's ally, not a provider reference.
+const LEAK = /claude|anthropic|sonnet|opus|haiku/i; // chokepoint-gate-allow
 
 describe('redactEngineIdentity', () => {
   it('redacts model + vendor names to the EKOA brand, keeping the sentence intact', () => {

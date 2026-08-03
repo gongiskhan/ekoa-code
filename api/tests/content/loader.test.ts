@@ -123,7 +123,9 @@ describe('content loader', () => {
         if (spec.startsWith('../')) {
           expect(spec.replace(/\.js$/, '')).toBe('../config');
         }
-        expect(spec).not.toMatch(/@anthropic/);
+        // chokepoint-gate-allow: an ABSENCE assertion — content/ may not import the SDK, and
+        // naming the banned specifier is how that is checked (obfuscating it would hide it).
+        expect(spec).not.toMatch(/@anthropic/); // chokepoint-gate-allow
         expect(spec).not.toMatch(/\bllm\b/);
       }
     }

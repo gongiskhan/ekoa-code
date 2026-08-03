@@ -386,6 +386,121 @@ describe('GET /api/v1/integration-builder/package (load)', () => {
   });
 });
 
+/**
+ * D2 re-review HIGH-1 — THE RAW EDITABLE VIEW IS EXACTLY THE SAVE PATH'S ADMISSION SET.
+ *
+ * D2 gated the raw (byte-exact, unscrubbed) projection on `doc.orgId === actor.orgId`, which is
+ * strictly WIDER than what `PUT /package` accepts. The cross-org case above was pinned; the two
+ * INTRA-tenant cases were not, and both were plaintext-credential reads by a principal with no
+ * write reach at all (both answered `[REDACTED]` before D2):
+ *   - a plain `user` peer over a peer's `org`-shared row  → PUT 403 `key_taken`;
+ *   - ANY reader of an own-org `global` row, author incl. → PUT 403 `published_row`.
+ * The positive case (an org-admin over the same peer row: RAW + PUT 200) is pinned alongside them
+ * so the gate is the SAVE SET and not merely "narrower than before".
+ *
+ * Non-tautology: the credential is really in the stored row (asserted from Mongo), the reader
+ * really resolves the row (the load is 200 with the row's own displayName, not a 404), and the
+ * refusal really writes nothing (the stored bytes are re-read after the PUT).
+ */
+describe('GET /package raw projection == the PUT admission set (D2 re-review HIGH-1)', () => {
+  /** A peer-authored row carrying a pasted credential in an action header AND in its SKILL.md.
+   *  Composed at runtime so no credential-shaped literal is ever committed. */
+  async function plantRow(key: string, opts: { userId: string; visibility: 'private' | 'org' | 'global' }) {
+    const secret = `Bearer ${['sk', 'live', [key.replace(/-/g, ''), 'K4m5N6p7Q8r9'].join('')].join('_')}`;
+    const iso = new Date().toISOString();
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('orgA', key),
+      orgId: 'orgA', userId: opts.userId, visibility: opts.visibility, key,
+      displayName: `Row ${key}`, description: 'd', authType: 'api_key', provider: 'X', category: 'test',
+      configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
+      credentialGuide: '1. x',
+      actions: [{
+        actionName: 'ping', description: 'd', mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://api.x.example', path: '/p', headers: { Authorization: secret } },
+      }],
+      skillMd: `# ${key}\nauthorization: ${secret}\n`,
+      origin: { kind: 'authored' }, createdAt: iso, updatedAt: iso,
+    } as never);
+    return secret;
+  }
+
+  const headerOf = (load: Record<string, unknown>): string | undefined =>
+    (load.generatedPackage as { config?: { actions?: Array<{ httpConfig?: { headers?: Record<string, string> } }> } })
+      .config?.actions?.[0]?.httpConfig?.headers?.Authorization;
+
+  const storedHeaderOf = async (key: string): Promise<string | undefined> => {
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', key))) as IntegrationDefinitionDoc;
+    return (row.actions[0] as { httpConfig?: { headers?: Record<string, string> } }).httpConfig?.headers?.Authorization;
+  };
+
+  it("a plain USER peer reading a peer's org-shared row gets SCRUBBED — the save answers 403 for them", async () => {
+    await mkUser('author', 'user');
+    await mkUser('peer', 'user');
+    const secret = await plantRow('peer-shared', { userId: 'author', visibility: 'org' });
+    expect(await storedHeaderOf('peer-shared')).toBe(secret); // the credential really is stored
+
+    const t = await tokenFor('peer');
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=peer-shared', t));
+    // The peer DOES resolve the row (org-shared is visible to them) — this is not a 404 passing
+    // for a scrub.
+    expect((load.generatedPackage as { config?: { displayName?: string } }).config?.displayName).toBe('Row peer-shared');
+    expect(headerOf(load)).toBe('[REDACTED]');
+    // …and the skillMd half of the same package (resolveSkillMdRaw) is scrubbed too — A3's fix
+    // closed only the cross-org half of this predicate.
+    expect((load.generatedPackage as { skillMd?: string }).skillMd).not.toContain(secret);
+    expect(JSON.stringify(load)).not.toContain(secret);
+
+    // The reason it must be scrubbed: this principal can never save the row back.
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(await readJson(save)).success).toBe(true);
+    expect(await storedHeaderOf('peer-shared')).toBe(secret); // the refusal wrote nothing
+  });
+
+  it('an own-org GLOBAL row loads SCRUBBED even for its OWN AUTHOR — the save answers 403 published_row', async () => {
+    await mkUser('author', 'user');
+    const secret = await plantRow('published-thing', { userId: 'author', visibility: 'global' });
+
+    const t = await tokenFor('author');
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=published-thing', t));
+    expect((load.generatedPackage as { config?: { displayName?: string } }).config?.displayName).toBe('Row published-thing');
+    expect(headerOf(load)).toBe('[REDACTED]');
+    expect((load.generatedPackage as { skillMd?: string }).skillMd).not.toContain(secret);
+    expect(JSON.stringify(load)).not.toContain(secret);
+
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(await readJson(save)).success).toBe(true);
+    expect(await storedHeaderOf('published-thing')).toBe(secret);
+  });
+
+  it("an ORG-ADMIN over the same peer row still gets the RAW package — and the save round-trips it", async () => {
+    await mkUser('author', 'user');
+    await mkUser('boss', 'org-admin');
+    const secret = await plantRow('admin-writable', { userId: 'author', visibility: 'org' });
+
+    const t = await tokenFor('boss');
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=admin-writable', t));
+    expect(headerOf(load)).toBe(secret);
+    expect((load.generatedPackage as { skillMd?: string }).skillMd).toContain(secret);
+
+    // The whole reason the raw view exists: this actor's ordinary edit cycle must not write
+    // "[REDACTED]" over the tenant's real header.
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(200);
+    expect(await storedHeaderOf('admin-writable')).toBe(secret);
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'admin-writable'))) as IntegrationDefinitionDoc;
+    expect(row.skillMd).toContain(secret);
+    expect(row.skillMd).not.toContain('[REDACTED]');
+  });
+});
+
 describe('reserved keys: chat and save agree (A3 review L4)', () => {
   it('the chat NEVER exempts a reserved key — even for a stale session carrying the retired loadedKey field', async () => {
     __setTransportForTests(makeFakeTransport({ oneShotText: modelReply('pipedream', 'https://api.x.example') }));

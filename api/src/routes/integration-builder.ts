@@ -21,8 +21,9 @@ import {
 } from '@ekoa/shared';
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import { actorOf, parseBody, sendError, notFound } from './helpers.js';
-// D2: the chat turn runs on the SHARED authoring core (agents/integration-agent.ts) — the same
-// core the automation planner authors through. The session store stays the builder's own.
+// D2: the chat turn runs on the SHARED authoring core (agents/authoring-core.ts) — the same core
+// the automation planner authors through — via the builder's own adapter below. The session store
+// stays the builder's own.
 import { handleBuilderChat } from '../agents/integration-agent.js';
 import {
   getOwnedSession,
@@ -38,6 +39,7 @@ import {
   saveAuthoredDefinition,
   resolveDefinition,
   resolveSkillMdRaw,
+  canEditDefinitionRaw,
   integrationDefinitionStore,
   createConfig,
   updateConfig,
@@ -87,15 +89,22 @@ function definitionToConfig(def: PackageConfigSource): IntegrationPackageConfig 
  * `action-executor.ts` then SENDS as the request's auth header. Exactly the round trip A3 review
  * F3 closed for `skillMd` (`resolveSkillMdRaw`), left open on the config.
  *
- * So: a row of the actor's OWN ORG comes back byte-exact, everything else stays scrubbed. The
- * own-org condition is `resolveSkillMdRaw`'s rule, verbatim and for its reason (A3 re-review
- * HIGH-2): `getForActor` legitimately answers another org's `global` row, and serving THAT raw
- * would hand a foreign author's pasted credential to the reader in plaintext. A foreign row is a
- * FORK source — no round trip can destroy the original, so the scrub costs nothing there.
+ * So: a row THIS ACTOR COULD SAVE BACK comes back byte-exact, everything else stays scrubbed. The
+ * predicate is `canEditDefinitionRaw` — literally the admission set of the PUT below
+ * (`saveAuthoredDefinition`) — shared with `resolveSkillMdRaw` so the config half and the skillMd
+ * half of one editable package cannot drift (D2 re-review HIGH-1).
+ *
+ * WHY THE SAVE PATH IS THE RIGHT BAR. A3 gated this on "same org", which is strictly WIDER, and the
+ * gap was a pure plaintext-credential read for a principal with NO write reach: a plain `user` peer
+ * over a peer's `org`-shared row got the raw `Authorization` header and then PUT 403 `key_taken`,
+ * and ANY reader of an own-org `global` row (its author included) got it and then PUT 403
+ * `published_row`. Both were `[REDACTED]` before D2. There is no round trip to protect where there
+ * is no save, so the scrub costs nothing — exactly the argument that already justified scrubbing a
+ * FORK source (another org's `global` row), one tenancy tier in.
  */
 async function editablePackageFor(actor: Actor, key: string): Promise<IntegrationPackageConfig | null> {
   const doc = await integrationDefinitionStore.getForActor(actor, key);
-  if (doc && doc.orgId === actor.orgId) return definitionToConfig(doc);
+  if (doc && canEditDefinitionRaw(doc, actor)) return definitionToConfig(doc);
   const def = await resolveDefinition(actor, key);
   return def ? definitionToConfig(def) : null;
 }

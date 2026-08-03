@@ -1,5 +1,7 @@
 /**
- * The SHARED authoring core (slice D2) — `agents/integration-agent.ts`.
+ * The SHARED authoring core (slice D2) — `agents/authoring-core.ts` (split out of
+ * `agents/integration-agent.ts` by the D2 re-review, LOW-1: the core's "only dependency is the
+ * chokepoint" is now a property of the file, not a claim about a section of one).
  *
  * The core is what the integration builder and the automation planner now BOTH author through, so
  * every case here is labelled with the caller whose policy it pins. The two policies are opposite
@@ -36,7 +38,7 @@ vi.mock('../../src/llm/index.js', () => {
 });
 
 import { runOneShot, LlmAbortedError } from '../../src/llm/index.js';
-import { composeAuthoringPrompt, authorWithRepair, type AuthoringDraft } from '../../src/agents/integration-agent.js';
+import { composeAuthoringPrompt, authorWithRepair, type AuthoringDraft } from '../../src/agents/authoring-core.js';
 
 const DECISION = { tier: 'EXPERT', model: 'm', effort: 'high', weight: 1 } as const;
 const ATTRIBUTION = { kind: 'user_work', agentType: 'automation-plan', billeeUserId: 'u1' } as const;

@@ -14,14 +14,17 @@
  *
  * D2: the prompt assembly, the chokepoint turn, the outage/abort/empty classification and the
  * violation-fed repair attempt are no longer this module's own — they are the authoring core
- * (`agents/integration-agent.ts`) it shares with the integration builder. What stays here is what
+ * (`agents/authoring-core.ts`) it shares with the integration builder. What stays here is what
  * is genuinely the planner's: PLANNER_SYSTEM (its output contract), the catalog-bearing user text,
- * step normalisation, and the cross-validation vocabulary below.
+ * step normalisation, and the cross-validation vocabulary below. The import points at the CORE
+ * file, not at the builder's adapter (`agents/integration-agent.ts`): the D2 re-review (LOW-1)
+ * showed the adapter drags in `billing/`, the agent seams and the builder session store — hence
+ * the Mongo store registry — at module-load time, for a planner that uses none of them.
  */
 
 import { randomUUID } from 'node:crypto';
 import { decideForTier, LlmAbortedError } from '../llm/index.js';
-import { authorWithRepair, type AuthoringDraft } from '../agents/integration-agent.js';
+import { authorWithRepair, type AuthoringDraft } from '../agents/authoring-core.js';
 import { automationContentSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
 import { formatCatalogForPrompt, type Catalog } from './catalog.js';

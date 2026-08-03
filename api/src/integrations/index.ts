@@ -18,7 +18,15 @@ export * from './pipedream.js';
 export { integrationPrefetch, __resetPrefetchCacheForTests, type PrefetchDeps } from './prefetch.js';
 // Config custody + the definitions registry (the composition root binds these to the
 // automation credential-loader and catalog seams).
-export { findConfigForOwner, createConfig, updateConfig, type IntegrationConfigDoc } from './service.js';
+export {
+  findConfigForOwner,
+  createConfig,
+  updateConfig,
+  // The provider-rotation write (B2 review H2): legacy column + WS-C shadow, in that order.
+  persistRotatedCredentials,
+  type RotationOutcome,
+  type IntegrationConfigDoc,
+} from './service.js';
 export {
   listDefinitions,
   getDefinition,
@@ -46,6 +54,7 @@ export {
   listDefinitionsFor,
   resolveSkillMd,
   resolveSkillMdRaw,
+  canEditDefinitionRaw,
   activeCatalogFor,
   definitionFromDoc,
   systemActorForOrg,

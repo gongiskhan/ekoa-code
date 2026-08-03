@@ -32,8 +32,12 @@
  *   node api/tests/journeys/boot-b.mjs down    print kill hints (pkill patterns) and exit.
  *
  * ENV:
- *   EKOA_LLM_DIRECT=1   point the LLM chokepoint base URL straight at https://api.anthropic.com
+ *   EKOA_LLM_DIRECT=1   point the LLM chokepoint base URL straight at https://api.anthropic.com  (chokepoint-gate-allow)
  *                       (otherwise the config default chokepoint route is used).
+ *                       chokepoint-gate-allow: this sets LLM_CHOKEPOINT_BASE_URL — the
+ *                       CHOKEPOINT'S OWN destination, i.e. the sanctioned external-chokepoint
+ *                       topology llm/credentials.ts implements — never a route around it, and
+ *                       this harness is an operator-driven dev boot, not product code.
  *
  * Ports (fixed to match the run-ekoa-code driver's contract): api=:4211 (internal), proxy=:4111,
  * web=:3000.
@@ -217,7 +221,9 @@ function bootApi() {
     JWT_SECRET,
     EKOA_ADMIN_USERNAME: 'admin',
     EKOA_ADMIN_PASSWORD: 'tmp12345',
-    ...(DIRECT ? { LLM_CHOKEPOINT_BASE_URL: 'https://api.anthropic.com' } : {}),
+    // chokepoint-gate-allow: see the EKOA_LLM_DIRECT note in the module header — the chokepoint's
+    // own base URL under an explicit opt-in, not a bypass.
+    ...(DIRECT ? { LLM_CHOKEPOINT_BASE_URL: 'https://api.anthropic.com' } : {}), // chokepoint-gate-allow
   };
   const child = spawn('node', [entry], { cwd: join(ROOT, 'api'), env, stdio: 'inherit' });
   child.on('exit', (code) => { if (!tearingDown) { log(`api exited (${code})`); teardown(1); } });

@@ -23,8 +23,9 @@
  * allowlist entry, and this is asserted by the matcher self-test.
  */
 import { describe, it, expect } from 'vitest';
-import { readdirSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, relative, join, sep } from 'node:path';
 
@@ -152,6 +153,60 @@ describe('grep gate: no orphan `builder` role ref survives (H5)', () => {
  * violations and reject the exact identifiers they must NOT match. If someone weakens the regex into
  * a no-op, THESE fail - so the two tree scans above can never silently become vacuous.
  */
+/**
+ * THE CHOKEPOINT GATE COVERS WHAT ITS COMMENT CLAIMS (D2 re-review LOW-3).
+ *
+ * `scripts/chokepoint-grep.sh` scanned `api/test` — a fixture directory holding only fake-daemon —
+ * while its own comment claimed it covered "the test harness". The real suite (`api/tests`) was
+ * never scanned, so a raw provider-host literal in a spec was invisible to CI. The path is fixed;
+ * these cases pin the BEHAVIOUR rather than the script's text, by running the real script against
+ * a planted violation. Revert the path and the first case goes green-when-it-should-be-red.
+ *
+ * The probe is written into the real tree (the script's roots are deliberately hardcoded — a gate
+ * whose scan scope is settable from outside is a gate with a switch) under a dot-prefixed,
+ * pid-unique directory, and removed in `finally`.
+ */
+describe('chokepoint grep gate: scope + exemption mechanism (D2 re-review LOW-3)', () => {
+  const GATE = resolve(ROOT, 'scripts/chokepoint-grep.sh');
+  const PROBE_DIR = resolve(ROOT, `api/tests/.chokepoint-gate-probe-${process.pid}`);
+  const PROBE = join(PROBE_DIR, 'probe.ts');
+  // Assembled, never a literal, so THIS file does not trip the gate it is testing.
+  const HOST = ['https://api.', 'anthrop', 'ic.com/v1/messages'].join('');
+
+  /** Run the real gate against `content` planted under api/tests; returns its exit status. */
+  function gateStatusWith(content: string): { status: number; stdout: string } {
+    mkdirSync(PROBE_DIR, { recursive: true });
+    try {
+      writeFileSync(PROBE, content);
+      const r = spawnSync('bash', [GATE], { cwd: ROOT, encoding: 'utf8' });
+      return { status: r.status ?? -1, stdout: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    } finally {
+      rmSync(PROBE_DIR, { recursive: true, force: true });
+    }
+  }
+
+  it('a provider reference planted in api/tests FAILS the gate (the path it never used to scan)', () => {
+    const { status, stdout } = gateStatusWith(`export const u = '${HOST}';\n`);
+    expect(status, `gate output:\n${stdout}`).not.toBe(0);
+    expect(stdout).toContain('.chokepoint-gate-probe');
+  });
+
+  it('the same line carrying the `chokepoint-gate-allow` marker is exempt', () => {
+    const { status, stdout } = gateStatusWith(`export const u = '${HOST}'; // chokepoint-gate-allow\n`);
+    expect(status, `gate output:\n${stdout}`).toBe(0);
+  });
+
+  it('the marker is LINE-scoped — one on a neighbouring line exempts nothing', () => {
+    const { status } = gateStatusWith(`// chokepoint-gate-allow\nexport const u = '${HOST}';\n`);
+    expect(status).not.toBe(0);
+  });
+
+  it('the gate is clean on the tree as it stands (the pre-existing hits were triaged, not ignored)', () => {
+    const r = spawnSync('bash', [GATE], { cwd: ROOT, encoding: 'utf8' });
+    expect(r.status, `${r.stdout ?? ''}${r.stderr ?? ''}`).toBe(0);
+  });
+});
+
 describe('grep gate matchers are not vacuous (H5 self-test)', () => {
   it('the builder-role matcher catches a planted role literal and ignores feature identifiers', () => {
     // Planted violations - MUST match.

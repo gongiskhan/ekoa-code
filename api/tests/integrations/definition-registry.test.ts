@@ -9,6 +9,7 @@ import { integrationDefinitions } from '../../src/data/stores.js';
 import { refreshDefinitions, listDefinitions } from '../../src/integrations/definitions.js';
 import {
   IntegrationDefinitionStore,
+  definitionIdFor,
   type IntegrationDefinitionCreate,
   type DefinitionVisibility,
 } from '../../src/integrations/definition-store.js';
@@ -298,6 +299,76 @@ describe('resolveSkillMd — the tenant body wins over the shipped one', () => {
     expect(scrubbed).toContain('authorization: required');
     expect(scrubbed).not.toContain(pasted);
     expect(scrubbed).toContain('[REDACTED]');
+  });
+});
+
+/**
+ * D2 re-review HIGH-1 + MEDIUM-1 — WHO gets the byte-exact body.
+ *
+ * `resolveSkillMdRaw` gated on `doc.orgId === actor.orgId`, which is strictly wider than the set
+ * `saveAuthoredDefinition` accepts. A3's fix closed the CROSS-ORG half (pinned above, line "another
+ * org gets nothing for this private key"); the same-org halves were never closed, and the reviewer
+ * confirmed a peer still got `skillMdHasSecret: true`. The gate is now `canEditDefinitionRaw` —
+ * literally the save path's admission set — and these cases pin both signs of it.
+ */
+describe('resolveSkillMdRaw is gated on the SAVE path, not on "same org" (D2 re-review HIGH-1)', () => {
+  const adminA: Actor = { userId: 'adminA', orgId: 'orgA', role: 'org-admin' };
+  /** A pasted credential, composed at runtime so no credential-shaped literal is committed. */
+  const pasted = ['sk', 'live', 'PEERPLAINSECRET4242'].join('_');
+  const body = (key: string) => `# ${key}\nNotes.\napi_key: ${pasted}\n`;
+
+  it("a same-org PLAIN peer gets the SCRUBBED body of an org-shared row; the AUTHOR gets it raw", async () => {
+    await createRow(draft('orgA', 'userA1', 'team-doc', 'org', { skillMd: body('team-doc') }));
+
+    // Non-tautology: the peer really resolves the row (org-shared), they just may not have it raw.
+    expect((await resolveDefinition(userA2, 'team-doc', store))!.displayName).toBe('team-doc (orgA tenant)');
+    const peer = await resolveSkillMdRaw(userA2, 'team-doc', store);
+    expect(peer).toContain('Notes.');
+    expect(peer).not.toContain(pasted);
+    expect(peer).toContain('[REDACTED]');
+    // The author's edit cycle is exactly what the raw view exists for — unchanged.
+    expect(await resolveSkillMdRaw(userA1, 'team-doc', store)).toBe(body('team-doc'));
+  });
+
+  it('an ORG-ADMIN over the same peer row DOES get it raw — the gate is the save set, not ownership', async () => {
+    await createRow(draft('orgA', 'userA1', 'team-doc', 'org', { skillMd: body('team-doc') }));
+    expect(await resolveSkillMdRaw(adminA, 'team-doc', store)).toBe(body('team-doc'));
+  });
+
+  it("an own-org GLOBAL row is scrubbed for EVERYONE, its own author included (the save answers published_row)", async () => {
+    await createRow(draft('orgA', 'userA1', 'pub-doc', 'global', { skillMd: body('pub-doc') }));
+
+    for (const who of [userA1, userA2, adminA, userB1]) {
+      const raw = await resolveSkillMdRaw(who, 'pub-doc', store);
+      expect(raw, who.userId).toContain('Notes.'); // the row really resolves for them
+      expect(raw, who.userId).not.toContain(pasted);
+    }
+  });
+
+  it('an ORG-LESS actor never becomes "same org" as an ORG-LESS row (D2 re-review MEDIUM-1 / probe S4)', async () => {
+    // A malformed/legacy row with no owning org. `store.create` refuses to mint one (A3), so it is
+    // inserted underneath the store — the point is that the READ predicates must not trust the data.
+    // `isDefinitionVisibleTo` hardened exactly this for its own-org branch, but its `global` branch
+    // answers TRUE before reaching the guard, so an org-less actor reached the raw projection with
+    // `'' === ''` and got the row's plaintext Authorization back (redacted before D2).
+    const orgless: Actor = { userId: '', orgId: '', role: 'user' };
+    const iso = new Date(1_700_000_000_000).toISOString();
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('', 'orgless-row'),
+      orgId: '', userId: '', visibility: 'global', key: 'orgless-row',
+      displayName: 'orgless', configSchema: [],
+      actions: [{ actionName: 'ping', description: 'd', mutates: false }],
+      skillMd: body('orgless-row'), createdAt: iso, updatedAt: iso,
+    } as never);
+    // Non-tautology: the row IS reachable for this actor (global is cross-org, by design)…
+    const def = await resolveDefinition(orgless, 'orgless-row', store);
+    expect(def!.displayName).toBe('orgless');
+    // …it just never counts as theirs: no storage envelope, and no byte-exact body.
+    expect(def!.id).toBeUndefined();
+    expect(def!.visibility).toBeUndefined();
+    const raw = await resolveSkillMdRaw(orgless, 'orgless-row', store);
+    expect(raw).not.toContain(pasted);
+    expect(raw).toContain('[REDACTED]');
   });
 });
 

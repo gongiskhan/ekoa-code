@@ -48,7 +48,12 @@ import {
   type IntegrationDefinition,
   type ActiveIntegrationCatalog,
 } from './definitions.js';
-import { integrationDefinitionStore, LEGACY_RUNTIME_ORG, type IntegrationDefinitionDoc } from './definition-store.js';
+import {
+  integrationDefinitionStore,
+  canWriteDefinition,
+  LEGACY_RUNTIME_ORG,
+  type IntegrationDefinitionDoc,
+} from './definition-store.js';
 
 /**
  * The slice of the A1 store this module needs: the two ACTOR-SCOPED reads. Deliberately narrow —
@@ -82,6 +87,46 @@ export function actorForOwnedRow(orgId: string, ownerUserId?: string): Actor {
 }
 
 /**
+ * "Same tenant", with the EMPTY-STRING HAZARD closed (D2 re-review MEDIUM-1). Three call sites used
+ * to compare org ids with a bare `===`, and only `isDefinitionVisibleTo` (definition-store.ts) had
+ * the guard: an org-less actor (a seam that defaulted `orgId` to `''`, or a malformed row) must not
+ * become "same org" as an org-less document. Both sides must name a real tenant before they can be
+ * equal. `isDefinitionVisibleTo`'s own `global` branch answers TRUE before reaching its copy of this
+ * guard — deliberately, because `global` IS cross-org — so every DOWNSTREAM same-org derivation has
+ * to carry the guard itself; this is that one implementation.
+ */
+function sameOrg(docOrgId: string, actorOrgId: string): boolean {
+  return docOrgId !== '' && actorOrgId !== '' && docOrgId === actorOrgId;
+}
+
+/**
+ * May `actor` read this stored row BYTE-EXACTLY (unscrubbed)? The ONE predicate behind every raw
+ * projection — `resolveSkillMdRaw` here and the builder route's `editablePackageFor` — so the two
+ * halves of the same editable package can never drift apart again.
+ *
+ * THE RULE: the raw view exists solely so an EDIT CYCLE (load → save) cannot round-trip a redaction
+ * into a stored document. It is therefore worth exactly as much as the save that follows it, and is
+ * granted to exactly the principals the SAVE PATH accepts (`saveAuthoredDefinition`):
+ *   - `canWriteDefinition` — the owner, or an org-admin over a same-org peer's visible row. A plain
+ *     `user` peer reading a peer's `org`-shared row is refused: `saveAuthoredDefinition` answers
+ *     `key_taken` for them, so the raw view could only ever hand them a peer's pasted credential
+ *     with no edit to protect (D2 re-review HIGH-1).
+ *   - NOT `global` — a published row is edited through the publish flow, never a builder save
+ *     (`published_row`), including by its own author and by a super-admin. Its content is what every
+ *     org resolves, so its pasted credentials belong to a scrubbed view for everyone.
+ * Everything else keeps the A2 review F7 anti-exfiltration floor (`redactSecrets`/`scrubSecretText`):
+ * a foreign row is a FORK source, so no round trip can destroy the original and the scrub is free.
+ */
+export function canEditDefinitionRaw(
+  doc: Pick<IntegrationDefinitionDoc, 'orgId' | 'userId' | 'visibility'>,
+  actor: Actor,
+): boolean {
+  if (doc.visibility === 'global') return false;
+  if (!sameOrg(doc.orgId, actor.orgId)) return false;
+  return canWriteDefinition(doc, actor);
+}
+
+/**
  * Project a stored definition onto the canonical `IntegrationDefinition` read shape. `userCreated`
  * is TRUE for every stored row: the Mongo tier only ever holds authored/forked/migrated packages,
  * while the shipped read-only packages remain the disk baseline (`userCreated: false`).
@@ -96,8 +141,11 @@ export function definitionFromDoc(doc: IntegrationDefinitionDoc, actor?: Actor):
   // A SUPER-ADMIN additionally gets addressability over the sentinel legacy-runtime org's rows
   // (A3 review F1): the retire/restore surface keys on the id, and the sentinel org is a platform
   // constant, not a tenant — projecting it leaks no org.
+  // `sameOrg`, not a bare `===`: an org-less actor reading an org-less row must not be handed the
+  // row's `_id` + tier as if it were their own (D2 re-review MEDIUM-1 — reachable today only
+  // through a `global` row, whose visibility branch answers before the store's own guard).
   const own = actor !== undefined
-    && (doc.orgId === actor.orgId
+    && (sameOrg(doc.orgId, actor.orgId)
       || (actor.role === 'super-admin' && doc.orgId === LEGACY_RUNTIME_ORG));
   return redactSecrets<IntegrationDefinition>({
     ...(own ? { id: doc._id, visibility: doc.visibility } : {}),
@@ -222,6 +270,12 @@ export async function resolveSkillMd(
  * stored body comes back byte-exact, so an edit cycle (load → save) can never round-trip a
  * redaction into the stored document. NEVER feed this into an agent prompt or any other model
  * egress — that is `resolveSkillMd`'s job, and the anti-exfiltration floor lives there.
+ *
+ * WHO gets the byte-exact body is `canEditDefinitionRaw` — the save path's own admission set, not
+ * "same org" (D2 re-review HIGH-1). A3's own-org rule was strictly WIDER than the set the PUT
+ * accepts: a plain `user` peer over a peer's `org`-shared row, and ANY reader of an own-org `global`
+ * row, both got the raw body while the save answered 403 — a plaintext credential read with no
+ * edit to protect. A3's fix closed the cross-org half of that; this closes the peer half.
  */
 export async function resolveSkillMdRaw(
   actor: Actor,
@@ -230,14 +284,8 @@ export async function resolveSkillMdRaw(
 ): Promise<string | null> {
   const doc = await store.getForActor(actor, key);
   if (doc) {
-    // OWN-ORG ROWS ONLY (A3 re-review HIGH-2). `getForActor` legitimately answers another org's
-    // `global` row and a same-org PEER's `org`-shared row; serving those RAW removed the A2-review
-    // F7 anti-exfiltration floor and handed a foreign author's pasted credential to the reader in
-    // plaintext. The raw view exists solely so an OWNER's edit cycle cannot round-trip a redaction
-    // into their own stored document — a foreign row is a FORK source, so no round trip can
-    // destroy the original and the scrub costs nothing there.
-    const own = doc.orgId === actor.orgId;
-    return doc.skillMd == null ? null : own ? doc.skillMd : scrubSecretText(doc.skillMd);
+    const raw = canEditDefinitionRaw(doc, actor);
+    return doc.skillMd == null ? null : raw ? doc.skillMd : scrubSecretText(doc.skillMd);
   }
   return baselineSkillMd(key);
 }

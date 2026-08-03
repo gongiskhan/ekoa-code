@@ -35,7 +35,9 @@ async function runChat(script: FakeTransportScript, message = 'que modelo és tu
 const chatEventsFor = (runId: string) => events.filter((e) => e.stream === 'chat' && e.streamId === runId);
 const joined = (evs: Captured[], type: string) => evs.filter((e) => e.type === type).map((e) => (e.data as { text: string }).text).join('');
 
-const LEAK = /claude|anthropic|sonnet|opus|haiku/i;
+// chokepoint-gate-allow: the needle of an ABSENCE assertion (see agents/branding.test.ts) —
+// the thinking channel must never leak the vendor name, and this is what checks it.
+const LEAK = /claude|anthropic|sonnet|opus|haiku/i; // chokepoint-gate-allow
 
 describe('chat thinking channel (§5.7 + ch12 white-label)', () => {
   beforeAll(() => bootAgentTestDb('ekoa_chat_thinking'));
