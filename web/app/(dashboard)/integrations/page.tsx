@@ -21,6 +21,8 @@ import {
   Download,
   MessageSquare,
   Workflow,
+  ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -32,6 +34,7 @@ import { SessionConnectPanel } from "@/components/integrations/SessionConnectPan
 import { PlatformIntegrationCard } from "@/components/integrations/PlatformIntegrationCard";
 import { PipedreamSection } from "@/components/integrations/PipedreamSection";
 import { WebhooksSection } from "@/components/integrations/WebhooksSection";
+import ActionConsentDialog, { type ActionConsentSubject } from "@/components/integrations/action-consent-dialog";
 import type {
   IntegrationSkill,
   IntegrationBuilderOutput,
@@ -47,6 +50,21 @@ import { Tabs } from "@/components/ui/tabs";
 import { Dialog } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+
+/**
+ * The standing-approval window the api enforces (`ACTION_APPROVAL_TTL_DAYS` in
+ * `api/src/integrations/action-consent.ts`). Mirrored rather than fetched because it is a
+ * COPY-EDIT input — the dialog states the consequence in a sentence — and the row it describes
+ * carries its own real `expiresAt`, which is what the chip shows. If the two ever disagree the
+ * user sees the true date, not this number.
+ */
+const ACTION_APPROVAL_TTL_DAYS = 90;
+
+/** `2026-11-01T09:00:00.000Z` -> `01/11/2026`, the dashboard's date grammar. */
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('pt-PT');
+}
 
 /* ---------- Animation Variants ---------- */
 
@@ -158,6 +176,46 @@ function IntegrationCard({
 
   const hasUnprovisionedAutomations =
     sessionEntry?.actions?.some((row) => row.automationTemplate && !row.provisioned) ?? false;
+
+  // ---- WRITE GATE (slice C2) ----------------------------------------------------------------
+  // A `mutates` action does not run until its owner approves it, so the card is where that answer
+  // is given. The per-action rows come from the server (never re-derived here) and are fetched
+  // lazily on expand, like the session rows above: the list is a per-user read and there is no
+  // reason to pay for it on every card of the grid.
+  const approvals = useIntegrationsStore((s) => s.actionApprovals[skill.integrationKey]);
+  const fetchActionApprovals = useIntegrationsStore((s) => s.fetchActionApprovals);
+  const approveActionWrite = useIntegrationsStore((s) => s.approveActionWrite);
+  const revokeActionWrite = useIntegrationsStore((s) => s.revokeActionWrite);
+  const [consentSubject, setConsentSubject] = useState<ActionConsentSubject | null>(null);
+  const [consentError, setConsentError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!expanded || approvals) return;
+    void fetchActionApprovals(skill.integrationKey);
+  }, [expanded, approvals, fetchActionApprovals, skill.integrationKey]);
+
+  async function handleConsentDecision(decision: 'once' | 'always') {
+    if (!consentSubject) return;
+    const result = await approveActionWrite(
+      consentSubject.integrationKey,
+      consentSubject.actionName,
+      consentSubject.shape,
+      decision,
+    );
+    if (result.success) {
+      setConsentSubject(null);
+      setConsentError(null);
+      return;
+    }
+    // The server's own message is shown rather than a generic one: the interesting failure here is
+    // "the action changed since it was shown", which the user has to be told precisely.
+    setConsentError(result.error || t.writeGate.failed);
+  }
+
+  async function handleRevokeWrite(actionName: string) {
+    const result = await revokeActionWrite(skill.integrationKey, actionName);
+    if (!result.success && result.error) toast.error(result.error);
+  }
 
   async function handleProvisionAutomations(e: React.MouseEvent) {
     e.stopPropagation();
@@ -294,16 +352,73 @@ function IntegrationCard({
                           const hasAutomation = Boolean(
                             action.automationBinding || row?.automationTemplate || row?.automationId
                           );
+                          // WRITE GATE (C2). The gate's own answer for this action, straight off
+                          // the server: whether it needs consent at all, what it will run, and the
+                          // live decision. Never re-derived from `action.mutates` here — the
+                          // fail-closed rule lives in the api and a second copy could disagree
+                          // with the thing that actually refuses.
+                          const approval = approvals?.find((a) => a.actionName === action.actionName);
                           return (
                             <div key={action.actionName} className="space-y-0.5">
-                              <div className="flex items-center justify-between text-[11px]">
-                                <div className="flex items-center gap-1.5">
+                              <div className="flex items-center justify-between gap-2 text-[11px]">
+                                <div className="flex min-w-0 items-center gap-1.5">
                                   <Zap size={10} className="text-neutral-400" />
                                   <span className="font-mono text-neutral-600">{action.actionName}</span>
                                 </div>
-                                {action.mutates && (
-                                  <Badge tone="warning">{t.mutates}</Badge>
-                                )}
+                                <div className="flex flex-shrink-0 items-center gap-1.5">
+                                  {action.mutates && (
+                                    <Badge tone="warning">{t.mutates}</Badge>
+                                  )}
+                                  {approval?.requiresConsent && (
+                                    <>
+                                      {approval.decision ? (
+                                        <>
+                                          <span
+                                            className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1 py-px font-medium text-emerald-700"
+                                            data-testid={`action-approval-state-${action.actionName}`}
+                                            title={approval.expiresAt ? t.writeGate.approvedUntil(formatShortDate(approval.expiresAt)) : undefined}
+                                          >
+                                            <ShieldCheck size={9} />
+                                            {approval.decision === 'once' ? t.writeGate.approvedOnce : t.writeGate.approved}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); void handleRevokeWrite(action.actionName); }}
+                                            className="whitespace-nowrap text-neutral-500 underline-offset-2 hover:text-neutral-700 hover:underline"
+                                            data-testid={`action-approval-revoke-${action.actionName}`}
+                                          >
+                                            {t.writeGate.revoke}
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span
+                                            className="inline-flex items-center gap-1 rounded bg-amber-50 px-1 py-px font-medium text-amber-700"
+                                            data-testid={`action-approval-state-${action.actionName}`}
+                                          >
+                                            <ShieldAlert size={9} />
+                                            {t.writeGate.needsApproval}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); setConsentSubject({
+                                              integrationKey: skill.integrationKey,
+                                              integrationName: skill.displayName || skill.integrationKey,
+                                              actionName: approval.actionName,
+                                              description: approval.description,
+                                              target: approval.target,
+                                              shape: approval.shape,
+                                            }); setConsentError(null); }}
+                                            className="whitespace-nowrap font-medium text-amber-700 underline-offset-2 hover:text-amber-800 hover:underline"
+                                            data-testid={`action-approval-authorise-${action.actionName}`}
+                                          >
+                                            {t.writeGate.authorise}
+                                          </button>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
                               </div>
                               {hasAutomation && (
                                 <div className="flex min-w-0 items-center gap-1.5 pl-4 text-[10px]">
@@ -444,6 +559,15 @@ function IntegrationCard({
         name={skill.displayName}
         guide={skill.credentialGuide}
         onClose={() => setShowGuide(false)}
+      />
+    )}
+    {consentSubject && (
+      <ActionConsentDialog
+        subject={consentSubject}
+        standingDays={ACTION_APPROVAL_TTL_DAYS}
+        error={consentError}
+        onDecision={handleConsentDecision}
+        onCancel={() => { setConsentSubject(null); setConsentError(null); }}
       />
     )}
     </>

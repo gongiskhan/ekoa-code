@@ -191,6 +191,15 @@ const COVERED = new Set<string>([
   // envelope on every non-2xx). Two NEW descriptors, two COVERED entries: the pinned
   // EXPECTED_PENDING_COUNT below is unchanged.
   'integrations.setVisibility', 'integrations.setGlobal',
+  // slice C2 - the WRITE GATE's HTTP surface this slice ADDS
+  // (integrations-write-gate.test.ts: a real app + two orgs + a same-org peer; the per-action
+  // approval list with its rendered target and shape, the grant/revoke round trip, the STALE-shape
+  // and non-mutating refusals, per-human scoping proven in both directions, the byte-identical 404
+  // for a hidden definition AND for an unknown action, and the shared error envelope on every
+  // non-2xx). The GATE itself is not here - it is in the executor, pinned by
+  // tests/integrations/action-consent.test.ts and tests/security/integration-write-gate.test.ts.
+  // Three NEW descriptors, three COVERED entries: the pinned EXPECTED_PENDING_COUNT is unchanged.
+  'integrations.listActionApprovals', 'integrations.approveAction', 'integrations.revokeActionApproval',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

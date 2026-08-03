@@ -6,10 +6,14 @@
  * user-configured endpoint. Credentials are never returned — only the HTTP response is; the
  * request/response dump surfaced on failure is credential-redacted.
  *
- * SSRF posture (spec §9 invariant 8, verbatim scope statement): "User-defined integration actions
- * call arbitrary user-configured endpoints by design … run under the owner's own credentials, and
- * are not SSRF-gated." So this path uses a plain fetch, NOT the guarded fetcher — the boundary is
- * a recorded decision. (The transport is injectable so tests fake it without a live call.)
+ * EGRESS POSTURE. The original scope statement (spec §9 invariant 8) read: "User-defined
+ * integration actions call arbitrary user-configured endpoints by design … run under the owner's
+ * own credentials, and are not SSRF-gated", and this path sent on a bare `fetch`. That has been
+ * overtaken twice and the sentence is kept only so the drift is legible: Cofre R-2 put the request
+ * behind `guardedFetch`, and C2 (below) put it behind the credential's own origin binding. "By
+ * design" described who chooses the URL, never that the choice is unconstrained.
+ * (The transport stays injectable so tests fake it without a live call — and the origin check is
+ * asserted OUTSIDE it, so injecting a transport cannot step around the binding.)
  *
  * This is the function the automation engine's `integration` step calls for a non-platform key.
  * Auth types executed: `api_key`, `none` (OAuth2/service_account are platform-only).
@@ -20,6 +24,35 @@
  * automation-backed handler (the seam the lead wires to automation/); absent that seam, or for an
  * unbound `bash-cli`, the result is a coded, non-throwing refusal. There is deliberately NO
  * server-side CLI runner: bash runs on the user's paired machine, which the automation engine owns.
+ *
+ * WRITE GATE (C2). A `mutates` action needs a human approval before it runs, and the check lives
+ * HERE rather than on any route because this function is the single funnel every rail goes through
+ * — the capability route, the automation engine's `integration` step, the listener supervisor's
+ * poll tick and the agent tool seam all end up on this line. A gate on a route would be a gate on
+ * one of four doors. `action-consent.ts` owns the approval store and the fail-closed rule (only a
+ * literal `mutates: false` is a read); this module owns WHEN it is consulted: before the owner's
+ * credentials are loaded, let alone decrypted.
+ *
+ * ORIGIN BINDING (C2, closing the CRITICAL B2's review proved). B2 re-pointed the credential rail
+ * at the Cofre and named this module as a SECOND credential read path the binding did not cover: it
+ * loads and decrypts the owner's credentials itself, then dialled whatever host the package's
+ * `baseUrl` named behind nothing but an SSRF guard — which by design permits every public host. The
+ * reviewer's probe locked the Cofre item first and the request STILL went out, carrying the live
+ * key to `exfil.example`. And this is the rail the listener supervisor and the automation
+ * `integration` step both use — i.e. exactly the "listeners poll with no user present" case that
+ * RUN_SPEC assumption 5 uses to justify the auto-grant, running with the grant unchecked. The
+ * request now resolves the same Cofre item scope B2 wired at the `api_call` seam, from the same two
+ * primitives, so there is one egress truth instead of two; `resolveEgressBinding` documents the one
+ * case where this rail is deliberately STRICTER and the one case that stays unbound.
+ *
+ * WS-C ROTATION (C2, same review, HIGH): a provider rotation writes BOTH credential stores, through
+ * the ONE implementation of that job — `service.persistRotatedCredentials`, not a sibling body here.
+ *
+ * RULE-10 MEASUREMENT (C2, same review, MEDIUM): this rail decrypts the config ITSELF rather than
+ * going through the composition root's credential loader, so the shadow comparator never saw it —
+ * and since the listener poll runs through here, listener ticks were absent from the sample the
+ * 2026-08-15 cutover decision will be read from. `observeCredentialShadow` now runs on this read
+ * too (sampled, never throwing, outside the decrypt's own try).
  */
 
 import {
@@ -29,10 +62,13 @@ import {
   type IntegrationActionHttpConfig,
 } from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
+import { checkActionConsent, type IntegrationActionConsentDescriptor } from './action-consent.js';
+import { declaredOriginsForIntegration, linkForConfig, observeCredentialShadow } from './credential-cofre.js';
+import { integrationOriginScope } from '../cofre/index.js';
 import { guardedFetch } from '../services/url-fetcher.js';
-import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
-import { integrationConfigs } from '../data/stores.js';
-import { envelopeEncrypt, envelopeDecrypt } from '../data/crypto.js';
+import { assertOriginAllowed, CredentialOriginError } from '../security/origin-binding.js';
+import { findConfigForOwner, persistRotatedCredentials, type IntegrationConfigDoc } from './service.js';
+import { envelopeDecrypt } from '../data/crypto.js';
 import {
   interpolate,
   interpolateObj,
@@ -72,6 +108,14 @@ export type IntegrationErrorCode =
   // (`unsupported_backing_type`). Distinct because the fixes are distinct.
   | 'invalid_backing_type'
   | 'unsupported_backing_type'
+  // C2, the write gate: the action mutates and no live human approval covers this exact shape.
+  // The SAME token the automation engine uses for its local_command pause, on purpose — one
+  // vocabulary for "a human has to answer before this proceeds", whichever rail asks.
+  | 'awaiting_consent'
+  // C2, the origin binding: the destination is not one of the hosts this credential is bound to.
+  // Distinct from an SSRF refusal (the host may be perfectly reachable) and from a 403 from the
+  // remote API (`credential_missing_scope`) — nothing was sent.
+  | 'origin_refused'
   | 'invalid_base_url'
   | 'transient_5xx'
   | 'client_4xx'
@@ -97,6 +141,13 @@ export interface ExecuteIntegrationActionResult {
   error?: string;
   code?: IntegrationErrorCode;
   details?: IntegrationErrorDetails;
+  /**
+   * Present ONLY with `code: 'awaiting_consent'` — what the human must be shown to answer. Carries
+   * no credential and no argument values: which integration, which action, what it does and where
+   * it writes. A caller that can reach a human renders it; one that cannot (a listener tick)
+   * surfaces the coded failure and stops, which is the correct outcome for an unapproved write.
+   */
+  consentRequest?: IntegrationActionConsentDescriptor;
 }
 
 /** Handler for `automationBinding` actions (integração-por-automação). Injected by the composition
@@ -127,10 +178,12 @@ export async function executeUserIntegrationAction(
   // A2: TENANT-SCOPED resolution. The call already carries the verified org + owner (the same pair
   // `findConfigForOwner` below is scoped to), so the package this action runs against is the one
   // THIS org sees — a tenant definition first, the shipped baseline otherwise.
-  const def = await resolveDefinition(
-    { userId: input.ownerUserId, orgId: input.orgId, role: 'user' },
-    input.integrationKey,
-  );
+  // The ONE read actor for this call: the verified (org, owner) pair the input carries. Every
+  // tenant-scoped read below — the definition, the Cofre item behind the origin binding, the
+  // shadow refresh after a rotation — is taken under it, so none of them can resolve a tenant the
+  // caller did not name.
+  const actor = { userId: input.ownerUserId, orgId: input.orgId, role: 'user' } as const;
+  const def = await resolveDefinition(actor, input.integrationKey);
   if (!def) return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
 
   const action = def.actions.find((a) => a.actionName === input.actionName);
@@ -180,6 +233,30 @@ export async function executeUserIntegrationAction(
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };
   }
 
+  // WRITE GATE (C2). Placed HERE — after the shape gates, before `findConfigForOwner` — so that a
+  // write nobody approved never causes a credential to be read, let alone decrypted or sent. The
+  // ordering has one visible consequence, and it is the intended one: an unapproved write on an
+  // integration that is not even connected answers `awaiting_consent` rather than `not_connected`.
+  // Refusing for the stronger reason first is the fail-closed direction, and it means the gate
+  // cannot be probed for connection state by a caller who has not been approved for the action.
+  //
+  // A read (`mutates: false`, and ONLY a literal false — see action-consent.ts) falls straight
+  // through with no store lookup: an existing non-mutating integration behaves exactly as it did
+  // before this slice, prompt-free (Rule 7 additive).
+  const consent = await checkActionConsent(
+    { orgId: input.orgId, userId: input.ownerUserId },
+    input.integrationKey,
+    action,
+  );
+  if (!consent.allowed) {
+    return {
+      success: false,
+      code: 'awaiting_consent',
+      error: `action "${input.actionName}" on ${input.integrationKey} writes (${consent.request.target}) and needs the owner's approval before it can run`,
+      consentRequest: consent.request,
+    };
+  }
+
   const config = await findConfigForOwner(input.orgId, input.ownerUserId, input.integrationKey);
   if (!config && def.authType !== 'none') {
     return { success: false, code: 'not_connected', error: `integration ${input.integrationKey} is not connected for this user` };
@@ -194,6 +271,25 @@ export async function executeUserIntegrationAction(
   }
   const credentialFields = decrypted;
 
+  // RULE-10 MEASUREMENT (C2, closing B2's review MEDIUM-1). Every OTHER credential read runs the
+  // WS-C comparator; this one did not, because this rail decrypts the config itself instead of
+  // going through the composition root's loader seam. That is not a small omission: the listener
+  // poll runs through this function, so the sample behind the 2026-08-15 cutover decision contained
+  // no listener ticks at all — it would have been read as "every read" while measuring two rails
+  // out of three.
+  //
+  // OUTSIDE the decrypt's `try` on purpose (B2 review L1): "the credential did not decrypt" and
+  // "the measurement of the credential failed" must never be the same answer to a caller. The
+  // observer is sampled per (config, reader) and absorbs everything, so this can neither slow the
+  // rail down per call nor fail it.
+  if (config) {
+    await observeCredentialShadow(
+      actor,
+      config,
+      Object.fromEntries(Object.entries(credentialFields).map(([k, v]) => [k, String(v)])),
+    );
+  }
+
   // Provider credential resolver (e.g. Zoho Sign): mint EXTRA computed fields (a
   // fresh access token + api_base) the versioned config's `{{...}}` templates
   // interpolate, and persist any rotated credential (grant_code → refresh_token)
@@ -204,8 +300,25 @@ export async function executeUserIntegrationAction(
       ownerUserId: input.ownerUserId,
       superAdmin: false,
       configId: config?._id,
+      // WS-C ROTATION (C2, closing B2's review HIGH). This used to write the legacy column here and
+      // nothing else, so a rotating integration's Cofre shadow went permanently stale from its
+      // first rotation: permanent Rule-10 `drift`, and at the 2026-08-15 cutover a spent grant code
+      // handed back in place of the refresh token. There is now ONE implementation of "persist a
+      // provider-rotated credential" — `service.persistRotatedCredentials` — and this rail calls it
+      // rather than carrying a sibling body. Its custody rule is the reason it is the survivor: on
+      // an org-shared config with no item yet it REFUSES to mint, because the rotating user is
+      // whoever happened to be running, and minting would put custody and the lock switch in the
+      // Cofre of someone who never typed the credential. A rotation refreshes a shadow; it does not
+      // perform the connect ceremony.
       onCredentialUpdate: config
-        ? (updates) => persistProviderCredentialUpdates(config, credentialFields, updates)
+        ? async (updates) => {
+            const outcome = await persistRotatedCredentials(config._id, input.ownerUserId, credentialFields, updates);
+            if (outcome !== 'updated') {
+              // Never silent: a one-time grant-code exchange that did not persist is unrecoverable,
+              // because the code is already burnt.
+              console.warn(`[action-executor] rotated credential for ${input.integrationKey} was not persisted (${outcome})`);
+            }
+          }
         : undefined,
     });
   } catch (err) {
@@ -243,7 +356,75 @@ export async function executeUserIntegrationAction(
   // for value-based redaction in the failure summary and the returned data.
   const secretValues = Object.values(resolvedFields)
     .filter((v): v is string => typeof v === 'string' && v.length >= 4);
-  return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues);
+  const binding = await resolveEgressBinding(actor, input.integrationKey, config);
+  return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues, binding, input.integrationKey);
+}
+
+/**
+ * Is this request's destination bound, and to what? (C2, closing the CRITICAL B2's review proved:
+ * a LOCKED Cofre item's credential still went out to an author-chosen host on this rail, because
+ * this rail had no origin check at all — only `guardedFetch`, which by design permits every public
+ * host. B2's "lock = revoke, load-bearing from day one" was true for `api_call` steps and false
+ * here, on the rail the listener supervisor and the automation `integration` step both use.)
+ *
+ * NEITHER PREDICATE IS RE-DERIVED. The item scope comes from `integrationOriginScope` (the Cofre's
+ * own tenancy + link + grant check) and the declared-host list from
+ * `declaredOriginsForIntegration` — the same two pieces `egressOriginsForIntegration` composes for
+ * the `api_call` seam. What differs is the FALLBACK POLICY, deliberately, in exactly one case:
+ *
+ *   item joined, GRANTED      -> ENFORCE the item's own `boundOrigins`: the hosts fixed at the
+ *                                moment the human typed the credentials. An action authored or
+ *                                edited afterwards cannot widen its own egress.
+ *   item joined, LOCKED       -> REFUSE (empty allowlist). Lock is the kill switch; falling back
+ *                                to a wider list would route around it. THIS is the probe B2's
+ *                                reviewer landed.
+ *   item joined, UNREACHABLE  -> REFUSE. With `sharedConfig` passed (below), an ORG-SHARED config's
+ *                                item resolves like any other, so `unreachable` no longer means
+ *                                "a peer is using the admin's config" — it means the join names
+ *                                nothing this actor can reach, i.e. it is stale or tampered. There
+ *                                is deliberately NO fallback to the definition-derived host list
+ *                                here: that list is written by the same author as the action being
+ *                                authorised, and this is the rail that runs with no human present.
+ *   no item, hosts declared   -> ENFORCE the declared hosts.
+ *   no item, none declared    -> UNBOUND: exactly the pre-C2 behaviour (SSRF guard only). This is
+ *                                the templated-baseUrl case (`{{api_base}}`, `{{graph_base_url}}`,
+ *                                `{{api_access_point}}` — zoho-sign, microsoft-365,
+ *                                adobe-acrobat-sign), where the host comes from a credential field
+ *                                at run time and the package declares no literal host to bind to.
+ *                                Those integrations mint no Cofre item for the same reason
+ *                                (`mintOrRefreshCredentialShadow` returns null on an empty
+ *                                binding), so this is not a hole C2 opens; it is named here rather
+ *                                than papered over, and closes the moment a templated host can be
+ *                                bound at connect.
+ */
+async function resolveEgressBinding(
+  actor: { userId: string; orgId: string; role: 'user' },
+  integrationKey: string,
+  config: IntegrationConfigDoc | null,
+): Promise<{ enforced: boolean; origins: string[] }> {
+  try {
+    if (config?.cofreItemId) {
+      // `sharedConfig` is load-bearing, not a default: an org-shared config's item belongs to the
+      // admin who typed the credentials, so WITHOUT this flag every peer's run reads `unreachable`
+      // and the rail would either refuse them all or fall back to the author-widened list — the
+      // exact defect B2's review found one file over. With it, a peer resolves the SAME item and
+      // therefore the SAME lock the owner set.
+      const scope = await integrationOriginScope(actor, config.cofreItemId, linkForConfig(config), {
+        sharedConfig: config.ownerUserId == null,
+      });
+      if (scope.kind === 'granted') return { enforced: true, origins: scope.origins };
+      // `locked` or `unreachable`: refuse. A joined item that will not answer is a stale or
+      // tampered join, never a sharing arrangement — the sharing case now resolves above.
+      return { enforced: true, origins: [] };
+    }
+    const declared = await declaredOriginsForIntegration(actor, integrationKey);
+    return { enforced: declared.length > 0, origins: declared };
+  } catch (err) {
+    // A resolver failure must not silently widen the binding. Fail CLOSED with an empty allowlist
+    // that `assertOriginAllowed` refuses, rather than returning `enforced: false`.
+    console.warn(`[action-executor] origin resolution failed for ${integrationKey}: ${err instanceof Error ? err.message : String(err)}`);
+    return { enforced: true, origins: [] };
+  }
 }
 
 // ============================================================================
@@ -294,29 +475,6 @@ export async function resolveProviderCredentials(
   return resolver(credentialFields, ctx);
 }
 
-/**
- * Persist rotated credential fields back into a saved config's encrypted bundle
- * (e.g. Zoho's grant-code → refresh_token exchange). Re-encrypts the current
- * decrypted bundle merged with the updates via the store's CAS mutator; never
- * folds a captured browser session (`storageState`) into the credentials bundle.
- */
-async function persistProviderCredentialUpdates(
-  config: IntegrationConfigDoc,
-  currentFields: Record<string, unknown>,
-  updates: Record<string, string>,
-): Promise<void> {
-  try {
-    const merged: Record<string, unknown> = { ...currentFields, ...updates };
-    delete merged.storageState;
-    // Cofre B-4 / B1: re-encrypt under the SAME org-bound v2 envelope the reader uses. Writing a
-    // flat v1 blob here (the pre-B1 bug) silently downgraded a v2 row on every rotation.
-    const ciphertext = await envelopeEncrypt(JSON.stringify(merged), config.orgId);
-    await integrationConfigs.update(config._id, (cur) => ({ ...cur, credentialsCiphertext: ciphertext }));
-  } catch (err) {
-    console.warn(`[action-executor] failed to persist rotated credentials for ${config.integrationKey}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
 const DECRYPT_FAILED = Symbol('decrypt-failed');
 
 /**
@@ -346,6 +504,8 @@ async function executeHttpAction(
   rawVars: Record<string, unknown>,
   deps: ExecutorDeps,
   secretValues: string[] = [],
+  binding: { enforced: boolean; origins: string[] } = { enforced: false, origins: [] },
+  credentialLabel?: string,
 ): Promise<ExecuteIntegrationActionResult> {
   const baseUrl = interpolate(httpConfig.baseUrl, vars);
   if (!/^https?:\/\//i.test(baseUrl)) {
@@ -383,14 +543,43 @@ async function executeHttpAction(
     body: body ? truncateForDisplay(redactBody(body), MAX_BODY_DISPLAY_BYTES) : undefined,
   }, secretValues) as { method: string; url: string; headers: Record<string, string>; body?: string };
 
+  // ORIGIN BINDING (C2). Asserted HERE, not inside the default transport, because `deps.fetchImpl`
+  // exists: a control that a caller can step around by injecting a transport is not a control. So
+  // the check runs against the resolved destination whatever ends up dialling it, and nothing has
+  // left this process when it refuses.
+  //
+  // The refusal message names the host and the allowed entries, and — where the destination could
+  // not be parsed — the URL itself, which for a `queryParams: { token: '{{api_key}}' }` action
+  // contains a live secret. Value-redacted before it becomes a result, like every other string
+  // this module returns.
+  //
+  // What this replaces (the pre-C2 note, kept for the record): "binding this request to the
+  // package's own baseUrl would be tautological, because the package declares that baseUrl itself."
+  // True, and still true for the declared-origin fallback. It stopped being the whole story with
+  // B2: once the credentials live in a Cofre item, the allowlist is the set of hosts bound at the
+  // moment the human typed them, so an action authored or edited AFTERWARDS cannot widen its own
+  // egress. That is the non-tautological half, and it was reachable on the automation rail and not
+  // on this one. The provenance problem the old note named is unchanged — see
+  // `integration-package-baseurl-unreviewed` in findings.
+  if (binding.enforced) {
+    try {
+      assertOriginAllowed(requestUrl, { allowedOrigins: binding.origins, credentialLabel });
+    } catch (err) {
+      if (!(err instanceof CredentialOriginError)) throw err;
+      return {
+        success: false,
+        code: 'origin_refused',
+        error: redactSecretValuesIn(err.message, secretValues),
+        details: { request: requestSummary },
+      };
+    }
+  }
+
   // SSRF GUARD (Cofre R-2). This path used to send on a bare `globalThis.fetch` behind nothing but
   // a `^https?://` shape check on a baseUrl written VERBATIM from an LLM-authored package config
   // (routes/integration-builder.ts) — no private-IP block, no metadata-endpoint block, no
   // DNS-rebinding re-check, while injecting the owner's decrypted credential. It now goes through
   // the same guarded fetcher as every other platform-initiated fetch of a user-supplied URL.
-  // NOTE (deliberately NOT closed here): binding this request to the package's own baseUrl would
-  // be tautological, because the package declares that baseUrl itself. A hostile user-defined
-  // package is a PROVENANCE problem — see `integration-package-baseurl-unreviewed` in findings.
   const fetchImpl = deps.fetchImpl
     ?? ((u: string, init?: Parameters<FetchLike>[1]) =>
       guardedFetch(u, {

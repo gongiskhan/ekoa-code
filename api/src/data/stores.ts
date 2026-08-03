@@ -231,6 +231,21 @@ export interface RunIdempotencyDoc extends Doc {
 }
 export const automationRunIdempotency = new Store<RunIdempotencyDoc>('automation_run_idempotency');
 export const approvedCommands = new Store<Doc>('approved_commands');
+/**
+ * Durable human approvals for MUTATING integration actions (slice C2, the write gate).
+ *
+ * The sibling of `approved_commands`, for the other thing this platform does on a user's behalf
+ * without a human watching: `approved_commands` answers "may this command shape run on your
+ * machine", this one answers "may this integration action WRITE to your account". Same tested
+ * shape — org+user scoped, TTL'd, fail-closed on a missing/expired row — with the third scope
+ * component being the action's own SHAPE (integrations/action-consent.ts) rather than a command
+ * shape, so re-authoring an action does not inherit the approval the human gave the old one.
+ *
+ * A separate collection rather than a discriminated column on `approved_commands`: the two are
+ * read on different rails, by different tiers (automation/ vs integrations/), and a shared
+ * collection would put a lookup for one on the same key space as the other for no gain.
+ */
+export const approvedIntegrationActions = new Store<Doc>('approved_integration_actions');
 export const triggers = new Store<Doc>('triggers');
 export const appSessions = new Store<Doc>('app_sessions');
 export const appSsoPending = new Store<Doc>('app_sso_pending');

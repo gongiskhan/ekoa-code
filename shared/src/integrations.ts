@@ -172,6 +172,71 @@ export const DefinitionVisibilityResponse = z.object({
 });
 export type DefinitionVisibilityResponse = z.infer<typeof DefinitionVisibilityResponse>;
 
+/* --- The write gate (slice C2) --------------------------------------------------------------- */
+
+/**
+ * A human's answer to "may this action write on my behalf".
+ *
+ *   `once`   — this run only. Single-use and short-lived: the next execution CLAIMS it (atomically
+ *              deleting it), so it can never authorise a second write.
+ *   `always` — a standing approval, 90 days, revocable.
+ *
+ * There is deliberately no `never`: refusing is simply not approving, and a persisted "no" would be
+ * a second thing to expire, revoke and reason about for no behavioural gain.
+ */
+export const IntegrationActionApprovalDecision = z.enum(['once', 'always']);
+export type IntegrationActionApprovalDecision = z.infer<typeof IntegrationActionApprovalDecision>;
+
+/**
+ * The per-action approval row the dashboard renders. `shape` is the fingerprint of the action's
+ * executable content (method + URL + templates, or the bound automation): it is what an approval is
+ * keyed on, so re-authoring an action does not inherit the approval given to the old one — and it
+ * is what the client must echo back when the user confirms, so an approval can only ever be banked
+ * for the shape the human was actually shown.
+ */
+export const IntegrationActionApproval = z.object({
+  actionName: z.string(),
+  description: z.string(),
+  /** Human-readable statement of what runs, e.g. `POST https://slack.com/api/chat.postMessage`. */
+  target: z.string(),
+  shape: z.string(),
+  /** Whether this action is gated at all. Fail-closed: anything but a literal `mutates:false`. */
+  requiresConsent: z.boolean(),
+  /** The live decision covering THIS shape, or null when the action still needs an answer. */
+  decision: IntegrationActionApprovalDecision.nullable(),
+  expiresAt: IsoTimestamp.nullable(),
+});
+export type IntegrationActionApproval = z.infer<typeof IntegrationActionApproval>;
+
+export const IntegrationActionApprovalListResponse = itemsResponse(IntegrationActionApproval);
+export type IntegrationActionApprovalListResponse = z.infer<typeof IntegrationActionApprovalListResponse>;
+
+/**
+ * `shape` is REQUIRED, and it is the anti-TOCTOU half of this endpoint: the server refuses an
+ * approval whose shape no longer matches the stored action. Same reasoning as the automations
+ * domain's `ConsentRequest` carrying the command shape — without it a caller could bank an approval
+ * for a shape the user never saw, which is the inverse of consent.
+ */
+export const ApproveIntegrationActionRequest = z.object({
+  decision: IntegrationActionApprovalDecision,
+  shape: z.string(),
+});
+export type ApproveIntegrationActionRequest = z.infer<typeof ApproveIntegrationActionRequest>;
+
+export const ApproveIntegrationActionResponse = z.object({
+  ok: z.literal(true),
+  decision: IntegrationActionApprovalDecision,
+  expiresAt: IsoTimestamp,
+});
+export type ApproveIntegrationActionResponse = z.infer<typeof ApproveIntegrationActionResponse>;
+
+export const RevokeIntegrationActionApprovalResponse = z.object({
+  ok: z.literal(true),
+  /** How many approval rows were removed — every decision and every past shape (see the route). */
+  revoked: z.number().int().nonnegative(),
+});
+export type RevokeIntegrationActionApprovalResponse = z.infer<typeof RevokeIntegrationActionApprovalResponse>;
+
 export const integrationsEndpoints = {
   list: {
     method: 'GET',
@@ -259,5 +324,38 @@ export const integrationsEndpoints = {
     auth: 'super-admin',
     request: SetDefinitionGlobalRequest,
     response: DefinitionVisibilityResponse,
+  },
+  /**
+   * The write gate's READ side: every action of an integration with its target, its shape and the
+   * live approval (if any). `auth: 'user'` — see the note on the write below.
+   */
+  listActionApprovals: {
+    method: 'GET',
+    path: '/api/v1/integrations/:key/action-approvals',
+    auth: 'user',
+    response: IntegrationActionApprovalListResponse,
+  },
+  /**
+   * Approve a mutating action.
+   *
+   * `auth: 'user'` and emphatically NOT `user-or-key`. The whole point of the gate is that a WRITE
+   * needs a HUMAN (RUN_SPEC criterion 6), and a gateway key is an agent. If this were
+   * `user-or-key`, an agent refused at the execution gate could call this endpoint with the very
+   * shape it was just handed and then retry — a gate that grants its own exemption is not a gate.
+   * Precedent in this same domain: `setVisibility` is `user` for the same reason.
+   */
+  approveAction: {
+    method: 'POST',
+    path: '/api/v1/integrations/:key/actions/:actionName/approval',
+    auth: 'user',
+    request: ApproveIntegrationActionRequest,
+    response: ApproveIntegrationActionResponse,
+  },
+  /** Revoke every approval this user holds for this action — both decisions, every past shape. */
+  revokeActionApproval: {
+    method: 'DELETE',
+    path: '/api/v1/integrations/:key/actions/:actionName/approval',
+    auth: 'user',
+    response: RevokeIntegrationActionApprovalResponse,
   },
 } as const satisfies DomainDescriptorMap;

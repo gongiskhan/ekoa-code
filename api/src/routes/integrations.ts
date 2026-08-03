@@ -6,11 +6,23 @@
  * Persistence via the integrations service; definitions via the registry (ch02 §2.7).
  */
 import { Router, type Response } from 'express';
-import { type Actor, SetDefinitionVisibilityRequest, SetDefinitionGlobalRequest } from '@ekoa/shared';
+import {
+  type Actor,
+  SetDefinitionVisibilityRequest,
+  SetDefinitionGlobalRequest,
+  ApproveIntegrationActionRequest,
+} from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
+import {
+  actionRequiresConsent,
+  approveAction,
+  describeAction,
+  liveApprovalFor,
+  revokeActionApprovals,
+} from '../integrations/action-consent.js';
 import {
   integrationDefinitionStore,
   type DefinitionVisibility,
@@ -142,6 +154,102 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
     const target: DefinitionVisibility = body.global ? 'global' : 'org';
     const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target);
     sendVisibility(res, result);
+  });
+
+  // --- The WRITE GATE (slice C2) --------------------------------------------------------------
+  //
+  // Three routes over `integrations/action-consent.ts`. None of them is the gate: the gate is in
+  // `executeUserIntegrationAction`, so it catches every rail (capability route, automation step,
+  // listener tick, agent tool) rather than only the ones that happen to pass through a router.
+  // These are the surface a human answers it on.
+  //
+  // TENANCY: the acting (org, user) is `actorOf(req)` — off the verified JWT — and the integration
+  // is resolved UNDER THAT ACTOR, so an action the caller cannot see is a 404, byte-identical with
+  // a key that does not exist. No body field names an org, a user or another tenant's action.
+
+  /**
+   * GET /api/v1/integrations/:key/action-approvals -> { items: IntegrationActionApproval[] }.
+   * Every action of the integration with its rendered target, its shape and the live approval.
+   * Non-mutating actions are listed too, flagged `requiresConsent: false`: the dashboard has to be
+   * able to show that a read needs no permission, and an empty row would read as "not yet asked".
+   */
+  r.get('/:key/action-approvals', async (req: AuthedRequest, res: Response) => {
+    const actor = actorOf(req);
+    const key = req.params.key as string;
+    const def = await resolveDefinition(actor, key);
+    if (!def) return notFound(res);
+    const items = [];
+    for (const action of def.actions ?? []) {
+      const descriptor = describeAction(key, action);
+      const requiresConsent = actionRequiresConsent(action);
+      // A read is never looked up: it has no approval to have, and querying for one would invent a
+      // row shape for actions that are not gated.
+      const live = requiresConsent
+        ? await liveApprovalFor({ orgId: actor.orgId, userId: actor.userId }, key, action.actionName, descriptor.shape)
+        : null;
+      items.push({
+        actionName: descriptor.actionName,
+        description: descriptor.description,
+        target: descriptor.target,
+        shape: descriptor.shape,
+        requiresConsent,
+        decision: live?.decision ?? null,
+        expiresAt: live?.expiresAt ?? null,
+      });
+    }
+    res.json({ items });
+  });
+
+  /**
+   * POST /api/v1/integrations/:key/actions/:actionName/approval -> { ok, decision, expiresAt }.
+   *
+   * The two refusals that matter:
+   *  - a NON-MUTATING action cannot be approved. Banking permission for something that needs none
+   *    would leave a row that outlives a later flip of `mutates` to true — an approval for a write
+   *    the human never saw. Rule 7's "a `mutates:false` action must not gain a prompt" runs in this
+   *    direction too.
+   *  - a SHAPE MISMATCH is refused. The body echoes the shape the user was shown; if the action was
+   *    re-authored between render and click, the answer is about a different action.
+   *
+   * Both answer `VALIDATION_FAILED` (400) rather than a conflict status: the shared error
+   * vocabulary (`shared/src/errors.ts`) has no generic `CONFLICT`, and widening it is a
+   * contract-wide change that does not belong to this slice. Both refusals genuinely are about the
+   * request body — it named a decision for an ungated action, or a shape that is not this action's
+   * — so the code is not a lie, and the messages say precisely which.
+   */
+  r.post('/:key/actions/:actionName/approval', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, ApproveIntegrationActionRequest, req.body);
+    if (!body) return;
+    const actor = actorOf(req);
+    const key = req.params.key as string;
+    const def = await resolveDefinition(actor, key);
+    const action = def?.actions?.find((a) => a.actionName === req.params.actionName);
+    if (!action) return notFound(res);
+    if (!actionRequiresConsent(action)) {
+      return sendError(res, 'VALIDATION_FAILED', 'Esta ação não altera dados e não precisa de autorização.');
+    }
+    const descriptor = describeAction(key, action);
+    if (descriptor.shape !== body.shape) {
+      return sendError(res, 'VALIDATION_FAILED', 'A ação mudou desde que foi apresentada. Reveja e confirme de novo.');
+    }
+    const { expiresAt } = await approveAction({ orgId: actor.orgId, userId: actor.userId }, descriptor, body.decision);
+    res.json({ ok: true, decision: body.decision, expiresAt });
+  });
+
+  /**
+   * DELETE /api/v1/integrations/:key/actions/:actionName/approval -> { ok, revoked }.
+   * Revoking does NOT require the action to still exist in a resolvable definition — a user must be
+   * able to withdraw permission from an action that was just deleted or re-authored, which is
+   * exactly when they most want to. The delete is scoped to their own (org, user) rows regardless.
+   */
+  r.delete('/:key/actions/:actionName/approval', async (req: AuthedRequest, res: Response) => {
+    const actor = actorOf(req);
+    const revoked = await revokeActionApprovals(
+      { orgId: actor.orgId, userId: actor.userId },
+      req.params.key as string,
+      req.params.actionName as string,
+    );
+    res.json({ ok: true, revoked });
   });
 
   // --- Configs CRUD -------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import type {
   IntegrationConnectSessionResult,
   IntegrationProvisionAutomationsResult,
 } from '@/types/integration';
+import type { IntegrationActionApproval, IntegrationActionApprovalListResponse } from '@ekoa/shared';
 
 export interface PlatformIntegrationStatus {
   connected: boolean;
@@ -75,6 +76,16 @@ interface IntegrationsState {
   sessionBusy: Record<string, boolean>;
   sessionPolling: Record<string, boolean>;
 
+  /**
+   * WRITE GATE (slice C2), keyed by integrationKey: every action of the integration with the
+   * server's rendering of what it will run (`target`), its `shape`, and the live approval this
+   * user holds for it. The server is the only source of these — the dashboard never derives
+   * `requiresConsent` from `mutates` itself, because the gate's fail-closed rule (anything but a
+   * literal `mutates:false` is a write) lives in `api/src/integrations/action-consent.ts` and a
+   * second copy here could disagree with the thing that actually refuses.
+   */
+  actionApprovals: Record<string, IntegrationActionApproval[]>;
+
   // Actions
   fetchSkills: () => Promise<void>;
   fetchConfigs: () => Promise<void>;
@@ -105,6 +116,16 @@ interface IntegrationsState {
   provisionAutomations: (integrationKey: string) => Promise<{ success: boolean; error?: string }>;
   cancelSessionWait: (integrationKey: string) => void;
 
+  // Write-gate actions (slice C2)
+  fetchActionApprovals: (integrationKey: string) => Promise<void>;
+  approveActionWrite: (
+    integrationKey: string,
+    actionName: string,
+    shape: string,
+    decision: 'once' | 'always',
+  ) => Promise<{ success: boolean; error?: string }>;
+  revokeActionWrite: (integrationKey: string, actionName: string) => Promise<{ success: boolean; error?: string }>;
+
   // Helpers
   isConfigured: (integrationKey: string) => boolean;
   isEnabled: (integrationKey: string) => boolean;
@@ -122,6 +143,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
   sessionStatuses: {},
   sessionBusy: {},
   sessionPolling: {},
+  actionApprovals: {},
 
   fetchSkills: async () => {
     set({ isLoading: true, error: null });
@@ -423,6 +445,38 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
         },
       };
     });
+  },
+
+  // ---- Write gate (slice C2) ----------------------------------------------------------------
+  //
+  // Three thin calls over the integrations write-gate routes. Every one of them RE-FETCHES the
+  // list rather than patching the cached row from the response: `shape` is the fingerprint the
+  // server refuses a stale approval on, so a locally-invented row would be exactly the state the
+  // server is designed to distrust.
+
+  fetchActionApprovals: async (integrationKey) => {
+    const res = await tryCall(() => api.integrations.listActionApprovals({ key: integrationKey }));
+    if (!res.ok) return;
+    const { items } = res.data as unknown as IntegrationActionApprovalListResponse;
+    set((state) => ({ actionApprovals: { ...state.actionApprovals, [integrationKey]: items } }));
+  },
+
+  approveActionWrite: async (integrationKey, actionName, shape, decision) => {
+    const res = await tryCall(() =>
+      api.integrations.approveAction({ key: integrationKey, actionName, decision, shape }),
+    );
+    if (!res.ok) return { success: false, error: res.error.message };
+    await get().fetchActionApprovals(integrationKey);
+    return { success: true };
+  },
+
+  revokeActionWrite: async (integrationKey, actionName) => {
+    const res = await tryCall(() =>
+      api.integrations.revokeActionApproval({ key: integrationKey, actionName }),
+    );
+    if (!res.ok) return { success: false, error: res.error.message };
+    await get().fetchActionApprovals(integrationKey);
+    return { success: true };
   },
 
   // Helpers

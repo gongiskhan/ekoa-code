@@ -254,6 +254,33 @@ export interface Translations {
       actionAutomationPending: string;
       actionRefineSteps: string;
       createAutomations: string;
+      // --- Write gate (slice C2): a `mutates` action needs the owner's approval before it runs ---
+      writeGate: {
+        /** Chip on a mutating action that has no live approval. */
+        needsApproval: string;
+        /** Chip on a mutating action with a standing (90-day) approval. */
+        approved: string;
+        approvedUntil: (date: string) => string;
+        /** Chip on a mutating action with a single-use approval waiting to be claimed. */
+        approvedOnce: string;
+        authorise: string;
+        revoke: string;
+        // The dialog.
+        title: string;
+        subtitle: string;
+        integrationLabel: string;
+        actionLabel: string;
+        targetLabel: string;
+        /** The standing consequence, stated before the buttons rather than after. */
+        standingNote: (days: number) => string;
+        onceNote: string;
+        revokeNote: string;
+        cancel: string;
+        approveOnce: string;
+        approveAlways: string;
+        staleShape: string;
+        failed: string;
+      };
     };
 
     // ============================================

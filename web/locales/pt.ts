@@ -239,6 +239,28 @@ export const pt: Translations = {
       actionAutomationPending: 'Automação por criar',
       actionRefineSteps: 'Refinar passos',
       createAutomations: 'Criar automações',
+      writeGate: {
+        needsApproval: 'Precisa de autorização',
+        approved: 'Autorizada',
+        approvedUntil: (date: string) => `Autorizada até ${date}`,
+        approvedOnce: 'Autorizada uma vez',
+        authorise: 'Autorizar',
+        revoke: 'Revogar',
+        title: 'Autorizar uma ação que altera dados',
+        subtitle: 'Esta ação escreve na sua conta. Nada é executado sem a sua confirmação.',
+        integrationLabel: 'Integração',
+        actionLabel: 'Ação',
+        targetLabel: 'Vai executar',
+        standingNote: (days: number) =>
+          `A autorização permanente vale ${days} dias e pode ser revogada a qualquer momento.`,
+        onceNote: 'A autorização única vale para a próxima execução e é consumida nessa execução.',
+        revokeNote: 'Revogar retira todas as autorizações desta ação.',
+        cancel: 'Cancelar',
+        approveOnce: 'Autorizar uma vez',
+        approveAlways: 'Autorizar sempre',
+        staleShape: 'A ação mudou desde que foi apresentada. Reveja e confirme de novo.',
+        failed: 'Não foi possível registar a autorização.',
+      },
     },
 
     platformIntegrations: {

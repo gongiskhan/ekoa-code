@@ -239,6 +239,28 @@ export const en: Translations = {
       actionAutomationPending: 'Automation not yet created',
       actionRefineSteps: 'Refine steps',
       createAutomations: 'Create automations',
+      writeGate: {
+        needsApproval: 'Needs approval',
+        approved: 'Approved',
+        approvedUntil: (date: string) => `Approved until ${date}`,
+        approvedOnce: 'Approved once',
+        authorise: 'Authorise',
+        revoke: 'Revoke',
+        title: 'Authorise an action that changes data',
+        subtitle: 'This action writes to your account. Nothing runs without your confirmation.',
+        integrationLabel: 'Integration',
+        actionLabel: 'Action',
+        targetLabel: 'Will run',
+        standingNote: (days: number) =>
+          `A standing approval lasts ${days} days and can be revoked at any time.`,
+        onceNote: 'A one-time approval covers the next run only and is consumed by it.',
+        revokeNote: 'Revoking removes every approval for this action.',
+        cancel: 'Cancel',
+        approveOnce: 'Approve once',
+        approveAlways: 'Approve always',
+        staleShape: 'The action changed since it was shown. Review and confirm again.',
+        failed: 'Could not record the approval.',
+      },
     },
 
     platformIntegrations: {
