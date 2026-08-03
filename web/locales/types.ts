@@ -150,6 +150,20 @@ export interface Translations {
       configFieldsHint: string;
       skillFile: string;
       skillFileHint: string;
+      /* Per-integration lessons (slice C3) — free text that rides into the agent's context. */
+      lessons: string;
+      lessonsHint: string;
+      lessonsPlaceholder: string;
+      lessonsSave: string;
+      lessonsSaved: string;
+      lessonsReadOnly: string;
+      lessonsReadOnlyHint: string;
+      lessonsCounter: (used: number, limit: number) => string;
+      lessonsTooLong: string;
+      lessonsConflictTitle: string;
+      lessonsConflictHint: string;
+      lessonsTakeTheirs: string;
+      lessonsOverwrite: string;
       actions: string;
       actionsHint: string;
       testing: string;

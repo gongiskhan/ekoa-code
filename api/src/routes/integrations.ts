@@ -35,6 +35,7 @@ import {
   ExecuteIntegrationActionRequest,
   IntegrationActionParams,
   IntegrationKeyParams,
+  SetIntegrationLessonsRequest,
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
@@ -60,6 +61,7 @@ import {
   type DefinitionVisibility,
   type SetVisibilityResult,
 } from '../integrations/definition-store.js';
+import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import type { AutomationBackedHandler } from '../integrations/action-executor.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
@@ -441,6 +443,53 @@ export function integrationsRouter(deps: {
       req.params.actionName as string,
     );
     res.json({ ok: true, revoked });
+  });
+
+  // --- Per-integration LESSONS (slice C3) -----------------------------------------------------
+  //
+  // Two thin routes over `integrations/definition-lessons.ts`. NOTHING about the raw-vs-scrubbed
+  // split, the admission set, the ceiling or the CAS is decided here — this layer validates, calls
+  // once, and maps the verdict onto the envelope. Both sit BELOW the `requireAuth` blanket: they
+  // are `auth: 'user'` and a gateway key never reaches them (the descriptors say why).
+
+  r.get('/:key/lessons', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const result = await readLessons(actorOf(req), params.data.key);
+    if (result.verdict === 'notfound') return notFound(res);
+    res.json(result.view);
+  });
+
+  r.patch('/:key/lessons', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const body = parseBody(res, SetIntegrationLessonsRequest, req.body);
+    if (!body) return;
+    const result = await writeLessons(actorOf(req), params.data.key, body.lessons, {
+      ...(body.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: body.expectedUpdatedAt } : {}),
+    });
+    if (result.verdict === 'notfound') return notFound(res);
+    if (result.verdict === 'forbidden') {
+      return sendError(res, 'FORBIDDEN', 'Não tem permissão para editar as lições desta integração.');
+    }
+    if (result.verdict === 'too_long') {
+      // Belt-and-braces: the shared schema already refuses this length, so reaching here means the
+      // two disagreed. Same 400 either way — the body genuinely is invalid.
+      return sendError(res, 'VALIDATION_FAILED', 'As lições excedem o limite de caracteres.', {
+        code: 'lessons_too_long', limit: result.limit, length: result.length,
+      });
+    }
+    if (result.verdict === 'stale') {
+      // 400 and not a conflict status, for the reason `approveAction` states one screen up: the
+      // shared error vocabulary has no generic CONFLICT and widening it does not belong to this
+      // slice. The refusal genuinely IS about the body — it named a revision that is no longer
+      // current — and `details.current` carries what IS stored, so the editor can show both
+      // versions instead of guessing.
+      return sendError(res, 'VALIDATION_FAILED', 'Estas lições foram alteradas entretanto. Reveja a versão guardada.', {
+        code: 'stale_revision', current: result.view,
+      });
+    }
+    res.json(result.view);
   });
 
   // --- Config removal + session/provision (the remaining `:key` dashboard routes) -------------

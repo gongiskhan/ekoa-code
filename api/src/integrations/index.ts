@@ -69,6 +69,20 @@ export {
   type PublishModelPassRecord,
   type DefinitionVisibility,
 } from './definition-store.js';
+// C3 — per-integration LESSONS: the raw (editor) / scrubbed (prompt) split over the `lessons`
+// field, its refusing ceiling, its CAS write, and the `load_context` concatenation.
+export {
+  readLessons,
+  writeLessons,
+  lessonsForPrompt,
+  lessonsViewOf,
+  composeIntegrationContext,
+  INTEGRATION_LESSONS_MAX_CHARS,
+  LESSONS_PROMPT_HEADING,
+  type ReadLessonsResult,
+  type WriteLessonsResult,
+  type LessonsStoreReader,
+} from './definition-lessons.js';
 // E2 — the publish scrub: deterministic floor + one chokepoint model pass into a FROZEN snapshot
 // other orgs read, plus its dry-run preview. `applyPublishFloor`/`publishedViewOf` are the pure
 // read-time half; `previewPublish`/`publishDefinition` are the two doors the route layer mounts.

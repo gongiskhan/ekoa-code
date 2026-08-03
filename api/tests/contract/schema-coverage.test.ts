@@ -216,6 +216,17 @@ const COVERED = new Set<string>([
   // stays where it already was under G6 - flipping an auth class adds no descriptor (the same
   // accounting slice E5 used for knowledge.listCollections/listDocuments).
   'integrations.getIntegration', 'integrations.executeAction',
+  // slice C3 - the per-integration LESSONS surface this slice ADDS
+  // (integrations-lessons.test.ts: a real app + two orgs + a same-org peer + an org-admin; the
+  // byte-exact PATCH->GET round trip and a three-cycle GET->PATCH edit loop that would burn in a
+  // redaction if the read were scrubbed; the peer's scrubbed read + 403 write; a published row
+  // scrubbed for everyone including its author; another org's byte-identical 404; the
+  // over-length 400 AT THE SCHEMA with the row proven untouched; the stale-revision refusal with
+  // `details.current`; 401 unauthenticated on both; and the REAL `loadContextContent` seam
+  // proving a credential pasted into lessons over the wire never reaches a prompt while the
+  // lesson prose does). Two NEW descriptors, two COVERED entries: EXPECTED_PENDING_COUNT is
+  // unchanged.
+  'integrations.getLessons', 'integrations.setLessons',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

@@ -156,6 +156,10 @@ import {
   resolveDefinition,
   listDefinitionsFor,
   resolveSkillMd,
+  // C3 — the PROMPT view of an integration's accumulated lessons, and the one place the two halves
+  // of the `load_context` body are joined.
+  lessonsForPrompt,
+  composeIntegrationContext,
 } from './integrations/index.js';
 // Deep import, deliberately NOT via the integrations barrel (A3 review L2): the importer mints a
 // platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
@@ -363,8 +367,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       if (orgId && cfg && (cfg as { enabled?: boolean }).enabled !== false) {
         // A2: the knowledge body is resolved TENANT-SCOPED under the requesting user's own org, so
         // a tenant that authored its own package serves ITS SKILL.md, not the shipped one.
-        const raw = await resolveSkillMd({ userId, orgId, role: 'user' }, key);
-        if (raw) return stripFrontmatter(raw);
+        // C3: and the integration's accumulated LESSONS are appended under one heading. BOTH
+        // halves come from the PROMPT views (`resolveSkillMd` / `lessonsForPrompt`), which are
+        // scrubbed and cross-org-safe; the byte-exact views exist only for the editor and must
+        // never be reached from here.
+        const actor = { userId, orgId, role: 'user' as const };
+        const raw = await resolveSkillMd(actor, key);
+        const lessons = await lessonsForPrompt(actor, key);
+        const body = composeIntegrationContext(raw === null ? null : stripFrontmatter(raw), lessons);
+        if (body !== null) return body;
       }
     }
     return null;

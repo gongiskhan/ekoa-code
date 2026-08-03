@@ -237,6 +237,53 @@ export const RevokeIntegrationActionApprovalResponse = z.object({
 });
 export type RevokeIntegrationActionApprovalResponse = z.infer<typeof RevokeIntegrationActionApprovalResponse>;
 
+/* --- Per-integration LESSONS (slice C3) ------------------------------------------------------ */
+
+/**
+ * The ceiling on a lessons body, in the units `String.length` and zod's `.max()` both count.
+ * ONE constant: the wire refusal, the api seam's own check and the dashboard's character counter
+ * all read it, because a limit that lives in two places eventually disagrees — and the surface
+ * that disagreed would be the one that silently truncates somebody's notes.
+ *
+ * 20k characters (~5k tokens) is generous for accumulated prose and bounded enough that an
+ * integration's lessons cannot quietly become the dominant cost of every run that loads it.
+ */
+export const INTEGRATION_LESSONS_MAX_CHARS = 20_000;
+
+/**
+ * What an integration's lessons look like to a caller.
+ *
+ * `editable` is the honest statement of WHICH view was served. Lessons are free text a human
+ * writes AND text that reaches a model prompt, so the api keeps two views: the BYTE-EXACT one for
+ * the principals who may save the definition (otherwise an edit cycle round-trips a redaction into
+ * stored documentation — A3 review F3), and the SCRUBBED one for everyone else (A2 review F7). A
+ * client must not offer an edit over a `false`: the write would be refused.
+ *
+ * `updatedAt` is the optimistic-concurrency token, echoed back on a write.
+ */
+export const IntegrationLessonsView = z.object({
+  key: z.string(),
+  lessons: z.string(),
+  editable: z.boolean(),
+  updatedAt: IsoTimestamp,
+});
+export type IntegrationLessonsView = z.infer<typeof IntegrationLessonsView>;
+
+/**
+ * `lessons` is bounded AT THE SCHEMA, so an over-length body is a 400 before any handler runs and
+ * the refusal cannot be forgotten by a second caller. Nothing anywhere trims: a truncated note is
+ * worse than a rejected one, because the author believes it was recorded.
+ *
+ * `expectedUpdatedAt` is OPTIONAL and its absence means something specific — "overwrite whatever
+ * is stored". Present, it is the row revision the editor loaded, and a mismatch is refused with
+ * the current text rather than clobbered.
+ */
+export const SetIntegrationLessonsRequest = z.object({
+  lessons: z.string().max(INTEGRATION_LESSONS_MAX_CHARS),
+  expectedUpdatedAt: IsoTimestamp.optional(),
+});
+export type SetIntegrationLessonsRequest = z.infer<typeof SetIntegrationLessonsRequest>;
+
 /* --- The PUBLIC capability surface (slice D1) ------------------------------------------------ */
 
 /**
@@ -501,6 +548,37 @@ export const integrationsEndpoints = {
     path: '/api/v1/integrations/:key/actions/:actionName/approval',
     auth: 'user',
     response: RevokeIntegrationActionApprovalResponse,
+  },
+
+  /* --- Per-integration LESSONS (slice C3) ---------------------------------------------------- */
+
+  /**
+   * Read / replace the operational knowledge an integration has accumulated.
+   *
+   * `auth: 'user'` on BOTH, and this is a DEVIATION from RUN_SPEC criterion 7's literal wording
+   * (which lists `lessons` on the user-or-key capability surface), journaled in docs/decisions.md:
+   *  - the READ an agent needs is not this endpoint. Lessons reach a model through the server-side
+   *    `load_context` seam, already scrubbed. A key-reachable GET would add a way to pull a
+   *    tenant's free text out over an API key without adding any capability the agent lacks.
+   *  - the WRITE is free text that lands in the caller's OWN FUTURE PROMPTS. A key-bearing agent
+   *    writing it is injecting its own context — what Rule 8 forbids the provider from doing — and
+   *    is the same self-exemption C2 refused when it made all three consent descriptors `user`.
+   * Narrow is the reversible direction: widening an auth class later is additive (Rule 7).
+   */
+  getLessons: {
+    method: 'GET',
+    path: '/api/v1/integrations/:key/lessons',
+    auth: 'user',
+    params: IntegrationKeyParams,
+    response: IntegrationLessonsView,
+  },
+  setLessons: {
+    method: 'PATCH',
+    path: '/api/v1/integrations/:key/lessons',
+    auth: 'user',
+    params: IntegrationKeyParams,
+    request: SetIntegrationLessonsRequest,
+    response: IntegrationLessonsView,
   },
 
   /* --- The PUBLIC capability surface (slice D1) ---------------------------------------------- */

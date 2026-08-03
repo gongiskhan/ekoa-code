@@ -33,6 +33,7 @@ import { toast } from "@/stores/toast";
 import { Button, IconButton } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { LessonsPanel } from "@/components/integrations/lessons-panel";
 import type {
   IntegrationBuilderOutput,
   IntegrationBuilderConfig,
@@ -950,6 +951,18 @@ export function IntegrationDialog({ mode, integrationKey: editKey, importedData,
               className="w-full bg-neutral-50 border border-neutral-200 rounded-lg py-3 px-4 text-xs font-mono text-neutral-700 leading-relaxed focus:outline-none focus:border-teal-400 focus:ring-1 focus:ring-teal-500/20 transition-colors resize-y min-h-[200px]"
               style={{ tabSize: 2 }} />
           </div>
+
+          {/* Operational Lessons (slice C3). EDIT MODE ONLY, and it saves ITSELF: lessons live on
+              the stored definition and accumulate across runs, so they are deliberately not part
+              of the package save below — a "create" has no row to attach them to yet, and an
+              operator recording what just broke should not have to re-submit the whole package. */}
+          {mode === "edit" && editKey && (
+            <div>
+              {/* `key` so switching integrations remounts rather than briefly showing the
+                  previous one's lessons while the new load is in flight. */}
+              <LessonsPanel key={editKey} integrationKey={editKey} />
+            </div>
+          )}
 
           {/* Actions Section */}
           <div>

@@ -202,6 +202,14 @@ export type SetVisibilityResult =
   | { verdict: 'notfound' }
   | { verdict: 'forbidden' };
 
+/** The outcome of a lessons write (slice C3): the visibility/write verdicts plus `stale`, the
+ *  optimistic-concurrency refusal (the row moved since the caller read it). */
+export type SetLessonsResult =
+  | { verdict: 'ok'; doc: IntegrationDefinitionDoc }
+  | { verdict: 'notfound' }
+  | { verdict: 'forbidden' }
+  | { verdict: 'stale'; doc: IntegrationDefinitionDoc };
+
 /** A typed store error the caller (A2/route layer) maps onto the error envelope. */
 export type IntegrationDefinitionStoreErrorCode = 'DUPLICATE' | 'FORBIDDEN' | 'INVALID';
 export class IntegrationDefinitionStoreError extends Error {
@@ -508,6 +516,67 @@ export class IntegrationDefinitionStore {
     });
     if (raced) return { verdict: 'forbidden' };
     return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /**
+   * Replace a definition's LESSONS body (slice C3), under compare-and-swap.
+   *
+   * THE ADMISSION PREDICATE IS INJECTED, NOT RE-DERIVED. C3's raw-lessons gate is
+   * `canEditDefinitionRaw` (definition-registry.ts) — the save path's own admission set — and this
+   * file cannot import the registry without a cycle (the registry imports this file). Taking the
+   * predicate as an argument keeps ONE implementation of the rule and lets the E1-review-F4b
+   * re-assert run THAT rule again inside the mutator, against the row actually being written,
+   * instead of a weaker local approximation of it.
+   *
+   * `expectedUpdatedAt` is optimistic concurrency, and its ABSENCE is a decision rather than a
+   * default: a caller that omits it is explicitly asking to overwrite whatever is stored. Present,
+   * it is checked before the swap AND again inside the CAS mutator, so a write that lands between
+   * the caller's read and this one is refused rather than silently discarded.
+   *
+   * `updatedAt` is bumped STRICTLY MONOTONICALLY, never merely "to now": the stamp IS the
+   * concurrency token, and two writes inside one millisecond would otherwise share one — precisely
+   * the case the token exists to catch.
+   */
+  async setLessons(
+    id: string,
+    actor: Actor,
+    lessons: string,
+    opts: { admit: (doc: IntegrationDefinitionDoc) => boolean; expectedUpdatedAt?: string },
+  ): Promise<SetLessonsResult> {
+    const row = await this.store.get(id);
+    if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    if (!opts.admit(row)) return { verdict: 'forbidden' };
+    if (opts.expectedUpdatedAt !== undefined && row.updatedAt !== opts.expectedUpdatedAt) {
+      return { verdict: 'stale', doc: row };
+    }
+    let racedForbidden = false;
+    let racedStale = false;
+    const updated = await this.store.update(id, (cur) => {
+      // RESET on every attempt: `Store.update` re-runs the mutator after losing a CAS race, and a
+      // flag set on a losing attempt would report a refusal the winning attempt never made.
+      racedForbidden = false;
+      racedStale = false;
+      const doc = cur as IntegrationDefinitionDoc;
+      if (!isDefinitionVisibleTo(doc, actor) || !opts.admit(doc)) { racedForbidden = true; return cur; }
+      if (opts.expectedUpdatedAt !== undefined && doc.updatedAt !== opts.expectedUpdatedAt) {
+        racedStale = true;
+        return cur;
+      }
+      return { ...cur, lessons, updatedAt: this.nextStamp(doc.updatedAt) };
+    });
+    if (racedForbidden) return { verdict: 'forbidden' };
+    if (racedStale) {
+      const current = await this.store.get(id);
+      return current ? { verdict: 'stale', doc: current } : { verdict: 'notfound' };
+    }
+    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+  }
+
+  /** The next `updatedAt`, guaranteed to differ from `prev` — see `setLessons`. */
+  private nextStamp(prev: string): string {
+    const prior = Date.parse(prev);
+    const now = this.now().getTime();
+    return new Date(Number.isNaN(prior) ? now : Math.max(now, prior + 1)).toISOString();
   }
 
   /**

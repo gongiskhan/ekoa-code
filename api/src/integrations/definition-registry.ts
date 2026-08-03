@@ -141,6 +141,9 @@ export function canEditDefinitionRaw(
  *
  * A row of the actor's OWN org is untouched: its author is entitled to their own live content, and
  * the existing read-path scrub (`redactSecrets` below / `scrubSecretText`) still runs on it.
+ *
+ * Exported for `definition-lessons.ts` (slice C3), which applies the same rule to the `lessons`
+ * field — re-deriving `sameOrg` in a fourth place is exactly the drift D2's re-review closed.
  */
 export function crossOrgView(doc: IntegrationDefinitionDoc, actor?: Actor): IntegrationDefinitionDoc {
   if (actor !== undefined && sameOrg(doc.orgId, actor.orgId)) return doc;
