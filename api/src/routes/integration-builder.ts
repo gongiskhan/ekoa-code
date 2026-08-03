@@ -1,6 +1,6 @@
 /**
  * Integration-builder router (ch03 §3.8.14). The four-endpoint contract:
- *   POST /api/v1/integration-builder/chat     — one builder chat turn (agents/integration-builder)
+ *   POST /api/v1/integration-builder/chat     — one builder chat turn (agents/integration-agent)
  *   GET  /api/v1/integration-builder/package  — load the user's session for an integration key
  *   PUT  /api/v1/integration-builder/package  — save the generated package (tenant-scoped Mongo
  *                                               definition, private-by-default — slice A3)
@@ -17,11 +17,14 @@ import {
   IntegrationBuilderChatRequest,
   IntegrationBuilderLoadQuery,
   IntegrationBuilderTestRequest,
+  type Actor,
 } from '@ekoa/shared';
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import { actorOf, parseBody, sendError, notFound } from './helpers.js';
+// D2: the chat turn runs on the SHARED authoring core (agents/integration-agent.ts) — the same
+// core the automation planner authors through. The session store stays the builder's own.
+import { handleBuilderChat } from '../agents/integration-agent.js';
 import {
-  handleBuilderChat,
   getOwnedSession,
   findSessionForKey,
   createSession,
@@ -35,6 +38,7 @@ import {
   saveAuthoredDefinition,
   resolveDefinition,
   resolveSkillMdRaw,
+  integrationDefinitionStore,
   createConfig,
   updateConfig,
   findConfigForOwner,
@@ -44,8 +48,17 @@ import {
 } from '../integrations/index.js';
 import { interpolate, interpolateObj, buildVars, findHeaderValue, formUrlEncode } from '../integrations/http-template.js';
 
+/** Everything the editable package needs. The projected read shape (`IntegrationDefinition`) and
+ *  the RAW stored row (`IntegrationDefinitionDoc`) both satisfy it with identical field types, so
+ *  ONE projection serves both and cannot drift between the scrubbed and the byte-exact path. */
+type PackageConfigSource = Pick<
+  IntegrationDefinition,
+  | 'version' | 'displayName' | 'description' | 'authType' | 'provider' | 'category'
+  | 'configSchema' | 'actions' | 'credentialGuide' | 'sessionConnect' | 'webhookConfig' | 'listenerConfig'
+> & { key: string };
+
 /** Project a loaded definition back into the editable package (config.json) shape. */
-function definitionToConfig(def: IntegrationDefinition): IntegrationPackageConfig {
+function definitionToConfig(def: PackageConfigSource): IntegrationPackageConfig {
   return {
     version: def.version,
     integrationKey: def.key,
@@ -61,6 +74,30 @@ function definitionToConfig(def: IntegrationDefinition): IntegrationPackageConfi
     webhookConfig: def.webhookConfig,
     listenerConfig: def.listenerConfig,
   };
+}
+
+/**
+ * The builder's EDITABLE package for a key — the config half of A3's raw/scrubbed split.
+ *
+ * `resolveDefinition` projects through `redactSecrets`, which replaces the value of every
+ * credential-named property with `[REDACTED]` unless it is a pure `{{template}}`. That view is
+ * correct for reading and for model egress, and DESTRUCTIVE for editing: this route seeds a
+ * builder session from it and PUT persists the session back, so one ordinary edit cycle used to
+ * overwrite a tenant's real `Authorization` header with the literal string `[REDACTED]` — which
+ * `action-executor.ts` then SENDS as the request's auth header. Exactly the round trip A3 review
+ * F3 closed for `skillMd` (`resolveSkillMdRaw`), left open on the config.
+ *
+ * So: a row of the actor's OWN ORG comes back byte-exact, everything else stays scrubbed. The
+ * own-org condition is `resolveSkillMdRaw`'s rule, verbatim and for its reason (A3 re-review
+ * HIGH-2): `getForActor` legitimately answers another org's `global` row, and serving THAT raw
+ * would hand a foreign author's pasted credential to the reader in plaintext. A foreign row is a
+ * FORK source — no round trip can destroy the original, so the scrub costs nothing there.
+ */
+async function editablePackageFor(actor: Actor, key: string): Promise<IntegrationPackageConfig | null> {
+  const doc = await integrationDefinitionStore.getForActor(actor, key);
+  if (doc && doc.orgId === actor.orgId) return definitionToConfig(doc);
+  const def = await resolveDefinition(actor, key);
+  return def ? definitionToConfig(def) : null;
 }
 
 /**
@@ -176,11 +213,13 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
       // BASELINE package still opens an editable session, but the reserved key stays reserved on
       // every surface — chat validation AND save — so the chat can never present as valid a
       // package the PUT then refuses; the user forks under a distinct key (A2-residual 4).
-      const def = await resolveDefinition(actor, integrationKey);
-      if (!def) return notFound(res);
+      const config = await editablePackageFor(actor, integrationKey);
+      if (!config) return notFound(res);
       session = await createSession(actor, deps, {
         integrationKey,
-        currentPackage: definitionToConfig(def),
+        // BYTE-EXACT for an own-org row, scrubbed for a foreign one — the config half of the same
+        // no-round-trip rule the body below carries (see editablePackageFor).
+        currentPackage: config,
         // RAW, deliberately (A3 review F3): this seeds the builder's EDITABLE body, and PUT
         // persists it back — a scrubbed view here would write "[REDACTED]" over the stored text
         // on the next ordinary save. The scrubbed view (`resolveSkillMd`) is for prompt egress.

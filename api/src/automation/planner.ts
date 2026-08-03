@@ -11,10 +11,17 @@
  * `runOneShot` (api/src/llm/), `user_work` `automation-plan`, billed to the run owner, EXPERT tier
  * (max effort — `high` is the top effort exposed). The corrective-retry budget (one violation-fed
  * retry) and closed-vocabulary cross-validation carry unchanged.
+ *
+ * D2: the prompt assembly, the chokepoint turn, the outage/abort/empty classification and the
+ * violation-fed repair attempt are no longer this module's own — they are the authoring core
+ * (`agents/integration-agent.ts`) it shares with the integration builder. What stays here is what
+ * is genuinely the planner's: PLANNER_SYSTEM (its output contract), the catalog-bearing user text,
+ * step normalisation, and the cross-validation vocabulary below.
  */
 
 import { randomUUID } from 'node:crypto';
-import { runOneShot, decideForTier, LlmAbortedError } from '../llm/index.js';
+import { decideForTier, LlmAbortedError } from '../llm/index.js';
+import { authorWithRepair, type AuthoringDraft } from '../agents/integration-agent.js';
 import { automationContentSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
 import { formatCatalogForPrompt, type Catalog } from './catalog.js';
@@ -210,89 +217,83 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
     (catalogSection ? `${catalogSection}\n\n` : '') +
     (input.automationName ? `## Working title\n${input.automationName}\n\n` : '');
 
-  // Pass 1
-  let firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
-  if (firstResult.status === 'unavailable') {
-    // An outage is not a validation failure — violation feedback cannot fix it. One plain
-    // immediate retry, then surface the outage as-is.
-    console.warn(`[planner] model unavailable (pass 1): ${firstResult.detail} — one plain retry`);
-    firstResult = await callPlannerOnce(input, baseUserText + `Return the JSON plan now.`);
-    if (firstResult.status === 'unavailable') return firstResult;
-  }
-  if (firstResult.status === 'awaiting_integration') return firstResult;
-  // A pass-1 FAILURE (unparseable / invalid model output) feeds the corrective retry the same way a
-  // cross-validation violation does — the feedback is what makes the retry actually fix it (F29).
-  const firstViolations = firstResult.status === 'failed'
-    ? firstResult.violations
-    : crossValidatePlan(firstResult, input.goal, input.catalog);
-  if (firstResult.status === 'ok' && firstViolations.length === 0) {
-    return firstResult;
-  }
+  // The automation kind's content sections lead; the inline PLANNER_SYSTEM (the JSON shape
+  // contract) stays LAST so the output contract is the final word (composeAuthoringPrompt, in the
+  // core). Content is never fatal, and it cannot change between the two passes of one plan, so it
+  // is resolved ONCE here rather than per attempt.
+  const contentSections = await automationContentSections(input.userId);
 
-  // Pass 2 — single retry with violation-specific feedback. Generic
-  // retries produce identical garbage; the feedback is what makes the
-  // retry actually fix the problem.
-  console.warn(
-    `[planner] plan rejected (pass 1), retrying with violations:\n${firstViolations.map((v) => `- ${v}`).join('\n')}`,
-  );
-  const feedbackSection =
-    `## Plan rejected — fix these violations and re-emit:\n` +
-    firstViolations.map((v) => `- ${v}`).join('\n') +
-    `\n\nRe-emit the FULL plan, with these issues fixed. Same JSON shape as before.`;
-  const secondResult = await callPlannerOnce(
-    input,
-    baseUserText + feedbackSection + `\n\nReturn the corrected JSON plan now.`,
-  );
-  if (secondResult.status === 'unavailable') return secondResult; // outage mid-flow — never a plan_failed
-  if (secondResult.status === 'awaiting_integration') return secondResult;
-  if (secondResult.status === 'failed') return secondResult;
-  const secondViolations = crossValidatePlan(secondResult, input.goal, input.catalog);
-  if (secondViolations.length === 0) {
-    return secondResult;
+  const outcome = await authorWithRepair<PlanFromGoalResult>({
+    contentSections,
+    outputContract: PLANNER_SYSTEM,
+    decision: decideForTier('EXPERT'),
+    attribution: { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },
+    // Empty text is the transport failing quietly (dead credential, clamped model refusing), not
+    // the model emitting a bad plan — so it is an OUTAGE here, never a `failed`.
+    emptyReply: 'unavailable',
+    userText: (violations) =>
+      violations === null
+        ? `${baseUserText}Return the JSON plan now.`
+        : `${baseUserText}${repairRequest(violations)}\n\nReturn the corrected JSON plan now.`,
+    parse: (text) => parsePlannerOutput(text, input.goal, input.catalog),
+    // ONE corrective retry. Generic retries produce identical garbage; the violation feedback is
+    // what makes the retry actually fix the problem. A pass-1 FAILURE (unparseable / invalid model
+    // output) feeds it the same way a cross-validation violation does (F29).
+    repairs: 1,
+    // An outage is not a validation failure — one plain immediate retry, then surface it as-is.
+    retryUnavailableOnce: true,
+    onUnavailable: ({ detail, willRetry }) => {
+      if (willRetry) console.warn(`[planner] model unavailable (pass 1): ${detail} — one plain retry`);
+    },
+    onRepair: (violations) => {
+      console.warn(`[planner] plan rejected (pass 1), retrying with violations:\n${violations.map((v) => `- ${v}`).join('\n')}`);
+    },
+  });
+
+  if (outcome.status === 'unavailable') {
+    // A deliberate abort (budget/cancel) keeps its typed error — the route owns that mapping, and
+    // it is never reported as an outage.
+    if (outcome.reason === 'aborted') throw outcome.cause instanceof Error ? outcome.cause : new LlmAbortedError();
+    // Transport/credential failure or an empty answer: an OUTAGE (see PlanFromGoalUnavailable) —
+    // never mapped to the "invalid plan" family that tells the user to rephrase the goal.
+    return { status: 'unavailable', detail: outcome.detail };
   }
-  // Structured failure — surface the violations to the user (as a `plan_failed` wire plan) rather
-  // than silently shipping a malformed plan, and rather than throwing an Error the route masks as
-  // a 500 (F29).
-  return { status: 'failed', violations: secondViolations };
+  // Violations still open after the corrective retry: a STRUCTURED failure the caller renders as a
+  // `plan_failed` wire plan — never a silently-shipped malformed plan, never a thrown Error the
+  // route masks as a 500 (F29).
+  if (outcome.violations.length > 0 || !outcome.draft) return { status: 'failed', violations: outcome.violations };
+  return outcome.draft;
 }
 
-async function callPlannerOnce(input: PlanFromGoalInput, userText: string): Promise<PlanFromGoalResult> {
-  // The automation kind's content sections lead; the inline PLANNER_SYSTEM (the JSON shape
-  // contract) stays LAST so the output contract is the final word. Content is never fatal.
-  const sections = await automationContentSections(input.userId);
-  const systemPrompt = [...sections, PLANNER_SYSTEM].filter(Boolean).join('\n\n');
+/** The violation feedback block appended to the retry's user text. */
+function repairRequest(violations: readonly string[]): string {
+  return (
+    `## Plan rejected — fix these violations and re-emit:\n` +
+    violations.map((v) => `- ${v}`).join('\n') +
+    `\n\nRe-emit the FULL plan, with these issues fixed. Same JSON shape as before.`
+  );
+}
 
-  let res: { text: string };
-  try {
-    res = await runOneShot(
-      { prompt: userText, systemPrompt, decision: decideForTier('EXPERT') },
-      { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },
-    );
-  } catch (err) {
-    // A deliberate abort (budget/cancel) keeps its typed error — the route owns that mapping.
-    if (err instanceof LlmAbortedError) throw err;
-    // Transport/credential failure: an OUTAGE (see PlanFromGoalUnavailable) — never mapped to
-    // the "invalid plan" family that tells the user to rephrase the goal.
-    return { status: 'unavailable', detail: err instanceof Error ? err.message : String(err) };
-  }
-
-  if (res.text.trim() === '') {
-    // Empty text is the transport failing quietly (dead credential, clamped model refusing),
-    // not the model emitting a bad plan.
-    return { status: 'unavailable', detail: 'empty model response' };
-  }
-
-  const parsed = parseFirstJsonObject(res.text);
+/**
+ * The planner's output contract, as the core's `parse` seam: ONE JSON object -> a validated
+ * `PlanFromGoalResult` -> deterministic cross-validation against the goal + catalog. Pure — it
+ * never calls the model; the core owns the retry it feeds.
+ */
+function parsePlannerOutput(text: string, goal: string, catalog: Catalog): AuthoringDraft<PlanFromGoalResult> {
+  const parsed = parseFirstJsonObject(text);
   if (!parsed) {
-    return { status: 'failed', violations: [`o modelo não devolveu um plano em JSON válido: ${res.text.slice(0, 120)}`] };
+    return { draft: null, violations: [`o modelo não devolveu um plano em JSON válido: ${text.slice(0, 120)}`] };
   }
   const validated = validatePlanOutput(parsed);
   if (validated.status === 'failed') {
     // Server-side only (violations can quote raw model output — never sent to the client):
     // the raw text is the ONLY way to diagnose a live shape mismatch.
-    console.warn(`[planner] model text on validation failure (server-side diagnostic):\n${res.text.slice(0, 800)}`);
+    console.warn(`[planner] model text on validation failure (server-side diagnostic):\n${text.slice(0, 800)}`);
+    return { draft: validated, violations: validated.violations };
   }
-  return validated;
+  // `awaiting_integration` is a terminal ANSWER, not a defect: no violations, so no repair.
+  if (validated.status !== 'ok') return { draft: validated, violations: [] };
+  return { draft: validated, violations: crossValidatePlan(validated, goal, catalog) };
 }
 
 // ============================================================================

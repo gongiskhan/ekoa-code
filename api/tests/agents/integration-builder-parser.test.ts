@@ -135,9 +135,12 @@ describe('validateConfig — key shape + reserved keys', () => {
     expect(errors.some((e) => /reserved/.test(e))).toBe(true);
   });
 
-  it('allows the reserved key when the session is editing that very key (loadedKey)', () => {
-    const errors = validateConfig(validConfig({ integrationKey: 'slack' }) as never, { reservedKeys: new Set(['slack', 'pipedream']), loadedKey: 'slack' });
-    expect(errors.some((e) => /reserved/.test(e))).toBe(false);
+  // D2: the `loadedKey` exemption is GONE from the option type (its last caller died at A3 review
+  // L4). A reserved key is refused for EVERY session — the chat's verdict and the save gate's are
+  // now the same one, so the builder can never present a package the PUT would refuse.
+  it('refuses a reserved key even for a session that is editing that very key (no loadedKey exemption)', () => {
+    const errors = validateConfig(validConfig({ integrationKey: 'slack' }) as never, { reservedKeys: new Set(['slack', 'pipedream']) });
+    expect(errors.some((e) => /reserved/.test(e))).toBe(true);
   });
 
   it('flags an action missing its httpConfig', () => {

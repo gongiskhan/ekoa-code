@@ -1,25 +1,16 @@
 /**
- * Integration-builder agent (ch03 §3.8.14).
- *
- * A job-less, TOOL-LESS one-shot (same posture as brand-research §5.6.4): the user describes the
- * service they want to connect and the agent replies in ONE WORKHORSE turn with a conversational
- * message plus two fenced blocks — ```skill-md (the integration's knowledge doc) and ```config-json
- * (the structured package). The fenced blocks are parsed out (integration-builder-parser.ts) and the
- * user sees only the prose; the package populates the builder's side panel.
+ * Integration-builder SESSION STORE (ch03 §3.8.14).
  *
  * Sessions are PERSISTED (data/stores.ts integrationBuilderSessions) — the old cortex builder kept an
  * in-memory Map that died on restart, but load-by-key durability requires the transcript + last
- * package to survive. This module owns the session store + the chat turn; the route owns load/save/test
- * orchestration and supplies the reserved-key set (it may import integrations/; agents/ does not).
+ * package to survive. This module owns the session store and nothing else: the chat TURN moved to
+ * `integration-agent.ts` at slice D2, where it shares one authoring core with the automation
+ * planner. The route owns load/save/test orchestration and supplies the reserved-key set (it may
+ * import integrations/; agents/ does not).
  */
-import type { Actor, ErrorCode } from '@ekoa/shared';
-import { checkAllowance } from '../billing/index.js';
-import { runOneShot, decideForTask } from '../llm/index.js';
+import type { Actor } from '@ekoa/shared';
 import { integrationBuilderSessions } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
-import { assembleAgentContext } from './seams.js';
-import { renderPrompt } from './context.js';
-import { parseIntegrationOutput } from './integration-builder-parser.js';
 
 /** A persisted builder session (ch03 §3.8.14). */
 export interface BuilderSessionDoc extends Doc {
@@ -116,110 +107,39 @@ export function validationErrorsOf(session: BuilderSessionDoc): Array<{ message:
   return (session.validationErrors ?? []).map((message) => ({ message }));
 }
 
-// --- The chat turn -----------------------------------------------------------------------
-
-/** Remove the two fenced output blocks from the assistant text before it is stored/shown (the user
- *  never sees raw skill-md/config-json — the side panel renders them, §3.8.14 prohibitions). */
-function stripFencedBlocks(text: string): string {
-  return text
-    .replace(/```skill-md\s*\n[\s\S]*?```/g, '')
-    .replace(/```config-json\s*\n[\s\S]*?```/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-export interface BuilderChatInput {
-  actor: Actor;
-  message: string;
-  /** Reply language (default PT-PT); the fenced blocks are always English. */
-  language: 'pt' | 'en';
-  /** Continue an existing session, else resolve by integrationKey, else start fresh. */
-  sessionId?: string;
-  integrationKey?: string;
-  /** Keys a NEW package may not claim (baseline defs + pipedream) — supplied by the route. */
-  reservedKeys: ReadonlySet<string>;
-  deps: BuilderDeps;
-}
-
-/** The wire chat response shape (shared IntegrationBuilderChatResponse). */
-export interface BuilderChatResponse {
-  builderSessionId: string;
-  generatedPackage: Record<string, unknown>;
-  validationErrors: Array<{ message: string }>;
-}
-
-export type BuilderChatOutcome =
-  | { ok: true; response: BuilderChatResponse }
-  | { ok: false; code: ErrorCode; message: string };
-
 /**
- * Run one builder chat turn: allowance gate -> load/create the persisted session -> assemble the
- * (kind 'integration-builder') system prompt + reply-language directive -> ONE tool-less WORKHORSE
- * runOneShot -> parse the two fenced blocks -> persist the turn (fenced blocks stripped from the
- * stored assistant text) -> return the wire ChatResponse.
+ * Persist ONE chat turn onto the session: the user message + the assistant message (already
+ * stripped of the fenced blocks by the caller), and the package when the model produced one — an
+ * interim reply leaves the previous package, body and validation verdict untouched. The session's
+ * key is pinned on the FIRST package that names one and never re-pointed afterwards (the key a
+ * session edits is decided once; a save re-pins it through markSessionSaved).
  */
-export async function handleBuilderChat(input: BuilderChatInput): Promise<BuilderChatOutcome> {
-  const { actor, message, language, deps } = input;
-
-  const allow = await checkAllowance(actor.userId);
-  if (!allow.ok) return { ok: false, code: 'BILLING_BLOCKED', message: allow.message ?? 'Faturação bloqueada.' };
-
-  // Resolve the session: explicit id (owned) -> by key -> a fresh one.
-  let session =
-    (input.sessionId ? await getOwnedSession(actor.userId, input.sessionId) : null) ??
-    (input.integrationKey ? await findSessionForKey(actor.userId, input.integrationKey) : null);
-  if (!session) session = await createSession(actor, deps, input.integrationKey ? { integrationKey: input.integrationKey } : {});
-
-  // System prompt: the composed integration-builder content sections + a reply-language directive.
-  const ctx = await assembleAgentContext({ agentKind: 'integration-builder', userId: actor.userId });
-  const langName = language === 'en' ? 'English' : 'Portuguese (PT-PT)';
-  const directive =
-    `# Reply language\nWrite your conversational reply to the user in ${langName}. ` +
-    'The `skill-md` and `config-json` blocks are ALWAYS in English regardless of the reply language.';
-  const systemPrompt = [...ctx.promptSections, directive].filter(Boolean).join('\n\n');
-
-  const history = session.messages.map((m) => ({ role: m.role, content: m.content }));
-  const prompt = renderPrompt(history, message);
-  const decision = decideForTask(message, undefined, 'WORKHORSE');
-
-  let text: string;
-  try {
-    const result = await runOneShot(
-      { prompt, decision, systemPrompt },
-      { kind: 'user_work', agentType: 'integration-builder', billeeUserId: actor.userId, sessionId: session._id },
-    );
-    text = result.text;
-  } catch (err) {
-    return { ok: false, code: 'INTERNAL', message: err instanceof Error ? err.message : 'A geração falhou.' };
-  }
-
-  // NO reserved-key exemption, for ANY session (A3 review L4). The save path refuses a reserved
-  // (shipped/pipedream) key unconditionally since A3, so exempting a "loaded" session here only
-  // produced a lie: the chat validated a package the PUT would then refuse with 403. The parser's
-  // verdict now matches the save gate for every session, loaded or fresh.
-  const parsed = parseIntegrationOutput(text, { reservedKeys: input.reservedKeys });
-
-  // Persist the turn: user message + assistant message (fenced blocks stripped), and the package
-  // when the model produced one (an interim reply leaves the previous package untouched).
+export async function recordBuilderTurn(
+  session: BuilderSessionDoc,
+  turn: {
+    userMessage: string;
+    assistantText: string;
+    package?: { config: unknown; skillMd: string; validationErrors: string[]; integrationKey?: string };
+  },
+  deps: BuilderDeps,
+): Promise<void> {
   const iso = new Date(deps.now()).toISOString();
-  const assistantText = stripFencedBlocks(text);
-  const messages = [
-    ...session.messages,
-    { role: 'user', content: message, timestamp: iso },
-    { role: 'assistant', content: assistantText, timestamp: iso },
-  ];
-  const patch: Partial<BuilderSessionDoc> = { messages, updatedAt: iso };
-  if (parsed.pkg) {
-    patch.currentPackage = parsed.pkg;
-    patch.currentSkillMd = parsed.skillMd ?? '';
-    patch.validationErrors = parsed.errors;
-    const pkgKey = typeof parsed.pkg.integrationKey === 'string' ? parsed.pkg.integrationKey : undefined;
-    if (!session.integrationKey && pkgKey) patch.integrationKey = pkgKey;
+  const patch: Partial<BuilderSessionDoc> = {
+    messages: [
+      ...session.messages,
+      { role: 'user', content: turn.userMessage, timestamp: iso },
+      { role: 'assistant', content: turn.assistantText, timestamp: iso },
+    ],
+    updatedAt: iso,
+  };
+  if (turn.package) {
+    patch.currentPackage = turn.package.config;
+    patch.currentSkillMd = turn.package.skillMd;
+    patch.validationErrors = turn.package.validationErrors;
+    if (!session.integrationKey && turn.package.integrationKey) patch.integrationKey = turn.package.integrationKey;
   }
-  const saved = (await integrationBuilderSessions.update(session._id, (cur) => ({ ...cur, ...patch }))) as BuilderSessionDoc;
-
-  const generatedPackage = parsed.pkg ? { skillMd: parsed.skillMd ?? '', config: parsed.pkg } : {};
-  const validationErrors = (parsed.pkg ? parsed.errors : []).map((m) => ({ message: m }));
-  void saved;
-  return { ok: true, response: { builderSessionId: session._id, generatedPackage, validationErrors } };
+  const saved = await integrationBuilderSessions.update(session._id, (cur) => ({ ...cur, ...patch }));
+  // The row is gone (a concurrent delete): the turn is NOT persisted. The response still carries
+  // the session id, exactly as before — but the write no longer disappears silently (C1 review).
+  if (!saved) console.warn(`[integration-builder] session ${session._id} vanished mid-turn — the turn was not persisted`);
 }

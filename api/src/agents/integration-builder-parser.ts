@@ -25,10 +25,12 @@ const VALID_CONFIG_TYPES = new Set<string>(['string', 'number', 'boolean', 'url'
 export const INTEGRATION_KEY_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
 
 export interface ParseOptions {
-  /** Keys a NEW package may not claim (every baseline definition key + `pipedream`). */
+  /** Keys a NEW package may not claim (every baseline definition key + `pipedream`).
+   *  There is NO per-session exemption: `loadedKey` was removed at D2 (A3 review L4 closed the
+   *  last caller — the save path refuses a reserved key unconditionally, so an exemption here only
+   *  let the chat validate a package the PUT would then refuse). Editing a shipped package forks
+   *  it under a distinct key. */
   reservedKeys?: ReadonlySet<string>;
-  /** The key this session is editing — a collision with it is allowed (re-save of the same key). */
-  loadedKey?: string;
 }
 
 export interface ParseResult {
@@ -130,7 +132,7 @@ export function validateConfig(config: IntegrationPackageConfig, opts: ParseOpti
     errors.push('Missing integrationKey');
   } else if (!INTEGRATION_KEY_RE.test(key)) {
     errors.push(`Invalid integrationKey "${key}" — use 2-49 lowercase letters, digits or hyphens, starting with a letter or digit`);
-  } else if (opts.reservedKeys && opts.reservedKeys.has(key) && key !== opts.loadedKey) {
+  } else if (opts.reservedKeys && opts.reservedKeys.has(key)) {
     errors.push(`integrationKey "${key}" is reserved — choose a different key`);
   }
 

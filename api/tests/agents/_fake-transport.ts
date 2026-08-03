@@ -17,6 +17,9 @@ export interface FakeTransportScript {
   usage?: RawUsage;
   /** oneShot return text (for classifiers + memory extract). */
   oneShotText?: string;
+  /** Make `oneShot` THROW — the egress-outage path (dead credential, provider down, network).
+   *  'abort' surfaces as an AbortError the way a cancelled subprocess does. */
+  oneShotThrow?: 'abort' | 'error';
   /** messages REST body (JSON string) + status. */
   messagesBody?: string;
   messagesStatus?: number;
@@ -57,6 +60,12 @@ export function makeFakeTransport(script: FakeTransportScript = {}): FakeTranspo
     },
     async oneShot(params: SdkCallParams): Promise<TransportResult> {
       oneShotCalls.push(params);
+      if (script.oneShotThrow === 'abort') {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      if (script.oneShotThrow === 'error') throw new Error('transport failure');
       if (params.signal?.aborted) return { text: '', usage, aborted: true };
       return { text: script.oneShotText ?? '', usage, aborted: false };
     },

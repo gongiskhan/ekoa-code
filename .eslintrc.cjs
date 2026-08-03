@@ -139,6 +139,17 @@ module.exports = {
                 from: './api/src/data',
                 message: 'routes/ must not import data/ directly — go through a domain module (ch02 §2.7).',
               },
+              // Rule 3 (extension, slice D2) — the ONE tier-5 sibling edge runs one way.
+              // automation/planner.ts imports the shared authoring core
+              // (agents/integration-agent.ts); agents/ importing automation/ back would close a
+              // cycle inside tier 5, which the tier table (docs/architecture.md) declares acyclic
+              // by construction. Direction is the whole safety argument, so it is lint-enforced
+              // rather than left as a convention a future slice can quietly reverse.
+              {
+                target: './api/src/agents',
+                from: './api/src/automation',
+                message: 'agents/ must not import automation/ — the tier-5 authoring edge runs ONE way (automation/ -> agents/integration-agent.ts).',
+              },
             ],
           },
         ],

@@ -147,6 +147,38 @@ describe('POST /api/v1/integration-builder/chat', () => {
     expect(assistant?.content).toContain("Here's what I'm setting up");
   });
 
+  // D2 parity: the chat turn now runs on the shared authoring core (agents/integration-agent.ts),
+  // which classifies an outage / an empty reply / an abort as TYPED outcomes. These two cases pin
+  // the builder's mapping of them at the WIRE, because that mapping is what the merge could have
+  // silently changed (the planner's opposite policy sits behind the same core).
+  it('an egress OUTAGE on the chat turn is a 500 error envelope, not a partial 200', async () => {
+    __setTransportForTests(makeFakeTransport({ oneShotThrow: 'error' }));
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    const res = await authed('/api/v1/integration-builder/chat', t, { method: 'POST', body: JSON.stringify({ message: 'connect something' }) });
+    expect(res.status).toBe(500);
+    const body = await readJson(res);
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+    expect((body.error as { code: string }).code).toBe('INTERNAL');
+  });
+
+  it('an EMPTY model reply is an ordinary package-less turn: 200, no package, no validation errors', async () => {
+    __setTransportForTests(makeFakeTransport({ oneShotText: '' }));
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    const res = await authed('/api/v1/integration-builder/chat', t, { method: 'POST', body: JSON.stringify({ message: 'olá' }) });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(IntegrationBuilderChatResponse.safeParse(body).success).toBe(true);
+    expect(body.generatedPackage).toEqual({});
+    expect(body.validationErrors).toEqual([]);
+    // …and the turn is still persisted (an empty assistant message), as it always was.
+    const session = (await integrationBuilderSessions.get(body.builderSessionId as string)) as { messages?: Array<{ role: string }> } | null;
+    expect(session?.messages?.length).toBe(2);
+  });
+
   it('unauthenticated chat gets a 401 envelope', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/integration-builder/chat`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'x' }),
@@ -282,6 +314,75 @@ describe('GET /api/v1/integration-builder/package (load)', () => {
     const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'my-notes'))) as IntegrationDefinitionDoc;
     expect(row.skillMd).toBe(legit);
     expect(row.skillMd).not.toContain('[REDACTED]');
+  });
+
+  it('an edit cycle preserves a real pasted CREDENTIAL in an action header byte-exactly (the config half of the A3 F3 round trip)', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    // A genuine pasted credential — the shape a tenant hardcodes instead of using {{api_key}}.
+    // Composed at runtime so no credential-shaped literal is ever committed.
+    const planted = `Bearer ${['sk', 'live', ['9aXbZ', 'Q1r2s3t4u5v6'].join('')].join('_')}`;
+    const iso = new Date().toISOString();
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('orgA', 'my-crm'),
+      orgId: 'orgA', userId: 'admin', visibility: 'private', key: 'my-crm',
+      displayName: 'My CRM', description: 'd', authType: 'api_key', provider: 'X', category: 'test',
+      configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
+      credentialGuide: '1. x',
+      actions: [{
+        actionName: 'ping', description: 'd', mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://api.x.example', path: '/p', headers: { Authorization: planted } },
+      }],
+      skillMd: '# crm\n', origin: { kind: 'authored' }, createdAt: iso, updatedAt: iso,
+    } as never);
+
+    // LOAD: the editable config is the RAW stored config for a row of the actor's own org — the
+    // redacted read view here would be written back by the save below.
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=my-crm', t));
+    const header = (load.generatedPackage as { config?: { actions?: Array<{ httpConfig?: { headers?: Record<string, string> } }> } })
+      .config?.actions?.[0]?.httpConfig?.headers?.Authorization;
+    expect(header).toBe(planted);
+    expect(header).not.toContain('[REDACTED]');
+
+    // SAVE the session back unchanged (the ordinary edit cycle) — the stored credential survives,
+    // so the action executor keeps sending the real header instead of the literal "[REDACTED]".
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(200);
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'my-crm'))) as IntegrationDefinitionDoc;
+    const stored = (row.actions[0] as { httpConfig?: { headers?: Record<string, string> } }).httpConfig?.headers?.Authorization;
+    expect(stored).toBe(planted);
+    expect(JSON.stringify(row.actions)).not.toContain('[REDACTED]');
+  });
+
+  it('a FOREIGN org\'s global row still loads SCRUBBED — the raw view is own-org only', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    const foreign = `Bearer ${['sk', 'live', ['7bYcW', 'M8n9o0p1q2r3'].join('')].join('_')}`;
+    const iso = new Date().toISOString();
+    await orgs.insert({ _id: 'orgB', name: 'Org B', displayName: 'Org B', createdAt: 'x' } as never);
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('orgB', 'shared-thing'),
+      orgId: 'orgB', userId: 'other', visibility: 'global', key: 'shared-thing',
+      displayName: 'Shared Thing', description: 'd', authType: 'api_key', provider: 'X', category: 'test',
+      configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
+      credentialGuide: '1. x',
+      actions: [{
+        actionName: 'ping', description: 'd', mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://api.y.example', path: '/p', headers: { Authorization: foreign } },
+      }],
+      skillMd: '# shared\n', origin: { kind: 'authored' }, createdAt: iso, updatedAt: iso,
+    } as never);
+
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=shared-thing', t));
+    const gp = load.generatedPackage as { config?: { actions?: Array<{ httpConfig?: { headers?: Record<string, string> } }> } };
+    expect(gp.config?.actions?.[0]?.httpConfig?.headers?.Authorization).toBe('[REDACTED]');
+    // The foreign author's credential never reaches the reader: a foreign row is a FORK source, so
+    // no round trip can destroy the original and the scrub costs nothing.
+    expect(JSON.stringify(load)).not.toContain(foreign);
   });
 });
 
