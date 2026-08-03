@@ -1048,6 +1048,16 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   the declared host when a package is created or edited (and, later, the Cofre grant ceremony
   naming the host the user is consenting to). Deliberately not closed inside R-2 because it needs a
   user-facing approval surface, not a filter.
+  NARROWED (not closed) 2026-08-03 by slice D3. `achieve`'s author arm can no longer be the way a
+  new host enters the allow-list: the credential's egress binding is resolved BEFORE the draft
+  exists and the draft's host must already be inside it, so on the declared-origin branch the
+  allowed set is a PRE-IMAGE that cannot grow to fit (`authored-action.ts` check 5, plus check 8
+  re-asserting it against the interpolated URL; the security suite measures the granted origins
+  before and after a successful author and asserts they are identical). What remains OPEN is
+  exactly what this entry names: the BUILDER SAVE path. A human at `PUT /api/v1/integration-builder/package`
+  can still declare any `baseUrl` they like, because that route requires a human session and the
+  fix is still an approval ceremony on the declared host, not a filter. So D3 closes the
+  key-reachable half and changes nothing about the human half.
 - **`ekoa-action-unsandboxed-fs`** (FIXED 2026-07-27, CRITICAL, confidentiality + integrity — Cofre
   discovery gate R-1). `resolveUserPath` in `api/src/automation/platform-primitives.ts` applied no
   containment whatsoever — `if (isAbsolute(path)) return path;`, with the comment "trust user-issued

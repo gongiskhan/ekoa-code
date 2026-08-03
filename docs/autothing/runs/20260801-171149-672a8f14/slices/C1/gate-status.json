@@ -1,0 +1,49 @@
+{
+  "slice": "C1",
+  "title": "backingType dispatch + org-scoped provisioner ids",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "a8e5d91",
+  "tag": "run-20260801-171149-C1",
+  "securityWall": {
+    "typecheck": "pass (full, clean)",
+    "eslint": "pass",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 25,
+    "note": "34 green in the C1 suites; 446 across integrations+automation per the implementer"
+  },
+  "adversarialReview": {
+    "status": "approved-with-findings-fixed",
+    "by": "fresh-context (tenancy + behaviour-regression)",
+    "verdict": "APPROVE. No cross-tenant write/clobber/silent-duplicate; no previously-working action refused (all 11 shipped configs checked); the reviewer INDEPENDENTLY reproduced the regression proof in an isolated worktree (exactly 4 of 8 fail on the old id). 6 LOW/process findings all fixed."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "closesFinding": "integration-provision-id-not-org-scoped (docs/findings.md updated to FIXED)",
+  "at": "2026-08-02T07:04:26Z",
+  "diagram": "docs/diagrams/05-data-model.excalidraw AS-BUILT (FIXED-12)",
+  "d1d3Carry": [
+    "bound automationId literals in shipped packages can NEVER resolve now \u2014 D1/D3 must resolve template->org automation at execute time via managedAutomationId or source.* provenance",
+    "runAutomationForAction gates on ownerUserId not orgId: a managed automation is org-visible but action-executable only by whoever clicked provision",
+    "engine.ts classifies integration failures by REGEX on the message, so the two new hard package-defect codes are marked recoverable and would burn LLM fixer calls \u2014 switch that classification to the code",
+    "mcp-call is deliberately absent from the union and refused; widen the union BEFORE any authoring surface can emit it"
+  ]
+}

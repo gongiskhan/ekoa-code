@@ -1,0 +1,61 @@
+{
+  "slice": "D3",
+  "title": "achieve: execute-or-author, behind locked guardrails",
+  "kind": "api",
+  "status": "landed-with-one-open-gate",
+  "checkpointCommit": "20b4f5b",
+  "followupCommit": "d41d47a",
+  "tag": "run-20260801-171149-D3",
+  "securityWall": {
+    "typecheck": "pass (clean source tree, both tsc passes, real exit code)",
+    "eslint": "pass",
+    "gitleaks": "clean after fixing 2 findings AT SOURCE (fakeSecret composition + a constant renamed); never allowlisted",
+    "openapiDrift": "clean - regenerate produced ZERO diff; achieve published, trustAction (auth:'user') not",
+    "clientDrift": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 89,
+    "note": "89 across 5 D3 suites (87 as written + 2 added closing the reversion misses). Whole estate at d41d47a: api 3942 pass / 1 skip (318 files), web 405 (49), cli 74 (7) = 4421 passing."
+  },
+  "reversionSweep": {
+    "status": "14/14 caught",
+    "firstPass": "12/14",
+    "misses": [
+      "R3 origin: forcing originOk=true left all 87 green - the render probe (check 8) covered for it and every test asserted only the whole-suite verdict. Now pinned by check NAME, with a converse case.",
+      "R14 promoteToTrusted passed-verification guard: nothing staged a stored FAILED verdict, so deleting the line changed nothing. Now staged directly, with an honest fingerprint so the refusal can only come from `passed: false`."
+    ],
+    "note": "Each reversion asserted its anchor string was present before running, so a vacuous edit could not score as a catch."
+  },
+  "claimsVerified": [
+    "actionShape excludes `mutates`, so the authoring fingerprint survives the promotion flip",
+    "definitionFromDoc applies crossOrgView, so a fork copies only what its author could already read",
+    "integration-builder is r.use(requireAuth) + four auth:'user' descriptors, so the STATED LIMIT holds and nothing key-reachable mints a trusted action",
+    "trustAction is absent from the published OpenAPI while achieve is present"
+  ],
+  "adversarialReview": {
+    "status": "NOT RUN",
+    "reason": "D3's implementing session was stopped before its gate phase; this session operates under a standing operator instruction not to dispatch subagents. Orchestrator verification (reversion sweep + claim checks + whole-estate regression) was done instead and is NOT a substitute: it was performed by the same context that chose what to check."
+  },
+  "adversarialTest": {
+    "status": "NOT RUN",
+    "reason": "same as above; api-kind slices in this run deferred this to run level"
+  },
+  "codexSliceReview": {
+    "status": "not-run",
+    "reason": "run-level checkpoint not invoked in this session"
+  },
+  "e2e": {
+    "status": "registered, parses, NOT EXECUTED",
+    "spec": "web/e2e/integration-achieve.spec.ts",
+    "note": "enumerates cleanly (1 test) and the ledger census balances (specs 79/79). Executing it needs the full stack booted with a real UI login - the `--run` half of gate:ledger."
+  },
+  "design": { "status": "skipped", "reason": "kind" },
+  "walkthrough": { "status": "skipped", "reason": "kind" },
+  "ratchetsFired": [
+    "tests/auth/integration-capability-auth.test.ts - the admission matrix is DERIVED from the descriptor map, so achieve joined every case automatically and the pinned floor went red. Its probe also posted `{}` everywhere, which achieve rejects at validation, so 'a live key is admitted' would have measured a 400 from the body parser. Fixed in d41d47a.",
+    "clients/cortex-cli/tests/client.test.ts - public-operation pin 30 -> 31, now also asserting trustAction is ABSENT."
+  ],
+  "knownPreexisting": "gate:ledger exit 1 - '136 artifact(s) are due at G12 but --run was not passed'. Unchanged by D3; its census half passes and balances in all three dimensions.",
+  "at": "2026-08-03T16:40:00Z"
+}

@@ -1,0 +1,50 @@
+{
+  "slice": "E1",
+  "title": "Sharing surface: tenant visibility + super-admin global toggle",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "39eeca1",
+  "tag": "run-20260801-171149-E1",
+  "securityWall": {
+    "typecheck": "pass (scoped; C1 mid-edit elsewhere)",
+    "eslint": "pass",
+    "gitleaks": "clean",
+    "openapiDrift": "clean (no user-or-key descriptor added)",
+    "clientDrift": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 20,
+    "note": "21 green incl. schema-coverage + mount-coverage; COVERED +2, EXPECTED_PENDING_COUNT stays 49"
+  },
+  "adversarialReview": {
+    "status": "clean-after-fix",
+    "by": "fresh-context (authorization boundary)",
+    "verdict": "no CRITICAL; escalation to global and the existence oracle both proven clean by direct schema probing. F1 (foreign super-admin trapdoor to private) + F4 (publish widens a private row) + F4b (TOCTOU in the CAS mutator) + F3 (unaddressable surface) + F5 (missing descriptor assertions) FIXED. F2 (the review gate is inert for platform staff who are not org members) is a PRODUCT decision deferred to E2 with the reviewer's recommendation recorded."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "acceptedDeviation": "setGlobal declares auth:'super-admin' not 'user' \u2014 the descriptor auth class is machine-readable and filters the public OpenAPI doc, so declaring 'user' for a requireRole('super-admin') route would make it lie. Matches the artifacts.setFeatured precedent.",
+  "at": "2026-08-02T06:56:26Z",
+  "e2Carry": [
+    "F2: platform review needs an author-initiated submit-for-review state, NOT a super-admin read exception (the 404 read denial is correct and must stay)",
+    "publishedSnapshot is not in the read projection \u2014 test the scrub at the store, not through GET",
+    "do not add a params-schema or any new status differentiation on /definitions/:id/* \u2014 the id is derivable from (orgId,key), so the uniform 404 is load-bearing",
+    "E2 must ship the diagram + decisions.md updates E1 did not"
+  ]
+}

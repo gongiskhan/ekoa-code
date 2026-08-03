@@ -1,0 +1,59 @@
+{
+  "slice": "A2",
+  "title": "Async tenant-scoped definition registry + seam threading",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "fb72df7",
+  "tag": "run-20260801-171149-A2",
+  "securityWall": {
+    "typecheck": "pass (agent, full)",
+    "eslint": "pass",
+    "garrison": "clean",
+    "chokepoint": "clean",
+    "gitleaks": "clean"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 12,
+    "note": "634 green across integrations+contract (orchestrator re-run)"
+  },
+  "adversarialReview": {
+    "status": "clean-after-fix",
+    "by": "fresh-context (2 rounds, probe-verified)",
+    "attempts": 2,
+    "verdict": "F1 (the claimed-closed cross-tenant leak was LIVE) fixed + probe-confirmed CLOSED on all four entry points incl. the baseline-key collision; F5 (listener scoping dead code) fixed + fail-closed; F2/F3/F4 + orgId symmetry closed. Residuals carried to A3."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "followUps": [
+    "events/service.ts:132,242 still use sync disk getDefinition (owner has orgId on TriggerDoc)",
+    "listener-supervisor.ts must pass orgId/ownerUserId into UserDefinedPollTrigger (fields made optional so behaviour is unchanged until then)",
+    "docs/diagrams/05-data-model.excalidraw lacks integration_definitions (A1 gap)"
+  ],
+  "at": "2026-08-01T20:34:39Z",
+  "a3Residuals": [
+    "POST /integrations/refresh returns merged-cache keys = cross-tenant key enumeration",
+    "events/service.ts:132,242 still read the merged cache (webhook verification policy steering; fails closed on secret)",
+    "integrationAutomationTemplate reads runtimeDir first on a tenant response path (latent)",
+    "builder loadedKey exemption still lets a shipped key be clobbered in the runtime tier",
+    "create() actor-optional escape hatch",
+    "declaredOrigins stored but ignored \u2014 pick one egress truth",
+    "SECRET_KEY_RE misses authorization/token/x-api-key/signature; resolveSkillMd returns an unscrubbed body into an agent prompt",
+    "no test asserts the actor received at any of the ~12 threaded call sites"
+  ]
+}

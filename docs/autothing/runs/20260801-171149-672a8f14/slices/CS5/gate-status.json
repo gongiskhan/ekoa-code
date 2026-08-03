@@ -1,0 +1,43 @@
+{
+  "slice": "CS5",
+  "title": "Session establishment (typist wiring) + Citius recipe",
+  "kind": "api",
+  "status": "passed",
+  "checkpointCommit": "f967e4a",
+  "tag": "run-20260801-171149-CS5",
+  "securityWall": {
+    "typecheck": "pass (at agent completion; full re-run deferred until A2 lands)",
+    "eslint": "pass",
+    "gitleaks": "clean (after fixing a credential-shaped test literal at source, not by allowlist)"
+  },
+  "test": {
+    "status": "pass",
+    "cases": 50,
+    "note": "39 green across session-establishment + typist-non-memorable + session-checkout"
+  },
+  "adversarialReview": {
+    "status": "clean-after-fix",
+    "by": "fresh-context (credential custody)",
+    "attempts": 2,
+    "verdict": "no CRITICAL; HIGH-1 (captured session had no grant \u2192 reuse path dead on arrival) and HIGH-2 (a spent login looked like a no-op refusal) FIXED; 5 MEDIUMs + 4 LOWs fixed. Found a NEW live hole while testing: SecretRegistry serialized credentials in plaintext after first redact() \u2014 fixed at the class, logged as a finding."
+  },
+  "codexSliceReview": {
+    "status": "degraded",
+    "reason": "codex-unavailable",
+    "actualModel": null
+  },
+  "adversarialTest": {
+    "status": "deferred-to-runlevel",
+    "reason": "kind-conditional (api)"
+  },
+  "design": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "walkthrough": {
+    "status": "skipped",
+    "reason": "kind"
+  },
+  "diagram": "docs/diagrams/02-module-map.excalidraw AS-BUILT note (FIXED-12)",
+  "at": "2026-08-01T20:17:41Z"
+}

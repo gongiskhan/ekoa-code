@@ -3,7 +3,7 @@
   "title": "Caixa Citius inbox parser + speculative fixtures",
   "kind": "api",
   "status": "needs-work",
-  "checkpointCommit": "fd51617",
+  "checkpointCommit": "8a12c4e",
   "tag": "run-20260801-171149-CS1",
   "securityWall": {
     "typecheck": "pass",
@@ -14,14 +14,13 @@
   },
   "test": {
     "status": "pass",
-    "cases": 18,
+    "cases": 41,
     "note": "173 legal tests green; independently re-run by orchestrator"
   },
   "adversarialReview": {
-    "status": "needs-work",
-    "by": "fresh-context re-review",
-    "attempt": 2,
-    "verdict": "false-empty STILL reachable via the exact-label variant: a filter/search/legend table with header-equal cells satisfies strong-grid id and (no rows) \u2192 ok:true rows:[] (verified: filter-only, login+filter, prose-exact). Fix attempt-2 closed the substring variant + CRIT-2 mechanism + caption-row; but empty must be POSITIVELY proven. Also NEW: sourceId value='on' non-uniqueness collides distinct rows; guard bypasses (alias/require/dynamic-import/XHR); exact-label brittle (N\u00ba Processo \u2192 ok:false). Attempt 3 (fresh context)."
+    "status": "round-4 needs-work \u2192 attempt 5 (LAST)",
+    "attempts": 4,
+    "verdict": "round-3 defects CLOSED; but marker2 /gridview/ unanchored reopened false-empty (P1/P6), input-only disqualifier evadable (P3/P9), and \u2014 worst \u2014 anchored regex drops a POPULATED inbox with prefixed cells (P4/P8, dangerous data-loss). Root flaw: 'zero parsed rows under a marker' conflates empty/parse-failure/chrome. Attempt-5 redesign: drop marker2; empty verdict requires ZERO DATA ROWS (not zero parsed); parse-failure\u2192ok:false; substring process-number extraction; broaden interactive-control disqualifier."
   },
   "codexSliceReview": {
     "status": "degraded",
