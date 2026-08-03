@@ -254,7 +254,26 @@ export type ParseInboxResult =
  * source-id scan. `sanitizeTree` therefore EMPTIES these elements; the TAGS survive, so a
  * `<textarea>` in a raw slice or in serialized output still reads as the interactive control it is.
  */
-const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set(['script', 'style', 'textarea', 'title']);
+const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set([
+  // Tokenizer raw-text / RCDATA elements.
+  'script',
+  'style',
+  'textarea',
+  'title',
+  // NOT-RENDERED elements (round-5c verification F3). The masking rule is not "what the TOKENIZER
+  // treats as raw text" but "what the RENDERER does not show as content" — parse5's serializer
+  // emits these children verbatim too, so an unmasked `<template>` row template or a `<noscript>`
+  // fallback FABRICATES a notification: the verifier proved a cell rendering "1234/26.0T8LSB"
+  // returned the template's "9999/2026" instead (a real processo silently REPLACED), and hidden
+  // inputs / anchors inside them fabricated `sourceId` (the dedup identity) and `documentoRef`.
+  // `<template>` is the modern equivalent of the `<script>` row template round-5b R6-4 hardened
+  // against; `<noscript>` fallbacks are commonplace in WebForms cells.
+  'noscript',
+  'iframe',
+  'noframes',
+  'noembed',
+  'xmp',
+]);
 
 /**
  * ONE normalization pass over the PARSED TREE before any serialization (round-5c). Structure is
@@ -272,19 +291,28 @@ const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set(['script', 'style', 'text
  *     actually read.
  */
 function sanitizeTree(root: P5ParentNode): void {
-  root.childNodes = root.childNodes.filter((c) => c.nodeName !== '#comment');
-  for (const child of root.childNodes) {
-    if (!defaultTreeAdapter.isElementNode(child)) continue;
-    for (const attr of child.attrs) {
-      attr.value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // ITERATIVE (round-5c verification F2): a recursive walk overflowed the stack at ~3.7k nesting
+  // depth and made `parseInboxPage` THROW where its contract says it must answer ok:false. parse5
+  // itself parses arbitrary depth happily, so the walk must too.
+  const stack: P5ParentNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    node.childNodes = node.childNodes.filter((c) => c.nodeName !== '#comment');
+    for (const child of node.childNodes) {
+      if (!defaultTreeAdapter.isElementNode(child)) continue;
+      for (const attr of child.attrs) {
+        attr.value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+      if (RAW_TEXT_ELEMENTS.has(child.tagName)) {
+        child.childNodes = [];
+        continue;
+      }
+      stack.push(child);
+      // parse5 serializes a <template>'s content, so it must be sanitized too — and its content is
+      // never RENDERED, so it is EMPTIED rather than merely sanitized (F3): a row template inside
+      // it must not reach `cellText` / `extractSourceId` / `extractHref`.
+      if (child.tagName === 'template') (child as P5Template).content.childNodes = [];
     }
-    if (RAW_TEXT_ELEMENTS.has(child.tagName)) {
-      child.childNodes = [];
-      continue;
-    }
-    sanitizeTree(child);
-    // parse5 serializes a <template>'s content, so it must be sanitized too.
-    if (child.tagName === 'template') sanitizeTree((child as P5Template).content);
   }
 }
 
@@ -685,6 +713,18 @@ function identifyHeader(cells: P5Element[]): string[] | null {
  *     dropped-deadline false empty is never worth risking over an honest "indisponível".
  */
 export function parseInboxPage(html: string): ParseInboxResult {
+  // NEVER THROWS (round-5c verification F2). Every structural walk below is iterative, but parse5's
+  // own `serialize` recurses, so a pathologically deep page can still overflow inside a library
+  // call. The contract this module is built on is that an unreadable page answers "indisponível" —
+  // an exception escaping into the sync rail is an unhandled outage, not an honest verdict.
+  try {
+    return parseInboxPageInner(html);
+  } catch {
+    return { ok: false, error: UNAVAILABLE };
+  }
+}
+
+function parseInboxPageInner(html: string): ParseInboxResult {
   if (!html || looksUnavailable(html)) {
     return { ok: false, error: UNAVAILABLE };
   }
@@ -743,6 +783,24 @@ export function parseInboxPage(html: string): ParseInboxResult {
       }
     }
     if (headerIdx === -1) continue; // no notifications-grid header in this table
+
+    // ROUND-5C VERIFICATION F1 — the CATASTROPHIC one. Only `rows.slice(headerIdx + 1)` is ever
+    // parsed or counted, so every row ABOVE the identified header was invisible to BOTH the empty
+    // proof and the populated read: a grid whose real header failed the exact-label gate (a sort
+    // glyph in the `<th>`) while a repeated footer/legend row passed it reported `{ok:true,
+    // rows:[]}` for a page rendering two notifications (false empty), and a data row above a
+    // mid-table header was silently dropped from an otherwise-correct populated read (subset).
+    // Reachability is not exotic: `SPIKE_HEADER_LABELS` is documented as UNOBSERVED GUESSES, so a
+    // real header missing the gate is an EXPECTED first-real-access condition — the verifier's
+    // permutation fuzz produced a false empty in 1087 of 3000 header positions.
+    // A pre-header row with >=2 direct cells is therefore structurally indistinguishable from a
+    // notification we failed to key, and resolves the only safe way: a MARKED grid is poisoned
+    // (parse-failure -> ok:false, never empty, never a subset); an unmarked table proves nothing.
+    const preHeaderDataRows = rows.slice(0, headerIdx).filter((r) => rowCells(r).length >= 2).length;
+    if (preHeaderDataRows > 0) {
+      if (marked) parseFailure = true;
+      continue;
+    }
 
     const idxOf = (field: string): number => fieldByIndex.indexOf(field);
 

@@ -1306,3 +1306,155 @@ describe('citius-mandatarios · round-5c regressions (spec-tokenizer divergences
     expectRows(html, ['1234/26.0T8LSB']);
   });
 });
+
+describe('citius-mandatarios · round-5c verification regressions (the semantic layer above the tree)', () => {
+  const GRID_OPEN = '<table id="ctl00_cph_gvNotificacoes">';
+  const HEADER = '<tr><th>Processo</th><th>Data</th><th>Tribunal</th></tr>';
+  const ROW1 = '<tr><td>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>';
+  const ROW2 = '<tr><td>5678/26.1T8PRT</td><td>2026-06-17</td><td>Porto</td></tr>';
+
+  // ---- F1 (CRITICAL): rows ABOVE the identified header were invisible to every verdict ----
+
+  it('F1a: a sort-glyph header + a repeating tfoot header never reports a populated grid as EMPTY', () => {
+    // The real <th>s carry a sort glyph so normalizeHeader misses them; the tfoot labels pass the
+    // gate instead, putting BOTH data rows above the identified header.
+    const html =
+      GRID_OPEN +
+      '<thead><tr><th>Processo &#9650;</th><th>Data &#9650;</th><th>Tribunal &#9650;</th></tr></thead>' +
+      '<tbody>' +
+      ROW1 +
+      ROW2 +
+      '</tbody>' +
+      '<tfoot>' +
+      HEADER +
+      '</tfoot>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was {ok:true, rows:[]} for a 2-notification page
+  });
+
+  it('F1b: a data row ABOVE a mid-table header is never silently dropped from a populated read', () => {
+    const html = GRID_OPEN + ROW1 + HEADER + ROW2 + '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was {ok:true, rows:['5678/26.1T8PRT']} — a subset
+  });
+
+  it('F1c: select-all checkboxes do not rescue the subset case (the raw-slice scan only guards EMPTY)', () => {
+    const cb = '<td><input type="checkbox" value="n1"></td>';
+    const html =
+      GRID_OPEN +
+      '<tr>' + cb + '<td>1234/26.0T8LSB</td><td>2026-06-16</td></tr>' +
+      '<tr><th>Sel</th><th>Processo</th><th>Data</th></tr>' +
+      '<tr>' + cb + '<td>5678/26.1T8PRT</td><td>2026-06-17</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F1d: a normal grid (header first, decorative single-colspan rows above it) still parses', () => {
+    const html =
+      GRID_OPEN +
+      '<tr><td colspan="3">Caixa de correio</td></tr>' + // single colspan: structurally not a data row
+      HEADER +
+      ROW1 +
+      ROW2 +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows.map((r) => r.processo)).toEqual(['1234/26.0T8LSB', '5678/26.1T8PRT']);
+  });
+
+  // ---- F2 (HIGH): the walk must never throw — an unreadable page answers indisponível ----
+
+  it('F2a: pathological nesting depth returns ok:false instead of throwing RangeError', () => {
+    const html = '<div>'.repeat(20000) + GRID_OPEN + HEADER + ROW1 + '</table>';
+    let res: ReturnType<typeof parseInboxPage> | undefined;
+    expect(() => {
+      res = parseInboxPage(html);
+    }).not.toThrow();
+    expect(res && res.ok === false).toBe(true);
+  });
+
+  it('F2b: deeply nested inline markup inside a cell never throws', () => {
+    const deepCell = '<td>' + '<b>'.repeat(20000) + '1234/26.0T8LSB' + '</b>'.repeat(20000) + '</td>';
+    const html = GRID_OPEN + HEADER + '<tr>' + deepCell + '<td>2026-06-16</td><td>Lisboa</td></tr>' + '</table>';
+    expect(() => parseInboxPage(html)).not.toThrow();
+  });
+
+  it('F2c: moderate nesting (well under the old overflow threshold) still parses normally', () => {
+    const html = '<div>'.repeat(500) + GRID_OPEN + HEADER + ROW1 + '</table>' + '</div>'.repeat(500);
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows).toHaveLength(1);
+  });
+
+  // ---- F3 (MEDIUM): not-rendered content fabricated processos, ids and doc refs ----
+
+  it('F3a: a <template> row template never replaces the cell\'s real process number', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><template>9999/2026</template>1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.processo).toBe('1234/26.0T8LSB'); // was '9999/2026' — a real processo replaced
+  });
+
+  it('F3b: a <template>-only cell renders no process number, so the marked grid poisons', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><template>9999/2026</template>Sem número</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false); // was ok:true with a fabricated row
+  });
+
+  it('F3c: a <noscript> fallback never fabricates a notification', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><noscript>7777/2026</noscript>Active o JavaScript</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F3d: an <iframe> fallback never fabricates a notification', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><iframe src="x">8888/2026</iframe>sem</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    expect(parseInboxPage(html).ok).toBe(false);
+  });
+
+  it('F3e: hidden inputs and anchors inside not-rendered content never fabricate sourceId/documentoRef', () => {
+    const html =
+      '<table id="ctl00_cph_gvNotificacoes">' +
+      '<tr><th>Processo</th><th>Data</th><th>Documento</th></tr>' +
+      '<tr><td><noscript><input type="hidden" value="FAKE-ID"></noscript>1234/26.0T8LSB</td>' +
+      '<td>2026-06-16</td>' +
+      '<td><noscript><a href="fallback.aspx?doc=1">sem js</a></noscript></td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.sourceId).toBeUndefined(); // dedup identity must not come from unrendered markup
+    expect(res.rows[0]!.ref).not.toBe('FAKE-ID');
+    expect(res.rows[0]!.documentoRef).toBeUndefined();
+    expect(res.rows[0]!.temDocumento).toBe(false);
+  });
+
+  it('F3f: a genuine hidden-input source id in RENDERED markup is still read', () => {
+    const html =
+      GRID_OPEN +
+      HEADER +
+      '<tr><td><input type="hidden" value="REAL-ID-1">1234/26.0T8LSB</td><td>2026-06-16</td><td>Lisboa</td></tr>' +
+      '</table>';
+    const res = parseInboxPage(html);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rows[0]!.sourceId).toBe('REAL-ID-1');
+    expect(res.rows[0]!.ref).toBe('REAL-ID-1');
+  });
+});
