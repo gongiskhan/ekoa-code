@@ -35,6 +35,7 @@ import { PlatformIntegrationCard } from "@/components/integrations/PlatformInteg
 import { PipedreamSection } from "@/components/integrations/PipedreamSection";
 import { WebhooksSection } from "@/components/integrations/WebhooksSection";
 import ActionConsentDialog, { type ActionConsentSubject } from "@/components/integrations/action-consent-dialog";
+import { SyncOutcomePanel } from "@/components/sync/sync-outcome-panel";
 import type {
   IntegrationSkill,
   IntegrationBuilderOutput,
@@ -981,6 +982,11 @@ export default function IntegrationsPage() {
           />
         }
       />
+
+      {/* Citius sync state (CS7). Renders NOTHING unless the api's flag-gated sync rail answers,
+          so this is invisible on every deployment that has not opted in. Above the tabs because
+          "am I missing notifications?" is not a question that should live behind a tab. */}
+      <SyncOutcomePanel />
 
       {/* Top-level tab bar (Plataforma / Minhas / Webhooks), URL-persisted */}
       <Tabs
