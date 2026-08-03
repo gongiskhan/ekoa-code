@@ -29,6 +29,27 @@ export function decodeHtml(buf: Buffer, contentType: string): string {
   return buf.toString('utf-8');
 }
 
+/**
+ * NAMED entities beyond the five XML ones. Additive on purpose: a portal writes its pager's
+ * next/previous control as `&raquo;` far more often than as a literal `»` or a numeric `&#187;`,
+ * and a decoder that only knows `&gt;` leaves that control unreadable to every caller downstream
+ * (CS4's pager recogniser reads control LABELS out of this, and an undecoded `&raquo;` there reads
+ * as "no next control" - a truncated sweep certified complete).
+ *
+ * The table is the arrow/chevron family that pagination is drawn with, plus the punctuation an
+ * older PT page still spells out. `nbsp/amp/lt/gt/quot/apos` stay in the chain below, unchanged.
+ */
+const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  // the arrow / chevron family: what a "seguinte" / "anterior" control is actually drawn with
+  raquo: '»', laquo: '«', rsaquo: '›', lsaquo: '‹',
+  rarr: '→', larr: '←', harr: '↔', uarr: '↑', darr: '↓',
+  // punctuation an older page still spells out
+  hellip: '…', mdash: '—', ndash: '–', middot: '·', bull: '•', times: '×',
+  ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’',
+  deg: '°', ordf: 'ª', ordm: 'º', euro: '€', copy: '©', reg: '®', trade: '™',
+};
+const NAMED_ENTITY_RE = new RegExp(`&(${Object.keys(NAMED_ENTITIES).join('|')});`, 'gi');
+
 /** Decode the small set of HTML entities that can appear in a PT registry portal's cell text. */
 export function decodeEntities(s: string): string {
   return s
@@ -38,6 +59,7 @@ export function decodeEntities(s: string): string {
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(NAMED_ENTITY_RE, (whole, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? whole)
     .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(parseInt(d, 10)));
 }

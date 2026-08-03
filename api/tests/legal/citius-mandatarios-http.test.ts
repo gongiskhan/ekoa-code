@@ -29,7 +29,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
+import { decodeEntities, decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
 import { parseInboxPage } from '../../src/legal/citius-mandatarios.js';
 import {
   enumerateInbox,
@@ -803,9 +803,12 @@ describe('citius-mandatarios-http · a truncated sweep is never COMPLETE (round-
   });
 
   it('THE FLOOR: a full last page with no pager account of itself cannot be complete', async () => {
-    // A pager control this module recognises as neither numeric nor next-labelled. Nothing says
-    // "there is more" — and nothing proves there is not, because the grid came back FULL.
-    const pager = '<div class="pager"><a href="CaixaCorreio.aspx?dir=next"><img src="n.gif"></a></div>';
+    // The pager shows ONE control and this module reads it correctly: it goes BACKWARDS. So
+    // nothing here says "there is more" — and nothing proves there is not either, because the
+    // grid came back FULL and the pager named no page at all. (Round 7 moved the icon-only
+    // FORWARD shape this block used to drive up into `pager-unrecognised`, which is strictly
+    // stronger: it no longer needs `pageSize` to fire. The floor keeps the residue.)
+    const pager = '<div class="pager"><a href="#" onclick="ir(0)" title="Anterior"><img src="p.gif"></a></div>';
     const full = await enumerateInbox(
       { sessionState: offlineState('floor'), ...OFFLINE, pageSize: 1 },
       { transport: stubTransport(() => gridPage(gridRow('1234'), pager)), sleep: async () => {} },
@@ -817,7 +820,7 @@ describe('citius-mandatarios-http · a truncated sweep is never COMPLETE (round-
   });
 
   it('…and the floor does NOT over-fire: a grid under the page size, or a pager that accounts for the page, is complete', async () => {
-    const pager = '<div class="pager"><a href="CaixaCorreio.aspx?dir=next"><img src="n.gif"></a></div>';
+    const pager = '<div class="pager"><a href="#" onclick="ir(0)" title="Anterior"><img src="p.gif"></a></div>';
     // same page, same pager — but the grid is not full, so nothing is suspicious
     const notFull = await enumerateInbox(
       { sessionState: offlineState('floor2'), ...OFFLINE, pageSize: 5 },
@@ -1113,6 +1116,416 @@ describe('citius-mandatarios-http · the small refusals (round-6 LOW)', () => {
     );
     // `failed` spends nothing; `session-dead` would spend a login attempt on a pathname guess
     expect(out.status).toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6b. COMPLETENESS HONESTY — the round-7 fresh-context verifier
+//
+// Round 6 left FIVE more ways a truncated sweep certified itself after ONE request, and TWO
+// livelocks in the other direction. The shapes below are the verifier's, unedited.
+//
+// THE PIN HARNESS. Round 6's probes put the shape under test on PAGE 1, which round 7 closes twice
+// over (the catch-all fires on page 1 for anything unreadable), so a page-1 probe can no longer
+// tell WHICH fix is load-bearing. Every vocabulary/label pin below therefore drives a THREE-page
+// portal and puts the shape on PAGE 2 — where the pager numerically accounts for pages 1 and 2, so
+// the catch-all is deliberately silent and the ONLY thing standing between `complete` and
+// `incomplete` is the fix under test. Page 3 carries a real third notification, so a `complete`
+// there is a provably lost one. `NON-VACUITY` drives the same portal with no shape at all and gets
+// `complete` back, which is what makes each pin a measurement rather than a tautology.
+// ---------------------------------------------------------------------------
+
+/** Page 1 links page 2 drivably; page 2 renders `1 [2]` PLUS `page2Extra`; page 3 really exists
+ *  and carries a third notification that only `page2Extra` could ever lead to. */
+function threePagePortal(page2Extra: string, recorded?: RecordedRequest[]): CitiusTransport {
+  return stubTransport((page) => {
+    if (page === 1) {
+      return gridPage(gridRow('1111'), '<span class="cur">1</span><a href="CaixaCorreio.aspx?page=2">2</a>');
+    }
+    if (page === 2) {
+      return gridPage(
+        gridRow('2222'),
+        `<a href="CaixaCorreio.aspx?page=1">1</a><span class="cur">2</span>${page2Extra}`,
+      );
+    }
+    return gridPage(gridRow('3333'), '<a href="CaixaCorreio.aspx?page=2">2</a><span class="cur">3</span>');
+  }, recorded);
+}
+
+/** Walk `threePagePortal` and assert the sweep refused to certify itself. Returns the outcome. */
+async function expectPage2ShapeBlocksComplete(id: string, shape: string): Promise<void> {
+  const recorded: RecordedRequest[] = [];
+  const out = await enumerateInbox(
+    { sessionState: offlineState(id), ...OFFLINE },
+    { transport: threePagePortal(shape, recorded), sleep: async () => {} },
+  );
+  expect(out.status).not.toBe('complete');
+  expect(out.status).toBe('incomplete');
+  if (out.status !== 'incomplete') return;
+  expect(out.reason).toBe('pager-unrecognised');
+  expect(recorded).toHaveLength(2);
+  expect(out.rows.map((r) => r.processo)).toEqual(['1111/26.0T8LSB', '2222/26.0T8LSB']);
+}
+
+describe('citius-mandatarios-http · the pin harness is not tautological (round-7)', () => {
+  it('NON-VACUITY: the same three-page portal with NO shape on page 2 walks to `complete`', async () => {
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-base'), ...OFFLINE },
+      { transport: threePagePortal('', recorded), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+    expect(recorded).toHaveLength(2);
+    // …and the accounting that makes it `complete` is real: page 2 named pages 1 and 2
+    expect(out.rows).toHaveLength(2);
+  });
+});
+
+describe('citius-mandatarios-http · &raquo; is really entity-decoded now (round-7 CRITICAL-A1)', () => {
+  it('decodeEntities knows the arrow/chevron family the docblock always claimed it knew', () => {
+    // The claim at the head of NEXT_LABEL_RE ("read AFTER entity decoding") used to be FALSE:
+    // `portal-html.ts` had no named-entity table at all, so the ONE spelling a real portal is most
+    // likely to emit was the one spelling the pager recogniser could not see.
+    expect(decodeEntities('&raquo;')).toBe('»');
+    expect(decodeEntities('&laquo;')).toBe('«');
+    expect(decodeEntities('&rsaquo;')).toBe('›');
+    expect(decodeEntities('&lsaquo;')).toBe('‹');
+    expect(decodeEntities('&rarr;')).toBe('→');
+    expect(decodeEntities('&larr;')).toBe('←');
+    expect(decodeEntities('&hellip;')).toBe('…');
+    expect(decodeEntities('&ndash;')).toBe('–');
+    expect(decodeEntities('&middot;')).toBe('·');
+    expect(decodeEntities('&bull;')).toBe('•');
+    expect(decodeEntities('&times;')).toBe('×');
+    expect(decodeEntities('&mdash;')).toHaveLength(1);
+    // additive: the five XML entities and the numeric refs are untouched
+    expect(decodeEntities('a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;&nbsp;f')).toBe('a & b <c> "d" \'e\' f');
+    expect(decodeEntities('&#187;&#x2192;')).toBe('»→');
+    // …and an entity it does not know is left ALONE rather than eaten
+    expect(decodeEntities('&naoexiste;')).toBe('&naoexiste;');
+  });
+
+  it.each([
+    ['&raquo;', '<a href="#" onclick="go(3)">&raquo;</a>'],
+    ['&rsaquo;', '<a href="#" onclick="go(3)">&rsaquo;</a>'],
+    ['&rarr;', '<a href="#" onclick="go(3)">&rarr;</a>'],
+  ])('a next control spelled %s blocks `complete` (it used to certify the sweep)', async (label, shape) => {
+    // the raw markup carries NONE of the forms the recogniser could already read
+    expect(shape).not.toMatch(/[»›→]|&#|>>/);
+    await expectPage2ShapeBlocksComplete(`r7-a1-${label}`, shape);
+  });
+});
+
+describe('citius-mandatarios-http · aria-label is a label (round-7 CRITICAL-A2)', () => {
+  it.each([
+    ['an image input', '<input type="image" src="n.gif" aria-label="Seguinte" />'],
+    ['an icon-only anchor', '<a href="#" onclick="go(3)" aria-label="Página seguinte"><span></span></a>'],
+    ['a nested aria-label', '<a href="#" onclick="go(3)"><span aria-label="Next"></span></a>'],
+  ])('%s says what it is ONLY in aria-label, and that now blocks `complete`', async (label, shape) => {
+    expect(shape).toContain('aria-label');
+    await expectPage2ShapeBlocksComplete(`r7-a2-${label}`, shape);
+  });
+
+  it('canonical Bootstrap pagination is not a single-page inbox', async () => {
+    // verbatim from the verifier: the most common pagination markup on the web
+    const bootstrap =
+      '<nav><ul class="pagination">'
+      + '<li class="page-item active"><a class="page-link" href="#">1</a></li>'
+      + '<li class="page-item"><a class="page-link" href="#" onclick="go(2)" aria-label="Next">'
+      + '<span aria-hidden="true">&raquo;</span></a></li>'
+      + '</ul></nav>';
+    const recorded: RecordedRequest[] = [];
+    const out = await walkTwoPagePortal(bootstrap, recorded);
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+    expect(out.rows).toHaveLength(1);
+    expect(recorded).toHaveLength(1);
+  });
+});
+
+describe('citius-mandatarios-http · selects and clickable non-controls are controls (round-7 CRITICAL-A3)', () => {
+  const SELECT_PAGER =
+    '<select name="ddlPagina" onchange="irPara(this.value)">'
+    + '<option value="2" selected>2</option><option value="3">3</option></select>';
+
+  it.each([
+    ['a <select> page picker', SELECT_PAGER],
+    ['a <div> with a click handler', '<div onclick="goPage(3)">Seguinte</div>'],
+    ['an <li> with a click handler', '<li onclick="goPage(3)">Seguinte</li>'],
+    ['a <span> with a click handler', '<span onclick="goPage(3)">Seguinte</span>'],
+  ])('%s blocks `complete` (the scan used to see nothing at all in it)', async (label, shape) => {
+    await expectPage2ShapeBlocksComplete(`r7-a3-${label}`, shape);
+  });
+
+  it('a <select> pager OUTSIDE any pager container is still caught, as the cry-wolf reason', async () => {
+    // no `class="pager"` around it: the region is empty, so this speaks from the page chrome rail
+    const body = gridPage(gridRow('1234'), '') + `<div class="topo">${SELECT_PAGER.replace('value="2" selected>2', 'value="1" selected>1')}</div>`;
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a3-out'), ...OFFLINE },
+      { transport: stubTransport(() => body), sleep: async () => {} },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-ambiguous');
+  });
+
+  it('…and an ordinary filter dropdown does NOT cry wolf', async () => {
+    // same page, a `<select>` that names itself something else and lists no page numbers
+    const filter =
+      '<div class="topo"><select name="ddlTribunal" onchange="filtrar()">'
+      + '<option value="lsb" selected>Lisboa</option><option value="prt">Porto</option></select></div>';
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a3-filter'), ...OFFLINE },
+      { transport: stubTransport(() => gridPage(gridRow('1234'), '') + filter), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+  });
+});
+
+describe('citius-mandatarios-http · an unreadable pager control is itself the signal (round-7 CRITICAL-A4)', () => {
+  // Every one of these is a live control in the pager region, on a FULL grid, that says nothing
+  // this module's vocabulary knows. Round 6 required a RECOGNISED label before refusing
+  // `complete`, which made the vocabulary the only thing between a court deadline and a lost
+  // notification — and the FLOOR that was supposed to back it up cannot fire on page 1 at all
+  // (no configured `pageSize`, no prior page to observe one from). All of these walked ONE page
+  // and certified the sweep.
+  it.each([
+    ['a sprite chevron', '<a href="#" onclick="goPage(2)"><span class="sprite-next"></span></a>'],
+    ['a single &gt; chevron', '<a href="#" onclick="goPage(2)">&gt;</a>'],
+    ['a › chevron', '<a href="#" onclick="goPage(2)">›</a>'],
+    ['an → arrow', '<a href="#" onclick="goPage(2)">→</a>'],
+    ['a data-page anchor', '<a href="#" class="nxt" data-page="2"><span></span></a>'],
+    ['a DataTables button', '<a class="paginate_button next" id="tbl_next"></a>'],
+    ['a Kendo pager arrow', '<a class="k-pager-nav"><span class="k-i-arrow-e"></span></a>'],
+    ['a bare unlabelled anchor', '<a href="#" onclick="ir(2)"><img src="n.gif"></a>'],
+  ])('%s is INCOMPLETE on page 1 with NO configured pageSize', async (label, pager) => {
+    const recorded: RecordedRequest[] = [];
+    const out = await walkTwoPagePortal(pager, recorded);
+    expect(out.status).not.toBe('complete');
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+    expect(out.rows).toHaveLength(1); // page 1's notification is real and is kept
+    expect(recorded).toHaveLength(1);
+  });
+
+  it.each([
+    ['a DataTables class/id', '<a class="paginate_button next" id="tbl_next"></a>'],
+    ['a sprite class', '<a href="#" class="sprite-next" onclick="go(3)"><span></span></a>'],
+    ['a data-page attribute', '<a href="#" class="ir" data-page="3"><span></span></a>'],
+  ])('%s is read as a label/page even where the catch-all is silent (page 2)', async (label, shape) => {
+    // These say what they are ONLY in the control's OWN `class` / `id` / `data-page`. On page 2 the
+    // pager accounts for the walk, so the catch-all is deliberately quiet and this is the only rail
+    // left. (A class on a NESTED element is deliberately NOT read as a label: nested class names
+    // are far noisier than a control's own, and crying wolf on a last page is the A6/A7 livelock.
+    // The nested-sprite shape is caught by the catch-all instead — see the page-1 block above.)
+    expect(shape).not.toMatch(/Seguinte|Next|»|›|→/);
+    await expectPage2ShapeBlocksComplete(`r7-a4-attr-${label}`, shape);
+  });
+
+  it('a pager printing only "1" does NOT buy an unreadable control an exemption on page 1', async () => {
+    // the accounting exemption needs a RUN to account for; on page 1 "[1]" proves nothing
+    const out = await walkTwoPagePortal(
+      '<span class="cur">1</span><a class="k-pager-nav"><span class="k-i-arrow-e"></span></a>',
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+  });
+
+  it.each([
+    ['an anonymous icon', '<a href="#" onclick="ir(1)"><img src="p.gif"></a>'],
+    ['a titled previous icon', '<a href="#" onclick="ir(1)" title="Anterior"><img src="p.gif"></a>'],
+    ['a « glyph', '<a href="#" onclick="ir(1)">&laquo;</a>'],
+    ['a ‹ glyph', '<a href="#" onclick="ir(1)">&lsaquo;</a>'],
+    ['a First button', '<a href="#" onclick="ir(1)" aria-label="First"></a>'],
+  ])('ANTI-LIVELOCK: %s on a LAST page whose pager accounts for the walk is still complete', async (label, shape) => {
+    // The catch-all must not turn every last page's back/first control into a permanent refusal:
+    // `incomplete` maps to `reachedEnd:false`, so a walk that cries wolf here never advances the
+    // watermark and re-sweeps for ever. This is the other failure mode, and it is not "safe".
+    const out = await enumerateInbox(
+      { sessionState: offlineState(`r7-a4-live-${label}`), ...OFFLINE },
+      {
+        transport: stubTransport((page) => (page === 1
+          ? gridPage(gridRow('1111'), '<span class="cur">1</span><a href="CaixaCorreio.aspx?page=2">2</a>')
+          : gridPage(gridRow('2222'), `<a href="CaixaCorreio.aspx?page=1">1</a><span class="cur">2</span>${shape}`))),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('complete');
+    expect(out.rows).toHaveLength(2);
+  });
+});
+
+describe('citius-mandatarios-http · the next/last vocabulary (round-7 CRITICAL-A5)', () => {
+  it.each([
+    ['Fim', '<a href="#" onclick="go(3)">Fim</a>'],
+    ['Mais', '<a href="#" onclick="go(3)">Mais</a>'],
+    ['Ver mais', '<a href="#" onclick="go(3)">Ver mais</a>'],
+    ['Continuar', '<a href="#" onclick="go(3)">Continuar</a>'],
+    ['Adiante', '<a href="#" onclick="go(3)">Adiante</a>'],
+    ['Frente', '<a href="#" onclick="go(3)">Frente</a>'],
+    ['+', '<a href="#" onclick="go(3)">+</a>'],
+  ])('a control labelled "%s" blocks `complete`', async (label, shape) => {
+    await expectPage2ShapeBlocksComplete(`r7-a5-${label}`, shape);
+  });
+});
+
+describe('citius-mandatarios-http · the single-page full-grid LIVELOCK (round-7 HIGH-A6)', () => {
+  /** A WebForms GridView renders NO pager at all when PageCount === 1. */
+  const gridPageNoPager = (rows: string): string => gridPage(rows, '').replace('<div class="pager"></div>', '');
+
+  it('an inbox holding exactly `pageSize` notifications, with the pager hidden, is COMPLETE', async () => {
+    // Round 6: `incomplete/page-full-no-pager` FOR EVER. CS6 maps that to `reachedEnd:false`, so
+    // the watermark never advances and every poll re-sweeps the same inbox — the configured
+    // `pageSize` (the documented mitigation for the icon-pager risk) was arming a permanent stall.
+    const page = gridPageNoPager(gridRow('1234'));
+    expect(page).not.toContain('class="pager"'); // the premise: nothing pager-shaped at all
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a6'), ...OFFLINE, pageSize: 1 },
+      { transport: stubTransport(() => page), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+    expect(out.rows).toHaveLength(1);
+  });
+
+  it('…and it is the MARKUP that decides, not the row count: the same full grid WITH a pager refuses', async () => {
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a6b'), ...OFFLINE, pageSize: 1 },
+      {
+        transport: stubTransport(() =>
+          gridPage(gridRow('1234'), '<a href="#" onclick="ir(2)"><img src="n.gif"></a>')),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('pager-unrecognised');
+  });
+
+  it('…and the FLOOR still fires on a full grid whose only navigational control says nothing at all', async () => {
+    // no pager container, but a live control whose purpose the page never states: the shape an
+    // image-only pager button wears when the portal renders it outside a pager region
+    const body = gridPageNoPager(gridRow('1234'))
+      + '<div class="rodape"><a href="#" onclick="x()"><img src="i.gif"></a></div>';
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a6c'), ...OFFLINE, pageSize: 1 },
+      { transport: stubTransport(() => body), sleep: async () => {} },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('page-full-no-pager');
+  });
+
+  it('THE RESIDUAL, pinned not fixed (SPIKE #14): the same page with pageSize UNSET reads complete', async () => {
+    // page 1 cannot observe its own page size, so the FLOOR is inert there whatever it is gated on.
+    // Configuring `pageSize` is the documented arming step, and this is what it buys.
+    const body = gridPageNoPager(gridRow('1234'))
+      + '<div class="rodape"><a href="#" onclick="x()"><img src="i.gif"></a></div>';
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a6d'), ...OFFLINE },
+      { transport: stubTransport(() => body), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+  });
+});
+
+describe('citius-mandatarios-http · the windowed-pager LIVELOCK (round-7 HIGH-A7)', () => {
+  /** Three real pages of two rows each, whose LAST page renders a WINDOWED pager (`… 2 [3]`). */
+  function windowedPortal(recorded?: RecordedRequest[]): CitiusTransport {
+    const pagers: Record<number, string> = {
+      1: '<span class="cur">1</span><a href="CaixaCorreio.aspx?page=2">2</a><a href="CaixaCorreio.aspx?page=3">3</a>',
+      2: '<a href="CaixaCorreio.aspx?page=1">1</a><span class="cur">2</span><a href="CaixaCorreio.aspx?page=3">3</a>',
+      3: '… <a href="CaixaCorreio.aspx?page=2">2</a><span class="cur">3</span>',
+    };
+    return stubTransport((page) => {
+      const p = Math.min(Math.max(page, 1), 3);
+      return gridPage(gridRow(`${p}0`) + gridRow(`${p}1`), pagers[p] ?? '');
+    }, recorded);
+  }
+
+  it('a genuinely exhausted 3-page walk is COMPLETE even though page 3 names no page 1', async () => {
+    // Round 6: `incomplete/page-full-no-pager` for ever, because the exhaustion check was fed only
+    // the CURRENT page's numbers and a windowed pager omits the pages the walk already read. Any
+    // portal whose item total is an exact multiple of the page size hit this on every run.
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a7'), ...OFFLINE, pageSize: 2 },
+      { transport: windowedPortal(recorded), sleep: async () => {} },
+    );
+    expect(out.status).toBe('complete');
+    expect(recorded).toHaveLength(3);
+    expect(out.pagesWalked).toBe(3);
+    expect(out.rows).toHaveLength(6); // every row of every page, and the grid was FULL on page 3
+    expect(out.pages.map((p) => p.rows)).toEqual([2, 2, 2]);
+  });
+
+  it('…and the credit is for pages actually READ: truncating the same walk is still INCOMPLETE', async () => {
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a7b'), ...OFFLINE, pageSize: 2, maxPages: 2 },
+      { transport: windowedPortal(), sleep: async () => {} },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('max-pages');
+    expect(out.rows).toHaveLength(4);
+  });
+
+  it('…and the page-1 case is NOT weakened: a first page whose pager names nothing still refuses', async () => {
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a7c'), ...OFFLINE, pageSize: 1 },
+      {
+        transport: stubTransport(() =>
+          gridPage(gridRow('1234'), '<a href="#" onclick="ir(0)" title="Anterior"><img src="p.gif"></a>')),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('incomplete');
+    if (out.status !== 'incomplete') return;
+    expect(out.reason).toBe('page-full-no-pager');
+  });
+});
+
+describe('citius-mandatarios-http · the VIEWSTATE CHUNKING family (round-7 MEDIUM-A8)', () => {
+  it('a chunked viewstate is replayed whole, and the page-seeded fields are still dropped', async () => {
+    // `maxPageStateFieldLength` splits the state across __VIEWSTATEFIELDCOUNT + __VIEWSTATE1..N.
+    // Dropping the chunks fails closed (nothing is lost) but leaves the pager undrivable against a
+    // deployment a large court grid is very likely to be.
+    const seeded =
+      '<input type="hidden" name="__VIEWSTATEFIELDCOUNT" value="3" />'
+      + '<input type="hidden" name="__VIEWSTATE1" value="parte-um" />'
+      + '<input type="hidden" name="__VIEWSTATE2" value="parte-dois" />'
+      + '<input type="hidden" name="__VIEWSTATEGENERATOR" value="C2EE9ABB" />'
+      + '<input type="hidden" name="ctl00$cph$hdnAbrirDocumento" value="abc123" />';
+    const pager = (n: number): string =>
+      `<a href="javascript:__doPostBack('ctl00$cph$gvNotificacoes','Page$${n}')">${n}</a>`;
+    const recorded: RecordedRequest[] = [];
+    const out = await enumerateInbox(
+      { sessionState: offlineState('r7-a8'), ...OFFLINE },
+      {
+        transport: stubTransport(
+          (page) => (page === 1
+            ? gridPage(gridRow('1234'), `${seeded}${pager(1)}${pager(2)}`)
+            : gridPage(gridRow('5678'), `${seeded}${pager(1)}<span class="cur">2</span>`)),
+          recorded,
+        ),
+        sleep: async () => {},
+      },
+    );
+    expect(out.status).toBe('complete');
+    expect(recorded).toHaveLength(2);
+    const body = new URLSearchParams(recorded[1]!.body ?? '');
+    expect(body.get('__VIEWSTATEFIELDCOUNT')).toBe('3');
+    expect(body.get('__VIEWSTATE1')).toBe('parte-um');
+    expect(body.get('__VIEWSTATE2')).toBe('parte-dois');
+    expect(body.get('__VIEWSTATE')).toBeTruthy();
+    // …and the allowlist did not become "echo everything"
+    expect(body.get('ctl00$cph$hdnAbrirDocumento')).toBeNull();
+    expect(recorded[1]!.body).not.toContain('abc123');
+    // non-vacuity: the page really did offer every one of those fields
+    expect(Object.keys(parseHiddenFields(seeded))).toContain('ctl00$cph$hdnAbrirDocumento');
+    expect(parseHiddenFields(seeded).__VIEWSTATE2).toBe('parte-dois');
   });
 });
 

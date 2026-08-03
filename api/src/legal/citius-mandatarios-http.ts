@@ -54,36 +54,58 @@
  *   `failed`       — machinery: the transport threw, a non-2xx, an unbound origin, an unusable
  *                    configuration. Nothing is known about completeness.
  *
- * ================================= HOW `complete` IS EARNED (round 6) ===========================
+ * ============================ HOW `complete` IS EARNED (rounds 6 and 7) =========================
  * A fresh-context review found that a truncated sweep reported `complete` whenever the pager was not
  * literally `?p=N` / `?page=N` in a quoted href: an entity-encoded `&amp;page=2`, a `?pagina=2`, a
  * `?pg=2` labelled "Seguinte", an `<img alt="Seguinte">`, an `onclick="goPage(2)"`, or an
- * `<input type=submit value="Seguinte">` each walked ONE page and certified the sweep. `complete`
- * now has to survive, in this order:
+ * `<input type=submit value="Seguinte">` each walked ONE page and certified the sweep. A second
+ * fresh-context pass then found FIVE more, all of them the same mistake in a different costume:
+ * `complete` was being granted whenever the pager failed to speak this module's VOCABULARY.
+ * `complete` now has to survive, in this order:
  *
- *   1. SCOPE. Every pager scan runs on `scanScope(html)` — the page with its scripts, styles,
- *      comments and GRID DATA ROWS removed — and, where it matters, on `pagerRegion(...)` of that:
+ *   1. SCOPE. Every pager scan runs on `scanScope(html)` - the page with its scripts, styles,
+ *      comments and GRID DATA ROWS removed - and, where it matters, on `pagerRegion(...)` of that:
  *      the containers a portal names like a pager plus the single-cell rows a GridView renders one
  *      into. A `?page=2` in a ROW link, a `&p=3` inside a row's own href, and a `Page$` token in a
  *      `<script>` therefore no longer speak for the pager (round-6 HIGH).
- *   2. ENTITY DECODING. Hrefs are `decodeEntities`d before any page-number scan, so `&amp;page=2`
- *      and `&#38;page=2` read as `&page=2`.
- *   3. EVERY NAVIGATIONAL CONTROL, not just postback anchors. Anchors, `<button>`s, and
- *      `<input type=submit|button|image>` are all inspected, and a control's LABEL is its text, its
- *      nested `<img alt>`, its `value` / `title`, and its humanised `name` / `id`. A control that
- *      reads like next/last and cannot be driven numerically blocks `complete`; so does a control
- *      whose label is a page NUMBER beyond the page we are on that we cannot address (the
- *      `?pagina=2` shape — which the `pageParam` input then makes drivable, SPIKE #2).
- *   4. THE FLOOR. Even with no pager signal at all, a last page whose grid came back FULL (at a
- *      `pageSize` the caller configured, or at the size observed on an earlier page of this walk)
- *      cannot be `complete` unless the pager NAMED every page up to this one. A windowed pager
- *      (`… 8 9 [10]`) fails that on purpose: it names no page 1, so it is not evidence of the end.
+ *   2. ENTITY DECODING, INCLUDING NAMED ENTITIES. Hrefs and labels are `decodeEntities`d before any
+ *      scan, so `&amp;page=2` reads as `&page=2` AND `&raquo;` / `&rsaquo;` / `&rarr;` read as
+ *      `»` / `›` / `→`. Round 7 CRITICAL-A1: this was documented but not true - `portal-html.ts`
+ *      had no named-entity table, so the label test worked for exactly the spellings a real portal
+ *      is LEAST likely to emit. The table is in `portal-html.ts` and is shared with every other
+ *      legal parser.
+ *   3. EVERY NAVIGATIONAL CONTROL, not just postback anchors, and not just form controls. Anchors,
+ *      `<button>`s, `<input type=submit|button|image>`, `<select>` page pickers (each option is its
+ *      own control) and ANY ordinary element carrying a click handler or a `data-page` are all
+ *      inspected (round-7 CRITICAL-A3). A control's LABEL is its text, its nested
+ *      `alt`/`title`/`value`/`aria-label`, its own `aria-label`/`title`, and its humanised
+ *      `name`/`id`/`class` - `aria-label` because canonical Bootstrap pagination says "Next" there
+ *      and nowhere else (CRITICAL-A2), `class`/`id` because `paginate_button next`, `tbl_next` and
+ *      `sprite-next` are the only statement a DataTables/sprite pager makes about itself.
+ *   4. AN UNREADABLE CONTROL IS ITSELF THE SIGNAL (round-7 CRITICAL-A4). A live control in the
+ *      pager region that addresses no page, wears no number and does not read as a BACKWARD control
+ *      blocks `complete` on its own: an icon chevron owes this module no vocabulary. The exemption
+ *      is narrow on purpose - the pager's own numbering must account for every page up to the one
+ *      we are on AND there must be a run to account for (page > 1), which is what stops a last
+ *      page's "«"/"Anterior"/refresh icon from refusing for ever.
+ *   5. THE FLOOR. A last page whose grid came back FULL (at a `pageSize` the caller configured, or
+ *      at the size observed on an earlier page of this walk) cannot be `complete` unless the pager
+ *      accounted for every page up to this one - counting the pages the WALK ITSELF READ, so a
+ *      windowed `… 2 [3]` on a genuinely exhausted walk is no longer a permanent refusal
+ *      (round-7 HIGH-A7). The floor needs something to point at: see SPIKE #14 for why a full grid
+ *      with no pager markup at all is `complete` and not a livelock.
  *
  * The reasons are deliberately DISTINGUISHABLE so an operator can tell cry-wolf from real
  * truncation: `pager-unrecognised` is a control inside the pager region, `pager-ambiguous` is a
  * page-ish signal only found OUTSIDE it, `page-full-no-pager` is the floor. All three are
  * fail-closed (no data loss); only the second is expected to be noisy, and the escape hatch for all
  * three is configuration (`pageParam`, `pageSize`) plus the raw markup capture SPIKE #3 demands.
+ *
+ * THE OTHER FAILURE MODE. `incomplete` is the safe direction only up to a point: CS6 maps it to
+ * `reachedEnd:false`, so a refusal that can never be withdrawn stops the watermark for ever and
+ * re-sweeps the same inbox on every poll. Round 7 found two of those (HIGH-A6, HIGH-A7) and both
+ * are closed above. A guard added here must be checked in BOTH directions - the committed suite
+ * carries an ANTI-LIVELOCK block for exactly that.
  *
  * ================================== CS6 WIRING CONTRACT (READ THIS) ==============================
  * CS6 adapts this to `events/verified-sync.ts`'s `EnumerateResult`. The mapping is NOT mechanical:
@@ -154,23 +176,28 @@
  *      THIS IS THE CONNECTOR'S MOST DANGEROUS UNKNOWN: a pager that only exposes a next/previous
  *      control would stop the walk after page 1 and call it COMPLETE. Guards, in the pager region:
  *      a non-numeric `Page$…` token (`Page$Next`), a non-numeric page parameter, ANY navigational
- *      control (anchor, `<button>`, `<input type=submit|button|image>`) whose label — text, nested
- *      `<img alt>`, `value`, `title`, or humanised `name`/`id` — reads like a next/last control, a
- *      control whose label is a page NUMBER we cannot address, a region CS1 classifies as a pager
- *      when we recognised no numbers in it, and finally the full-grid FLOOR. What still reads as a
- *      single-page inbox: a GET link with neither a numeric parameter nor a recognised label nor a
- *      numeric label (`?dir=next` rendered as an icon with no `alt`) on a page whose grid is NOT
- *      full. Confirm the pager markup on first access before trusting any `complete`, and capture
- *      the raw HTML: the residual risk here is a WINDOWED pager whose "Seguinte" is rendered as a
- *      live control on the last page (fires `pager-unrecognised` forever — cry-wolf) or as inert
- *      text (silently reads as exhausted).
+ *      control (anchor, `<button>`, `<input type=submit|button|image>`, a `<select>` option, an
+ *      element with a click handler) whose label — text, nested `alt`/`title`/`value`/`aria-label`,
+ *      own `aria-label`/`title`, humanised `name`/`id`/`class` — reads like a next/last control, a
+ *      control whose label or `data-page` is a page NUMBER we cannot address, a region CS1
+ *      classifies as a pager when we recognised no numbers in it, ANY live control in the pager
+ *      region this module cannot read at all (round-7 CRITICAL-A4), and finally the full-grid
+ *      FLOOR. What still reads as a single-page inbox is now narrow, and is named in SPIKE #14.
+ *      Confirm the pager markup on first access before trusting any `complete`, and capture the raw
+ *      HTML: a portal whose pager is built client-side (a DataTables/Kendo grid fed by JSON) would
+ *      render a grid this module reads and a pager it cannot see at all, and that is the shape
+ *      SPIKE #14 cannot defend against from the markup alone.
  *   4. POSTBACK TARGET — read off the page's own `__doPostBack('target','Page$N')` and refused
  *      unless it matches the WebForms id charset. Whether the real grid's target is stable across
  *      pages (and whether a `__EVENTVALIDATION` from page N is accepted for page N+1) is unobserved.
  *      The postback sends `Referer` (this module's own inbox URL) and the ALLOWLISTED hidden state
  *      only; whether the real deployment needs more than that (an `X-MicrosoftAjax` header, an
  *      async-postback wrapper, a hidden field outside the allowlist) is unknown until a real page is
- *      seen. If it does, the allowlist grows by review — it does not become "echo everything".
+ *      seen. If it does, the allowlist grows by review — it does not become "echo everything". The
+ *      VIEWSTATE CHUNKING family (`__VIEWSTATEFIELDCOUNT`, `__VIEWSTATE1..N`, what ASP.NET emits
+ *      when `maxPageStateFieldLength` is set) grew in by exactly that route in round 7 (MEDIUM-A8):
+ *      it is the same opaque server state as `__VIEWSTATE` itself, and dropping it made the pager
+ *      undrivable against the large-grid deployments a court inbox is most likely to be.
  *   5. NO SERVER-SIDE WINDOW FILTER is assumed to exist, so every run walks from page 1. A large
  *      inbox therefore truncates at `maxPages` and reports INCOMPLETE for ever, rather than
  *      pretending. If the real page offers a date filter, plumb it and revisit clause (c) above.
@@ -210,6 +237,25 @@
  *      chunked response with no length is therefore still bounded only by the request timeout: the
  *      seam this module is given (`arrayBuffer()`) cannot stop mid-stream, and widening it is a
  *      change to `services/url-fetcher.ts`, which is out of this module's scope.
+ *  14. THE ONE PLACE SILENCE IS READ AS EVIDENCE (round-7 HIGH-A6). A full grid with NO pagination
+ *      markup anywhere on the page reads as `complete`. The reasoning: a WebForms GridView renders
+ *      NO pager when `PageCount === 1`, so an inbox holding exactly `pageSize` notifications comes
+ *      back as a full grid with nothing pager-shaped on it — and reading THAT as `incomplete` is a
+ *      permanent livelock (CS6 maps it to `reachedEnd:false`, so the watermark never advances and
+ *      every poll re-sweeps), which is a failure mode of its own and not a safe direction. "No
+ *      pagination markup" is deliberately generous about what counts as markup: a container the
+ *      portal named like a pager, a single-cell GridView pager row, or ANY live control whose
+ *      purpose the page never states (an anonymous icon — the shape an image-only pager button
+ *      wears) all count, and any of them re-arms the FLOOR.
+ *      WHAT THIS CANNOT DEFEND AGAINST, stated plainly because it is not defensible from the HTML:
+ *      a pager rendered outside every pager-named container, with no page parameter, no `Page$`
+ *      token, no `data-page`, no numeric label, no next-ish text/`alt`/`aria-label`/`class`/`id`,
+ *      AND a non-empty label (so it is not anonymous either) is indistinguishable from ordinary
+ *      page chrome. So is a pager built entirely in client-side script (SPIKE #3). FIRST REAL
+ *      ACCESS MUST SETTLE THIS: capture page 1 of a MULTI-page inbox and page 1 of a
+ *      single-page-but-full inbox, and confirm (a) the pager is server-rendered, (b) it sits in a
+ *      container named like one, and (c) it is genuinely absent when there is one page. Until then,
+ *      `pageSize` is the arming configuration: with it set, the FLOOR fires on page 1 too.
  */
 import { parseInboxPage, detectPagingMode, type CitiusNotificacaoMeta } from './citius-mandatarios.js';
 import { decodeEntities, decodeHtml, parseHiddenFields } from './portal-html.js';
@@ -259,11 +305,22 @@ const POSTBACK_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
   '__VIEWSTATE',
   '__VIEWSTATEGENERATOR',
   '__VIEWSTATEENCRYPTED',
+  '__VIEWSTATEFIELDCOUNT',
   '__EVENTVALIDATION',
   '__LASTFOCUS',
 ]);
 /** `__SCROLLPOSITIONX` / `__SCROLLPOSITIONY` — same rationale, a family rather than two literals. */
 const SCROLL_POSITION_FIELD_RE = /^__SCROLLPOSITION[A-Z]{0,8}$/;
+/**
+ * VIEWSTATE CHUNKING (round-7 MEDIUM A8). With `maxPageStateFieldLength` set - common on large
+ * grids - ASP.NET splits the state across `__VIEWSTATEFIELDCOUNT` + `__VIEWSTATE1`, `__VIEWSTATE2`
+ * … and the server rejects a POST that echoes only `__VIEWSTATE`. Dropping the chunks fails closed
+ * (the pager becomes undrivable, the walk reports incomplete, nothing is lost) but it makes the
+ * connector undrivable against exactly the deployments a court inbox is most likely to be. The
+ * chunks are the SAME kind of field as `__VIEWSTATE` itself - opaque server state, not an
+ * instruction the page is handing back to itself - so they belong in the allowlist as a family.
+ */
+const VIEWSTATE_CHUNK_FIELD_RE = /^__VIEWSTATE[0-9]{1,3}$/;
 
 // ---------------------------------------------------------------------------
 // The transport seam
@@ -346,8 +403,10 @@ export interface EnumerateInboxInput {
   maxPages?: number;
   /**
    * Rows one page of the grid holds when it is FULL. Unobserved (SPIKE #2), so unset by default.
-   * When set, it arms the FLOOR on page 1 too: a first page that came back with `pageSize` rows and
-   * a pager that named no page numbers cannot be `complete`.
+   * When set, it arms the FLOOR on page 1 too: a first page that came back with `pageSize` rows,
+   * that SHOWED pagination markup, and whose markup named no page numbers cannot be `complete`.
+   * (The markup condition is SPIKE #14: a GridView hides its pager on a single page, so a full
+   * grid with no pager at all is the one-page shape, not a pager this module failed to read.)
    */
   pageSize?: number;
   /** Delay between page requests, ms. Clamped to `[0, 60_000]`. */
@@ -390,8 +449,10 @@ export type CitiusIncompleteReason =
    *  unrecognised layout). Fail-closed like the others, named apart because it is the cry-wolf-prone
    *  one: an operator seeing this repeatedly should capture the markup, not widen a guard. */
   | 'pager-ambiguous'
-  /** THE FLOOR: the last page's grid came back FULL and the pager did not account for every page up
-   *  to it. Nothing said "there is more" — and nothing proved there is not. */
+  /** THE FLOOR: the last page's grid came back FULL, the page showed pagination markup, and that
+   *  markup did not account for every page up to this one (counting the pages the walk itself
+   *  read). Nothing said "there is more" — and nothing proved there is not. A page showing NO
+   *  pagination markup at all is a different thing and is not this: see SPIKE #14. */
   | 'page-full-no-pager'
   /** A postback page whose target/hidden state could not be read, so the next page is unreachable. */
   | 'pager-unavailable'
@@ -561,12 +622,33 @@ const NON_NUMERIC_PAGE_TOKEN_RE = /Page\$(?![0-9])/i;
 const PAGE_PARAM_RE = /^[A-Za-z0-9_.$-]{1,40}$/;
 
 /**
- * Labels a next/last-page control wears, read AFTER entity decoding (so `&gt;&gt;` and `&raquo;`
- * arrive here as `>>` and `»`). Deliberately narrow, and only ever consulted on a NAVIGATIONAL
- * control inside the scan scope: an ordinary "página seguinte" sentence in help prose is not a
- * control, and a prose LINK to a help page carries no query string, so neither reaches this test.
+ * Labels a next/last-page control wears, read AFTER entity decoding. That claim used to be false:
+ * `decodeEntities` had no NAMED-entity table, so `&raquo;` arrived here verbatim and the ONE
+ * spelling a real portal is most likely to emit was the one spelling this test could not see
+ * (round-7 CRITICAL-A1). The table now lives in `portal-html.ts`, so `&raquo;`/`&rsaquo;`/`&rarr;`
+ * arrive as `»`/`›`/`→` alongside the literal and numeric forms that already worked.
+ *
+ * Deliberately narrow, and only ever consulted on a NAVIGATIONAL control inside the scan scope: an
+ * ordinary "página seguinte" sentence in help prose is not a control, and a prose LINK to a help
+ * page carries no query string, so neither reaches this test.
  */
-const NEXT_LABEL_RE = /seguinte|pr[oó]xim|[uú]ltim|avan[cç]|>>|»|\bnext\b|\blast\b/i;
+const NEXT_LABEL_RE =
+  /seguinte|pr[oó]xim|[uú]ltim|avan[cç]|adiante|\bfrente\b|\bfim\b|\bfinal\b|\bmais\b|continuar|>>|»|›|→|▶|►|\bnext\b|\bnxt\b|\blast\b|\bend\b|\bmore\b|\bforward\b|\bfwd\b/i;
+/**
+ * A control whose WHOLE label is a forward GLYPH. Kept apart from `NEXT_LABEL_RE` because a lone
+ * `>` or `+` is only a next control when it is the entire label - `>` anywhere in a sentence is
+ * noise, `>` as the only thing a button says is a pager (round-7 CRITICAL-A4/A5).
+ */
+const NEXT_GLYPH_RE = /^[\s.]*[>»›→▶►+]+[\s.]*$/;
+/**
+ * The BACKWARD family. Not a truncation signal, and - this is the load-bearing part - the ONE thing
+ * that exempts an otherwise unreadable control inside a pager region from the round-7 catch-all
+ * below: a last page legitimately renders a "«"/"Anterior"/"Primeira" control, and treating that as
+ * evidence of more pages is the A6/A7 livelock in a different costume.
+ */
+const PREV_LABEL_RE =
+  /anterior|antecede|primeir|voltar|retroced|in[ií]cio|regress|<<|«|‹|←|◀|◄|\bprev(?:ious)?\b|\bfirst\b|\bback\b|\bstart\b|\bprv\b/i;
+const PREV_GLYPH_RE = /^[\s.]*[<«‹←◀◄-]+[\s.]*$/;
 
 /** Script/style bodies and comments: never pager markup, and the classic source of a phantom
  *  `Page$` token or `?page=` string (round-6 HIGH). */
@@ -587,11 +669,34 @@ const MAX_REGION_BYTES = 256 * 1024;
 const ANCHOR_RE = /<a\b([^>]*)>([\s\S]{0,800}?)<\/a\s*>/gi;
 const INPUT_TAG_RE = /<input\b[^>]*>/gi;
 const BUTTON_RE = /<button\b([^>]*)>([\s\S]{0,800}?)<\/button\s*>/gi;
-/** `alt` / `title` / `value` on anything NESTED inside a control — an `<img alt="Seguinte">` is the
- *  whole label of an image-only pager button. */
-const NESTED_LABEL_ATTR_RE = /\b(?:alt|title|value)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+/** A `<select>` pager (`<select name="ddlPagina" onchange="irPara(this.value)">`) and its options —
+ *  a whole pager idiom the control scan used to be blind to (round-7 CRITICAL-A3). */
+const SELECT_RE = /<select\b([^>]*)>([\s\S]{0,8000}?)<\/select\s*>/gi;
+const OPTION_RE = /<option\b([^>]*)>([\s\S]{0,200}?)(?=<\/option|<option\b|$)/gi;
+/**
+ * A NON-CONTROL element carrying a click handler or a `data-page` — `<div onclick="goPage(2)">`,
+ * `<li onclick="…">Seguinte</li>`. A portal that paginates with these is not exotic, and the scan
+ * used to see nothing at all in them (round-7 CRITICAL-A3). Bounded by a backreference close so a
+ * broken page cannot make this run away.
+ */
+const CLICKABLE_RE =
+  /<(div|span|li|td|th|p|nav|section|label|strong|em|b|small|h[1-6])\b([^>]*\b(?:onclick|onmousedown|ondblclick|onkeydown|data-page|data-pagina|data-pagenumber|data-pageindex)\s*=[^>]*)>([\s\S]{0,800}?)<\/\1\s*>/gi;
+/** The same, for the void elements that carry their own handler (`<img onclick="irPara(2)">`). */
+const CLICKABLE_VOID_RE =
+  /<(?:img|area)\b([^>]*\b(?:onclick|onmousedown|data-page|data-pagina|data-pagenumber|data-pageindex)\s*=[^>]*)>/gi;
+/** `alt` / `title` / `value` / `aria-label` on anything NESTED inside a control — an
+ *  `<img alt="Seguinte">` or a `<span aria-hidden="true">&raquo;</span>` is the WHOLE label of an
+ *  image-only pager button. `aria-label` was missing, which is what let canonical Bootstrap
+ *  pagination certify a truncated sweep (round-7 CRITICAL-A2). */
+const NESTED_LABEL_ATTR_RE =
+  /\b(?:aria-label|alt|title|value)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
 /** A label that is nothing but a page number (`2`, `[2]`, `Página 2`). */
 const NUMERIC_LABEL_RE = /^[^0-9]{0,12}([0-9]{1,6})[^0-9]{0,12}$/;
+/** A `data-page="2"` style attribute: a page this control addresses in an idiom we cannot DRIVE. */
+const DATA_PAGE_ATTR_RE = /\bdata-(?:page|pagina|pagenumber|pageindex)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
+/** A `<select>` / container that NAMES itself as pagination, so it speaks for the pager even when
+ *  it sits outside a pager-named container. */
+const PAGER_HINT_RE = /pagin|pager|paging|\bpage\b|\bpg\b|pgr/i;
 
 function escapeForRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
@@ -668,7 +773,7 @@ function pagerRegion(scoped: string): string {
   while ((m = ROW_RE.exec(scoped)) !== null) {
     const row = m[0];
     if (cellCount(row) >= 2) continue;
-    if (!/<a\b|<input\b|<button\b/i.test(row)) continue;
+    if (!/<a\b|<input\b|<button\b|<select\b/i.test(row)) continue;
     take(row);
   }
   return parts.join('\n');
@@ -680,11 +785,27 @@ interface NavControl {
   href: string;
   /** Everything scriptable on it (href + onclick), entity-decoded — where `Page$N` lives. */
   drive: string;
-  /** Every label it wears: its text, its nested `alt`/`title`/`value`, its humanised `name`/`id`. */
+  /**
+   * Every label it wears: its text, its nested `alt`/`title`/`value`/`aria-label`, its own
+   * `aria-label`/`title`, and its humanised `name`/`id`/`class`. The class and id are labels too:
+   * `class="paginate_button next"`, `id="tbl_next"` and `class="sprite-next"` are the ONLY thing a
+   * DataTables / sprite pager says about itself (round-7 CRITICAL-A2/A4).
+   */
   label: string;
+  /** A page this control addresses through `data-page` — known, but not drivable. */
+  pageHint?: number;
   /** A form/script control (as opposed to a plain prose link, which is never a pager). */
   navigational: boolean;
   disabled: boolean;
+}
+
+/** `data-page="2"` as a number, or undefined. */
+function pageHintOf(attrs: string): number | undefined {
+  const m = DATA_PAGE_ATTR_RE.exec(attrs);
+  const raw = (m?.[1] ?? m?.[2] ?? m?.[3] ?? '').trim();
+  if (!/^[0-9]{1,6}$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return n > 0 ? n : undefined;
 }
 
 function isDisabled(attrs: string): boolean {
@@ -701,10 +822,24 @@ function labelsIn(inner: string): string {
   return decodeEntities(`${text} ${attrs.join(' ')}`).replace(/\s+/g, ' ').trim();
 }
 
+/** Every label a control's OWN attributes carry: `aria-label`, `title`, and the humanised
+ *  `name`/`id`/`class` (a sprite pager says what it is in its class and nowhere else). */
+function ownLabels(attrs: string): string {
+  return [
+    attrOf(attrs, 'aria-label'), attrOf(attrs, 'title'),
+    humanise(attrOf(attrs, 'name')), humanise(attrOf(attrs, 'id')), humanise(attrOf(attrs, 'class')),
+  ].join(' ').replace(/\s+/g, ' ').trim();
+}
+
 /**
- * EVERY navigational control in a scope — anchors, `<button>`s and `<input type=submit|button|image>`
- * alike. The round-6 CRITICAL: the old guard read only `<a href="…__doPostBack…">`, so a labelled
- * GET link, an `<img alt="Seguinte">` and a submit button were never inspected at all.
+ * EVERY navigational control in a scope — anchors, `<button>`s, `<input type=submit|button|image>`,
+ * `<select>` page pickers, and any ORDINARY element carrying a click handler or a `data-page`.
+ *
+ * Round 6 closed the first hole (the guard read only `<a href="…__doPostBack…">`). Round 7 closed
+ * the rest: `aria-label` was never read (canonical Bootstrap pagination certified a truncated
+ * sweep — CRITICAL-A2), `<select>` pagers and `<div onclick>` / `<li onclick>` controls were not
+ * enumerated at all (CRITICAL-A3), and an icon-only control said what it was ONLY in its
+ * `class`/`id`, which was not a label (CRITICAL-A4).
  */
 function navControls(scope: string): NavControl[] {
   const out: NavControl[] = [];
@@ -715,16 +850,18 @@ function navControls(scope: string): NavControl[] {
     const attrs = m[1] ?? '';
     const href = attrOf(attrs, 'href');
     const onclick = attrOf(attrs, 'onclick');
-    const label = `${labelsIn(m[2] ?? '')} ${attrOf(attrs, 'title')}`.trim();
+    const hint = pageHintOf(attrs);
+    const label = `${labelsIn(m[2] ?? '')} ${ownLabels(attrs)}`.replace(/\s+/g, ' ').trim();
     out.push({
       href,
       drive: `${href} ${onclick}`,
       label,
+      ...(hint === undefined ? {} : { pageHint: hint }),
       // A prose link carries a plain path and no script; a pager link carries a query, a fragment,
       // a `javascript:` url or a handler. A bare NUMBER as its whole label makes it one too.
       navigational:
         !href || href === '#' || /^javascript:/i.test(href) || href.includes('?') || Boolean(onclick)
-        || NUMERIC_LABEL_RE.test(label),
+        || hint !== undefined || NUMERIC_LABEL_RE.test(label),
       disabled: isDisabled(attrs),
     });
   }
@@ -735,13 +872,12 @@ function navControls(scope: string): NavControl[] {
     const type = attrOf(tag, 'type').toLowerCase();
     if (type !== 'submit' && type !== 'button' && type !== 'image') continue;
     const href = attrOf(tag, 'formaction');
+    const hint = pageHintOf(tag);
     out.push({
       href,
       drive: `${href} ${attrOf(tag, 'onclick')}`,
-      label: [
-        attrOf(tag, 'value'), attrOf(tag, 'alt'), attrOf(tag, 'title'),
-        humanise(attrOf(tag, 'name')), humanise(attrOf(tag, 'id')),
-      ].join(' ').trim(),
+      label: [attrOf(tag, 'value'), attrOf(tag, 'alt'), ownLabels(tag)].join(' ').replace(/\s+/g, ' ').trim(),
+      ...(hint === undefined ? {} : { pageHint: hint }),
       navigational: true,
       disabled: isDisabled(tag),
     });
@@ -751,12 +887,67 @@ function navControls(scope: string): NavControl[] {
   while ((m = BUTTON_RE.exec(scope)) !== null) {
     const attrs = m[1] ?? '';
     const href = attrOf(attrs, 'formaction');
+    const hint = pageHintOf(attrs);
     out.push({
       href,
       drive: `${href} ${attrOf(attrs, 'onclick')}`,
-      label: [
-        labelsIn(m[2] ?? ''), attrOf(attrs, 'value'), attrOf(attrs, 'title'), humanise(attrOf(attrs, 'name')),
-      ].join(' ').trim(),
+      label: [labelsIn(m[2] ?? ''), attrOf(attrs, 'value'), ownLabels(attrs)].join(' ').replace(/\s+/g, ' ').trim(),
+      ...(hint === undefined ? {} : { pageHint: hint }),
+      navigational: true,
+      disabled: isDisabled(attrs),
+    });
+  }
+
+  // A `<select>` page picker. Each OPTION is its own control: an option naming a page beyond the
+  // one we are on, in a select we cannot drive, is the `?pagina=2` shape wearing a dropdown. The
+  // select speaks for the pager when it sits INSIDE a pager region (every control there does) or
+  // when it names itself (`ddlPagina`) — otherwise it is an ordinary filter and stays quiet.
+  SELECT_RE.lastIndex = 0;
+  while ((m = SELECT_RE.exec(scope)) !== null) {
+    const attrs = m[1] ?? '';
+    const onchange = attrOf(attrs, 'onchange');
+    const selfNamed = PAGER_HINT_RE.test(`${attrOf(attrs, 'name')} ${attrOf(attrs, 'id')} ${attrOf(attrs, 'class')} ${onchange}`);
+    const disabled = isDisabled(attrs);
+    OPTION_RE.lastIndex = 0;
+    let o: RegExpExecArray | null;
+    while ((o = OPTION_RE.exec(m[2] ?? '')) !== null) {
+      const optAttrs = o[1] ?? '';
+      const value = attrOf(optAttrs, 'value');
+      const text = decodeEntities((o[2] ?? '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+      out.push({
+        href: value,
+        drive: `${value} ${onchange}`,
+        label: text || value,
+        navigational: selfNamed,
+        disabled,
+      });
+    }
+  }
+
+  // An ordinary element with a click handler: `<div onclick="goPage(2)">Seguinte</div>`.
+  CLICKABLE_RE.lastIndex = 0;
+  while ((m = CLICKABLE_RE.exec(scope)) !== null) {
+    const attrs = m[2] ?? '';
+    const hint = pageHintOf(attrs);
+    out.push({
+      href: '',
+      drive: `${attrOf(attrs, 'onclick')} ${attrOf(attrs, 'onmousedown')} ${attrOf(attrs, 'ondblclick')}`,
+      label: `${labelsIn(m[3] ?? '')} ${ownLabels(attrs)}`.replace(/\s+/g, ' ').trim(),
+      ...(hint === undefined ? {} : { pageHint: hint }),
+      navigational: true,
+      disabled: isDisabled(attrs),
+    });
+  }
+
+  CLICKABLE_VOID_RE.lastIndex = 0;
+  while ((m = CLICKABLE_VOID_RE.exec(scope)) !== null) {
+    const attrs = m[1] ?? '';
+    const hint = pageHintOf(attrs);
+    out.push({
+      href: '',
+      drive: `${attrOf(attrs, 'onclick')} ${attrOf(attrs, 'onmousedown')}`,
+      label: [attrOf(attrs, 'alt'), ownLabels(attrs)].join(' ').replace(/\s+/g, ' ').trim(),
+      ...(hint === undefined ? {} : { pageHint: hint }),
       navigational: true,
       disabled: isDisabled(attrs),
     });
@@ -775,6 +966,16 @@ interface PagerReading {
   next?: 'get' | 'postback';
   /** A control that means "there are more pages" and that this module cannot drive numerically. */
   undrivable: boolean;
+  /**
+   * A live control INSIDE THE PAGER REGION that says nothing this module recognises: not drivable,
+   * no page number, no next label, no backward label. Round-7 CRITICAL-A4: an icon/sprite chevron
+   * is exactly this, and requiring a RECOGNISED label before refusing `complete` made the
+   * recogniser's vocabulary the thing standing between a court deadline and a lost notification.
+   * Reported apart from `undrivable` because it is only trusted when the pager's NUMBERING did not
+   * already account for every page up to this one (see `pagerAccountsForEveryPageUpTo`) — that is
+   * what keeps a last page's "«"/"Anterior"/refresh icon from livelocking the walk.
+   */
+  unrecognised: boolean;
 }
 
 /** The page number a control addresses in an idiom we can drive, or null. */
@@ -825,6 +1026,7 @@ function readPager(scope: string, page: number, names: string[], isPagerRegion: 
 
   const nonNumericParamRe = new RegExp(`[?&](?:${namesAlt})=(?![0-9])`, 'i');
   let undrivable = false;
+  let unrecognised = false;
   for (const control of navControls(scope)) {
     if (control.disabled) continue;
     if (!isPagerRegion && !control.navigational) continue;
@@ -836,11 +1038,24 @@ function readPager(scope: string, page: number, names: string[], isPagerRegion: 
       undrivable = true;
       continue;
     }
-    if (NEXT_LABEL_RE.test(control.label)) { undrivable = true; continue; }
+    if (NEXT_LABEL_RE.test(control.label) || NEXT_GLYPH_RE.test(control.label)) { undrivable = true; continue; }
     // A link labelled with a page number BEYOND this one that we cannot address: the `?pagina=2`
     // shape. `pageParam` is the fix (SPIKE #2) and this is what prompts it.
     const labelled = NUMERIC_LABEL_RE.exec(control.label);
-    if (driven === null && labelled && Number(labelled[1]) > page) undrivable = true;
+    if (driven === null && labelled && Number(labelled[1]) > page) { undrivable = true; continue; }
+    // The same statement made in an attribute instead of in text (`data-page="2"`).
+    if (driven === null && control.pageHint !== undefined && control.pageHint > page) {
+      undrivable = true;
+      continue;
+    }
+    // THE CATCH-ALL (round-7 CRITICAL-A4). Everything above needed the control to SAY something
+    // this module's vocabulary knows. A pager region's controls do not owe us a vocabulary: a live
+    // one that addresses no page, wears no number and does not read as a BACKWARD control is a
+    // pager control we failed to read, and that is a truncation signal in its own right.
+    if (isPagerRegion && driven === null && !labelled && control.pageHint === undefined
+        && !PREV_LABEL_RE.test(control.label) && !PREV_GLYPH_RE.test(control.label)) {
+      unrecognised = true;
+    }
   }
   // A region CS1 classifies as a pager, in which we recognised no page number at all: an unlabelled
   // postback chevron is exactly this shape.
@@ -854,23 +1069,55 @@ function readPager(scope: string, page: number, names: string[], isPagerRegion: 
   return {
     numbers,
     undrivable,
+    unrecognised,
     ...(advertised === undefined ? {} : { advertised }),
     ...(next === undefined ? {} : { next }),
   };
 }
 
 /**
- * Did the pager NAME every page from 1 up to the one we are on? A WebForms pager renders the
- * current page as a label and the others as links, so `{1..page}` all present is the pager saying
- * "this is the last page" — the one thing that exempts a full grid from the FLOOR. A WINDOWED pager
- * (`… 8 9 [10]`) fails this on purpose: it names no page 1, so it proves nothing about the end.
+ * Is every page from 1 up to the one we are on ACCOUNTED FOR? A WebForms pager renders the current
+ * page as a label and the others as links, so `{1..page}` all present is the pager saying "this is
+ * the last page" — the one thing that exempts a full grid from the FLOOR, and the one thing that
+ * makes an unreadable icon control in the pager region safe to ignore.
+ *
+ * Two halves, and both matter:
+ *   - THE PAGER MUST SAY SOMETHING. A region printing no number at all accounts for nothing
+ *     (`numbers.length === 0` -> false). This is what keeps the page-1 case honest: a first page
+ *     whose pager names no numbers is never "accounted", however many pages the walk has read.
+ *   - PAGES THE WALK ITSELF READ COUNT (round-7 HIGH-A7). A WINDOWED pager on the last page renders
+ *     `… 2 [3]` and names no page 1 — so a walk that really did read pages 1, 2 and 3 used to fail
+ *     this check FOR EVER and report `incomplete` on a genuinely exhausted inbox, which CS6 maps to
+ *     `reachedEnd:false`: the watermark never advances and every poll re-sweeps. Any portal whose
+ *     item total is an exact multiple of the page size hit this. Crediting `pagesWalked` closes it
+ *     without touching the page-1 case, because on page 1 the credit is `{1}` and the clause above
+ *     has already returned false when the pager named nothing.
  */
-function pagerAccountsForEveryPageUpTo(numbers: number[], page: number): boolean {
+function pagerAccountsForEveryPageUpTo(numbers: number[], page: number, pagesWalked: number): boolean {
   if (numbers.length === 0) return false;
   const named = new Set(numbers);
   named.add(page);
+  for (let n = 1; n <= pagesWalked; n += 1) named.add(n);
   for (let n = 1; n <= page; n += 1) if (!named.has(n)) return false;
   return true;
+}
+
+/**
+ * Does this page show ANY pagination markup at all (round-7 HIGH-A6)? A WebForms GridView renders
+ * NO pager when `PageCount === 1`, so an inbox holding exactly `pageSize` notifications comes back
+ * as a FULL grid with nothing pager-shaped on it — indistinguishable, by the FLOOR's old rule, from
+ * a pager this module failed to recognise, and therefore permanently `incomplete`. Since CS6 maps
+ * that to `reachedEnd:false`, the watermark would never advance and every poll would re-sweep the
+ * same inbox for ever: a livelock, which is its own failure mode and not a safe direction.
+ *
+ * The line drawn here: the FLOOR needs something to point at. It fires when the portal SHOWS a
+ * pager (a region it named like one) or shows a live control whose purpose it does not state at all
+ * (an anonymous icon — the shape an image-only pager button wears). It does NOT fire on a page
+ * whose every control says in words what it is and where none of them says "next". See SPIKE #14.
+ */
+function showsPagerMarkup(scoped: string, region: string): boolean {
+  if (region.trim() !== '') return true;
+  return navControls(scoped).some((c) => c.navigational && !c.disabled && c.label === '');
 }
 
 /** The `__EVENTTARGET` that drives this page's pager to `page`, or null when the page does not
@@ -1056,7 +1303,9 @@ async function walk(input: EnumerateInboxInput, deps: EnumerateInboxDeps): Promi
       }
       const form = new URLSearchParams();
       for (const [name, value] of Object.entries(parseHiddenFields(currentHtml))) {
-        if (!POSTBACK_FIELD_ALLOWLIST.has(name) && !SCROLL_POSITION_FIELD_RE.test(name)) continue;
+        if (!POSTBACK_FIELD_ALLOWLIST.has(name)
+            && !SCROLL_POSITION_FIELD_RE.test(name)
+            && !VIEWSTATE_CHUNK_FIELD_RE.test(name)) continue;
         form.set(name, value);
       }
       form.set('__EVENTTARGET', target);
@@ -1192,13 +1441,25 @@ async function walk(input: EnumerateInboxInput, deps: EnumerateInboxDeps): Promi
       // much an operator can trust them, and named apart for exactly that reason.
       if (advertisedPageCount !== undefined && advertisedPageCount > page) return partial('page-count-disagreement');
       if (inPager.undrivable) return partial('pager-unrecognised');
-      // THE FLOOR. A full last page with no pager account of itself is not proof of the end.
+      // Does the pager's own NUMBERING account for every page up to this one? It is the single
+      // predicate behind both refusals below: it is what tells a pager we UNDERSTAND (whose spare
+      // icons are prev/first/refresh) from one we merely failed to read.
+      const accounted = pagerAccountsForEveryPageUpTo(inPager.numbers, page, pagesWalked);
+      // A pager control we could not read at all, on a pager that never told us where the end is.
+      // The accounting only EARNS that trust once there is a run to account for: on page 1 a pager
+      // printing "1" has proved nothing about where the end is, so an unreadable control there is
+      // still a truncation signal (round-7 CRITICAL-A4). From page 2 on, a pager that names every
+      // page the walk has read plus the one it is on is a pager we understand, and its leftover
+      // icons are the previous/first/refresh controls a last page legitimately renders (HIGH-A7).
+      if (inPager.unrecognised && !(accounted && page > 1)) return partial('pager-unrecognised');
+      // THE FLOOR. A full last page with no pager account of itself is not proof of the end —
+      // provided the page showed a pager at all (a GridView hides it on a single page: HIGH-A6).
       const priorPages = rowsPerPage.slice(0, -1);
       const knownPageSize = configuredPageSize
         ?? (priorPages.length ? Math.max(...priorPages) || undefined : undefined);
       const lastRows = rowsPerPage[rowsPerPage.length - 1] ?? 0;
       if (lastRows > 0 && knownPageSize !== undefined && lastRows >= knownPageSize
-          && !pagerAccountsForEveryPageUpTo(inPager.numbers, page)) {
+          && !accounted && showsPagerMarkup(currentScope, region)) {
         return partial('page-full-no-pager');
       }
       // Last: the same signals, but from OUTSIDE the pager region. Fail-closed like the rest, named
