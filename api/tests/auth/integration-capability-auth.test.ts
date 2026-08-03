@@ -33,10 +33,16 @@ import { ErrorEnvelope, integrationsEndpoints } from '@ekoa/shared';
  * memvault: every verdict of the admission plane, driven through the REAL app on the REAL
  * capability paths.
  *
- * Every case below runs against all three declared capability routes, so a route that admits keys
+ * Every case below runs against EVERY declared capability route, so a route that admits keys
  * through a DIFFERENT path — a hand-rolled header check, a mount that forgot the middleware, a
- * fourth route that quietly became key-reachable — fails here rather than being covered by the one
+ * further route that quietly became key-reachable — fails here rather than being covered by the one
  * route somebody remembered to test.
+ *
+ * THE DERIVATION EARNED ITS KEEP IN D3. `achieve` landed as a fourth `user-or-key` descriptor and
+ * this suite failed immediately — not because anything was wrong with it, but because a new
+ * capability route MUST be walked through every admission verdict before it ships. That is the
+ * ratchet working: the matrix comes off the descriptors, so the only way to add a key-reachable
+ * endpoint without admission coverage is to delete a test on purpose.
  */
 let mem: MongoMemoryServer;
 let seq = 0;
@@ -54,25 +60,43 @@ const readAction: IntegrationAction = {
   httpConfig: { method: 'GET', baseUrl: 'https://auth.example', path: '/things' },
 };
 
-/** The three declared `user-or-key` routes, derived FROM THE DESCRIPTORS rather than retyped, so a
- *  fourth capability endpoint added to the domain is automatically exercised by every case here. */
+/**
+ * The minimal VALID body a capability route needs to reach its HANDLER, so these cases measure
+ * ADMISSION rather than request validation — a 400 from the body parser proves nothing about who
+ * the middleware let in.
+ *
+ * A route absent from this map is probed with `{}`. If that is not valid for it these tests fail
+ * loudly, which is the intended behaviour rather than an inconvenience: a new capability endpoint
+ * has to be considered here, not silently skipped.
+ */
+const CAPABILITY_BODIES: Record<string, unknown> = {
+  // D3. A goal that NAMES the seeded read action, so `achieve` takes its EXECUTE arm. Deliberately
+  // not an unmatched goal: that routes to the AUTHOR arm, which would put a live model call inside
+  // an admission test. `list_things` is `mutates: false`, so it also does not meet the write gate
+  // and the verdict under test stays the admission one.
+  achieve: { goal: 'list things' },
+};
+
+/** The declared `user-or-key` routes, derived FROM THE DESCRIPTORS rather than retyped, so a
+ *  further capability endpoint added to the domain is automatically exercised by every case here. */
 const CAPABILITY_CALLS = Object.entries(integrationsEndpoints)
   .filter(([, d]) => d.auth === 'user-or-key')
   .map(([name, d]) => ({
     name,
     method: d.method,
     path: d.path.replace('/:key/', `/${KEY}/`).replace(/\/:key$/, `/${KEY}`).replace(':actionName', 'list_things'),
+    body: JSON.stringify(CAPABILITY_BODIES[name] ?? {}),
   }));
 
 const probe = (
-  op: { method: string; path: string },
+  op: { method: string; path: string; body?: string },
   auth?: string,
   headers: Record<string, string> = {},
 ): Promise<Response> =>
   fetch(`http://127.0.0.1:${port}${op.path}`, {
     method: op.method,
     headers: { 'content-type': 'application/json', ...(auth ? { authorization: auth } : {}), ...headers },
-    ...(op.method === 'GET' || op.method === 'DELETE' ? {} : { body: '{}' }),
+    ...(op.method === 'GET' || op.method === 'DELETE' ? {} : { body: op.body ?? '{}' }),
   });
 
 async function expectEnvelope(res: Response, status: number, code: string): Promise<void> {
@@ -82,8 +106,12 @@ async function expectEnvelope(res: Response, status: number, code: string): Prom
   expect((body as { error: { code: string } }).error.code).toBe(code);
 }
 
-/** Run one expectation across EVERY declared capability route. */
-async function forEachCapabilityRoute(fn: (op: { name: string; method: string; path: string }) => Promise<void>): Promise<void> {
+/** Run one expectation across EVERY declared capability route. `body` is part of the op: dropping
+ *  it here would silently probe `achieve` with `{}` and measure a 400 from the body parser instead
+ *  of the admission verdict under test. */
+async function forEachCapabilityRoute(
+  fn: (op: { name: string; method: string; path: string; body: string }) => Promise<void>,
+): Promise<void> {
   for (const op of CAPABILITY_CALLS) await fn(op);
 }
 
@@ -125,19 +153,29 @@ beforeEach(async () => {
   );
 });
 
-describe('the domain really declares three capability routes (a floor, so an empty matrix cannot pass)', () => {
-  it('descriptor-derived call list covers list + get + execute', () => {
-    expect(CAPABILITY_CALLS.map((c) => c.name).sort()).toEqual(['executeAction', 'getIntegration', 'list']);
+describe('the domain really declares its capability routes (a floor, so an empty matrix cannot pass)', () => {
+  it('descriptor-derived call list covers list + get + execute + achieve', () => {
+    expect(CAPABILITY_CALLS.map((c) => c.name).sort()).toEqual(['achieve', 'executeAction', 'getIntegration', 'list']);
     expect(CAPABILITY_CALLS.map((c) => c.path)).toEqual([
       '/api/v1/integrations',
       `/api/v1/integrations/${KEY}`,
       `/api/v1/integrations/${KEY}/actions/list_things/execute`,
+      `/api/v1/integrations/${KEY}/achieve`,
     ]);
+  });
+
+  it('and the PROMOTION route is NOT among them — `achieve` is key-reachable, promoting it is not', () => {
+    // The D3 rule, asserted where the capability matrix is defined rather than only in D3's own
+    // suite: if `trustAction` ever became `user-or-key`, a key-bearing agent could author an action
+    // and then bless its own work. It would also silently join every walk above, so pinning it here
+    // states the intent at the place the walk is built.
+    expect(integrationsEndpoints.trustAction.auth).toBe('user');
+    expect(CAPABILITY_CALLS.map((c) => c.name)).not.toContain('trustAction');
   });
 });
 
 describe('gateway-key admission on the integrations capability routes: fail closed, every verdict', () => {
-  it('a live key is admitted on all three, and only the key path leaves an audit principal', async () => {
+  it('a live key is admitted on EVERY capability route, and only the key path leaves an audit principal', async () => {
     const minted = await mintGatewayKey(OWNER, 'live', deps);
     await forEachCapabilityRoute(async (op) => {
       const res = await probe(op, `Bearer ${minted.key}`, { 'x-client': 'claude-code' });

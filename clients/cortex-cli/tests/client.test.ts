@@ -40,12 +40,22 @@ const client = (fetchImpl: typeof fetch, baseUrl = 'https://cortex.example.com/'
   new CortexClient({ baseUrl, apiKey: 'ekoa_gk_test', clientTag: 'cortex-cli/9.9.9', fetchImpl });
 
 describe('generated operation table', () => {
-  it('carries all 30 contract operations, each with its declared success statuses', () => {
+  it('carries all 31 contract operations, each with its declared success statuses', () => {
     // 27 -> 30 with slice D1 (2026-08-03): the integrations domain reached the public surface with
     // `list` (flipped from `user`), `getIntegration` and `executeAction`. The count is a PIN, not a
     // description: it moves only when a descriptor's auth class does, which is exactly the event a
     // reader of this file should be forced to notice.
-    expect(OPERATION_IDS).toHaveLength(30);
+    // 30 -> 31 with slice D3 (2026-08-03): `integrations.achieve`. Its human counterpart,
+    // `integrations.trustAction`, is deliberately ABSENT — it is `auth: 'user'`, so it is not part
+    // of the public surface a gateway key can reach, and the pin below asserts that rather than
+    // leaving it to be inferred from a number.
+    expect(OPERATION_IDS).toHaveLength(31);
+    expect(OPERATIONS['integrations.achieve']).toMatchObject({
+      method: 'POST',
+      path: '/api/v1/integrations/{key}/achieve',
+      domain: 'integrations',
+    });
+    expect(OPERATION_IDS).not.toContain('integrations.trustAction');
     expect(OPERATIONS['integrations.executeAction']).toMatchObject({
       method: 'POST',
       path: '/api/v1/integrations/{key}/actions/{actionName}/execute',
