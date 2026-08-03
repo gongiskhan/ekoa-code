@@ -40,8 +40,19 @@ const client = (fetchImpl: typeof fetch, baseUrl = 'https://cortex.example.com/'
   new CortexClient({ baseUrl, apiKey: 'ekoa_gk_test', clientTag: 'cortex-cli/9.9.9', fetchImpl });
 
 describe('generated operation table', () => {
-  it('carries all 27 contract operations, each with its declared success statuses', () => {
-    expect(OPERATION_IDS).toHaveLength(27);
+  it('carries all 30 contract operations, each with its declared success statuses', () => {
+    // 27 -> 30 with slice D1 (2026-08-03): the integrations domain reached the public surface with
+    // `list` (flipped from `user`), `getIntegration` and `executeAction`. The count is a PIN, not a
+    // description: it moves only when a descriptor's auth class does, which is exactly the event a
+    // reader of this file should be forced to notice.
+    expect(OPERATION_IDS).toHaveLength(30);
+    expect(OPERATIONS['integrations.executeAction']).toMatchObject({
+      method: 'POST',
+      path: '/api/v1/integrations/{key}/actions/{actionName}/execute',
+      domain: 'integrations',
+    });
+    expect(OPERATIONS['integrations.getIntegration']).toMatchObject({ method: 'GET', path: '/api/v1/integrations/{key}' });
+    expect(OPERATIONS['integrations.list']).toMatchObject({ method: 'GET', path: '/api/v1/integrations' });
     expect(OPERATIONS['automations.createRun'].successStatuses).toEqual([202, 200]);
     expect(OPERATIONS['automations.create'].successStatuses).toEqual([201]);
     expect(OPERATIONS['memvault.exportVault'].kind).toBe('binary');

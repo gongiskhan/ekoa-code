@@ -884,7 +884,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // not the router — one place to audit, and one place for WS-K's KMS envelope to install behind.
   app.use('/api/v1/cofre', cofreRouter(deps));
   // G4 — integrations + knowledge.
-  app.use('/api/v1/integrations', integrationsRouter(deps));
+  // D1: the router now also carries the PUBLIC `user-or-key` capability surface, whose execute
+  // endpoint runs on the SAME gated executor as the other three rails - so it is handed the SAME
+  // `runAutomationBackedAction` bound once above. Omitting it here would leave every
+  // automation-backed action (citius' poll, every browser-steps action) answering
+  // `automation_required` on the capability rail alone, i.e. one rail quietly behaving differently
+  // from the other three. This is a WIRING argument, not a second executor: no consent check, no
+  // credential read and no dispatch decision lives at this call site.
+  app.use('/api/v1/integrations', integrationsRouter({ ...deps, runAutomationBackedAction }));
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
   app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));

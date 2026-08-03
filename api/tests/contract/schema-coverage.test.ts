@@ -200,6 +200,22 @@ const COVERED = new Set<string>([
   // tests/integrations/action-consent.test.ts and tests/security/integration-write-gate.test.ts.
   // Three NEW descriptors, three COVERED entries: the pinned EXPECTED_PENDING_COUNT is unchanged.
   'integrations.listActionApprovals', 'integrations.approveAction', 'integrations.revokeActionApproval',
+  // slice D1 - the PUBLIC capability surface this slice ADDS on the integrations domain
+  // (integrations-capability.test.ts contract: both admissions on the real app with a REAL minted
+  // gateway key, every 2xx safeParsed against IntegrationCapability /
+  // ExecuteIntegrationActionResponse, the 403 `awaiting_consent` refusal with its typed
+  // consentRequest and ZERO upstream requests, the key's failure to approve itself, the uniform
+  // 404, the audit row, and an admission walk over the router's OWN stack proving no other route
+  // admits a key; integration-capability-auth.test.ts: every gateway-key verdict on all three
+  // capability routes; integration-capability-isolation.test.ts: cross-tenant blindness under both
+  // admissions, "no request field names a tenant", and the global row's authorship/secret
+  // redaction).
+  //
+  // TWO new descriptors, two COVERED entries: the pinned EXPECTED_PENDING_COUNT below is
+  // UNCHANGED. `integrations.list` was flipped from `user` to `user-or-key` by the same slice and
+  // stays where it already was under G6 - flipping an auth class adds no descriptor (the same
+  // accounting slice E5 used for knowledge.listCollections/listDocuments).
+  'integrations.getIntegration', 'integrations.executeAction',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

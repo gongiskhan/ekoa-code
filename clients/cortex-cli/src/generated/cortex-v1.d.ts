@@ -247,6 +247,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/integrations */
+        get: operations["integrations.list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/integrations/{key} */
+        get: operations["integrations.getIntegration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{key}/actions/{actionName}/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/v1/integrations/{key}/actions/{actionName}/execute */
+        post: operations["integrations.executeAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/knowledge/collections": {
         parameters: {
             query?: never;
@@ -480,8 +531,54 @@ export interface components {
                 message: string;
             };
         };
+        ExecuteIntegrationActionRequest: {
+            args?: {
+                [key: string]: unknown;
+            };
+        };
+        ExecuteIntegrationActionResponse: {
+            code?: string;
+            data?: unknown;
+            error?: string;
+            status?: number;
+            success: boolean;
+        };
         Id: string;
         IdempotencyKey: string;
+        IntegrationCapability: {
+            actions: components["schemas"]["IntegrationCapabilityAction"][];
+            connected: boolean;
+            integration: components["schemas"]["IntegrationDefinition"];
+        };
+        IntegrationCapabilityAction: {
+            actionName: string;
+            approved: boolean;
+            backingType: string;
+            description: string;
+            requiresApproval: boolean;
+            shape: string;
+            target: string;
+            transport: string;
+        };
+        IntegrationDefinition: {
+            actions?: {
+                [key: string]: unknown;
+            }[];
+            authType?: string;
+            createdAt?: components["schemas"]["IsoTimestamp"];
+            description?: string;
+            displayName?: string;
+            icon?: string;
+            key: string;
+            updatedAt?: components["schemas"]["IsoTimestamp"];
+            userCreated?: boolean;
+            version?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        IntegrationDefinitionListResponse: {
+            items: components["schemas"]["IntegrationDefinition"][];
+        };
         /** Format: date-time */
         IsoTimestamp: string;
         JsonValue: string | number | boolean | null | components["schemas"]["JsonValue"][] | {
@@ -2086,6 +2183,264 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StepFeedbackResponse"];
+                };
+            };
+            /** @description Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`). */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate limited by the per-key capability window (`RATE_LIMITED`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error (`INTERNAL`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    "integrations.list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationDefinitionListResponse"];
+                };
+            };
+            /** @description Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`). */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate limited by the per-key capability window (`RATE_LIMITED`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error (`INTERNAL`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    "integrations.getIntegration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationCapability"];
+                };
+            };
+            /** @description Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`). */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate limited by the per-key capability window (`RATE_LIMITED`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error (`INTERNAL`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    "integrations.executeAction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionName: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecuteIntegrationActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Success. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecuteIntegrationActionResponse"];
                 };
             };
             /** @description Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues. */

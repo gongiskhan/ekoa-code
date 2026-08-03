@@ -1,9 +1,30 @@
 /**
- * Integrations router (ch03 §3.8.13). Two surfaces:
- *  - the DEFINITIONS registry (read-only): list definitions, the active catalog, and an
- *    org-admin refresh that reloads the versioned packages from disk (ch03 §3.8.13 rows).
- *  - configs CRUD; credentials NEVER returned (summary only).
- * Persistence via the integrations service; definitions via the registry (ch02 §2.7).
+ * Integrations router (ch03 §3.8.13). Since D1 it carries TWO ADMISSION TIERS, and the split is
+ * the point:
+ *
+ *   1. The PUBLIC CAPABILITY surface — `user-or-key` (Capability Contract rule 4): discover the
+ *      caller's integrations (`GET /`), read one as a capability (`GET /:key`), and execute an
+ *      action under the caller's own credentials (`POST /:key/actions/:actionName/execute`). A
+ *      per-user gateway key reaches these; `requireUserOrApiKey` delegates to `requireAuth`
+ *      untouched for a platform JWT, so the dashboard's calls are byte-identical to before.
+ *   2. Everything else — the dashboard surface: configs CRUD, the active catalog, the org-admin
+ *      refresh, the SHARING routes (E1) and the three WRITE-GATE consent routes (C2). These carry
+ *      `requireAuth` and a gateway key can never reach them. The consent routes in particular are
+ *      `auth: 'user'` on purpose: an agent refused at the write gate must not be able to POST the
+ *      shape it was just handed and retry (see shared/src/integrations.ts `approveAction`).
+ *
+ * HOW THE TWO TIERS ARE KEPT APART, and why the ordering below is load-bearing: express matches in
+ * registration order, so `GET /:key` (tier 1) is registered AFTER the dashboard's literal-segment
+ * routes (`/active`, `/configs`, `/refresh`, `/definitions/…`) — otherwise it would swallow them —
+ * and the router-wide `requireAuth` blanket sits BELOW it, covering every remaining `:key` route.
+ * That blanket is the SAFE DEFAULT for anything appended later. The routes above it each carry
+ * their admission EXPLICITLY, and `api/tests/contract/integrations-capability.test.ts` walks this
+ * router's own stack and probes every route it finds: unauthenticated must be 401, and every route
+ * outside the declared capability set must refuse a real gateway key. A new route added anywhere in
+ * this file is therefore covered by that gate without anyone remembering to extend it.
+ *
+ * Persistence via the integrations service; definitions via the tenant-scoped registry (ch02 §2.7);
+ * credentials NEVER returned (summary only).
  */
 import { Router, type Response } from 'express';
 import {
@@ -11,8 +32,12 @@ import {
   SetDefinitionVisibilityRequest,
   SetDefinitionGlobalRequest,
   ApproveIntegrationActionRequest,
+  ExecuteIntegrationActionRequest,
+  IntegrationActionParams,
+  IntegrationKeyParams,
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
+import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
@@ -24,11 +49,19 @@ import {
   revokeActionApprovals,
 } from '../integrations/action-consent.js';
 import {
+  capabilityWireOutcome,
+  executeIntegrationCapabilityAction,
+  getIntegrationCapability,
+  type CapabilityContext,
+  type CapabilityRefusal,
+} from '../integrations/integration-capability.js';
+import {
   integrationDefinitionStore,
   type DefinitionVisibility,
   type SetVisibilityResult,
 } from '../integrations/definition-store.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
+import type { AutomationBackedHandler } from '../integrations/action-executor.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import { z } from 'zod';
 
@@ -74,25 +107,78 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
   res.json({ ok: true, visibility: result.doc.visibility });
 }
 
-export function integrationsRouter(deps: { now: () => number; genId: () => string }): Router {
+/**
+ * The audit/exec context for a capability call: the actor from the VERIFIED principal (never a
+ * body field), the username the activity row needs, and — for a key-admitted call — the trace-only
+ * key principal. `x-client` arrives already capped by the admission middleware and is carried into
+ * the audit row verbatim; nothing below reads it, let alone branches on it (Rule 3).
+ */
+function capabilityCtxOf(
+  req: AuthedRequest,
+  res: Response,
+  deps: { now: () => number; genId: () => string; runAutomationBackedAction?: AutomationBackedHandler },
+): CapabilityContext {
+  const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
+  return {
+    actor: actorOf(req),
+    deps,
+    ...(p ? { principal: { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } } : {}),
+    ...(req.user?.username ? { username: req.user.username } : {}),
+    ...(deps.runAutomationBackedAction ? { runAutomationBackedAction: deps.runAutomationBackedAction } : {}),
+  };
+}
+
+/**
+ * The two capability refusals on the wire.
+ *
+ * `not_found` is the house 404, byte-identical for "no such integration" and "not visible to you" —
+ * the same no-existence-oracle posture the sharing and consent routes already take.
+ * `no_tenant` is a 403: the caller authenticated, but their principal names no organisation, and
+ * since A2 the org SELECTS which definition resolves — so resolving anything for them would mean
+ * resolving an arbitrary tenant's package. Fail closed, and say so rather than answering an
+ * ambiguous 404 that reads like a missing integration.
+ */
+function refuseCapability(res: Response, refusal: CapabilityRefusal): void {
+  if (refusal === 'not_found') return notFound(res);
+  sendError(res, 'FORBIDDEN', 'A sua conta não pertence a nenhuma organização.');
+}
+
+export function integrationsRouter(deps: {
+  now: () => number;
+  genId: () => string;
+  /** The automation seam the composition root binds ONCE and hands to every executor rail. */
+  runAutomationBackedAction?: AutomationBackedHandler;
+}): Router {
   const r = Router();
-  r.use(requireAuth);
 
-  // --- Definitions registry (read surface; execution stack is G8) ---------------------------
+  // ===========================================================================================
+  // TIER 1 (part 1) — the PUBLIC CAPABILITY surface: the exact-path route.
+  // Registered before any `requireAuth`, so a gateway key reaches it.
+  // ===========================================================================================
 
-  // GET /api/v1/integrations -> { items: IntegrationDefinition[] } (auth: user, 'list-skills').
+  // GET /api/v1/integrations -> { items: IntegrationDefinition[] } (auth: USER-OR-KEY since D1).
   // A2: TENANT-SCOPED. The actor's visible stored definitions merged over the shipped baseline —
   // this is the filter that stops one org's authored package being listed to every other org.
-  // Wire shape is unchanged (Rule 7): the same `{ items: IntegrationDefinition[] }`.
-  r.get('/', async (req: AuthedRequest, res: Response) => {
+  // Wire shape is unchanged (Rule 7): the same `{ items: IntegrationDefinition[] }` the dashboard
+  // has always read, from the same call under the same actor. What D1 changed is WHO may ask:
+  // this is the capability DISCOVERY endpoint, so an outside client can find its user's
+  // integrations before calling `GET /:key` and `POST /:key/actions/:actionName/execute`.
+  r.get('/', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
     res.json({ items: await listDefinitionsFor(actorOf(req)) });
   });
+
+  // ===========================================================================================
+  // TIER 2 (part 1) — dashboard routes whose FIRST SEGMENT IS A LITERAL. They must be registered
+  // before the tier-1 `/:key` routes below, or `:key` would swallow `active` / `configs` /
+  // `refresh` / `definitions`. Each carries `requireAuth` explicitly (the router-wide blanket
+  // starts further down).
+  // ===========================================================================================
 
   // GET /api/v1/integrations/active -> { items: ActiveIntegration[] } (auth: user, 'list-active').
   // The active set = definitions the actor's org has an ENABLED config for; each entry carries
   // the action + webhook/listener event catalogs the trigger picker offers. A2: the catalog is
   // built over the actor's VISIBLE definitions before the enabled-config join.
-  r.get('/active', async (req: AuthedRequest, res: Response) => {
+  r.get('/active', requireAuth, async (req: AuthedRequest, res: Response) => {
     const actor = actorOf(req);
     const configs = await listConfigs(actor);
     const enabled = new Set(configs.filter((c) => c.enabled).map((c) => c.integrationKey));
@@ -105,7 +191,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
   // for every caller and can no longer enumerate other tenants' authored keys (A2-residual 1).
   // It does not read, write or invalidate any tenant definition document — those are read per
   // request straight off Mongo and need no refresh.
-  r.post('/refresh', requireRole('org-admin', 'super-admin'), (_req: AuthedRequest, res: Response) => {
+  r.post('/refresh', requireAuth, requireRole('org-admin', 'super-admin'), (_req: AuthedRequest, res: Response) => {
     res.json(refreshDefinitions());
   });
 
@@ -129,7 +215,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
    * owns a `global` row still cannot demote it here: the store answers `forbidden` unless they are
    * a super-admin, which is why the demotion direction is gated too.
    */
-  r.patch('/definitions/:id/visibility', async (req: AuthedRequest, res: Response) => {
+  r.patch('/definitions/:id/visibility', requireAuth, async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SetDefinitionVisibilityRequest, req.body);
     if (!body) return;
     const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), body.visibility);
@@ -143,7 +229,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
    * bar on both directions, so a regression in either layer alone cannot publish a tenant's
    * definition to every org.
    */
-  r.post('/definitions/:id/global', requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
+  r.post('/definitions/:id/global', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SetDefinitionGlobalRequest, req.body);
     if (!body) return;
     // DEMOTION TARGET: un-publishing returns the row to `org`, NOT to `private`. `global` is a tier
@@ -156,12 +242,117 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
     sendVisibility(res, result);
   });
 
+  // --- Configs CRUD (literal first segment — must precede the `/:key` routes) -----------------
+
+  r.get('/configs', requireAuth, async (req: AuthedRequest, res: Response) => {
+    res.json({ items: (await listConfigs(actorOf(req))).map(configSummary) });
+  });
+
+  r.post('/configs', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, CreateConfig, req.body);
+    if (!body) return;
+    const c = await createConfig(actorOf(req), body as { integrationKey: string; configValues: Record<string, unknown>; name?: string }, deps);
+    res.status(201).json(configSummary(c));
+  });
+
+  r.patch('/configs/:integrationKey', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, UpdateConfig, req.body);
+    if (!body) return;
+    const a = actorOf(req);
+    const target = (await listConfigs(a)).find((c) => c.integrationKey === req.params.integrationKey);
+    if (!target) return notFound(res);
+    const result = await updateConfig(a, target._id, body as { enabled?: boolean; configValues?: Record<string, unknown> });
+    if (result.verdict === 'notfound') return notFound(res);
+    if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    res.json(configSummary(result.config!));
+  });
+
+  // ===========================================================================================
+  // TIER 1 (part 2) — the PUBLIC CAPABILITY surface's `:key` routes (slice D1).
+  //
+  // Registered HERE: after every dashboard route whose first segment is a literal (so `:key`
+  // cannot swallow `active`/`configs`/`refresh`/`definitions`), and before the router-wide
+  // `requireAuth` blanket below (so a gateway key reaches them). Both carry
+  // `requireUserOrApiKey` explicitly rather than relying on position.
+  //
+  // Behaviour lives in `integrations/integration-capability.ts`; these two handlers validate,
+  // call it once, and shape the answer.
+  // ===========================================================================================
+
+  /**
+   * GET /api/v1/integrations/:key -> IntegrationCapability (auth: user-or-key).
+   *
+   * The definition as the list already projects it (one projection, never a second one that could
+   * drift), plus per-action execution metadata: how it runs, where it writes, whether it needs a
+   * human approval and whether one already stands for this caller. Resolved through A2's
+   * tenant-scoped registry under the verified actor, so an integration the caller may not see is a
+   * 404 byte-identical with one that does not exist.
+   */
+  r.get('/:key', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const out = await getIntegrationCapability(capabilityCtxOf(req, res, deps), params.data.key);
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    res.json(out.value);
+  });
+
+  /**
+   * POST /api/v1/integrations/:key/actions/:actionName/execute -> ExecuteIntegrationActionResponse.
+   *
+   * THE WRITE GATE IS INHERITED, NOT RE-IMPLEMENTED HERE. The call goes to
+   * `executeUserIntegrationAction` (through the capability module) and meets C2's
+   * `checkActionConsent` inside it, before any credential is loaded. An unapproved `mutates` action
+   * therefore answers 403 with `details.code = 'awaiting_consent'` and the descriptor a human must
+   * be shown — and the endpoint that BANKS that answer, `POST …/approval`, is `auth: 'user'` and
+   * sits below the blanket, so the gateway key that was just refused cannot approve itself.
+   *
+   * The request body carries `args` and nothing else: no field names an org, a user or an owner,
+   * and zod strips unknown keys, so a body inventing one is inert (Rule 5).
+   */
+  r.post('/:key/actions/:actionName/execute', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const body = parseBody(res, ExecuteIntegrationActionRequest, req.body ?? {});
+    if (!body) return;
+    const out = await executeIntegrationCapabilityAction(
+      capabilityCtxOf(req, res, deps),
+      params.data.key,
+      params.data.actionName,
+      body.args ?? {},
+    );
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    const wire = capabilityWireOutcome(out.value);
+    if (wire.kind === 'not_found') return notFound(res);
+    if (wire.kind === 'awaiting_consent') {
+      return sendError(
+        res,
+        'FORBIDDEN',
+        'Esta ação altera dados e precisa da autorização do titular antes de correr.',
+        { code: 'awaiting_consent', consentRequest: wire.consentRequest },
+      );
+    }
+    res.json(wire.body);
+  });
+
+  // ===========================================================================================
+  // TIER 2 (part 2) — everything below is PLATFORM-SESSION ONLY. The blanket is the SAFE DEFAULT
+  // for any route appended later: a new handler added past this line inherits `requireAuth`
+  // whether or not its author thought about admission. Nothing below may become `user-or-key`
+  // without moving above it AND declaring the class in `shared/src/integrations.ts`.
+  // ===========================================================================================
+  r.use(requireAuth);
+
   // --- The WRITE GATE (slice C2) --------------------------------------------------------------
   //
   // Three routes over `integrations/action-consent.ts`. None of them is the gate: the gate is in
   // `executeUserIntegrationAction`, so it catches every rail (capability route, automation step,
   // listener tick, agent tool) rather than only the ones that happen to pass through a router.
   // These are the surface a human answers it on.
+  //
+  // ALL THREE ARE `auth: 'user'` AND STAY THAT WAY (C2, reaffirmed by D1). D1 put an execute
+  // endpoint on the key-reachable surface; if approving were key-reachable too, an agent refused at
+  // the gate could POST the very shape it was just handed and retry. A gate that grants its own
+  // exemption is not a gate.
   //
   // TENANCY: the acting (org, user) is `actorOf(req)` — off the verified JWT — and the integration
   // is resolved UNDER THAT ACTOR, so an action the caller cannot see is a 404, byte-identical with
@@ -252,30 +443,7 @@ export function integrationsRouter(deps: { now: () => number; genId: () => strin
     res.json({ ok: true, revoked });
   });
 
-  // --- Configs CRUD -------------------------------------------------------------------------
-
-  r.get('/configs', async (req: AuthedRequest, res: Response) => {
-    res.json({ items: (await listConfigs(actorOf(req))).map(configSummary) });
-  });
-
-  r.post('/configs', async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, CreateConfig, req.body);
-    if (!body) return;
-    const c = await createConfig(actorOf(req), body as { integrationKey: string; configValues: Record<string, unknown>; name?: string }, deps);
-    res.status(201).json(configSummary(c));
-  });
-
-  r.patch('/configs/:integrationKey', async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, UpdateConfig, req.body);
-    if (!body) return;
-    const a = actorOf(req);
-    const target = (await listConfigs(a)).find((c) => c.integrationKey === req.params.integrationKey);
-    if (!target) return notFound(res);
-    const result = await updateConfig(a, target._id, body as { enabled?: boolean; configValues?: Record<string, unknown> });
-    if (result.verdict === 'notfound') return notFound(res);
-    if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
-    res.json(configSummary(result.config!));
-  });
+  // --- Config removal + session/provision (the remaining `:key` dashboard routes) -------------
 
   r.delete('/:key', async (req: AuthedRequest, res: Response) => {
     const result = await deleteConfig(actorOf(req), req.params.key as string);

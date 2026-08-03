@@ -21,6 +21,9 @@
       "name": "automations"
     },
     {
+      "name": "integrations"
+    },
+    {
       "name": "knowledge"
     },
     {
@@ -1828,6 +1831,333 @@
         }
       }
     },
+    "/api/v1/integrations": {
+      "get": {
+        "operationId": "integrations.list",
+        "summary": "GET /api/v1/integrations",
+        "tags": [
+          "integrations"
+        ],
+        "x-ekoa-domain": "integrations",
+        "x-ekoa-endpoint": "list",
+        "x-ekoa-auth": "user-or-key",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationDefinitionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/{key}": {
+      "get": {
+        "operationId": "integrations.getIntegration",
+        "summary": "GET /api/v1/integrations/{key}",
+        "tags": [
+          "integrations"
+        ],
+        "x-ekoa-domain": "integrations",
+        "x-ekoa-endpoint": "getIntegration",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationCapability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/{key}/actions/{actionName}/execute": {
+      "post": {
+        "operationId": "integrations.executeAction",
+        "summary": "POST /api/v1/integrations/{key}/actions/{actionName}/execute",
+        "tags": [
+          "integrations"
+        ],
+        "x-ekoa-domain": "integrations",
+        "x-ekoa-endpoint": "executeAction",
+        "x-ekoa-auth": "user-or-key",
+        "x-ekoa-timeout-ms": 60000,
+        "parameters": [
+          {
+            "name": "actionName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteIntegrationActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecuteIntegrationActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/knowledge/collections": {
       "get": {
         "operationId": "knowledge.listCollections",
@@ -3230,6 +3560,38 @@
         ],
         "additionalProperties": false
       },
+      "ExecuteIntegrationActionRequest": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExecuteIntegrationActionResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "data": {},
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      },
       "Id": {
         "type": "string",
         "minLength": 1
@@ -3238,6 +3600,127 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 128
+      },
+      "IntegrationCapability": {
+        "type": "object",
+        "properties": {
+          "integration": {
+            "$ref": "#/components/schemas/IntegrationDefinition"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationCapabilityAction"
+            }
+          }
+        },
+        "required": [
+          "integration",
+          "connected",
+          "actions"
+        ],
+        "additionalProperties": false
+      },
+      "IntegrationCapabilityAction": {
+        "type": "object",
+        "properties": {
+          "actionName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "backingType": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "shape": {
+            "type": "string"
+          },
+          "requiresApproval": {
+            "type": "boolean"
+          },
+          "approved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionName",
+          "description",
+          "backingType",
+          "transport",
+          "target",
+          "shape",
+          "requiresApproval",
+          "approved"
+        ],
+        "additionalProperties": false
+      },
+      "IntegrationDefinition": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "authType": {
+            "type": "string"
+          },
+          "userCreated": {
+            "type": "boolean"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": true
+      },
+      "IntegrationDefinitionListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationDefinition"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
       },
       "IsoTimestamp": {
         "type": "string",

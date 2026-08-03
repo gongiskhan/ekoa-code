@@ -237,11 +237,155 @@ export const RevokeIntegrationActionApprovalResponse = z.object({
 });
 export type RevokeIntegrationActionApprovalResponse = z.infer<typeof RevokeIntegrationActionApprovalResponse>;
 
+/* --- The PUBLIC capability surface (slice D1) ------------------------------------------------ */
+
+/**
+ * Path params of the two capability routes. Declared so two facts are CONTRACTUAL rather than
+ * only implemented: a segment has a shape, and a malformed one is a 400 rather than a 404
+ * (descriptor.ts `params`). Deliberately permissive — a grammar stricter than the store's own
+ * would turn a legitimately-named authored integration into a 400 it can never recover from —
+ * but BOUNDED, because these segments are echoed into audit metadata.
+ */
+export const IntegrationKeyParams = z.object({ key: z.string().min(1).max(120) });
+export type IntegrationKeyParams = z.infer<typeof IntegrationKeyParams>;
+
+export const IntegrationActionParams = z.object({
+  key: z.string().min(1).max(120),
+  actionName: z.string().min(1).max(120),
+});
+export type IntegrationActionParams = z.infer<typeof IntegrationActionParams>;
+
+/**
+ * What a capability client needs to know about ONE action in order to call it — the facts the
+ * definition's own `actions[]` record cannot carry because they are derived, per-caller, or both.
+ *
+ * WHY THIS IS A SIBLING OF THE DEFINITION AND NOT A SECOND COPY OF IT. The definition (with its
+ * `httpConfig`, `argsSchema`, `returnSchema`) rides on `integration` below, projected by the ONE
+ * registry projection every other read uses. Nothing here re-states it. What is here is:
+ *   - `backingType`/`transport` — HOW it runs, resolved once by the executor's own resolver
+ *     (`resolveBackingType`), never re-derived by a client from the action's shape;
+ *   - `target` — WHERE it writes, in the words the consent dialog shows a human;
+ *   - `shape` — the approval fingerprint, so a client that hits the write gate can hand the user
+ *     the exact token `POST …/approval` demands (that route is `auth: 'user'` — see below);
+ *   - `requiresApproval` — the FAIL-CLOSED reading of `mutates` (only a literal `false` is a read),
+ *     which is the executor's rule and not something a client should re-implement off the raw field;
+ *   - `approved` — whether a live approval of the CALLER's own already covers this exact shape.
+ *
+ * `approved` is ADVISORY and says so: the gate is re-evaluated inside the executor at call time (a
+ * `once` approval is CLAIMED there, atomically), so `true` here is "no prompt is pending as of this
+ * read", never a promise that the next execute will run.
+ */
+export const IntegrationCapabilityAction = z.object({
+  actionName: z.string(),
+  description: z.string(),
+  /** `api-call | bash-cli | browser-steps`, or `invalid` for a package that contradicts itself. */
+  backingType: z.string(),
+  /** Wire protocol the action needs; `http` unless the package declares otherwise. */
+  transport: z.string(),
+  /** Human-readable destination, e.g. `POST https://slack.com/api/chat.postMessage`. */
+  target: z.string(),
+  /** Fingerprint of the action's executable content — the token an approval is keyed on. */
+  shape: z.string(),
+  requiresApproval: z.boolean(),
+  /** Advisory (see above): a live approval of the caller's covers this exact shape right now. */
+  approved: z.boolean(),
+});
+export type IntegrationCapabilityAction = z.infer<typeof IntegrationCapabilityAction>;
+
+/**
+ * The capability view of one integration: the definition exactly as the list emits it, plus the
+ * per-action execution metadata and whether this caller can actually reach a credential.
+ *
+ * `integration` is the SAME `IntegrationDefinition` projection `GET /api/v1/integrations` returns —
+ * one projection, not a second one that could drift from it (Rule 1). That projection is where the
+ * tenancy rules live: it drops the storage envelope, reveals `id`/`visibility` only for a row of
+ * the caller's OWN org, and runs the secret-redaction pass on both tiers, so a cross-org `global`
+ * row never tells the reader which org authored it.
+ */
+export const IntegrationCapability = z.object({
+  integration: IntegrationDefinition,
+  /**
+   * Can an execute reach a credential today? Mirrors the executor's own two checks exactly
+   * (`not_connected` / `disabled`): a config that exists and is enabled, or an integration whose
+   * `authType` is `none` and needs no config at all.
+   */
+  connected: z.boolean(),
+  actions: z.array(IntegrationCapabilityAction),
+});
+export type IntegrationCapability = z.infer<typeof IntegrationCapability>;
+
+/**
+ * Execute request. `args` and NOTHING ELSE — there is deliberately no field naming an org, a user,
+ * an owner or a credential. Tenancy comes from the verified principal and only from it (Rule 5),
+ * and because zod strips unknown keys a body that invents `orgId` is silently inert rather than
+ * influential. The same reasoning as the knowledge/memvault capability requests.
+ */
+export const ExecuteIntegrationActionRequest = z.object({
+  args: z.record(z.unknown()).optional(),
+});
+export type ExecuteIntegrationActionRequest = z.infer<typeof ExecuteIntegrationActionRequest>;
+
+/**
+ * Execute response — the OUTCOME of a call that was addressed correctly and permitted.
+ *
+ * THE SPLIT, stated because a client's error handling depends on it:
+ *   - the request could not be ADDRESSED (unknown/invisible integration or action) -> 404 envelope;
+ *   - the request was not PERMITTED (a `mutates` action with no live human approval) -> 403
+ *     envelope carrying `details.code = 'awaiting_consent'` and `details.consentRequest`;
+ *   - anything else -> 200 and THIS body, including a failed outcome. A remote 500, a locked
+ *     credential, a disabled integration and a transport timeout are results of the routed call,
+ *     not failures of Cortex, and they are exactly what the other three rails (automation step,
+ *     listener tick, agent tool) already receive as a result object. One vocabulary, four rails.
+ *
+ * `data` is the action's own result (the upstream body, or the automation's output), already
+ * deep-redacted of the caller's credential values by the executor. The executor's request/response
+ * DUMP is deliberately absent: it is an operator-facing diagnostic, not part of a public contract.
+ */
+export const ExecuteIntegrationActionResponse = z.object({
+  success: z.boolean(),
+  /** Upstream HTTP status, for an `api-call` action that reached the remote. */
+  status: z.number().int().optional(),
+  data: z.unknown().optional(),
+  /** Machine-readable outcome token when `success` is false (the executor's own vocabulary). */
+  code: z.string().optional(),
+  /** Human-readable failure message, credential-redacted. */
+  error: z.string().optional(),
+});
+export type ExecuteIntegrationActionResponse = z.infer<typeof ExecuteIntegrationActionResponse>;
+
+/**
+ * What a human must be shown to answer the write gate. Rides inside the 403's `details` rather
+ * than in a 2xx body: nothing executed, so there is no result to carry it. Declared here so a
+ * client (and the contract suite) can type the refusal instead of reading loose strings.
+ */
+export const IntegrationActionConsentRequest = z.object({
+  integrationKey: z.string(),
+  actionName: z.string(),
+  description: z.string(),
+  target: z.string(),
+  shape: z.string(),
+});
+export type IntegrationActionConsentRequest = z.infer<typeof IntegrationActionConsentRequest>;
+
 export const integrationsEndpoints = {
+  /**
+   * The definition list — the CAPABILITY DISCOVERY endpoint since D1.
+   *
+   * THE FLIP: `user` -> `user-or-key`. Additive in the strict sense (Rule 7): the body is the same
+   * `{ items: IntegrationDefinition[] }` the dashboard has always read, produced by the same
+   * tenant-scoped `listDefinitionsFor(actor)` under the same actor. A platform JWT reaches it
+   * byte-identically (`requireUserOrApiKey` delegates to `requireAuth` untouched); what changed is
+   * that a per-user gateway key now reaches it too, so an outside client can DISCOVER which
+   * integrations its user has before calling `getIntegration`/`executeAction` below.
+   *
+   * Flipping an auth class adds no descriptor, so the schema-coverage pin is untouched by it — but
+   * it DOES publish this endpoint into `docs/openapi/cortex.v1.json`, which is the whole point:
+   * the spec is definitionally the key-reachable surface.
+   */
   list: {
     method: 'GET',
     path: '/api/v1/integrations',
-    auth: 'user',
+    auth: 'user-or-key',
     response: IntegrationDefinitionListResponse,
   },
   listActive: {
@@ -357,5 +501,51 @@ export const integrationsEndpoints = {
     path: '/api/v1/integrations/:key/actions/:actionName/approval',
     auth: 'user',
     response: RevokeIntegrationActionApprovalResponse,
+  },
+
+  /* --- The PUBLIC capability surface (slice D1) ---------------------------------------------- */
+
+  /**
+   * GET one integration as a CAPABILITY: the definition plus how each of its actions runs, where
+   * it writes, and whether it needs (or already has) a human approval.
+   *
+   * `auth: 'user-or-key'` — a per-user gateway key reaches it, and every call still identifies a
+   * user (Rule 4). The row is resolved UNDER THAT USER through the tenant-scoped registry, so a
+   * key that names an integration its user cannot see gets the same 404 as one that names an
+   * integration that does not exist: no existence oracle, and no consumer-specific branch anywhere
+   * on the path (Rule 3).
+   */
+  getIntegration: {
+    method: 'GET',
+    path: '/api/v1/integrations/:key',
+    auth: 'user-or-key',
+    params: IntegrationKeyParams,
+    response: IntegrationCapability,
+  },
+
+  /**
+   * EXECUTE one action of one integration under the calling user's own credentials.
+   *
+   * THE WRITE GATE IS INHERITED, NOT RE-IMPLEMENTED. This route calls
+   * `executeUserIntegrationAction`, which is where C2 put `checkActionConsent` precisely so that
+   * every rail — this one, the automation `integration` step, the listener tick, the agent tool —
+   * meets the same gate instead of four callers each remembering to ask. A `mutates` action with
+   * no live approval therefore answers 403 with `details.code = 'awaiting_consent'` and the
+   * descriptor the human must be shown, and NOTHING has left the process: the gate sits before the
+   * credential is even loaded.
+   *
+   * AND THE KEY CANNOT ANSWER ITS OWN PROMPT. `approveAction` above is `auth: 'user'`, deliberately
+   * not `user-or-key`: an agent refused here would otherwise POST the very shape it was just handed
+   * and retry, and a gate that grants its own exemption is not a gate.
+   */
+  executeAction: {
+    method: 'POST',
+    path: '/api/v1/integrations/:key/actions/:actionName/execute',
+    auth: 'user-or-key',
+    params: IntegrationActionParams,
+    request: ExecuteIntegrationActionRequest,
+    response: ExecuteIntegrationActionResponse,
+    /** An action may legitimately call a slow remote; the executor's own ceiling is 30s. */
+    timeoutMs: 60_000,
   },
 } as const satisfies DomainDescriptorMap;

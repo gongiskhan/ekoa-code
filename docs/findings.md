@@ -2321,3 +2321,19 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   the record reads `awaiting_consent`. THE FIX: `paused` gains an optional `reason` (additive under
   Rule 7), the dashboard renders `awaiting_consent` distinctly and links to the integration's
   action-approvals surface. Not done here: `shared/` is slice D1's live surface this wave.
+
+- **`module-level-regex-from-an-imported-const-silently-misbuilds-in-the-integrations-cycle`**
+  (OPEN 2026-08-03, HIGH latent, correctness - found by slice E2 while building `publish-scrub.ts`).
+  `api/src/integrations/` contains a live import cycle: `definitions -> service -> credential-cofre
+  -> definition-registry -> publish-scrub -> definitions`. Inside a cycle, a module-level
+  `new RegExp(SOME_IMPORTED_CONST)` evaluates while the imported binding is still in its temporal
+  dead zone / undefined, so the pattern is built from the WRONG source and compiles silently. E2 hit
+  this for real: the placeholder branch of its credential pattern never matched, which made the
+  publish floor redact EVERY SHIPPED AUTH HEADER — i.e. published integrations would have gone out
+  with `[REDACTED]` where their `Authorization` template belonged. It failed silently at every level
+  except one: the shipped-package identity property test (the A3 determinism ratchet) was the only
+  thing that caught it. Fixed in E2 by building the regex LAZILY. THE FINDING IS NOT E2's BUG - it is
+  that the hazard is invisible and repeatable: any future module-level use of an imported binding
+  anywhere in that cycle can misbuild the same way. Close by breaking the cycle, or by a lint rule
+  banning module-level `new RegExp(<imported>)` in `api/src/integrations/**`. Logged by the
+  orchestrator because E2 correctly reported it rather than editing a file outside its ownership.
