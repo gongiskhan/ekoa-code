@@ -16,20 +16,29 @@ import {
   definitionIdFor,
   type IntegrationDefinitionDoc,
 } from '../../src/integrations/definition-store.js';
-import { resolveDefinition, resolveSkillMd } from '../../src/integrations/definition-registry.js';
+import { resolveDefinition, resolveSkillMd, listDefinitionsFor } from '../../src/integrations/definition-registry.js';
 
 /**
- * Boot import of the frozen legacy runtime tier (slice A3 — RUN_SPEC assumption 3, Rule 10).
+ * Boot scan/import of the frozen legacy runtime tier (slice A3 — Rule 10; REPORT-ONLY default and
+ * reversible retirement per the A3 fresh-context review, F1/F2/L1/L2/L3).
  *
  * Proven here, non-tautologically:
- *   - a legacy package IS imported as `visibility:'global'` + `origin:'legacy-runtime'` and stays
- *     resolvable by BOTH orgs' actors (their exact effective visibility before A3 — zero
- *     regression), while a BASELINE key is NOT imported (assumption 2 + the F1 collision hijack);
+ *   - the DEFAULT is REPORT-ONLY: without EKOA_IMPORT_LEGACY_RUNTIME=1 nothing is persisted and
+ *     the report names what WOULD be imported (review F2 — a silent boot-time global publish of
+ *     author-less packages re-widened what A2 narrowed);
+ *   - behind the opt-in, a legacy package IS imported as `visibility:'global'` +
+ *     `origin:'legacy-runtime'` and resolvable by BOTH orgs' actors, while a BASELINE key is NOT
+ *     imported (assumption 2 + the F1 collision hijack);
  *   - the importer is IDEMPOTENT (second boot: skip, no duplicate, no touch);
  *   - the hash comparator reports DRIFT for a disk file changed after import and NEVER overwrites
  *     the Mongo row (Mongo wins — it may have been edited/republished);
- *   - the imported rows are manageable only through the super-admin review surface (closing the
- *     legacy leak later is E1's reviewed action, not a silent break).
+ *   - RETIREMENT IS EXACTLY REVERSIBLE (review F1): after the super-admin demotes an imported row
+ *     off `global`, no tenant sees it, but the super-admin STILL reads and writes it — and the
+ *     restore (`org` → `global`) puts it back for every org. The pre-review suite stopped BEFORE
+ *     the reversibility assertion and thereby pinned the trapdoor as intended behaviour;
+ *   - a broken runtime directory lands in the report, never a throw (review L1), a duplicate key
+ *     across two directories gets its own distinct reason (review L3), and the importer is NOT on
+ *     the integrations barrel (review L2 — its ambient super-admin actor stays boot-only).
  */
 let mem: MongoMemoryServer;
 let tmp: string;
@@ -69,8 +78,12 @@ beforeAll(async () => {
   writeFileSync(join(baselineDir, 'demo-base', 'config.json'), JSON.stringify(config('demo-base', { displayName: 'demo-base shipped' })));
   savedEnv.EKOA_INTEGRATIONS_DIR = process.env.EKOA_INTEGRATIONS_DIR;
   savedEnv.EKOA_DATA_DIR = process.env.EKOA_DATA_DIR;
+  savedEnv.EKOA_IMPORT_LEGACY_RUNTIME = process.env.EKOA_IMPORT_LEGACY_RUNTIME;
   process.env.EKOA_INTEGRATIONS_DIR = baselineDir;
   process.env.EKOA_DATA_DIR = join(tmp, 'data');
+  // Most cases exercise the PERSISTING path, which since the F2 fix is the operator opt-in; the
+  // report-only DEFAULT has its own cases below (which unset this).
+  process.env.EKOA_IMPORT_LEGACY_RUNTIME = '1';
   runtimeRoot = join(tmp, 'data', 'integrations', 'runtime');
   refreshDefinitions();
   mem = await createMem();
@@ -82,6 +95,8 @@ afterAll(async () => {
   await mem.stop();
   process.env.EKOA_INTEGRATIONS_DIR = savedEnv.EKOA_INTEGRATIONS_DIR;
   process.env.EKOA_DATA_DIR = savedEnv.EKOA_DATA_DIR;
+  if (savedEnv.EKOA_IMPORT_LEGACY_RUNTIME === undefined) delete process.env.EKOA_IMPORT_LEGACY_RUNTIME;
+  else process.env.EKOA_IMPORT_LEGACY_RUNTIME = savedEnv.EKOA_IMPORT_LEGACY_RUNTIME;
   refreshDefinitions();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -171,7 +186,7 @@ describe('importLegacyRuntimePackages', () => {
     expect(row.displayName).toBe('edited in Mongo');
   });
 
-  it('closing the legacy leak is the reviewed super-admin action: demote global → org retires the row', async () => {
+  it('retire ↔ restore is EXACTLY reversible: the retired row stays super-admin-addressable (review F1)', async () => {
     writeRuntimePkg('legacy-crm');
     await importLegacyRuntimePackages(store);
     const id = definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-crm');
@@ -181,11 +196,56 @@ describe('importLegacyRuntimePackages', () => {
     expect((await store.setVisibility(id, userA, 'org')).verdict).toBe('forbidden');
     expect((await resolveDefinition(userA, 'legacy-crm', store))).toBeTruthy();
 
-    // The super-admin demotes it to `org` — confined to the sentinel org, i.e. visible to NO real
-    // actor: the leak is closed by review, exactly as assumption 3 planned.
+    // RETIRE: the super-admin demotes it to `org` — confined to the sentinel org, so NO tenant
+    // resolves or lists it any more.
     expect((await store.setVisibility(id, superAdmin, 'org')).verdict).toBe('ok');
     expect(await resolveDefinition(userA, 'legacy-crm', store)).toBeNull();
     expect(await resolveDefinition(userB, 'legacy-crm', store)).toBeNull();
+    expect((await store.listForActor(userA)).some((d) => d.key === 'legacy-crm')).toBe(false);
+
+    // …but the SUPER-ADMIN still sees it — resolve, store list, AND the registry list (with id +
+    // visibility projected, so the E1 sharing surface can address it). The pre-review suite
+    // stopped before these assertions: retirement was a one-way trapdoor (list(super)=[],
+    // setVisibility → notfound for EVERY actor) recoverable only by DB surgery.
+    const retired = await store.getForActor(superAdmin, 'legacy-crm');
+    expect(retired?._id).toBe(id);
+    expect(retired?.visibility).toBe('org');
+    expect((await store.listForActor(superAdmin)).some((d) => d._id === id)).toBe(true);
+    const listed = (await listDefinitionsFor(superAdmin, store)).find((d) => d.key === 'legacy-crm');
+    expect(listed?.id).toBe(id);
+    expect(listed?.visibility).toBe('org');
+
+    // RESTORE: `org` → `global` through the same reviewed surface puts it back for every org.
+    expect((await store.setVisibility(id, superAdmin, 'global')).verdict).toBe('ok');
+    expect((await resolveDefinition(userA, 'legacy-crm', store))?.displayName).toBe('legacy-crm legacy');
+    expect((await resolveDefinition(userB, 'legacy-crm', store))?.displayName).toBe('legacy-crm legacy');
+  });
+
+  it('a RETIRED sentinel row never reaches ordinary tenants and never displaces a live resolution', async () => {
+    writeRuntimePkg('legacy-crm');
+    await importLegacyRuntimePackages(store);
+    const id = definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-crm');
+    expect((await store.setVisibility(id, superAdmin, 'org')).verdict).toBe('ok');
+
+    // Ordinary tenants: not resolvable, not listed — the sentinel exception is super-admin only.
+    for (const who of [userA, userB]) {
+      expect(await resolveDefinition(who, 'legacy-crm', store)).toBeNull();
+      expect((await listDefinitionsFor(who, store)).some((d) => d.key === 'legacy-crm')).toBe(false);
+    }
+
+    // A LIVE row of the same key wins over the retired one for the super-admin too: the retired
+    // row is discoverable, never preferred.
+    await store.create(
+      {
+        orgId: 'orgA', userId: 'root', visibility: 'org', key: 'legacy-crm',
+        displayName: 'live orgA row', configSchema: [], actions: [], skillMd: '',
+      },
+      { actor: superAdmin },
+    );
+    expect((await store.getForActor(superAdmin, 'legacy-crm'))?.displayName).toBe('live orgA row');
+    const listed = (await listDefinitionsFor(superAdmin, store)).filter((d) => d.key === 'legacy-crm');
+    expect(listed.length).toBe(1);
+    expect(listed[0]!.displayName).toBe('live orgA row');
   });
 
   it('bad packages land in the report, never throw: keyless config, invalid key, unreadable JSON', async () => {
@@ -208,6 +268,86 @@ describe('importLegacyRuntimePackages', () => {
 
   it('a fresh box (no runtime directory) imports nothing and does not fail', async () => {
     const report = await importLegacyRuntimePackages(store);
-    expect(report).toEqual({ imported: [], skipped: [], drift: [], errors: [] });
+    expect(report).toEqual({ mode: 'import', imported: [], wouldImport: [], skipped: [], drift: [], errors: [] });
+  });
+
+  it('TWO directories declaring the same integrationKey: first wins, second is a DISTINCT duplicate-key report (review L3)', async () => {
+    writeRuntimePkg('legacy-crm');
+    const second = join(runtimeRoot, 'zz-other-dir');
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(second, 'config.json'), JSON.stringify(config('legacy-crm', { displayName: 'SECOND DIR SAME KEY' })));
+
+    const report = await importLegacyRuntimePackages(store);
+    expect(report.imported).toEqual(['legacy-crm']);
+    // NOT reported as 'disk-changed-after-import' — that reason means the FROZEN tier drifted
+    // after an earlier boot's import, and reporting an in-boot duplicate under it sent the
+    // operator hunting a freeze violation that never happened.
+    expect(report.drift).toEqual([{ key: 'legacy-crm', reason: 'duplicate-key' }]);
+    const row = (await integrationDefinitions.get(definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-crm'))) as IntegrationDefinitionDoc;
+    expect(row.displayName).toBe('legacy-crm legacy'); // the first directory's content
+  });
+
+  it('an UNREADABLE runtime root lands in the report and never throws — a broken directory must not stop boot (review L1)', async () => {
+    // A FILE squatting on the runtime path: existsSync answers true, readdirSync throws ENOTDIR —
+    // deterministic on every platform, no permission games.
+    mkdirSync(join(tmp, 'data', 'integrations'), { recursive: true });
+    writeFileSync(runtimeRoot, 'not a directory');
+    try {
+      const report = await importLegacyRuntimePackages(store);
+      expect(report.imported).toEqual([]);
+      expect(report.errors.length).toBe(1);
+      expect(report.errors[0]!.key).toBe('<runtime-root>');
+      expect(report.errors[0]!.error).toContain('unreadable legacy runtime directory');
+    } finally {
+      rmSync(runtimeRoot, { force: true });
+    }
+  });
+});
+
+describe('report-only default (review F2 — the boot import must not silently re-widen what A2 narrowed)', () => {
+  it('without the operator opt-in NOTHING is persisted; the report names what WOULD be imported', async () => {
+    delete process.env.EKOA_IMPORT_LEGACY_RUNTIME;
+    try {
+      writeRuntimePkg('legacy-crm');
+      const report = await importLegacyRuntimePackages(store);
+      expect(report.mode).toBe('report-only');
+      expect(report.wouldImport).toEqual(['legacy-crm']);
+      expect(report.imported).toEqual([]);
+
+      // Nothing landed in Mongo, and NO org resolves the package — the availability cost is taken
+      // over the silent global publish (deviation journaled in docs/decisions.md 2026-08-03).
+      expect(await integrationDefinitions.get(definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-crm'))).toBeNull();
+      expect(await resolveDefinition(userA, 'legacy-crm', store)).toBeNull();
+      expect(await resolveDefinition(userB, 'legacy-crm', store)).toBeNull();
+    } finally {
+      process.env.EKOA_IMPORT_LEGACY_RUNTIME = '1';
+    }
+  });
+
+  it('report-only still runs the comparator over ALREADY-imported rows (skip/drift), persisting nothing', async () => {
+    writeRuntimePkg('legacy-crm');
+    await importLegacyRuntimePackages(store); // opted-in import (env set in beforeAll)
+    delete process.env.EKOA_IMPORT_LEGACY_RUNTIME;
+    try {
+      writeRuntimePkg('legacy-crm', { displayName: 'DISK EDIT AFTER FREEZE' });
+      writeRuntimePkg('legacy-new');
+      const report = await importLegacyRuntimePackages(store);
+      expect(report.mode).toBe('report-only');
+      expect(report.drift).toEqual([{ key: 'legacy-crm', reason: 'disk-changed-after-import' }]);
+      expect(report.wouldImport).toEqual(['legacy-new']);
+      // The drifted row is untouched and the new package was not persisted.
+      const row = (await integrationDefinitions.get(definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-crm'))) as IntegrationDefinitionDoc;
+      expect(row.displayName).toBe('legacy-crm legacy');
+      expect(await integrationDefinitions.get(definitionIdFor(LEGACY_RUNTIME_ORG, 'legacy-new'))).toBeNull();
+    } finally {
+      process.env.EKOA_IMPORT_LEGACY_RUNTIME = '1';
+    }
+  });
+});
+
+describe('export surface (review L2 — the ambient-authority importer stays boot-only)', () => {
+  it('the integrations barrel does NOT re-export importLegacyRuntimePackages', async () => {
+    const barrel = await import('../../src/integrations/index.js');
+    expect('importLegacyRuntimePackages' in barrel).toBe(false);
   });
 });

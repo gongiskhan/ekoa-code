@@ -249,6 +249,69 @@ describe('GET /api/v1/integration-builder/package (load)', () => {
     expect(res.status).toBe(404);
     expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
   });
+
+  it('an edit cycle preserves the stored SKILL.md BYTE-EXACTLY — the egress scrub never round-trips (A3 review F3)', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    // Legitimate documentation that the PROMPT-egress scrub redacts ("authorization: required" —
+    // the reviewer's probe). Before the fix, GET seeded the session from the SCRUBBED view and one
+    // ordinary save wrote "authorization: [REDACTED]" over the tenant's real text, permanently.
+    const legit = '# notes\nauthorization: required\nSee docs.\n';
+    const iso = new Date().toISOString();
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('orgA', 'my-notes'),
+      orgId: 'orgA', userId: 'admin', visibility: 'private', key: 'my-notes',
+      displayName: 'My Notes', description: 'd', authType: 'api_key', provider: 'X', category: 'test',
+      configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
+      credentialGuide: '1. x',
+      actions: [{ actionName: 'ping', description: 'd', mutates: false, httpConfig: { method: 'GET', baseUrl: 'https://api.x.example', path: '/p' } }],
+      skillMd: legit, origin: { kind: 'authored' }, createdAt: iso, updatedAt: iso,
+    } as never);
+
+    // LOAD: the editable body is the RAW stored body, not the scrubbed egress view.
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=my-notes', t));
+    const gp = load.generatedPackage as { skillMd?: string };
+    expect(gp.skillMd).toBe(legit);
+
+    // SAVE the session back unchanged (the ordinary edit cycle) — the stored bytes must survive.
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(200);
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'my-notes'))) as IntegrationDefinitionDoc;
+    expect(row.skillMd).toBe(legit);
+    expect(row.skillMd).not.toContain('[REDACTED]');
+  });
+});
+
+describe('reserved keys: chat and save agree (A3 review L4)', () => {
+  it('the chat NEVER exempts a reserved key — even for a stale session carrying the retired loadedKey field', async () => {
+    __setTransportForTests(makeFakeTransport({ oneShotText: modelReply('pipedream', 'https://api.x.example') }));
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    // A pre-fix session doc pinning the reserved key as "loaded" — the exact state that used to
+    // make the chat present a package the PUT would then refuse with an error.
+    await integrationBuilderSessions.insert({
+      _id: 'stale-sess', userId: 'admin', orgId: 'orgA', integrationKey: 'pipedream',
+      loadedKey: 'pipedream', messages: [], validationErrors: [], createdAt: 'x', updatedAt: 'x',
+    } as never);
+
+    const chat = await readJson(await authed('/api/v1/integration-builder/chat', t, {
+      method: 'POST', body: JSON.stringify({ message: 'edit pipedream', builderSessionId: 'stale-sess' }),
+    }));
+    const chatErrors = (chat.validationErrors as Array<{ message: string }>).map((e) => e.message).join('\n');
+    expect(chatErrors).toContain('reserved');
+
+    // …and the save for the same session refuses too: one verdict on every surface.
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: 'stale-sess' }),
+    });
+    expect(save.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await readJson(save)).success).toBe(true);
+    expect(await integrationDefinitions.get(definitionIdFor('orgA', 'pipedream'))).toBeNull();
+  });
 });
 
 describe('POST /api/v1/integration-builder/test', () => {

@@ -48,7 +48,7 @@ import {
   type IntegrationDefinition,
   type ActiveIntegrationCatalog,
 } from './definitions.js';
-import { integrationDefinitionStore, type IntegrationDefinitionDoc } from './definition-store.js';
+import { integrationDefinitionStore, LEGACY_RUNTIME_ORG, type IntegrationDefinitionDoc } from './definition-store.js';
 
 /**
  * The slice of the A1 store this module needs: the two ACTOR-SCOPED reads. Deliberately narrow —
@@ -93,7 +93,12 @@ export function definitionFromDoc(doc: IntegrationDefinitionDoc, actor?: Actor):
   // only way to get an id was to re-derive the hash client-side. Both fields are now projected, but
   // ONLY for a row of the actor's own org: a cross-org `global` row must still not reveal its
   // author or its id (the id is derivable from `(orgId, key)`, so leaking it leaks the org).
-  const own = actor !== undefined && doc.orgId === actor.orgId;
+  // A SUPER-ADMIN additionally gets addressability over the sentinel legacy-runtime org's rows
+  // (A3 review F1): the retire/restore surface keys on the id, and the sentinel org is a platform
+  // constant, not a tenant — projecting it leaks no org.
+  const own = actor !== undefined
+    && (doc.orgId === actor.orgId
+      || (actor.role === 'super-admin' && doc.orgId === LEGACY_RUNTIME_ORG));
   return redactSecrets<IntegrationDefinition>({
     ...(own ? { id: doc._id, visibility: doc.visibility } : {}),
     key: doc.key,
@@ -162,8 +167,10 @@ export async function listDefinitionsFor(
   const docs = await store.listForActor(actor);
 
   const chosen = new Map<string, IntegrationDefinitionDoc>();
-  // Foreign `global` rows first, in the deterministic order; first one for a key wins.
-  for (const doc of sortGlobals(docs.filter((d) => d.orgId !== actor.orgId))) {
+  // Foreign `global` rows first, in the deterministic order; first one for a key wins. RETIRED
+  // sentinel rows (a super-admin's list also carries the legacy-runtime org's non-global rows —
+  // A3 review F1) are excluded here: a retired row must never displace a live resolution.
+  for (const doc of sortGlobals(docs.filter((d) => d.orgId !== actor.orgId && d.visibility === 'global'))) {
     if (!chosen.has(doc.key)) chosen.set(doc.key, doc);
   }
   // The actor's own-org row always wins (at most one per (org, key) — A1's deterministic `_id`).
@@ -174,6 +181,11 @@ export async function listDefinitionsFor(
   const merged = new Map<string, IntegrationDefinition>();
   for (const def of listBaselineDefinitions()) merged.set(def.key, def);
   for (const [key, doc] of chosen) merged.set(key, definitionFromDoc(doc, actor));
+  // RETIRED sentinel rows last, and only for keys nothing live holds: the super-admin needs to
+  // DISCOVER a retired legacy row to restore it, without it masquerading as an active definition.
+  for (const doc of docs.filter((d) => d.orgId === LEGACY_RUNTIME_ORG && d.visibility !== 'global')) {
+    if (!merged.has(doc.key)) merged.set(doc.key, definitionFromDoc(doc, actor));
+  }
   return [...merged.values()];
 }
 
@@ -186,6 +198,13 @@ export async function listDefinitionsFor(
  * prompts (the `load_context` seam), and a user-authored doc can carry a pasted credential.
  * `scrubSecretText` is the deterministic read-path floor; the strict publish-time scrub into a
  * frozen snapshot is slice E2's. The BASELINE body is repo-authored and reviewed — served as-is.
+ *
+ * THIS IS THE PROMPT-EGRESS VIEW AND ONLY THAT (A3 review F3). It must never feed an EDITABLE
+ * surface: the scrub is deterministic-lossy (a redaction is not the stored text), so a builder
+ * session seeded from here would WRITE THE REDACTION BACK on the next ordinary save, permanently
+ * destroying legitimate tenant content ("authorization: required" became "authorization:
+ * [REDACTED]" forever). Editors read `resolveSkillMdRaw`; prompts read this. The safe default
+ * stays here — a future caller that picks the undecorated name gets the scrub.
  */
 export async function resolveSkillMd(
   actor: Actor,
@@ -194,6 +213,23 @@ export async function resolveSkillMd(
 ): Promise<string | null> {
   const doc = await store.getForActor(actor, key);
   if (doc) return doc.skillMd == null ? null : scrubSecretText(doc.skillMd);
+  return baselineSkillMd(key);
+}
+
+/**
+ * The RAW stored knowledge body — the builder's EDITABLE view (A3 review F3). Same tenant-first
+ * resolution and the same visibility gate as `resolveSkillMd`; the ONLY difference is that a
+ * stored body comes back byte-exact, so an edit cycle (load → save) can never round-trip a
+ * redaction into the stored document. NEVER feed this into an agent prompt or any other model
+ * egress — that is `resolveSkillMd`'s job, and the anti-exfiltration floor lives there.
+ */
+export async function resolveSkillMdRaw(
+  actor: Actor,
+  key: string,
+  store: DefinitionStoreReader = integrationDefinitionStore,
+): Promise<string | null> {
+  const doc = await store.getForActor(actor, key);
+  if (doc) return doc.skillMd ?? null;
   return baselineSkillMd(key);
 }
 

@@ -16,6 +16,7 @@ import {
   resolveDefinition,
   listDefinitionsFor,
   resolveSkillMd,
+  resolveSkillMdRaw,
   activeCatalogFor,
   systemActorForOrg,
 } from '../../src/integrations/definition-registry.js';
@@ -272,6 +273,24 @@ describe('resolveSkillMd — the tenant body wins over the shipped one', () => {
     expect(body).not.toContain(pasted);
     expect(body).toContain('[REDACTED]');
     expect(body).toContain('Bearer {{api_key}}'); // the scrub is value-anchored, not name-phobic
+
+    // …and the EDITABLE view (`resolveSkillMdRaw`, A3 review F3) is byte-exact — the builder must
+    // never round-trip a redaction into the stored document. Same visibility gate: the raw body
+    // is the OWNER's; another org gets nothing for this private key.
+    const raw = await resolveSkillMdRaw(userA1, 'noted', store);
+    expect(raw).toContain(pasted);
+    expect(raw).not.toContain('[REDACTED]');
+    expect(await resolveSkillMdRaw(userB1, 'noted', store)).toBeNull();
+  });
+
+  it('resolveSkillMdRaw preserves EXACT bytes of scrub-triggering-but-legitimate prose (A3 review F3)', async () => {
+    // The reviewer's probe: ordinary documentation that the egress scrub redacts. The editable
+    // view must hand it back untouched, byte for byte.
+    const legit = 'authorization: required\nSee docs.\n';
+    await createRow(draft('orgA', 'userA1', 'legit-doc', 'private', { skillMd: legit }));
+    expect(await resolveSkillMdRaw(userA1, 'legit-doc', store)).toBe(legit);
+    // The PROMPT view of the same row is scrubbed — the two views must not be conflated.
+    expect(await resolveSkillMd(userA1, 'legit-doc', store)).toBe('authorization: [REDACTED]\nSee docs.\n');
   });
 });
 

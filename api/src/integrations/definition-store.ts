@@ -47,6 +47,23 @@ import type {
 /** The three-tier visibility of a stored definition (private-by-default, org-shared, cross-org). */
 export type DefinitionVisibility = 'private' | 'org' | 'global';
 
+/**
+ * Sentinel tenant that owns rows imported from the legacy disk runtime tier (slice A3,
+ * `legacy-runtime-import.ts`). Reserved: no real org/user id has this shape (real ids are
+ * generated), so no actor INHABITS the org — which means an imported row demoted from `global`
+ * to `org` is visible to nobody under the plain tenancy gate. That is the point of retiring it,
+ * but it must never be a trapdoor: the A3 fresh-context review proved a retired row became
+ * unreadable and unwritable by EVERYONE (super-admins included), so retirement was a silent
+ * PERMANENT break — the exact thing the import decision promised it would never be. The
+ * visibility predicate below therefore grants a SUPER-ADMIN (and only a super-admin) read reach
+ * over sentinel-org rows at any visibility, making retire (`global` → `org`) and restore
+ * (`org` → `global`) exactly reversible through the one E1 review surface. Ordinary tenants
+ * never see a retired sentinel row. The constants live HERE (not in the importer) because the
+ * predicate is the one place the exception is enforced; the importer imports them.
+ */
+export const LEGACY_RUNTIME_ORG = '__legacy_runtime__';
+export const LEGACY_RUNTIME_USER = '__legacy_runtime__';
+
 /** How a definition came to exist (provenance for A2's fork/legacy-migration flows). */
 export interface IntegrationDefinitionOrigin {
   kind: 'authored' | 'forked' | 'legacy-runtime' | 'baseline-override';
@@ -174,6 +191,14 @@ type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'vi
  */
 export function isDefinitionVisibleTo(doc: VisibilityView, actor: Actor): boolean {
   if (doc.visibility === 'global') return true; // cross-org tier
+  // SENTINEL-ORG ROWS STAY SUPER-ADMIN-ADDRESSABLE IN EVERY STATE (A3 review F1). A legacy row
+  // retired to `org` sits in an org no actor inhabits; without this branch NOBODY could read or
+  // write it again (setVisibility answers notfound for a row the actor cannot see), so "retire"
+  // was an irreversible break recoverable only by DB surgery. This is deliberately NOT a general
+  // super-admin read exception — the A1 tenancy model keeps tenant private rows invisible to
+  // every role — it is scoped to the one platform-owned org that, by construction, holds no
+  // tenant's data (its rows were the world-readable pre-A3 disk tier).
+  if (actor.role === 'super-admin' && doc.orgId === LEGACY_RUNTIME_ORG) return true;
   // The SAME empty-string hazard as the userId branch below, one field over: an org-less actor
   // (a broken row, or a seam that defaulted `orgId` to '') must not become "same org" as an
   // org-less document. Both sides must name a real tenant before they can be equal.
@@ -330,26 +355,43 @@ export class IntegrationDefinitionStore {
     const globals = (await this.store.find({ key, visibility: 'global' })).filter(
       (g) => g.orgId !== actor.orgId, // the actor's own org row was already considered above
     );
-    if (globals.length === 0) return null;
-    // Deterministic pick so the resolver is a pure function of the data: oldest first, orgId tiebreak.
-    globals.sort((a, b) =>
-      a.createdAt < b.createdAt ? -1
-        : a.createdAt > b.createdAt ? 1
-          : a.orgId < b.orgId ? -1
-            : a.orgId > b.orgId ? 1
-              : 0,
-    );
-    return globals[0] ?? null;
+    if (globals.length > 0) {
+      // Deterministic pick so the resolver is a pure function of the data: oldest first, orgId tiebreak.
+      globals.sort((a, b) =>
+        a.createdAt < b.createdAt ? -1
+          : a.createdAt > b.createdAt ? 1
+            : a.orgId < b.orgId ? -1
+              : a.orgId > b.orgId ? 1
+                : 0,
+      );
+      return globals[0] ?? null;
+    }
+    // LAST resort, super-admin only: a RETIRED sentinel-org row (demoted off `global`, so the
+    // globals query above no longer finds it). Ordered after the global tier so a retired row can
+    // never shadow a live resolution — it answers only when nothing else holds the key (A3 review
+    // F1: retired must stay readable, not become preferred).
+    if (actor.role === 'super-admin') {
+      const sentinel = await this.store.get(definitionIdFor(LEGACY_RUNTIME_ORG, key));
+      if (sentinel && isDefinitionVisibleTo(sentinel, actor)) return sentinel;
+    }
+    return null;
   }
 
   /** Every definition `actor` may see: own org rows they can read (own any-visibility + org-shared)
-   *  plus every `global` row from any org, de-duplicated by `_id`. */
+   *  plus every `global` row from any org, de-duplicated by `_id`. A super-admin additionally sees
+   *  the sentinel legacy-runtime org's rows at ANY visibility (A3 review F1: a RETIRED legacy row
+   *  must stay discoverable, or it can never be restored through the review surface). */
   async listForActor(actor: Actor): Promise<IntegrationDefinitionDoc[]> {
     const inOrg = await this.store.find({ orgId: actor.orgId });
     const globals = await this.store.find({ visibility: 'global' });
     const byId = new Map<string, IntegrationDefinitionDoc>();
     for (const row of inOrg) if (isDefinitionVisibleTo(row, actor)) byId.set(row._id, row);
     for (const row of globals) byId.set(row._id, row); // global is visible to every actor
+    if (actor.role === 'super-admin') {
+      for (const row of await this.store.find({ orgId: LEGACY_RUNTIME_ORG })) {
+        if (isDefinitionVisibleTo(row, actor)) byId.set(row._id, row);
+      }
+    }
     return [...byId.values()];
   }
 

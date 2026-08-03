@@ -191,6 +191,14 @@ Env names the API reads, with dev defaults:
 - `SANDBOX_ROOT` - owner build sandboxes, default `~/.ekoa/sandboxes`.
 - `EKOA_FEATURED_BUILDS_DIR` - prebuilt featured bundles, default `~/.ekoa/data/featured-builds`.
 - `EKOA_DATA_DIR` - runtime data root (app-data, artifact PDFs, snapshots), default `~/.ekoa/data`.
+- `EKOA_IMPORT_LEGACY_RUNTIME` - opt-in (`1`) for the boot import of the FROZEN legacy disk runtime
+  integration tier (`<EKOA_DATA_DIR>/integrations/runtime/`) into Mongo as `visibility:'global'`
+  rows. Default UNSET = report-only: every boot logs `[legacy-runtime-import] REPORT-ONLY: ...`
+  naming each package that would be imported, and persists nothing - those packages resolve for
+  NOBODY until you either set this flag for one boot (they become global, cross-tenant, exactly
+  their pre-A3 reach; a super-admin can then retire individual rows reversibly via
+  `PATCH /api/v1/integrations/definitions/:id/visibility`) or delete the directory. Rationale and
+  the tenancy consequences: `docs/decisions.md` 2026-08-03; Rule-10 review date 2026-08-15.
 - `API_PUBLIC_URL` - public origin used to build absolute trigger/webhook URLs, default empty.
 - OAuth provider creds for integrations: `MICROSOFT_*`, `MICROSOFT_SSO_*`, `GOOGLE_CLIENT_*`,
   `ADOBE_*` (see `deploy/api.service.json` `env_passthrough` for the deploy-time list).

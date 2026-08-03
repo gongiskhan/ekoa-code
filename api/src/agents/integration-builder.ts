@@ -25,12 +25,12 @@ import { parseIntegrationOutput } from './integration-builder-parser.js';
 export interface BuilderSessionDoc extends Doc {
   userId: string;
   orgId: string;
-  /** The current package's proposed key (from generation or load). Powers findSessionForKey. */
+  /** The current package's proposed key (from generation or load). Powers findSessionForKey.
+   *  NOTE (A3 review L4): sessions used to also carry `loadedKey`, a per-session reserved-key
+   *  exemption. It is GONE: the save path refuses reserved keys unconditionally (A2-residual 4),
+   *  so an exemption on the chat surface only let the agent present a package the PUT would then
+   *  403 — and a stale pre-A3 session doc carrying the field is deliberately ignored. */
   integrationKey?: string;
-  /** Set ONLY when the session EDITS an existing saved integration (the load route / a completed
-   *  save). A reserved key (shipped/pipedream) may be re-saved only when it equals this — a fresh
-   *  chat that merely PROPOSES a reserved key is still rejected. */
-  loadedKey?: string;
   messages: Array<{ role: string; content: string; timestamp: string }>;
   /** The last generated package config (the `IntegrationPackageConfig` shape). */
   currentPackage?: unknown;
@@ -66,7 +66,7 @@ export async function findSessionForKey(userId: string, integrationKey: string):
 export async function createSession(
   actor: Actor,
   deps: BuilderDeps,
-  seed: { integrationKey?: string; loadedKey?: string; currentPackage?: unknown; currentSkillMd?: string; messages?: BuilderSessionDoc['messages'] } = {},
+  seed: { integrationKey?: string; currentPackage?: unknown; currentSkillMd?: string; messages?: BuilderSessionDoc['messages'] } = {},
 ): Promise<BuilderSessionDoc> {
   const iso = new Date(deps.now()).toISOString();
   const doc: BuilderSessionDoc = {
@@ -74,7 +74,6 @@ export async function createSession(
     userId: actor.userId,
     orgId: actor.orgId,
     ...(seed.integrationKey ? { integrationKey: seed.integrationKey } : {}),
-    ...(seed.loadedKey ? { loadedKey: seed.loadedKey } : {}),
     messages: seed.messages ?? [],
     ...(seed.currentPackage !== undefined ? { currentPackage: seed.currentPackage } : {}),
     ...(seed.currentSkillMd !== undefined ? { currentSkillMd: seed.currentSkillMd } : {}),
@@ -86,9 +85,9 @@ export async function createSession(
   return doc;
 }
 
-/** Pin a session to a just-SAVED integration: it now edits that key, so `loadedKey` is set and a
- *  future re-save of the same key passes the reserved-key guard. Called by the save route (which
- *  owns integrations/ but must not touch data/ directly, ch02 §2.7). */
+/** Pin a session to a just-SAVED integration: its package/body snapshot and key now track the
+ *  save. Called by the save route (which owns integrations/ but must not touch data/ directly,
+ *  ch02 §2.7). */
 export async function markSessionSaved(
   sessionId: string,
   saved: { config: unknown; skillMd: string; integrationKey: string },
@@ -100,7 +99,6 @@ export async function markSessionSaved(
     currentPackage: saved.config,
     currentSkillMd: saved.skillMd,
     integrationKey: saved.integrationKey,
-    loadedKey: saved.integrationKey,
     validationErrors: [],
     updatedAt: iso,
   }));
@@ -195,12 +193,11 @@ export async function handleBuilderChat(input: BuilderChatInput): Promise<Builde
     return { ok: false, code: 'INTERNAL', message: err instanceof Error ? err.message : 'A geração falhou.' };
   }
 
-  const parsed = parseIntegrationOutput(text, {
-    reservedKeys: input.reservedKeys,
-    // Only a session EDITING an existing key (loadedKey) may re-propose that reserved key; a fresh
-    // chat that merely proposes a reserved key is rejected (the parser reports it).
-    ...(session.loadedKey ? { loadedKey: session.loadedKey } : {}),
-  });
+  // NO reserved-key exemption, for ANY session (A3 review L4). The save path refuses a reserved
+  // (shipped/pipedream) key unconditionally since A3, so exempting a "loaded" session here only
+  // produced a lie: the chat validated a package the PUT would then refuse with 403. The parser's
+  // verdict now matches the save gate for every session, loaded or fresh.
+  const parsed = parseIntegrationOutput(text, { reservedKeys: input.reservedKeys });
 
   // Persist the turn: user message + assistant message (fenced blocks stripped), and the package
   // when the model produced one (an interim reply leaves the previous package untouched).

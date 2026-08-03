@@ -284,19 +284,37 @@ export interface ActiveIntegrationCatalog {
  * carry no secret and MUST survive, or the executor would send "[REDACTED]" as the header —
  * hence the template exemption in `redactSecrets` below.
  */
-const SECRET_KEY_RE =
-  /^(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature)$/i;
+const SECRET_KEY_NAMES =
+  'api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature';
+const SECRET_KEY_RE = new RegExp(`^(${SECRET_KEY_NAMES})$`, 'i');
+
+/** An `{{interpolation}}` placeholder — the shape a template names a credential field with. */
+const PLACEHOLDER_SRC = String.raw`\{\{[^{}]+\}\}`;
 
 /**
  * A string value under a credential-named key that is a pure INTERPOLATION TEMPLATE: it names a
- * credential field (`{{api_key}}`) rather than carrying a value. The residue outside the
- * placeholders must not itself look like a pasted token — a scheme word ("Bearer ",
- * "Zoho-oauthtoken ") passes, `"Bearer sk-live-<28 chars>"` does not.
+ * credential field (`{{api_key}}`) rather than carrying a value.
+ *
+ * TIGHTENED (A3 review F4): the old rule only rejected a residue containing a 20+ char token run,
+ * so a LITERAL pasted key riding beside a placeholder slid under the floor (`"Bearer
+ * sk_live_9aXbZ {{unused}}"`, `"ghp_16C7e42F292c69 {{x}}"` — live-key shapes are routinely under
+ * 20 chars). Now the residue outside the placeholders must consist ONLY of scheme-like words —
+ * pure letters/hyphens, bounded length ("Bearer", "Zoho-oauthtoken") — plus joining punctuation.
+ * ANY digit-bearing or over-long word is treated as a pasted literal and the exemption does not
+ * apply, whatever its length. Every shipped package's credential-named values are pure templates
+ * ("Bearer {{access_token}}") and pass unchanged — pinned by the shipped-package property test in
+ * api/tests/integrations/definitions-runtime.test.ts, so a future tightening cannot silently
+ * break a shipped integration.
  */
 function isCredentialTemplate(v: unknown): boolean {
-  if (typeof v !== 'string' || !/\{\{[^{}]+\}\}/.test(v)) return false;
-  const residue = v.replace(/\{\{[^{}]+\}\}/g, '');
-  return !/[A-Za-z0-9+/=_.-]{20,}/.test(residue);
+  if (typeof v !== 'string' || !new RegExp(PLACEHOLDER_SRC).test(v)) return false;
+  const residue = v.replace(new RegExp(PLACEHOLDER_SRC, 'g'), ' ');
+  return residue
+    .split(/[^A-Za-z0-9+/=_.-]+/)
+    // 16 chars covers every real scheme word ("Bearer", "Basic", "Zoho-oauthtoken") while keeping
+    // even an all-letters pasted secret out of scheme-word clothing; strictly stronger than the
+    // old 20-char floor (any 20+ char word fails the cap on top of everything else).
+    .every((w) => w === '' || /^[A-Za-z][A-Za-z-]{0,15}$/.test(w) || /^[+/=_.-]{1,8}$/.test(w));
 }
 
 /**
@@ -321,25 +339,48 @@ export function redactSecrets<T>(value: T): T {
 }
 
 /**
- * Deterministic FREE-TEXT scrub for stored knowledge bodies (SKILL.md / lessons) read back into an
- * agent prompt (A2 review F7: `resolveSkillMd` returned a tenant-authored body verbatim, so a
- * credential the author pasted into their doc would ride into every future prompt). This is the
- * READ-path floor only — the strict publish-time scrub (deterministic floor + one chokepoint model
- * pass into a frozen snapshot) is slice E2's.
+ * Deterministic FREE-TEXT scrub for stored knowledge bodies (SKILL.md / lessons) at MODEL EGRESS —
+ * a body read back into an agent prompt (A2 review F7: `resolveSkillMd` returned a tenant-authored
+ * body verbatim, so a credential the author pasted into their doc would ride into every future
+ * prompt). EGRESS ONLY (A3 review F3): this scrub is lossy by design, so it must never touch a
+ * body headed back to an EDITABLE surface — the builder reads `resolveSkillMdRaw`, or one ordinary
+ * edit cycle would persist the redaction over the tenant's real text. The strict publish-time
+ * scrub (deterministic floor + one chokepoint model pass into a frozen snapshot) is slice E2's.
  *
  * Two passes, both value-anchored so documentation of field NAMES survives:
- *   1. `<secret-name>: value` / `<secret-name>=value` — the value token is redacted unless it is a
- *      `{{template}}` placeholder (docs legitimately show `Authorization: Bearer {{access_token}}`).
- *   2. `Bearer|Basic <long token>` — a pasted credential after an auth scheme word.
+ *   1. `<secret-name>: value` / `<secret-name>=value` — the value is a SEQUENCE of tokens, each a
+ *      `{{template}}` placeholder or a secret-shaped run; placeholders survive, literal runs are
+ *      redacted. Matching the sequence (not just the first token) closes the A3-review F4 bypass
+ *      where a value STARTING with a placeholder waved the pasted literal beside it straight
+ *      through (`api_key: {{name}} sk_live_…` — the old `(?!\{\{)` lookahead failed the whole
+ *      match). Docs legitimately show `Authorization: Bearer {{access_token}}`, which survives.
+ *   2. `Bearer|Basic <long token>` — a pasted credential after an auth scheme word, with the same
+ *      per-token rule for the same reason.
  */
-const SECRET_LINE_RE =
-  /\b(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature)(\s*[:=]\s*)(?!\{\{)("?[A-Za-z0-9+/=_.-]{8,}"?)/gi;
-const BEARER_VALUE_RE = /\b(bearer|basic)\s+(?!\{\{)[A-Za-z0-9+/=_.-]{16,}/gi;
+const SECRET_RUN_SRC = String.raw`"?[A-Za-z0-9+/=_.-]{8,}"?`;
+const SECRET_LINE_RE = new RegExp(
+  String.raw`\b(${SECRET_KEY_NAMES})(\s*[:=][ \t]*)((?:${PLACEHOLDER_SRC}|${SECRET_RUN_SRC})(?:[ \t]+(?:${PLACEHOLDER_SRC}|${SECRET_RUN_SRC}))*)`,
+  'gi',
+);
+const SECRET_VALUE_TOKEN_RE = new RegExp(String.raw`${PLACEHOLDER_SRC}|(${SECRET_RUN_SRC})`, 'g');
+const BEARER_RUN_SRC = String.raw`[A-Za-z0-9+/=_.-]{16,}`;
+const BEARER_VALUE_RE = new RegExp(
+  String.raw`\b(bearer|basic)((?:[ \t]+(?:${PLACEHOLDER_SRC}|${BEARER_RUN_SRC}))+)`,
+  'gi',
+);
+const BEARER_TOKEN_RE = new RegExp(String.raw`${PLACEHOLDER_SRC}|(${BEARER_RUN_SRC})`, 'g');
+
+/** Redact the literal runs of a matched value sequence, keeping `{{placeholders}}` intact. */
+function redactLiteralTokens(value: string, tokenRe: RegExp): string {
+  return value.replace(tokenRe, (whole, literal: string | undefined) => (literal !== undefined ? '[REDACTED]' : whole));
+}
 
 export function scrubSecretText(body: string): string {
   return body
-    .replace(SECRET_LINE_RE, (_m, key: string, sep: string) => `${key}${sep}[REDACTED]`)
-    .replace(BEARER_VALUE_RE, (_m, scheme: string) => `${scheme} [REDACTED]`);
+    .replace(SECRET_LINE_RE, (_m, key: string, sep: string, value: string) =>
+      `${key}${sep}${redactLiteralTokens(value, SECRET_VALUE_TOKEN_RE)}`)
+    .replace(BEARER_VALUE_RE, (_m, scheme: string, rest: string) =>
+      `${scheme}${redactLiteralTokens(rest, BEARER_TOKEN_RE)}`);
 }
 
 // ============================================

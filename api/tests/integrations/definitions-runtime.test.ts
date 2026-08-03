@@ -196,6 +196,22 @@ describe('redactSecrets — broadened key set + the template exemption (A2-resid
     expect(out.authorization).toBe('[REDACTED]');
   });
 
+  it('a SHORT literal beside a placeholder no longer rides the exemption (A3 review F4 — the 20-char floor is gone)', () => {
+    // The review's probe survivals, verbatim shapes: live-key formats are routinely under the old
+    // 20-char residue floor, and a value merely CONTAINING a placeholder must not launder them.
+    const probes = {
+      authorization: `Bearer ${fakeSecret('sk_live_', '9aXbZ')} {{unused}}`,
+      token: `${fakeSecret('ghp_', '16C7e42F292c69')} {{x}}`,
+      api_key: `{{name}} ${fakeSecret('sk_live_', '51H8xQ2eZvKYlo2C')}`,
+    };
+    const out = redactSecrets(probes) as Record<string, string>;
+    for (const k of Object.keys(probes)) expect(out[k], k).toBe('[REDACTED]');
+    // …while the pure-template scheme-word shapes keep surviving (asserted again HERE so this
+    // tightening and the exemption are pinned by the same case).
+    const kept = redactSecrets({ authorization: 'Zoho-oauthtoken {{access_token}}' }) as Record<string, string>;
+    expect(kept.authorization).toBe('Zoho-oauthtoken {{access_token}}');
+  });
+
   it('structural fields keep surviving: secret flags, secretSource, verifySignature, credentialField', () => {
     const out = redactSecrets({
       configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
@@ -235,5 +251,54 @@ describe('scrubSecretText — the read-path floor for stored knowledge bodies (A
     expect(out).toContain('Provide your api_key in the config panel.');
     expect(out).toContain('Bearer {{access_token}}');
     expect(out).toContain('password: use the value from your dashboard');
+  });
+
+  it('a literal pasted BESIDE a leading placeholder is redacted, the placeholder kept (A3 review F4)', () => {
+    // The old `(?!\{\{)` lookahead failed the WHOLE match when the value merely STARTED with a
+    // placeholder, so the pasted key after it rode into the prompt untouched.
+    const pasted = fakeSecret('sk_live_', '51H8xQ2eZvKYlo2C');
+    const out = scrubSecretText(`api_key: {{name}} ${pasted}\nSee docs.\n`);
+    expect(out).not.toContain(pasted);
+    expect(out).toContain('api_key: {{name}} [REDACTED]');
+    expect(out).toContain('See docs.');
+    // Same rule on the auth-scheme pass.
+    const bearer = scrubSecretText(`Use Bearer {{token}} ${fakeSecret('eyJhbGciOi', 'JIUzI1NiJ9abcdef')} here.`);
+    expect(bearer).toContain('Bearer {{token}} [REDACTED]');
+  });
+});
+
+describe('every SHIPPED package survives the scrub byte-identically (A3 review F4 — the property, pinned)', () => {
+  it('redactSecrets is the identity over all api/assets/integrations/*/config.json', async () => {
+    const { readdirSync: rd, readFileSync: rf } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const root = fileURLToPath(new URL('../../assets/integrations', import.meta.url));
+    const keys = rd(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    expect(keys.length).toBeGreaterThanOrEqual(11); // the shipped set — shrink means a package vanished
+
+    let credentialNamedValues = 0;
+    const credNameRe = /^(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|password|passwd|credentials?|bearer[_-]?token|authorization|auth[_-]?token|api[_-]?token|token|x[_-]?api[_-]?key|signature)$/i;
+    const count = (v: unknown): void => {
+      if (Array.isArray(v)) { for (const x of v) count(x); return; }
+      if (v !== null && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+          if (credNameRe.test(k) && typeof x === 'string') credentialNamedValues++;
+          count(x);
+        }
+      }
+    };
+
+    for (const key of keys) {
+      const raw = rf(join(root, key, 'config.json'), 'utf8');
+      const cfg = JSON.parse(raw) as Record<string, unknown>;
+      count(cfg);
+      // Identity, structurally: the executor sends these header/param values on the wire, so ONE
+      // "[REDACTED]" here bricks the shipped integration for every tenant.
+      expect(redactSecrets(cfg), key).toEqual(cfg);
+      expect(JSON.stringify(redactSecrets(cfg)), key).not.toContain('[REDACTED]');
+    }
+    // Non-vacuous: the shipped set really does carry credential-NAMED template values (the
+    // reviewer counted 56 across 11 packages) — if this floor breaks, the property above proves
+    // nothing and this test must be rethought, loudly.
+    expect(credentialNamedValues).toBeGreaterThanOrEqual(40);
   });
 });

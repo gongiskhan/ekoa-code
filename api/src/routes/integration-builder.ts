@@ -34,7 +34,7 @@ import {
   reservedIntegrationKeys,
   saveAuthoredDefinition,
   resolveDefinition,
-  resolveSkillMd,
+  resolveSkillMdRaw,
   createConfig,
   updateConfig,
   findConfigForOwner,
@@ -172,17 +172,19 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
       // No live session: rebuild an editable one from the saved package, when the key exists.
       // A2: resolved TENANT-SCOPED, so the builder loads the actor's OWN definition when they have
       // one and the shipped baseline otherwise — never another tenant's package of the same key.
-      // A3: `loadedKey` is pinned ONLY for a STORED (tenant) definition. Loading a shipped
-      // BASELINE package still opens an editable session, but the reserved key stays reserved —
-      // the old exemption let that session re-save (clobber) the shipped key; now the parser flags
-      // the collision and the user forks under a distinct key (A2-residual 4).
+      // A3 (+ review L4): there is NO loadedKey exemption anywhere any more. Loading a shipped
+      // BASELINE package still opens an editable session, but the reserved key stays reserved on
+      // every surface — chat validation AND save — so the chat can never present as valid a
+      // package the PUT then refuses; the user forks under a distinct key (A2-residual 4).
       const def = await resolveDefinition(actor, integrationKey);
       if (!def) return notFound(res);
       session = await createSession(actor, deps, {
         integrationKey,
-        ...(def.userCreated ? { loadedKey: integrationKey } : {}),
         currentPackage: definitionToConfig(def),
-        currentSkillMd: (await resolveSkillMd(actor, integrationKey)) ?? '',
+        // RAW, deliberately (A3 review F3): this seeds the builder's EDITABLE body, and PUT
+        // persists it back — a scrubbed view here would write "[REDACTED]" over the stored text
+        // on the next ordinary save. The scrubbed view (`resolveSkillMd`) is for prompt egress.
+        currentSkillMd: (await resolveSkillMdRaw(actor, integrationKey)) ?? '',
       });
     }
     res.status(200).json({
@@ -233,7 +235,7 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
       configured = true;
     }
 
-    // The session now edits a saved integration: pin loadedKey so future re-saves of this key pass.
+    // The session now edits the saved integration: its package/body snapshot tracks the save.
     if (session) await markSessionSaved(session._id, { config, skillMd, integrationKey: key }, deps);
 
     res.status(200).json({ integrationKey: key, displayName: config.displayName ?? key, saved: true, configured });

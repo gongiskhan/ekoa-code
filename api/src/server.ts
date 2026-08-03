@@ -155,8 +155,11 @@ import {
   resolveDefinition,
   listDefinitionsFor,
   resolveSkillMd,
-  importLegacyRuntimePackages,
 } from './integrations/index.js';
+// Deep import, deliberately NOT via the integrations barrel (A3 review L2): the importer mints a
+// platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
+// barrel means no route module can pick it up by accident (pinned by a barrel-surface test).
+import { importLegacyRuntimePackages, LEGACY_IMPORT_OPT_IN_ENV } from './integrations/legacy-runtime-import.js';
 import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
@@ -1146,17 +1149,28 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
     })
     .catch(() => {});
 
-  // A3 — one-shot import of the FROZEN legacy disk runtime tier into the tenant-scoped definition
-  // store (`visibility:'global'`, `origin:'legacy-runtime'` — RUN_SPEC assumption 3; Rule-10 review
-  // 2026-08-15). Idempotent per key via the content-hash comparator; a changed disk file after
-  // import is reported as DRIFT and never overwrites the Mongo row (Mongo wins). Resilient on a
-  // fresh box (no runtime directory → empty report).
-  const legacy = await importLegacyRuntimePackages();
-  if (legacy.imported.length + legacy.skipped.length + legacy.drift.length + legacy.errors.length > 0) {
-    console.log(
-      `[legacy-runtime-import] imported ${legacy.imported.length}, unchanged ${legacy.skipped.length}, drift ${legacy.drift.length}, errors ${legacy.errors.length}`,
+  // A3 — the FROZEN legacy disk runtime tier scan (Rule-10 review 2026-08-15). REPORT-ONLY by
+  // default: it persists nothing unless the operator set EKOA_IMPORT_LEGACY_RUNTIME=1 (A3 review
+  // F2 — a silent boot-time global publish of author-less packages re-widened what A2 narrowed;
+  // deviation from RUN_SPEC assumption 3 journaled in docs/decisions.md 2026-08-03). When opted
+  // in: idempotent per key via the content-hash comparator; a changed disk file after import is
+  // reported as DRIFT and never overwrites the Mongo row (Mongo wins). The importer never throws
+  // (a broken directory lands in the report) and the call is guarded anyway — the legacy tier
+  // must not be able to stop boot (A3 review L1).
+  try {
+    const legacy = await importLegacyRuntimePackages();
+    if (legacy.imported.length + legacy.wouldImport.length + legacy.skipped.length + legacy.drift.length + legacy.errors.length > 0) {
+      console.log(
+        `[legacy-runtime-import] mode ${legacy.mode}: imported ${legacy.imported.length}, would-import ${legacy.wouldImport.length}, ` +
+        `unchanged ${legacy.skipped.length}, drift ${legacy.drift.length}, errors ${legacy.errors.length}`,
+      );
+      for (const e of legacy.errors) console.warn(`[legacy-runtime-import] '${e.key}': ${e.error}`);
+    }
+  } catch (err) {
+    console.warn(
+      `[legacy-runtime-import] scan failed (boot continues; set ${LEGACY_IMPORT_OPT_IN_ENV} aside and inspect the directory):`,
+      err instanceof Error ? err.message : err,
     );
-    for (const e of legacy.errors) console.warn(`[legacy-runtime-import] '${e.key}': ${e.error}`);
   }
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
