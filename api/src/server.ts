@@ -122,6 +122,7 @@ import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnow
 import { automationsRouter } from './routes/automations.js';
 import { platformIntegrationsRouter, oauthCallbackRouter } from './routes/platform-integrations.js';
 import { pipedreamRouter } from './routes/pipedream.js';
+import { syncRouter } from './routes/sync.js';
 import {
   setRunEventEmitterFactory,
   setIntegrationActionExecutor,
@@ -883,6 +884,13 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // The OAuth callback path is kept VERBATIM (§3.8.15): it is a registered redirect URI.
   app.use('/api/v1/oauth', oauthCallbackRouter(deps));
   app.use('/api/v1/pipedream', pipedreamRouter(deps));
+  // CS6 — the Caixa Citius read-only notifications sync. DASHBOARD AUTH + A DEFAULT-OFF FLAG
+  // (CITIUS_SYNC_ENABLED), deliberately NOT on the user-or-key capability surface (RUN_SPEC
+  // non-goal): no descriptor, no OpenAPI entry, no gateway-key admission. Mounted here so the
+  // dashboard can drive it; it graduates through the integration execute endpoint, not by being
+  // promoted in place. The router's own flag gate runs BEFORE requireAuth, so a disabled feature
+  // answers 404 identically with and without a token.
+  app.use('/api/v1/sync', syncRouter());
   // G8A — the bridge token mint (ch18 §18.3.2, §3.10); the WS connect + provider endpoint are on
   // the bridge WS server attached at boot, not REST.
   app.use('/api/v1/bridge', bridgeTokenRouter());

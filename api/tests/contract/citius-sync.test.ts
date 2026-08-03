@@ -23,7 +23,8 @@ import { users, orgs } from '../../src/data/stores.js';
 import { setActivation } from '../../src/data/activation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
-import { __resetConfigForTests, loadConfig } from '../../src/config.js';
+import { __resetConfigForTests, loadConfig, defaultLlmConfig } from '../../src/config.js';
+import { buildApp } from '../../src/server.js';
 import { decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
 import { syncRouter, CITIUS_SYNC_FLAG, citiusSyncEnabled } from '../../src/routes/sync.js';
 import { CofreLockedError } from '../../src/cofre/index.js';
@@ -185,6 +186,34 @@ describe('sync routes · dashboard auth only', () => {
     expect(res.status).toBe(401);
     expect(ErrorEnvelope.safeParse(await json(res)).success).toBe(true);
   });
+
+  it('the router is REALLY MOUNTED in the app factory (the wiring, pinned)', async () => {
+    // This surface carries no descriptor, so neither the mount-coverage nor the OpenAPI gate can
+    // see it: without this test, deleting the `app.use('/api/v1/sync', …)` line in server.ts would
+    // red nothing. With the flag ON, a MOUNTED router answers 401 to an anonymous call (its own
+    // requireAuth); an UNMOUNTED path falls through to the app's 404. The two are distinguishable,
+    // which is what makes this a real assertion rather than a smoke test.
+    const app = buildApp(
+      { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() },
+      deps,
+    );
+    const booted = await new Promise<Server>((r) => { const s = app.listen(0, () => r(s)); });
+    try {
+      const p = (booted.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${p}/api/v1/sync/citius/notificacoes/state`);
+      expect(res.status).toBe(401);
+      expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
+
+      // …and with the flag OFF the same mounted route answers 404 — proving the 401 above came
+      // from the router and not from an accidental match somewhere else.
+      delete process.env[CITIUS_SYNC_FLAG];
+      const off = await fetch(`http://127.0.0.1:${p}/api/v1/sync/citius/notificacoes/state`);
+      expect(off.status).toBe(404);
+      expect(ErrorEnvelope.safeParse(await off.json()).success).toBe(true);
+    } finally {
+      booted.close();
+    }
+  }, 60_000);
 
   it('the sync is DELIBERATELY ABSENT from the public contract (RUN_SPEC non-goal)', () => {
     const paths = Object.values(ALL_ENDPOINTS).flatMap((map) =>
