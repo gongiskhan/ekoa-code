@@ -42,10 +42,30 @@ export interface IntegrationSkillScoped extends IntegrationSkill {
   scope?: 'global' | `user:${string}` | string;
   ownerUserId?: string;
   webhookConfig?: { events?: WebhookEventOption[] };
+  /**
+   * `true` on a definition a user built, `false` on a shipped package. Emitted by the stored
+   * definition projection (`definitionFromDoc`) on `GET /api/v1/integrations`, and widened here
+   * for the same reason as `scope` above: the shared `IntegrationSkill` type omits it.
+   */
+  userCreated?: boolean;
 }
 
-/** True when a skill was created by a user (sandbox scope) rather than shipped. */
+/**
+ * True when a skill was created by a user rather than shipped with the platform.
+ *
+ * `userCreated` IS THE CURRENT CONTRACT and is checked first. The `scope` test below it is the
+ * LEGACY disk-runtime shape (`'user:<id>'`), and on its own it is now always false: authored
+ * definitions moved into the tenant-scoped store, whose projection (`definitionFromDoc`) emits
+ * `userCreated` + `visibility` + `id` and never a `scope`. So every definition the API returns
+ * today read as NOT user-scoped, which had two visible consequences - "Minhas Integrações" was
+ * permanently empty however many integrations you had built, and each of them was rendered in
+ * "Integrações da Plataforma", i.e. a private integration was labelled as a platform one.
+ *
+ * `scope` is kept as a fallback rather than deleted because it is what the `list-skills` agent
+ * intent still returns (see the interface doc above); a payload carrying it keeps working.
+ */
 export function isUserScopedSkill(skill: IntegrationSkillScoped): boolean {
+  if (skill.userCreated === true) return true;
   return typeof skill.scope === 'string' && skill.scope.startsWith('user:');
 }
 

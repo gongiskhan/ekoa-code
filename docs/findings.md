@@ -2301,6 +2301,32 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   2026-08-03 for the argument (synchronous human caller, own session, caller-supplied credentials,
   nothing stored spent; and gating an unsaved session package would be a ban, not a gate).
 
+- **`consent-target-shows-an-uninterpolated-template-and-config-can-redirect-it`** (OPEN 2026-08-04,
+  MEDIUM, consent integrity - found by a live vision-driven run against a REAL third-party
+  integration, not by a suite). Two halves of one problem, both reproduced end to end on the
+  running stack with a real ntfy.sh account and a real gateway key.
+  (a) THE DIALOG SHOWS A PLACEHOLDER. `actionTarget()` renders `httpConfig.baseUrl + path`
+  VERBATIM, so for any action whose path is templated the human is asked to authorise
+  `VAI EXECUTAR POST https://ntfy.sh/{{ntfy_topic}}`. C2's requirement is that the dialog names the
+  real destination "not a paraphrase"; a raw placeholder is strictly less than a paraphrase. The
+  shipped Slack package hides this because its baseUrl and path are both literal.
+  (b) AND THE DESTINATION CAN MOVE UNDER A LIVE APPROVAL. `actionShape` fingerprints
+  `(key, actionName, backing, transport, httpConfig, automationBinding)` - the TEMPLATE. Config
+  VALUES are not in it. Reproduced: a human granted "Autorizar sempre" for the write; the config's
+  `ntfy_topic` was then changed with `PATCH /api/v1/integrations/configs/ntfy` and NOTHING else;
+  the same gateway key's next `achieve` call published to the NEW topic, HTTP 200, message
+  confirmed landed on a destination the approver never saw. No re-prompt, because by the
+  fingerprint nothing changed.
+  SCOPE, honestly: the host cannot be moved this way - `baseUrl` is literal in the action and
+  origin-binding would refuse a new host - so this redirects WITHIN an already-bound origin
+  (path/query/body). And the principal who can edit the config is the credential owner, so this is
+  not a peer-to-peer escalation. What it does break is the meaning of the consent record: "I
+  authorised sending to X" silently becomes "sending to Y", which is exactly what the approval
+  exists to pin. It also matters more after D3, since `achieve` makes the write rail reachable by a
+  key whose holder is not the approver.
+  CANDIDATE CLOSES (not attempted here): render the RESOLVED target in the dialog for non-secret
+  config values and mark secret ones, or extend the fingerprint to cover the config values the
+  template actually names, so moving one invalidates the approval the way editing the action does.
 - **`action-shape-does-not-cover-browser-steps-content`** (OPEN 2026-08-03, HIGH, consent bound to a
   name rather than to a command). `actionShape` (integrations/action-consent.ts) hashes
   `automationBinding` - i.e. the automation's ID - and never the STEPS that automation runs.
