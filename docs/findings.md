@@ -2301,10 +2301,23 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   2026-08-03 for the argument (synchronous human caller, own session, caller-supplied credentials,
   nothing stored spent; and gating an unsaved session package would be a ban, not a gate).
 
-- **`consent-target-shows-an-uninterpolated-template-and-config-can-redirect-it`** (OPEN 2026-08-04,
-  MEDIUM, consent integrity - found by a live vision-driven run against a REAL third-party
-  integration, not by a suite). Two halves of one problem, both reproduced end to end on the
-  running stack with a real ntfy.sh account and a real gateway key.
+- **`consent-target-shows-an-uninterpolated-template-and-config-can-redirect-it`**
+  (**FIXED 2026-08-04**, was MEDIUM, consent integrity - found by a live vision-driven run against a
+  REAL third-party integration, not by a suite). Two halves of one problem, both reproduced end to
+  end on the running stack with a real ntfy.sh account and a real gateway key.
+  CLOSED by keying an approval on (org, user, integration, action, SHAPE, **DESTINATION**), where
+  the destination is the RESOLVED target. It resolves from `publicConfigValues` - a plaintext
+  projection of the values the definition's `configSchema` does NOT mark secret - so the gate still
+  answers BEFORE any credential is decrypted and C2's ordering is intact; a secret in a destination
+  renders as `••••` and is never resolved into a dialog. Deliberately NOT a hash of the credential
+  blob: the envelope is non-deterministic, so that would make every routine OAuth refresh revoke
+  every standing approval. `actionShape` is untouched, so D3's authoring/trust fingerprint keeps its
+  meaning. Suite: `api/tests/security/consent-destination-binding.test.ts` (7 cases; removing the
+  destination from the approval key was reverted-and-verified to turn the redirect case red).
+  RE-VALIDATED LIVE after the fix: the dialog now shows
+  `VAI EXECUTAR POST https://ntfy.sh/<real topic>`, moving the topic returns 403 `awaiting_consent`
+  with the re-prompt naming the NEW destination and nothing published, and restoring the approved
+  destination works again without re-approving.
   (a) THE DIALOG SHOWS A PLACEHOLDER. `actionTarget()` renders `httpConfig.baseUrl + path`
   VERBATIM, so for any action whose path is templated the human is asked to authorise
   `VAI EXECUTAR POST https://ntfy.sh/{{ntfy_topic}}`. C2's requirement is that the dialog names the
@@ -2327,6 +2340,23 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   CANDIDATE CLOSES (not attempted here): render the RESOLVED target in the dialog for non-secret
   config values and mark secret ones, or extend the fingerprint to cover the config values the
   template actually names, so moving one invalidates the approval the way editing the action does.
+- **`authored-action-guardrails-cannot-prove-an-endpoint-exists`** (OPEN 2026-08-04, LOW, honest
+  labelling - observed while validating D3's author arm against a REAL API with a real model).
+  `achieve` was asked for "consultar as estatisticas do topico" on a live ntfy.sh integration. It
+  authored `consultar_estatisticas_topico` -> `GET https://ntfy.sh/<topic>/stats`, and ALL EIGHT
+  deterministic guardrails passed: shape, action_name, backing, transport, origin, placeholders,
+  no_pasted_secret, render. The action was well-formed, on a bound host, naming only declared
+  variables. It is also wrong: ntfy has no `/stats` endpoint, and once a human promoted it the call
+  returned a real 404.
+  NOT A DEFECT IN THE SUITE, and recorded so nobody reads a passing verification as more than it
+  claims: every check is a property of the DRAFT, and none of them can know a remote API's route
+  table without calling it - which the author arm must not do, since the call it would make is
+  exactly the unapproved one. This is the argument FOR provisional-by-default rather than against
+  it: the state machine exists because a draft can be perfectly formed and still not work, and the
+  human promoting it is the first party in a position to notice.
+  CANDIDATE CLOSE if it ever matters: surface the verification verdict in the promotion dialog
+  alongside a one-click dry run of the drafted action, so the person promoting sees the real
+  response before they take responsibility for it.
 - **`action-shape-does-not-cover-browser-steps-content`** (OPEN 2026-08-03, HIGH, consent bound to a
   name rather than to a command). `actionShape` (integrations/action-consent.ts) hashes
   `automationBinding` - i.e. the automation's ID - and never the STEPS that automation runs.
