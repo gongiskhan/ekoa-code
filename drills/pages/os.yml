@@ -1,0 +1,482 @@
+id: os
+title: OS mode
+path: /os
+mode: steps
+areas: []
+steps:
+  - id: os-doorway-entry
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      From the classic dashboard (logged in as admin/tmp12345), the sidebar
+      shows a separated, teal-accent-bordered doorway (data-testid
+      'os-mode-doorway') labelled 'Modo OS' with an uppercase 'Beta' badge -
+      visually a doorway card, not another nav row (on mobile, open the
+      sidebar via the header menu toggle first). Clicking it navigates to /os
+      and renders the OS shell (data-testid 'os-shell') with no classic
+      sidebar or dashboard header chrome. (Prerequisite: the web build must
+      run with NEXT_PUBLIC_OS_MODE=1 - with the flag off the sidebar doorway
+      is absent and /os client-redirects to /chat, making every check on this
+      page unreachable.)
+    tags:
+      - entry
+      - navigation
+    judgment: false
+  - id: os-top-strip
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The OS shell's top strip shows, left to right: the title 'Modo OS' in
+      the display face (Space Grotesk) beside a teal-tinted uppercase 'Beta'
+      pill; the workspace switcher (data-testid 'os-workspace-switcher', role
+      tablist, aria-label 'Ecrãs de trabalho') whose first pill reads 'Ecrã 1'
+      and renders active (dark background, white text), followed by a '+' icon
+      button labelled 'Novo ecrã'; and on the right a link 'Voltar ao modo
+      clássico' with a left-arrow icon.
+    tags:
+      - layout
+    judgment: false
+  - id: desktop-icons
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      The desktop (data-testid 'os-desktop') sits on a dotted-grid canvas and
+      shows a wrapping icon grid: first the 'Artefactos' surface icon
+      (data-testid 'os-icon-surface-artifacts', a box glyph in a white rounded
+      tile with a teal icon), then one icon per owned artifact (data-testid
+      prefixed 'os-icon-artifact-'); artifacts whose app is not running render
+      their tile dimmed at ~50% opacity. Every icon carries an always-visible
+      '...' menu button (aria-label 'Mais ações') pinned to its top-right
+      corner - never hover-gated.
+    tags:
+      - desktop
+    judgment: false
+  - id: desktop-icon-menus
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Right-clicking (desktop), long-pressing (touch), or clicking the '...'
+      button on the 'Artefactos' desktop icon opens an action menu with
+      'Abrir', 'Afixar na Dock' (or 'Desafixar da Dock' when it is already
+      pinned) and 'Remover do ecrã'. The same three triggers on an artifact
+      icon open the shared artifact menu instead, including 'Abrir', 'Mudar o
+      nome', 'Duplicar', a destructive delete entry, plus the 'Afixar na Dock'
+      and 'Remover do ecrã' entries. Clicking elsewhere closes the menu
+      without acting; choosing 'Mudar o nome' opens the rename dialog and
+      'Cancelar' leaves the name unchanged.
+    tags:
+      - desktop
+      - menus
+    judgment: false
+  - id: dock-bar-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      A dock strip (data-testid 'os-dock') spans the bottom of the shell as a
+      translucent glass bar. By default it holds the pinned 'Artefactos' item
+      (data-testid 'os-dock-pin-artifacts') with a teal box icon; open-window
+      chips (data-testid prefixed 'os-dock-window-') appear to its right,
+      separated from the pins by a thin vertical divider that only exists
+      while at least one window is open. Clicking the 'Artefactos' pin opens
+      (or focuses) the Artefactos surface; right-clicking or long-pressing the
+      pin offers 'Abrir' and 'Desafixar da Dock'.
+    tags:
+      - dock
+    judgment: false
+  - id: open-artifacts-window
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking the 'Artefactos' desktop icon opens a floating window
+      (data-testid 'os-window-artifacts', role dialog, aria-label
+      'Artefactos') with a title bar reading 'Artefactos', a 'Minimizar' and a
+      'Fechar' icon button, and the artifacts manager rendering inside the
+      window body; a teal-highlighted chip labelled 'Artefactos' appears in
+      the dock. The surface is a singleton: clicking the desktop icon or the
+      dock pin again focuses the existing window - exactly one
+      'os-window-artifacts' element ever exists.
+    tags:
+      - windowing
+    judgment: false
+  - id: window-move-resize
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: window-open
+    description: >-
+      Dragging the open window's title bar ([data-window-titlebar]) around the
+      middle of the desktop moves the window live with the pointer, and on
+      release it stays exactly where dropped - no jump-back and no stranding
+      at a stale drag position (a previously fixed defect). Dragging the
+      invisible bottom-right resize corner (cursor nwse-resize; right edge and
+      bottom edge handles also exist with ew-resize/ns-resize cursors) resizes
+      the window live, never below the surface minimum (360x420 for
+      Artefactos), and the new size sticks after release.
+    tags:
+      - windowing
+      - regression
+    judgment: false
+  - id: window-edge-snap
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: window-open
+    description: >-
+      Dragging the window's title bar until the pointer is within ~24px of the
+      desktop's left edge makes the left snap zone (data-testid
+      'os-snap-left') gain the class 'over' and shows a teal-tinted preview
+      rectangle (data-testid 'os-snap-preview') covering the left half of the
+      desktop; releasing there tiles the window into exactly that half (full
+      desktop height, squarer corners than the floating window). The same
+      works symmetrically at the right edge (data-testid 'os-snap-right').
+    tags:
+      - windowing
+      - tiling
+    judgment: false
+  - id: tiled-divider-ratio
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: two-windows-tiled
+    description: >-
+      With two windows tiled side by side, a draggable divider (data-testid
+      prefixed 'os-divider-', role separator, aria-orientation vertical) sits
+      between them with a col-resize cursor and a teal tint on hover; dragging
+      it horizontally live-reflows the two windows' widths to the new ratio,
+      and at no point do the tiled windows overlap each other or extend under
+      the docked chat panel.
+    tags:
+      - windowing
+      - tiling
+    judgment: false
+  - id: window-minimize-restore-close
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: window-open
+    description: >-
+      Clicking the window's 'Minimizar' button hides it from the desktop while
+      its dock chip remains, switched to the inactive gray style; clicking
+      that chip restores the window at its previous position/size and
+      re-activates the chip; right-clicking the chip offers 'Restaurar' and a
+      destructive 'Fechar'. Clicking the title-bar 'Fechar' button removes
+      both the window and its dock chip, and the dock's pin/window divider
+      disappears once no windows remain.
+    tags:
+      - windowing
+      - dock
+    judgment: false
+  - id: artifact-app-window
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking an artifact's desktop icon (data-testid prefixed
+      'os-icon-artifact-') opens a window (data-testid
+      'os-window-artifact-app') titled with the artifact's name. While the
+      served app is probed a teal spinner shows; a running artifact then
+      renders its app in an iframe filling the window body; a not-ready
+      artifact instead shows the centered text 'Esta aplicação ainda não está
+      pronta para abrir.'; a failed load shows 'Não foi possível carregar a
+      aplicação.' with a 'Tentar novamente' secondary button that retries the
+      probe.
+    tags:
+      - windowing
+      - artifacts
+    judgment: false
+  - id: chat-dock-open-default
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The docked chat panel (aside with data-testid 'global-chat-dock') is
+      OPEN by default in OS mode, ~420px wide against the right edge, sitting
+      beside (never underneath) the desktop and any windows. Its header shows
+      a session-switcher button (title 'Conversas') with a speech-bubble icon
+      and chevron, plus icon buttons 'Nova conversa', 'Abrir a página de
+      conversa' and 'Ocultar o painel de conversa'; below the header is the
+      same conversation view the /chat page renders, with a message composer.
+    tags:
+      - chat-dock
+    judgment: false
+  - id: chat-dock-collapse-resize
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Clicking 'Ocultar o painel de conversa' collapses the panel to a slim
+      tab on the right edge (data-testid 'global-chat-dock-tab', speech-bubble
+      icon, aria-label 'Mostrar o painel de conversa') and the desktop expands
+      to full width; clicking the tab reopens the panel. Dragging the panel's
+      left-edge handle (role separator, aria-label 'Redimensionar o painel de
+      conversa') left/right resizes the panel live, and the chosen width
+      survives collapsing and reopening.
+    tags:
+      - chat-dock
+    judgment: false
+  - id: chat-dock-sections
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: chat-session-active
+    description: >-
+      With an active chat session, a section block (data-testid
+      'os-dock-sections') renders under the conversation with two collapsible
+      rows: 'Ficheiros' (data-testid 'os-dock-section-files') and 'Resultado'
+      (data-testid 'os-dock-section-output'). Each row shows a right-chevron
+      with aria-expanded='false' when closed and a down-chevron with
+      aria-expanded='true' when open, revealing a height-capped scrollable
+      body (the session file tree / the output panel). When the active session
+      has a built app or preview, an extra 'Abrir em janela' icon button
+      appears in the panel header and opens that app as an
+      'os-window-artifact-app' window on the desktop.
+    tags:
+      - chat-dock
+    judgment: false
+  - id: workspace-create-switch
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: window-open
+    description: >-
+      Clicking the workspace switcher's '+' button (aria-label 'Novo ecrã')
+      creates and activates a new pill named 'Ecrã 2' whose desktop starts
+      clean: only the 'Artefactos' icon, zero open windows, and only the
+      'Artefactos' dock pin. Clicking the 'Ecrã 1' pill switches back and the
+      previously open window is exactly where it was left - windows and pins
+      belong to their workspace.
+    tags:
+      - workspaces
+    judgment: false
+  - id: workspace-rename-delete
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Create a second workspace via 'Novo ecrã' if only one exists.
+      Right-clicking (or long-pressing) a workspace pill opens a menu with
+      'Mudar o nome' and a destructive 'Eliminar' (the delete entry is only
+      offered while more than one workspace exists). 'Mudar o nome' opens a
+      small dialog titled 'Mudar o nome' with the current name pre-selected in
+      its input and 'Cancelar'/'Guardar' buttons (Enter also commits);
+      'Eliminar' opens a danger-toned confirm titled 'Eliminar este ecrã?'
+      with the body 'As janelas e os itens afixados deste ecrã são esquecidos.
+      Os seus artefactos não são afetados.', and confirming removes the pill
+      while its artifacts stay intact.
+    tags:
+      - workspaces
+      - dialogs
+    judgment: false
+  - id: layout-persistence-reload
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: two-windows-tiled
+    description: >-
+      Reloading the browser on /os restores the exact same client-side layout:
+      the same workspace pills with the same active one, both tiled windows
+      back side by side with their divider (data-testid prefixed
+      'os-divider-'), and the same pinned dock items - the desktop does not
+      reset to an empty first-run state after a full page reload.
+    tags:
+      - persistence
+    judgment: false
+  - id: mobile-fullscreen-surface
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375x812, OS mode never shows floating windows: tapping the
+      'Artefactos' desktop icon opens the surface full-screen over the desktop
+      (data-testid 'os-fullscreen-artifacts') with a slim top bar containing
+      the title 'Artefactos', a chevron-down 'Minimizar' button and an X
+      'Fechar' button. 'Minimizar' returns to the desktop while the surface
+      stays as an inactive dock chip (the dock below remains visible and acts
+      as the switcher); 'Fechar' discards it. No docked chat panel and no
+      'global-chat-dock-tab' renders on mobile.
+    tags:
+      - responsive
+      - windowing
+    judgment: false
+  - id: mobile-layout-quality
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - mobile
+    state: default
+    description: >-
+      At 375px width nothing overflows horizontally: the top strip fits 'Modo
+      OS' + 'Beta', the workspace pills and 'Voltar ao modo clássico' without
+      clipped or overlapping text; desktop icons wrap into a clean grid with
+      legible two-line labels; the bottom dock's items stay within the
+      viewport; and the full-screen surface (when open) fills the viewport
+      edge to edge with no horizontal scrollbar anywhere in the shell.
+    tags:
+      - responsive
+    judgment: true
+  - id: exit-to-classic
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Clicking 'Voltar ao modo clássico' in the top strip navigates to /chat
+      with the full classic dashboard chrome restored (sidebar with nav items
+      and the 'Modo OS' doorway, dashboard header); no OS-shell elements
+      ('os-shell', 'os-dock') remain mounted. Re-entering through the doorway
+      returns to /os with the previous workspace state intact.
+    tags:
+      - navigation
+      - exit-gate
+    judgment: false
+  - id: zero-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+      - mobile
+    state: default
+    description: >-
+      Entering /os, opening and closing the 'Artefactos' surface (window on
+      desktop, full-screen on mobile), and switching workspaces produces ZERO
+      browser console errors - including no 404 from the previously fixed
+      double-deleted surplus chat sessions on page mount, and no
+      React/hydration warnings.
+    tags:
+      - console-errors
+      - regression
+    judgment: false
+  - id: os-visual-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The OS surface reads as one designed system consistent with S1:
+      translucent glass top strip and dock over the dotted canvas; white
+      rounded icon tiles with soft card shadows and teal glyphs; windows with
+      a raised shadow, hairline borders and a light-gray title bar; teal used
+      only as the accent (active dock chips, snap preview, spinner). Spacing
+      is even, icons and dock items align crisply, no labels are clipped, and
+      nothing shows double borders or misaligned edges. (Note: this shell
+      intentionally has no PageShell/PageHeader - do not flag their absence.)
+    tags:
+      - visual
+      - design-system
+    judgment: true
+states:
+  - id: window-open
+    label: The Artefactos window is open on the OS desktop (desktop viewport)
+    reachPath:
+      - id: enter-os
+        description: >-
+          Log in at /login as admin/tmp12345, then in the sidebar click the
+          teal 'Modo OS' doorway (data-testid 'os-mode-doorway') and wait for
+          the OS shell (data-testid 'os-shell') and the 'Artefactos' desktop
+          icon (data-testid 'os-icon-surface-artifacts') to render.
+      - id: open-artifacts-window
+        description: >-
+          Click the 'Artefactos' desktop icon; a floating window with
+          data-testid 'os-window-artifacts' appears over the desktop with an
+          'Artefactos' title bar and a matching chip in the bottom dock.
+  - id: two-windows-tiled
+    label: Two windows tiled side by side (Artefactos left, an artifact app right)
+    reachPath:
+      - id: enter-os
+        description: >-
+          Log in at /login as admin/tmp12345, then in the sidebar click the
+          'Modo OS' doorway (data-testid 'os-mode-doorway') and wait for the
+          OS shell and desktop icons to render.
+      - id: snap-artifacts-left
+        description: >-
+          Click the 'Artefactos' desktop icon to open its window, then drag
+          its title bar ([data-window-titlebar]) until the pointer reaches the
+          desktop's left edge (the teal 'os-snap-preview' covers the left
+          half) and release - the window tiles into the left half.
+      - id: open-and-snap-app-right
+        description: >-
+          Click any artifact desktop icon (data-testid prefixed
+          'os-icon-artifact-') to open an 'os-window-artifact-app' window,
+          then drag its title bar to the desktop's right edge and release so
+          it tiles into the right half; a divider (data-testid prefixed
+          'os-divider-') now separates the two tiles.
+  - id: chat-session-active
+    label: Docked chat panel with an active session (Files/Output sections visible)
+    reachPath:
+      - id: enter-os
+        description: >-
+          Log in at /login as admin/tmp12345, then in the sidebar click the
+          'Modo OS' doorway (data-testid 'os-mode-doorway') and wait for the
+          OS shell to render with the chat panel (data-testid
+          'global-chat-dock') open on the right.
+      - id: activate-session
+        description: >-
+          In the chat panel header, click the '+' icon button 'Nova conversa'
+          so a session becomes active; the section block (data-testid
+          'os-dock-sections') with the 'Ficheiros' and 'Resultado' rows
+          appears under the conversation.
