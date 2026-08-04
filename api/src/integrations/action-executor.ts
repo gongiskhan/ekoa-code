@@ -63,7 +63,7 @@ import {
   type IntegrationActionHttpConfig,
 } from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
-import { checkActionConsent, type IntegrationActionConsentDescriptor } from './action-consent.js';
+import { checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
 import {
   definitionActorForCredential,
   resolveCredentialEgressBinding,
@@ -273,10 +273,17 @@ export async function executeUserIntegrationAction(
   // A read (`mutates: false`, and ONLY a literal false — see action-consent.ts) falls straight
   // through with no store lookup: an existing non-mutating integration behaves exactly as it did
   // before this slice, prompt-free (Rule 7 additive).
+  // The RESOLVED destination comes from `config.publicConfigValues` — the non-secret projection
+  // stored in PLAINTEXT beside the ciphertext (service.ts). Reading it decrypts NOTHING, so the
+  // sentence above stays true: an unapproved write still causes no credential to be read. What it
+  // buys is that the approval is keyed on where this call actually goes, so a config edit that
+  // moves the destination cannot be covered by an approval granted for the old one.
   const consent = await checkActionConsent(
     { orgId: input.orgId, userId: input.ownerUserId },
     input.integrationKey,
     action,
+    undefined,
+    targetResolutionOf(def.configSchema, config?.publicConfigValues),
   );
   if (!consent.allowed) {
     return {

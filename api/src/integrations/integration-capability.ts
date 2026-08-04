@@ -76,7 +76,7 @@ import { resolveDefinition } from './definition-registry.js';
 // The consent module's READ side only. `checkActionConsent` — the gate — is deliberately NOT
 // imported: it belongs to the executor, and importing it here would put a second copy of the
 // decision one keystroke away from the rail that must inherit it.
-import { actionRequiresConsent, describeAction, liveApprovalFor } from './action-consent.js';
+import { actionRequiresConsent, describeAction, liveApprovalFor, targetResolutionOf } from './action-consent.js';
 import { authoringStateOf } from './authored-action.js';
 import { definitionActorForCredential } from './credential-cofre.js';
 import {
@@ -223,9 +223,13 @@ export async function getIntegrationCapability(
   const { definition: def, config } = resolved.value;
   const connected = config ? config.enabled !== false : def.authType === 'none';
 
+  // The SAME resolution the executor's gate uses, so `target`/`approved` here describe the call the
+  // executor would actually make. Non-secret values only, straight off the un-decrypted row.
+  const resolution = targetResolutionOf(def.configSchema, config?.publicConfigValues);
+
   const actions: CapabilityActionView[] = [];
   for (const action of def.actions ?? []) {
-    const descriptor = describeAction(integrationKey, action);
+    const descriptor = describeAction(integrationKey, action, resolution);
     const requiresApproval = actionRequiresConsent(action);
     // A read is never looked up: it has no approval to have, and asking for one would invent a row
     // shape for actions that are not gated (the same rule the dashboard's approvals route follows).
@@ -235,6 +239,7 @@ export async function getIntegrationCapability(
         integrationKey,
         action.actionName,
         descriptor.shape,
+        descriptor.target,
       )
       : null;
     actions.push({

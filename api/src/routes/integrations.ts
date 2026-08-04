@@ -41,7 +41,7 @@ import {
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
-import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary } from '../integrations/service.js';
+import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import {
@@ -49,6 +49,7 @@ import {
   approveAction,
   describeAction,
   liveApprovalFor,
+  targetResolutionOf,
   revokeActionApprovals,
 } from '../integrations/action-consent.js';
 import {
@@ -270,7 +271,20 @@ export function integrationsRouter(deps: {
   r.post('/configs', requireAuth, async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, CreateConfig, req.body);
     if (!body) return;
-    const c = await createConfig(actorOf(req), body as { integrationKey: string; configValues: Record<string, unknown>; name?: string }, deps);
+    // `secretKeys` comes from the definition's own schema and decides which values may be stored
+    // in the non-secret projection the consent path reads (service.ts `publicValuesOf`). Resolved
+    // HERE because `service.ts` cannot import the registry - `definitions.ts` imports `service.ts`,
+    // so that edge would close an import cycle (docs/findings.md).
+    const actorForCreate = actorOf(req);
+    const createDef = await resolveDefinition(actorForCreate, body.integrationKey);
+    const c = await createConfig(
+      actorForCreate,
+      {
+        ...(body as { integrationKey: string; configValues: Record<string, unknown>; name?: string }),
+        secretKeys: (createDef?.configSchema ?? []).filter((f) => f?.secret).map((f) => f.key),
+      },
+      deps,
+    );
     res.status(201).json(configSummary(c));
   });
 
@@ -280,7 +294,11 @@ export function integrationsRouter(deps: {
     const a = actorOf(req);
     const target = (await listConfigs(a)).find((c) => c.integrationKey === req.params.integrationKey);
     if (!target) return notFound(res);
-    const result = await updateConfig(a, target._id, body as { enabled?: boolean; configValues?: Record<string, unknown> });
+    const patchDef = await resolveDefinition(a, req.params.integrationKey as string);
+    const result = await updateConfig(a, target._id, {
+      ...(body as { enabled?: boolean; configValues?: Record<string, unknown> }),
+      secretKeys: (patchDef?.configSchema ?? []).filter((f) => f?.secret).map((f) => f.key),
+    });
     if (result.verdict === 'notfound') return notFound(res);
     if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
     res.json(configSummary(result.config!));
@@ -436,14 +454,18 @@ export function integrationsRouter(deps: {
     const key = req.params.key as string;
     const def = await resolveDefinition(actor, key);
     if (!def) return notFound(res);
+    // The SAME resolution the gate uses, so the target shown here is the target an approval is
+    // keyed on. Non-secret values only, off the un-decrypted row.
+    const cfg = await findConfigForOwner(actor.orgId, actor.userId, key);
+    const resolution = targetResolutionOf(def.configSchema, cfg?.publicConfigValues);
     const items = [];
     for (const action of def.actions ?? []) {
-      const descriptor = describeAction(key, action);
+      const descriptor = describeAction(key, action, resolution);
       const requiresConsent = actionRequiresConsent(action);
       // A read is never looked up: it has no approval to have, and querying for one would invent a
       // row shape for actions that are not gated.
       const live = requiresConsent
-        ? await liveApprovalFor({ orgId: actor.orgId, userId: actor.userId }, key, action.actionName, descriptor.shape)
+        ? await liveApprovalFor({ orgId: actor.orgId, userId: actor.userId }, key, action.actionName, descriptor.shape, descriptor.target)
         : null;
       items.push({
         actionName: descriptor.actionName,
@@ -486,7 +508,8 @@ export function integrationsRouter(deps: {
     if (!actionRequiresConsent(action)) {
       return sendError(res, 'VALIDATION_FAILED', 'Esta ação não altera dados e não precisa de autorização.');
     }
-    const descriptor = describeAction(key, action);
+    const cfg = await findConfigForOwner(actor.orgId, actor.userId, key);
+    const descriptor = describeAction(key, action, targetResolutionOf(def?.configSchema, cfg?.publicConfigValues));
     if (descriptor.shape !== body.shape) {
       return sendError(res, 'VALIDATION_FAILED', 'A ação mudou desde que foi apresentada. Reveja e confirme de novo.');
     }

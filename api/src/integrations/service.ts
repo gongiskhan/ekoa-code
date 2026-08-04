@@ -22,6 +22,18 @@ export interface IntegrationConfigDoc extends Doc {
   enabled: boolean;
   credentialsCiphertext?: string; // never returned
   /**
+   * The NON-SECRET config values, in plaintext (`publicValuesOf`). Only fields the definition's
+   * `configSchema` does NOT declare `secret` are ever written here, so this holds nothing the
+   * product does not already show in the clear.
+   *
+   * It exists so the write gate can name the REAL destination of an action whose template
+   * interpolates a config value, and bind a human's approval to it, WITHOUT decrypting anything -
+   * the gate runs before credential load on purpose (`action-executor.ts`). Absent on rows written
+   * before this landed and on any write whose caller could not name the schema; the consent path
+   * then falls back to the `{{template}}`, i.e. exactly the previous behaviour.
+   */
+  publicConfigValues?: Record<string, string>;
+  /**
    * WS-C join (slice B2): the Cofre item shadowing this row's credentials. Stamped server-side by
    * `mintOrRefreshCredentialShadow`, never accepted from a request body. Absent means "not migrated"
    * — the pre-WS-C behaviour, unchanged (Rule 7 additive). The 2026-08-15 Rule-10 review either
@@ -94,7 +106,45 @@ export async function findConfigForOwner(orgId: string, ownerUserId: string, int
   return rows.find((c) => c.ownerUserId === ownerUserId) ?? rows.find((c) => c.ownerUserId == null) ?? null;
 }
 
-export async function createConfig(actor: Actor, input: { integrationKey: string; configValues: Record<string, unknown>; name?: string }, deps: Deps): Promise<IntegrationConfigDoc> {
+/**
+ * THE NON-SECRET PROJECTION of a config's values, stored in PLAINTEXT beside the ciphertext.
+ *
+ * WHY IT EXISTS. A config value can decide WHERE an action writes - a topic, a channel, a
+ * tenant path - and the write gate has to know that destination to bind a human's approval to it
+ * (`action-consent.ts`). The gate deliberately runs BEFORE anything is decrypted, so it cannot
+ * read the encrypted bundle; without this projection the consent record can only name the
+ * `{{template}}`, and a later edit of the value silently redirects an approval nobody re-granted.
+ *
+ * WHY IT IS SAFE. `secretKeys` comes from the definition's own `configSchema`: a field the schema
+ * declares `secret` NEVER lands here, so this holds only values the product already shows in the
+ * clear (they are echoed back in the builder and rendered in the dashboard). A caller that cannot
+ * name the schema passes nothing and gets NO projection, which degrades to the previous behaviour
+ * - the dialog names the template - rather than guessing which values are safe.
+ *
+ * WHY NOT JUST HASH THE CIPHERTEXT. It would bind the approval to the whole credential blob, and
+ * the envelope is non-deterministic - so every routine OAuth token refresh
+ * (`persistRotatedCredentials`) would invalidate every standing approval. Rotating a secret must
+ * not re-prompt; moving a destination must.
+ */
+export function publicValuesOf(
+  configValues: Record<string, unknown>,
+  secretKeys?: readonly string[],
+): Record<string, string> | undefined {
+  if (!secretKeys) return undefined;
+  const secret = new Set(secretKeys);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(configValues)) {
+    if (secret.has(key)) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') out[key] = String(value);
+  }
+  return out;
+}
+
+export async function createConfig(
+  actor: Actor,
+  input: { integrationKey: string; configValues: Record<string, unknown>; name?: string; secretKeys?: readonly string[] },
+  deps: Deps,
+): Promise<IntegrationConfigDoc> {
   const id = deps.genId();
   const doc: IntegrationConfigDoc = {
     _id: id,
@@ -111,6 +161,11 @@ export async function createConfig(actor: Actor, input: { integrationKey: string
     // used the UNSCOPED `encrypt()`, so an integration's ciphertext was not even org-bound — a row
     // copied between tenants decrypted fine. v1 rows still read, so this needed no flag day.
     credentialsCiphertext: await envelopeEncrypt(JSON.stringify(input.configValues), actor.orgId),
+    // Absent optionals are OMITTED, never written as `undefined`: the Mongo driver serialises that
+    // as `null`, which the read schemas reject (the same hazard `fieldsFromPackageConfig` documents).
+    ...(publicValuesOf(input.configValues, input.secretKeys) !== undefined
+      ? { publicConfigValues: publicValuesOf(input.configValues, input.secretKeys) }
+      : {}),
   };
   await integrationConfigs.insert(doc as never);
   // WS-C SHADOW + THE CONSENT CEREMONY (B2). Typing the credentials IS the consent, so the mint
@@ -166,7 +221,11 @@ export function canWriteConfig(actor: Actor, c: IntegrationConfigDoc): boolean {
 
 export type WriteVerdict = 'ok' | 'notfound' | 'forbidden';
 
-export async function updateConfig(actor: Actor, id: string, patch: { enabled?: boolean; configValues?: Record<string, unknown> }): Promise<{ verdict: WriteVerdict; config?: IntegrationConfigDoc }> {
+export async function updateConfig(
+  actor: Actor,
+  id: string,
+  patch: { enabled?: boolean; configValues?: Record<string, unknown>; secretKeys?: readonly string[] },
+): Promise<{ verdict: WriteVerdict; config?: IntegrationConfigDoc }> {
   const c = (await integrationConfigs.get(id)) as IntegrationConfigDoc | null;
   if (!c || c.orgId !== actor.orgId) return { verdict: 'notfound' };
   if (!canWriteConfig(actor, c)) return { verdict: 'forbidden' };
@@ -189,6 +248,11 @@ export async function updateConfig(actor: Actor, id: string, patch: { enabled?: 
     // org-admin, and `mintOrRefreshCredentialShadow` already mints under this writer — so the
     // custodian stamp moves with it. Toggling `enabled` is not a ceremony and leaves it alone.
     ...(patch.configValues ? { custodianUserId: actor.userId } : {}),
+    // The non-secret projection moves with the values it projects. Recomputed only on a values
+    // write, so toggling `enabled` cannot disturb a standing approval's destination binding.
+    ...(patch.configValues && publicValuesOf(patch.configValues, patch.secretKeys) !== undefined
+      ? { publicConfigValues: publicValuesOf(patch.configValues, patch.secretKeys) }
+      : {}),
     ...(cofreItemId ? { cofreItemId } : {}),
   }))) as IntegrationConfigDoc;
   return { verdict: 'ok', config };

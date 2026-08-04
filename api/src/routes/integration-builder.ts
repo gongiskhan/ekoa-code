@@ -307,8 +307,13 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
     let configured = false;
     if (creds && Object.keys(creds).length > 0) {
       const existing = await findConfigForOwner(actor.orgId, actor.userId, key);
-      if (existing) await updateConfig(actor, existing._id, { configValues: creds });
-      else await createConfig(actor, { integrationKey: key, configValues: creds, name: config.displayName ?? key }, deps);
+      // The schema is right here in the package being saved, so the non-secret projection the
+      // consent path reads is written on this path too (service.ts `publicValuesOf`).
+      const secretKeys = (config.configSchema ?? [])
+        .filter((f: { secret?: boolean }) => f?.secret)
+        .map((f: { key: string }) => f.key);
+      if (existing) await updateConfig(actor, existing._id, { configValues: creds, secretKeys });
+      else await createConfig(actor, { integrationKey: key, configValues: creds, name: config.displayName ?? key, secretKeys }, deps);
       configured = true;
     }
 

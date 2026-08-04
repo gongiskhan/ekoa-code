@@ -31,8 +31,8 @@
  * expiry is treated as expired", same "a miss is a re-prompt, never a failure".
  *
  * ================================ THE SCOPE OF AN APPROVAL ==================================
- * An approval is keyed on (orgId, userId, integrationKey, actionName, SHAPE) and is transferable
- * across none of them:
+ * An approval is keyed on (orgId, userId, integrationKey, actionName, SHAPE, DESTINATION) and is
+ * transferable across none of them:
  *
  *   - **Tenant.** The org is in the key. An approval does not follow a user across a tenant
  *     boundary, and no other tenant can reach it.
@@ -47,6 +47,17 @@
  *     bump) therefore does NOT inherit the approval the human gave the old one — which is the
  *     other half of criterion 6, "before an authored one persists as executable". Persistence is
  *     free; executability is not.
+ *   - **DESTINATION** (2026-08-04). The RESOLVED target — the URL after the action's
+ *     `{{placeholders}}` are filled from the config's non-secret values — is in the key too,
+ *     because the SHAPE alone is not the destination. A templated path (`/{{ntfy_topic}}`,
+ *     `/{{workspace}}/messages`) hashes identically whatever the config says, so before this the
+ *     dialog could only name the template and editing one config value silently redirected an
+ *     approval nobody re-granted: reproduced end to end, a message landed on a topic the approver
+ *     had never seen. Now the human is shown the real destination and the approval is keyed on
+ *     that same string, so the two cannot disagree.
+ *     Deliberately NOT a fingerprint of the credential blob: the envelope is non-deterministic, so
+ *     that would make every routine OAuth refresh (`persistRotatedCredentials`) revoke every
+ *     standing approval. Rotating a secret must not re-prompt; MOVING A DESTINATION must.
  *   - **TTL.** 90 days, like consent.ts. A standing permission to write to someone's Stripe
  *     account is not something they meaningfully consented to a year ago.
  *
@@ -167,12 +178,75 @@ export function actionShape(integrationKey: string, action: IntegrationAction): 
   return createHash('sha256').update(JSON.stringify(canonical(tuple))).digest('hex').slice(0, 32);
 }
 
-/** WHERE this action writes, for the dialog. Never a guess: an action whose backing cannot be
- *  resolved says so rather than rendering a reassuring blank. */
-export function actionTarget(action: IntegrationAction): string {
+/** `{{name}}` / `{{$odata}}` — the ONE placeholder grammar, matching `http-template.ts`'s. */
+const TARGET_PLACEHOLDER_RE = /\{\{(\$?\w+)\}\}/g;
+
+/** The masking stand-in for a placeholder naming a SECRET config field. A destination that depends
+ *  on a secret still has to be *distinguishable* between two different secrets, which is why the
+ *  fingerprint below covers the raw resolution while the dialog only ever sees this. */
+const SECRET_MASK = '••••';
+
+/**
+ * The non-secret config values an action's destination may interpolate, as the consent path sees
+ * them. `secretKeys` are the schema's `secret` fields: they are never resolved, only masked.
+ */
+export interface TargetResolution {
+  publicValues?: Record<string, string>;
+  secretKeys?: readonly string[];
+}
+
+/**
+ * Build the resolution from the two things every consent call site already has: the definition's
+ * `configSchema` (which fields are secret) and the config row's non-secret projection.
+ *
+ * ONE derivation, because the capability view, the approvals list, the approve handler and the
+ * executor's gate must agree exactly - a `target` that differs between the dialog and the gate by
+ * so much as a character is an approval that can never be matched.
+ */
+export function targetResolutionOf(
+  configSchema: readonly { key: string; secret?: boolean }[] | undefined,
+  publicConfigValues: Record<string, string> | undefined,
+): TargetResolution {
+  return {
+    ...(publicConfigValues ? { publicValues: publicConfigValues } : {}),
+    secretKeys: (configSchema ?? []).filter((f) => f?.secret).map((f) => f.key),
+  };
+}
+
+/**
+ * Interpolate a destination string for a HUMAN.
+ *
+ * A placeholder resolves when the projection carries it, renders as `••••` when the schema calls
+ * it secret, and is LEFT ALONE otherwise - an unresolvable name is shown as itself rather than
+ * blanked, because a dialog that quietly drops part of a URL is worse than one that admits it
+ * does not know. (`http-template.interpolate` substitutes a missing variable with the empty
+ * string, which is right at call time and wrong here, for the same reason D3's render probe does
+ * not reuse it.)
+ */
+function resolveTargetText(text: string, resolution?: TargetResolution): string {
+  if (!resolution) return text;
+  const secret = new Set(resolution.secretKeys ?? []);
+  return text.replace(TARGET_PLACEHOLDER_RE, (whole, name: string) => {
+    if (secret.has(name)) return SECRET_MASK;
+    const value = resolution.publicValues?.[name];
+    return value === undefined ? whole : value;
+  });
+}
+
+/**
+ * WHERE this action writes, for the dialog. Never a guess: an action whose backing cannot be
+ * resolved says so rather than rendering a reassuring blank.
+ *
+ * With a `resolution` the destination is RESOLVED - `POST https://ntfy.sh/equipa-juridica` rather
+ * than `POST https://ntfy.sh/{{ntfy_topic}}`. That string is what the human is shown AND what the
+ * approval is keyed on (`idFor`), so the two can never disagree: a config edit that moves the
+ * destination moves the key, and the standing approval stops matching.
+ */
+export function actionTarget(action: IntegrationAction, resolution?: TargetResolution): string {
   const backing = safeBacking(action);
   if (backing === 'api-call' && action.httpConfig) {
-    return `${action.httpConfig.method} ${action.httpConfig.baseUrl}${action.httpConfig.path}`;
+    const raw = `${action.httpConfig.method} ${action.httpConfig.baseUrl}${action.httpConfig.path}`;
+    return resolveTargetText(raw, resolution);
   }
   const binding = action.automationBinding;
   if (binding) {
@@ -184,12 +258,16 @@ export function actionTarget(action: IntegrationAction): string {
   return 'destino indeterminado';
 }
 
-export function describeAction(integrationKey: string, action: IntegrationAction): IntegrationActionConsentDescriptor {
+export function describeAction(
+  integrationKey: string,
+  action: IntegrationAction,
+  resolution?: TargetResolution,
+): IntegrationActionConsentDescriptor {
   return {
     integrationKey,
     actionName: action.actionName,
     description: action.description ?? '',
-    target: actionTarget(action),
+    target: actionTarget(action, resolution),
     shape: actionShape(integrationKey, action),
   };
 }
@@ -216,8 +294,15 @@ export function actionRequiresConsent(action: Pick<IntegrationAction, 'mutates'>
  * the id so a single-use "once" row and a standing "always" row coexist without one consuming the
  * other.
  */
-function idFor(scope: ActionApprovalScope, integrationKey: string, actionName: string, shape: string, decision: ActionApprovalDecision): string {
-  const tuple = JSON.stringify([scope.orgId, scope.userId, integrationKey, actionName, shape, decision]);
+function idFor(
+  scope: ActionApprovalScope,
+  integrationKey: string,
+  actionName: string,
+  shape: string,
+  decision: ActionApprovalDecision,
+  target: string,
+): string {
+  const tuple = JSON.stringify([scope.orgId, scope.userId, integrationKey, actionName, shape, decision, target]);
   return `ia_${createHash('sha256').update(tuple).digest('hex')}`;
 }
 
@@ -244,13 +329,24 @@ export async function checkActionConsent(
   integrationKey: string,
   action: IntegrationAction,
   now: () => number = Date.now,
+  /**
+   * The non-secret config values this call will interpolate. Read off the config row the executor
+   * ALREADY holds un-decrypted (`publicConfigValues`), so supplying it costs no decryption and the
+   * gate keeps answering before any credential is loaded.
+   *
+   * Its effect is the point of this parameter: the approval is keyed on the RESOLVED destination,
+   * so an approval granted for one topic/channel/path does not cover another. Omit it and the key
+   * falls back to the template - the pre-2026-08-04 behaviour, which is what a row written before
+   * the projection existed still gets.
+   */
+  resolution?: TargetResolution,
 ): Promise<ActionConsentVerdict> {
   if (!actionRequiresConsent(action)) return { allowed: true, reason: 'not_mutating' };
-  const descriptor = describeAction(integrationKey, action);
+  const descriptor = describeAction(integrationKey, action, resolution);
   const at = now();
 
   const always = (await approvedIntegrationActions.get(
-    idFor(scope, integrationKey, action.actionName, descriptor.shape, 'always'),
+    idFor(scope, integrationKey, action.actionName, descriptor.shape, 'always', descriptor.target),
   )) as ApprovedActionDoc | null;
   if (isLive(always, at)) {
     void recordApprovalUse(always._id, at);
@@ -260,7 +356,7 @@ export async function checkActionConsent(
   // Single-use: the claim IS the delete. An expired row is still consumed — leaving it would let a
   // clock change or a later grant of the same id resurrect an answer the user gave weeks ago.
   const claimed = (await approvedIntegrationActions.consume(
-    idFor(scope, integrationKey, action.actionName, descriptor.shape, 'once'),
+    idFor(scope, integrationKey, action.actionName, descriptor.shape, 'once', descriptor.target),
   )) as ApprovedActionDoc | null;
   if (isLive(claimed, at)) return { allowed: true, reason: 'approved_once' };
 
@@ -277,7 +373,7 @@ export async function approveAction(
   const at = now();
   const expiresAt = new Date(at + (decision === 'always' ? ALWAYS_TTL_MS : ONCE_TTL_MS)).toISOString();
   const doc: ApprovedActionDoc = {
-    _id: idFor(scope, descriptor.integrationKey, descriptor.actionName, descriptor.shape, decision),
+    _id: idFor(scope, descriptor.integrationKey, descriptor.actionName, descriptor.shape, decision, descriptor.target),
     orgId: scope.orgId,
     userId: scope.userId,
     integrationKey: descriptor.integrationKey,
@@ -319,11 +415,13 @@ export async function liveApprovalFor(
   integrationKey: string,
   actionName: string,
   shape: string,
+  /** The RESOLVED destination this approval must cover - see `idFor`. */
+  target: string,
   now: () => number = Date.now,
 ): Promise<{ decision: ActionApprovalDecision; expiresAt: string } | null> {
   const at = now();
   for (const decision of ['always', 'once'] as const) {
-    const row = (await approvedIntegrationActions.get(idFor(scope, integrationKey, actionName, shape, decision))) as ApprovedActionDoc | null;
+    const row = (await approvedIntegrationActions.get(idFor(scope, integrationKey, actionName, shape, decision, target))) as ApprovedActionDoc | null;
     if (isLive(row, at)) return { decision, expiresAt: row.expiresAt! };
   }
   return null;
