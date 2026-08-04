@@ -361,10 +361,19 @@ function IntegrationCard({
                           const approval = approvals?.find((a) => a.actionName === action.actionName);
                           return (
                             <div key={action.actionName} className="space-y-0.5">
-                              <div className="flex items-center justify-between gap-2 text-[11px]">
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                  <Zap size={10} className="text-neutral-400" />
-                                  <span className="font-mono text-neutral-600">{action.actionName}</span>
+                              {/* WRAPS rather than crushes. The badge cluster below is
+                                  `flex-shrink-0`, so on a narrow card the name side absorbed all
+                                  the shortfall: `publicar_notificacao` first rendered as clipped
+                                  fragments ("put"), and once truncated, as nothing at all — a gated
+                                  action whose NAME is invisible, next to the badge saying it is
+                                  authorised. Giving the name a basis lets the badges drop to their
+                                  own line instead, so both stay readable at any card width. */}
+                              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px]">
+                                <div className="flex min-w-0 flex-1 basis-32 items-center gap-1.5">
+                                  <Zap size={10} className="flex-shrink-0 text-neutral-400" />
+                                  <span className="truncate font-mono text-neutral-600" title={action.actionName}>
+                                    {action.actionName}
+                                  </span>
                                 </div>
                                 <div className="flex flex-shrink-0 items-center gap-1.5">
                                   {action.mutates && (
