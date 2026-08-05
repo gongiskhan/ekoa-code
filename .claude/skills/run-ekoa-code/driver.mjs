@@ -161,6 +161,10 @@ function startProxy() {
       // anything with a body has already been piped and cannot be.
       const retryable = req.method === 'GET' || req.method === 'HEAD';
       const forward = (attempt) => {
+        // Set when WE tear the upstream down because the browser left, so the error
+        // handler below can tell that apart from a genuine upstream failure (and, for
+        // GET/HEAD, not "retry" a request nobody is waiting for any more).
+        let clientGone = false;
         const proxyReq = http.request(
           { host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers: req.headers, agent: upstreamAgent },
           (proxyRes) => {
@@ -168,7 +172,23 @@ function startProxy() {
             proxyRes.pipe(res);
           },
         );
+        // Propagate the client's disconnect upstream. `pipe` only forwards data, never
+        // teardown, so without this an SSE stream (/api/v1/notifications/events, chat,
+        // jobs, automations) that the browser closed left this proxy request - and with
+        // it the API's SseManager client and its 30s keepalive timer - open FOREVER.
+        // Measured 2026-08-05: /health reported 67 attached SSE clients against 12 real
+        // sockets after a few hours of drill runs. Straight to :4211 the same connect/
+        // abort returns to baseline in under 3s, so the API was always correct and this
+        // proxy was the leak. A stale count is not cosmetic: it is read as evidence of a
+        // product defect (docs/findings.md).
+        const onClientClose = () => {
+          clientGone = true;
+          proxyReq.destroy();
+        };
+        res.once('close', onClientClose);
+        proxyReq.on('close', () => res.off('close', onClientClose));
         proxyReq.on('error', (err) => {
+          if (clientGone) return; // we destroyed it on purpose; the client is already gone
           log(`proxy upstream error (${req.method} ${req.url} attempt ${attempt}): ${err.code || err.message}`);
           if (res.headersSent) { res.destroy(); return; } // mid-stream: never append to a partial body
           if (retryable && attempt === 1) { forward(2); return; }
