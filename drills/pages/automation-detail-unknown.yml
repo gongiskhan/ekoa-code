@@ -2,14 +2,99 @@ id: automation-detail-unknown
 title: Automatização (detail, unknown id)
 path: /automations/00000000-0000-0000-0000-000000000000
 mode: steps
+# This page is the error path of the automation detail route: a well-formed id that
+# matches no automation. Observed at authoring time: the route holds a bare, full-viewport
+# "A carregar..." spinner forever - no page header, no not-found message, no way back.
+# The checks below pin the behaviour the route should have, plus the shell invariants
+# that DO hold today so a regression in them is caught deterministically.
 areas: []
 steps:
+  - id: stays-on-detail-route
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Requesting an automation that does not exist keeps the browser on the automation detail
+      route rather than silently bouncing to the list or to the app root - the user must be able
+      to see which id failed and to copy or retry the URL.
+    tags: [functionality, navigation, error-handling]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/automations/00000000-0000-0000-0000-000000000000" }
+    assertionSource: authored
+  - id: shell-chrome-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The error path stays inside the authenticated shell - the sidebar toggle is still there, so
+      the user is never dumped onto a chrome-less dead end they can only escape with the back button.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Alternar barra lateral" }
+    assertionSource: authored
+  - id: user-menu-still-reachable
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The top bar's user menu remains available on the error path, so the session is still operable from here.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Menu do utilizador" }
+    assertionSource: authored
   - id: unknown-id-handled-gracefully
     area: 0
     mode: vision
     enabled: true
     viewports: [desktop]
     state: default
-    description: Navigating to an automation id that does not exist settles on a clear not-found or error message (with a way back to the automations list). It must NOT hang forever on the "A carregar..." spinner. (Known defect at authoring time - the page spins indefinitely and logs 404 network errors; this check pins the desired behaviour.)
+    description: >-
+      The page settles on a clear not-found or error message naming the problem in Portuguese - the
+      automation does not exist or is not accessible. It must NOT be left on the "A carregar..."
+      spinner: a request that has already come back 404 has finished, and continuing to show a
+      loading state misrepresents a definite failure as work in progress.
+      (Observed at authoring time - the route spins indefinitely and logs 404 network errors.)
     tags: [functionality, error-handling]
     judgment: false
+  - id: way-back-to-list
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The not-found state offers an explicit route out - a link or button back to "Automatizações" -
+      rather than relying on the user to find the sidebar icon or press the browser back button.
+    tags: [ux, navigation, error-handling]
+    judgment: false
+  - id: no-bare-fullscreen-spinner
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Whatever this route shows, it keeps the app's page-header pattern - an icon tile, a title and
+      a subtitle - so the user can tell which section they are in. A centred spinner filling the
+      whole content area with no heading at all is a defect.
+      (Observed at authoring time - the content area is nothing but a centred spinner.)
+    tags: [visual, ux, error-handling]
+    judgment: false
+  - id: error-state-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The not-found state is composed rather than improvised - the message sits in the same card
+      geometry and horizontal margins as the rest of the app, the tone is plain Portuguese without
+      raw ids, stack traces or English fragments leaking through, and nothing about it looks like an
+      unhandled crash.
+    tags: [visual, polish, error-handling]
+    judgment: true

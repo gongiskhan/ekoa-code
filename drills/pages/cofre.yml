@@ -1,0 +1,182 @@
+id: cofre
+title: Cofre (credential vault)
+path: /cofre
+mode: steps
+# O Cofre holds the user's own credentials (passwords, API keys, OAuth tokens, TOTP seeds,
+# sessions) and the lock state each one is in. Observed at authoring time: the card never leaves
+# "A carregar…" - the list never resolves. That is pinned below as vault-list-resolves.
+areas: []
+steps:
+  - id: heading-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page header shows the "Cofre" title.
+    tags: [functionality]
+    judgment: false
+    assertion: { kind: text-contains, text: "Cofre" }
+    assertionSource: authored
+  - id: stays-on-cofre
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /cofre with a valid session stays on /cofre - it does not bounce to the login screen or to another section.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/cofre" }
+    assertionSource: authored
+  - id: privacy-promise-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The subtitle states the vault's privacy promise - that credentials are encrypted with keys held in dedicated hardware ("As suas credenciais são cifradas com chaves guardadas em hardware dedicado").
+    tags: [functionality, content]
+    judgment: false
+    assertion: { kind: text-contains, text: "As suas credenciais são cifradas" }
+    assertionSource: authored
+  - id: no-model-sees-passwords-claim
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The subtitle carries the explicit "Nenhum modelo de IA vê as suas palavras-passe" guarantee - this is the load-bearing claim of the whole feature and must not be silently dropped from the copy.
+    tags: [content, security]
+    judgment: false
+    assertion: { kind: text-contains, text: "Nenhum modelo de IA vê as suas palavras-passe" }
+    assertionSource: authored
+  - id: shell-chrome-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page renders inside the standard dashboard shell - the user menu is present in the top bar.
+    tags: [functionality, layout]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Menu do utilizador" }
+    assertionSource: authored
+  - id: vault-list-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The vault card settles into a real result - either a list of stored credentials or an explicit empty state telling the user they have none yet. It must NOT still be showing "A carregar…" once the page has loaded; a spinner that never resolves is a failure, not a slow success. (Observed at authoring time - the card stays on "A carregar…" indefinitely.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: header-has-icon-tile
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The "Cofre" header follows the app-wide page-header pattern - an icon tile to the left of the large title, with the grey one-line subtitle beneath. A bare title with no icon tile here, where every other section has one, is an inconsistency. (Observed at authoring time - no icon tile is rendered.)
+    tags: [visual, polish, consistency]
+    judgment: false
+  - id: lock-states-visually-distinct
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: Each credential row shows its lock state as a distinctly styled badge, and the four states read as genuinely different at a glance - "Bloqueada", "Desbloqueada", "Desbloqueada até bloquear" and "Em utilização". An indefinite unlock must never look the same as a timed one, because the entire point of the timed option is that the user can see it ends.
+    tags: [functionality, visual, security]
+    judgment: true
+  - id: credential-type-labelled
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: Every credential row names its type in Portuguese - "Palavra-passe", "Chave de API", "Token OAuth", "Semente TOTP" or "Sessão" - never a raw enum value like password or oauth_token.
+    tags: [functionality, content]
+    judgment: false
+  - id: secret-never-displayed
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: No credential's actual secret value is rendered anywhere on the page - not in a row, not in a tooltip, not as placeholder text. The vault lists which credentials exist and what state they are in; it never shows the secret itself.
+    tags: [security]
+    judgment: false
+  - id: unlock-offers-duration-choice
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: After the action, unlocking a locked credential offers an explicit duration choice (a bounded window versus "até bloquear"), rather than silently unlocking it forever. The user must be able to see how long the unlock lasts before confirming it.
+    actions:
+      - click the unlock control on the first locked credential row
+    tags: [functionality, security]
+    judgment: false
+  - id: signature-has-no-duration-control
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: After the action, a credential used for signing offers NO duration control at all - every signature is a fresh, single-use ceremony, so a signature identity must never be unlockable for a period of time.
+    actions:
+      - click the unlock control on a signature credential row
+    tags: [functionality, security]
+    judgment: false
+  - id: lock-action-confirms-or-feeds-back
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: populated
+    description: After the action, locking an unlocked credential either asks for confirmation or gives explicit visible feedback that it is now locked - the row's state badge updates. It must not act silently with the row left looking unchanged.
+    actions:
+      - click the lock control on the first unlocked credential row
+    tags: [functionality, ux]
+    judgment: false
+  - id: empty-state-explains-itself
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: empty
+    description: With no credentials stored, the card shows a written empty state in Portuguese that explains what the Cofre is for and how a credential gets in here - not a blank card, not a bare "0 resultados", not raw table headers over nothing.
+    tags: [ux, content]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Loading /cofre produces no browser console errors and no failed network requests.
+    tags: [quality]
+    judgment: false
+  - id: page-polish
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The page is visually polished and consistent with the rest of the dashboard - the card shares the same horizontal margins and corner radius as other sections, the header block has even vertical rhythm, the subtitle does not run to an awkward two-line orphan, and there is no large expanse of empty page below a short card that reads as unfinished layout.
+    tags: [visual, polish]
+    judgment: true
+states:
+  - id: populated
+    label: Vault holding at least one credential
+    reachPath:
+      - id: open-cofre
+        description: navigate to /cofre and wait for the credential list to finish loading
+      - id: ensure-item
+        description: confirm at least one credential row is listed; if the vault is empty, add a credential through the vault's own add control first
+  - id: empty
+    label: Vault with no credentials stored
+    reachPath:
+      - id: open-cofre-empty
+        description: navigate to /cofre as a user whose vault holds no credentials and wait for the card to finish loading

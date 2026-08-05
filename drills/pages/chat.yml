@@ -2,6 +2,9 @@ id: chat
 title: Chat (assistant workspace)
 path: /chat
 mode: steps
+# NOTE for the runner: this page's hero headline runs a looping type-on animation
+# ("O que vamos automatizar" / "construir"), so the DOM is never fully still. Deterministic
+# assertions on this route sometimes cannot be receipted; that is the animation, not a defect.
 areas: []
 steps:
   - id: composer-visible
@@ -12,18 +15,21 @@ steps:
       - desktop
     state: default
     description: >-
-      The message composer is present with its placeholder "Escreva a sua
-      mensagem...".
+      The message composer is present, prompting with "Descreva o que precisa...".
     tags:
       - functionality
     judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0028
     assertion:
       kind: visible
-      placeholder: Escreva a sua mensagem...
+      placeholder: Descreva o que precisa...
     assertionSource: authored
   - id: send-button-visible
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -32,11 +38,6 @@ steps:
     tags:
       - functionality
     judgment: false
-    assertion:
-      kind: visible
-      role: button
-      name: Enviar mensagem
-    assertionSource: authored
   - id: attach-button-visible
     area: 0
     mode: e2e
@@ -44,31 +45,37 @@ steps:
     viewports:
       - desktop
     state: default
-    description: The "Anexar ficheiro" attach button is present in the composer.
+    description: >-
+      The composer offers an "Anexar" attachment control, so a user can bring a file into the
+      conversation without leaving the workspace.
     tags:
       - functionality
     judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0024
     assertion:
       kind: visible
       role: button
-      name: Anexar ficheiro
+      name: Anexar
     assertionSource: authored
-  - id: voice-button-visible
+  - id: composer-input-affordances
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
     state: default
-    description: The voice dictation button is present in the composer.
+    description: >-
+      The composer's action row offers the three ways to bring material in - "Anexar" (file),
+      "Captura" (screen capture) and "Cola URL" - each with an icon and a legible label, and it
+      states the "Shift+Enter para nova linha" hint. Every control in that row must be a real
+      labelled button, not a bare glyph.
     tags:
       - functionality
+      - ux
     judgment: false
-    assertion:
-      kind: visible
-      role: button
-      name: Ditar por voz. Mantenha premido para o modo mãos-livres.
-    assertionSource: authored
   - id: topbar-controls-visible
     area: 0
     mode: e2e
@@ -80,6 +87,10 @@ steps:
     tags:
       - functionality
     judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0034
     assertion:
       kind: visible
       role: button
@@ -87,37 +98,30 @@ steps:
     assertionSource: authored
   - id: language-switcher-visible
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
     state: default
-    description: The "Mudar idioma" language switcher is present in the top bar.
+    description: The "Mudar idioma" language switcher is present in the top bar, showing the active locale ("PT").
     tags:
       - functionality
     judgment: false
-    assertion:
-      kind: visible
-      role: button
-      name: Mudar idioma
-    assertionSource: authored
   - id: token-meter-visible
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The top bar shows the token usage meter (the word "Tokens" with a quota
-      readout).
+      The top bar shows the token usage meter - the word "Tokens" with a real quota readout of the
+      form "<used>/<quota>" (e.g. "0/10.0M") and its progress bar beneath, never a grey skeleton
+      pill left in place after the page has settled.
     tags:
       - functionality
+      - loading
     judgment: false
-    assertion:
-      kind: text-contains
-      text: Tokens
-    assertionSource: authored
   - id: lands-on-chat-url
     area: 0
     mode: e2e
@@ -131,10 +135,122 @@ steps:
     tags:
       - functionality
     judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0036
     assertion:
       kind: url-matches
       pattern: /chat
     assertionSource: authored
+  - id: starting-points-rail-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The empty workspace is not a blank page - it offers a "PONTOS DE PARTIDA" rail of ready-made
+      build templates so a first-time user has something concrete to click.
+    tags:
+      - functionality
+      - ux
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0037
+    assertion:
+      kind: text-contains
+      text: PONTOS DE PARTIDA
+    assertionSource: authored
+  - id: sessions-rail-toggle-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: The sessions rail can be reached from the workspace via an "Expandir Sessões" control.
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0038
+    assertion:
+      kind: visible
+      role: button
+      name: Expandir Sessões
+    assertionSource: authored
+  - id: onboarding-banner-offers-guidance
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The "Novo por aqui?" banner sits above the starter rail with its explanatory line and a
+      primary "Começar com orientação" action. The banner must read as an invitation and the
+      action must be the visually dominant control inside it.
+    tags:
+      - ux
+      - onboarding
+    judgment: false
+  - id: starter-cards-not-clipped-by-composer
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The "PONTOS DE PARTIDA" cards are fully readable on a desktop viewport - each visible card
+      shows its preview, its title and whatever caption it carries. The floating composer sits
+      over the bottom of the scroll area, so the failure to look for is a card row sliced through
+      the middle by the composer's edge, with titles half-hidden behind it and no way to see the
+      whole card without scrolling a region the user has no reason to think is scrollable.
+    tags:
+      - visual
+      - polish
+      - layout
+    judgment: true
+  - id: starter-card-carousel-advances
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the "PONTOS DE PARTIDA" rail has scrolled to a further set of template
+      cards - the "Seguinte" arrow actually advances the carousel rather than sitting inert.
+    actions:
+      - click the "Seguinte" button
+    tags:
+      - functionality
+    judgment: false
+  - id: suggestion-chip-fills-composer
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, clicking a suggestion chip puts that suggestion to work - the composer is
+      populated with the chip's text ready to send, or the chat starts on that prompt. A chip that
+      does nothing when clicked is a defect.
+    actions:
+      - click the "Quero construir um CRM para a minha equipa de vendas" suggestion chip
+    tags:
+      - functionality
+      - ux
+    judgment: false
   - id: sessions-panel-opens
     area: 0
     mode: vision
@@ -179,10 +295,28 @@ steps:
       message bubble in the chat transcript (an agent error reply is acceptable
       - only the user bubble is being checked).
     actions:
-      - type "Olá, teste de drill" into the "Escreva a sua mensagem..." composer
+      - type "Olá, teste de drill" into the "Descreva o que precisa..." composer
       - click the "Enviar mensagem" button
     tags:
       - functionality
+    judgment: false
+  - id: send-clears-the-composer
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the actions, sending empties the composer and returns it to its placeholder state, so
+      the next message starts from a clean field - the sent text must not be left behind where a
+      second Enter would send it twice.
+    actions:
+      - type "Olá, teste de drill" into the "Descreva o que precisa..." composer
+      - click the "Enviar mensagem" button
+    tags:
+      - functionality
+      - ux
     judgment: false
   - id: sidebar-expands-with-labels
     area: 0
@@ -212,7 +346,7 @@ steps:
     state: default
     description: >-
       After the action, the user menu is open and shows the account name
-      "admin", the role "super-admin" and a "Terminar Sessao" logout entry.
+      "admin", the role "super-admin" and a "Terminar Sessão" logout entry.
     actions:
       - click the "Menu do utilizador" button
     tags:
@@ -249,6 +383,37 @@ steps:
       - visual
       - polish
     judgment: true
+  - id: hero-headline-animation-is-clean
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The hero headline ("O que vamos ..." with a rotating final word, the rotating word in the
+      brand teal) reads as one complete phrase at every moment. What must never show is two words
+      run together into a non-word ("automatizarconstruir"), a word half-deleted, or the line
+      re-flowing and shoving the content beneath it as the word changes length.
+    tags:
+      - visual
+      - polish
+    judgment: true
+  - id: date-line-is-formatted-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The small caps date above the headline reads as a real formatted Portuguese date - weekday,
+      day and month, e.g. "QUARTA · 5 DE AGOSTO" - never an English weekday, a raw timestamp or
+      "Invalid Date".
+    tags:
+      - functionality
+      - i18n
+    judgment: false
   - id: transcript-readability
     area: 0
     mode: vision
@@ -265,6 +430,82 @@ steps:
       - visual
       - ux
     judgment: true
+  - id: workspace-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The chat workspace actually renders and is usable within the normal couple-of-seconds
+      settle - the starter rail and the composer are present, so the user can type. The pane must
+      NOT be left on a bare centred spinner, on "A preparar o seu espaço de trabalho...", on "A
+      preparar tudo para si..." or on "A pensar na melhor abordagem..." before the user has asked
+      anything. This is the app's landing surface: if it never resolves, the product is unusable
+      on arrival, not merely slow.
+    tags:
+      - functionality
+      - loading
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0024
+  - id: token-meter-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The token meter in the top bar resolves to a real reading rather than staying as a grey
+      skeleton placeholder. A skeleton that never fills is a broken widget, and this one sits in
+      the shell on every authenticated page, so it is visible everywhere.
+    tags:
+      - functionality
+      - loading
+      - visual
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-2d0d2a21441f-0024
+  - id: stale-session-id-recovers
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Landing on /chat with a remembered session id that the backend no longer knows must recover,
+      not strand. The client restores the last session id from browser storage and redirects to
+      /chat/<that id>; when that session does not exist server-side, the workspace must fall back
+      to a new empty session (or say the conversation could not be found), never sit indefinitely
+      on "A preparar o seu espaço de trabalho...". This is easy to hit in normal use: any session
+      deleted on one device, or expired server-side, would otherwise leave the other browser stuck
+      on the app's landing screen with no way back except clearing site storage.
+    tags:
+      - functionality
+      - error-handling
+      - session
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Loading the chat workspace produces no browser console errors. Note that this app can fail a
+      fetch without logging anything, so a clean console is necessary but not sufficient - also
+      confirm the workspace actually rendered its content.
+    tags:
+      - quality
+    judgment: false
 states:
   - id: populated-session
     label: A chat session that already contains user and agent messages

@@ -59,6 +59,46 @@ steps:
     judgment: false
     assertion: { kind: text-contains, text: "Guardrails" }
     assertionSource: authored
+  - id: chrome-copy-correctly-accented
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The page's own chrome is spelled in correct Portuguese. The subtitle must read "Conhecimento
+      aprendido a partir das interações dos agentes", the fourth tab must read "Padrões recentes",
+      and the scope filter must read "Todos os âmbitos". Unaccented "interacoes", "Padroes" and
+      "ambitos" are spelling defects sitting in permanent navigation and header copy.
+      (Observed defect at authoring time - all three render without their accents.)
+    tags: [i18n, copy, quality]
+    judgment: false
+  - id: memory-list-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Below the filter bar the memory area settles into a real result - either memory cards or the
+      written empty state. It must not be left on the "Carregando..." spinner: a loading state that
+      never resolves is a failure, not a slow success.
+      (Observed defect at authoring time - the area stays on "Carregando..." indefinitely.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: loading-copy-is-european-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Any loading text on this page uses the same wording as the rest of the product, which says
+      "A carregar...". "Carregando..." is Brazilian Portuguese and is inconsistent with the pt-PT
+      copy used everywhere else in the app.
+      (Observed defect at authoring time - the list area shows "Carregando...".)
+    tags: [i18n, copy, consistency]
+    judgment: false
   - id: add-memory-dialog-opens
     area: 0
     mode: vision

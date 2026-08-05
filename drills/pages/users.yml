@@ -121,3 +121,95 @@ steps:
     description: The page reads cleanly - the "Visão geral" summary bar, the UTILIZADORES section header with its search box, and the table below share consistent horizontal margins; the avatar, role badge and token-usage pill are vertically centred within their row.
     tags: [visual, polish]
     judgment: true
+  - id: table-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The users table settles into a real result - at minimum the signed-in account's own row,
+      since a user looking at this page necessarily exists. It must not stop at the heading and
+      the "Adicionar Utilizador" button with no table beneath.
+      (Observed at authoring time - the table never renders even though the API returns the user
+      list immediately.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: user-list-does-not-fake-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The page never claims the organisation has no users. Whoever is reading this page is
+      themselves a user of it, so "Nenhum utilizador ainda. Adicione o primeiro utilizador." is
+      always false here - a read that failed must surface as a retryable error, not as an
+      authoritative statement that the account list is empty. The tell is that empty copy sitting
+      directly below a red error banner.
+      (Observed defect at authoring time - after the fetch timed out, the page showed the error
+      banner and the "Nenhum utilizador ainda." empty state together, while the API returned the
+      admin account immediately.)
+    tags: [functionality, error-handling, data-integrity]
+    judgment: false
+  - id: overview-counts-are-not-fabricated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Visão geral" summary bar never presents counts it does not have. Reading
+      "0 utilizadores", "0 administrador" and "0 ativo" on a page being viewed BY an active
+      administrator is a stated falsehood, not a neutral default - when the underlying request
+      failed, the summary must show a dash, a skeleton or nothing at all rather than a confident
+      zero. This is the most damaging form of the failure on this page, because a zero reads as a
+      fact the user can act on.
+      (Observed defect at authoring time - the bar read "0 utilizadores  0 administrador  0 ativo"
+      beneath a request-timeout banner, for an org owning the signed-in super-admin.)
+    tags: [functionality, data-integrity]
+    judgment: false
+  - id: overview-counts-pluralise
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Visão geral" counters agree in number with the figure they follow: a count other than
+      one reads "administradores" and "ativos", not the singular. Portuguese pluralises the noun
+      after a numeral, so "0 administrador" and "0 ativo" are grammatical defects on a summary bar
+      that is one of the first things the eye lands on.
+      (Observed defect at authoring time - the bar rendered "0 administrador" and "0 ativo"
+      alongside a correctly pluralised "0 utilizadores".)
+    tags: [i18n, copy, polish]
+    judgment: false
+  - id: load-error-is-in-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      If the user list fails to load, the message shown is Portuguese and written for a person -
+      it says the list could not be loaded and offers the retry. A raw English developer string is
+      a defect in a product that is otherwise Portuguese throughout, and a millisecond timeout
+      figure is not something to quote at the user.
+      (Observed defect at authoring time - the banner read literally "Request timed out after
+      120000ms", in English, beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the authoring-time observation behind this check was a dev-harness artifact (a leaking CORS proxy), not a product hang - the page renders normally in a clean browser. The CHECK stands: web/lib/api/core.ts really can surface a raw English timeout string and a failed read really must not render as an empty state, so this is kept as the guard for those paths.
+    tags: [i18n, error-handling, ux]
+    judgment: false
+  - id: search-placeholder-not-truncated
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The search box's placeholder is a well-formed phrase. It currently reads "Pesquisar
+      utilizadores." ending in a single full stop, which reads as a truncated ellipsis - every
+      other search field in this product ends in "..." (compare "Pesquisar memórias..." on
+      Memória). Either the ellipsis or no trailing punctuation at all is correct; a lone period is
+      neither.
+    tags: [copy, polish, i18n]
+    judgment: false

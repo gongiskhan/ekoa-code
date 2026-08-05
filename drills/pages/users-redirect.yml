@@ -1,0 +1,46 @@
+id: users-redirect
+title: Utilizadores legacy route (redirect into Settings)
+path: /users
+mode: steps
+areas: []
+steps:
+  - id: redirects-to-settings-users
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /users no longer renders a standalone page - the browser is redirected and the URL shown is /settings/users.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/settings/users" }
+    assertionSource: authored
+  - id: lands-on-users-page
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the redirect the real destination is rendered - the "Utilizadores e Equipas" heading is on the page.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: text-contains, text: "Utilizadores e Equipas" }
+    assertionSource: authored
+  - id: redirect-is-clean
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The redirect is clean - no flash of an empty page or an error banner on the way through, and the settings tab bar ends up highlighting the Utilizadores tab that was actually landed on.
+    tags: [ux, navigation]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /users produces no browser console errors and no failed network requests on the way to its destination.
+    tags: [quality]
+    judgment: false

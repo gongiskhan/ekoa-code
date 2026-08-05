@@ -123,6 +123,46 @@ steps:
     description: The page delivers on the part of its subtitle about "o registo de tudo o que sai deste computador" - scrolling down reveals the read-permission controls and the egress log (or an explicit link to it), not just bridge installation instructions.
     tags: [functionality, privacy]
     judgment: true
+  - id: unpaired-sections-explain-themselves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      With no bridge paired, the four lower sections - "Autorizações de leitura ativas", "Registo de
+      leituras locais", "Atividade de mascaramento" and "Comandos locais aprovados" - each say in
+      words why they are empty and what the user must do first ("a lista é servida pela ponte local;
+      ligue a ponte..."), rather than showing an empty table or a bare column header row. A privacy
+      page that goes quiet is worse than one that says nothing is being read.
+    tags: [functionality, privacy, empty-state]
+    judgment: false
+  - id: lower-sections-resolve
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      None of the lower sections is left mid-flight once the page has settled - "Comandos locais
+      aprovados" must not stay on "A carregar..." and "Atividade de mascaramento" must not stay on
+      "Verificação em curso". On a privacy page an indefinite "checking..." reads as if an audit is
+      running when nothing is.
+      (Observed defect at authoring time - both sit in those states indefinitely with no bridge paired.)
+    tags: [functionality, loading, privacy]
+    judgment: false
+  - id: egress-log-columns-present
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Registo de leituras locais" table declares what it will record - MOMENTO, TIPO, FICHEIRO,
+      INTERVALO, DIMENSÃO and SESSÃO - so the user can see the shape of the evidence the product
+      promises to keep before any bridge is connected.
+    tags: [functionality, privacy, transparency]
+    judgment: false
   - id: instructions-readable
     area: 0
     mode: vision

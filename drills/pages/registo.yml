@@ -122,3 +122,62 @@ steps:
     description: The log reads cleanly at a glance - action names render as consistently styled badges, the long artifact UUIDs use a monospace treatment and do not push other columns out of alignment, and rows have enough vertical rhythm to scan without eye strain.
     tags: [visual, polish]
     judgment: true
+  - id: table-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The audit table settles into a real result - either event rows or a written empty state.
+      The filter bar rendering on its own, with nothing below it, is a failure: this page's whole
+      purpose is the record, and a blank record is indistinguishable from "nothing ever happened".
+      (Observed at authoring time - only the header and filter bar render; the table never arrives.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: audit-log-does-not-fake-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The audit log never reports "Sem entradas no registo." when the request behind it failed.
+      This run signed in, so at least one auth event exists to show, and on an audit surface a
+      false empty is the most serious form of this bug in the whole product: the record of who did
+      what is precisely the thing that must never quietly read as "nothing happened". A failed read
+      has to be an error the user can retry.
+      (Observed defect at authoring time - about two minutes after load the page showed the red
+      "Request timed out after 120000ms" banner and, beneath it, the "Sem entradas no registo."
+      empty state, in a session that had performed several logins.)
+    tags: [functionality, error-handling, data-integrity, audit]
+    judgment: false
+  - id: date-filters-use-portuguese-format
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "De" and "Até" date inputs present dates in the European day-month-year order this
+      product's locale uses - dd/mm/aaaa - not the American month-day-year order. Getting this
+      wrong is not cosmetic on an audit filter: "03/04" silently means two different days to the
+      app and to a Portuguese user, so a search returns the wrong window with no sign of an error.
+      (Observed defect at authoring time - both inputs render the placeholder "mm/dd/yyyy", the US
+      order, and in English abbreviations, on a page whose every other string is Portuguese.)
+    tags: [i18n, functionality, data]
+    judgment: false
+  - id: load-error-is-in-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      A failure to load the audit log is reported in Portuguese and in human terms, offering the
+      retry. A raw English developer string quoting a millisecond timeout is a defect here as
+      everywhere else in this product.
+      (Observed defect at authoring time - the banner read literally "Request timed out after
+      120000ms", in English, beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the authoring-time observation behind this check was a dev-harness artifact (a leaking CORS proxy), not a product hang - the page renders normally in a clean browser. The CHECK stands: web/lib/api/core.ts really can surface a raw English timeout string and a failed read really must not render as an empty state, so this is kept as the guard for those paths.
+    tags: [i18n, error-handling, ux]
+    judgment: false

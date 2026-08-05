@@ -18,6 +18,7 @@ steps:
     assertion:
       kind: text-contains
       text: Automatizações
+    assertionSource: authored
   - id: create-cta-visible
     area: 0
     mode: e2e
@@ -33,6 +34,7 @@ steps:
       kind: visible
       role: button
       name: Criar automatização
+    assertionSource: authored
   - id: on-automations-url
     area: 0
     mode: e2e
@@ -47,6 +49,7 @@ steps:
     assertion:
       kind: url-matches
       pattern: /automations
+    assertionSource: authored
   - id: content-renders-not-stuck-loading
     area: 0
     mode: e2e
@@ -66,6 +69,34 @@ steps:
     assertion:
       kind: text-contains
       text: Ainda não há automatizações
+  - id: header-survives-loading
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      While the automations list is still fetching, the page header stays on screen - the icon tile,
+      the "Automatizações" title, its subtitle and the "Criar automatização" action. The loading
+      state belongs to the list region only. Replacing the entire content area with a centred
+      spinner strips the user of the section title and of the primary action, so a user who wants to
+      create an automation has nothing to click for as long as the fetch takes.
+      (Observed defect at authoring time - the whole content area is replaced by "A carregar
+      automatizações...", and the fetch never returns.)
+    tags: [functionality, ux, loading]
+    judgment: false
+  - id: heading-not-satisfied-by-loading-text
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      "Automatizações" appears on this page as the page TITLE in the header, rendered as a heading -
+      not merely as a word inside the "A carregar automatizações..." spinner caption. A page whose
+      only occurrence of its own name is inside a loading message has not rendered its header.
+    tags: [functionality, visual]
+    judgment: false
   - id: create-cta-navigates-to-new
     area: 0
     mode: e2e
@@ -109,6 +140,21 @@ steps:
       - polish
     judgment: true
     spec: tests/drills/automations.spec.ts#empty-state-polish
+  - id: list-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The automations panel settles into a real result - either a list of automations or the
+      written empty state ("Ainda não há automatizações"). It must NOT still be showing
+      "A carregar automatizações..." once the page has settled; a loader that never resolves is a
+      failure, not a slow success.
+      (Observed at authoring time - the page stays on "A carregar automatizações..." indefinitely
+      while the API answers the same request in milliseconds.)
+    tags: [functionality, loading]
+    judgment: false
 spotter:
   stability:
     step-end:

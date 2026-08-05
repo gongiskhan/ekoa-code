@@ -1,36 +1,125 @@
 app:
   name: Ekoa
   url: http://localhost:3000
-fullDrill: false
-autonomy: gated
+fullDrill: true
+autonomy: auto
 viewports:
   - desktop
 globalRules: >-
   The product UI is Portuguese (pt-PT) throughout - any English string in the
   interface chrome, navigation, headings or messages is a defect unless the page
-  is demonstrably a third-party embed. Every authenticated page shares the same
-  shell: a dark icon rail on the left (expandable to labelled navigation), a top
-  bar carrying the office name, the token meter, the language switcher and the
-  user menu, and a page header made of an icon tile, a large title and a
-  one-line grey subtitle. Pages are built from full-width cards with consistent
-  horizontal margins. Dates must always render as real formatted dates -
-  "Invalid Date", raw epochs and empty dashes for records that do have a date
-  are defects. Destructive or irreversible actions (revoking a key, resetting a
-  quota or a brand, deleting) must confirm or give explicit feedback, never act
-  silently. Loading states must resolve: a page that stays on a spinner is a
-  failure, not a slow success. Zero browser console errors is the bar on every
-  page. Do not treat decorative emoji as acceptable UI - this product uses SVG
-  icons.
+  is demonstrably a third-party embed. Portuguese diacritics are part of that
+  bar: "sessao", "maiuscula", "minuscula", "numero", "revisao", "sera",
+  "interacoes", "Padroes" or "ambitos" written without their accents are
+  spelling defects, not stylistic choices. European Portuguese is the register:
+  the Brazilian "Carregando..." is wrong where the rest of the product says "A
+  carregar...", and Brazilian gerund progressives ("Carregando", "Processando",
+  "Planejando", "Construindo") are wrong where pt-PT uses "a + infinitive" ("A
+  carregar", "A processar", "A planear", "A construir"). The language switcher
+  is a single toggle in the top bar, not a menu - one click swaps PT<->EN and a
+  second click swaps back. It must translate the whole page, not just the shell:
+  a page in two languages at once is a defect on whichever page it is seen, and
+  the bar is that no Portuguese string survives a page switched to EN - headings,
+  field labels, table column headers, sub-navigation tabs and body copy included.
+  Hardcoded JSX text that never reaches the locale files is the usual cause. Every
+  authenticated page shares the same shell: a dark icon rail on the left
+  (expandable to labelled navigation), a top bar carrying the office name, the
+  token meter, the language switcher and the user menu, and a page header made
+  of an icon tile, a large title and a one-line grey subtitle. The top bar's
+  token meter must resolve to a real figure (e.g. "0/10.0M") - a grey skeleton
+  pill still showing after the page has settled is an unresolved loading state. Pages are built from full-width cards with
+  consistent horizontal margins. Dates must always render as real formatted
+  dates - "Invalid Date", raw epochs and empty dashes for records that do have a
+  date are defects. Destructive or irreversible actions (revoking a key,
+  resetting a quota or a brand, deleting) must confirm or give explicit
+  feedback, never act silently. Loading states must resolve: any region left on
+  "A carregar...", "Carregando..." or a spinner after the page has settled is a
+  failure, not a slow success, and the same goes for a submit button whose
+  spinner never returns to its resting label. Zero browser console errors is the
+  bar on every page - and note that this app can fail a fetch without logging
+  anything (the web client swallows a contract mismatch into a silent fallback),
+  so an empty console is not by itself evidence that the page worked. Equally, a
+  region still on a spinner is not proof of a product defect: confirm the request
+  actually hung, because a freshly-booted `next dev` compiles each route on first
+  visit and a screenshot taken mid-compile looks identical to a hung fetch.
+  Do not treat decorative emoji as acceptable UI - this product uses SVG icons.
+  RETRACTED CLAIM - read this before trusting any "everything hangs" report. A
+  2026-08-05 authoring run recorded a STANDING DEFECT here stating that the
+  dashboard's data reads never reach the browser, that every list sits on its
+  spinner for two minutes and then renders a "Request timed out after 120000ms"
+  banner over a false empty state, and that pages must therefore be given two
+  minutes to settle. That claim was re-tested the same day, against the same
+  stack it was written on, and it is WRONG. In a clean browser context every one
+  of the named pages renders in full and every request behind them answers 200 in
+  single-digit milliseconds - across 12 full page loads AND 35 client-side
+  navigations, with zero pending requests and the token meter resolving to
+  "0/10.0M" throughout. The false-empty-state and "0 utilizadores" screenshots
+  were downstream of that non-existent hang, so do NOT expect them either. Judge
+  every page on the normal couple-of-seconds settle: a spinner still showing after
+  that is a real failure, not something to wait two minutes for.
+  WHAT WAS ACTUALLY BROKEN, and is now fixed: the dev harness's CORS reverse proxy
+  (.claude/skills/run-ekoa-code/driver.mjs, :4111 -> the API's real port :4211)
+  piped responses without ever propagating the client's disconnect upstream. Every
+  SSE stream a browser opened and closed left an API-side client and its 30s
+  keepalive timer open forever, so /health's `bridgeConnections` only ever climbed
+  (67 attached clients against 12 real sockets). The authoring run read that
+  climbing counter as proof of a product-wide fetch failure and built the retracted
+  claim on it. The API was always correct - the same connect/abort straight to
+  :4211 returned to baseline in under three seconds. The proxy now destroys the
+  upstream request when the client goes away, and the counter returns to 0.
+  LESSON for any run that sees a spinner: confirm the request actually hung before
+  pinning it. Read the network panel, or curl the same endpoint. A counter on
+  /health is not evidence about the browser, and a screenshot of a spinner is not
+  evidence that a request never came back.
 dispatch: manual
 auth:
   loginPath: /login
   steps:
     - fill the "Nome de utilizador" field with "admin"
-    - fill the "Palavra-passe" field with "tmp12345"
-    - click the "Entrar" button
+    - >-
+      fill the "Palavra-passe" field with "tmp12345". This is the password a
+      FRESHLY BOOTED stack seeds, and the dev database is an in-memory Mongo that
+      is wiped and re-seeded on every stack restart, so "tmp12345" is correct
+      again after any restart. If it is rejected with "Credenciais inválidas.",
+      this stack instance has already had its admin password rotated by an
+      earlier run - retype the field with "Drill#Temp2026" and carry on.
+    - >-
+      click the "Entrar" button. Sign-in is not instant on this dev stack - the login request has
+      been measured between about 0.4s and 4.7s - so give the "Entrar" spinner a few seconds
+      before judging it stuck.
+    - >-
+      the seeded admin carries a forced-password-change flag, so this login usually lands on
+      /change-password showing "Deve alterar a palavra-passe antes de continuar". That screen does
+      NOT have to be cleared: the session it hands you is a fully working one. Verified on this
+      stack - with the flag still set, /registo rendered its 11 real audit entries and /usage
+      rendered the real per-user quota table, both with every API read answering 200 in about
+      240ms. So simply navigate on to the page under test (or click "Voltar ao Dashboard"); the
+      app does not bounce you back. Do NOT attempt the password change to "clear" it: it changes
+      the very credentials this Book stores, and this screen has its own known trouble (see the
+      change-password page file).
+    - >-
+      if the login form itself reappears unchanged, or the browser is bounced
+      straight to /change-password before any credentials were typed, the tab is
+      carrying a stale token from a previous stack instance: click "Terminar
+      sessão" (or clear the site's storage), then run the login steps again from
+      the top on the freshly rendered /login form.
+    - >-
+      DEV-STACK TRAP that looks exactly like a product-wide outage, and is not one. The dashboard
+      holds several long-lived SSE streams open against the API origin. Chrome allows only six
+      concurrent connections per origin over HTTP/1.1, which the dev CORS proxy speaks, so once
+      those streams have saturated the pool EVERY later fetch to the API simply queues, with no
+      error and nothing in the console. The page then shows shells, spinners and empty lists while
+      /health reports the API perfectly healthy and a curl to the same endpoint answers in single-
+      digit milliseconds. Measured on this stack: six attached SSE clients against exactly six
+      Chrome sockets, with 20 fetches pending behind them. The tell is the network panel - many
+      pending requests to the API origin, zero completed, no HTTP errors. It is NOT evidence of a
+      broken page. Recover by restarting the browser (a fresh context re-renders the same page in
+      full), and prefer one page per fresh context when a run is judging data-heavy pages.
   success: >-
-    the dashboard shell is visible (dark icon sidebar plus the top bar with the
-    token meter and user menu) and no login form remains
+    the dashboard shell is visible - the dark icon sidebar plus the top bar carrying the office
+    name, the token meter and the user menu - and no login form remains. Landing on
+    /change-password still counts as signed in: navigate to the page under test and confirm the
+    shell renders there.
   cacheMinutes: 720
 pages:
   - id: activate
@@ -68,6 +157,11 @@ pages:
     path: /chat
     mode: steps
     selected: true
+  - id: cofre
+    title: Cofre (credential vault)
+    path: /cofre
+    mode: steps
+    selected: true
   - id: integrations
     title: Integrações
     path: /integrations
@@ -93,6 +187,16 @@ pages:
     path: /settings/offices
     mode: steps
     selected: true
+  - id: orgs-redirect
+    title: Escritórios legacy route (redirect into Settings)
+    path: /orgs
+    mode: steps
+    selected: true
+  - id: os
+    title: OS mode (beta shell, NEXT_PUBLIC_OS_MODE)
+    path: /os
+    mode: steps
+    selected: false
   - id: pedidos
     title: Pedidos (change requests, Settings tab)
     path: /settings/pedidos
@@ -108,6 +212,11 @@ pages:
     path: /registo
     mode: steps
     selected: true
+  - id: root-redirect
+    title: App root (entry point, redirects to Chat)
+    path: /
+    mode: steps
+    selected: true
   - id: settings-api-keys
     title: Chaves de API
     path: /settings/api-keys
@@ -116,6 +225,11 @@ pages:
   - id: settings-branding
     title: Marca (brand research and design system)
     path: /settings/branding
+    mode: steps
+    selected: true
+  - id: settings-bridge-redirect
+    title: Ponte local legacy route (redirect into Privacidade)
+    path: /settings/bridge
     mode: steps
     selected: true
   - id: settings-devices
@@ -141,5 +255,10 @@ pages:
   - id: users
     title: Utilizadores e Equipas (Settings tab)
     path: /settings/users
+    mode: steps
+    selected: true
+  - id: users-redirect
+    title: Utilizadores legacy route (redirect into Settings)
+    path: /users
     mode: steps
     selected: true

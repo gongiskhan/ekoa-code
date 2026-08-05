@@ -91,3 +91,66 @@ steps:
     description: The table reads cleanly - the ID column uses a monospace, de-emphasised treatment that does not compete with the office name, the AÇÃO icon column is right-aligned, and the single-row table does not leave the card looking broken or stretched.
     tags: [visual, polish]
     judgment: true
+  - id: list-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The offices panel settles into a real result - either the offices table or a written empty
+      state. It must NOT still be showing "A carregar escritórios..." once the page has settled.
+      Judge the empty state carefully: "Ainda não há escritórios." only counts as a real result
+      when NO error banner sits above it (see office-list-does-not-fake-empty below), because the
+      page currently renders that same empty copy after a failed request.
+      (Observed at authoring time - the page stays on "A carregar escritórios..." for a full two
+      minutes even though the API returns the office list immediately.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: office-list-does-not-fake-empty
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The page never tells the user they have no offices when the request to fetch them failed.
+      This account owns the seeded "Founder" office, so "Ainda não há escritórios." with its
+      "Criar escritório" call to action is a FALSE empty state and a defect - a failed read must
+      surface as an error the user can retry, never as an authoritative "you have nothing here".
+      The tell is the empty illustration and copy appearing directly BELOW a red error banner on
+      the same screen; a genuine empty state appears on its own.
+      (Authoring-time observation, since retracted as a harness artifact - a request that timed out after 120s rendered the red
+      banner and the "Ainda não há escritórios." empty state together, for an account that
+      demonstrably owns an office.)
+    tags: [functionality, error-handling, data-integrity]
+    judgment: false
+  - id: load-error-is-in-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      If the offices list fails to load, the error the user is shown is written in Portuguese and
+      in human terms - it explains that the list could not be loaded and offers the retry action.
+      A raw English developer string is a defect in a product that is Portuguese everywhere else,
+      and so is quoting a millisecond timeout figure at the user.
+      (Observed defect at authoring time - the banner read literally "Request timed out after
+      120000ms", in English, beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the authoring-time observation behind this check was a dev-harness artifact (a leaking CORS proxy), not a product hang - the page renders normally in a clean browser. The CHECK stands: web/lib/api/core.ts really can surface a raw English timeout string and a failed read really must not render as an empty state, so this is kept as the guard for those paths.
+    tags: [i18n, error-handling, ux]
+    judgment: false
+  - id: retry-action-offered-on-failure
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, when the offices list has failed to load the page offers a "Tentar
+      novamente" retry control, and using it visibly re-attempts the request (the error banner
+      clears and the panel returns to a loading or resolved state) rather than doing nothing.
+    actions:
+      - click the "Tentar novamente" retry link in the error banner
+    tags: [functionality, error-handling]
+    judgment: false

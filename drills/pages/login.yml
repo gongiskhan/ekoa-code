@@ -57,10 +57,16 @@ steps:
     enabled: true
     viewports: [desktop]
     state: default
-    description: The "Esqueceu-se da palavra-passe?" recovery link is offered.
+    description: >-
+      The card tells a locked-out user how to get back in. There is no self-service recovery in
+      this product (the only reset is POST /api/v1/users/:id/password, super-admin only), so the
+      correct UI is a plain instruction to ask an administrator - NOT a link. It used to be a
+      link to /change-password, which needs the very password the user has forgotten and, signed
+      out, redirects straight back to /login, so it did nothing when clicked (fixed 2026-08-05).
+      A link reappearing here is a regression unless a real recovery route ships with it.
     tags: [functionality, ux]
     judgment: false
-    assertion: { kind: visible, role: link, name: "Esqueceu-se da palavra-passe?" }
+    assertion: { kind: text-contains, text: "Peça ao administrador da plataforma para a repor." }
     assertionSource: authored
   - id: remember-me-present
     area: 0
@@ -73,6 +79,69 @@ steps:
     judgment: false
     assertion: { kind: text-contains, text: "Manter sessão iniciada" }
     assertionSource: authored
+  - id: remember-me-is-a-real-checkbox
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      "Manter sessão iniciada" is exposed as a real checkbox control, not a decorative tick glyph -
+      a keyboard or screen-reader user must be able to reach and toggle the setting that decides how
+      long their session survives.
+    tags: [functionality, a11y]
+    judgment: false
+    assertion: { kind: visible, role: checkbox, name: "Manter sessão iniciada" }
+    assertionSource: authored
+  - id: fields-carry-placeholders
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The username field prompts with "Introduza o seu nome de utilizador", so an unlabelled-looking form is never presented on the product's first screen.
+    tags: [ux]
+    judgment: false
+    assertion: { kind: visible, placeholder: "Introduza o seu nome de utilizador" }
+    assertionSource: authored
+  - id: password-reveal-toggle-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The password field offers a "Mostrar palavra-passe" reveal toggle.
+    tags: [ux]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Mostrar palavra-passe" }
+    assertionSource: authored
+  - id: footer-wordmark-present
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The signed-out screen is branded - the "Ekoa · Plataforma de trabalho com IA" wordmark sits beneath the card.
+    tags: [visual, brand]
+    judgment: false
+    assertion: { kind: text-contains, text: "Ekoa · Plataforma de trabalho com IA" }
+    assertionSource: authored
+  - id: remember-me-default-is-deliberate
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      "Manter sessão iniciada" arrives pre-ticked on a freshly loaded login page. For a product
+      holding privileged client material, a persistent session opted in by default is a decision the
+      screen should own rather than slip past the user - the option must at least be unmistakably
+      legible and togglable, and the user must be able to see at a glance that it is ON.
+      (Observed at authoring time - the box is checked by default. Its label is legible dark text
+      at rest; it only dims while a sign-in request is in flight, which is correct disabled-during-
+      submit behaviour and not a defect.)
+    tags: [security, ux]
+    judgment: false
   - id: stays-on-login-when-signed-out
     area: 0
     mode: e2e
@@ -123,6 +192,45 @@ steps:
       - click the "Entrar" button
     tags: [functionality, auth]
     judgment: false
+  - id: failed-signin-never-resets-silently
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the actions, a sign-in attempt that does not succeed always ends in a message. The one
+      outcome that must never happen is the form quietly clearing both fields, dropping the "Entrar"
+      spinner and returning to its untouched resting state with no error and no navigation - the
+      user then cannot tell a wrong password from a broken app, and retyping the same correct
+      credentials produces the same silence.
+      (Observed defect at authoring time - a correct admin sign-in whose request never came back
+      left the card reset to empty fields with no error, while the API's own login endpoint answered
+      the same credentials in under half a second.)
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "tmp12345"
+      - click the "Entrar" button
+    tags: [functionality, error-handling, auth]
+    judgment: false
+  - id: signin-request-completes
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the actions, the sign-in resolves within a few seconds of the click - the "Entrar"
+      button must not be left spinning indefinitely. The platform's own login endpoint answers in
+      well under a second, so a spinner that outlives that is the client hanging on its own request,
+      not a slow server.
+      (Observed defect at authoring time - the button spun on repeated attempts and never resolved.)
+    actions:
+      - fill the "Nome de utilizador" field with "admin"
+      - fill the "Palavra-passe" field with "tmp12345"
+      - click the "Entrar" button
+    tags: [functionality, loading, auth]
+    judgment: false
   - id: submit-shows-pending-state
     area: 0
     mode: vision
@@ -154,9 +262,13 @@ steps:
     enabled: true
     viewports: [desktop]
     state: default
-    description: After the action, the "Esqueceu-se da palavra-passe?" link leads to a real recovery route or a clear explanation of how to recover access - it is not a dead link that leaves the page unchanged or lands on a 404.
-    actions:
-      - click the "Esqueceu-se da palavra-passe?" link
+    description: >-
+      A user who has forgotten their password is given a route back in, or told plainly how to get
+      one - never an inert control. This was a dead link to /change-password: clicking it changed
+      nothing at all (no route change, no dialog, no message, no console error), because signed
+      out that route redirects back to /login. Fixed 2026-08-05 by replacing it with the standing
+      instruction to ask an administrator, which is the only recovery this product actually has.
+      Judge the copy: it must name who can help, not merely state that recovery exists elsewhere.
     tags: [functionality, navigation]
     judgment: false
   - id: no-console-errors-on-load
@@ -174,7 +286,11 @@ steps:
     enabled: true
     viewports: [desktop]
     state: default
-    description: The "Manter sessão iniciada" label and the "Esqueceu-se da palavra-passe?" link each sit on a single line on the desktop card. Both wrapping to two lines inside a card this wide is a layout defect. (Observed at authoring time - both wrap.)
+    description: >-
+      The "Manter sessão iniciada" label sits on a single line on the desktop card. It used to
+      share a flex row with the recovery text, which squeezed it onto two (and, once the recovery
+      copy grew, three) lines inside a 400px card; the two are stacked as of 2026-08-05. The
+      recovery sentence below it may wrap - it is a sentence - but the checkbox label must not.
     tags: [visual, polish]
     judgment: false
   - id: card-polish

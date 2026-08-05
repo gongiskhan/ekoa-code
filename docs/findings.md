@@ -6,6 +6,187 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`the-dev-harness-proxy-never-propagated-client-disconnects`** (FIXED 2026-08-05, MEDIUM,
+  dev-harness resource leak - and the root of a whole false defect report). `driver.mjs up`
+  occupies `backend.port` (4111) with a small CORS reverse proxy and runs the real API on 4211.
+  Its forward path did `proxyRes.pipe(res)` and nothing else: `pipe` forwards DATA, never
+  TEARDOWN, so when a browser closed an SSE stream the proxy's upstream request to the API stayed
+  open forever. The API never saw the disconnect, so `res.on('close')` never fired, its
+  `SseManager` client was never deleted, and its 30s keepalive timer went on writing into a dead
+  socket for the life of the process. `/health`'s `bridgeConnections` therefore only ever climbed:
+  measured 67 attached clients against 12 real ESTABLISHED sockets, and +2 per document load with
+  no decrease on page close, context close, or browser exit.
+  THE API WAS ALWAYS CORRECT. The identical connect/abort straight to :4211 returns to baseline in
+  under 3 seconds; `res.on('close')` fires, the client is deleted, the timer is cleared. That one
+  substitution - bypass the proxy - is what separated harness from product, after `express.json`,
+  the three `noServer` WebSocket upgrade surfaces, and an isolated Express 5 reproduction had all
+  been eliminated as suspects. FIXED in the proxy: `res.once('close')` destroys the upstream
+  request, with a `clientGone` flag so the existing error/retry path does not treat a deliberate
+  teardown as an upstream failure and re-issue the GET. Verified: 0 -> 3 -> 0 within 2.5s through
+  :4111, and flat at 1 across 12 full page loads (was 19 -> 46).
+  WHY IT MATTERS BEYOND THE LEAK: a Drill authoring run read that climbing counter as evidence and
+  wrote a fabricated "STANDING DEFECT" into `drills/drillbook.yml` - see the dismissal below.
+  LESSON: a monotonic counter is not a measurement. Before believing `/health`, check it against
+  something independent (here, `ss` said 12 where the counter said 67).
+
+- **`a-drill-run-reported-a-product-wide-hang-that-was-its-own-harness`** (DISMISSED 2026-08-05,
+  discovery-run finding, closed by written dismissal per the QA block). A Drill authoring run
+  restarted the stack, re-tested, and reported a STANDING DEFECT: "the dashboard's data reads never
+  reach the browser", every list sitting two minutes then rendering a red `Request timed out after
+  120000ms` banner over a false empty state, `/settings/users` printing "0 utilizadores  0
+  administrador  0 ativo" to the administrator it was counting, `/utilizacao` showing a silent
+  false empty, `/registo` claiming "Sem entradas no registo.", `/chat` stranded on a spinner, and
+  the /change-password form spinning forever. It concluded roughly a third of the Book's assertions
+  should be expected red and that every page needed a two-minute settle.
+  NONE OF IT REPRODUCES. Re-driven the same day against the same stack, in a clean browser context:
+  every named page renders in full, every request behind them answers 200 in single-digit ms, the
+  token meter resolves to "0/10.0M" - across 12 full page loads AND 35 client-side navigations,
+  with zero pending requests. `/registo` shows 35 entries, `/chat` renders its composer, and the
+  change-password form posts `/api/v1/auth/password`, gets 200 in 757ms and lands on /login in ~3s.
+  CAUSE: the run drove a long-lived explorer browser through the leaking harness proxy above, and
+  read the climbing `bridgeConnections` counter as proof of a product-wide fetch failure. Its own
+  transcript records the counter reaching 6 - Chrome's per-origin HTTP/1.1 connection limit - which
+  is how a genuinely wedged tab and a mis-attributed counter looked alike.
+  TWO OF ITS CLAIMS WERE REAL and are fixed separately: the raw English timeout string (below) and
+  the dead recovery link (below). One was a harness artifact of a different kind: `/registo`'s
+  "mm/dd/yyyy" date filters are `<input type="date">`, whose display format is chosen by the
+  BROWSER's locale and cannot be set by the page - headless Chromium defaults to en-US. Not a
+  product defect; do not re-file it.
+  ACTION TAKEN: the fabricated STANDING DEFECT block in `drills/drillbook.yml` `globalRules` is
+  replaced with a retraction plus the verified account, because as written it would have told every
+  future run to wait two minutes per page and to attribute any red assertion to a defect that does
+  not exist. The four page files whose notes cited the 120s timeout are annotated in place.
+  LESSON: the run did the right thing by restarting the stack to rule out a stale environment, and
+  still landed on the wrong cause because it never tested the API without the harness in front of
+  it. When browser and curl disagree, the thing between them is the first suspect.
+
+- **`a-raw-english-timeout-string-reaches-a-pt-pt-ui`** (FIXED 2026-08-05, LOW, copy). The Drill run
+  was right that `Request timed out after 120000ms` is a defect, even though the hang that surfaced
+  it was not real. `web/lib/api/core.ts` threw three transport failures with English developer
+  strings - `Request timed out after ${timeoutMs}ms`, `Request aborted`, `Network request failed` -
+  and callers surface `err.message` directly, so any real timeout puts English in front of a
+  Portuguese-only product. The class docblock in `web/lib/api/errors.ts` already asserted these
+  messages were "user-safe and PT-aware", which was false for exactly these three. FIXED to the
+  wording the `backendErrors` block in `web/locales/pt.ts` already uses for the same conditions;
+  the machine-readable `code` is unchanged and the timeout budget moved into `details` rather than
+  being printed at the user.
+
+- **`the-forgot-password-link-pointed-at-a-page-needing-the-forgotten-password`** (FIXED 2026-08-05,
+  LOW, dead-end UX). `/login` rendered "Esqueceu-se da palavra-passe?" as a `<Link href="/change-password">`.
+  That route requires authentication AND the current password - the very thing the user has lost -
+  and, signed out, redirects straight back to /login, so clicking it did nothing at all: no route
+  change, no dialog, no message, no console error. There is no self-service recovery in this
+  product: the only reset is `POST /api/v1/users/:id/password`, auth class `super-admin`. FIXED by
+  replacing the dead control with the instruction that matches reality ("Peça ao administrador da
+  plataforma para a repor."), stacked below the remember-me checkbox rather than beside it - sharing
+  that flex row forced the checkbox label onto three lines in a 400px card.
+
+- **`a-forced-password-change-was-skipped-on-the-submit-path`** (FIXED 2026-08-05, HIGH, auth
+  bypass - found while verifying a Drill planning run's defect list). `seedAdmin` creates the
+  super-admin with `passwordChangeRequired: true` and `POST /auth/login` returns that flag, but
+  /login's `redirectAfterAuth` read it out of a **stale closure**: `handleSubmit` calls the callback
+  immediately after `await login(...)` resolves, and the captured `passwordChangeRequired` is still
+  the PRE-login value (`false`), so the branch that routes to /change-password never ran and the user
+  landed on the dashboard. The same function already dodged this exact hazard for the token — it
+  takes `latestToken` as a parameter *because* the store write is not visible to this closure — and
+  the flag was left reading the stale one right beside it. The already-authenticated path
+  (`useEffect` at mount, from a persisted token) used the reactive value and DID redirect, which is
+  why the behaviour looked intermittent: sign in fresh and the forced change was skipped, arrive
+  with a token and it was enforced. FIXED by reading `useAuthStore.getState().passwordChangeRequired`
+  at call time. Verified: three consecutive fresh sign-ins now land on /change-password showing
+  "Deve alterar a palavra-passe antes de continuar".
+  NOTE: ~30 e2e specs signed in as admin and asserted `waitForURL(/\/chat/)` — i.e. the suite was
+  green *because of* this bug. They now route through `web/e2e/helpers/ui-login.ts`, which normalises
+  the admin over the API before driving the UI (spend the forced change, then change back, leaving
+  `admin`/`tmp12345` with the flag clear) so the many specs that authenticate over the API with the
+  seeded password keep working. The forced-change path itself stays covered by change-password.spec.ts.
+  LESSON: a callback that already takes one post-await value as a parameter is announcing that its
+  closure is stale; every other store field it reads is suspect for the same reason.
+
+- **`a-404-detail-page-never-left-its-loading-state`** (FIXED 2026-08-05, MEDIUM, honest state).
+  `/automations/<unknown-id>` rendered a bare full-viewport "A carregar..." forever. The requests had
+  in fact finished — `GET /automations/:id` and `.../triggers` both answered 404 in ~20ms — but the
+  page's only early return was `if (!current || current.id !== id) return <LoadingState/>`, with no
+  branch for "the fetch is over and produced nothing". The store already tracked `currentLoading` and
+  `error`; the page read neither. A spinner over a finished 404 is a lie, and it also stripped the
+  user of the page header and of any way back. FIXED with a three-way branch (loading / not-found /
+  loaded); the not-found state renders the section header plus an EmptyState and a "Voltar às
+  automatizações" link. Guarded against a first-render flash of the not-found state by gating on a
+  ref holding the id a fetch was actually dispatched for, since `currentLoading` is still false on
+  the render before the effect runs.
+
+- **`pt-pt-copy-was-partly-brazilian-and-partly-unaccented`** (FIXED 2026-08-05, LOW, copy quality).
+  `web/locales/pt.ts` carried 84 defects against the product's own pt-PT bar: 64 words missing their
+  diacritic ("Terminar Sessao", "interacoes", "Padroes", "ambitos", "revisao", "sera", "utilizacao",
+  "codigo", "maiuscula"/"minuscula"/"numero" in the password policy), and 20 strings in Brazilian
+  register — the whole `backendErrors` block ("Sua sessao expirou. Faca login novamente.", "A
+  requisicao e invalida. Verifique seus dados."), Brazilian gerund progressives ("Carregando...",
+  "Preparando tudo...", "Planejando a melhor abordagem...", "Construindo...", "Processando...") where
+  the same file's `friendlyMessages` block already used the correct "a + infinitive" form, and two
+  missing crases. FIXED wholesale; verified by rendering /memory, /knowledge, /usage,
+  /settings/users, /settings/platform and /artifacts and matching against the offending forms.
+
+- **`hardcoded-jsx-text-never-reached-the-locale-files`** (FIXED 2026-08-05, LOW, i18n). Switching to
+  EN left parts of some pages in Portuguese — not because a translation was missing but because the
+  strings bypassed the locale system entirely: `/knowledge`'s header description, its "O que a Ekoa
+  aprendeu" action and its whole agents-first banner were literal JSX; the settings sub-navigation
+  ("Plataforma / Pedidos / Utilizadores / Escritórios") was a module-level const; and the users
+  table's "Escritório" column header was a literal. FIXED by adding `pages.knowledge`,
+  `pages.settingsNav` and `pages.users.office` to `types.ts` + both locales and wiring the call
+  sites. Verified: /knowledge, /memory and /settings/users now contain no Portuguese under EN.
+
+- **`the-drill-authoring-run-reported-a-product-wide-hang-that-does-not-exist`** (DISMISSED
+  2026-08-05, discovery-run finding, closed by written dismissal per the QA block). The Drill Book
+  planning run (2026-08-05, 04:46-05:05 local) reported that "the client hangs its own fetches" on
+  /automations, /cofre, /knowledge, /memory, /settings/users, /settings/offices and
+  /settings/pedidos; that the top-bar token meter "never resolves past its grey skeleton, on every
+  page"; that /settings/api-keys shows a heading over blank space; and that /integrations "never
+  renders its search box or filter chips" with "most cards stuck as skeletons". NONE of it
+  reproduces. Re-driven the same day against the SAME still-running stack (api pid 755077 and the
+  web dev server both up since 04:46; the in-memory Mongo never restarted), every one of those pages
+  renders its full content, every API request behind them answers 200 in under 60ms, the token meter
+  reads "Tokens 0/10.0M" on every page, /integrations renders its search input, its
+  "Todas 9 / Ativadas 0 / Configuradas 0 / Disponíveis 9" chips and all 9 cards, and the console is
+  clean. The one spinner in that list that WAS real is logged separately above
+  (`a-404-detail-page-never-left-its-loading-state`) and is a missing not-found branch, not a hang.
+  ON THE CREDENTIAL THEORY, which is what prompted the re-check: the model credential was NOT
+  missing during the authoring run. `activity_logs` puts the credential `set` at 03:46:48.509Z, nine
+  seconds into boot and BEFORE the run's first login at 03:46:57Z; the later `set` at 07:12:24Z is a
+  `npm run dev:auth` re-arm of an already-present credential. It could not have been the cause
+  anyway — none of the hung pages touch the LLM, and `GET /api/v1/users` is a Mongo read.
+  MOST LIKELY CAUSE: the run began 36 seconds after the web dev server started, so every route it
+  visited was being compiled on demand for the first time, on a box also running several other Next
+  servers; a screenshot taken mid-compile is indistinguishable from a hung fetch. Not proven — the
+  routes are warm now and the window cannot be reconstructed — which is exactly why it is dismissed
+  rather than re-filed.
+  ACTION TAKEN: `drills/drillbook.yml`'s `globalRules` asserted three of these as standing product
+  facts, which would have produced a false failure on EVERY page of every future run. Corrected: the
+  token-meter rule now states the requirement without the false "it currently renders as a grey
+  skeleton"; the language-switcher rule no longer claims EN "relabels only the top bar and sidebar"
+  (verified false — /memory translates completely; the real defect was the hardcoded-JSX one logged
+  above) and now records that the control is a single toggle, not a menu; and the console rule now
+  warns that a visible spinner is not by itself proof of a hang. The per-page
+  "(Observed at authoring time - ...)" parentheticals were left as-authored: they are historical
+  notes attached to checks that remain correct expectations, and rewriting the ones I did not
+  individually re-drive would trade one set of unverified claims for another.
+  LESSON: a discovery run against a cold dev server records compile latency as product defect. Warm
+  the routes first, or confirm the request actually hung before pinning it.
+
+- **`two-specs-failed-on-a-by-design-404-the-rest-of-the-suite-filters`** (FIXED 2026-08-05, LOW,
+  test correctness — pre-existing, found while verifying the Drill run). `shell-nav.spec.ts` and
+  `pages-manage.spec.ts` failed on /integrations with two console 404s. The 404 is CORRECT and
+  deliberate: `/integrations` probes `GET /api/v1/sync/citius/notificacoes/state`, and
+  `api/src/routes/sync.ts` answers 404 for a flag-disabled rail *specifically so* the panel can tell
+  "not for this deployment" apart from a failure and render nothing at all — the contract is spelled
+  out in `web/lib/sync/citius-sync.ts` (`kind: 'unavailable'`). `fetch` logs the 404 regardless of
+  how the app handles it, so any spec visiting /integrations with a strict console bar fails on a
+  handled, designed answer. 20 of the suite's specs already filter the URL-less
+  "Failed to load resource" line for exactly this reason; these two did not. FIXED by giving both the
+  documented pattern (document-redline.spec.ts): drop the URL-less console line, then pin 4xx/5xx
+  from `response` events BY URL with the by-design probe excluded. Net effect is a STRICTER bar than
+  before — both specs now also catch `pageerror`s and every other non-2xx by URL, neither of which
+  they were checking. NOT a product defect: no change to the sync rail.
+
 - **`org-shared-credential-egress-was-authored-by-the-reader`** (FIXED 2026-08-03, CRITICAL,
   credential exfiltration - found by the B2+C2 fresh-context review, on the branch BOTH slices
   documented as safe). B2 and C2 each moved the egress allow-list onto the Cofre item and each

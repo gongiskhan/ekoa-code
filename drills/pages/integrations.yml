@@ -26,17 +26,45 @@ steps:
     judgment: false
     assertion: { kind: visible, role: tab, name: "Webhooks" }
     assertionSource: authored
-  - id: search-box-visible
+  - id: refresh-action-present
     area: 0
     mode: e2e
     enabled: true
     viewports: [desktop]
     state: default
-    description: The "Pesquisar integrações." search box is present.
-    tags: [functionality]
+    description: The page header offers an "Atualizar" refresh action, so a user whose catalogue failed to load has a way to retry without a full page reload.
+    tags: [functionality, ux]
     judgment: false
-    assertion: { kind: visible, placeholder: "Pesquisar integrações." }
+    assertion: { kind: visible, role: button, name: "Atualizar" }
     assertionSource: authored
+  - id: search-box-visible
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The platform tab renders its filter row above the card grid - the "Pesquisar integrações."
+      search box and the Todas / Ativadas / Configuradas / Disponíveis count chips. A catalogue of
+      this size is unusable without them.
+      (Observed defect at authoring time - no search box and no count chips are rendered at all;
+      the tab goes straight from the description line to the cards.)
+    tags: [functionality, ux]
+    judgment: false
+  - id: platform-grid-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Every card in the platform grid settles into a real integration - a logo, a name, a
+      description and a status pill. Grey skeleton placeholder cards still sitting in the grid once
+      the page has loaded are a failure, not a slow success.
+      (Observed defect at authoring time - only the first three cards resolve; the remaining rows
+      stay as grey skeletons indefinitely.)
+    tags: [functionality, loading]
+    judgment: false
   - id: platform-cards-present
     area: 0
     mode: e2e

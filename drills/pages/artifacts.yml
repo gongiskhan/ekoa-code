@@ -48,6 +48,31 @@ steps:
     judgment: false
     assertion: { kind: visible, role: button, name: "Todos" }
     assertionSource: authored
+  - id: gallery-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The gallery settles into a real result - either a grid of artifact cards or an explicit written empty state inviting the user to build or import their first artifact. It must not be left on a spinner, and it must not be a bare blank area under the filter chips.
+    tags: [functionality, loading]
+    judgment: false
+  - id: count-matches-grid
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "N artefactos construídos" counter under the heading agrees with what the grid actually
+      shows - if the account owns artifacts, the counter is not 0 and the cards are rendered.
+      A page that reports "0 artefactos construídos" while the account does in fact own artifacts
+      is showing a false empty state, which is worse than a spinner because it looks finished.
+    tags: [functionality, data-integrity]
+    authoringObservation:
+      kind: snapshot
+      receipts: [observation-2d0d2a21441f-0110]
+    judgment: false
   - id: cards-render
     area: 0
     mode: e2e
@@ -70,6 +95,67 @@ steps:
     judgment: false
     assertion: { kind: visible, role: button, name: "Personalizar no chat" }
     assertionSource: authored
+  - id: no-invalid-date-on-cards
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      No artifact card anywhere on this page renders the literal string "Invalid Date". Each card's
+      timestamp is either a real formatted Portuguese date or is omitted entirely. Check the card
+      hover overlay as well as the resting card - the overlay that carries "Continuar a trabalhar",
+      "Abrir num novo separador" and "Mais ações" also carries the timestamp, and that is where the
+      broken value surfaced at authoring time.
+    tags: [functionality, data-integrity]
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts: [observation-2d0d2a21441f-0110]
+  - id: card-hover-overlay-actions
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, hovering an artifact card reveals its action overlay - "Continuar a
+      trabalhar", "Abrir num novo separador", "Mais ações" and the delete control - laid out over
+      the preview without obscuring the card title, and every action reads as a real labelled
+      control rather than a bare icon.
+    actions:
+      - hover the "Portfólio Agência" artifact card
+    tags: [functionality, ux]
+    judgment: false
+  - id: delete-action-confirms
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the actions, asking to delete an artifact does NOT delete it on the spot - a
+      confirmation step names what is about to be destroyed and offers a way out. Deleting a built
+      artifact is irreversible, so a single unconfirmed click must never be enough.
+    actions:
+      - hover the "Portfólio Agência" artifact card
+      - click the "Eliminar artefacto" button on that card
+    tags: [functionality, safety]
+    judgment: false
+  - id: refresh-control-works
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, the refresh control re-reads the gallery and settles back into the grid -
+      it shows a brief pending state and then returns to the same populated grid, never leaving a
+      spinner in place, emptying the grid or dropping the artifact count to 0.
+    actions:
+      - click the "Atualizar artefactos" button
+    tags: [functionality]
+    judgment: false
   - id: search-filters-grid
     area: 0
     mode: vision
@@ -98,7 +184,7 @@ steps:
     enabled: true
     viewports: [desktop]
     state: default
-    description: Every visible artifact card shows a rendered preview thumbnail - no broken-image icons, no permanently empty grey placeholders. (At authoring time the page logged four 404 network errors on load; if a card's preview is missing this check should fail.)
+    description: Every visible artifact card shows a rendered preview thumbnail - no broken-image icons, no permanently empty grey placeholders. A card whose preview never arrives should fail this check even if the page logged nothing to the console.
     tags: [functionality, visual]
     judgment: true
   - id: gallery-polish
@@ -110,3 +196,11 @@ steps:
     description: The gallery reads as a tidy grid - cards are equal width, aligned in rows, titles do not overflow, the chip row and search box sit on one header line, and the "Aplicações" section header with its description is clearly separated from the cards.
     tags: [visual, polish]
     judgment: true
+states:
+  - id: populated
+    label: Account owning at least four artifacts
+    reachPath:
+      - id: open-artifacts
+        description: navigate to /artifacts and wait for the gallery to finish loading
+      - id: clear-filters
+        description: make sure the "Todos" filter chip is the selected one so the grid is not narrowed by a filter

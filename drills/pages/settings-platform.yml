@@ -134,3 +134,52 @@ steps:
     description: Every settings row follows one pattern - label and description on the left, control right-aligned on the same baseline, rows separated by hairline dividers within a card, and sections introduced by a small title plus grey caption. No control is orphaned or vertically misaligned with its label.
     tags: [visual, polish]
     judgment: true
+  - id: settings-form-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The platform settings form actually renders, rather than being left indefinitely on its
+      "A carregar as configurações..." loader with none of the settings below reachable.
+      (Re-checked 2026-08-05: this page DOES resolve, but only after about two minutes on the
+      loader - the same delay described in the Book's standing defect. Everything below it then
+      renders correctly. Judge it on whether the form arrives in a reasonable time, not on whether
+      it arrives at all. Note also that the loader copy is correct European Portuguese - an earlier
+      note in this Book called it Brazilian "Carregando configurações...", which is not what the
+      page shows.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: default-language-is-portuguese
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Idioma" setting - described as "Definir o idioma predefinido para a interface da
+      plataforma e conteúdo gerado" - has "Português (Portugal)" as the selected segment, not
+      "Inglês". This product ships a Portuguese interface, its top-bar switcher reads PT, and every
+      string on this very page is Portuguese, so a platform default of English contradicts the
+      product the user is looking at and would drive generated content into the wrong language.
+      (Observed defect at authoring time - the "Inglês" segment is the highlighted/selected one.)
+    tags: [i18n, functionality, defaults]
+    judgment: false
+  - id: platform-name-shows-saved-value
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Nome da Plataforma" field shows the platform's saved name as an actual editable VALUE
+      in dark text, not as a grey placeholder. A placeholder reading "Ekoa" is ambiguous in a way
+      that matters on a settings form: the user cannot tell whether the name is set to "Ekoa" or
+      simply unset with "Ekoa" suggested, and saving the form with the field untouched may clear
+      or default the setting without them intending it.
+      (Observed at authoring time - "Ekoa" renders in the grey placeholder treatment, matching the
+      empty-field styling rather than the filled-field styling used by "Europe/Lisbon (WET)" in the
+      row beneath it.)
+    tags: [functionality, ux, data]
+    judgment: false

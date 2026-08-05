@@ -68,6 +68,20 @@ steps:
     description: Both advisory callouts are shown before any research runs - "Os resultados podem necessitar de revisao" (AI-extracted results need checking) and "A memória da empresa sera atualizada" (saving replaces existing company-identity memories). These set expectations for a destructive, AI-driven action and must not be hidden behind a click.
     tags: [ux, safety]
     judgment: false
+  - id: warning-copy-correctly-accented
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The two amber callouts are spelled in correct Portuguese. Their headings must read
+      "Os resultados podem necessitar de revisão" and "A memória da empresa será atualizada" -
+      with the accents on "revisão" and "será". Unaccented "revisao" and "sera" are spelling
+      defects, not stylistic choices, and they sit in the most prominent warning copy on the page.
+      (Observed defect at authoring time - both headings render unaccented.)
+    tags: [i18n, copy, quality]
+    judgment: false
   - id: research-enables-with-url
     area: 0
     mode: vision

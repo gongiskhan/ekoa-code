@@ -20,6 +20,7 @@ steps:
     assertion:
       kind: text-contains
       text: Nova automatização
+    assertionSource: authored
   - id: objective-field-visible
     area: 0
     mode: e2e
@@ -34,6 +35,7 @@ steps:
     assertion:
       kind: visible
       label: Objetivo (obrigatório)
+    assertionSource: authored
   - id: name-field-visible
     area: 0
     mode: e2e
@@ -48,6 +50,7 @@ steps:
     assertion:
       kind: visible
       label: Nome (opcional)
+    assertionSource: authored
   - id: cancel-button-visible
     area: 0
     mode: e2e
@@ -63,6 +66,7 @@ steps:
       kind: visible
       role: button
       name: Cancelar
+    assertionSource: authored
   - id: draft-disabled-when-empty
     area: 0
     mode: e2e
@@ -81,16 +85,23 @@ steps:
       name: Esboçar passos
       attribute: disabled
       value: ''
+    assertionSource: authored
+  # This check was graduated to a pinned assertion that asserted the button was DISABLED - the
+  # exact opposite of its own criterion. Verified live at authoring time: with the objective
+  # empty, attribute-equals disabled="" passes; once the objective is filled it fails, because
+  # the attribute is gone. None of the five assertion kinds can express "this control is
+  # enabled", so the check belongs in the behavioural lane and the inverted assertion and the
+  # spec generated from it are removed.
   - id: draft-enables-after-objective
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
       After the action, the "Esboçar passos" button is enabled (no longer greyed
-      out / disabled).
+      out / disabled) once an objective has been typed.
     actions:
       - id: __act-0
         description: >-
@@ -105,13 +116,6 @@ steps:
       - functionality
       - validation
     judgment: false
-    spec: tests/drills/automations-new.spec.ts#draft-enables-after-objective
-    assertion:
-      kind: attribute-equals
-      role: button
-      name: Esboçar passos
-      attribute: disabled
-      value: ''
   - id: cancel-returns-to-list
     area: 0
     mode: e2e
@@ -134,10 +138,14 @@ steps:
       - navigation
     judgment: false
     spec: tests/drills/automations-new.spec.ts#cancel-returns-to-list
+    # Anchored: the loose "contains /automations" pattern also matched /automations/new, so the
+    # check passed whether or not Cancelar navigated anywhere. Verified live at authoring time -
+    # after clicking Cancelar the URL is exactly /automations and this regex passes.
     assertion:
       kind: url-matches
-      pattern: /automations
-      mode: contains
+      pattern: /automations$
+      mode: regex
+    assertionSource: authored
   - id: form-layout-polish
     area: 0
     mode: e2e
@@ -168,6 +176,7 @@ steps:
       goncalo.p.gomes@gmail.com Make sure this automation works end to end and
       all states are visible and correct.
     tags: []
+    judgment: true
   - id: s1785348441480-1
     area: 0
     mode: e2e
@@ -175,13 +184,18 @@ steps:
     viewports:
       - desktop
     state: default
-    description: ''
-    tags: []
+    description: >-
+      The create form is served at its own route - the browser stays on
+      /automations/new rather than being redirected back to the list.
+    tags:
+      - navigation
+    judgment: false
     spec: tests/drills/automations-new.spec.ts#s1785348441480-1
     assertion:
       kind: url-matches
       pattern: /automations/new
       mode: contains
+    assertionSource: authored
   - id: s1785351740689-2
     area: 0
     mode: e2e
@@ -189,13 +203,18 @@ steps:
     viewports:
       - desktop
     state: default
-    description: ''
-    tags: []
+    description: >-
+      Interacting with the draft form does not navigate away - the browser is
+      still on /automations/new after the form has been filled in.
+    tags:
+      - navigation
+    judgment: false
     spec: tests/drills/automations-new.spec.ts#s1785351740689-2
     assertion:
       kind: url-matches
       pattern: /automations/new
       mode: contains
+    assertionSource: authored
 spotter:
   stability: {}
   rules: []

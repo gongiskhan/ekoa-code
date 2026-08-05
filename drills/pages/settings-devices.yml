@@ -65,7 +65,14 @@ steps:
     enabled: true
     viewports: [desktop]
     state: default
-    description: After the actions, submitting a well-formed but non-existent code shows a clear error explaining the code is invalid or expired - it must not silently succeed, and it must not leave the user staring at an unchanged form.
+    description: >-
+      After the actions, submitting a well-formed but non-existent code shows a clear error
+      explaining the code is invalid or expired - it must not silently succeed, and it must not
+      leave the user staring at an unchanged form. In particular the button must come back out of
+      its "A aprovar..." spinner: a device approval that neither confirms nor fails leaves the user
+      unable to tell whether an unknown device was just authorised.
+      (Observed defect at authoring time - the button stays on "A aprovar..." indefinitely and no
+      error is ever shown.)
     actions:
       - fill the "Código do dispositivo" field with "ZZZZ-ZZZZ"
       - click the "Aprovar" button
@@ -91,6 +98,56 @@ steps:
     state: default
     description: The helper text under the field tells the user the code's format and that it is valid for 10 minutes, so an expired-code failure is understandable rather than mysterious.
     tags: [ux]
+    judgment: false
+  # The three checks below are about the shared authenticated shell rather than this page's
+  # own content. They are hosted here because this is one of the few routes that renders
+  # completely and quickly, so a shell regression is caught without waiting on a hanging fetch.
+  - id: shell-signout-label-accented
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, the open user menu shows the signed-in account ("admin", "super-admin") and
+      a sign-out item spelled "Terminar Sessão" - with the accent. This item is on every
+      authenticated page, so an unaccented "Terminar Sessao" is a spelling defect repeated across
+      the whole product.
+      (Observed defect at authoring time - the menu reads "Terminar Sessao".)
+    actions:
+      - click the "Menu do utilizador" button
+    tags: [i18n, copy, quality]
+    judgment: false
+  - id: shell-language-switch-translates-whole-page
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, switching the language to EN translates the PAGE, not only the chrome. The
+      top bar and sidebar relabel to "Toggle sidebar" / "Change language" / "User menu", so the
+      heading, the field label, the helper text and the buttons in the card below must relabel too.
+      A page showing English chrome over Portuguese content is a half-applied translation and a
+      defect.
+      (Observed defect at authoring time - only the shell relabels; "Aprovação de dispositivos",
+      "Código do dispositivo", "Recusar" and the helper text all stay Portuguese.)
+    actions:
+      - click the "Mudar idioma" button
+    tags: [i18n, functionality]
+    judgment: false
+  - id: shell-token-meter-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The token meter in the top bar shows a real consumption figure. A grey skeleton pill sitting
+      between the page area and the language switcher is an unresolved loading state, and it is on
+      every page of the product.
+      (Observed defect at authoring time - the meter never resolves past its skeleton.)
+    tags: [functionality, loading, visual]
     judgment: false
   - id: page-polish
     area: 0

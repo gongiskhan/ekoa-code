@@ -2,11 +2,16 @@ id: os
 title: OS mode
 path: /os
 mode: steps
+# GATED ROUTE. The OS shell lives behind the NEXT_PUBLIC_OS_MODE beta flag. With the flag
+# unset - which is how the local dev stack boots by default - /os does not exist for the
+# deployment and the layout replaces itself with a redirect to /chat, so every check below
+# would fail for that one reason. The Book therefore carries this page with selected: false.
+# To exercise it, boot the web app with NEXT_PUBLIC_OS_MODE enabled and select the page.
 areas: []
 steps:
   - id: os-doorway-entry
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -23,13 +28,17 @@ steps:
       run with NEXT_PUBLIC_OS_MODE=1 - with the flag off the sidebar doorway
       is absent and /os client-redirects to /chat, making every check on this
       page unreachable.)
+    actions:
+      - navigate to /chat
+      - click the "Alternar barra lateral" button to expand the sidebar
+      - click the "Modo OS" doorway card in the sidebar
     tags:
       - entry
       - navigation
     judgment: false
   - id: os-top-strip
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -48,7 +57,7 @@ steps:
     judgment: false
   - id: desktop-icons
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -90,7 +99,7 @@ steps:
     judgment: false
   - id: dock-bar-default
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -110,7 +119,7 @@ steps:
     judgment: false
   - id: open-artifacts-window
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -124,12 +133,14 @@ steps:
       the dock. The surface is a singleton: clicking the desktop icon or the
       dock pin again focuses the existing window - exactly one
       'os-window-artifacts' element ever exists.
+    actions:
+      - click the "Artefactos" icon on the OS desktop
     tags:
       - windowing
     judgment: false
   - id: window-move-resize
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -143,13 +154,17 @@ steps:
       bottom edge handles also exist with ew-resize/ns-resize cursors) resizes
       the window live, never below the surface minimum (360x420 for
       Artefactos), and the new size sticks after release.
+    actions:
+      - click the "Artefactos" icon on the OS desktop to open its window
+      - drag the window's title bar to the middle of the desktop and release
+      - drag the window's bottom-right resize corner outwards and release
     tags:
       - windowing
       - regression
     judgment: false
   - id: window-edge-snap
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -162,13 +177,16 @@ steps:
       desktop; releasing there tiles the window into exactly that half (full
       desktop height, squarer corners than the floating window). The same
       works symmetrically at the right edge (data-testid 'os-snap-right').
+    actions:
+      - click the "Artefactos" icon on the OS desktop to open its window
+      - drag the window's title bar until the pointer is within about 24px of the desktop's left edge, then release
     tags:
       - windowing
       - tiling
     judgment: false
   - id: tiled-divider-ratio
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -180,13 +198,16 @@ steps:
       it horizontally live-reflows the two windows' widths to the new ratio,
       and at no point do the tiled windows overlap each other or extend under
       the docked chat panel.
+    actions:
+      - open two windows on the OS desktop and tile them side by side by dragging each to an opposite edge
+      - drag the vertical divider between the two tiled windows to the right
     tags:
       - windowing
       - tiling
     judgment: false
   - id: window-minimize-restore-close
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -199,6 +220,10 @@ steps:
       destructive 'Fechar'. Clicking the title-bar 'Fechar' button removes
       both the window and its dock chip, and the dock's pin/window divider
       disappears once no windows remain.
+    actions:
+      - click the "Artefactos" icon on the OS desktop to open its window
+      - click the window's "Minimizar" button
+      - click the window's chip in the dock to restore it
     tags:
       - windowing
       - dock
@@ -226,7 +251,7 @@ steps:
     judgment: false
   - id: chat-dock-open-default
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -244,7 +269,7 @@ steps:
     judgment: false
   - id: chat-dock-collapse-resize
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -257,12 +282,16 @@ steps:
       left-edge handle (role separator, aria-label 'Redimensionar o painel de
       conversa') left/right resizes the panel live, and the chosen width
       survives collapsing and reopening.
+    actions:
+      - click the "Ocultar o painel de conversa" button
+      - click the collapsed chat tab on the right edge to reopen the panel
+      - drag the chat panel's left-edge handle to the left
     tags:
       - chat-dock
     judgment: false
   - id: chat-dock-sections
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -278,12 +307,15 @@ steps:
       has a built app or preview, an extra 'Abrir em janela' icon button
       appears in the panel header and opens that app as an
       'os-window-artifact-app' window on the desktop.
+    actions:
+      - send a short message in the chat dock so there is an active session
+      - click the "Ficheiros" section row in the chat dock
     tags:
       - chat-dock
     judgment: false
   - id: workspace-create-switch
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -295,6 +327,9 @@ steps:
       'Artefactos' dock pin. Clicking the 'Ecrã 1' pill switches back and the
       previously open window is exactly where it was left - windows and pins
       belong to their workspace.
+    actions:
+      - click the "Novo ecrã" (+) button in the workspace switcher
+      - click the "Ecrã 1" pill to switch back
     tags:
       - workspaces
     judgment: false
@@ -322,7 +357,7 @@ steps:
     judgment: false
   - id: layout-persistence-reload
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -333,12 +368,15 @@ steps:
       back side by side with their divider (data-testid prefixed
       'os-divider-'), and the same pinned dock items - the desktop does not
       reset to an empty first-run state after a full page reload.
+    actions:
+      - open a window on the OS desktop
+      - reload the browser on /os
     tags:
       - persistence
     judgment: false
   - id: mobile-fullscreen-surface
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - mobile
@@ -352,6 +390,9 @@ steps:
       stays as an inactive dock chip (the dock below remains visible and acts
       as the switcher); 'Fechar' discards it. No docked chat panel and no
       'global-chat-dock-tab' renders on mobile.
+    actions:
+      - tap the "Artefactos" icon on the OS desktop
+      - tap the "Minimizar" button in the full-screen surface's top bar
     tags:
       - responsive
       - windowing
@@ -375,7 +416,7 @@ steps:
     judgment: true
   - id: exit-to-classic
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -387,13 +428,15 @@ steps:
       and the 'Modo OS' doorway, dashboard header); no OS-shell elements
       ('os-shell', 'os-dock') remain mounted. Re-entering through the doorway
       returns to /os with the previous workspace state intact.
+    actions:
+      - click "Voltar ao modo clássico" in the OS top strip
     tags:
       - navigation
       - exit-gate
     judgment: false
   - id: zero-console-errors
     area: 0
-    mode: e2e
+    mode: vision
     enabled: true
     viewports:
       - desktop
@@ -405,6 +448,10 @@ steps:
       browser console errors - including no 404 from the previously fixed
       double-deleted surplus chat sessions on page mount, and no
       React/hydration warnings.
+    actions:
+      - click the "Artefactos" icon on the OS desktop
+      - close the "Artefactos" surface
+      - click the "Novo ecrã" (+) button in the workspace switcher
     tags:
       - console-errors
       - regression

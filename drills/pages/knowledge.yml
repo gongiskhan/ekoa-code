@@ -57,6 +57,37 @@ steps:
     description: On the default "Fornecido" tab with no documents, the page shows the centred empty state "Ainda não há documentos nesta base." with the hint pointing at «Documentos» and «Fontes», plus the "Todas" filter chip - not a blank panel.
     tags: [functionality, ux]
     judgment: false
+  - id: fornecido-list-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The "Fornecido" panel settles into a real result - either document entries or the written
+      empty state. It must not be left on the centred "A carregar..." spinner beneath the "Todas"
+      filter chip once the page has loaded; a spinner that never resolves is a failure, and it is
+      indistinguishable to the user from a knowledge base that silently lost its contents.
+      (Observed defect at authoring time - the panel stays on "A carregar..." indefinitely.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: loading-state-does-not-leak-across-tabs
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the action, switching to the "Fontes" tab shows that tab's own content - the "Adicionar
+      fonte" form and the list of configured sources. A stray "A carregar..." left over from the
+      Fornecido panel must not still be sitting in the page header area while a different tab is
+      selected.
+      (Observed at authoring time - "A carregar..." is still present on the page after switching to
+      Fontes.)
+    actions:
+      - click the "Fontes" tab
+    tags: [functionality, loading, ux]
+    judgment: false
   - id: fontes-tab-shows-add-source-form
     area: 0
     mode: vision

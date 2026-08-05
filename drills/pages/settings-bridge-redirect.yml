@@ -1,0 +1,59 @@
+id: settings-bridge-redirect
+title: Ponte local legacy route (redirect into Privacidade)
+path: /settings/bridge
+mode: steps
+# The local bridge no longer has its own settings tab - it was folded into "Privacidade e ponte
+# local". This route exists only to keep old links and bookmarks working.
+areas: []
+steps:
+  - id: redirects-to-settings-privacy
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /settings/bridge does not render a standalone bridge page - the browser is redirected and the URL shown is /settings/privacy.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/settings/privacy" }
+    assertionSource: authored
+  - id: lands-on-privacy-page
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the redirect the user is looking at the real destination, not a blank shell - the "Privacidade e ponte local" heading is rendered.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: text-contains, text: "Privacidade e ponte local" }
+    assertionSource: authored
+  - id: bridge-section-reachable
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The bridge functionality the old route pointed at is actually present at the destination - the "Gerar código de emparelhamento" pairing control is on the page. A redirect that drops the user somewhere the feature no longer exists is a broken redirect.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Gerar código de emparelhamento" }
+    assertionSource: authored
+  - id: redirect-is-clean
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The redirect happens cleanly - the user never sees a flash of an empty or half-built bridge page, an error banner, or a "not found" screen on the way through, and the settings navigation ends up highlighting the tab that was actually landed on.
+    tags: [ux, navigation]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /settings/bridge produces no browser console errors and no failed network requests on the way to its destination.
+    tags: [quality]
+    judgment: false

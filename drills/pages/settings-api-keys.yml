@@ -48,6 +48,38 @@ steps:
     judgment: false
     assertion: { kind: text-contains, text: "As suas chaves" }
     assertionSource: authored
+  - id: create-submit-settles
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      After the actions, the create-key submission finishes: the button comes back out of its
+      "A criar..." spinner - either to the reveal panel and a populated list, or to a written error.
+      A button left spinning on "A criar..." with the key list still empty is a failure, and so is a
+      page that quietly reverts to the blank form on reload with no key created and no error shown.
+      (Observed at authoring time - the button stayed on "A criar..." indefinitely and no key was
+      ever created.)
+    actions:
+      - fill the "Nome da chave" field with "Chave de teste drill"
+      - click the "Criar chave" button
+    tags: [functionality, loading, error-handling]
+    judgment: false
+  - id: keys-section-has-empty-state
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      With no keys created yet, the "As suas chaves" section says so in words - an empty-state line
+      such as "Ainda nao criou nenhuma chave" (correctly accented) or an empty table with its column
+      headers. A bare "As suas chaves" heading followed by nothing but white space is a defect: the
+      user cannot tell an account with no keys apart from a list that failed to load.
+      (Observed at authoring time - the heading renders with completely empty space beneath it.)
+    tags: [functionality, ux, empty-state]
+    judgment: false
   - id: create-reveals-key-once
     area: 0
     mode: vision

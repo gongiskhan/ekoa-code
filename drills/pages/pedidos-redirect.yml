@@ -26,6 +26,65 @@ steps:
       kind: url-matches
       pattern: /settings/pedidos
       mode: contains
+  - id: lands-on-pedidos-page
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: After the redirect the real destination is rendered - the "Pedidos" heading is on the page, not an empty shell.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: text-contains, text: "Pedidos" }
+    assertionSource: authored
+  - id: pedidos-tab-is-the-active-one
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The redirect lands inside the Settings tab bar, with the "Pedidos" tab present alongside
+      Plataforma, Utilizadores and Escritórios - the legacy route resolves to a tab of Settings
+      rather than to a detached page that happens to share the heading.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: visible, role: tab, name: "Pedidos" }
+    assertionSource: authored
+  - id: redirect-is-clean
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The redirect is clean - no flash of an empty page, a login form or an error banner on the way
+      through, and the settings tab bar ends up visually highlighting Pedidos, the tab actually
+      landed on, rather than leaving no tab marked active.
+    tags: [ux, navigation]
+    judgment: false
+  - id: destination-content-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      Arriving through the legacy route loads the destination's data just like a direct visit does -
+      the Pedidos list settles into either change-request rows or a written empty state, and does not
+      stay parked on "A carregar pedidos...".
+      (Observed at authoring time - the list stays on "A carregar pedidos..." indefinitely.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to /pedidos produces no browser console errors and no failed network requests on the way to its destination.
+    tags: [quality]
+    judgment: false
 spotter:
   stability:
     step-end:

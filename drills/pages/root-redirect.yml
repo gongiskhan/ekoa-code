@@ -1,0 +1,74 @@
+id: root-redirect
+title: App root (entry point, redirects to Chat)
+path: /
+mode: steps
+# The app has no separate dashboard/home page: the root sends a signed-in user straight into the
+# chat workspace, which then opens or resumes a session at /chat/<sessionId>.
+areas: []
+steps:
+  - id: root-lands-in-chat
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to the app root with a valid session lands the user in the chat workspace - the URL is under /chat, not left on / and not bounced to the login screen.
+    tags: [functionality, navigation]
+    judgment: false
+    assertion: { kind: url-matches, pattern: "/chat" }
+    assertionSource: authored
+  - id: dashboard-shell-rendered
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The destination renders the full dashboard shell rather than a bare redirect stub - the top-bar user menu is present.
+    tags: [functionality, layout]
+    judgment: false
+    assertion: { kind: visible, role: button, name: "Menu do utilizador" }
+    assertionSource: authored
+  - id: entry-is-usable-immediately
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Arriving at the app root leaves the user on a workspace they can immediately use - the icon rail, top bar and a ready chat composer are all rendered and interactive. It must not settle on a permanent spinner, an empty white pane, or a chat that is stuck mid-"A pensar..." with nothing the user can type into.
+    tags: [functionality, ux, loading]
+    judgment: false
+  - id: redirect-has-no-flash
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: The hop from / into the chat workspace is visually clean - no flash of an unstyled page, no momentary login form, and no visible double navigation before the workspace settles.
+    tags: [ux, polish]
+    judgment: false
+  - id: signed-out-root-goes-to-login
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: signed-out
+    description: With no session, navigating to the app root sends the user to the login screen rather than briefly exposing the dashboard shell or leaving them on a blank page.
+    tags: [security, navigation]
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: Navigating to the app root produces no browser console errors and no failed network requests through the redirect and into the workspace.
+    tags: [quality]
+    judgment: false
+states:
+  - id: signed-out
+    label: No active session
+    reachPath:
+      - id: sign-out
+        description: open the user menu in the top bar and choose the sign-out option ("Terminar sessão")
+      - id: go-root
+        description: navigate to the app root /

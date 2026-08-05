@@ -97,3 +97,49 @@ steps:
     description: The usage table looks clean - numeric columns are right-aligned, the percentage badge is consistently styled, the header row is visually distinct from the body, and the table card does not stretch awkwardly wide relative to its content.
     tags: [visual, polish]
     judgment: true
+  - id: table-resolves
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The consumption table settles into a real result - either per-user rows or a written empty
+      state. The page must not stop at its heading and subtitle with nothing but blank space where
+      the table belongs. Note that "Nenhum utilizador encontrado." does NOT count as settling into
+      a real result here; see usage-empty-state-is-a-lie below.
+      (Observed at authoring time - the table never renders; the page shows only its header block.)
+    tags: [functionality, loading]
+    judgment: false
+  - id: usage-empty-state-is-a-lie
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      The page never states that no users exist. At minimum the signed-in admin has an account and
+      has consumed tokens, so "Nenhum utilizador encontrado." is always false on this screen. A
+      read that did not return must be shown as a failure the user can retry.
+      (Observed defect at authoring time - roughly two minutes after load the page replaced its
+      spinner with the "Nenhum utilizador encontrado." empty state, while GET /api/v1/users
+      returned the admin account in milliseconds.)
+    tags: [functionality, error-handling, data-integrity]
+    judgment: false
+  - id: failed-load-is-not-silent
+    area: 0
+    mode: vision
+    enabled: true
+    viewports: [desktop]
+    state: default
+    description: >-
+      When the consumption data cannot be loaded, this page SAYS SO. It is the worst offender of
+      the product's failed-read handling: sibling pages at least render a red banner above their
+      false empty state, whereas this one shows the empty illustration and "Nenhum utilizador
+      encontrado." with no banner, no retry control and nothing in the console - the user is given
+      a confident, wrong answer and no way to tell it is wrong or to try again. A failed load must
+      produce a visible, Portuguese, retryable error.
+      (Observed defect at authoring time - the timeout produced a completely silent false empty
+      state, with no error affordance anywhere on the page.)
+    tags: [functionality, error-handling, ux]
+    judgment: false
