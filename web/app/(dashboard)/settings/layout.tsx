@@ -2,13 +2,21 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth";
+import { useTranslation } from "@/stores/i18n";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 
-const ALL_TABS: (TabItem & { href: string; adminOnly?: boolean; superAdminOnly?: boolean })[] = [
-  { key: "platform", label: "Plataforma", href: "/settings/platform" },
-  { key: "pedidos", label: "Pedidos", href: "/settings/pedidos", adminOnly: true },
-  { key: "users", label: "Utilizadores", href: "/settings/users", adminOnly: true },
-  { key: "offices", label: "Escritórios", href: "/settings/offices", superAdminOnly: true },
+// Labels are resolved from the active locale at render time (below); the
+// module-level table carries only the routing/permission shape, which does
+// not vary by language.
+const ALL_TABS: (Omit<TabItem, "label"> & {
+  href: string;
+  adminOnly?: boolean;
+  superAdminOnly?: boolean;
+})[] = [
+  { key: "platform", href: "/settings/platform" },
+  { key: "pedidos", href: "/settings/pedidos", adminOnly: true },
+  { key: "users", href: "/settings/users", adminOnly: true },
+  { key: "offices", href: "/settings/offices", superAdminOnly: true },
 ];
 
 const TAB_ROUTES = ALL_TABS.map((t) => t.href);
@@ -24,6 +32,8 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const pathname = usePathname();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const { pages } = useTranslation();
+  const navLabels = pages.settingsNav;
   const isAdmin = user?.role === "org-admin" || user?.role === "super-admin";
   const isSuperAdmin = user?.role === "super-admin";
 
@@ -35,11 +45,11 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     return <>{children}</>;
   }
 
-  const visibleTabs = ALL_TABS.filter((t) => {
+  const visibleTabs: TabItem[] = ALL_TABS.filter((t) => {
     if (t.superAdminOnly) return isSuperAdmin;
     if (t.adminOnly) return isAdmin;
     return true;
-  });
+  }).map((t) => ({ ...t, label: navLabels[t.key as keyof typeof navLabels] }));
 
   const currentKey = activeKey(pathname);
 

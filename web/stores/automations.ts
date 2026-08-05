@@ -24,6 +24,12 @@ interface AutomationsState {
   /** Currently-open automation (editor view). */
   current: Automation | null;
   currentLoading: boolean;
+  /**
+   * The id `fetchOne` was last dispatched for. Lets the editor tell "no result
+   * yet because nothing has been asked for" apart from "asked, and the answer
+   * was nothing" — the latter is a not-found, the former is still loading.
+   */
+  currentRequestedId: string | null;
 
   /** Live run state. */
   activeRun: {
@@ -185,6 +191,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
   loading: false,
   current: null,
   currentLoading: false,
+  currentRequestedId: null,
   activeRun: { ...INITIAL_RUN },
   runs: [],
   runsLoading: false,
@@ -204,7 +211,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
   },
 
   async fetchOne(id) {
-    set({ currentLoading: true, error: undefined });
+    set({ currentLoading: true, currentRequestedId: id, error: undefined });
     const res = await tryCall(() => api.automations.get({ id }));
     if (res.ok) {
       const automation = normalizeWireAutomation(res.data as unknown);

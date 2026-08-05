@@ -66,6 +66,7 @@ export interface Translations {
       signIn: string;
       signingIn: string;
       forgotPassword: string;
+      forgotPasswordHelp: string;
       version: string;
       showPassword: string;
       hidePassword: string;
@@ -431,6 +432,7 @@ export interface Translations {
       role: string;
       roleAdmin: string;
       roleUser: string;
+      office: string;
       action: string;
       createdBy: string;
       on: string;
@@ -474,6 +476,20 @@ export interface Translations {
     // RESOURCES & MONITORING
     // ============================================
 
+    settingsNav: {
+      platform: string;
+      pedidos: string;
+      users: string;
+      offices: string;
+    };
+    knowledge: {
+      description: string;
+      learnedLink: string;
+      agentsBannerTitle: string;
+      agentsBannerBodyBefore: string;
+      agentsBannerBodyEmphasis: string;
+      agentsBannerBodyAfter: string;
+    };
     resources: {
       title: string;
       subtitle: string;
@@ -1532,6 +1548,9 @@ export interface Translations {
       tabHistory: string;
       managedBanner: (integrationKey: string) => string;
       managedBannerLink: string;
+      notFoundTitle: string;
+      notFoundDescription: string;
+      notFoundBack: string;
     };
     newPage: {
       title: string;

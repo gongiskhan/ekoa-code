@@ -55,7 +55,8 @@ function formatDate(iso: string): string {
 type TabKey = "fornecido" | "fontes" | "documentos";
 
 export default function KnowledgePage() {
-  const { sidebar } = useTranslation();
+  const { sidebar, pages } = useTranslation();
+  const tk = pages.knowledge;
   const router = useRouter();
 
   const collections = useKnowledgeStore((s) => s.collections);
@@ -99,7 +100,7 @@ export default function KnowledgePage() {
       <PageHeader
         icon={Library}
         title={sidebar.knowledge}
-        description="A base de conhecimento que fornece à Ekoa: documentos com fonte e data, prontos a citar."
+        description={tk.description}
         actions={
           <Button
             variant="secondary"
@@ -107,7 +108,7 @@ export default function KnowledgePage() {
             data-testid="kn-aprendido-link"
             onClick={() => router.push("/memory")}
           >
-            O que a Ekoa aprendeu
+            {tk.learnedLink}
           </Button>
         }
       />
@@ -120,12 +121,11 @@ export default function KnowledgePage() {
       >
         <Bot className="mt-0.5 h-[18px] w-[18px] shrink-0 text-teal-600" aria-hidden />
         <div className="text-sm text-teal-900">
-          <p className="font-medium">Os agentes da Ekoa usam esta base primeiro.</p>
+          <p className="font-medium">{tk.agentsBannerTitle}</p>
           <p className="mt-0.5 text-teal-800/80">
-            O assistente, o agente de código e (em breve) as automações consultam esta base de
-            conhecimento <span className="font-medium">antes da web</span> — citam a fonte ou ficam
-            em silêncio, nunca inventam. Não há aqui uma caixa de pesquisa: a base é consultada pelos
-            agentes; aqui apenas gere o que ela contém.
+            {tk.agentsBannerBodyBefore}
+            <span className="font-medium">{tk.agentsBannerBodyEmphasis}</span>
+            {tk.agentsBannerBodyAfter}
           </p>
         </div>
       </Card>

@@ -4,7 +4,6 @@ import { Suspense, useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import Image from "next/image";
-import Link from "next/link";
 import { Eye, EyeOff, User, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -105,7 +104,6 @@ function LoginForm() {
     error,
     errorCode,
     clearError,
-    passwordChangeRequired,
     hasHydrated,
     token,
   } = useAuthStore();
@@ -132,7 +130,13 @@ function LoginForm() {
 
   const redirectAfterAuth = useCallback(
     (latestToken: string | null) => {
-      if (passwordChangeRequired) {
+      // Read the flag from the store at call time rather than from this
+      // closure. `handleSubmit` calls this immediately after `login()`
+      // resolves, and the captured `passwordChangeRequired` is still the
+      // pre-login value (false) at that point - so a forced password change
+      // was skipped entirely and the user landed on the dashboard. Same
+      // reasoning as `latestToken` being passed in rather than read here.
+      if (useAuthStore.getState().passwordChangeRequired) {
         // Carry `next` through the forced password change so flows that login
         // *into* a destination (e.g. the TUI device /activate page) resume after
         // the change instead of being stranded on the dashboard.
@@ -145,7 +149,7 @@ function LoginForm() {
       }
       router.push("/");
     },
-    [router, passwordChangeRequired, nextParam],
+    [router, nextParam],
   );
 
   // Redirect if already authenticated
@@ -262,20 +266,25 @@ function LoginForm() {
               </div>
             </div>
 
-            {/* Remember me + Forgot password row */}
-            <div className="flex items-center justify-between pt-1">
+            {/* Remember me, then the recovery note on its own line. They used to share one
+                row, which forced "Manter sessão iniciada" to wrap onto three lines once the
+                note grew past a couple of words — the card is only 400px wide, so two blocks
+                of text cannot sit side by side here. */}
+            <div className="space-y-2 pt-1">
               <Checkbox
                 checked={rememberMe}
                 onChange={setRememberMe}
                 disabled={isLoading}
                 label={pages.login.rememberMe}
               />
-              <Link
-                href="/change-password"
-                className="text-xs text-neutral-500 transition-colors hover:text-teal-700"
-              >
-                {pages.login.forgotPassword}
-              </Link>
+              {/* Not a link. There is no self-service recovery: the only reset path is
+                  `POST /api/v1/users/:id/password`, which is super-admin only. This used to
+                  point at /change-password, which needs the very password the user has
+                  forgotten — and, signed out, redirects straight back to /login, so the
+                  control did nothing at all when clicked. Say what actually helps instead. */}
+              <p className="text-xs text-neutral-500" data-testid="login-forgot-password-help">
+                {pages.login.forgotPasswordHelp}
+              </p>
             </div>
 
             {/* Sign In button */}

@@ -57,6 +57,7 @@ export const en: Translations = {
       signIn: 'Sign In',
       signingIn: 'Signing in...',
       forgotPassword: 'Forgot your password?',
+      forgotPasswordHelp: 'Forgot your password? Ask your platform administrator to reset it.',
       version: 'Ekoa · AI work platform',
       showPassword: 'Show password',
       hidePassword: 'Hide password',
@@ -403,6 +404,7 @@ export const en: Translations = {
       role: 'Role',
       roleAdmin: 'Admin',
       roleUser: 'User',
+      office: 'Office',
       action: 'Action',
       createdBy: 'Created by',
       on: 'on',
@@ -442,6 +444,23 @@ export const en: Translations = {
       teamNamePlaceholder: 'e.g. Engineering',
     },
 
+    settingsNav: {
+      platform: 'Platform',
+      pedidos: 'Requests',
+      users: 'Users',
+      offices: 'Offices',
+    },
+    knowledge: {
+      description:
+        "Ekoa's knowledge base: documents with a source and a date, ready to be cited.",
+      learnedLink: 'What Ekoa has learned',
+      agentsBannerTitle: 'Ekoa agents consult this base first.',
+      agentsBannerBodyBefore:
+        'The assistant, the coding agent and (soon) automations consult this knowledge base ',
+      agentsBannerBodyEmphasis: 'before the web',
+      agentsBannerBodyAfter:
+        ' — they cite the source or stay silent, never inventing. There is no search box here: the base is queried by the agents; here you only manage what it contains.',
+    },
     resources: {
       title: 'Resources',
       subtitle: 'Monitor system resources and activity',
@@ -1441,6 +1460,10 @@ What would make your day easier?`,
       managedBanner: (integrationKey: string) =>
         `This automation serves the ${integrationKey} integration. Integration actions run these steps - you can refine them here.`,
       managedBannerLink: 'Open integrations',
+      notFoundTitle: 'Automation not found',
+      notFoundDescription:
+        'This automation does not exist, or you no longer have access to it. It may have been deleted.',
+      notFoundBack: 'Back to automations',
     },
     newPage: {
       title: 'New automation',

@@ -222,7 +222,7 @@ function AddUserDialog({
         </div>
         {orgs.length > 0 && (
           <Select
-            label="Escritório"
+            label={t.office}
             value={orgId}
             onChange={(e) => setOrgId(e.target.value)}
             data-testid="add-user-org"
@@ -623,7 +623,7 @@ export default function SettingsUsersPage() {
                     <THead>
                       <TR>
                         <TH>{t.username}</TH>
-                        <TH>Escritório</TH>
+                        <TH>{t.office}</TH>
                         <TH>{t.role}</TH>
                         <TH>{common.active}</TH>
                         {isSuperAdmin && <TH>{t.tokensUsed}</TH>}

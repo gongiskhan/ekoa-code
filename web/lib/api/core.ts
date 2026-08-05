@@ -243,9 +243,21 @@ export async function request(descriptor: EndpointDescriptor, args?: RequestArgs
   try {
     res = await fetch(url, { method: descriptor.method, headers, body: fetchBody, signal: controller.signal });
   } catch (error) {
-    if (timedOut) throw new ApiError(0, 'TIMEOUT', `Request timed out after ${timeoutMs}ms`);
-    if (abortedByCaller) throw new ApiError(0, 'ABORTED', 'Request aborted');
-    throw new ApiError(0, 'NETWORK_ERROR', error instanceof Error ? error.message : 'Network request failed');
+    // These messages are USER-FACING: callers surface `err.message` in banners, so a raw
+    // English developer string lands in a product whose every other word is Portuguese.
+    // The wording matches the `backendErrors` entries in web/locales/pt.ts for the same
+    // conditions; the machine-readable code carries the detail a developer needs, and the
+    // timeout budget is logged rather than printed at the user.
+    if (timedOut) {
+      throw new ApiError(0, 'TIMEOUT', 'O pedido expirou. Tente novamente.', { timeoutMs });
+    }
+    if (abortedByCaller) throw new ApiError(0, 'ABORTED', 'O pedido foi cancelado.');
+    throw new ApiError(
+      0,
+      'NETWORK_ERROR',
+      'Não foi possível ligar ao servidor. Verifique a sua ligação.',
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
   } finally {
     clearTimeout(timer);
     opts?.signal?.removeEventListener('abort', onCallerAbort);

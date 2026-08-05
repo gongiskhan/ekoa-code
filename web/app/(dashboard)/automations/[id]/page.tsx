@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Plug, Save, Trash2 } from 'lucide-react';
+import { Play, Plug, Save, Trash2 } from 'lucide-react';
 import GoalEditor from '@/components/automations/goal-editor';
 import StepList from '@/components/automations/step-list';
 import RunViewer from '@/components/automations/run-viewer';
@@ -20,6 +20,9 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button, IconButton } from '@/components/ui/button';
 import { Tabs } from '@/components/ui/tabs';
 import { LoadingState } from '@/components/ui/spinner';
+import { PageShell } from '@/components/ui/page-shell';
+import { PageHeader } from '@/components/ui/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
 import type { Step, StepStatus } from '@/types/automation';
 
 interface TriggerRow {
@@ -43,6 +46,8 @@ export default function AutomationEditorPage() {
   const t = automations.editor;
 
   const current = useAutomationsStore((s) => s.current);
+  const currentLoading = useAutomationsStore((s) => s.currentLoading);
+  const currentRequestedId = useAutomationsStore((s) => s.currentRequestedId);
   const fetchOne = useAutomationsStore((s) => s.fetchOne);
   const update = useAutomationsStore((s) => s.update);
   const remove = useAutomationsStore((s) => s.remove);
@@ -165,6 +170,32 @@ export default function AutomationEditorPage() {
   );
 
   if (!current || current.id !== id) {
+    // The fetch has finished (or never started) and still produced nothing for
+    // this id: the automation was deleted, never existed, or is not ours. A
+    // spinner here would be a lie - the request is over - and it strips the
+    // user of any chrome to escape with, so render a real not-found state.
+    // `currentRequestedId` is what keeps the very first render (before the
+    // fetch effect has run, when `currentLoading` is still false) on the
+    // spinner instead of flashing not-found.
+    if (currentRequestedId === id && !currentLoading) {
+      return (
+        <PageShell testId="automation-editor-page">
+          <PageHeader icon={Play} title={automations.list.title} />
+          <EmptyState
+            icon={Play}
+            title={t.notFoundTitle}
+            description={t.notFoundDescription}
+            action={
+              <Link href="/automations">
+                <Button variant="primary" size="sm">
+                  {t.notFoundBack}
+                </Button>
+              </Link>
+            }
+          />
+        </PageShell>
+      );
+    }
     return (
       <div className="flex-1 overflow-y-auto scrollbar-light" data-testid="automation-editor-page">
         <LoadingState label={t.loading} />
