@@ -11,6 +11,7 @@ import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Gallery "Importar artefacto" update-in-place flow, against the REAL backend:
@@ -88,11 +89,7 @@ async function listOwnInstances(request: APIRequestContext): Promise<Array<{ id:
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: 'Entrar' }).click();
-  await page.waitForURL(/\/chat/, { timeout: 20_000 });
+  await uiLogin(page);
 }
 
 /** Console-error watchdog: fail on page errors and app console.error output.

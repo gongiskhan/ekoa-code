@@ -9,6 +9,7 @@ import {
 } from './helpers/backend-rest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * U1 — /artifacts "Aplicações" section + universal "Usar" button + featured
@@ -65,11 +66,7 @@ async function listFeatured(request: APIRequestContext): Promise<Array<{ id: str
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: 'Entrar' }).click();
-  await page.waitForURL(/\/chat/, { timeout: 20_000 });
+  await uiLogin(page);
 }
 
 /** Fail on genuine JS errors; ignore environmental resource-load / dev-mode noise. */

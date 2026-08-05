@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 import {
   ChatRun,
   ChatRunCreateResponse,
@@ -73,11 +74,7 @@ function sseBody(events: ReadonlyArray<Record<string, unknown>>, retryMs?: numbe
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 /** Console + non-asset 4xx tracking (regressions-dashboard pattern). */

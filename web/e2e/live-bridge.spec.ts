@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * s8 — LIVE cross-repo evidence lane (brief S8; the reverse of ekoa-bridge's integration
@@ -28,11 +29,7 @@ const CLI = process.env.EKOA_BRIDGE_CLI ?? '';
 const API = 'http://localhost:4111';
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 test.describe('live bridge journey (s8 evidence lane)', () => {

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { DeviceStartResponse, DevicePollResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Device approval page (run s3; D5) — REAL end-to-end, no protocol stubs: the spec
@@ -12,11 +13,7 @@ import { DeviceStartResponse, DevicePollResponse } from '@ekoa/shared';
 const API = process.env.EKOA_API_URL ?? 'http://localhost:4111';
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page, opts: { allow?: (text: string, url: string) => boolean } = {}): string[] {

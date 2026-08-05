@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * S2 shell-nav: the restyled sidebar + header must drop the header's
@@ -9,18 +10,28 @@ import { test, expect } from '@playwright/test';
  */
 
 async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 test.describe('shell-nav (S2)', () => {
   test('header drops page-identity duplication and shows a PT language label', async ({ page }) => {
+    // The bare "Failed to load resource" console line carries no URL, so 4xx/5xx
+    // are pinned from `response` events BY URL (document-redline.spec.ts's
+    // pattern). The Citius sync state probe is excluded: api/src/routes/sync.ts
+    // answers 404 for a flag-disabled rail deliberately, so the panel can tell
+    // "not for this deployment" from a failure (web/lib/sync/citius-sync.ts).
+    const byDesign404 = /\/api\/v1\/sync\/citius\/notificacoes\/state$/;
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
+      if (msg.type() !== 'error') return;
+      if (/^Failed to load resource/.test(msg.text())) return; // pinned below
+      consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
+    page.on('response', (r) => {
+      if (r.status() < 400) return;
+      if (byDesign404.test(r.url())) return;
+      consoleErrors.push(`${r.status()} ${r.url()}`);
     });
 
     await login(page);

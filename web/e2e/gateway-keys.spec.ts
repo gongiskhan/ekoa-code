@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Per-user gateway API keys page (S4b, run 20260717-071930-d1244839) - REAL end-to-end, no
@@ -8,11 +9,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 90_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page): string[] {

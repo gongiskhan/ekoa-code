@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { clearForcedPasswordChange, settleAfterLogin, uiLogin } from './helpers/ui-login';
 
 /**
  * S1 ui-foundation smoke: the token override + primitive foundation must not
@@ -13,6 +14,11 @@ test.describe('ui-foundation (S1)', () => {
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
+
+    // The seeded admin owes a forced password change, which would redirect this
+    // sign-in to /change-password; clear it first so this spec tests the login
+    // foundation rather than that flow (change-password.spec.ts owns it).
+    await clearForcedPasswordChange(page.request);
 
     await page.goto('/login');
 
@@ -29,7 +35,7 @@ test.describe('ui-foundation (S1)', () => {
     await submit.click();
 
     // Auth lands on chat with the app shell rendered (composer visible).
-    await page.waitForURL(/\/chat/, { timeout: 60_000 });
+    await settleAfterLogin(page);
     await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 });
 
     // No console errors during the whole flow.
@@ -74,10 +80,7 @@ test.describe('ui-foundation (S1)', () => {
 
     // The classes lived on authenticated pages (integrations had .btn-primary),
     // so the guarantee must be checked behind auth too.
-    await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-    await page.locator('input[type="password"]').first().fill('tmp12345');
-    await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-    await page.waitForURL(/\/chat/, { timeout: 60_000 });
+    await uiLogin(page);
     await assertNoDeadClasses('/chat');
 
     // networkidle never settles (the SSE stream stays open) — wait for content.

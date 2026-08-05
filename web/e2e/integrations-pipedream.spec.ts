@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * PA slice — the Pipedream card on the "Integrações da Plataforma" tab. It is
@@ -13,11 +14,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 test.describe('integrations — Pipedream card (PA)', () => {

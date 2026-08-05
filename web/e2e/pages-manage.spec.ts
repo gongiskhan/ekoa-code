@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * S5 pages-manage: the integrations / memory / users / settings-branding
@@ -15,17 +16,34 @@ const DESKTOP = { width: 1280, height: 800 };
 const MOBILE = { width: 375, height: 812 };
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
+
+/**
+ * The bare "Failed to load resource" console line carries no URL, so 4xx/5xx are
+ * pinned from `response` events BY URL (document-redline.spec.ts's pattern) while
+ * every OTHER console error keeps the strict zero bar.
+ *
+ * The Citius sync state probe is excluded by URL: `api/src/routes/sync.ts` answers
+ * 404 for a flag-disabled rail *deliberately*, so that the panel can tell "not for
+ * this deployment" from a failure and render nothing (see the contract in
+ * web/lib/sync/citius-sync.ts). The 404 is the designed answer, not a defect - but
+ * `fetch` still logs it, so /integrations would otherwise never pass this bar.
+ */
+const BY_DESIGN_404 = /\/api\/v1\/sync\/citius\/notificacoes\/state$/;
 
 function trackConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text());
+    if (msg.type() !== 'error') return;
+    if (/^Failed to load resource/.test(msg.text())) return; // pinned precisely below
+    errors.push(msg.text());
+  });
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+  page.on('response', (r) => {
+    if (r.status() < 400) return;
+    if (BY_DESIGN_404.test(r.url())) return;
+    errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;
 }

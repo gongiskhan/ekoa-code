@@ -1,4 +1,5 @@
 import { test, expect, request as pwRequest, type APIRequestContext, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * integration-achieve — `achieve` (EXECUTE-OR-AUTHOR) end to end, slice D3.
@@ -30,11 +31,7 @@ const WRITE_ACTION = 'send_message';
 const READ_ACTION = 'list_channels';
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 90_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page): string[] {

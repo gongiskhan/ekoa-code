@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ChatRunEvent, ChatRun, ChatRunCreateResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Trust chip (run s5; FC-402/FC-403) — deterministic, LLM-free, daemon-free.
@@ -33,11 +34,7 @@ function sseBody(): string {
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page): string[] {

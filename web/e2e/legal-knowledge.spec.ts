@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Knowledge UI after the agent-first redesign:
@@ -11,11 +12,7 @@ import { test, expect, type Page } from '@playwright/test';
  *    in the Fornecido browse.
  */
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: 'Entrar' }).click();
-  await page.waitForURL(/\/chat/, { timeout: 20_000 });
+  await uiLogin(page);
 }
 
 test('Knowledge UI: no search box, agents-first banner, browse + add via Documentos', async ({ page }) => {

@@ -2,6 +2,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Tutorial Bridge harness - DATA-DRIVEN over every spec in ekoa-data/demos.
@@ -83,11 +84,7 @@ function validateSpecShape(spec: any): string[] {
 // --- helpers ----------------------------------------------------------------
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 async function clickNext(page: Page) {

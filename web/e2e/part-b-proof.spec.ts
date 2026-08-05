@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Sheet } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Part B proof (slice B7, run 20260717-190134): ONE LIVE-MODEL session against the
@@ -100,11 +101,7 @@ function stripMdLine(line: string): string {
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 /** Console + non-asset 4xx tracking (regressions-dashboard pattern). */

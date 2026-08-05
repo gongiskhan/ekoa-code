@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { NotificationEvent, IntegrationBuilderChatResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Integration-builder journey (ch03 §3.8.14, backend landed 2026-07-11): the chat handoff
@@ -56,11 +57,7 @@ const CHAT_STUB = {
 };
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 /** Same precise tracking as regressions-dashboard: real console errors + non-asset 4xx by URL. */

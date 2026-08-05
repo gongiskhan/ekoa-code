@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * S6 pages-flagship: the /artifacts page migrated to the design system
@@ -8,11 +9,7 @@ import { test, expect } from '@playwright/test';
  */
 
 async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 // Only fail on genuine JS errors — ignore favicon and best-effort resource

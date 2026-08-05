@@ -7,6 +7,7 @@ import {
 } from './helpers/backend-rest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Layer 3 — the artifact backend panel, against a REAL fixture backend.
@@ -89,11 +90,7 @@ let plainAppId = '';
 // POST /api/v1/artifacts/:id/backend/sample-run.
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: 'Entrar' }).click();
-  await page.waitForURL(/\/chat/, { timeout: 20_000 });
+  await uiLogin(page);
 }
 
 function watchConsole(page: Page): string[] {

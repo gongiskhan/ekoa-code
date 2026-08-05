@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { test, expect, type Page } from '@playwright/test';
 import { BridgeStatusResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Daemon-served grants + registo (run 20260711-111952 s6; FC-406/FC-407, D2/D5) —
@@ -90,11 +91,7 @@ function startStubDaemon(): Promise<StubDaemon> {
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page, opts: { allow?: (text: string, url: string) => boolean } = {}): string[] {

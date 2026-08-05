@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Dashboard regression net for the post-rc-1 crash fixes (2026-07). Each test drives the
@@ -19,11 +20,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 /**
@@ -50,6 +47,11 @@ function trackConsoleErrors(page: Page): string[] {
     // landing intermittently GETs a just-created session id that 404s. Scoped exclusion —
     // remove when the finding closes.
     if (r.status() === 404 && /\/api\/v1\/sessions\/[0-9a-f-]{36}$/.test(r.url())) return;
+    // BY DESIGN, not a defect: api/src/routes/sync.ts answers 404 for a flag-disabled
+    // Citius rail specifically so the panel can tell "not for this deployment" apart
+    // from a failure and render nothing (contract in web/lib/sync/citius-sync.ts).
+    // /integrations probes it on every visit, so the handled 404 is the expected answer.
+    if (r.status() === 404 && /\/api\/v1\/sync\/citius\/notificacoes\/state$/.test(r.url())) return;
     errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;

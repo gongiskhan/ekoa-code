@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * The three legacy admin routes, after the settings tab-group move.
@@ -21,11 +22,7 @@ import { test, expect, type Page } from '@playwright/test';
 // Real-UI login, per the estate's standing rule (no protocol stubs). Local to the file, as every
 // other spec here keeps it — there is no shared auth fixture by design.
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 const REDIRECTS: Array<{ from: string; to: string; label: string }> = [

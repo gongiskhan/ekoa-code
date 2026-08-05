@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BridgeStatusResponse, ChatRunCreateRequest, ChatRunEvent, ChatRun, ChatRunCreateResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Reference attach (run 20260711-111952 s5; FC-400, FC-401 connected state, FC-411; D1/D2/D3) —
@@ -29,11 +30,7 @@ function sseBody(): string {
 }
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page): string[] {

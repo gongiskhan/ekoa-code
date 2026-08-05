@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BridgeStatusResponse } from '@ekoa/shared';
+import { uiLogin } from './helpers/ui-login';
 
 /**
  * Bridge presence wiring (run s2; FC-401 states, FC-405) — deterministic, daemon-free.
@@ -18,11 +19,7 @@ const STATES = {
 } as const;
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.locator('input[type="text"], input:not([type])').first().fill('admin');
-  await page.locator('input[type="password"]').first().fill('tmp12345');
-  await page.getByRole('button', { name: /entrar|iniciar/i }).first().click();
-  await page.waitForURL(/\/chat/, { timeout: 60_000 });
+  await uiLogin(page);
 }
 
 function trackConsoleErrors(page: Page): string[] {
