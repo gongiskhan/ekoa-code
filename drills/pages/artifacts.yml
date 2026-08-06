@@ -8,194 +8,338 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Os Meus Artefactos" heading with the built-artifact count subtitle.
-    tags: [functionality]
+    description: >-
+      The page shows the "Os Meus Artefactos" heading with the built-artifact
+      count subtitle.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Os Meus Artefactos" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Os Meus Artefactos
   - id: import-button-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Importar artefacto" button is present in the page header.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Importar artefacto" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Importar artefacto
   - id: search-box-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Pesquisar artefactos..." search box is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, placeholder: "Pesquisar artefactos..." }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: Pesquisar artefactos...
   - id: filter-chips-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
-    state: default
-    description: The status filter chip row is present (at least the "Todos" and "Em Execução" chips).
-    tags: [functionality]
-    judgment: false
-    assertion: { kind: visible, role: button, name: "Todos" }
-    assertionSource: authored
-  - id: gallery-resolves
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
-    state: default
-    description: The gallery settles into a real result - either a grid of artifact cards or an explicit written empty state inviting the user to build or import their first artifact. It must not be left on a spinner, and it must not be a bare blank area under the filter chips.
-    tags: [functionality, loading]
-    judgment: false
-  - id: count-matches-grid
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "N artefactos construídos" counter under the heading agrees with what the grid actually
-      shows - if the account owns artifacts, the counter is not 0 and the cards are rendered.
-      A page that reports "0 artefactos construídos" while the account does in fact own artifacts
-      is showing a false empty state, which is worse than a spinner because it looks finished.
-    tags: [functionality, data-integrity]
+      The status filter chip row is present (at least the "Todos" and "Em
+      Execução" chips).
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: visible
+      role: button
+      name: Todos
+  - id: gallery-resolves
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The gallery settles into a real result - either a grid of artifact cards
+      or an explicit written empty state inviting the user to build or import
+      their first artifact. It must not be left on a spinner, and it must not be
+      a bare blank area under the filter chips.
+    tags:
+      - functionality
+      - loading
+    judgment: false
+    spec: tests/drills/artifacts.spec.ts#gallery-resolves
+    assertion:
+      kind: text-contains
+      text: 41 artefactos construídos
+  - id: count-matches-grid
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The "N artefactos construídos" counter under the heading agrees with what
+      the grid actually shows - if the account owns artifacts, the counter is
+      not 0 and the cards are rendered. A page that reports "0 artefactos
+      construídos" while the account does in fact own artifacts is showing a
+      false empty state, which is worse than a spinner because it looks
+      finished.
+    tags:
+      - functionality
+      - data-integrity
     authoringObservation:
       kind: snapshot
-      receipts: [observation-2d0d2a21441f-0110]
+      receipts:
+        - observation-2d0d2a21441f-0110
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#count-matches-grid
+    assertion:
+      kind: text-contains
+      text: 41 artefactos construídos
   - id: cards-render
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Multiple artifact cards render, each with a "Usar" action (at least 4 on the default view).
-    tags: [functionality]
+    description: >-
+      Multiple artifact cards render, each with a "Usar" action (at least 4 on
+      the default view).
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: count, role: button, name: "Usar", op: gte, value: 4 }
-    assertionSource: authored
+    assertion:
+      kind: count
+      role: button
+      name: Usar
+      op: gte
+      value: 4
   - id: customize-action-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: Artifact cards offer the secondary "Personalizar no chat" action.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Personalizar no chat" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Personalizar no chat
   - id: no-invalid-date-on-cards
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      No artifact card anywhere on this page renders the literal string "Invalid Date". Each card's
-      timestamp is either a real formatted Portuguese date or is omitted entirely. Check the card
-      hover overlay as well as the resting card - the overlay that carries "Continuar a trabalhar",
-      "Abrir num novo separador" and "Mais ações" also carries the timestamp, and that is where the
-      broken value surfaced at authoring time.
-    tags: [functionality, data-integrity]
+      No element anywhere on this page renders the literal string "Invalid Date"
+      - every card timestamp is either a real formatted Portuguese date or
+      omitted entirely. The count assertion sweeps the whole DOM, so
+      below-the-fold cards and always-mounted tooltip/menu content are covered
+      without scrolling.
+    tags:
+      - functionality
+      - data-integrity
     judgment: false
-    authoringObservation:
-      kind: snapshot
-      receipts: [observation-2d0d2a21441f-0110]
+    assertion:
+      kind: count
+      selector: text=Invalid Date
+      op: eq
+      value: 0
   - id: card-hover-overlay-actions
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the action, hovering an artifact card reveals its action overlay - "Continuar a
-      trabalhar", "Abrir num novo separador", "Mais ações" and the delete control - laid out over
-      the preview without obscuring the card title, and every action reads as a real labelled
-      control rather than a bare icon.
+      After the action, hovering an artifact card reveals its action overlay -
+      "Continuar a trabalhar", "Abrir num novo separador", "Mais ações" and the
+      delete control - laid out over the preview without obscuring the card
+      title, and every action reads as a real labelled control rather than a
+      bare icon.
     actions:
-      - hover the "Portfólio Agência" artifact card
-    tags: [functionality, ux]
+      - id: __act-0
+        description: hover the "Portfólio Agência" artifact card
+        resolved:
+          kind: hover
+          role: img
+          name: Portfólio Agência
+    tags:
+      - functionality
+      - ux
     judgment: false
   - id: delete-action-confirms
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the actions, asking to delete an artifact does NOT delete it on the spot - a
-      confirmation step names what is about to be destroyed and offers a way out. Deleting a built
-      artifact is irreversible, so a single unconfirmed click must never be enough.
+      After the actions, asking to delete an artifact does NOT delete it on the
+      spot - a confirmation step names what is about to be destroyed and offers
+      a way out. Deleting a built artifact is irreversible, so a single
+      unconfirmed click must never be enough.
     actions:
-      - hover the "Portfólio Agência" artifact card
-      - click the "Eliminar artefacto" button on that card
-    tags: [functionality, safety]
+      - id: __act-0
+        description: hover the "Portfólio Agência" artifact card
+        resolved:
+          kind: hover
+          role: img
+          name: Portfólio Agência
+      - id: __act-1
+        description: click the "Eliminar artefacto" button on that card
+        resolved:
+          kind: click
+          role: button
+          name: Eliminar artefacto
+    tags:
+      - functionality
+      - safety
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#delete-action-confirms
+    assertion:
+      kind: visible
+      role: dialog
+      name: Eliminar Artefacto
   - id: refresh-control-works
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the action, the refresh control re-reads the gallery and settles back into the grid -
-      it shows a brief pending state and then returns to the same populated grid, never leaving a
-      spinner in place, emptying the grid or dropping the artifact count to 0.
+      After the action, the refresh control re-reads the gallery and settles
+      back into the grid - it shows a brief pending state and then returns to
+      the same populated grid, never leaving a spinner in place, emptying the
+      grid or dropping the artifact count to 0.
     actions:
-      - click the "Atualizar artefactos" button
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Atualizar artefactos" button
+        resolved:
+          kind: click
+          role: button
+          name: Atualizar artefactos
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#refresh-control-works
+    assertion:
+      kind: text-contains
+      text: 41 artefactos construídos
   - id: search-filters-grid
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the grid narrows to matching artifacts only - a single "Helpdesk" card remains visible (the other cards are filtered out).
+    description: >-
+      After the action, the grid narrows to matching artifacts only - a single
+      "Helpdesk" card remains visible (the other cards are filtered out).
     actions:
-      - type "Helpdesk" into the "Pesquisar artefactos..." search box
-    tags: [functionality, search]
+      - id: __act-0
+        description: type "Helpdesk" into the "Pesquisar artefactos..." search box
+        resolved:
+          kind: fill
+          role: textbox
+          name: Pesquisar artefactos...
+          value: Helpdesk
+    tags:
+      - functionality
+      - search
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#search-filters-grid
+    assertion:
+      kind: count
+      role: img
+      op: eq
+      value: 1
   - id: status-chip-filters
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Prontos" chip is visibly selected (active styling replaces "Todos") and the grid updates to show only artifacts in that status - or a clear "no results" style message if none match. The grid never errors or goes blank.
+    description: >-
+      After the action, the "Prontos" chip is visibly selected (active styling
+      replaces "Todos") and the grid updates to show only artifacts in that
+      status - or a clear "no results" style message if none match. The grid
+      never errors or goes blank.
     actions:
-      - click the "Prontos" filter chip
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Prontos" filter chip
+        resolved:
+          kind: click
+          role: button
+          name: Prontos
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#status-chip-filters
+    assertion:
+      kind: text-contains
+      text: Nenhum artefacto corresponde aos filtros.
   - id: thumbnails-render
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Every visible artifact card shows a rendered preview thumbnail - no broken-image icons, no permanently empty grey placeholders. A card whose preview never arrives should fail this check even if the page logged nothing to the console.
-    tags: [functionality, visual]
+    description: >-
+      Every visible artifact card shows a rendered preview thumbnail - no
+      broken-image icons, no permanently empty grey placeholders. A card whose
+      preview never arrives should fail this check even if the page logged
+      nothing to the console.
+    tags:
+      - functionality
+      - visual
     judgment: true
+    spec: tests/drills/artifacts.spec.ts#thumbnails-render
   - id: gallery-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The gallery reads as a tidy grid - cards are equal width, aligned in rows, titles do not overflow, the chip row and search box sit on one header line, and the "Aplicações" section header with its description is clearly separated from the cards.
-    tags: [visual, polish]
+    description: >-
+      The gallery reads as a tidy grid - cards are equal width, aligned in rows,
+      titles do not overflow, the chip row and search box sit on one header
+      line, and the "Aplicações" section header with its description is clearly
+      separated from the cards.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/artifacts.spec.ts#gallery-polish
 states:
   - id: populated
     label: Account owning at least four artifacts
@@ -203,4 +347,16 @@ states:
       - id: open-artifacts
         description: navigate to /artifacts and wait for the gallery to finish loading
       - id: clear-filters
-        description: make sure the "Todos" filter chip is the selected one so the grid is not narrowed by a filter
+        description: >-
+          make sure the "Todos" filter chip is the selected one so the grid is
+          not narrowed by a filter
+spotter:
+  stability:
+    step-end:
+      decision: drop
+      runs: 1
+      lastRunId: 01KZC6PWCMGQ6CYG995S09TF6M
+      annotation: >-
+        Step-end frame pixel-identical to frame-0001; same fully-loaded
+        artifacts grid, redundant duplicate.
+  rules: []
