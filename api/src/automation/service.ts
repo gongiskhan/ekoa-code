@@ -66,9 +66,72 @@ const VALID_STEP_TYPES: ReadonlySet<string> = new Set([
   'browser', 'verify', 'integration', 'sub_automation', 'navigate', 'wait', 'local_command', 'api_call', 'ekoa_action',
 ]);
 
+/**
+ * The engine parameters each step type needs that the WIRE step cannot carry.
+ *
+ * `PlanStep` reaches this module as `{stepId, description, tool}` and `mapWireStepToEngine` builds
+ * an engine `Step` from those three fields only. That narrowness is deliberate: engine `Step`
+ * (automation/types.ts) also carries `commandTemplate` (a local command), `apiRequest` (an arbitrary
+ * outbound HTTP call), `ekoaAction`, and the `declaration` that governs WHERE a step runs and which
+ * Cofre items it may reference (E-2). This is a `user-or-key` capability surface, so widening the
+ * mapper would hand any gateway-key holder those authoring powers - a decision for the owner, not a
+ * mapper detail.
+ *
+ * What was NOT deliberate was storing the step anyway. A `tool` in this table can only ever fail at
+ * execution, and it fails blaming the caller for a field the API itself discarded - `integration
+ * step <id> missing integrationKey or integrationAction` (engine.ts), `local_command step <id>
+ * missing commandTemplate.argv`, `navigate step <id> missing url`. The client supplied those fields;
+ * the mapper dropped them; `toWireAutomation` then projected the stored step back as
+ * `{stepId, description, tool}` so the loss was invisible until the run failed. Refuse at the door
+ * instead, naming the fields that cannot be expressed.
+ *
+ * The supported route for these is the planner: `POST /api/v1/automations/plan` turns a goal into
+ * engine-native steps (planner.ts `normaliseStep` sets `integrationKey`/`integrationAction`/
+ * `argsTemplate`/`commandTemplate`/...), persists the automation, and the caller runs it with
+ * `POST /api/v1/automations/:id/runs`.
+ */
+const STEP_TYPE_UNCARRIED_PARAMS: Readonly<Record<string, string>> = {
+  navigate: 'url',
+  integration: 'integrationKey, integrationAction',
+  sub_automation: 'subAutomationId',
+  local_command: 'commandTemplate.argv',
+  api_call: 'apiRequest.method, apiRequest.url',
+  ekoa_action: 'ekoaAction.artifactSlug, ekoaAction.capabilityName',
+};
+
+/** The step types this endpoint CAN express end to end. Derived, so the two lists cannot drift. */
+const WIRE_AUTHORABLE_STEP_TYPES: readonly string[] = [...VALID_STEP_TYPES].filter(
+  (t) => !(t in STEP_TYPE_UNCARRIED_PARAMS),
+);
+
+/**
+ * A wire step -> the engine step, or a VALIDATION refusal.
+ *
+ * An ABSENT `tool` keeps its historical default of `browser`: the contract marks the field optional
+ * and the wire view always emits one, so omitting it is a legal way to say "a browser step". Only a
+ * value that is not a step type is refused - it used to be silently coerced to `browser`, which
+ * turned a typo into a running automation that does something else.
+ */
 function mapWireStepToEngine(s: { stepId?: string; description?: string; tool?: string; argv?: string[] }, i: number): Step {
-  const type = (typeof s.tool === 'string' && VALID_STEP_TYPES.has(s.tool) ? s.tool : 'browser') as StepType;
-  return { id: s.stepId ?? `step-${i}-${randomUUID().slice(0, 6)}`, description: s.description ?? '', type };
+  const where = `O passo ${i + 1}${s.stepId ? ` (stepId="${s.stepId}")` : ''}`;
+  const tool = s.tool ?? 'browser';
+  if (!VALID_STEP_TYPES.has(tool)) {
+    throw new AutomationServiceError(
+      'VALIDATION',
+      `${where} tem tool=${JSON.stringify(tool.slice(0, 40))}, que não é um tipo de passo. ` +
+        `Tipos válidos neste endpoint: ${WIRE_AUTHORABLE_STEP_TYPES.join(', ')}.`,
+    );
+  }
+  const uncarried = STEP_TYPE_UNCARRIED_PARAMS[tool];
+  if (uncarried) {
+    throw new AutomationServiceError(
+      'VALIDATION',
+      `${where} tem tool="${tool}", que precisa de ${uncarried} - campos que o plano deste endpoint não transporta, ` +
+        `pelo que o passo falharia na execução. Crie a automação com POST /api/v1/automations/plan ` +
+        `(o planeador constrói estes passos) e execute-a com POST /api/v1/automations/{id}/runs.`,
+    );
+  }
+  return { id: s.stepId ?? `step-${i}-${randomUUID().slice(0, 6)}`, description: s.description ?? '', type: tool as StepType };
 }
 
 function toWireAutomation(doc: StoredAutomation): WireAutomation {
@@ -106,6 +169,25 @@ function toWireRun(doc: StoredRun): WireRunRecord {
     ...(doc.ownerUserId ? { ownerId: doc.ownerUserId } : {}),
     ...(doc.orgId ? { orgId: doc.orgId } : {}),
     ...(Array.isArray(doc.steps) ? { steps: doc.steps.map(toWireStep) } : {}),
+    // The pending question, when there is one. `POST /runs/:id/consent` is `user-or-key` and its
+    // body REQUIRES `shape`, so withholding this made the gate unanswerable by exactly the callers
+    // the endpoint's auth class invites: a key holder could read `status: 'awaiting_consent'` and
+    // had nowhere to learn what was being asked or which shape to echo back. The only carrier of
+    // the shape was the SSE `runAwaitingConsent` event, and no event stream is key-reachable.
+    //
+    // THREE fields only. `argv` is the raw command line, which the engine shows a human solely
+    // behind an explicit "what exactly will run?" toggle, and `approvalScope` is server-written
+    // bookkeeping its own type marks as never caller-supplied. Neither goes public as a side
+    // effect of making the gate answerable.
+    ...(doc.consentRequest
+      ? {
+          consentRequest: {
+            stepIndex: doc.consentRequest.stepIndex,
+            description: doc.consentRequest.description,
+            shape: doc.consentRequest.shape,
+          },
+        }
+      : {}),
   };
 }
 
@@ -270,13 +352,15 @@ export async function createAutomation(
   if (!canCreateAutomation(actor, orgSettings)) {
     throw new AutomationServiceError('FORBIDDEN', 'not authorized to create automations');
   }
+  // Map (and refuse) BEFORE minting anything: a step the engine could only fail on is never stored.
+  const steps = (input.plan?.steps ?? []).map(mapWireStepToEngine);
   const id = randomUUID();
   const now = new Date().toISOString();
   const doc: StoredAutomation = {
     id,
     name: input.name,
     description: input.description ?? '',
-    steps: (input.plan?.steps ?? []).map(mapWireStepToEngine),
+    steps,
     ownerUserId: actor.userId,
     orgId: actor.orgId,
     ...(input.visibility ? { visibility: input.visibility } : {}),
@@ -295,13 +379,17 @@ export async function patchAutomation(
   const doc = (await automations.get(id)) as StoredAutomation | null;
   if (!doc || !canReadAutomation(doc, actor)) throw new AutomationServiceError('NOT_FOUND', 'automation not found');
   if (!canWriteAutomation(doc, actor)) throw new AutomationServiceError('FORBIDDEN', 'not authorized to modify this automation');
+  // Map (and refuse) OUTSIDE the update callback: a refusal must leave the stored plan untouched,
+  // not throw halfway through a write. Authorization still answers first - an actor who may not
+  // write this automation gets FORBIDDEN whatever the steps look like.
+  const steps = patch.plan?.steps ? patch.plan.steps.map(mapWireStepToEngine) : undefined;
   const now = new Date().toISOString();
   const updated = (await automations.update(id, (cur) => ({
     ...cur,
     ...(patch.name !== undefined ? { name: patch.name } : {}),
     ...(patch.description !== undefined ? { description: patch.description } : {}),
     ...(patch.visibility !== undefined ? { visibility: patch.visibility } : {}),
-    ...(patch.plan?.steps ? { steps: patch.plan.steps.map(mapWireStepToEngine) } : {}),
+    ...(steps ? { steps } : {}),
     updatedAt: now,
   }))) as unknown as StoredAutomation | null;
   if (!updated) throw new AutomationServiceError('NOT_FOUND', 'automation not found');

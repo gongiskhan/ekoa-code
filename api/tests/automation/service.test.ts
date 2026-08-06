@@ -108,6 +108,70 @@ describe('automation service surface (§3.8.18)', () => {
     expect(await svc.listAutomations(otherOrg)).toHaveLength(0);
   });
 
+  // ---- wire step mapping: refuse what the wire shape cannot express -------
+  //
+  // The wire step is `{stepId, description, tool}`; the mapper builds the engine Step from those
+  // three fields and nothing else. It used to store the step anyway, so a client that correctly
+  // supplied `integrationKey`/`integrationAction` got a 201 and then a run that failed with
+  // "integration step <id> missing integrationKey or integrationAction" - the API discarding the
+  // fields and then blaming the caller for their absence. And an unrecognised `tool` was coerced to
+  // `browser`, turning a typo into an automation that does something else.
+
+  const integrationStep = {
+    description: 'List Gmail labels',
+    tool: 'integration',
+    integrationKey: 'google-workspace',
+    integrationAction: 'list_labels',
+  };
+
+  it('create refuses a step whose tool needs parameters the wire plan cannot carry, and stores nothing', async () => {
+    const rejected = svc.createAutomation(admin, { name: 'Etiquetas Gmail', plan: { steps: [integrationStep] } });
+    await expect(rejected).rejects.toMatchObject({ code: 'VALIDATION' });
+    // The message names the fields that cannot be expressed AND the route that can author them.
+    await expect(rejected).rejects.toThrow(/integrationKey, integrationAction/);
+    await expect(rejected).rejects.toThrow(/POST \/api\/v1\/automations\/plan/);
+    expect(await automations.find({})).toHaveLength(0); // refused at the door, never persisted
+  });
+
+  it('create refuses an unrecognised tool instead of coercing it to a browser step', async () => {
+    const rejected = svc.createAutomation(admin, {
+      name: 'Gralha',
+      plan: { steps: [{ description: 'clicar em guardar', tool: 'brwoser' }] },
+    });
+    await expect(rejected).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(rejected).rejects.toThrow(/não é um tipo de passo/);
+    await expect(rejected).rejects.toThrow(/browser, verify, wait/); // the types this endpoint can express
+    expect(await automations.find({})).toHaveLength(0);
+  });
+
+  it('patch refuses the same steps and leaves the stored plan untouched', async () => {
+    const a = await svc.createAutomation(admin, {
+      name: 'Editável',
+      plan: { steps: [{ stepId: 's1', description: 'abrir o painel', tool: 'browser' }] },
+    });
+    await expect(
+      svc.patchAutomation(admin, a.id, { plan: { steps: [integrationStep] } }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    // No partial write: the refusal happens before the update, so the original plan survives.
+    const after = await svc.getAutomation(admin, a.id);
+    expect(after.plan?.steps).toEqual([{ stepId: 's1', description: 'abrir o painel', tool: 'browser' }]);
+  });
+
+  it('the expressible step types still map, and an absent tool still means a browser step', async () => {
+    const a = await svc.createAutomation(admin, {
+      name: 'Mistura',
+      plan: {
+        steps: [
+          { description: 'abrir o painel' }, // tool omitted (optional in the contract) -> browser
+          { description: 'confirmar o título', tool: 'verify' },
+          { description: 'esperar', tool: 'wait' },
+        ],
+      },
+    });
+    expect(AutomationSchema.safeParse(a).success).toBe(true);
+    expect(a.plan?.steps?.map((s) => s.tool)).toEqual(['browser', 'verify', 'wait']);
+  });
+
   // ---- plan-from-goal (Landmine 9) ---------------------------------------
 
   it('planFromGoal requires creation authority: a builder without the org setting is FORBIDDEN (§3.8.18 landmine-9 gate)', async () => {
@@ -193,6 +257,45 @@ describe('automation service surface (§3.8.18)', () => {
     expect(await isCommandShapeApproved({ userId: 'u1', orgId: 'o1', pairingId: null }, 'ls -la /tmp')).toBe(true);
 
     await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
+  });
+
+  // The gate must be ANSWERABLE by the callers its auth class invites. `POST /runs/:id/consent` is
+  // `user-or-key` and its body requires the exact shape the run awaits (the test after this one
+  // proves any other shape is refused) - but the only carrier of that shape was the SSE
+  // `runAwaitingConsent` event, and no event stream is on the key-reachable surface. A gateway key
+  // could therefore read `status: 'awaiting_consent'` and had no published way to learn what was
+  // being asked or which shape to echo back. This drives the loop using ONLY the wire run record.
+  it('a parked run publishes the pending question, and echoing that shape back closes the loop', async () => {
+    await automations.insert({
+      _id: 'cauto-wire', id: 'cauto-wire', name: 'Consent on the wire', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 's1', type: 'local_command', description: 'list tmp', commandTemplate: { argv: ['ls', '-la', '/tmp'] } }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const env: ResultEnvelope = { ok: true, observation: { data: { exitCode: 0, stdout: 'ok', stderr: '' } } };
+    setDaemonConnectionResolver(() => ({ runStep: async () => env }));
+
+    const { runId } = await svc.startRun(builder, 'cauto-wire');
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'awaiting_consent');
+
+    const parked = await svc.getRunRecord(builder, runId);
+    expect(RunRecordSchema.safeParse(parked).success).toBe(true);
+    expect(parked.consentRequest).toMatchObject({ stepIndex: 0, shape: 'ls -la /tmp' });
+    // `description` is the engine's plain-English rendering ("run `ls` to list a directory"), which
+    // is the point of publishing it rather than the argv: a human can answer without reading a
+    // command line. Assert the PROPERTY, not the wording, so a better sentence is not a failure.
+    const pending = parked.consentRequest as { description: string; shape: string };
+    expect(pending.description.length).toBeGreaterThan(0);
+    expect(pending.description).not.toContain('/tmp'); // not the raw command
+    // The raw command line and the server-written approval scope stay off the wire.
+    expect(parked.consentRequest).not.toHaveProperty('argv');
+    expect(parked.consentRequest).not.toHaveProperty('approvalScope');
+
+    // Answer with ONLY what the record published - no out-of-band knowledge of the shape.
+    const answered = await svc.resolveConsent(builder, runId, { decision: 'once', shape: pending.shape });
+    expect(answered).toMatchObject({ decision: 'once', resumed: true });
+    await waitFor(async () => (await svc.getRunRecord(builder, runId)).status === 'completed');
+    // Cleared once the run moves on, so a finished run never advertises a stale question.
+    expect((await svc.getRunRecord(builder, runId)).consentRequest).toBeUndefined();
   });
 
   // A standing approval must be bound to the shape the run is AWAITING, not to one the caller

@@ -347,6 +347,91 @@ describe('cortex automations through the real binary', () => {
   });
 });
 
+/**
+ * The integrations group against the REAL router, with no integration connected - which is exactly
+ * the state that produces both of this group's traps, so neither has to be simulated:
+ *
+ *   - a read-only action on a disconnected integration is an HTTP 200 saying `success: false`;
+ *   - a mutating one is refused by the write gate BEFORE any credential is looked at, as a 403
+ *     carrying the descriptor a human must answer.
+ *
+ * The action names are read out of `show` rather than hardcoded: the shipped package is the
+ * platform's to change, and a client that pins its action names breaks when it does.
+ */
+describe('cortex integrations through the real binary', () => {
+  interface CapabilityAction {
+    actionName: string;
+    requiresApproval: boolean;
+    approved: boolean;
+    target: string;
+  }
+  let readOnly: CapabilityAction;
+  let mutating: CapabilityAction;
+
+  it('list and show answer over a gateway key, and report the integration as not connected', async () => {
+    const list = jsonOf(await cortex(['integrations', 'list', '--json']));
+    expect((list.data as { items: Array<{ key: string }> }).items.map((i) => i.key)).toContain('slack');
+
+    const show = jsonOf(await cortex(['integrations', 'show', 'slack', '--json']));
+    const capability = show.data as { connected: boolean; actions: CapabilityAction[] };
+    expect(capability.connected).toBe(false); // nothing was configured for this org
+    readOnly = capability.actions.find((a) => !a.requiresApproval) as CapabilityAction;
+    mutating = capability.actions.find((a) => a.requiresApproval) as CapabilityAction;
+    expect(readOnly, 'the fixture needs one action outside the write gate').toBeTruthy();
+    expect(mutating, 'the fixture needs one action behind the write gate').toBeTruthy();
+
+    // Human mode names the trap the JSON only implies.
+    const human = await cortex(['integrations', 'show', 'slack']);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain('connected: no');
+    expect(human.stdout).toContain('needs-approval');
+  });
+
+  it('a not-connected action comes back HTTP 200 with success:false - and that is exit 1', async () => {
+    const res = await cortex(['integrations', 'execute', 'slack', readOnly.actionName, '--json']);
+    expect(res.code, 'a 200 whose body says success:false must not exit 0').toBe(1);
+    expect(res.stdout, 'stdout stays empty on a failure').toBe('');
+    const doc = JSON.parse(res.stderr) as { ok: boolean; error: { code: string; details?: { success: boolean } } };
+    expect(doc.ok).toBe(false);
+    expect(doc.error.code).toBe('not_connected');
+    expect(doc.error.details?.success).toBe(false);
+  });
+
+  it('a mutating action is refused by the write gate, with the descriptor the human must see', async () => {
+    const res = await cortex(['integrations', 'execute', 'slack', mutating.actionName, '--json']);
+    expect(res.code).toBe(1);
+    expect(res.stdout).toBe('');
+    const doc = JSON.parse(res.stderr) as {
+      error: { status: number; details?: { code: string; consentRequest?: Record<string, string> } };
+    };
+    expect(doc.error.status).toBe(403);
+    expect(doc.error.details?.code).toBe('awaiting_consent');
+    expect(doc.error.details?.consentRequest).toMatchObject({
+      integrationKey: 'slack',
+      actionName: mutating.actionName,
+      target: mutating.target,
+    });
+    expect(typeof doc.error.details?.consentRequest?.shape).toBe('string');
+
+    // And the human is told both what would have run and that this CLI cannot approve it.
+    const human = await cortex(['integrations', 'execute', 'slack', mutating.actionName]);
+    expect(human.code).toBe(1);
+    expect(human.stdout).toBe('');
+    expect(human.stderr).toContain(mutating.target);
+    expect(human.stderr).toContain('CANNOT grant that approval');
+  });
+
+  it('the approval endpoint really is off the key-reachable surface, so the refusal cannot self-clear', async () => {
+    // The gate would be theatre if the key it just refused could bank its own approval.
+    const res = await fetch(`${baseUrl}/api/v1/integrations/slack/actions/${mutating.actionName}/approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ decision: 'always', shape: 'whatever' }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('credentials, exit codes and the audit trail', () => {
   it('a wrong key is exit 1 with a 401 envelope; a missing key is exit 2 before any request', async () => {
     const bad = await cortex(['memory', 'list', '--json'], { env: { CORTEX_API_KEY: 'ekoa_gk_definitely-not-a-key' } });

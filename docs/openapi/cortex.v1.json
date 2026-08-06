@@ -4509,6 +4509,26 @@
         ],
         "additionalProperties": false
       },
+      "RunConsentRequest": {
+        "type": "object",
+        "properties": {
+          "stepIndex": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "shape": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stepIndex",
+          "description",
+          "shape"
+        ],
+        "additionalProperties": false
+      },
       "RunCreateRequest": {
         "type": "object",
         "properties": {
@@ -4625,6 +4645,9 @@
             "items": {
               "$ref": "#/components/schemas/RunStepRecord"
             }
+          },
+          "consentRequest": {
+            "$ref": "#/components/schemas/RunConsentRequest"
           }
         },
         "required": [

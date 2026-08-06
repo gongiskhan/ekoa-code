@@ -6,6 +6,175 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`a-parked-run-asked-a-question-no-external-client-could-read`** (FIXED 2026-08-06, MEDIUM,
+  public capability surface / an endpoint whose auth class invites a caller who cannot use it -
+  found while driving the Garrison consumer through the public surface end to end). A run that
+  halts at `awaiting_consent` is answered with `POST /api/v1/automations/runs/:id/consent`, whose
+  descriptor is `auth: 'user-or-key'` (`shared/src/automations.ts`, `consent`) and whose body
+  REQUIRES `shape` (`ConsentRequest`, same file). The service refuses any shape other than the one
+  the run is actually awaiting - deliberately, and that refusal is itself a security fix already
+  recorded here (`consent-approval-scope-mismatch`, plus the "bank an approval for a shape the user
+  was never shown" case pinned in `api/tests/automation/service.test.ts`). So the ONLY shape that
+  works is the pending one, and the only carrier of it was the SSE `runAwaitingConsent` event
+  (`api/src/automation/engine.ts:769`). There is no event stream on the key-reachable surface -
+  `docs/openapi/cortex.v1.json` is generated from the `user-or-key` descriptors and contains none.
+  `toWireRun` (`api/src/automation/service.ts`) projected `status` and never `consentRequest`.
+  Net effect: a gateway key could read `status: "awaiting_consent"`, could not learn what was being
+  asked, could not learn the shape, and therefore could not call the endpoint its own auth class
+  invited it to call. The run was answerable only from a browser holding a live SSE subscription.
+  This is the same gap the OPEN entry `no-wire-event-can-carry-a-pause-reason` names from the event
+  side; this is its polling-side half, and unlike that one it is closable without a new event type.
+  FIXED by publishing the pending question on the run record: `RunRecord.consentRequest`
+  (`shared/src/automations.ts`, new `RunConsentRequest`) carries `{stepIndex, description, shape}`,
+  `toWireRun` projects exactly those three, and `docs/openapi/cortex.v1.json` was regenerated
+  (`api/scripts/generate-openapi.mjs`) so the drift gate stays green. ADDITIVE, so rule 7 applies:
+  a new optional field on a `.passthrough()` schema; no existing response changed.
+  THREE fields, not more: `argv` is the raw command line, which the engine shows a human only behind
+  an explicit "what exactly will run?" toggle (`automation/types.ts:572`), and `approvalScope` is
+  server-written bookkeeping its own type marks as never caller-supplied (`types.ts:586`). Neither
+  becomes public as a side effect of making the gate answerable. Publishing the shape gives an
+  attacker nothing the refusal above did not already constrain: `resolveConsent` still binds the
+  answer to the run's own pending shape, and a caller who cannot read the run cannot read the shape.
+  Pinned by `api/tests/automation/service.test.ts` - a case that reaches `awaiting_consent`, asserts
+  the three fields (and the ABSENCE of `argv`/`approvalScope`), answers using ONLY the value the
+  wire record published, and asserts the field is cleared once the run resumes so a finished run
+  never advertises a stale question. Reverted-and-verified: with the projection removed the case
+  fails on `expected undefined to match object`. `api/tests/contract` + `api/tests/automation` are
+  844/844 green with it.
+  NOT CLOSED BY THIS: the integration write gate on a DIRECT
+  `POST /integrations/:key/actions/:name/execute` remains unanswerable by a key, and correctly so -
+  it returns 403 with the `consentRequest` descriptor inline, but the approval endpoint
+  (`POST /api/v1/integrations/:key/actions/:actionName/approval`) is `auth: 'user'` and off the
+  key-reachable surface, so the approving human is a human by construction. Verified live against a
+  real minted key: `send_email_simple` answers 403 `awaiting_consent` naming the RESOLVED target
+  `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send` (no `{{placeholder}}` -
+  independent live confirmation that `consent-target-shows-an-uninterpolated-template-and-config-can-redirect-it`
+  is fixed), and the gate fires BEFORE the not-connected check, so it answers before a credential is
+  touched.
+
+- **`automations-create-dropped-every-step-field-it-could-not-carry`** (FIXED 2026-08-06, HIGH,
+  public capability surface / contract honesty - the WIDENING half stays OPEN, at the end of this
+  entry). `POST /api/v1/automations` and `PATCH /api/v1/automations/:id` are `user-or-key`
+  (Capability Contract rule 4), and both stored their `plan.steps[]` through `mapWireStepToEngine`
+  (`api/src/automation/service.ts`, was line 69), which built the engine `Step` from `{id,
+  description, type}` and DISCARDED every other field on the wire step - while the contract's
+  `PlanStep` (`shared/src/automations.ts:22-31`) is `.passthrough()` and therefore advertises the
+  opposite. `toWireAutomation` (same file, ~line 74) then projected the stored step back as
+  `{stepId, description, tool}`, so a client could not even SEE what had been lost.
+  REPRODUCED LIVE against the running stack, with a key: a step
+  `{"description":"List Gmail labels","tool":"integration","integrationKey":"google-workspace","integrationAction":"list_labels"}`
+  was accepted **HTTP 201** and stored as
+  `{"stepId":"step-0-1e98d8","description":"List Gmail labels","tool":"integration"}`; the run then
+  died at execution with `integration step step-0-1e98d8 missing integrationKey or
+  integrationAction` (`api/src/automation/engine.ts:1379`). The API discarded the fields the client
+  had correctly supplied and then blamed the client at run time for their absence. SIX step types
+  are in that position, each with its own run-time death: `integration` (integrationKey +
+  integrationAction), `navigate` (url, engine.ts:1335), `sub_automation` (subAutomationId,
+  engine.ts:1362), `local_command` (commandTemplate.argv,
+  `api/src/automation/executors/local-command.ts:76`), `api_call` (apiRequest.method/.url,
+  `executors/api-call.ts:155`), `ekoa_action` (ekoaAction.artifactSlug/.capabilityName,
+  `executors/ekoa-action.ts:68`). A SECOND defect sat inside the same expression: an unrecognised
+  `tool` was coerced to `'browser'` (`VALID_STEP_TYPES.has(s.tool) ? s.tool : 'browser'`), so the
+  typo `brwoser` became a running browser step rather than an error.
+  FIXED by refusing both at the door rather than storing a step that can only fail later. The
+  uncarried parameters are now a named table (`STEP_TYPE_UNCARRIED_PARAMS`, service.ts:93) and the
+  types this endpoint CAN express are derived from it, so the two lists cannot drift; a `tool` in the
+  table and an unrecognised `tool` each throw `AutomationServiceError('VALIDATION', ...)`, which the
+  router already maps onto the 400 `VALIDATION_FAILED` envelope (`routes/automations.ts`
+  `sendServiceError` - this is that code's first use). The refusal message names the fields that
+  cannot be expressed AND the route that can author them (`POST /api/v1/automations/plan`, then
+  `POST /api/v1/automations/{id}/runs`); the claim was verified before it was written, in
+  `automation/planner.ts` `normaliseStep` (sets integrationKey/integrationAction/argsTemplate) and
+  `service.ts` `planFromGoal`, which persists those engine-native steps verbatim. The mapping is
+  hoisted OUT of the `automations.update` callback in `patchAutomation` (service.ts:385) so a refused
+  patch leaves the stored plan untouched instead of throwing mid-write, and out of the doc literal in
+  `createAutomation` (service.ts:356) so nothing is minted before the refusal. An ABSENT `tool` still
+  means `browser` - the contract marks the field optional and the wire view always emits one - so
+  this refuses only input that was already guaranteed to fail (rule 7: nothing that worked stopped
+  working). Pinned by `api/tests/automation/service.test.ts` (4 cases: create refused + nothing
+  persisted, unrecognised tool not coerced, patch refused with the stored plan byte-identical, and
+  the expressible types + absent-tool default still mapping) and
+  `api/tests/contract/automations.test.ts` (2 cases through the real router: 400 + error envelope +
+  the message naming `integrationKey, integrationAction` and `POST /api/v1/automations/plan`, and the
+  refused automation absent from the following list). Reverted-and-verified: with the old mapper body
+  restored, 5 of the 6 turn red and the compatibility guard stays green.
+  **STILL OPEN - THE WIDENING QUESTION, DELIBERATELY NOT ANSWERED HERE.** Whether this endpoint should
+  carry the parametrised step fields AT ALL is a security decision for the owner, not a bug fix. Engine
+  `Step` (`api/src/automation/types.ts:258+`) also carries `commandTemplate` (a local command),
+  `apiRequest` (an arbitrary outbound HTTP call), `ekoaAction`, `subAutomationId` and `declaration`
+  (`StepDeclaration`, Cofre E-2 - which governs WHERE a step may run and which credential refs it may
+  name). Passing those through from a key-auth surface would let any gateway-key holder author local
+  commands and arbitrary HTTP calls: the same write rails `F-2026-08-03-ungated-write-rails` finished
+  gating, reached from the authoring side instead. The narrow whitelist is containment, and widening it
+  is not a mapper detail. CANDIDATE CLOSE: publish a NARROW per-type authoring shape in `shared/`
+  covering `integration` only (integrationKey + integrationAction + argsTemplate, validated against the
+  caller's own connected integrations through the existing catalog), and leave
+  `local_command`/`api_call`/`ekoa_action`/`declaration` unauthorable on this surface - the two ends of
+  that risk scale are not one decision. Related dangling promise to resolve in the same unit: `PlanStep`
+  already declares `argv?: string[]`, which is parsed, never read by the mapper, and now sits on a step
+  type (`local_command`) this endpoint refuses. Any of that changes `shared/` and the generated OpenAPI
+  document, which is why it was not done here (review policy: the shared contract is cross-model-review
+  scope).
+
+- **`the-automation-editors-save-sends-steps-the-api-never-reads`** (OPEN 2026-08-06, HIGH, silent
+  data loss in the product UI - found while fixing the entry above, NOT fixed here). The editor's
+  Guardar calls the store with a TOP-LEVEL `steps`
+  (`web/app/(dashboard)/automations/[id]/page.tsx:213` -> `update(current.id, { name, description,
+  steps: draftSteps })`), the store forwards it as `api.automations.patch({ id, ...patch })`
+  (`web/stores/automations.ts:238-250`), and `splitArgs` in `web/lib/api/core.ts` puts every
+  non-path argument straight into the PATCH body. The server reads `patch.plan?.steps` and nothing
+  else (`api/src/automation/service.ts` `patchAutomation`), and `AutomationPatch` is `.passthrough()`,
+  so the key survives zod validation and is then ignored. TWO layers disagree, not one: the view step
+  is `{id, description, type}` while the wire step is `{stepId, description, tool}`, so even a server
+  that read the top-level key would be reading the wrong field names. NET EFFECT: editing a step and
+  pressing Guardar changes nothing server-side, and because the store re-normalises the response into
+  `current`, the edit visibly reverts. `create` carries the same mismatch
+  (`web/stores/automations.ts:225-236` sends `steps`; `createAutomation` reads `input.plan?.steps`).
+  NOT reproduced live - the running stack was off-limits for this unit, so the chain above is read
+  from the code, and nothing in the suite contradicts it: neither `tests/drills/automations.spec.ts`
+  nor `web/e2e/automation-deterministic.spec.ts` ever presses Guardar. WHY IT MATTERS FOR THE ENTRY
+  ABOVE: the editor already authors the very fields the wire shape cannot carry - `step-card.tsx` +
+  `integration-action-picker.tsx` let the user pick `integrationKey.actionName`, and
+  `step-type-selector.tsx` offers all nine engine step types - so the widening question is not
+  hypothetical: the UI has an authoring surface for it today and throws the result away on save.
+  CANDIDATE CLOSE: normalise in the store's `create`/`update` (view steps -> `plan.steps` with
+  `stepId`/`tool`), the mirror of the `normalizeWireAutomation` that already exists for the read
+  direction, plus an e2e that edits a step description, saves, reloads and asserts the new text -
+  BUT sequence it after the widening decision, because a faithful editor needs a wire shape that can
+  carry an integration step, and until then the honest outcome for those types is the new 400.
+
+- **`activate-page-shipped-untranslated-english`** (FIXED 2026-08-06, MEDIUM, i18n - Drill batch
+  `01KZAP1CS3C3FYDYJ6T6ZS7MB9`). The CLI device-activation page (`/activate`) hardcoded every string
+  in English ("Authorize this device", "No device code in the link...", "Only approve if you started
+  this login...") while the rest of the product renders in pt-PT, so a user bounced here from the
+  terminal login hit an untranslated page. FIXED by moving the copy into the locale contract
+  (`pages.activate` in `web/locales/{types,pt,en}.ts`) and rendering it through `useTranslation()` in
+  `web/app/activate/page.tsx`. The drill's e2e assertions and `tests/drills/activate.spec.ts` were
+  moved to the pt-PT strings in the same unit, so `page-language-matches-app` and the text checks
+  agree again.
+
+- **`artifact-cards-rendered-literal-invalid-date`** (FIXED 2026-08-06, MEDIUM, data-integrity -
+  same batch). Artifact cards printed the literal "Invalid Date" at rest whenever the API handed back
+  a null/empty/malformed `createdAt`/`updatedAt`: `formatDate` and the detail-panel's direct
+  `new Date(x).toLocaleDateString()` calls all formatted an Invalid Date straight to that string.
+  FIXED in `web/components/artifacts/artifacts-surface.tsx` with a `toValidDate()` guard that returns
+  null for an unparseable timestamp; `formatDate` now returns `string | null` and every call site
+  omits the whole timestamp element rather than printing garbage - "a real formatted Portuguese date
+  or the field omitted", per the drill.
+
+- **`change-password-mismatch-rejection-read-as-a-defect-by-a-repair-step`** (DISMISSED 2026-08-06,
+  discovery-run false positive, closed by a deterministic test + this dismissal). The batch reported
+  that `/change-password` "changed the password rather than rejecting a mismatch", landing on
+  `/login`. The page was always correct: `canSubmit` requires `newPassword === confirmPassword`, the
+  submit is `disabled` on mismatch, `handleSubmit` early-returns on `!canSubmit`, and the confirm
+  field shows "As palavras-passe não coincidem" inline. What the vision judge photographed was the
+  run's OWN repair step re-typing a matching confirmation and submitting - the harness acting, not
+  the page accepting a mismatch. Closed by graduating the step from vision to a deterministic e2e
+  spec (`tests/drills/change-password.spec.ts#mismatch-rejected`) that asserts the inline error is
+  shown, the submit stays disabled, and no success banner appears. LESSON: a vision step whose
+  "success" only appears after an auto-repair typed the passing input is testing the harness, not the
+  product - graduate it to a spec that pins the pre-repair state.
+
 - **`the-dev-harness-proxy-never-propagated-client-disconnects`** (FIXED 2026-08-05, MEDIUM,
   dev-harness resource leak - and the root of a whole false defect report). `driver.mjs up`
   occupies `backend.port` (4111) with a small CORS reverse proxy and runs the real API on 4211.

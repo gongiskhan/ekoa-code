@@ -132,6 +132,49 @@ describe('automations contract (§3.8.18)', () => {
     await orgs.update('o1', (o) => ({ ...o, settings: { allowBuilderAutomations: false } }));
   });
 
+  /**
+   * A plan step the wire shape cannot express is refused at CREATE/PATCH, not stored and left to
+   * fail at run time. The live defect: a caller correctly sent `integrationKey`/`integrationAction`,
+   * got 201 with `{stepId, description, tool}` (the mapper had dropped both, and the wire projection
+   * hid the loss), and the run then failed with "integration step <id> missing integrationKey or
+   * integrationAction" - the API blaming the caller for fields it discarded itself.
+   */
+  it('a step the wire plan cannot express is refused with the error envelope, and never stored', async () => {
+    const t = await adminToken();
+    const step = { description: 'List Gmail labels', tool: 'integration', integrationKey: 'google-workspace', integrationAction: 'list_labels' };
+    const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-etiquetas', plan: { steps: [step] } }) });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+    expect(body.error.code).toBe('VALIDATION_FAILED');
+    // Actionable: names the fields that cannot travel and the route that CAN author them.
+    expect(body.error.message).toContain('integrationKey, integrationAction');
+    expect(body.error.message).toContain('POST /api/v1/automations/plan');
+
+    // PATCH refuses identically, and the stored plan is untouched.
+    const created = (await (await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-editavel', plan: { steps: [{ stepId: 's1', description: 'abrir', tool: 'browser' }] } }) })).json()) as Record<string, unknown>;
+    const patched = await api(`/api/v1/automations/${created.id}`, t, { method: 'PATCH', body: JSON.stringify({ plan: { steps: [step] } }) });
+    expect(patched.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await patched.json()).success).toBe(true);
+    const reread = (await (await api(`/api/v1/automations/${created.id}`, t)).json()) as { plan: { steps: unknown[] } };
+    expect(reread.plan.steps).toEqual([{ stepId: 's1', description: 'abrir', tool: 'browser' }]);
+
+    const list = (await (await api('/api/v1/automations', t)).json()) as { items: Array<{ name: string }> };
+    expect(list.items.some((a) => a.name === 'CT-etiquetas')).toBe(false);
+  });
+
+  it('an unrecognised tool is refused, not coerced into a browser step', async () => {
+    const t = await adminToken();
+    const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-gralha', plan: { steps: [{ description: 'clicar em guardar', tool: 'brwoser' }] } }) });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+    expect(body.error.code).toBe('VALIDATION_FAILED');
+    expect(body.error.message).toContain('browser, verify, wait'); // what this endpoint can express
+    const list = (await (await api('/api/v1/automations', t)).json()) as { items: Array<{ name: string }> };
+    expect(list.items.some((a) => a.name === 'CT-gralha')).toBe(false);
+  });
+
   it('runs lifecycle: 202 create, get, list, idempotent cancel, resume — all schema-valid', async () => {
     const t = await adminToken();
     const auto = (await (await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'Runner' }) })).json()) as Record<string, unknown>;

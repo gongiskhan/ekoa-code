@@ -770,6 +770,11 @@ export interface components {
         RunCancelResponse: {
             cancelled: boolean;
         };
+        RunConsentRequest: {
+            description: string;
+            shape: string;
+            stepIndex: number;
+        };
         RunCreateRequest: {
             idempotencyKey?: components["schemas"]["IdempotencyKey"];
             inputs?: {
@@ -793,6 +798,7 @@ export interface components {
         };
         RunRecord: {
             automationId: components["schemas"]["Id"];
+            consentRequest?: components["schemas"]["RunConsentRequest"];
             finishedAt?: components["schemas"]["IsoTimestamp"];
             id: components["schemas"]["Id"];
             inputs?: {

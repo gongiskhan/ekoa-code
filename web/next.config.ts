@@ -8,10 +8,20 @@ import { join } from "node:path";
 // NOT honor an inherited shell NEXT_PUBLIC_API_URL — past port drift
 // came from stale env vars overriding the port files.
 //
+// EKOA_PUBLIC_API_URL is the one deliberate escape, and it is a DIFFERENT
+// name on purpose: the rule above exists because a NEXT_PUBLIC_API_URL left
+// in a shell silently outranked the port file, which is an accident. Naming
+// the override separately means it can only be set on purpose. It is what a
+// stack reached from another machine needs — a browser on a laptop cannot
+// resolve this box's `localhost`, so the API origin baked into the bundle
+// has to be the one that browser can actually reach.
+//
 // In production builds the file isn't present; deployments are expected
 // to set NEXT_PUBLIC_API_URL explicitly at build time, so we only enforce
 // the file's presence in dev.
 function resolveApiUrl(): string {
+  const override = process.env.EKOA_PUBLIC_API_URL?.trim();
+  if (override) return override.replace(/\/+$/, "");
   const portFile = join(process.cwd(), "..", "backend.port");
   if (existsSync(portFile)) {
     const port = readFileSync(portFile, "utf8").trim();
@@ -53,6 +63,12 @@ const nextConfig: NextConfig = {
   // Gate/CI builds can use an isolated dist dir so a `next build` never
   // corrupts a live dev server's .next incremental state.
   distDir: process.env.NEXT_BUILD_DIST_DIR || ".next",
+  // A dev server reached over a hostname other than localhost (the stack running on one box
+  // and driven from a laptop) is a cross-origin dev request as far as Next is concerned, and
+  // it refuses those unless the host is named here.
+  ...(process.env.EKOA_PUBLIC_WEB_HOST
+    ? { allowedDevOrigins: [process.env.EKOA_PUBLIC_WEB_HOST.trim()] }
+    : {}),
   env: {
     NEXT_PUBLIC_API_URL: resolveApiUrl(),
     NEXT_PUBLIC_EKOA_VERTICAL: resolveVertical(),
@@ -72,7 +88,12 @@ const nextConfig: NextConfig = {
   // so the authenticated dashboard cannot be framed by a served app or hostile origin), plus
   // HSTS / nosniff / referrer / X-Frame-Options.
   async headers() {
-    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || "";
+    // THE SAME resolver the bundle is built against. Reading the raw env var here instead
+    // let the two disagree: in dev the bundle takes `../backend.port` and ignores an
+    // inherited NEXT_PUBLIC_API_URL, so a stale (or simply absent) env produced a CSP whose
+    // connect-src named a different origin than the one the app actually calls — and the
+    // browser blocks the login fetch with nothing in the server log to explain it.
+    const apiOrigin = resolveApiUrl();
     // The ekoa-bridge daemon's loopback surface (FC-406/FC-407, run D2): grants + the
     // egress ledger are fetched by the BROWSER straight from 127.0.0.1 — never proxied or
     // persisted hosted-side. Default port is the proposed C1 stable port; keep the literal

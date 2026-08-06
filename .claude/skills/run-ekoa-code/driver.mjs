@@ -224,10 +224,15 @@ function startProxy() {
 
 // ---- Web (Next.js dev) -----------------------------------------------------
 function bootWeb() {
-  log(`booting web (next dev) on :${WEB_PORT} with NEXT_PUBLIC_API_URL=http://localhost:${PROXY_PORT}`);
+  // EKOA_PUBLIC_API_URL, when the operator set it, is the origin the BROWSER must use and
+  // therefore the one the bundle and its CSP are built against (next.config.ts resolves it).
+  // Leave it alone here: overwriting it with a loopback URL is exactly what makes a stack
+  // driven from another machine fail with a blocked fetch and no server-side trace.
+  const apiUrl = process.env.EKOA_PUBLIC_API_URL?.trim() || `http://localhost:${PROXY_PORT}`;
+  log(`booting web (next dev) on :${WEB_PORT} with NEXT_PUBLIC_API_URL=${apiUrl}`);
   const child = spawn('npm', ['run', 'dev', '--workspace', 'web'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: WEB_PORT, NEXT_PUBLIC_API_URL: `http://localhost:${PROXY_PORT}` },
+    env: { ...process.env, PORT: WEB_PORT, NEXT_PUBLIC_API_URL: apiUrl },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
   child.on('exit', (code) => { if (!tearingDown) { log(`web exited (${code})`); teardown(1); } });

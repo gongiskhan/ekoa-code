@@ -13,9 +13,19 @@
  * Port: the committed default 4111 (the ported drivers' expectation), overridable with
  * PORT. The process prints `DEV-API READY <base>` once /health answers, so harnesses can
  * spawn it and wait for that line.
+ *
+ * STORAGE. Ephemeral is the right default for a test lane: every run starts from a known
+ * empty database and leaves nothing behind. It is the wrong default for a human driving the
+ * stack by hand, because the state a person creates through the UI - an OAuth workspace
+ * connection, a minted key - does not survive the next restart, and re-doing a third-party
+ * consent screen on every boot is not a workflow. Two opt-in escapes, neither of which
+ * changes the default:
+ *
+ *   MONGODB_URI=mongodb://...      point at a real server; this harness then provisions nothing
+ *   EKOA_DEV_DB_PATH=/some/dir     keep the memory-server's files, so state survives a restart
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -46,12 +56,29 @@ async function waitForHealth(base, timeoutMs = HEALTH_TIMEOUT_MS) {
   return false;
 }
 
-const mem = await MongoMemoryServer.create({ instance: { launchTimeout: 60_000 } });
+// An externally provisioned server wins outright: this harness then starts nothing and stops
+// nothing, so a hand-driven stack can point at storage whose lifetime it does not control.
+const externalUri = (process.env.MONGODB_URI ?? '').trim();
+const dbPath = (process.env.EKOA_DEV_DB_PATH ?? '').trim();
+if (dbPath) mkdirSync(dbPath, { recursive: true });
+
+// wiredTiger + a fixed dbPath is what makes the memory-server's files outlive the process;
+// the default (ephemeralForTest, a temp dir) is what makes it a clean-room for the test lane.
+const mem = externalUri
+  ? null
+  : await MongoMemoryServer.create({
+      instance: {
+        launchTimeout: 60_000,
+        ...(dbPath ? { dbPath, storageEngine: 'wiredTiger' } : {}),
+      },
+    });
+if (externalUri) process.stdout.write('[dev-api] using MONGODB_URI from the environment\n');
+else if (dbPath) process.stdout.write(`[dev-api] persistent dev database at ${dbPath}\n`);
 
 const env = {
   ...process.env,
   PORT,
-  MONGODB_URI: mem.getUri(),
+  MONGODB_URI: externalUri || mem.getUri(),
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? 'dev-only-encryption-key',
   JWT_SECRET: process.env.JWT_SECRET ?? 'dev-only-jwt-secret',
   EKOA_ADMIN_USERNAME: process.env.EKOA_ADMIN_USERNAME ?? 'admin',
@@ -63,7 +90,7 @@ if (useBuilt) {
   const entry = join(ROOT, 'api', 'dist', 'server.js');
   if (!existsSync(entry)) {
     process.stderr.write('[dev-api] api/dist/server.js missing — run `npm run build --workspace api` first\n');
-    await mem.stop();
+    await mem?.stop();
     process.exit(1);
   }
   child = spawn('node', [entry], { cwd: join(ROOT, 'api'), env, stdio: 'inherit' });
@@ -73,7 +100,7 @@ if (useBuilt) {
 
 const shutdown = async (code) => {
   child.kill('SIGTERM');
-  await mem.stop();
+  await mem?.stop();
   process.exit(code);
 };
 process.on('SIGINT', () => void shutdown(130));

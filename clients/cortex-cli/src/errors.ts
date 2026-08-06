@@ -23,6 +23,13 @@ export class RuntimeFailure extends Error {
   constructor(
     readonly code: string,
     message: string,
+    /**
+     * The server document that explains the failure, where the failure HAS one. `integrations
+     * execute` needs it: a failed action arrives as an HTTP 200 body, stdout is empty on the
+     * failure path, and the error document is then the only place the upstream status and the
+     * payload can travel. Printed under `--json` only, and scrubbed like every other printed value.
+     */
+    readonly details?: unknown,
   ) {
     super(message);
   }

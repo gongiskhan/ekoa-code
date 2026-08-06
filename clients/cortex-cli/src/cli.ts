@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { CortexApiError, CortexClient, CortexNetworkError, CortexTimeoutError } from './client.js';
 import { automationsCommand } from './commands/automations.js';
+import { integrationsCommand } from './commands/integrations.js';
 import { knowledgeCommand } from './commands/knowledge.js';
 import { memoryCommand } from './commands/memory.js';
 import type { CommandGroup } from './context.js';
@@ -16,7 +17,7 @@ import { RuntimeFailure, UsageError } from './errors.js';
 import { EXIT_API_ERROR, EXIT_OK, EXIT_USAGE, printJson, printJsonError, processIo, type Io } from './output.js';
 import { makeRedactor, redactValue } from './redact.js';
 
-const GROUPS: readonly CommandGroup[] = [memoryCommand, knowledgeCommand, automationsCommand];
+const GROUPS: readonly CommandGroup[] = [memoryCommand, knowledgeCommand, automationsCommand, integrationsCommand];
 
 let cachedVersion: string | undefined;
 
@@ -37,7 +38,9 @@ function helpText(): string {
     'cortex <group> <command> [options]',
     '',
     'Groups:',
-    ...GROUPS.map((g) => `  ${g.name.padEnd(12)}${g.summary}`),
+    // Wide enough for the longest group name plus a gap: at padEnd(12) "integrations" ran straight
+    // into its own summary.
+    ...GROUPS.map((g) => `  ${g.name.padEnd(14)}${g.summary}`),
     '',
     'Global options:',
     '  --json        print exactly one JSON document on stdout (nothing else)',
@@ -172,8 +175,17 @@ function report(
     return EXIT_API_ERROR;
   }
   if (error instanceof CortexTimeoutError || error instanceof CortexNetworkError || error instanceof RuntimeFailure) {
-    if (json) printJsonError(io, command, { code: error.code, message: redact(error.message) });
-    else io.err(`error: ${error.code}: ${redact(error.message)}`);
+    // A RuntimeFailure may carry the server document that explains it (`integrations execute`
+    // reads its failure out of an HTTP 200 body). It rides in `details`, exactly as an api
+    // refusal's does, because stdout is empty on the failure path and there is nowhere else.
+    const details = error instanceof RuntimeFailure ? error.details : undefined;
+    if (json) {
+      printJsonError(io, command, {
+        code: error.code,
+        message: redact(error.message),
+        ...(details === undefined ? {} : { details: redactValue(redact, details) }),
+      });
+    } else io.err(`error: ${error.code}: ${redact(error.message)}`);
     return EXIT_API_ERROR;
   }
   const message = error instanceof Error ? error.message : String(error);

@@ -120,7 +120,7 @@ describe('exit codes', () => {
   });
 
   it('0 for --help on the root and on every group', async () => {
-    for (const argv of [['--help'], ['memory', '--help'], ['knowledge', '-h'], ['automations', '--help']]) {
+    for (const argv of [['--help'], ['memory', '--help'], ['knowledge', '-h'], ['automations', '--help'], ['integrations', '--help']]) {
       const cap = capture();
       expect(await main(argv, { io: cap.io, env: {} }), argv.join(' ')).toBe(0);
       expect(cap.out.join('\n')).toContain('cortex');

@@ -124,6 +124,31 @@ export const RunStepRecord = z
   .passthrough();
 export type RunStepRecord = z.infer<typeof RunStepRecord>;
 
+/**
+ * What a run parked at `awaiting_consent` is asking a human to authorise — the command-shape
+ * gate a `local_command` or `api_call` step raises before it runs.
+ *
+ * Published because `POST /runs/:id/consent` is `user-or-key` and its body REQUIRES `shape`,
+ * while the only carrier of that shape was the SSE `runAwaitingConsent` event — and there is no
+ * event stream on the key-reachable surface. A key holder could therefore read
+ * `status: 'awaiting_consent'` and had no published way to learn what was being asked or which
+ * shape to echo back: an endpoint whose auth class invites a caller who cannot use it.
+ *
+ * `argv` is deliberately NOT here. It is the raw command line, which the engine shows a human
+ * only behind an explicit "what exactly will run?" toggle; `description` is the published
+ * human-readable form. Widening this to the argv is a separate decision, not a side effect of
+ * making the gate answerable. `approvalScope` is server-written bookkeeping and never leaves.
+ */
+export const RunConsentRequest = z.object({
+  /** Index of the step that is blocked, matching `RunStepRecord.index`. */
+  stepIndex: z.number().int(),
+  /** Plain-English statement of what will run: "run cat to read a file". */
+  description: z.string(),
+  /** Fingerprint of the exact command shape being approved — echo it back to `/consent`. */
+  shape: z.string(),
+});
+export type RunConsentRequest = z.infer<typeof RunConsentRequest>;
+
 export const RunRecord = z
   .object({
     id: Id,
@@ -138,6 +163,8 @@ export const RunRecord = z
     /** Per-step outcomes for the run detail view (screenshots, status, timing). Optional so a lean
      *  list response may omit them; present on GET /runs/:id and the list serialization. */
     steps: z.array(RunStepRecord).optional(),
+    /** Present exactly while `status === 'awaiting_consent'`; cleared when the run resumes. */
+    consentRequest: RunConsentRequest.optional(),
   })
   .passthrough();
 export type RunRecord = z.infer<typeof RunRecord>;
