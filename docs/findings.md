@@ -223,6 +223,52 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   shown, the submit stays disabled, and no success banner appears. LESSON: a vision step whose
   "success" only appears after an auto-repair typed the passing input is testing the harness, not the
   product - graduate it to a spec that pins the pre-repair state.
+- **`microsoft-connect-never-showed-an-account-picker`** (FIXED 2026-08-06, HIGH, a connect that
+  binds the workspace to an account the user never chose - and cannot undo from the product).
+  `microsoftAuthUrl` (`api/src/integrations/platform-oauth.ts`) sent no `prompt` parameter, while
+  its Google sibling three functions above sends `prompt: 'select_account consent'`. Without it the
+  Microsoft identity platform reuses whatever account the browser is already signed into and
+  returns straight to the callback: the operator clicks "Ligar", a window flashes, and the page
+  says "Ligação concluída" having asked nothing. Observed live on staging - a PERSONAL (MSA)
+  account got bound this way, and it reports healthy on every surface we have while `/v1.0/sites`
+  answers `not supported for MSA accounts`, i.e. the SharePoint capability the plane exists for
+  cannot run (see `workspace-microsoft-connected-as-a-personal-account-cannot-reach-sharepoint`).
+  WHY IT IS WORSE THAN A MISCLICK: there is no in-product recovery. Disconnecting drops OUR row but
+  not Microsoft's browser session, so the next connect silently rebinds the same wrong account, and
+  the operator has no affordance anywhere to choose a different one. The only escape was signing
+  out of Microsoft in the browser.
+  FIXED: `prompt: 'select_account'` on the Microsoft authorize URL - `select_account` alone rather
+  than Google's pair, because Microsoft documents `prompt` as a SINGLE value
+  (login|none|consent|select_account) and re-prompts consent by itself for a new account or scope
+  set. Pinned by `api/tests/integrations/platform.test.ts`, which now asserts the picker parameter
+  for BOTH providers in one test (the asymmetry is the bug, so the assertion is symmetric) plus
+  that Microsoft still requests `offline_access` and `Sites.ReadWrite.All`.
+
+- **`workspace-microsoft-connected-as-a-personal-account-cannot-reach-sharepoint`** (OPEN
+  2026-08-06, MEDIUM, configuration + a swallowed failure the product should surface). On staging
+  the workspace Microsoft connect completed and every platform-side signal says connected:
+  `/api/v1/platform-integrations/microsoft` -> `{connected:true}`, `/api/app-cloud-files/status` ->
+  `microsoft.connected:true`, and a real Graph call through the served-app proxy returns real data
+  (`GET /api/m365/v1.0/me/drive` -> a live OneDrive). The workspace-credential seam is therefore
+  working end to end. But the account that was connected is a PERSONAL Microsoft account (MSA), and
+  SharePoint is an organizational-tenant API: `GET /v1.0/sites?search=...` and `GET /v1.0/organization`
+  both answer `BadRequest: This API is not supported for MSA accounts`. So the SALOMAO ERP's
+  `provisionClientSharePoint` - which does `/sites?search=Ekoa AI` and then PUTs the client folder
+  tree into that site's drive - cannot work with this connection, while the dashboard shows the
+  integration as healthy.
+  TWO THINGS MAKE THIS WORSE THAN A WRONG CLICK. (1) `MICROSOFT_TENANT_ID=common` admits both
+  account types, so nothing at consent time distinguishes the account that can do the job from the
+  one that cannot; ekoa-dev's exchange decoded the id_token `tid` claim (`9188040d-...` = MSA)
+  precisely so an org-only feature could tell them apart, and that discrimination was not ported.
+  (2) The ERP swallows the failure: its SharePoint provisioning is deliberately best-effort so the
+  conversion cascade never blocks, which means a user sees the client convert successfully and
+  simply never gets folders, with no error anywhere.
+  FIX (operator): connect the WORK/SCHOOL account of the tenant that owns the SharePoint site
+  (prod used `ekoaai.sharepoint.com`), not a personal one. FIX (product, unported): record the
+  account type at connect and either refuse or warn when an org-only capability is enabled against
+  an MSA connection - a status that says "connected" while the only feature it exists for cannot
+  run is the honest-degrade rule broken.
+
 - **`zoho-callback-page-script-injection`** (FIXED-HERE 2026-08-06, HIGH, **live in ekoa-dev /
   api.ekoa.io** - not a defect of this repo, a defect this repo refused to inherit). The Zoho OAuth
   callback renders a server-built HTML page that hands the outcome to the opener via

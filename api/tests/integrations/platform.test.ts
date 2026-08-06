@@ -112,6 +112,30 @@ describe('platform OAuth connect (ch03 §3.8.15)', () => {
     expect(row?.credentialsCiphertext).toBeUndefined();
   });
 
+  it('BOTH providers force the account picker, so a connect can never silently reuse a session', async () => {
+    // Without `prompt`, Microsoft returns to the callback with no interaction at all, binding the
+    // workspace to whichever account the browser happened to be signed into. Observed live on
+    // staging 2026-08-06: a personal (MSA) account was connected that way, reported healthy
+    // everywhere, and could not reach SharePoint - the only reason the plane exists. Disconnecting
+    // does not recover it, because our row goes and the provider's session does not.
+    const { http } = makeHttp();
+    for (const [provider, expected] of [['google', 'select_account consent'], ['microsoft', 'select_account']] as const) {
+      const res = await connectPlatform(admin, provider, depsWith(http));
+      expect(res.ok, `${provider} connect failed`).toBe(true);
+      if (!res.ok) continue;
+      expect(new URL(res.authUrl).searchParams.get('prompt'), `${provider} must force the picker`).toBe(expected);
+    }
+  });
+
+  it('microsoft asks for a refresh token and the SharePoint scope it exists for', async () => {
+    const { http } = makeHttp();
+    const res = await connectPlatform(admin, 'microsoft', depsWith(http));
+    if (!res.ok) throw new Error('connect failed');
+    const scope = new URL(res.authUrl).searchParams.get('scope') ?? '';
+    expect(scope).toContain('offline_access'); // no refresh token without it
+    expect(scope).toContain('Sites.ReadWrite.All'); // served-app SharePoint folder creation
+  });
+
   it('rejects an unknown provider', async () => {
     const res = await connectPlatform(admin, 'dropbox', depsWith(makeHttp().http));
     expect(res).toEqual({ ok: false, code: 'invalid_provider' });

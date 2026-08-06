@@ -236,6 +236,18 @@ function microsoftAuthUrl(cfg: OAuthProviderConfig, state: string): string {
     redirect_uri: redirectUri(cfg, 'microsoft'),
     response_type: 'code',
     scope: MICROSOFT_SCOPES,
+    // ALWAYS SHOW THE ACCOUNT PICKER. Without `prompt`, Microsoft silently reuses whichever
+    // account the browser is already signed into and returns to the callback with no interaction
+    // at all - the connect "succeeds" instantly against an account the user never chose, and there
+    // is no way to pick a different one from inside the product. Observed on staging 2026-08-06:
+    // a personal (MSA) account was connected this way, which reports healthy everywhere while
+    // SharePoint - the reason the plane exists - answers `not supported for MSA accounts`.
+    // Disconnecting does not help either: our row goes, Microsoft's session does not.
+    //
+    // `select_account` alone, not Google's `select_account consent` pair: the Microsoft identity
+    // platform documents `prompt` as a SINGLE value (login | none | consent | select_account), and
+    // consent is re-prompted on its own when the account or the scope set is new.
+    prompt: 'select_account',
     state,
   });
   return `${msAuthEndpoint(cfg)}?${params.toString()}`;
