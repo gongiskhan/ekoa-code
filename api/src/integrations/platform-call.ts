@@ -79,6 +79,17 @@ export interface PlatformCallResult {
   consentRequest?: IntegrationActionConsentDescriptor;
 }
 
+/**
+ * Is this key one of the two shipped PLATFORM packages? Exported because the credential custody
+ * differs, and so the rail must: platform tokens live on an org-scoped OAuth row that only
+ * `callPlatformIntegration` can read, while `executeUserIntegrationAction` resolves a per-user
+ * config row and therefore answers `not_connected` for these keys no matter how connected the org
+ * actually is. A caller that dispatches on backing type alone cannot tell the two apart.
+ */
+export function isPlatformIntegrationKey(integrationKey: string): boolean {
+  return keyToProvider(integrationKey) !== null;
+}
+
 function keyToProvider(integrationKey: string): PlatformProvider | null {
   if (integrationKey === 'google-workspace') return 'google';
   if (integrationKey === 'microsoft-365') return 'microsoft';

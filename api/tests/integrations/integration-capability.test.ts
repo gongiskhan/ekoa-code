@@ -201,6 +201,41 @@ describe('the capability execute INHERITS the executor write gate', () => {
     const result = valueOf(await executeIntegrationCapabilityAction(ctx, PROBE_INTEGRATION, 'send_message', {}));
     expect(result.code).toBe('awaiting_consent');
   });
+
+  /**
+   * THE TWO PLATFORM PACKAGES ARE A DIFFERENT CUSTODY, AND THE RAIL HAS TO KNOW IT.
+   *
+   * `google-workspace` / `microsoft-365` keep their OAuth tokens on an ORG-scoped row that only
+   * `callPlatformIntegration` reads. `executeUserIntegrationAction` resolves a PER-USER config row,
+   * so before the seam existed this endpoint answered `not_connected` for a fully connected org -
+   * while `GET /integrations` happily listed the package and all 24 of its actions. The catalog
+   * advertised a rail that did not exist, and no suite noticed because every case here used a
+   * user-credential package.
+   */
+  it('a PLATFORM key is executed on the platform seam, not the user-credential rail', async () => {
+    const seen: Array<{ orgId: string; integrationKey: string; actionName: string; actingUserId?: string }> = [];
+    const { ctx } = ctxWithSpy('ownerA', 'orgA');
+    ctx.callPlatform = async (input) => {
+      seen.push(input);
+      return { success: true, status: 200, data: { files: [] } };
+    };
+
+    const result = valueOf(await executeIntegrationCapabilityAction(ctx, 'google-workspace', 'list_files', {}));
+
+    expect(result.success).toBe(true);
+    expect(seen).toHaveLength(1);
+    // Tenancy comes from the VERIFIED principal, and the acting user is forwarded so the platform
+    // write gate has an approval to look up (without it every mutating platform action on this rail
+    // would be refused as unattended, with no way to say yes).
+    expect(seen[0]).toMatchObject({ orgId: 'orgA', integrationKey: 'google-workspace', actionName: 'list_files', actingUserId: 'ownerA' });
+  });
+
+  it('with NO platform seam bound it fails closed, never falling through to another custody', async () => {
+    const { ctx } = ctxWithSpy('ownerA', 'orgA');
+    expect(ctx.callPlatform).toBeUndefined();
+    const result = valueOf(await executeIntegrationCapabilityAction(ctx, 'google-workspace', 'list_files', {}));
+    expect(result.success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -228,6 +263,17 @@ describe('static: the capability rail routes through the gated executor and owns
 
   it('it CALLS executeUserIntegrationAction — the one funnel every rail goes through', () => {
     expect(capabilitySrc.split('executeUserIntegrationAction(').length - 1).toBe(1);
+  });
+
+  // The platform branch is the ONE other executor this module may reach, and only because
+  // `callPlatformIntegration` carries the same gate over the same action-consent primitives. Pin
+  // that it goes through the injected SEAM rather than importing the caller directly: a direct
+  // import would give this module its own credential path and put it back outside the composition
+  // root's control. The behavioural half is the not_connected case below.
+  it('a platform action goes through the injected seam, never a direct platform call', () => {
+    expect(capabilitySrc).toContain('isPlatformIntegrationKey(');
+    expect(capabilitySrc).toContain('ctx.callPlatform');
+    expect(capabilitySrc).not.toContain('callPlatformIntegration(');
   });
 
   it('it never contains the gate, and never grants an approval', () => {

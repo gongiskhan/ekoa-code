@@ -6,6 +6,47 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`the-capability-surface-listed-google-workspace-and-could-never-execute-it`** (FIXED 2026-08-06,
+  HIGH, public capability surface — found by driving the Garrison consumer to a REAL connected
+  Google account rather than to a fixture). `POST /api/v1/integrations/:key/actions/:name/execute`
+  answered `{"success": false, "code": "not_connected"}` for `google-workspace` on an org whose
+  OAuth connection was live, enabled and refreshing — `GET /api/v1/platform-integrations/google`
+  reported `connected: true` with the account email, and the stored row
+  (`platform-<orgId>-google`) carried valid credentials the whole time.
+  CAUSE: custody, not connection. `executeIntegrationCapabilityAction` called
+  `executeUserIntegrationAction` and, by design, nothing else — that funnel resolves a PER-USER
+  `integrationConfigs` row (`findConfigForOwner`) and there is none for a platform package, so it
+  returned the coded refusal from `action-executor.ts:298`. The two shipped platform packages keep
+  their tokens on an ORG-scoped row only `callPlatformIntegration` can read, and that function was
+  wired into the composition root for the automation `integration` step and the trigger pipeline
+  and NEVER onto the capability rail. `action-executor.ts:18-19` states the split plainly ("the
+  function the automation engine's `integration` step calls for a NON-platform key … OAuth2/
+  service_account are platform-only"); the capability route simply had no platform branch.
+  So `GET /api/v1/integrations` listed `google-workspace` with all 24 actions, `GET
+  /integrations/google-workspace` described them, the write gate correctly refused the mutating
+  ones with a resolved destination — and not one of the 24 could ever run. The catalog advertised a
+  rail that did not exist. Every existing case in
+  `api/tests/integrations/integration-capability.test.ts` used a user-credential package, which is
+  why nothing caught it; the contract suite probes admission, not custody.
+  FIXED with a `callPlatform` SEAM on `CapabilityContext`, bound once in `server.ts` exactly like
+  the existing `runAutomationBackedAction` and `draftAction` seams, and a custody dispatch in
+  `executeIntegrationCapabilityAction` keyed on the new exported `isPlatformIntegrationKey`
+  (platform-call.ts). The org comes from the verified principal and the acting user is forwarded so
+  the platform write gate has an approval to look up.
+  THE GATE DID NOT MOVE, which is the only reason the branch is allowed: `callPlatformIntegration`
+  enforces its own gate over the same `action-consent.ts` primitives, in the one function every
+  platform rail calls, and a mutating platform action with no live approval still answers
+  `awaiting_consent` and still cannot be approved with a key (the approval route is `auth: 'user'`).
+  A DIRECT import of the caller is refused by the static guard — the branch must go through the
+  injected seam or the module regains its own credential path outside the composition root's
+  control. With NO seam bound it fails closed rather than falling through to another custody.
+  Pinned by three cases in `api/tests/integrations/integration-capability.test.ts` (the seam is
+  used with the right tenancy; the static guard; fail-closed with no seam), reverted-and-verified
+  red on two of them. VERIFIED LIVE end to end afterwards: `list_files` through the Garrison
+  consumer returned 100 real Drive files, and `send_email_simple` still answered 403
+  `awaiting_consent` naming `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send`.
+  `api/tests/security` + `api/tests/contract` + `api/tests/integrations` are 1750/1750 green.
+
 - **`a-parked-run-asked-a-question-no-external-client-could-read`** (FIXED 2026-08-06, MEDIUM,
   public capability surface / an endpoint whose auth class invites a caller who cannot use it -
   found while driving the Garrison consumer through the public surface end to end). A run that

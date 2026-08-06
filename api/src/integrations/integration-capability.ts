@@ -8,9 +8,14 @@
  * behaviour is testable without a socket.
  *
  * ================================ WHAT IT DELIBERATELY DOES NOT DO ==========================
- * THE WRITE GATE IS INHERITED. `executeIntegrationCapabilityAction` calls
- * `executeUserIntegrationAction` and nothing else — never `checkActionConsent`, never a private
- * step of the executor, never a "the caller already checked" fast path. C2 placed the gate INSIDE
+ * THE WRITE GATE IS INHERITED. `executeIntegrationCapabilityAction` never calls
+ * `checkActionConsent`, never a private step of an executor, never a "the caller already checked"
+ * fast path. It reaches exactly TWO executors, each of which owns the gate itself:
+ * `executeUserIntegrationAction` for a user-credential package, and — through the injected
+ * `callPlatform` seam — `callPlatformIntegration` for the two platform packages, whose OAuth
+ * tokens live on an org-scoped row the user rail cannot read. That second branch is a CUSTODY
+ * dispatch, not a second gate: platform-call.ts enforces the same decision over the same
+ * `action-consent.ts` primitives, in the one function every platform rail calls. C2 placed the gate INSIDE
  * the executor, after the shape gates and before `findConfigForOwner`, exactly so that a write
  * nobody approved never causes a credential to be read, on ANY of the four rails. A capability
  * endpoint that reached past that would be a fifth rail with its own rules, which is the failure
@@ -85,6 +90,7 @@ import {
   type ExecutorDeps,
 } from './action-executor.js';
 import { findConfigForOwner, type IntegrationConfigDoc } from './service.js';
+import { isPlatformIntegrationKey } from './platform-call.js';
 
 /** The per-action capability row (shared/src/integrations.ts `IntegrationCapabilityAction`). */
 export interface CapabilityActionView {
@@ -145,6 +151,18 @@ export interface CapabilityContext {
   username?: string;
   /** The automation seam, bound once by the composition root and handed to every rail. */
   runAutomationBackedAction?: ExecutorDeps['runAutomationBackedAction'];
+  /**
+   * The PLATFORM seam (google-workspace / microsoft-365), bound once by the composition root
+   * exactly like the automation one. Absent, a platform action is refused as `not_connected`
+   * rather than silently routed down the user-credential rail — see the dispatch below.
+   */
+  callPlatform?: (input: {
+    orgId: string;
+    integrationKey: string;
+    actionName: string;
+    args: Record<string, unknown>;
+    actingUserId?: string;
+  }) => Promise<ExecuteIntegrationActionResult>;
 }
 
 /** A real tenant means BOTH halves are named. Neither an empty org nor an empty user is a tenant. */
@@ -277,16 +295,38 @@ export async function executeIntegrationCapabilityAction(
   if (!hasTenant(ctx.actor)) return { ok: false, refusal: 'no_tenant' };
 
   const t0 = Date.now();
-  const result = await executeUserIntegrationAction(
-    {
-      orgId: ctx.actor.orgId,
-      ownerUserId: ctx.actor.userId,
-      integrationKey,
-      actionName,
-      args,
-    },
-    ctx.runAutomationBackedAction ? { runAutomationBackedAction: ctx.runAutomationBackedAction } : {},
-  );
+  // WHICH CUSTODY THIS KEY HAS, not which backing the action declares. The two shipped platform
+  // packages keep their OAuth tokens on an ORG-scoped row that only `callPlatformIntegration` can
+  // read; `executeUserIntegrationAction` resolves a PER-USER config row and, finding none, answers
+  // `not_connected` however connected the org really is. Before this dispatch the capability
+  // surface listed google-workspace and all 24 of its actions, gated its writes, and could not
+  // execute a single one of them - the catalog advertised a rail that did not exist.
+  //
+  // THE WRITE GATE SURVIVES THE BRANCH, which is the only reason the branch is allowed. C2 put the
+  // gate inside `executeUserIntegrationAction`; `callPlatformIntegration` enforces its own, in the
+  // one function every platform rail calls, over the SAME `action-consent.ts` primitives - and it
+  // needs `actingUserId` to look up the approval, so the acting user is passed explicitly. A
+  // mutating platform action with no live approval still comes back `awaiting_consent`, and still
+  // cannot be approved with a key (the approval route is `auth: 'user'`).
+  const result =
+    isPlatformIntegrationKey(integrationKey) && ctx.callPlatform
+      ? await ctx.callPlatform({
+          orgId: ctx.actor.orgId,
+          integrationKey,
+          actionName,
+          args,
+          actingUserId: ctx.actor.userId,
+        })
+      : await executeUserIntegrationAction(
+          {
+            orgId: ctx.actor.orgId,
+            ownerUserId: ctx.actor.userId,
+            integrationKey,
+            actionName,
+            args,
+          },
+          ctx.runAutomationBackedAction ? { runAutomationBackedAction: ctx.runAutomationBackedAction } : {},
+        );
 
   await auditExecute(ctx, integrationKey, actionName, result, t0);
   return { ok: true, value: result };

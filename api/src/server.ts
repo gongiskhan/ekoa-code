@@ -155,6 +155,7 @@ import {
   type RunEventEmitter,
 } from './automation/index.js';
 import { type ActionDrafter } from './integrations/integration-achieve.js';
+import { type CapabilityContext } from './integrations/integration-capability.js';
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
@@ -942,7 +943,26 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // `emptyReply: 'unavailable'` is the planner's rule rather than the builder's: an empty reply to
   // "write me an action" is a transport failing quietly, never an action.
   const draftAction: ActionDrafter = (input) => authorWithRepair({ ...input, emptyReply: 'unavailable' });
-  app.use('/api/v1/integrations', integrationsRouter({ ...deps, runAutomationBackedAction, draftAction }));
+  // The PLATFORM seam for the public capability rail. The org comes from the VERIFIED principal
+  // the route already built (never from the request), and the acting user is forwarded so the
+  // platform write gate has an approval to look up - the same reason the automation seam above
+  // forwards one. `callPlatformIntegration` enforces that gate itself, so routing here does not
+  // move the gate, only the credential custody it reads.
+  const callPlatform: CapabilityContext['callPlatform'] = (input) =>
+    callPlatformIntegration(
+      {
+        orgId: input.orgId,
+        integrationKey: input.integrationKey,
+        actionName: input.actionName,
+        args: input.args,
+        ...(input.actingUserId ? { actingUserId: input.actingUserId } : {}),
+      },
+      deps,
+    );
+  app.use(
+    '/api/v1/integrations',
+    integrationsRouter({ ...deps, runAutomationBackedAction, draftAction, callPlatform }),
+  );
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
   app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));
   app.use('/api/v1/knowledge', knowledgeRouter(deps));

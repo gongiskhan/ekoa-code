@@ -131,6 +131,7 @@ function capabilityCtxOf(
     genId: () => string;
     runAutomationBackedAction?: AutomationBackedHandler;
     draftAction?: ActionDrafter;
+    callPlatform?: CapabilityContext['callPlatform'];
   },
 ): CapabilityContext & { draftAction?: ActionDrafter } {
   const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
@@ -143,6 +144,10 @@ function capabilityCtxOf(
     // D3: the AUTHORING seam, bound once by the composition root exactly like the automation one.
     // Absent, `achieve` still executes and refuses to author (`authoring_unavailable`).
     ...(deps.draftAction ? { draftAction: deps.draftAction } : {}),
+    // Bound once by the composition root, same as the two seams above. Its ABSENCE is meaningful:
+    // a platform action then falls through to the user-credential rail and is refused there, which
+    // is the correct closed answer rather than a silent cross-custody read.
+    ...(deps.callPlatform ? { callPlatform: deps.callPlatform } : {}),
   };
 }
 
@@ -168,6 +173,8 @@ export function integrationsRouter(deps: {
   runAutomationBackedAction?: AutomationBackedHandler;
   /** The AUTHORING seam (D3): one drafting turn on D2's shared authoring core. */
   draftAction?: ActionDrafter;
+  /** The PLATFORM seam: google-workspace / microsoft-365 run on org-scoped OAuth custody. */
+  callPlatform?: CapabilityContext['callPlatform'];
 }): Router {
   const r = Router();
 
