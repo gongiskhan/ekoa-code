@@ -1,0 +1,9 @@
+{
+  "id": "cobrancas",
+  "name": "Cobranças",
+  "description": "Contas a receber e recuperação de créditos para escritórios de advogados: dívidas com prestações, lembretes por perfil com aprovação prévia, envio de emails pelas Integrações (com rascunhos na caixa de correio), reconciliação de extratos bancários com regras auto-aprendidas, juros de mora citados e linha do tempo auditável.",
+  "extends": "app-auth-persistent",
+  "outputKind": "web_app",
+  "featuredRank": 30,
+  "version": "1.1.0"
+}

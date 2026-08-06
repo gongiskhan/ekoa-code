@@ -1,0 +1,11 @@
+{
+  "id": "cobrancas",
+  "name": "Cobranças",
+  "version": "1.0.0",
+  "description": "Contas a receber e recuperação de créditos para escritórios de advogados: dívidas com prestações, planos de lembretes por perfil, envio de emails pelas Integrações, reconciliação de extratos bancários e histórico auditável.",
+  "entryPoint": "frontend/src/index.jsx",
+  "outputDir": "dist/",
+  "type": "jsx-app",
+  "extends": "app-auth-persistent",
+  "sharedData": true
+}
