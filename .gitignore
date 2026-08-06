@@ -46,3 +46,9 @@ web/public/voice/vendor/
 
 __pycache__/
 .walkthrough/auth.json
+
+# Planted-violation probes written by api/tests/security/grep-gates.test.ts. The test creates a
+# file that DELIBERATELY breaks the chokepoint gate (an api.anthropic.com literal outside
+# api/src/llm/) and deletes it again. A killed run leaves it behind, and committing one would
+# fail the chokepoint gate on every build afterwards - it has already been caught once.
+api/tests/.chokepoint-gate-probe-*/
