@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, tryCall } from "@/lib/api";
-import { forkFeaturedInto } from "@/lib/featured-fork";
 import { useTranslation } from "@/stores/i18n";
 import { useOrchestrationStore } from "@/stores/orchestration";
 import {
@@ -128,18 +127,30 @@ export function ChatStripes() {
         kind: kindLabel(kind, t),
         accent: accentForKind(kind),
         imageUrl: a.screenshotUrl,
-        // "Usar" a Starting Point: fork it, open the running fork in a new tab
-        // (use it) and land the current tab in the fork's chat (change it).
-        // Mirrors the /artifacts Starting Points strip via the shared helper.
-        // The app tab must open synchronously (popup blocker) before the fork.
+        // A featured app IS the app — forking here produced a second copy the
+        // user then saw twice in the gallery, with no way to tell which one
+        // their changes had gone into. Mirror what /artifacts already does
+        // (handleCustomizeFeatured): open the running featured app in a new tab
+        // (use it) and land the current tab in ITS chat via ?continue= (change
+        // it in place). The backend materialises a working copy on the first
+        // real modification, keeping the id, slug and data.
+        //
+        // The app tab still opens synchronously inside the handler, before any
+        // navigation, or the popup blocker eats it.
         onClick: () => {
           const appTab =
             typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
-          void (async () => {
-            const fork = await forkFeaturedInto(a.id, appTab);
-            if (!fork) return;
-            router.push(`/chat?continue=${encodeURIComponent(fork.id)}`);
-          })();
+          if (appTab) {
+            // Sever the opener link before navigating (reverse-tabnabbing),
+            // matching the noopener posture of the regular "Run" action.
+            try {
+              appTab.opener = null;
+            } catch {
+              /* cross-origin after navigation — nothing to sever */
+            }
+            appTab.location.replace(api.appUrl(a.slug || a.id));
+          }
+          router.push(`/chat?continue=${encodeURIComponent(a.id)}`);
         },
       };
     });

@@ -6,6 +6,57 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`ekoa-dev-work-can-live-only-on-a-peer-machine`** (FIXED 2026-08-06, MEDIUM, parity mechanism —
+  found by the operator saying "check on dev-madrid we definitely made changes" after the audit
+  reported clean). `npm run parity:audit` printed `parity:audit OK - ledger current` while four
+  commits sat on the operator's other machine, committed and never pushed: the served-app email
+  plane, document extraction, the Cobranças featured artifact, and the featured-fork fix. GitHub's
+  `ekoa-dev` main was genuinely unchanged since 2026-08-03, and `gh api` confirmed it — the audit
+  was not wrong about `origin/main`, it was wrong about what the question meant. An audit that
+  answers confidently and uselessly is worse than one that does not exist, because it is believed.
+  FIX: `scripts/dev-parity-audit.mjs` now fetches configured PEER checkouts into
+  `refs/remotes/parity-peer-<name>/main` and reports commits a peer holds that origin does not as
+  UNPUSHED, with a per-peer baseline so dispositioned work stops being re-reported; an unreachable
+  peer warns and is named as NOT audited on the success line. Two honesty bugs surfaced while
+  testing the fix and were fixed with it: an EMPTY `EKOA_DEV_PEERS` suppressed the ledger's own
+  peer config (looking like "not set"), and the OK line listed unreachable peers as audited.
+  Pinned by `api/tests/docs/dev-parity-audit.test.ts` (throwaway git repos, incl. the negative
+  cases). Related: the same read found that upstream `c4f7f2c6`'s MESSAGE describes three fixes
+  while the commit contains one — the other two are uncommitted in that machine's working tree, so
+  a commit subject is not evidence of what landed.
+
+- **`ported-app-content-can-describe-the-wrong-platform`** (FIXED 2026-08-06, MEDIUM, ported
+  content — found while verifying the Cobranças featured artifact renders, not by reading the
+  diff). The app's Definições page told the user, in bold as an "honest note": *"a plataforma não
+  aplica qualquer confirmação adicional aos envios"* — the platform applies no extra confirmation
+  to sends. That was TRUE of the platform it was written for. It is FALSE here: a send from a
+  served app is a WRITE and passes the C2 consent gate, so the first time a user acted on that
+  sentence they would hit `awaiting_consent` having just been told the door did not exist.
+  Rewritten to state both approvals (the app's own work-queue approval, and the account owner's
+  one-time authorisation in Integrações). A second defect in the same import: the app's
+  `dados-omissao.test.mjs` resolved `seed-data.json` one directory too shallow, so it threw ENOENT
+  instead of asserting — a dead test upstream as well as here. Path fixed; the invariant it guards
+  (the auto-seed source and the fork-seed file are the same content) does hold, and now provably.
+  This is `docs/governance.md`'s runtime-truth rule earning its place: ported content carries
+  CLAIMS about a platform it was not written for, and the claims are the part that rots silently —
+  the code fails loudly, the sentence just misleads.
+
+- **`the-chat-empty-state-forked-a-featured-app-into-a-second-copy`** (FIXED 2026-08-06, MEDIUM,
+  web — ported from ekoa-dev `c4f7f2c6`, which found it in the old platform). Clicking a featured
+  Starting Point on the chat empty state called `api.artifacts.fork`, so "use this" produced a
+  SECOND copy of the app in the user's gallery, identical in name, with no way to tell which one
+  their subsequent edits went into. `/artifacts` had already been fixed to open the featured app's
+  own chat via `?continue=` (`handleCustomizeFeatured`), so the two surfaces disagreed about what
+  the same action meant. FIX: `web/components/chat/chat-stripes.tsx` opens the running featured app
+  in a new tab and routes the current tab to `/chat?continue=<featured.id>`; the backend
+  materialises a working copy on the first real modification, keeping id, slug and data.
+  `web/lib/featured-fork.ts` is deleted (it had exactly one consumer). Regression:
+  `web/__tests__/components/chat-stripes-featured.test.tsx`, whose load-bearing assertion is
+  NEGATIVE — `fork` is never called — because asserting only the navigation would still pass with a
+  fork firing alongside it, which is exactly the shape the bug had. The upstream commit's other
+  half (follow-up detection requiring `projectPath`) is NOT-NEEDED here: ekoa-code already keys a
+  follow-up on the artifact id alone and never sends a client-side project dir.
+
 - **`the-capability-surface-listed-google-workspace-and-could-never-execute-it`** (FIXED 2026-08-06,
   HIGH, public capability surface — found by driving the Garrison consumer to a REAL connected
   Google account rather than to a fixture). `POST /api/v1/integrations/:key/actions/:name/execute`
