@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -10,6 +10,8 @@ import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { managedAutomationId } from '../../src/automation/integration-automations.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
+import * as bridgeRegistry from '../../src/bridge/registry.js';
+import { __resetCeremoniesForTests, __openCeremonyCount } from '../../src/bridge/attended.js';
 import {
   KnowledgeSource, CrawlStartResponse, CrawlStatusResponse, RefreshScheduleResponse,
   SessionCaptureStatus, ConnectSessionResponse, ProvisionAutomationsResponse, ErrorEnvelope,
@@ -123,22 +125,107 @@ describe('knowledge: crawl endpoints (no crawler infra — honest, never a fake 
 });
 
 describe('integrations: session + provisioning (no capture infra — honest, never a fake captured session)', () => {
-  it('GET /:key/session answers SessionCaptureStatus with status none', async () => {
+  // An UNKNOWN key is a 404 here for the same reason it is on every other `:key` route (A2): a key
+  // the actor cannot see must be byte-identical to one that does not exist. The pre-ignition stub
+  // answered 200 for any string because it never looked the key up — it had nothing to look up.
+  it('GET|POST /:key/session on an unknown key is the uniform 404, not a blind 200', async () => {
     const t = await tokenFor();
-    const res = await authed('/api/v1/integrations/gmail/session', t);
+    for (const init of [{}, { method: 'POST' as const }]) {
+      const res = await authed('/api/v1/integrations/definitely-not-an-integration/session', t, init);
+      expect(res.status).toBe(404);
+    }
+  });
+
+  it('GET /:key/session on a NON-session integration says so, and claims no capture', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/integrations/google-workspace/session', t);
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(SessionCaptureStatus.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect(body.status).toBe('none');
     expect((body.session as { status: string }).status).toBe('none');
+    // `supported` is a property of the PACKAGE: google-workspace authenticates by OAuth, so session
+    // capture does not apply to it at all.
+    expect((body.sessionConnect as { supported: boolean }).supported).toBe(false);
     // The dashboard derefs `.actions` on this body (integrations page automation rows):
     // the contract carries an explicit (possibly empty) array, never undefined.
     expect(Array.isArray(body.actions), JSON.stringify(body)).toBe(true);
   });
 
-  it('POST /:key/session answers ConnectSessionResponse WITHOUT claiming a session was started', async () => {
+  /**
+   * The browser_session package with NO machine connected. This is the case the whole rail turns on:
+   * `supported` is true (citius declares sessionConnect + authType browser_session) while
+   * `available` is false (nothing is paired in this test process), and the two must not collapse
+   * into one another — telling a user with no machine online that the feature does not exist is the
+   * same class of untruth the old hardcoded stub told everyone.
+   */
+  it('GET /:key/session on a session integration separates supported from available', async () => {
     const t = await tokenFor();
-    const res = await authed('/api/v1/integrations/gmail/session', t, { method: 'POST' });
+    const res = await authed('/api/v1/integrations/citius/session', t);
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(SessionCaptureStatus.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    const connect = body.sessionConnect as { supported: boolean; available: boolean; loginUrl?: string };
+    expect(connect.supported).toBe(true);
+    expect(connect.available).toBe(false); // no bridge paired in this process
+    expect(connect.loginUrl).toBe('https://portal.tribunais.org.pt');
+    expect(body.status).toBe('none'); // nothing captured, and it does not pretend otherwise
+  });
+
+  it('POST /:key/session REFUSES rather than queueing when no machine is connected', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/integrations/citius/session', t, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(ConnectSessionResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    // A ceremony needs a human AT the machine, so "we will ask when it comes back" would mean
+    // asking at a moment nobody is standing there (bridge/attended.ts).
+    expect(body.started).toBe(false);
+    expect((body.session as { status: string }).status).toBe('failed');
+    expect((body.session as { message: string }).message).toMatch(/máquina/i);
+  });
+
+  /**
+   * THE PATH THAT MATTERS: a machine IS connected, so the ceremony actually opens.
+   *
+   * The two facts asserted are the ones the rail is built on. First, the request goes to a machine
+   * resolved from the ACTOR — a caller-supplied pairingId would let one user pop a login prompt on
+   * another user's screen and bank the session against their own org. Second, the ORIGIN Cortex
+   * declares is the package's own `sessionConnect.loginUrl`, never anything the client sent, which
+   * is what makes the returned session provably the session for the portal we asked about.
+   */
+  it('POST /:key/session opens a ceremony on the ACTOR\'s machine, for the PACKAGE\'s origin', async () => {
+    const t = await tokenFor();
+    vi.spyOn(bridgeRegistry, 'getConnectionByOwner').mockReturnValue({
+      pairingId: 'pair-f5',
+      org: 'orgA',
+      ownerUserId: 'u1',
+    } as unknown as ReturnType<typeof bridgeRegistry.getConnectionByOwner>);
+    const sendToPairing = vi.spyOn(bridgeRegistry, 'sendToPairing').mockReturnValue(true);
+
+    const res = await authed('/api/v1/integrations/citius/session', t, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(ConnectSessionResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    expect(body.started).toBe(true);
+    expect((body.session as { status: string }).status).toBe('waiting_login');
+
+    expect(sendToPairing).toHaveBeenCalledTimes(1);
+    const [pairingId, frame] = sendToPairing.mock.calls[0] as [string, Record<string, unknown>];
+    expect(pairingId).toBe('pair-f5'); // the actor's machine, not a request field
+    expect(frame.type).toBe('attended.request');
+    expect(frame.origin).toBe('https://portal.tribunais.org.pt'); // the package's origin
+    expect(__openCeremonyCount()).toBe(1);
+
+    // Still status metadata only — a started ceremony must not start leaking session material.
+    const text = JSON.stringify(body);
+    expect(text).not.toContain('storageState');
+    expect(text).not.toContain('cookies');
+  });
+
+  it('POST /:key/session on a NON-session integration answers failed, never started', async () => {
+    const t = await tokenFor();
+    const res = await authed('/api/v1/integrations/google-workspace/session', t, { method: 'POST' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ConnectSessionResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
@@ -149,7 +236,7 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
   it('the session responses never carry captured credential material (storageState/cookies)', async () => {
     const t = await tokenFor();
     for (const init of [{}, { method: 'POST' }]) {
-      const text = await (await authed('/api/v1/integrations/gmail/session', t, init)).text();
+      const text = await (await authed('/api/v1/integrations/citius/session', t, init)).text();
       expect(text).not.toContain('storageState');
       expect(text).not.toContain('cookies');
     }

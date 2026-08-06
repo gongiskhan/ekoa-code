@@ -6,6 +6,52 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`the-attended-session-ceremony-was-built-tested-and-unreachable`** (FIXED 2026-08-06, MEDIUM,
+  a complete rail with no ignition - found while answering "how else could an agent authenticate to
+  a site" rather than by a suite). Everything needed to capture a human-established browser session
+  existed and passed tests: `requestAttendedCeremony` (`api/src/bridge/attended.ts`) opens a
+  ceremony on a named machine and refuses rather than queueing when it is offline; the bridge's
+  `session.push` handler (`api/src/bridge/server.ts:306`) already called `acceptSessionPush`, which
+  refuses an unknown requestId, a push from the wrong machine and a mismatched origin; and
+  `captureSessionToCofre` (`api/src/cofre/sessions.ts`) sealed the result as a Cofre item of type
+  `session` under the same envelope, grants and lock-all as a password, origin-bound and TTL'd.
+  `api/src/cofre/session-checkout.ts` even decided how an expired one must be re-established
+  (`typist` vs `attended`) and whether the egress matches where it was made.
+  NOTHING IN `api/src` CALLED THE FIRST FUNCTION. Only its own test did. So the daemon-to-Cortex
+  direction was live while the Cortex-to-daemon direction had no caller, and the only reachable
+  surface - `GET`/`POST /api/v1/integrations/:key/session` - answered a hardcoded
+  `"Captura de sessão não disponível nesta versão."` for every key. That stub was itself the
+  honest half of an earlier finding (the shipped CITIUS asset promised users "O Ekoa captura a
+  sessão autenticada (cookies) e guarda-a cifrada" while the route said `available: false`), so the
+  product had been truthful about a capability it owned but could not start.
+  FIXED by wiring the two existing routes to the existing engine - no new endpoints, no contract
+  change (`SessionCaptureStatus` is passthrough and `ConnectSessionResponse` already declared
+  `waiting_login`). POST resolves the package's `sessionConnect.loginUrl` as the origin and the
+  ACTOR's own live pairing as the machine, then opens the ceremony; GET reports the real state.
+  TWO THINGS DELIBERATELY NOT TAKEN FROM THE REQUEST. The machine is resolved from the actor via
+  `getConnectionByOwner`, never a caller-supplied `pairingId` - otherwise one user could pop a login
+  prompt on another user's screen and bank the resulting session against their own org. The origin
+  is the package's declared `loginUrl`, never a client field - that is what makes the session which
+  comes back provably the session for the portal we asked about.
+  `supported` (a property of the package) and `available` (a property of this moment) are reported
+  separately: collapsing them would tell a user with no machine online that the feature does not
+  exist, which is the same class of untruth the stub told everyone. `newestUsableSession` skips
+  expired and unhealthy rows, so `captured` never describes a session that would fail at checkout.
+  BEHAVIOUR CHANGE worth noting: an unknown `:key` on these two routes is now the uniform 404 every
+  other `:key` route answers (A2), where the stub returned 200 for any string because it never
+  looked the key up. Two contract tests asserted that blind 200 and were rewritten.
+  Pinned by 6 cases in `api/tests/contract/f5-ui-endpoints.test.ts`, including the live path (a
+  connected machine: the frame goes to the actor's pairing, carries `attended.request` and the
+  package's origin, and one ceremony is open) and the refusal path (no machine -> `started: false`,
+  never queued). Reverted-and-verified: removing the ignition turns the live case red.
+  Session material still never crosses the wire - both responses are status metadata only, asserted.
+  STILL OPEN, and it is a product decision rather than a defect: the ceremony is machine-targeted by
+  design because it exists for credentials that cannot travel (an OA certificate in a keystore, a
+  Cartão de Cidadão in a reader). There is no ATTENDED-ANYWHERE route - a human who merely needs to
+  pass an SMS/TOTP prompt, with no local credential, still has to be at the paired machine. A
+  one-time-link flow that let them complete such a login on a phone would reuse
+  `captureSessionToCofre` unchanged; only the handoff is missing.
+
 - **`ekoa-dev-work-can-live-only-on-a-peer-machine`** (FIXED 2026-08-06, MEDIUM, parity mechanism —
   found by the operator saying "check on dev-madrid we definitely made changes" after the audit
   reported clean). `npm run parity:audit` printed `parity:audit OK - ledger current` while four

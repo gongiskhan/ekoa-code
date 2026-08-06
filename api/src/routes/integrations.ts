@@ -71,6 +71,9 @@ import {
 } from '../integrations/definition-store.js';
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
+import { requestAttendedCeremony } from '../bridge/attended.js';
+import { getConnectionByOwner } from '../bridge/registry.js';
+import { findSessionItemsForOrigin, sessionIsExpired } from '../cofre/sessions.js';
 import type { AutomationBackedHandler } from '../integrations/action-executor.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import { z } from 'zod';
@@ -645,6 +648,28 @@ export function integrationsRouter(deps: {
     res.json(result.view);
   });
 
+
+/**
+ * The session a run would actually get for this portal, or null.
+ *
+ * Newest-first and skipping the unusable: an expired item and one marked unhealthy are both still
+ * ROWS, so a naive "does any session exist" read reports `captured` for a session that would fail
+ * at checkout — which is the same class of lie the hardcoded stub told, just later and harder to
+ * spot. Metadata only ever leaves here; the blob stays sealed.
+ */
+async function newestUsableSession(
+  actor: Parameters<typeof findSessionItemsForOrigin>[0],
+  origin: string,
+): Promise<{ createdAt?: string; expiresAt?: string } | null> {
+  const items = await findSessionItemsForOrigin(actor, origin).catch(() => []);
+  const usable = items
+    .filter((item) => !sessionIsExpired(item))
+    .filter((item) => (item.sessionMetadata?.healthy ?? true) !== false)
+    .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
+  const newest = usable[0];
+  return newest ? { createdAt: newest.createdAt, expiresAt: newest.expiresAt } : null;
+}
+
   // --- Config removal + session/provision (the remaining `:key` dashboard routes) -------------
 
   r.delete('/:key', async (req: AuthedRequest, res: Response) => {
@@ -655,38 +680,113 @@ export function integrationsRouter(deps: {
   });
 
   /**
-   * F5 session-capture endpoints. There is NO server-side session-capture orchestration in this
-   * build (the browser capture lives on the ekoa-local bridge, de-scoped for rc-1). Per the F5
-   * brief these answer their declared shape with truthful values and never claim a captured
-   * session. SECRET HYGIENE (shared/src/integrations.ts SessionSnapshot): the captured Playwright
-   * storageState/cookies are consumed in-memory by the automation engine and MUST NEVER be
-   * serialized to a client — these responses carry STATUS METADATA ONLY.
+   * Session capture (Cofre WS-G/WS-I) — the ATTENDED ceremony, over the bridge.
+   *
+   * These two answered a hardcoded "não disponível nesta versão" while every piece behind them was
+   * built and tested: `requestAttendedCeremony` opens a ceremony on a machine, the bridge's
+   * `session.push` handler (bridge/server.ts) already accepted the result, and
+   * `captureSessionToCofre` sealed it. Nothing in `api/src` called the first one, so the rail was
+   * complete and unreachable and the honest stub was the only truthful thing left to say.
+   *
+   * WHY IT RUNS ON A MACHINE AND NOT HERE. The credentials this exists for cannot travel: an OA
+   * certificate in the lawyer's keystore, a Cartão de Cidadão in a reader. And even where they
+   * could, the session is bound to the vantage point it was made from — replaying a
+   * residentially-established session from a datacenter is the pattern portals flag
+   * (cofre/session-checkout.ts). So the browser opens where the human and the credential already
+   * are, and only the sealed result comes back.
+   *
+   * SECRET HYGIENE (shared/src/integrations.ts SessionSnapshot): the captured storageState is
+   * encrypted straight into a Cofre item and is NEVER serialized to a client. Both responses carry
+   * STATUS METADATA ONLY — that rule survives this change unaltered.
    */
   r.get('/:key/session', async (req: AuthedRequest, res: Response) => {
     const key = req.params.key as string;
     const actor = actorOf(req);
+    const definition = await resolveDefinition(actor, key);
+    if (!definition) return notFound(res);
+
+    const connect = definition.sessionConnect;
+    const machine = connect ? getConnectionByOwner(actor.userId, actor.orgId) : undefined;
+    // `supported` is a property of the PACKAGE; `available` is a property of this MOMENT. Collapsing
+    // them would tell a user with no machine online that the feature does not exist.
+    const supported = !!connect?.loginUrl && definition.authType === 'browser_session';
+    const captured = connect?.loginUrl ? await newestUsableSession(actor, connect.loginUrl) : null;
+
     res.json({
       integrationKey: key,
-      status: 'none',
-      // Truthful values: capture is a supported product surface but unavailable in this
-      // environment (no capture orchestration). The ACTIONS rows are real: the definition's
-      // automation bindings joined with the org's materialized managed automations.
+      status: captured ? 'captured' : 'none',
       sessionConnect: {
-        supported: true,
-        available: false,
-        message: 'Captura de sessão não disponível nesta versão.',
+        supported,
+        available: supported && !!machine,
+        ...(connect?.loginUrl ? { loginUrl: connect.loginUrl } : {}),
+        ...(connect?.guidePt ? { guide: connect.guidePt } : {}),
+        message: !supported
+          ? 'Esta integração não usa captura de sessão.'
+          : machine
+            ? 'Pronto: a sessão é capturada na sua máquina.'
+            : 'Nenhuma máquina ligada. Abra o ekoa-local na máquina onde tem o certificado ou o leitor de cartões.',
       },
-      session: { status: 'none', capturedAt: null },
+      session: captured
+        ? { status: 'captured', capturedAt: captured.createdAt ?? null, expiresAt: captured.expiresAt ?? null }
+        : { status: 'none', capturedAt: null },
       actions: await sessionActionRows(actor, key, await automationBindings(actor, key)),
     });
   });
 
   r.post('/:key/session', async (req: AuthedRequest, res: Response) => {
+    const key = req.params.key as string;
+    const actor = actorOf(req);
+    const definition = await resolveDefinition(actor, key);
+    if (!definition) return notFound(res);
+
+    const connect = definition.sessionConnect;
+    if (!connect?.loginUrl || definition.authType !== 'browser_session') {
+      return res.json({
+        started: false,
+        session: { status: 'failed', message: 'Esta integração não usa captura de sessão.' },
+      });
+    }
+
+    // THE MACHINE IS RESOLVED FROM THE ACTOR, never taken from the request. A caller-supplied
+    // pairingId would let one user open a login prompt on another user's screen and bank the
+    // resulting session against their own org — the ceremony's whole value is that the session
+    // which comes back is the one we asked for, from the person we asked.
+    const machine = getConnectionByOwner(actor.userId, actor.orgId);
+    if (!machine) {
+      return res.json({
+        started: false,
+        session: {
+          status: 'failed',
+          message: 'Nenhuma máquina ligada. Abra o ekoa-local na máquina onde tem o certificado ou o leitor de cartões.',
+        },
+      });
+    }
+
+    try {
+      await requestAttendedCeremony(actor, {
+        pairingId: machine.pairingId,
+        // The kinds this rail models are both "a human is standing at the machine"; a card in a
+        // reader and a certificate in a keystore are the same ceremony from here.
+        kind: 'card_login',
+        origin: connect.loginUrl,
+        reason: `Autenticação para ${definition.displayName ?? key}`,
+        label: `${key} session`,
+      });
+    } catch (error) {
+      // Offline is a REFUSAL, never a queued promise (bridge/attended.ts): a ceremony needs a human
+      // there now, so "we will ask when it comes back" would ask when nobody is standing there.
+      return res.json({
+        started: false,
+        session: { status: 'failed', message: error instanceof Error ? error.message : 'A cerimónia não pôde ser iniciada.' },
+      });
+    }
+
+    // No requestId on the wire: the client learns the outcome by polling GET, which reports the
+    // stored item. A ceremony handle would be a second thing to correlate and nothing needs it.
     res.json({
-      started: false,
-      session: { status: 'failed', message: 'Captura de sessão não disponível nesta versão.' },
+      started: true,
+      session: { status: 'waiting_login', message: connect.guidePt ?? 'Conclua a autenticação na máquina ligada.' },
     });
-    void req;
   });
 
   r.post('/:key/provision-automations', async (req: AuthedRequest, res: Response) => {
