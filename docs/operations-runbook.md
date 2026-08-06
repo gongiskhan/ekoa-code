@@ -205,6 +205,41 @@ Env names the API reads, with dev defaults:
 - OAuth provider creds for integrations: `MICROSOFT_*`, `MICROSOFT_SSO_*`, `GOOGLE_CLIENT_*`,
   `ADOBE_*` (see `deploy/api.service.json` `env_passthrough` for the deploy-time list).
 
+### The served-app WORKSPACE planes (`/api/m365/*`, `/api/app-cloud-files/*`)
+
+These act as the connected Microsoft/Google account **of the app's OWNER** (the token is resolved
+per request from the admitted app scope - `api/src/integrations/workspace-credential.ts`), so three
+things must all be true before a served app can reach Graph, and each fails in its own way:
+
+1. **The org is connected.** An org-admin completes the managed OAuth connect for the provider
+   (`POST /api/v1/integrations/platform/microsoft/connect` → callback). Needs
+   `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` (`common` unless the
+   deployment is single-tenant) and `OAUTH_REDIRECT_BASE_URL` - note the name: ekoa-dev called this
+   `EKOA_OAUTH_REDIRECT_BASE_URL`, and a value carried over verbatim from that deployment will not
+   be read. Not connected ⇒ `502` from the Graph proxy, `409` from cloud-files, `connected:false`
+   from `/api/app-cloud-files/status`. The granted scopes (`api/src/integrations/platform-oauth.ts`
+   `MICROSOFT_SCOPES`) include `Sites.ReadWrite.All`, which is what SharePoint folder/file creation
+   through `PUT /api/m365/v1.0/sites/<id>/drive/root:/<path>:/content` needs.
+2. **The app opts in.** `manifest.json` must declare `"m365Proxy": true` for `/api/m365/*`; without
+   it the proxy answers `403 App has not enabled the Microsoft 365 workspace proxy`. It is a
+   per-app decision on purpose, and it is NOT inferred on import - an app brought in from the old
+   platform (whose proxy had no such flag) must have it added to its manifest.
+3. **The owner is active.** `checkOwnerActivation` gates both planes: `403 ACCOUNT_DISABLED` /
+   `402 BILLING_LOCKED`.
+
+An app whose owner has no organisation resolves NOBODY (fail-closed, no provider traffic) - so a
+served app registered outside an artifact, which has an empty owner, can never reach the plane.
+
+### Zoho Sign (the OAuth popup connect)
+
+`ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_DC` (plus `ZOHO_OAUTH_REDIRECT_BASE_URL`, which
+overrides `OAUTH_REDIRECT_BASE_URL` for Zoho only - Zoho accepts `http://localhost` redirects, so
+local dev needs no tunnel). Without the client pair the connect route answers `503` naming exactly
+those two variables, and the dashboard surfaces that message verbatim rather than a generic
+failure - the whole point, since upstream spent weeks with a button that could only ever refuse.
+Measured 2026-08-06: the dev-madrid `ekoa-dev/cortex/.env` declares both keys with EMPTY values, so
+a copy of that file connects Microsoft but not Zoho.
+
 ## Model credential re-provisioning
 
 The provider credential is the AES-encrypted `credentials/default` document in Mongo. Dev Mongo is

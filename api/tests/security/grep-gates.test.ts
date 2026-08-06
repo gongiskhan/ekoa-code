@@ -197,6 +197,18 @@ const TOKEN = ['anthrop', 'ic'].join('');
 const HOST = `https://api.${TOKEN}.com/v1/messages`;
 const GATE = resolve(ROOT, 'scripts/chokepoint-grep.sh');
 
+/** Does the filesystem hosting the sandboxes distinguish `LLM` from `llm`? Linux yes, macOS
+ *  (APFS, default config) no. Probed once, in the same tmpdir the sandboxes are made in. */
+const CASE_SENSITIVE_FS = (() => {
+  const probe = mkdtempSync(join(tmpdir(), 'fs-case-'));
+  try {
+    mkdirSync(join(probe, 'llm'));
+    return !existsSync(join(probe, 'LLM'));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
 /**
  * Every root `scripts/chokepoint-grep.sh` declares. Hardcoded here INDEPENDENTLY of the script, so
  * dropping one from the script's ROOTS makes the per-root case below go red instead of silently
@@ -386,14 +398,21 @@ describe('chokepoint grep gate: bypass matrix (sandboxed copy of the real script
     expect(b.status, b.out).not.toBe(0);
   });
 
-  it('the PATH exemptions are case-SENSITIVE — api/src/LLM and api/tests/LLM inherit nothing', () => {
+  it('the real chokepoint module and its own suite ARE exempt', () => {
+    const real = gateWith({ 'api/src/llm/p.ts': decl(HOST), 'api/tests/llm/p.ts': decl(HOST) });
+    expect(real.status, real.out).toBe(0);
+  });
+
+  // The sandbox pre-creates `api/src/llm`, so on a case-INSENSITIVE filesystem (macOS APFS by
+  // default) `mkdir api/src/LLM` is a no-op and the planted file lands in the exempt directory —
+  // the setup cannot express the case at all, and the assertion would fail on the harness rather
+  // than on the gate. The gate's own matching is case-sensitive regardless of the host; this runs
+  // for real on CI (Linux). Skipping is the honest report: a case the machine cannot pose.
+  it.skipIf(!CASE_SENSITIVE_FS)('the PATH exemptions are case-SENSITIVE — api/src/LLM and api/tests/LLM inherit nothing', () => {
     const src = gateWith({ 'api/src/LLM/p.ts': decl(HOST) });
     expect(src.status, src.out).not.toBe(0);
     const tests = gateWith({ 'api/tests/LLM/p.ts': decl(HOST) });
     expect(tests.status, tests.out).not.toBe(0);
-    // ...while the real chokepoint module and its own suite ARE exempt.
-    const real = gateWith({ 'api/src/llm/p.ts': decl(HOST), 'api/tests/llm/p.ts': decl(HOST) });
-    expect(real.status, real.out).toBe(0);
   });
 
   it('a split-string literal is still caught by the broad token pass', () => {

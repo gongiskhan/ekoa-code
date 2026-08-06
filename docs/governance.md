@@ -48,6 +48,15 @@ a bootstrap-generated key in dev); TENANT credential material lives in the Cofre
 DEK, never in a managed secret - the two planes and why they are separate are in `docs/security.md`
 "Secure development" and `docs/decisions.md` 2026-07-28 (A-8).
 
+**`../ekoa-dev` keeps shipping**, so "read-only reference" is not the whole rule: what it ships that
+this repo lacks is tracked in `docs/dev-parity.md`, a ledger carrying the last-audited upstream SHA
+and exactly one disposition per commit (PORTED / NOT-NEEDED / OPEN). `npm run parity:audit`
+(`scripts/dev-parity-audit.mjs`) fetches the sibling and refuses a clean exit while any commit past
+that SHA is undispositioned. An OPEN row is a live work item under the same discipline as a finding:
+it ends PORTED or NOT-NEEDED, never silently dropped. Operator-run, not a CI gate - CI has no sibling
+checkout. Process: `.claude/skills/ekoa-dev-parity/SKILL.md`; the audit is the standing mechanism
+`docs/decisions.md` 2026-08-05 records.
+
 ## Archive
 
 The build-run design record - `spec/` (19 chapters + `SPEC.md`), the `spec/diagrams/` sources (now

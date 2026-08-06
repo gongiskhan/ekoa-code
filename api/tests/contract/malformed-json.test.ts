@@ -67,3 +67,62 @@ describe('malformed JSON bodies return the shared error envelope, never a stack 
     expect(ErrorEnvelope.safeParse(JSON.parse(text)).success).toBe(true);
   });
 });
+
+/**
+ * THE ARTIFACT BUNDLE ROUTES ARE EXEMPT FROM THE 1 MB GLOBAL PARSER.
+ *
+ * A real app export does not fit in 1 MB: the production `legal-case-manager-3` bundle is 1.34 MB
+ * of source before any app-data dump, and prod's own exporter admits files up to 1.5 MB EACH. Under
+ * the global limit `POST /api/v1/artifacts/import` could only ever accept toy bundles and every
+ * genuine import answered 413 - found on the first real one (2026-08-06). The exemption is only
+ * half the fix: if the global parser consumed the body first, the router's own larger limit would
+ * be dead code, which is exactly the trap the LLM gateway hit in run 20260717. So the assertions
+ * below are about WHERE the refusal comes from, not just that one happens: an over-1 MB body must
+ * get PAST the parser and be refused by auth/validation instead.
+ */
+describe('artifact bundle routes accept a real-world bundle (>1mb)', () => {
+  const bigBundle = () =>
+    JSON.stringify({ bundle: { manifestId: 'app', name: 'App', files: [{ path: 'frontend/src/index.jsx', content: 'x'.repeat(1_400_000) }] } });
+
+  it('POST /artifacts/import with a 1.4 MB body is NOT refused by the body parser', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/artifacts/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bigBundle(),
+    });
+    // Unauthenticated here, so 401 is the expected refusal - the POINT is that it is not 413.
+    expect(res.status).not.toBe(413);
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /artifacts/:id/bundle-update with a 1.4 MB body is NOT refused by the body parser', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/artifacts/art_123/bundle-update`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bigBundle(),
+    });
+    expect(res.status).not.toBe(413);
+    expect(res.status).toBe(401);
+  });
+
+  it('the exemption does NOT widen to its neighbours - another artifact route still caps at 1 MB', async () => {
+    // `/import` is a fixed path and `/:id/bundle-update` is pinned at both ends; a sibling route
+    // under the same router must still hit the global parser, or the carve-out is a hole.
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/artifacts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'x'.repeat(1_400_000) }),
+    });
+    expect(res.status).toBe(413);
+    expect(ErrorEnvelope.safeParse(JSON.parse(await res.text())).success).toBe(true);
+  });
+
+  it('a path that merely CONTAINS the bundle segment is not exempt', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/artifacts/art_123/bundle-update/extra`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bigBundle(),
+    });
+    expect(res.status).toBe(413);
+  });
+});

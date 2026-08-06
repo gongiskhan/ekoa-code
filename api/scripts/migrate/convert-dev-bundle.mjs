@@ -19,6 +19,11 @@
  *       files?: [{ path, content }],              // PLAINTEXT utf-8 content
  *       data?:  Record<string, unknown> }         // seeded by importArtifact (2B-S5)
  *
+ * The envelope's `manifest` field is ALWAYS written into `files` as `manifest.json` (see the
+ * comment at the reconstruction site). ekoa-code's importer reads what an app declares - its
+ * `backend.handlers`, its `extends` base, its `m365Proxy` opt-in - from that file, and a prod
+ * export does not necessarily carry one in its scaffold.
+ *
  * The prod "app-data dump" (super-admin export from api.ekoa.io) may arrive INLINE
  * in the envelope (`appData`) OR as a SEPARATE file passed with `--data`. Its
  * canonical shape matches ekoa-code's AppDataAccess/AppDataBackups dump
@@ -150,12 +155,36 @@ export function convertDevBundle(envelope, opts = {}) {
     files.push({ path: rel, content });
   }
 
+  // THE MANIFEST TRAVELS AS A FILE, ALWAYS.
+  //
+  // `envelope.manifest` is the exporter's canonical view of the app: it starts from prod's
+  // defaults and overlays the on-disk manifest.json, so it is the one place `backend`
+  // (`{entryPoint, handlers:['onEmail']}`) and `extends` (the base) are guaranteed to be. But
+  // ekoa-code's importer reads the manifest from a FILE in the project dir - so unless one is in
+  // `files`, the import writes a DEFAULT manifest and the app arrives without its backend
+  // handlers and without its base. Observed for real: the 2026-08-05 legal-case-manager-3 export
+  // carried 26 scaffold files and no manifest.json, while `envelope.manifest.backend` named
+  // `onEmail`. Reconstructing it here is what makes the two formats actually equivalent.
+  //
+  // The envelope's manifest WINS over a scaffold copy of the same file: prod assembled it on
+  // purpose (and `manifest.id`/`name` are re-stamped by the importer for the new instance
+  // anyway), so a stale on-disk copy must not decide what the imported app declares.
+  const manifestFile = {
+    entryPoint: 'frontend/src/index.jsx',
+    outputDir: 'dist/',
+    type: 'jsx-app',
+    ...manifest,
+    version: typeof manifest.version === 'string' ? manifest.version : '1.0.0',
+  };
+  const withoutManifest = files.filter((f) => f.path !== 'manifest.json');
+  withoutManifest.push({ path: 'manifest.json', content: JSON.stringify(manifestFile, null, 2) + '\n' });
+
   const fallbackAt = typeof envelope.exportedAt === 'string' ? envelope.exportedAt : undefined;
   const data = normalizeAppData(opts.appData ?? envelope.appData ?? envelope.seedData, fallbackAt);
 
   const bundle = { manifestId: manifest.id, name: manifest.name };
   if (typeof opts.slug === 'string' && opts.slug) bundle.slug = opts.slug;
-  bundle.files = files;
+  bundle.files = withoutManifest;
   if (data) bundle.data = data;
   bundle.version = typeof manifest.version === 'string' ? manifest.version : '1.0.0';
   return bundle;

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
@@ -78,8 +78,10 @@ import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
 import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
+import { createWorkspaceCredentials } from './integrations/workspace-credential.js';
 import { adobeSignRouter, handleAdobeWebhook, notConnectedBackend } from './integrations/adobe-sign.js';
 import { zohoSignRouter, makeZohoSignBackend, handleZohoWebhook } from './integrations/zoho-sign.js';
+import { zohoOAuthRouter } from './integrations/zoho-oauth.js';
 import { recordZohoAgreement, findZohoAgreement, findAdobeAgreement } from './integrations/sign-agreements.js';
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
@@ -90,7 +92,7 @@ import { appPdfRouter, getArtifactPdfDir, renderHtmlToPdf } from './apps/pdf.js'
 import { getBrandAssetsDir } from './services/branding/index.js';
 import { companySpaceRouter } from './routes/company-space.js';
 import { verifyToken } from './auth/jwt.js';
-import { verifySseToken } from './auth/middleware.js';
+import { verifySseToken, requireAuth, requireRole, type AuthedRequest } from './auth/middleware.js';
 import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { memvaultRouter } from './routes/memvault.js';
@@ -159,6 +161,9 @@ import {
   callPlatformIntegration,
   findConfigForOwner,
   persistRotatedCredentials,
+  beginConfigOAuth,
+  findConfigByOAuthState,
+  persistConfigOAuthGrant,
   integrationPrefetch,
   resolveDefinition,
   listDefinitionsFor,
@@ -784,17 +789,24 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       m365Proxy: (reg?.manifest as { m365Proxy?: boolean } | null)?.m365Proxy === true,
     };
   };
-  // Workspace-credential seams (ch06/G8 territory): until the platform-integrations
-  // credential store lands, the workspace planes surface the honest not-connected state.
-  const workspaceNotConnected = (what: string) => async (): Promise<never> => {
-    throw Object.assign(new Error(`${what} is not connected`), { code: 'not_connected' });
-  };
-  /** The workspace cloud-storage credential seam, shared by the served-app cloud plane and the
-   *  docx link ingest: both report the same honest not-connected state until the platform-
-   *  integrations credential store lands - never a silent failure or a fake success. */
-  const workspaceCloudFiles = {
+  // Workspace-credential seams (ch06/G8 territory). The workspace of a served app is the ORG
+  // OF ITS OWNER - platform-OAuth rows are org-scoped - so the token is resolved per request
+  // from the app scope the router already admitted, never from an ambient process-wide
+  // connection. Not-connected stays honest (throws `not connected` / reports connected:false).
+  const workspaceCredentials = createWorkspaceCredentials({
+    resolveOwnerOrgId: async (ownerUserId: string) =>
+      ((await users.get(ownerUserId)) as { orgId?: string } | null)?.orgId ?? null,
+    oauth: { now: deps.now, genId: deps.genId },
+  });
+  /** The docx link/cloud ingest runs on a BUILD, whose tool calls carry an appId but no owner
+   *  down to this seam, so it keeps the honest not-connected state rather than guessing whose
+   *  workspace to spend. Threading the run's owner through `agents/seams.ts fetchFromCloud` is
+   *  the open follow-up (docs/dev-parity.md); the direct-URL branch is unaffected and live. */
+  const workspaceCloudFilesForDocx = {
     getStatus: async () => ({ google: { connected: false, needsReauth: false }, microsoft: { connected: false, needsReauth: false } }),
-    getAccessToken: workspaceNotConnected('Workspace cloud storage'),
+    getAccessToken: async (): Promise<never> => {
+      throw Object.assign(new Error('Workspace cloud storage is not connected'), { code: 'not_connected' });
+    },
   };
 
   // 2C-S5 - the three ekoa-docx agent tools (agents/sdk-tools.ts `docxToolSpecs`, mounted on
@@ -803,7 +815,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // SSRF-guarded link/cloud ingest (integrations/docx-fetch.ts, over the workspace-credential
   // seam above) reach it ONLY through this seam, wired here and nowhere else. The appId the tools
   // act on binds from the RUN (build.ts: appId = artifactId), never from a tool argument.
-  const docxFetcher = createDocxFetcher(workspaceCloudFiles);
+  const docxFetcher = createDocxFetcher(workspaceCloudFilesForDocx);
   setDocxToolSeams({
     projectBuffer: (buffer) => projectDocx(buffer),
     getProjection: docxGetProjection,
@@ -818,8 +830,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
 
   // Raw-body served-app planes mount BEFORE the global JSON parser: their proxied/
   // uploaded bytes must arrive unconsumed (each carries its own per-route parsers).
-  app.use('/api/m365', m365ProxyRouter({ resolveAppScope, getWorkspaceGraphToken: workspaceNotConnected('Microsoft workspace integration'), verifyToken }));
-  app.use('/api/app-cloud-files', appCloudFilesRouter({ resolveAppScope, ...workspaceCloudFiles }));
+  app.use('/api/m365', m365ProxyRouter({ resolveAppScope, getWorkspaceGraphToken: workspaceCredentials.graphToken, verifyToken }));
+  app.use('/api/app-cloud-files', appCloudFilesRouter({
+    resolveAppScope,
+    getStatus: workspaceCredentials.status,
+    getAccessToken: workspaceCredentials.accessToken,
+  }));
   app.use('/api/app-files', appFilesRouter());
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
 
@@ -836,8 +852,18 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     const p = path.toLowerCase();
     return p === '/api/v1/llm' || p.startsWith('/api/v1/llm/');
   };
+  /**
+   * The artifact BUNDLE routes are exempt for the same reason: they mount their own larger parser
+   * (routes/artifacts.ts `bundleJson`), and a real app export does not fit in 1 MB - the
+   * production `legal-case-manager-3` bundle is 1.34 MB of source before any app-data. Matched
+   * exactly, case-insensitively, so no other artifact route widens: `/import` is a fixed path and
+   * `/:id/bundle-update` is pinned by both ends with the id charset in between.
+   */
+  const BUNDLE_UPDATE_RE = /^\/api\/v1\/artifacts\/[a-z0-9._-]{1,100}\/bundle-update$/i;
+  const isBundlePath = (path: string): boolean =>
+    path.toLowerCase() === '/api/v1/artifacts/import' || BUNDLE_UPDATE_RE.test(path);
   app.use((req: Request, res: Response, next: NextFunction) =>
-    isGatewayPath(req.path) ? next() : globalJson(req, res, next));
+    isGatewayPath(req.path) || isBundlePath(req.path) ? next() : globalJson(req, res, next));
   // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
   // without this, Express's default handler returns an HTML page with the full stack trace and
   // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;
@@ -928,6 +954,33 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/platform-integrations', platformIntegrationsRouter(deps));
   // The OAuth callback path is kept VERBATIM (§3.8.15): it is a registered redirect URI.
   app.use('/api/v1/oauth', oauthCallbackRouter(deps));
+  // Zoho Sign OAuth popup connect (ported from ekoa-dev 09a29bb7/e620e740/d8e4538e). The grant
+  // lands in the ordinary `zoho-sign` integration config - the bundle the service and the action
+  // executor already read - so nothing downstream distinguishes an OAuth connect from a pasted
+  // one. `integrations/` may not import `auth/`, so the admin gate and the actor projection are
+  // injected here, the same shape m365-proxy.ts takes its verifier.
+  app.use('/', zohoOAuthRouter({
+    now: deps.now,
+    genState: deps.genId,
+    requireAdmin: ((req, res, next) =>
+      requireAuth(req as AuthedRequest, res, () =>
+        requireRole('org-admin', 'super-admin')(req as AuthedRequest, res, next))) as RequestHandler,
+    actorOf: (req) => {
+      const u = (req as AuthedRequest).user!;
+      return { userId: u.sub, orgId: u.orgId, isAdmin: u.role === 'org-admin' || u.role === 'super-admin' };
+    },
+    appOrigin: process.env.EKOA_APP_ORIGIN ?? '',
+    beginConnect: (actor, state, expiresAt) =>
+      beginConfigOAuth(
+        { userId: actor.userId, orgId: actor.orgId, role: actor.isAdmin ? 'org-admin' : 'user' },
+        'zoho-sign',
+        state,
+        expiresAt,
+        deps,
+      ),
+    findByState: (state, now) => findConfigByOAuthState('zoho-sign', state, now),
+    persistGrant: (row, patch) => persistConfigOAuthGrant(row._id, patch),
+  }));
   app.use('/api/v1/pipedream', pipedreamRouter(deps));
   // CS6 — the Caixa Citius read-only notifications sync. DASHBOARD AUTH + A DEFAULT-OFF FLAG
   // (CITIUS_SYNC_ENABLED), deliberately NOT on the user-or-key capability surface (RUN_SPEC

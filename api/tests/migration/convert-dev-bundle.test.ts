@@ -9,6 +9,7 @@ import {
   decodeUtf8Strict,
   readUtf8Strict,
 } from '../../scripts/migrate/convert-dev-bundle.mjs';
+import { validateManifest } from '../../src/apps/manifest.js';
 
 /**
  * 2B-S5 converter (api/scripts/migrate/convert-dev-bundle.mjs). Proves the prod
@@ -54,8 +55,9 @@ describe('convert-dev-bundle: envelope -> shared ArtifactBundle (incl. data)', (
     expect(bundle.name).toBe('SALOMAO ERP');
     expect(bundle.version).toBe('2.3.0');
 
-    // Scaffold base64 was decoded to plaintext utf-8 file content.
-    expect(bundle.files).toHaveLength(2);
+    // Scaffold base64 was decoded to plaintext utf-8 file content, plus the reconstructed
+    // manifest.json (see the manifest-fidelity block below).
+    expect(bundle.files).toHaveLength(3);
     const index = bundle.files!.find((f) => f.path === 'frontend/src/index.jsx');
     expect(index!.content).toBe('export const App = () => "olá";\n');
 
@@ -103,6 +105,83 @@ describe('convert-dev-bundle: envelope -> shared ArtifactBundle (incl. data)', (
     const env = devEnvelope({ seedData: undefined, appData: { collections: { faturas: [{ id: 'f1' }] } } });
     const bundle = convertDevBundle(env);
     expect(bundle.data!.collections.faturas).toHaveLength(1);
+  });
+});
+
+/**
+ * THE MANIFEST MUST ARRIVE AS A FILE.
+ *
+ * ekoa-code's importer reads what an app declares - `backend.handlers` (the SALOMAO ERP's
+ * `onEmail`), the `extends` base, the `m365Proxy` workspace opt-in - from `manifest.json` in the
+ * project dir. The prod envelope carries that information in its `manifest` FIELD, and the real
+ * 2026-08-05 `legal-case-manager-3` export carried 26 scaffold files with NO manifest.json among
+ * them. Before this, the converter kept only id/name/version from the field and dropped the rest,
+ * so the import wrote a default manifest and the app arrived with no backend and no base: it
+ * would have built, served its UI, and silently never processed an email.
+ */
+describe('convert-dev-bundle: the envelope manifest becomes manifest.json', () => {
+  const manifestOf = (bundle: { files?: Array<{ path: string; content: string }> }) =>
+    JSON.parse(bundle.files!.find((f) => f.path === 'manifest.json')!.content) as Record<string, unknown>;
+
+  it('reconstructs manifest.json when the scaffold has none, keeping backend + extends', () => {
+    const env = devEnvelope({
+      manifest: {
+        id: 'prod-app-08dd',
+        name: 'SALOMAO ERP',
+        version: '2.3.0',
+        entryPoint: 'frontend/src/index.jsx',
+        outputDir: 'dist/',
+        type: 'jsx-app',
+        extends: 'app-auth-persistent',
+        backend: { entryPoint: 'backend/index.js', handlers: ['onEmail'] },
+      },
+    });
+    const m = manifestOf(convertDevBundle(env));
+    expect(m.backend).toEqual({ entryPoint: 'backend/index.js', handlers: ['onEmail'] });
+    expect(m.extends).toBe('app-auth-persistent');
+    expect(m.type).toBe('jsx-app');
+    expect(m.version).toBe('2.3.0');
+  });
+
+  it('fills the build fields a minimal prod manifest omits, so the import validates', () => {
+    // The prod exporter synthesises a manifest from defaults when the app has no file on disk;
+    // an older/sparser one may carry only id + name.
+    const env = devEnvelope({ manifest: { id: 'prod-app-08dd', name: 'SALOMAO ERP' } });
+    const m = manifestOf(convertDevBundle(env));
+    expect(m).toMatchObject({ entryPoint: 'frontend/src/index.jsx', outputDir: 'dist/', type: 'jsx-app', version: '1.0.0' });
+  });
+
+  it('the envelope manifest WINS over a stale scaffold copy of the same file', () => {
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const env = devEnvelope({
+      manifest: { id: 'prod-app-08dd', name: 'SALOMAO ERP', type: 'jsx-app', backend: { entryPoint: 'backend/index.js', handlers: ['onEmail'] } },
+      scaffold: [{ path: 'manifest.json', contentB64: b64('{"id":"stale","name":"Stale","type":"static"}') }],
+    });
+    const bundle = convertDevBundle(env);
+    expect(bundle.files!.filter((f) => f.path === 'manifest.json')).toHaveLength(1); // never both
+    const m = manifestOf(bundle);
+    expect(m.backend).toEqual({ entryPoint: 'backend/index.js', handlers: ['onEmail'] });
+    expect(m.type).toBe('jsx-app');
+  });
+
+  it('the reconstructed manifest passes ekoa-code’s own validator', () => {
+    const env = devEnvelope({
+      manifest: {
+        id: 'prod-app-08dd', name: 'SALOMAO ERP', version: '2.3.0',
+        entryPoint: 'frontend/src/index.jsx', outputDir: 'dist/', type: 'jsx-app',
+        extends: 'app-auth-persistent', backend: { entryPoint: 'backend/index.js', handlers: ['onEmail'] },
+      },
+    });
+    const m = validateManifest(manifestOf(convertDevBundle(env)));
+    expect(m.backend?.handlers).toEqual(['onEmail']);
+    expect(m.extends).toBe('app-auth-persistent');
+  });
+
+  it('carries an m365Proxy opt-in through when the operator adds one', () => {
+    const env = devEnvelope({
+      manifest: { id: 'prod-app-08dd', name: 'SALOMAO ERP', type: 'jsx-app', m365Proxy: true },
+    });
+    expect(validateManifest(manifestOf(convertDevBundle(env))).m365Proxy).toBe(true);
   });
 });
 

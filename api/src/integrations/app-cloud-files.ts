@@ -231,11 +231,12 @@ function contentDisposition(name: string): string {
 
 export interface CloudFilesDeps {
   resolveAppScope: ResolveAppScope;
-  /** Which providers are usable right now (workspace integration state). Injected. */
-  getStatus: () => Promise<CloudFilesStatus>;
-  /** A valid workspace access token for the provider. Throws Error('...not connected...')
-   *  when unavailable — surfaced as 409 to the app. Injected. */
-  getAccessToken: (provider: CloudProvider) => Promise<string>;
+  /** Which providers are usable right now for THIS APP'S OWNER (workspace integration state).
+   *  Injected; the owner comes from the admitted app scope, never from the request. */
+  getStatus: (ownerUserId: string) => Promise<CloudFilesStatus>;
+  /** A valid workspace access token for the provider, for this app's OWNER. Throws
+   *  Error('...not connected...') when unavailable — surfaced as 409 to the app. Injected. */
+  getAccessToken: (provider: CloudProvider, ownerUserId: string) => Promise<string>;
 }
 
 export function appCloudFilesRouter(deps: CloudFilesDeps): Router {
@@ -263,16 +264,18 @@ export function appCloudFilesRouter(deps: CloudFilesDeps): Router {
   r.options(/^\/(status|.+)$/, (_req, res) => { res.status(204).end(); });
 
   r.get('/status', async (req, res) => {
-    if (!(await admit(req, res))) return;
+    const scope = await admit(req, res);
+    if (!scope) return;
     try {
-      res.json({ success: true, data: await deps.getStatus() });
+      res.json({ success: true, data: await deps.getStatus(scope.ownerUserId) });
     } catch (err) {
       sendCloudError(res, err);
     }
   });
 
   r.post('/:provider/upload', expressRaw({ type: '*/*', limit: maxSize }), async (req, res) => {
-    if (!(await admit(req, res))) return;
+    const scope = await admit(req, res);
+    if (!scope) return;
     const { provider } = req.params as { provider: string };
     if (!isCloudProvider(provider)) { res.status(400).json({ error: 'provider must be google or microsoft' }); return; }
     const rawName = req.headers['x-filename'];
@@ -288,7 +291,7 @@ export function appCloudFilesRouter(deps: CloudFilesDeps): Router {
     if (data.length === 0) { res.status(400).json({ error: 'Empty file body' }); return; }
     const mimeType = (req.headers['content-type'] as string | undefined) || 'application/octet-stream';
     try {
-      const token = await deps.getAccessToken(provider);
+      const token = await deps.getAccessToken(provider, scope.ownerUserId);
       res.status(201).json({ success: true, data: await uploadCloudFile(provider, token, { name, mimeType, data }) });
     } catch (err) {
       sendCloudError(res, err);
@@ -296,12 +299,13 @@ export function appCloudFilesRouter(deps: CloudFilesDeps): Router {
   });
 
   r.get('/:provider/list', async (req, res) => {
-    if (!(await admit(req, res))) return;
+    const scope = await admit(req, res);
+    if (!scope) return;
     const { provider } = req.params as { provider: string };
     if (!isCloudProvider(provider)) { res.status(400).json({ error: 'provider must be google or microsoft' }); return; }
     const query = typeof req.query.query === 'string' && req.query.query.trim() ? req.query.query.trim() : undefined;
     try {
-      const token = await deps.getAccessToken(provider);
+      const token = await deps.getAccessToken(provider, scope.ownerUserId);
       res.json({ success: true, data: await listCloudFiles(provider, token, query) });
     } catch (err) {
       sendCloudError(res, err);
@@ -309,13 +313,14 @@ export function appCloudFilesRouter(deps: CloudFilesDeps): Router {
   });
 
   r.get('/:provider/download', async (req, res) => {
-    if (!(await admit(req, res))) return;
+    const scope = await admit(req, res);
+    if (!scope) return;
     const { provider } = req.params as { provider: string };
     if (!isCloudProvider(provider)) { res.status(400).json({ error: 'provider must be google or microsoft' }); return; }
     const id = typeof req.query.id === 'string' ? req.query.id : '';
     if (!id) { res.status(400).json({ error: 'id is required' }); return; }
     try {
-      const token = await deps.getAccessToken(provider);
+      const token = await deps.getAccessToken(provider, scope.ownerUserId);
       const file = await downloadCloudFile(provider, token, id);
       res.status(200);
       res.set('Content-Type', file.mimeType);

@@ -32,6 +32,7 @@
     "gate:audit": "node scripts/audit-gate.mjs",
     "ci:lane": "npm run lint && npm run gate:chokepoint && npm run gate:encryption-key && npm run gate:garrison && npm run gate:client-drift && npm run typecheck && npm run test && NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4111} npm run build",
     "gate:ledger": "node scripts/suite-ledger-run.mjs",
+    "parity:audit": "node scripts/dev-parity-audit.mjs",
     "e2e:server": "node scripts/e2e-with-server.mjs"
   },
   "devDependencies": {

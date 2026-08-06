@@ -49,6 +49,10 @@ let cloudStatus: CloudFilesStatus = {
   microsoft: { connected: false, needsReauth: false },
 };
 let workspaceToken: string | null = 'workspace-tok';
+/** Whose workspace the seam was asked to spend. The workspace is per-tenant, never ambient:
+ *  the routers must pass the ADMITTED app's owner, not the header or the caller. */
+let workspaceTokenAskedFor: string[] = [];
+let cloudStatusAskedFor: string[] = [];
 
 const api = (p: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${p}`, init);
 
@@ -64,7 +68,8 @@ beforeAll(async () => {
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope, crossSite: false }));
   app.use('/api/m365', m365ProxyRouter({
     resolveAppScope,
-    getWorkspaceGraphToken: async () => {
+    getWorkspaceGraphToken: async (ownerUserId: string) => {
+      workspaceTokenAskedFor.push(ownerUserId);
       if (!workspaceToken) throw new Error('microsoft integration not connected');
       return workspaceToken;
     },
@@ -75,7 +80,7 @@ beforeAll(async () => {
   }));
   app.use('/api/app-cloud-files', appCloudFilesRouter({
     resolveAppScope,
-    getStatus: async () => cloudStatus,
+    getStatus: async (ownerUserId: string) => { cloudStatusAskedFor.push(ownerUserId); return cloudStatus; },
     getAccessToken: async () => { throw new Error('microsoft not connected'); },
   }));
 
@@ -314,6 +319,34 @@ describe('m365 workspace Graph proxy (Q-10 gate + verbatim forward)', () => {
     expect(res.status).toBe(401);
   });
 
+  it('spends the ADMITTED APP OWNER’s workspace, resolved from the canonical app - not the header, not the caller', async () => {
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.startsWith('https://graph.microsoft.com/')) return Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+      return realFetch(input, init);
+    });
+    try {
+      workspaceTokenAskedFor = [];
+      // Reached by SLUG, and with a valid JWT for a different subject: neither may choose whose
+      // workspace is spent. The canonical app's owner does.
+      const res = await api('/api/m365/v1.0/me', { headers: { 'x-ekoa-app-id': 'slug1', authorization: 'Bearer good' } });
+      expect(res.status).toBe(200);
+      expect(workspaceTokenAskedFor).toEqual(['owner1']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a refused gate never reaches the workspace seam at all', async () => {
+    workspaceTokenAskedFor = [];
+    await api('/api/m365/v1.0/me');
+    await api('/api/m365/v1.0/me', { headers: { 'x-ekoa-app-id': 'unserved' } });
+    await api('/api/m365/v1.0/me', { headers: { 'x-ekoa-app-id': 'served0' } });
+    await api('/api/m365/v1.0/me', { headers: { 'x-ekoa-app-id': 'dead' } });
+    expect(workspaceTokenAskedFor).toEqual([]);
+  });
+
   it('workspace integration not connected → 502', async () => {
     workspaceToken = null;
     try {
@@ -345,6 +378,16 @@ describe('cloud-files status (workspace credential never reaches the page)', () 
     } finally {
       cloudStatus = { google: { connected: false, needsReauth: false }, microsoft: { connected: false, needsReauth: false } };
     }
+  });
+
+  it('asks the seam for the ADMITTED APP OWNER, and never asks at all for a refused app', async () => {
+    cloudStatusAskedFor = [];
+    await api('/api/app-cloud-files/status', { headers: { 'x-ekoa-app-id': 'slug1' } });
+    expect(cloudStatusAskedFor).toEqual(['owner1']);
+    cloudStatusAskedFor = [];
+    await api('/api/app-cloud-files/status');
+    await api('/api/app-cloud-files/status', { headers: { 'x-ekoa-app-id': 'dead' } });
+    expect(cloudStatusAskedFor).toEqual([]);
   });
 
   it('missing header → 400; deactivated owner → 403 ACCOUNT_DISABLED', async () => {

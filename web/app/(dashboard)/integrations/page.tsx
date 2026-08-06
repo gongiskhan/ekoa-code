@@ -31,6 +31,7 @@ import { useTranslation } from "@/stores/i18n";
 import { IntegrationDialog, type IntegrationDialogMode } from "@/components/integrations/integration-dialog";
 import { InlineCredentialForm } from "@/components/integrations/InlineCredentialForm";
 import { SessionConnectPanel } from "@/components/integrations/SessionConnectPanel";
+import { ZohoOAuthConnect } from "@/components/integrations/ZohoOAuthConnect";
 import { PlatformIntegrationCard } from "@/components/integrations/PlatformIntegrationCard";
 import { PipedreamSection } from "@/components/integrations/PipedreamSection";
 import { WebhooksSection } from "@/components/integrations/WebhooksSection";
@@ -319,6 +320,9 @@ function IntegrationCard({
 
         {/* Browser-session connect flow (authType 'browser_session') */}
         {skill.sessionConnect && <SessionConnectPanel skill={skill} />}
+
+        {/* Zoho Sign: the OAuth popup is the customer path; the fields below are recovery-only. */}
+        {skill.integrationKey === 'zoho-sign' && <ZohoOAuthConnect />}
 
         {/* Inline credential form */}
         <InlineCredentialForm

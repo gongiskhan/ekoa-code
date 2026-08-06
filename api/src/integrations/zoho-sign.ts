@@ -131,6 +131,12 @@ function normalizeDc(dc: unknown): string {
   return VALID_DC.has(d) ? d : 'com';
 }
 
+/** Is this one of Zoho's real data centres? The whitelist, exposed for the OAuth callback, which
+ *  must decide whether a provider-supplied `location` may be trusted BEFORE it becomes a host. */
+export function isValidZohoDc(dc: unknown): boolean {
+  return VALID_DC.has(String(dc ?? '').trim().toLowerCase().replace(/^\./, ''));
+}
+
 /** Public API host for a data center. `override` (test seam) wins when set. */
 export function zohoApiBase(dc: unknown, override?: string): string {
   const o = (override ?? '').trim();

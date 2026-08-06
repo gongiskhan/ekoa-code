@@ -87,6 +87,18 @@ export interface AppManifest {
    * Absent/false: the app sees only its own per-app data (the default isolation).
    */
   sharedData?: boolean;
+
+  /**
+   * Opt in to the WORKSPACE Microsoft 365 proxy (`/api/m365/*`, integrations/m365-proxy.ts).
+   * The proxy acts as the app OWNER's connected Microsoft account, so reaching it is a
+   * per-app decision recorded here - the Q-10 gate requires this flag on top of the app
+   * being served and its owner being active. Absent/false: the plane answers 403.
+   *
+   * Load-bearing: `validateManifest` must CARRY this key. It returns a whitelist, so an
+   * unknown key is silently dropped - which is exactly how this opt-in was dead on arrival
+   * (findings.md `m365proxy-manifest-flag-stripped`).
+   */
+  m365Proxy?: boolean;
 }
 
 // ============================================
@@ -195,6 +207,10 @@ export function validateManifest(data: unknown): AppManifest {
     throw new Error('Manifest "sharedData" must be a boolean if provided');
   }
 
+  if (obj.m365Proxy !== undefined && typeof obj.m365Proxy !== 'boolean') {
+    throw new Error('Manifest "m365Proxy" must be a boolean if provided');
+  }
+
   if (obj.cortexApi !== undefined) {
     if (!obj.cortexApi || typeof obj.cortexApi !== 'object' || Array.isArray(obj.cortexApi)) {
       throw new Error('Manifest "cortexApi" must be a plain object if provided');
@@ -232,6 +248,7 @@ export function validateManifest(data: unknown): AppManifest {
     ...(obj.extends !== undefined && { extends: obj.extends as string }),
     ...(obj.backend !== undefined && { backend: obj.backend as AppManifest['backend'] }),
     ...(obj.sharedData !== undefined && { sharedData: obj.sharedData as boolean }),
+    ...(obj.m365Proxy !== undefined && { m365Proxy: obj.m365Proxy as boolean }),
   };
 }
 

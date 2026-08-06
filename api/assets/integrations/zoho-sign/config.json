@@ -4,33 +4,17 @@
   "integrationKey": "zoho-sign",
   "displayName": "Zoho Sign",
   "description": "Send documents for e-signature with Zoho Sign, track request status, mint embedded signing links, list requests and recall (cancel) them. Document upload + request creation for served apps go through the platform's /api/zoho-sign proxy (it renders to PDF, uploads and auto-places signature fields server-side); these generic actions cover status, listing and recall.",
-  "authType": "api_key",
+  "authType": "oauth2",
   "provider": "Zoho",
   "category": "document-signing",
   "configSchema": [
-    {
-      "key": "client_id",
-      "label": "Client ID",
-      "type": "text",
-      "required": true,
-      "secret": false,
-      "helpText": "Client ID do Self Client criado em api-console.zoho.com (separador Client Secret)."
-    },
-    {
-      "key": "client_secret",
-      "label": "Client Secret",
-      "type": "password",
-      "required": true,
-      "secret": true,
-      "helpText": "Client Secret do Self Client em api-console.zoho.com."
-    },
     {
       "key": "grant_code",
       "label": "Grant Code",
       "type": "password",
       "required": false,
       "secret": true,
-      "helpText": "Codigo unico do separador 'Generate Code' do Self Client, com os scopes ZohoSign.documents.ALL,ZohoSign.account.READ. Expira em minutos - guarde e corra o test_connection de imediato. Deixe vazio se colar um Refresh Token."
+      "helpText": "Apenas recuperacao. O caminho normal e o botao 'Ligar com OAuth'. Codigo unico gerado contra o cliente OAuth da plataforma, com os scopes ZohoSign.documents.ALL,ZohoSign.account.READ; expira em minutos."
     },
     {
       "key": "refresh_token",
@@ -38,15 +22,15 @@
       "type": "password",
       "required": false,
       "secret": true,
-      "helpText": "Alternativa opcional ao Grant Code: um refresh token ja trocado por si (POST {accounts}/oauth/v2/token com grant_type=authorization_code). Nao expira."
+      "helpText": "Apenas recuperacao. Refresh token ja trocado contra o cliente OAuth da plataforma. Nao expira. Normalmente e preenchido automaticamente pelo 'Ligar com OAuth'."
     },
     {
       "key": "dc",
       "label": "Data Center",
       "type": "text",
-      "required": true,
+      "required": false,
       "secret": false,
-      "helpText": "Data center Zoho da sua conta: com (US), eu, in, jp, au, ca ou sa. Leia-o no URL do Zoho Sign (sign.zoho.com -> com, sign.zoho.eu -> eu)."
+      "helpText": "Apenas recuperacao. Data center Zoho da conta: com (US), eu, in, jp, au, ca ou sa. Leia-o no URL do Zoho Sign (sign.zoho.com -> com, sign.zoho.eu -> eu). O 'Ligar com OAuth' deteta-o sozinho."
     }
   ],
   "actions": [
@@ -149,6 +133,10 @@
   ],
   "proxyContract": {
     "executeEndpoint": "/api/agent/integrations/execute",
-    "requiredInputs": ["integrationKey", "actionName", "args"]
+    "requiredInputs": [
+      "integrationKey",
+      "actionName",
+      "args"
+    ]
   }
 }

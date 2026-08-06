@@ -18,9 +18,11 @@ import { Router, raw as expressRaw, type Request } from 'express';
 import { checkOwnerActivation, type ResolveAppScope } from './app-scope.js';
 import { proxyToGraph } from './app-sso.js';
 
-/** Provides a valid workspace Graph access token (refresh handled behind the seam). Throws
- *  when the workspace Microsoft integration is not connected / needs reauth. */
-export type WorkspaceGraphTokenProvider = () => Promise<string>;
+/** Provides a valid workspace Graph access token for the APP OWNER (refresh handled behind the
+ *  seam; see integrations/workspace-credential.ts). Throws when that owner's Microsoft
+ *  integration is not connected / needs reauth. The owner is passed explicitly because the
+ *  workspace is per-tenant, never ambient: an app reaches its own owner's connection or none. */
+export type WorkspaceGraphTokenProvider = (ownerUserId: string) => Promise<string>;
 
 export interface M365ProxyDeps {
   resolveAppScope: ResolveAppScope;
@@ -62,7 +64,7 @@ export function m365ProxyRouter(deps: M365ProxyDeps): Router {
     const graphPath = (req.params as Record<string, string>)[0] ?? '';
     let accessToken: string;
     try {
-      accessToken = await deps.getWorkspaceGraphToken();
+      accessToken = await deps.getWorkspaceGraphToken(app.ownerUserId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(502).json({ error: `Microsoft Graph proxy error: ${msg}` });

@@ -5,7 +5,7 @@
  * (shared to the org); else owner-only (Amendment 2 Part 4).
  */
 import { integrationConfigs } from '../data/stores.js';
-import { envelopeEncrypt } from '../data/crypto.js';
+import { envelopeEncrypt, envelopeDecrypt } from '../data/crypto.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 import {
@@ -183,6 +183,141 @@ export async function createConfig(
 }
 
 /**
+ * CONNECT-OR-RE-SAVE, the dashboard's single credential-save action.
+ *
+ * `createConfig` inserts unconditionally. The dashboard's "guardar credenciais" button only ever
+ * called that, so every re-save inserted ANOTHER row for the same integration - and
+ * `findConfigForOwner` resolves duplicates by "first row that matches", i.e. whichever the driver
+ * returns first. So a re-saved credential could go on being ignored in favour of the old row, or
+ * take effect and drop every field this save did not resend. Neither is visible in the UI: both
+ * rows render as one connected integration.
+ *
+ * A save for an integration this actor already has a config for is therefore an UPDATE of that
+ * row (merging, per `mergeCredentialValues`), and only a genuinely new one inserts. The row this
+ * looks for is the one `createConfig` WOULD have authored - an org-admin authors the org-shared
+ * row (`ownerUserId == null`), anyone else their own - so this never redirects a user's save into
+ * a shared row or vice versa.
+ */
+export async function upsertConfig(
+  actor: Actor,
+  input: { integrationKey: string; configValues: Record<string, unknown>; name?: string; secretKeys?: readonly string[] },
+  deps: Deps,
+): Promise<{ verdict: WriteVerdict; config?: IntegrationConfigDoc; created: boolean }> {
+  const authorsShared = actor.role === 'org-admin' || actor.role === 'super-admin';
+  const rows = (await integrationConfigs.find({ orgId: actor.orgId, integrationKey: input.integrationKey })) as IntegrationConfigDoc[];
+  const existing = rows.find((c) => !isReservedIntegrationRow(c) && (authorsShared ? c.ownerUserId == null : c.ownerUserId === actor.userId));
+  if (!existing) {
+    return { verdict: 'ok', config: await createConfig(actor, input, deps), created: true };
+  }
+  const updated = await updateConfig(actor, existing._id, {
+    configValues: input.configValues,
+    ...(input.secretKeys ? { secretKeys: input.secretKeys } : {}),
+  });
+  return { ...updated, created: false };
+}
+
+// ============================================================================
+// OAuth-connect support for INTEGRATION-CONFIG-backed providers (Zoho Sign)
+//
+// Google/Microsoft connect into reserved `platform-<orgId>-<provider>` rows. Zoho cannot: its
+// credentials are read by the zoho-sign service and by the generic action executor, both of which
+// resolve the ordinary `zoho-sign` integration config for an owner. So its OAuth grant lands in
+// THAT row's encrypted bundle - the same bundle the manual path writes - and nothing downstream
+// has to know which path produced it.
+// ============================================================================
+
+/** Find-or-create the caller's config row for `integrationKey` and stamp a pending OAuth state. */
+export async function beginConfigOAuth(
+  actor: Actor,
+  integrationKey: string,
+  state: string,
+  expiresAt: number,
+  deps: Deps,
+): Promise<IntegrationConfigDoc> {
+  const authorsShared = actor.role === 'org-admin' || actor.role === 'super-admin';
+  const rows = (await integrationConfigs.find({ orgId: actor.orgId, integrationKey })) as IntegrationConfigDoc[];
+  const existing = rows.find((c) => !isReservedIntegrationRow(c) && (authorsShared ? c.ownerUserId == null : c.ownerUserId === actor.userId));
+  if (existing) {
+    return (await integrationConfigs.update(existing._id, (cur) => ({
+      ...cur,
+      oauthState: state,
+      oauthStateExpiresAt: expiresAt,
+    }))) as IntegrationConfigDoc;
+  }
+  // A row created by a connect starts DISABLED and credential-less: only a completed callback
+  // turns it on, so an abandoned popup never leaves an integration looking connected.
+  const doc: IntegrationConfigDoc = {
+    _id: deps.genId(),
+    orgId: actor.orgId,
+    ...(authorsShared ? {} : { ownerUserId: actor.userId }),
+    custodianUserId: actor.userId,
+    integrationKey,
+    name: integrationKey,
+    enabled: false,
+    oauthState: state,
+    oauthStateExpiresAt: expiresAt,
+  };
+  await integrationConfigs.insert(doc as never);
+  return doc;
+}
+
+/** The config row holding this pending OAuth state, or null when unknown or expired. */
+export async function findConfigByOAuthState(
+  integrationKey: string,
+  state: string,
+  now: number,
+): Promise<IntegrationConfigDoc | null> {
+  if (!state) return null;
+  const rows = (await integrationConfigs.find({ integrationKey })) as IntegrationConfigDoc[];
+  const row = rows.find((c) => c.oauthState === state);
+  if (!row) return null;
+  // An expiry the row does not carry is treated as expired rather than eternal: a state with no
+  // deadline is exactly the pre-TTL behaviour this field exists to end.
+  if (typeof row.oauthStateExpiresAt !== 'number' || row.oauthStateExpiresAt < now) return null;
+  return row;
+}
+
+/**
+ * Merge a completed OAuth grant into a config's encrypted bundle and turn the row on.
+ *
+ * NOT `updateConfig`: that path authorises a human actor, and this one runs on a public callback
+ * whose only credential is the CSRF state already matched to this exact row. It shares the
+ * important half - `mergeCredentialValues`, so `CLEAR_CREDENTIAL` really deletes and an untouched
+ * field really survives - and deliberately does not move `custodianUserId`, because completing a
+ * consent is not the credential-typing ceremony that decides custody.
+ *
+ * An undecryptable stored bundle REPLACES rather than refusing here, unlike a user edit: the
+ * alternative is an account that can never be reconnected through the UI, and a fresh grant is a
+ * complete, self-sufficient credential set.
+ */
+export async function persistConfigOAuthGrant(
+  configId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const row = (await integrationConfigs.get(configId)) as IntegrationConfigDoc | null;
+  if (!row) throw new Error('integration config not found');
+  let current: Record<string, unknown> = {};
+  try {
+    current = await decryptForMerge(row);
+  } catch (err) {
+    if (!(err instanceof UndecryptableBundleError)) throw err;
+    console.warn(`[integrations] ${row.integrationKey}: stored credentials are undecryptable; replacing them with this grant.`);
+  }
+  const { values } = mergeCredentialValues(current, patch);
+  const ciphertext = await envelopeEncrypt(JSON.stringify(values), row.orgId);
+  await integrationConfigs.update(configId, (cur) => ({
+    ...cur,
+    credentialsCiphertext: ciphertext,
+    enabled: true,
+    oauthState: undefined,
+    oauthStateExpiresAt: undefined,
+    // Fresh consent means the account is live again - a stale dead-token flag would otherwise keep
+    // reporting it disconnected right after a successful reconnect.
+    needsReauth: false,
+  }));
+}
+
+/**
  * Run the WS-C shadow for a row, unless it is one of the RESERVED rows.
  *
  * Platform-OAuth and Pipedream rows are out of WS-C scope (RUN_SPEC assumption 4): they carry their
@@ -219,7 +354,81 @@ export function canWriteConfig(actor: Actor, c: IntegrationConfigDoc): boolean {
   return c.ownerUserId === actor.userId;
 }
 
-export type WriteVerdict = 'ok' | 'notfound' | 'forbidden';
+export type WriteVerdict = 'ok' | 'notfound' | 'forbidden' | 'undecryptable';
+
+/**
+ * Explicit "blank this key" sentinel for a credential patch. A STRING, not a symbol, so it
+ * travels through JSON and the `Record<string, unknown>` value maps every call site already
+ * uses. Only a deliberate "clear this field" action may produce it.
+ */
+export const CLEAR_CREDENTIAL = '__ekoa_clear_credential__';
+
+/**
+ * MERGE A PARTIAL CREDENTIAL PATCH INTO THE STORED BUNDLE.
+ *
+ * A credential form only carries what was typed in THIS browser session: a masked field the
+ * user did not retype comes back empty, and a field the form does not render does not come
+ * back at all. Replacing the whole bundle with such a patch destroys every value it omits -
+ * which is exactly how a re-pasted Zoho client_id/secret wiped the permanent `refresh_token`
+ * and took a customer's e-signature down in the old platform (ekoa-dev `ca446cb0`, 2026-07-28).
+ * Merging is the only safe default; a wipe must be ASKED FOR.
+ *
+ *   - a key ABSENT from the patch      -> unchanged
+ *   - `undefined` / `null`             -> unchanged (never an implicit wipe)
+ *   - an empty / whitespace-only string -> unchanged: that is what an untouched masked input
+ *                                          emits. The ambiguous case, resolved in favour of
+ *                                          never losing a secret.
+ *   - `CLEAR_CREDENTIAL`               -> the key is deleted. The only way to blank a field.
+ *
+ * A rotation (`persistRotatedCredentials`) merges too, but on its own path and against fields
+ * the caller already decrypted - it is a provider refresh, not a user's edit.
+ */
+export function mergeCredentialValues(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): { values: Record<string, unknown>; changed: boolean } {
+  const values: Record<string, unknown> = { ...current };
+  let changed = false;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === CLEAR_CREDENTIAL) {
+      if (key in values) { delete values[key]; changed = true; }
+      continue;
+    }
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    if (Object.is(values[key], value)) continue;
+    values[key] = value;
+    changed = true;
+  }
+  return { values, changed };
+}
+
+/**
+ * The stored bundle, decrypted, for a write that must not lose it. THROWS on an undecryptable
+ * blob rather than degrading to `{}` - degrading here would turn "the key rotated" into a full
+ * credential wipe on the very next save, which is the failure this whole path exists to prevent.
+ * Read/presence paths that must not fail a request use their own tolerant decrypt.
+ */
+class UndecryptableBundleError extends Error {
+  readonly code = 'credential_bundle_undecryptable';
+}
+async function decryptForMerge(c: IntegrationConfigDoc): Promise<Record<string, unknown>> {
+  if (!c.credentialsCiphertext) return {};
+  let plaintext: string;
+  try {
+    plaintext = await envelopeDecrypt(c.credentialsCiphertext, c.orgId);
+  } catch {
+    // Deliberately content-free: nothing from the blob may reach a message or a log.
+    throw new UndecryptableBundleError('stored credentials could not be decrypted');
+  }
+  try {
+    const parsed = JSON.parse(plaintext) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    /* legacy single-value blob */
+  }
+  return { value: plaintext };
+}
 
 export async function updateConfig(
   actor: Actor,
@@ -229,16 +438,33 @@ export async function updateConfig(
   const c = (await integrationConfigs.get(id)) as IntegrationConfigDoc | null;
   if (!c || c.orgId !== actor.orgId) return { verdict: 'notfound' };
   if (!canWriteConfig(actor, c)) return { verdict: 'forbidden' };
+  // MERGE, never replace (see `mergeCredentialValues`). Everything downstream - the ciphertext,
+  // the WS-C shadow, and the non-secret projection the consent gate reads - is computed from the
+  // MERGED bundle, so a partial save can no longer shrink any of the three out of step.
+  //
+  // A patch that changes NOTHING (every field re-sent identical, or all of them left untouched)
+  // is treated as no credential write at all: it must not re-encrypt, must not re-shadow, and
+  // above all must not re-stamp `custodianUserId`. Custody follows the ceremony, and posting an
+  // empty or unchanged bundle is not one - otherwise any writer could take custody of a
+  // credential they never typed by saving the form without touching it.
+  let values: Record<string, unknown> | undefined;
+  if (patch.configValues) {
+    try {
+      const merged = mergeCredentialValues(await decryptForMerge(c), patch.configValues);
+      if (merged.changed || !c.credentialsCiphertext) values = merged.values;
+    } catch (err) {
+      if (err instanceof UndecryptableBundleError) return { verdict: 'undecryptable' };
+      throw err;
+    }
+  }
   // Encrypt BEFORE the update callback: `update` takes a synchronous mutator, and the envelope is
   // async because the key wrapper may be a remote KMS call.
-  const nextCiphertext = patch.configValues
-    ? await envelopeEncrypt(JSON.stringify(patch.configValues), actor.orgId)
-    : undefined;
+  const nextCiphertext = values ? await envelopeEncrypt(JSON.stringify(values), actor.orgId) : undefined;
   // WS-C shadow, kept in step with the live column. A REFRESH never re-grants (see
   // `updateIntegrationCredentialValue`): rotating the credentials of a LOCKED integration leaves it
   // locked, because undoing the user's kill switch as a side effect of an unrelated edit would make
   // the lock advisory. Only a first mint carries the connect ceremony's auto-grant.
-  const cofreItemId = patch.configValues ? await shadowCredentials(actor, c, patch.configValues) : undefined;
+  const cofreItemId = values ? await shadowCredentials(actor, c, values) : undefined;
   const config = (await integrationConfigs.update(id, (cur) => ({
     ...cur,
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
@@ -247,11 +473,13 @@ export async function updateConfig(
     // repeated — `canWriteConfig` above already restricts an org-shared row's re-save to an
     // org-admin, and `mintOrRefreshCredentialShadow` already mints under this writer — so the
     // custodian stamp moves with it. Toggling `enabled` is not a ceremony and leaves it alone.
-    ...(patch.configValues ? { custodianUserId: actor.userId } : {}),
+    ...(values ? { custodianUserId: actor.userId } : {}),
     // The non-secret projection moves with the values it projects. Recomputed only on a values
     // write, so toggling `enabled` cannot disturb a standing approval's destination binding.
-    ...(patch.configValues && publicValuesOf(patch.configValues, patch.secretKeys) !== undefined
-      ? { publicConfigValues: publicValuesOf(patch.configValues, patch.secretKeys) }
+    // Projected from the MERGED bundle: from the patch alone, a save that did not resend a
+    // destination field would drop it here and silently re-open a bound approval.
+    ...(values && publicValuesOf(values, patch.secretKeys) !== undefined
+      ? { publicConfigValues: publicValuesOf(values, patch.secretKeys) }
       : {}),
     ...(cofreItemId ? { cofreItemId } : {}),
   }))) as IntegrationConfigDoc;

@@ -30,7 +30,7 @@ import type { ArtifactBundle } from '@ekoa/shared';
 import { generateSlug, type ArtifactDoc, type Deps } from './artifacts-service.js';
 import { indexSlug } from './slug-index.js';
 import { projectDirFor, newProjectDir } from './app-paths.js';
-import { readManifest, createDefaultManifest, writeManifest } from './manifest.js';
+import { readManifest, createDefaultManifest, writeManifest, type AppManifest } from './manifest.js';
 import { appBuilder } from './builder.js';
 import { appRegistry } from './app-registry.js';
 import { commitSnapshot, type SnapshotAudit } from '../services/commit-guard.js';
@@ -162,9 +162,24 @@ async function applyImportedAppData(appId: string, bundle: ArtifactBundle, deps:
   }
 }
 
-/** Ensure a valid manifest.json at the project root, stamped with id + name. */
+/**
+ * Adopt the bundle's own `manifest.json` (re-stamping id + name for this instance), or write a
+ * default when the bundle carried none.
+ *
+ * A manifest that is PRESENT but INVALID is a hard failure, deliberately. The manifest is where
+ * an app declares its server-side backend (`backend.handlers`, e.g. `onEmail`), the base it
+ * extends, and its workspace-proxy opt-in; substituting a default for it silently would import
+ * an app that LOOKS fine, serves its UI, and has quietly lost its email handler and its Graph
+ * access - a failure nobody sees until the feature does not fire in production. Refusing names
+ * the real problem while it is still fixable.
+ */
 async function ensureManifest(projectDir: string, id: string, name: string): Promise<void> {
-  const existing = await readManifest(projectDir).catch(() => null);
+  let existing: AppManifest | null;
+  try {
+    existing = await readManifest(projectDir);
+  } catch (err) {
+    throw new Error(`Bundle manifest.json is invalid, so the import was refused rather than silently dropping what it declares: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const manifest = existing ?? createDefaultManifest(id, name);
   manifest.id = id;
   manifest.name = name;

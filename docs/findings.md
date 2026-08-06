@@ -174,6 +174,158 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   shown, the submit stays disabled, and no success banner appears. LESSON: a vision step whose
   "success" only appears after an auto-repair typed the passing input is testing the harness, not the
   product - graduate it to a spec that pins the pre-repair state.
+- **`zoho-callback-page-script-injection`** (FIXED-HERE 2026-08-06, HIGH, **live in ekoa-dev /
+  api.ekoa.io** - not a defect of this repo, a defect this repo refused to inherit). The Zoho OAuth
+  callback renders a server-built HTML page that hands the outcome to the opener via
+  `postMessage`, embedding the values with `JSON.stringify` inside an inline `<script>`.
+  `JSON.stringify` does not escape `/`, so a value containing a literal `</script>` CLOSES the
+  script element during HTML parsing and everything after it is parsed as markup. The injected
+  value on that page is the OAuth error string, which is reflected straight from Zoho's own
+  `?error=` query parameter on an **unauthenticated** route - so a crafted link is reflected XSS on
+  the API origin, with no state, no login and no interaction beyond the click. Same shape in the
+  human-readable message line.
+  In the port, `jsonForScript()` escapes `<`, `>`, `&` and U+2028/U+2029 before embedding, and the
+  fallback link is attribute-escaped; the payload still arrives intact, just inert. Pinned by
+  `api/tests/integrations/zoho-oauth.test.ts`, which asserts the page still contains exactly one
+  `<script>`/`</script>` pair after an injection attempt. Found BY writing that test - upstream has
+  no test of this route at all, which is also how its credential-clearing regression reached a
+  customer.
+  ACTION FOR THE OPERATOR: this is exploitable in production today at
+  `https://api.ekoa.io/api/v1/oauth/zoho/callback?error=...`. The same `buildOAuthResultPage` is
+  shared by the ADOBE callback, so both providers are affected. Fix is the four-line escape above,
+  in `cortex/src/server.ts buildOAuthResultPage`.
+
+- **`import-ignores-the-bundle-slug`** (OPEN 2026-08-06, LOW, contract inconsistency). The shared
+  `ArtifactBundle` declares an optional `slug`, and `convert-dev-bundle.mjs` sets it from `--slug`,
+  but `importArtifact` calls `generateSlug(name, deps)` and never reads `bundle.slug`. Importing
+  `legal-case-manager-3` therefore produced `erp-juridico-brasil-salomao` (derived from the app's
+  display name) with no warning. Harmless here - the served URL is cosmetic and app-data is keyed on
+  the canonical id, not the slug - but a field the schema advertises and the importer silently drops
+  is the same class of defect as the two manifest bugs fixed this week. FIX WHEN TOUCHED: honour
+  `bundle.slug` when it is free, fall back to the generated one when taken, and say which happened.
+
+- **`artifact-import-could-not-accept-a-real-app`** (FIXED 2026-08-06, HIGH, the import endpoint
+  did not work for its own purpose). `POST /api/v1/artifacts/import` sat behind the app-wide 1 MB
+  `express.json()`, and a real app export is bigger than that: the production
+  `legal-case-manager-3` bundle is **1.34 MB of source alone**, before any app-data dump, and
+  prod's own exporter admits files up to 1.5 MB EACH. So the endpoint whose entire job is
+  importing real apps could only ever accept toy ones, and the first genuine import answered
+  `413 PAYLOAD_TOO_LARGE`. `POST /:id/bundle-update` - the path prod patches are pushed through -
+  had exactly the same ceiling.
+  FIXED with the LLM gateway's established pattern, both halves: the two bundle routes mount their
+  own parser (`bundleJson`, 25 MB, `EKOA_ARTIFACT_BUNDLE_MAX_SIZE`) AND `server.ts` exempts those
+  paths from the global parser - without the exemption the global one consumes the body first and
+  the router limit is dead code, which is the trap the gateway hit in run 20260717. The exemption
+  is pinned at both ends (`/import` exact; `/:id/bundle-update` with the id charset between fixed
+  segments) so no sibling route widens. Suite: `api/tests/contract/malformed-json.test.ts` asserts
+  a 1.4 MB body reaches auth on both bundle routes (401, never 413) and that two neighbours -
+  `POST /artifacts` and `/bundle-update/extra` - still cap at 1 MB.
+  WHY IT WAS NEVER CAUGHT: every fixture bundle was small. The size limit is not a property any
+  hand-written test bundle exercises, and the operator-run import driver skips cleanly without a
+  real export - so the first real payload was the first test.
+
+- **`prod-export-manifest-never-reached-the-import`** (FIXED 2026-08-06, HIGH, silent capability
+  loss on every prod import). The first real export of `legal-case-manager-3` from api.ekoa.io
+  carried 26 scaffold files and **no `manifest.json` among them** - prod keeps that information in
+  the envelope's separate `manifest` FIELD, which it assembles from its own defaults overlaid with
+  the on-disk file. `convert-dev-bundle.mjs` read only `id`/`name`/`version` off that field and
+  dropped the rest, and ekoa-code's importer reads what an app declares from a manifest FILE. Net
+  effect: the ERP would have imported with a DEFAULT manifest - no `backend: {handlers:['onEmail']}`,
+  no `extends: 'app-auth-persistent'` - and would have built, served its UI, and silently never
+  processed an email. Nothing would have failed; the feature would simply not exist.
+  FIXED: the converter now always writes `manifest.json` into `bundle.files` from the envelope's
+  manifest field, filling the build fields a sparse prod manifest omits, and the envelope's copy
+  WINS over a stale scaffold copy of the same path (never both). Suite: the manifest-fidelity block
+  in `api/tests/migration/convert-dev-bundle.test.ts`, including a case asserting the reconstructed
+  manifest passes ekoa-code's own `validateManifest`.
+  CAUGHT BY a warning deliberately put in the one-shot operator import script rather than by a test
+  - the two formats had been "equivalent" in every fixture written by hand, because every fixture
+  author put a manifest.json in the scaffold. The real export did not. Related and landed the same
+  day: `ensureManifest` now REFUSES an invalid manifest instead of defaulting past it.
+
+- **`m365proxy-manifest-flag-stripped`** (FIXED 2026-08-05, HIGH, dead opt-in - the workspace
+  Microsoft plane could never be reached by any app). The Q-10 gate on `/api/m365/*`
+  (`api/src/integrations/m365-proxy.ts`) requires a per-app manifest opt-in, and `server.ts`'s
+  `resolveAppScope` reads it: `m365Proxy: (reg?.manifest as {m365Proxy?: boolean})?.m365Proxy === true`.
+  But `validateManifest` (`api/src/apps/manifest.ts`) returns a WHITELIST of named keys, and
+  `m365Proxy` was not among them - so the registry's manifest never carried the flag no matter what
+  the author wrote in `manifest.json`, `resolveAppScope` always computed `false`, and every request
+  to the workspace Graph proxy answered `403 App has not enabled the Microsoft 365 workspace proxy`.
+  Two independent gates (served + opt-in) read as one that can never open. It went unnoticed because
+  the plane's other half was ALSO stubbed (see the next finding): with the token seam throwing
+  not-connected, a 403 and a 502 both looked like "not wired yet".
+  FIXED: `m365Proxy?: boolean` declared on `AppManifest`, validated as a boolean (a truthy STRING is
+  refused, never coerced into an opt-in), and carried through the return. Pinned by
+  `api/tests/apps/manifest.test.ts`, which asserts both halves of the whitelist property - the
+  declared flags survive a write→read round-trip, an undeclared key still does not.
+  LESSON: a whitelist validator between an author and a consumer is a silent-drop machine. Any
+  manifest key a gate reads needs a test that carries it end to end, not a type declaration.
+
+- **`workspace-graph-token-was-a-permanent-not-connected-stub`** (FIXED 2026-08-05, HIGH,
+  unimplemented plane presented as a wired one). `server.ts` passed `workspaceNotConnected(...)` as
+  `getWorkspaceGraphToken` for `/api/m365/*` and as `workspaceCloudFiles.getAccessToken` for
+  `/api/app-cloud-files/*`: both planes were mounted, documented, gated and tested, and could not
+  reach Microsoft Graph at all. Honest (502 / 409, never a fake success) but permanently inert, so
+  the SharePoint provisioning the SALOMAO ERP performs through `/api/m365/v1.0/sites/...` had no
+  server-side path.
+  FIXED by `api/src/integrations/workspace-credential.ts`: the workspace of a served app is the ORG
+  OF ITS OWNER - platform-OAuth rows are org-scoped (`platform-<orgId>-<provider>`) - so the token is
+  resolved per request from the app scope the router already admitted, refreshed behind the seam,
+  and never ambient. Fails closed on an empty/unknown/org-less owner (no provider traffic at all on
+  behalf of a non-tenant) and keeps the `not connected` / `reconnect required` degrade contract both
+  routers already mapped. Suites: `api/tests/integrations/workspace-credential.test.ts` (tenancy,
+  refresh, dead-token reauth, no token in an error message) and the extended
+  `api/tests/contract/app-sso.test.ts`, which pins that the owner spent is the ADMITTED app's - not
+  the header, not the caller's JWT - and that a refused gate never reaches the seam at all.
+  STILL OPEN alongside it: the docx link/cloud ingest keeps the not-connected stub, because a build's
+  tool call carries an appId but no owner down to `agents/seams.ts fetchFromCloud`; threading the
+  run's owner through is tracked in `docs/dev-parity.md`.
+
+- **`a-partial-credential-save-replaced-the-whole-bundle`** (FIXED 2026-08-05, HIGH, silent
+  destruction of a stored secret). `updateConfig` (`api/src/integrations/service.ts`) encrypted
+  `patch.configValues` verbatim as the new bundle, so a save carried away every field it did not
+  include. A credential form only sends what was typed in that browser session - a masked field the
+  user did not retype comes back as `''`, a field the form does not render does not come back at
+  all - so re-pasting a Zoho `client_id`/`client_secret` erased the permanent `refresh_token`. In the
+  old platform that exact sequence took Brasil Salomão's e-signature down (ekoa-dev `ca446cb0`,
+  2026-07-28); this repo carried the same shape, untriggered only because nobody had re-saved a
+  credential yet. Two further consequences rode along: the WS-C shadow and the non-secret
+  `publicConfigValues` projection were both computed from the patch, so a partial save shrank the
+  Rule-10 comparator's shadow and could drop a destination field a standing approval was bound to.
+  FIXED: `mergeCredentialValues` - absent keys, `null`/`undefined`, and empty/whitespace strings all
+  leave the stored value alone; only the explicit `CLEAR_CREDENTIAL` sentinel deletes a key. The
+  ciphertext, the shadow and the projection are all computed from the MERGED bundle. An undecryptable
+  stored blob now RETURNS `undecryptable` (route: 422 `SECRET_GUARD_BLOCKED`, telling the user to
+  re-enter every credential) instead of merging blind - degrading to `{}` there would have turned a
+  rotated encryption key into a full wipe on the very next save. Suite:
+  `api/tests/integrations/credential-merge.test.ts` reproduces the Zoho incident directly.
+  NOT a new error code on purpose: the shared `ErrorCode` enum is a client contract, and adding a
+  member makes older clients read the body as "not the shared error envelope".
+
+- **`chokepoint-gate-case-test-failed-on-a-case-insensitive-filesystem`** (FIXED 2026-08-05, LOW,
+  harness-not-product). `tests/security/grep-gates.test.ts` planted `api/src/LLM/p.ts` in a sandbox
+  that pre-creates `api/src/llm`, and asserted the gate refuses it. On macOS APFS the `mkdir` is a
+  no-op and the file lands in the exempt directory, so the gate correctly reported clean and the
+  test failed - on every local full-suite run, for months, on the harness rather than on the gate.
+  FIXED by probing the sandbox filesystem once and skipping exactly that case when it cannot be
+  posed (CI on Linux still runs it), with the always-true half - the real `llm/` paths ARE exempt -
+  split into its own test that runs everywhere. Found while running the suite for an unrelated
+  change; see also the ledger-census drift below - two gates rotted the same way.
+
+- **`client-drift-gate-red-on-a-stale-node_modules`** (FIXED 2026-08-05, LOW, environment).
+  `npm run gate:client-drift` - which sits in `ci:lane` BEFORE `typecheck`/`test`/`build`, so its
+  failure hides everything after it - died with `ERR_MODULE_NOT_FOUND: openapi-typescript` on a
+  clean tree. The package is correctly declared in `clients/cortex-cli/package.json`; the local
+  `node_modules` had simply drifted from the lock file. `npm install` fixed it with NO lock-file
+  change, and the gate reports clean. Worth knowing because the failure mode reads like client
+  drift and is not: an `ERR_MODULE_NOT_FOUND` from a gate means the gate did not run.
+
+- **`suite-ledger-unit-census-drifted-red`** (FIXED 2026-08-05, LOW, gate rot). `npm run gate:ledger`
+  had been failing its frontend-unit count census (disk 50 vs ledger 49) since commit `105e10b`,
+  which landed `web/__tests__/integration-user-scoped-skill.test.ts` without its `SUITE_LEDGER.json`
+  row. Registered, with the reason recorded in the ledger's own `census_note` (the same class of
+  omission that note already records three times). Found during an unrelated parity run - the census
+  is only load-bearing if somebody runs it.
 
 - **`the-dev-harness-proxy-never-propagated-client-disconnects`** (FIXED 2026-08-05, MEDIUM,
   dev-harness resource leak - and the root of a whole false defect report). `driver.mjs up`

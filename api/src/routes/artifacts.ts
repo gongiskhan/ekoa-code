@@ -5,7 +5,7 @@
  * list shape `{ items, featured }` (landmine 7). Thin: validate, call one apps/
  * module, shape the response (CONV-2 error envelope throughout).
  */
-import { Router, type Response } from 'express';
+import { Router, json as expressJson, type Response } from 'express';
 import {
   ArtifactPatch,
   ImportArtifactRequest,
@@ -49,6 +49,20 @@ const ForkBody = z.object({ name: z.string().optional() });
 export function artifactsRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
   r.use(requireAuth);
+
+  /**
+   * The two BUNDLE routes carry their own JSON parser, because the global one is 1 MB and a real
+   * app export is bigger than that. Measured: the production `legal-case-manager-3` export is
+   * 1.34 MB of source alone, before any app-data dump, and prod's own exporter admits files up to
+   * 1.5 MB EACH - so under the global limit `POST /import` could only ever accept toy bundles,
+   * and every genuine import 413'd (found running the first real one, 2026-08-06).
+   *
+   * Same shape as the LLM gateway's 50 MB parser: server.ts must ALSO exempt these paths from the
+   * global parser, or it consumes the body first and this limit is dead code. Over-limit still
+   * answers the shared envelope (`PAYLOAD_TOO_LARGE`) through the app-level body-parser error
+   * handler - a router-level parser error propagates to it.
+   */
+  const bundleJson = expressJson({ limit: process.env.EKOA_ARTIFACT_BUNDLE_MAX_SIZE || '25mb' });
 
   const auditOf = (req: AuthedRequest): SnapshotAudit => ({
     actor: { userId: req.user!.sub, username: req.user!.username, orgId: req.user!.orgId },
@@ -105,7 +119,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   });
 
   // ---- import must precede GET/:id-style matches (distinct verb+path) ----
-  r.post('/import', async (req: AuthedRequest, res: Response) => {
+  r.post('/import', bundleJson, async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, ImportArtifactRequest, req.body) as { bundle: import('@ekoa/shared').ArtifactBundle } | undefined;
     if (!body) return;
     // H1 HIGH-2: a bundle is always an app export; importing it CREATES and BUILDS a new app →
@@ -186,7 +200,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
     res.json(await exportArtifact(art));
   });
 
-  r.post('/:id/bundle-update', async (req: AuthedRequest, res: Response) => {
+  r.post('/:id/bundle-update', bundleJson, async (req: AuthedRequest, res: Response) => {
     const art = await writable(req, res);
     if (!art) return;
     if (denyAppEdit(req, res, art)) return; // H1 HIGH-2: in-place app edit → canEditApps

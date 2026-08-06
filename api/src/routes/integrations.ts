@@ -41,7 +41,7 @@ import {
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
-import { listConfigs, createConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
+import { listConfigs, upsertConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import {
@@ -277,7 +277,11 @@ export function integrationsRouter(deps: {
     // so that edge would close an import cycle (docs/findings.md).
     const actorForCreate = actorOf(req);
     const createDef = await resolveDefinition(actorForCreate, body.integrationKey);
-    const c = await createConfig(
+    // UPSERT, not insert: the dashboard's save button posts here every time, so an unconditional
+    // insert made every re-save a duplicate row for the same integration, and duplicates resolve
+    // nondeterministically (`findConfigForOwner`). A re-save updates the row it would have
+    // created, merging into the stored bundle. 201 on a genuine connect, 200 on a re-save.
+    const result = await upsertConfig(
       actorForCreate,
       {
         ...(body as { integrationKey: string; configValues: Record<string, unknown>; name?: string }),
@@ -285,7 +289,12 @@ export function integrationsRouter(deps: {
       },
       deps,
     );
-    res.status(201).json(configSummary(c));
+    if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    if (result.verdict === 'notfound') return notFound(res);
+    if (result.verdict === 'undecryptable') {
+      return sendError(res, 'SECRET_GUARD_BLOCKED', 'As credenciais guardadas não puderam ser lidas, por isso a gravação foi recusada para não as destruir. Volte a introduzir todas as credenciais desta integração.');
+    }
+    res.status(result.created ? 201 : 200).json(configSummary(result.config!));
   });
 
   r.patch('/configs/:integrationKey', requireAuth, async (req: AuthedRequest, res: Response) => {
@@ -301,6 +310,16 @@ export function integrationsRouter(deps: {
     });
     if (result.verdict === 'notfound') return notFound(res);
     if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    // The stored bundle could not be decrypted, so it could not be merged into. Refusing is the
+    // point: writing the patch alone would silently wipe every credential it omits. Recovery is
+    // to re-enter them all (the client then sends a complete bundle, which merges to itself).
+    // `SECRET_GUARD_BLOCKED` (422) rather than a new code: a guard protecting stored secrets
+    // refused the write, which is exactly what this code already names on the artifact-download
+    // path, and the shared ErrorCode enum is a client contract - adding a member makes every
+    // older client read the body as "not the shared error envelope" (clients/cortex-cli).
+    if (result.verdict === 'undecryptable') {
+      return sendError(res, 'SECRET_GUARD_BLOCKED', 'As credenciais guardadas não puderam ser lidas, por isso a gravação foi recusada para não as destruir. Volte a introduzir todas as credenciais desta integração.');
+    }
     res.json(configSummary(result.config!));
   });
 

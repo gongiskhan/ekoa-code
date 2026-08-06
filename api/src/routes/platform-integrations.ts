@@ -41,6 +41,9 @@ function isKnownProvider(p: string): boolean {
   return (PLATFORM_PROVIDERS as readonly string[]).includes(p);
 }
 
+/** Providers whose OAuth callback is owned by a dedicated router mounted alongside this one. */
+const DELEGATED_PROVIDERS = new Set(['zoho']);
+
 function firstStr(v: unknown): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
@@ -90,8 +93,19 @@ export function oauthCallbackRouter(deps: RouterDeps): Router {
   const r = Router();
   const oauthDeps: OAuthDeps = { now: deps.now, genId: deps.genId, http: deps.oauth?.http, env: deps.oauth?.env };
 
-  r.get('/:provider/callback', async (req, res: Response) => {
+  r.get('/:provider/callback', async (req, res: Response, next) => {
     const provider = req.params.provider as string;
+    // HANDED OFF, NOT UNKNOWN. `:provider` matches any word, so this route would otherwise swallow
+    // the callback of a provider that connects some other way and answer it with a generic failure
+    // page while the real handler never ran. Zoho is such a provider: its grant belongs in an
+    // ordinary integration config, not a platform row, so it owns its own route
+    // (integrations/zoho-oauth.ts) and this one steps aside for it.
+    //
+    // Only the DELEGATED names fall through - an unrecognised provider still gets this route's
+    // page, because the shared callback path must stay MOUNTED for any segment (the mount-coverage
+    // gate probes it with a synthetic one, and a path that 404s for an unknown provider would read
+    // as a drifted descriptor).
+    if (DELEGATED_PROVIDERS.has(provider)) return next();
     const outcome = await completeCallback(
       provider,
       { code: firstStr(req.query.code), state: firstStr(req.query.state), error: firstStr(req.query.error) },

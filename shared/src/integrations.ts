@@ -126,6 +126,14 @@ export const ConnectSessionResponse = z.object({
 });
 export type ConnectSessionResponse = z.infer<typeof ConnectSessionResponse>;
 
+/** What the browser needs to open the Zoho consent popup. `state` is echoed for the caller's own
+ *  correlation only - the server matches it against the row it stamped, never against this copy. */
+export const ZohoOAuthConnectResponse = z.object({
+  authUrl: z.string(),
+  state: z.string(),
+});
+export type ZohoOAuthConnectResponse = z.infer<typeof ZohoOAuthConnectResponse>;
+
 export const ProvisionAutomationsResponse = z.object({
   provisioned: z.boolean(),
   created: z.number().int().nonnegative(),
@@ -565,6 +573,10 @@ export const integrationsEndpoints = {
     auth: 'user',
     request: CreateConfigRequest,
     response: IntegrationConfigSummary,
+    // CONNECT-OR-RE-SAVE: this is the dashboard's single save action, so it upserts - 201 when it
+    // connects the integration, 200 when it updates the config that already exists (merging into
+    // the stored credentials). Both were previously undeclared; the 201 was already being sent.
+    successStatus: [201, 200],
   },
   updateConfig: {
     method: 'PATCH',
@@ -596,6 +608,18 @@ export const integrationsEndpoints = {
     path: '/api/v1/integrations/:key/session',
     auth: 'user',
     response: ConnectSessionResponse,
+  },
+  /**
+   * Start the Zoho Sign OAuth popup connect. Org-admin: completing it re-points the whole
+   * workspace's e-signature at the platform's OAuth client. The browser opens `authUrl`; the
+   * callback (`GET /api/v1/oauth/zoho/callback`, a public provider redirect, not a client call)
+   * writes the grant and postMessages the result back to the opener.
+   */
+  zohoOAuthConnect: {
+    method: 'POST',
+    path: '/api/v1/integrations/zoho-sign/oauth/connect',
+    auth: 'org-admin',
+    response: ZohoOAuthConnectResponse,
   },
   provisionAutomations: {
     method: 'POST',

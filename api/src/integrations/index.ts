@@ -24,6 +24,11 @@ export {
   updateConfig,
   // The provider-rotation write (B2 review H2): legacy column + WS-C shadow, in that order.
   persistRotatedCredentials,
+  // OAuth connect for INTEGRATION-CONFIG-backed providers (Zoho Sign): find-or-create with a
+  // pending CSRF state, look the row up by that state, merge the grant into its bundle.
+  beginConfigOAuth,
+  findConfigByOAuthState,
+  persistConfigOAuthGrant,
   type RotationOutcome,
   type IntegrationConfigDoc,
 } from './service.js';

@@ -103,6 +103,11 @@ const COVERED = new Set<string>([
   'memories.bulkDelete', 'memories.submitSignal', 'memories.listTags', 'memories.stats',
   'knowledge.updateSource', 'knowledge.crawlSource', 'knowledge.crawlStatus', 'knowledge.refreshSchedule',
   'integrations.sessionStatus', 'integrations.connectSession', 'integrations.provisionAutomations',
+  // 2026-08-06 — Zoho Sign OAuth popup connect, ported from ekoa-dev (zoho-oauth.contract.test.ts:
+  // admin gate, schema-valid authorize URL, the pending state + its expiry, one row per workspace,
+  // and the callback's effect on the stored bundle). Additive endpoint: covering it keeps
+  // EXPECTED_PENDING_COUNT unchanged.
+  'integrations.zohoOAuthConnect',
   // PR4 — the AI integration builder (integration-builder.test.ts): chat/load/save/test.
   'integrationBuilder.chat', 'integrationBuilder.load', 'integrationBuilder.save', 'integrationBuilder.test',
   // Local-bridge consumer run s1 — hosted presence (bridge-status.test.ts)

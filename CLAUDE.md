@@ -7,8 +7,9 @@ Routing index (area skills under `.claude/skills/`):
 - **ekoa-testing** — the five-layer test strategy, CI per-PR lane, contract-test mechanism, suite ledger, security suite classes, live-verification playbook. Load before writing tests or claiming a change verified.
 - **ekoa-governance** — decision journal, findings ledger, review policy, reference-access rules. Load before logging a decision or touching ../ekoa-dev / ../ekoa-deploy.
 - **run-ekoa-code** — boot the full stack locally (handles the CSP/CORS dev traps + credential provisioning).
+- **ekoa-dev-parity** — audit what `../ekoa-dev` has shipped that this repo has not, and bring it over. Load before analysing ekoa-dev commits or porting from it.
 
-Canonical docs (`docs/`): architecture → `architecture.md` + `diagrams/`; contract conventions → `api-contract.md`; security → `security.md`; testing → `testing.md`; governance → `governance.md`; operations → `operations-runbook.md`; decisions → `decisions.md` (append-only); live defect ledger → `findings.md`; capability contract (what Cortex exposes to outside clients, and the gate behind each rule) → `CAPABILITY_CONTRACT.md` + its factual base `CONVERGENCE_AUDIT.md`.
+Canonical docs (`docs/`): architecture → `architecture.md` + `diagrams/`; contract conventions → `api-contract.md`; security → `security.md`; testing → `testing.md`; governance → `governance.md`; operations → `operations-runbook.md`; decisions → `decisions.md` (append-only); live defect ledger → `findings.md`; ekoa-dev parity ledger (last-audited upstream SHA + one disposition per commit; `npm run parity:audit`) → `dev-parity.md`; capability contract (what Cortex exposes to outside clients, and the gate behind each rule) → `CAPABILITY_CONTRACT.md` + its factual base `CONVERGENCE_AUDIT.md`.
 
 ## Import boundaries (FIXED-1) — lint-enforced
 
