@@ -1,6 +1,7 @@
 id: settings-bridge-redirect
 title: Ponte local legacy route (redirect into Privacidade)
 path: /settings/bridge
+redirectsTo: /settings/privacy
 mode: steps
 # The local bridge no longer has its own settings tab - it was folded into "Privacidade e ponte
 # local". This route exists only to keep old links and bookmarks working.

@@ -1,6 +1,7 @@
 id: orgs-redirect
 title: Escritórios legacy route (redirect into Settings)
 path: /orgs
+redirectsTo: /settings/offices
 mode: steps
 areas: []
 steps:

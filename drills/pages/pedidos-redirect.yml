@@ -1,6 +1,7 @@
 id: pedidos-redirect
 title: Pedidos legacy route (redirect into Settings)
 path: /pedidos
+redirectsTo: /settings/pedidos
 mode: steps
 areas: []
 steps:
@@ -73,7 +74,6 @@ steps:
       Arriving through the legacy route loads the destination's data just like a direct visit does -
       the Pedidos list settles into either change-request rows or a written empty state, and does not
       stay parked on "A carregar pedidos...".
-      (Observed at authoring time - the list stays on "A carregar pedidos..." indefinitely.)
     tags: [functionality, loading]
     judgment: false
   - id: no-console-errors

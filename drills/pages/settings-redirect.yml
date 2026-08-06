@@ -1,0 +1,135 @@
+id: settings-redirect
+title: Definições (settings root, redirects to Plataforma)
+path: /settings
+redirectsTo: /settings/platform
+mode: steps
+areas: []
+steps:
+  - id: redirects-into-a-settings-tab
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Navigating to /settings does not dead-end on a 404 or an empty shell - the
+      app forwards to a real settings tab (the platform tab, /settings/platform)
+      and the address bar shows that destination.
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+  - id: settings-tabs-present
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The settings sub-navigation is present and complete - the tabs Plataforma,
+      Pedidos, Utilizadores and Escritórios - so every settings area is
+      reachable from the entry point a user typed.
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+  - id: pedidos-tab-present
+    area: 0
+    mode: vision
+    enabled: false
+    viewports:
+      - desktop
+    state: default
+    description: The "Pedidos" tab is present in the settings sub-navigation.
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-38831c5f3b9b-0048
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    planGuard:
+      status: quarantined
+      reason: observation-receipt-mismatch
+  - id: escritorios-tab-present
+    area: 0
+    mode: vision
+    enabled: false
+    viewports:
+      - desktop
+    state: default
+    description: The "Escritórios" tab is present in the settings sub-navigation.
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-38831c5f3b9b-0048
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    planGuard:
+      status: quarantined
+      reason: observation-receipt-mismatch
+  - id: landed-tab-is-highlighted
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The sub-navigation marks the tab the redirect actually landed on as the
+      active one, so the user can tell where they are. A tab strip with nothing
+      selected after a redirect is a defect.
+    tags:
+      - ux
+      - navigation
+    judgment: false
+  - id: destination-renders-its-page
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the redirect the destination is actually rendered, not just its
+      chrome - the "Configurações da Plataforma" heading with its "Configuração
+      geral e opções avançadas" subtitle, and the "Geral" card carrying "Nome da
+      Plataforma", "Fuso Horário" and "Idioma". A page left on "A carregar as
+      configurações..." has not finished.
+    tags:
+      - functionality
+      - loading
+    judgment: false
+  - id: redirect-is-clean
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The forward happens cleanly - no flash of a "not found" screen, no error
+      banner, and no visible bounce through an intermediate empty page on the
+      way to the destination.
+    tags:
+      - ux
+      - navigation
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Navigating to /settings produces no browser console errors and no failed
+      network requests on the way to its destination.
+    tags:
+      - quality
+    judgment: false

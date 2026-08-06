@@ -1,6 +1,7 @@
 id: users-redirect
 title: Utilizadores legacy route (redirect into Settings)
 path: /users
+redirectsTo: /settings/users
 mode: steps
 areas: []
 steps:
