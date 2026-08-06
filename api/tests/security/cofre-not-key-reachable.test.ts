@@ -11,7 +11,7 @@ import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
-import { cofreEndpoints } from '@ekoa/shared';
+import { cofreEndpoints, type AuthClass } from '@ekoa/shared';
 
 /**
  * SECURITY SUITE — the Cofre is NOT on the capability surface.
@@ -111,8 +111,15 @@ const cofreRoutes = Object.values(cofreEndpoints).map((e) => ({
 
 describe('the Cofre is not reachable with a capability key', () => {
   it('STRUCTURAL: no cofre endpoint declares the key-bearing AuthClass', () => {
+    // `cofreEndpoints` is `as const`, so TS narrows every `auth` to the literal `'user'` and
+    // flags a comparison against `'user-or-key'` as provably false (TS2367). That is the type
+    // system agreeing with the assertion, not a reason to delete it: the check has to survive
+    // the edit that makes it false, and after that edit the narrowed type is `'user-or-key'`
+    // and the comparison is meaningful again. Widening to the declared union at the read is
+    // what lets both states compile.
+    const authOf = (e: { auth: AuthClass }): AuthClass => e.auth;
     const published = Object.entries(cofreEndpoints)
-      .filter(([, e]) => e.auth === 'user-or-key')
+      .filter(([, e]) => authOf(e) === 'user-or-key')
       .map(([name]) => name);
     expect(
       published,
@@ -121,8 +128,9 @@ describe('the Cofre is not reachable with a capability key', () => {
         'survive that, so this is a contract decision, not a routing detail',
     ).toEqual([]);
 
-    // Non-tautology: the filter DOES fire on the class it is looking for.
-    expect([{ auth: 'user-or-key' }].filter((e) => e.auth === 'user-or-key')).toHaveLength(1);
+    // Non-tautology: the same predicate DOES fire on the class it is looking for.
+    const planted: Array<{ auth: AuthClass }> = [{ auth: 'user-or-key' }, { auth: 'user' }];
+    expect(planted.filter((e) => authOf(e) === 'user-or-key')).toHaveLength(1);
     // And the map under test is not empty (a renamed export would otherwise pass vacuously).
     expect(cofreRoutes.length).toBeGreaterThanOrEqual(6);
   });
