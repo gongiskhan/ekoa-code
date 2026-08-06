@@ -52,6 +52,7 @@ import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
 import { appAssistantRouter } from './apps/app-assistant-route.js';
+import { appVisionRouter } from './apps/app-vision-route.js';
 import { devServeRouter } from './apps/dev-serve.js';
 import { servingRouter } from './apps/serving.js';
 import { appRegistry } from './apps/app-registry.js';
@@ -78,6 +79,7 @@ import { buildLinkRouter } from './apps/build-link.js';
 import { appSsoRouter } from './integrations/app-sso.js';
 import { m365ProxyRouter } from './integrations/m365-proxy.js';
 import { appCloudFilesRouter } from './integrations/app-cloud-files.js';
+import { appEmailRouter } from './integrations/app-email.js';
 import { createWorkspaceCredentials } from './integrations/workspace-credential.js';
 import { adobeSignRouter, handleAdobeWebhook, notConnectedBackend } from './integrations/adobe-sign.js';
 import { zohoSignRouter, makeZohoSignBackend, handleZohoWebhook } from './integrations/zoho-sign.js';
@@ -840,6 +842,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   }));
   app.use('/api/app-files', appFilesRouter());
   app.use('/api/app-sso', appSsoRouter({ ...deps, resolveAppScope }));
+  // Served-app email plane: the app names an email-capable action, the platform runs it under the
+  // OWNER's connection (and the owner's standing approval — a send is a write, so it goes through
+  // the same consent gate every other platform write does). Carries its own JSON parser, so it
+  // mounts here with the other raw-body served-app planes.
+  app.use('/api/app-email', appEmailRouter({
+    resolveAppScope,
+    resolveOwnerOrgId: async (ownerUserId: string) =>
+      ((await users.get(ownerUserId)) as { orgId?: string } | null)?.orgId ?? null,
+    workspaceStatus: workspaceCredentials.status,
+    oauth: { now: deps.now, genId: deps.genId },
+  }));
 
   // The LLM gateway sub-app carries its own 50 MB body limit (stock Claude Code clients
   // routinely send >1 MB bodies - long transcripts, base64 screenshots). The global 1 MB parser
@@ -864,8 +877,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const BUNDLE_UPDATE_RE = /^\/api\/v1\/artifacts\/[a-z0-9._-]{1,100}\/bundle-update$/i;
   const isBundlePath = (path: string): boolean =>
     path.toLowerCase() === '/api/v1/artifacts/import' || BUNDLE_UPDATE_RE.test(path);
+  /**
+   * Served-app document extraction is exempt for the same reason: its body is base64 file bytes and
+   * it mounts its own 25 MB parser (apps/app-vision-route.ts). Without this the global parser runs
+   * FIRST and 413s an ordinary phone photo of an invoice, so the plane's own deliberate ~14 MB
+   * ceiling - and its typed `too_large` answer - would be unreachable dead code.
+   */
+  const isVisionPath = (path: string): boolean => path.toLowerCase() === '/api/app-vision/extract';
   app.use((req: Request, res: Response, next: NextFunction) =>
-    isGatewayPath(req.path) || isBundlePath(req.path) ? next() : globalJson(req, res, next));
+    isGatewayPath(req.path) || isBundlePath(req.path) || isVisionPath(req.path) ? next() : globalJson(req, res, next));
   // Body-parser failures (malformed JSON, over-limit payloads) must speak the CONV-2 envelope:
   // without this, Express's default handler returns an HTML page with the full stack trace and
   // absolute server paths — pre-auth, on every JSON route (2026-07-09 adversarial-test finding;
@@ -1066,6 +1086,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // Served-app assistant (operator-run D1): POST /api/app-assistant, header-scoped, runs under the
   // resolved artifact owner's org + billing through the llm/ chokepoint.
   app.use('/api', appAssistantRouter());
+  // Served-app document extraction: POST /api/app-vision/extract, same admission plane as the
+  // assistant (owner-activation + allowance billed to the owner). Carries its OWN 25 MB parser for
+  // the base64 file bytes, so it must mount BEFORE the global 1 MB parser could reject a photo -
+  // Express uses the FIRST parser that runs, and the router-level one wins because this mount sits
+  // ahead of any later re-parse.
+  app.use('/api', appVisionRouter());
   // App DOCX served-app plane (2C-S4): the document-base app's window onto its linked Word doc.
   // Mounted AFTER the global JSON parser (its /edits + /clean bodies are JSON). Admission is
   // app-files' admitApp incl. the owner-activation gate (inside the router); the document-source

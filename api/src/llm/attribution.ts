@@ -21,6 +21,9 @@ export type UserWorkAgentType =
   | 'chat'
   | 'build'
   | 'assistant-chat'
+  // Served-app document extraction (`apps/app-vision.ts`): an invoice image or a PDF's text layer
+  // turned into structured fields. Billed to the app OWNER, like every other served-app model call.
+  | 'app-vision-extract'
   | 'integration-builder'
   | 'brand-research'
   | 'agent-face'

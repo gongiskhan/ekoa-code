@@ -179,15 +179,26 @@ describe('platform mutation derivation - allowlist vs the shipped packages', () 
     });
   }
 
-  it('the mutating reach this closes is the one the reviewer enumerated (14 Google, 3 Microsoft)', () => {
+  /**
+   * The enumeration this suite was built on was 14 Google / 3 Microsoft mutating actions. It has
+   * GROWN, on purpose, and the growth is pinned rather than the original count: the served-app email
+   * plane (`apps/app-email.ts`) added `create_draft_simple` + `send_draft` to Google and
+   * `create_draft` + `send_draft` to Microsoft. Both providers' drafts WRITE to the mailbox, so both
+   * land in the gated set — parking a draft in someone's Drafts folder is a write, not a preview.
+   * `get_profile` came with the same plane and is the counterexample: a pure read, so it goes on the
+   * allowlist and auto-runs.
+   */
+  it('the mutating reach this gates, pinned in full (16 Google, 5 Microsoft)', () => {
     const mutating = (key: string): string[] =>
       shipped(key).filter((a) => a.mutates !== false).map((a) => a.actionName).sort();
     expect(mutating('google-workspace')).toEqual([
-      'append_sheet', 'batch_modify_emails', 'complete_task', 'create_doc', 'create_event',
-      'create_sheet', 'create_task', 'delete_event', 'modify_email', 'send_email',
-      'send_email_simple', 'trash_email', 'update_event', 'write_doc',
+      'append_sheet', 'batch_modify_emails', 'complete_task', 'create_doc', 'create_draft_simple',
+      'create_event', 'create_sheet', 'create_task', 'delete_event', 'modify_email', 'send_draft',
+      'send_email', 'send_email_simple', 'trash_email', 'update_event', 'write_doc',
     ]);
-    expect(mutating('microsoft-365')).toEqual(['create_event', 'create_file', 'send_email']);
+    expect(mutating('microsoft-365')).toEqual([
+      'create_draft', 'create_event', 'create_file', 'send_draft', 'send_email',
+    ]);
   });
 });
 

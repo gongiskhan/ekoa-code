@@ -433,6 +433,13 @@ describe('entry path: every rail still routes through the gated executor', () =>
       'server.ts', // the composition root: the agent/automation seam + the listener supervisor
       'integrations/action-executor.ts', // the executor itself (its own declaration)
       'integrations/integration-capability.ts', // D1's public capability router — inherits the gate
+      // The served-app email plane. Reviewed 2026-08-06: it dispatches a USER-defined email
+      // integration through this executor (so the gate applies unchanged) and a PLATFORM one
+      // through callPlatformIntegration with the app OWNER as actingUserId (so the platform write
+      // gate applies too). It carries NO consent check of its own — it surfaces `awaiting_consent`
+      // from whichever executor answered. Custody: the owner is resolved server-side from the
+      // admitted app scope, never from the page. Suite: integrations/app-email.test.ts.
+      'integrations/app-email.ts',
     ];
     const src = join(__dirname, '..', '..', 'src');
     const callers = spawnSync(

@@ -121,9 +121,9 @@ function keyToProvider(integrationKey: string): PlatformProvider | null {
 const PLATFORM_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   'google-workspace': new Set([
     'list_emails', 'read_email', 'list_events', 'list_files', 'list_labels', 'list_drafts',
-    'read_sheet', 'get_file', 'list_task_lists', 'list_tasks',
+    'read_sheet', 'get_file', 'list_task_lists', 'list_tasks', 'get_profile',
   ]),
-  'microsoft-365': new Set(['list_emails', 'read_email', 'list_events', 'list_files', 'list_sites']),
+  'microsoft-365': new Set(['list_emails', 'read_email', 'list_events', 'list_files', 'list_sites', 'get_profile']),
 };
 
 /** The read allowlist, for the drift test. Never mutated - the sets are module-private. */
@@ -219,10 +219,16 @@ export async function callPlatformIntegration(input: PlatformCallInput, deps: OA
     throw err;
   }
 
-  // Gmail send_email_simple: the static template cannot build an RFC 2822 message, so encode the
-  // structured fields into the `raw` arg here (mirrors the account's own From).
+  // Gmail send_email_simple / create_draft_simple: the static template cannot build an RFC 2822
+  // message, so encode the structured fields into the `raw` arg here (mirrors the account's own
+  // From). Both actions take the SAME structured fields and post the SAME `raw` — they differ only
+  // in the Gmail endpoint the package points them at (messages/send vs drafts) — so they share this
+  // one encoder rather than growing a second, drifting copy.
   const actionArgs = { ...input.args };
-  if (input.integrationKey === 'google-workspace' && input.actionName === 'send_email_simple') {
+  if (
+    input.integrationKey === 'google-workspace' &&
+    (input.actionName === 'send_email_simple' || input.actionName === 'create_draft_simple')
+  ) {
     actionArgs.raw = buildGmailRaw(actionArgs, accountEmail);
     for (const k of ['to', 'subject', 'body', 'attachmentBase64', 'attachmentFilename', 'attachmentMimeType']) delete actionArgs[k];
   }
@@ -297,8 +303,10 @@ function buildGmailRaw(args: Record<string, unknown>, fromEmail: string | undefi
   const to = String(args.to ?? '').trim();
   const subject = String(args.subject ?? '').trim();
   const bodyText = String(args.body ?? '');
-  if (!to) throw new Error('send_email_simple: "to" is required');
-  if (!subject) throw new Error('send_email_simple: "subject" is required');
+  // Shared by send_email_simple and create_draft_simple — named generically so the draft path does
+  // not report a send action's name back to the caller.
+  if (!to) throw new Error('gmail structured message: "to" is required');
+  if (!subject) throw new Error('gmail structured message: "subject" is required');
   const from = fromEmail ?? 'me';
   const isAscii = [...subject].every((c) => c.charCodeAt(0) <= 0x7f);
   const encodedSubject = isAscii ? subject : `=?utf-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`;

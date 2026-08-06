@@ -125,6 +125,16 @@ const COVERED = new Set<string>([
   // the whoami route matrix in tests/apps/app-assistant.test.ts). Additive endpoint: covering it
   // keeps EXPECTED_PENDING_COUNT unchanged (assistantChat stays PENDING as before).
   'appAssistant.whoami',
+  // ekoa-dev parity (1d4eaf64 + fd209f70) — the served-app EMAIL plane, a NEW domain
+  // (contract/app-email.test.ts: every response validated against its shared schema, plus the
+  // admission matrix across all five entries; integrations/app-email.test.ts: discovery by
+  // capability + the write gate). Covering all five keeps EXPECTED_PENDING_COUNT unchanged.
+  'appEmail.emailIntegrations', 'appEmail.emailSend', 'appEmail.emailDraft',
+  'appEmail.emailDraftSend', 'appEmail.emailInbox',
+  // ekoa-dev parity (1d4eaf64) — served-app document extraction (contract/app-vision.test.ts:
+  // wire shape + the admission matrix proving no model call escapes it; apps/app-vision.test.ts:
+  // the extraction contract against real PDFs). Covering it keeps EXPECTED_PENDING_COUNT unchanged.
+  'appVision.visionExtract',
   // operator-run H4 — the request-changes queue (change-requests.test.ts contract +
   // tests/routes/change-requests.test.ts integration). A NEW domain: covering all four keeps
   // EXPECTED_PENDING_COUNT unchanged.

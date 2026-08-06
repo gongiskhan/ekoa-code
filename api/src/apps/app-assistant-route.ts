@@ -20,59 +20,20 @@ import { Router, type Request, type Response, type RequestHandler, type NextFunc
 import {
   AssistantChatRequest,
   AppActionManifest,
-  ERROR_STATUS,
-  type ErrorCode,
   type AssistantChatResponse,
   type AppAssistantWhoamiResponse,
 } from '@ekoa/shared';
-import { collectionName } from '../data/collections-engine.js';
-import { getActivation } from '../data/activation.js';
-import { users, artifacts } from '../data/stores.js';
+import { artifacts } from '../data/stores.js';
 import { allowanceMiddleware } from '../billing/index.js';
 import { runOneShot, decideForTask } from '../llm/index.js';
 import { buildGroundingBlock } from '../knowledge/index.js';
 import { verifySseToken } from '../auth/middleware.js';
+import { getActivation } from '../data/activation.js';
 import { can } from '../auth/capabilities.js';
 import type { JwtClaims } from '../auth/jwt.js';
-import { resolveApp, type ResolvedApp } from './registry.js';
 import { loadWritable } from './app-paths.js';
 import { runAppAssistant, type AppAssistantDeps } from './app-assistant.js';
-
-const SHARED_SCOPE_PREFIX = 'usr.';
-
-/** CONV-2 error envelope off the shared status table (routes/ is off-limits to apps/, ch02 §2.7). */
-function sendError(res: Response, code: ErrorCode, message: string, details?: unknown): void {
-  res.status(ERROR_STATUS[code]).json({ error: { code, message, ...(details ? { details } : {}) } });
-}
-
-/**
- * Resolve the `X-Ekoa-App-Id` header to an artifact-backed owner — the SHARED front half of every
- * app-assistant plane entry (POST admission AND the H2 whoami detection), so both apply the exact
- * same charset/collision checks and expose the exact same existence surface (no plane is a
- * different oracle than the other). A discriminated result the callers turn into the CONV-2
- * envelope: `invalid-id` → 400 VALIDATION_FAILED, `not-found` → 404 NOT_FOUND, `ok` → the app.
- */
-type AssistantAppResolution =
-  | { status: 'invalid-id' }
-  | { status: 'not-found' }
-  | { status: 'ok'; app: ResolvedApp };
-
-async function resolveAssistantApp(header: unknown): Promise<AssistantAppResolution> {
-  // Same header contract admit() has always applied: a string, a valid collection-name charset,
-  // and NOT the reserved `usr.` shared-namespace prefix.
-  if (
-    typeof header !== 'string' ||
-    !collectionName.safeParse(header).success ||
-    header.startsWith(SHARED_SCOPE_PREFIX)
-  ) {
-    return { status: 'invalid-id' };
-  }
-  const app = await resolveApp(header);
-  // The assistant plane needs a real artifact-backed owner (org to scope by, user to attribute).
-  // A dev-serve / registry-only or unresolved id has none — the same 404 admit() gives.
-  if (!app || !app.artifactBacked || !app.ownerUserId) return { status: 'not-found' };
-  return { status: 'ok', app };
-}
+import { admitServedApp, resolveServedApp, sendAppError as sendError } from './served-app-admission.js';
 
 /**
  * Can this verified caller EDIT this specific app? Detection MIRRORS the H1 follow-up-build gate
@@ -147,45 +108,24 @@ export function appAssistantRouter(deps: AppAssistantDeps = prodDeps): Router {
   const r = Router();
 
   /**
-   * Served-app admission (mirrors served-data's headerFor + admitOwner, then resolves the owner org
-   * and the app's action manifest). On any refusal it writes the CONV-2 envelope and does NOT call
-   * next. On success it stashes the resolved subject on the request for the allowance gate + handler.
+   * Served-app admission (the shared plane: header charset/collision checks, artifact-backed
+   * resolution, owner-activation gate, owner org read server-side), then this plane's own extra —
+   * the app's action manifest. On any refusal the shared admission has already written the CONV-2
+   * envelope and we do NOT call next. On success we stash the resolved subject on the request for
+   * the allowance gate + handler.
    */
   const admit = async (req: AssistantRequest, res: Response, next: NextFunction): Promise<void> => {
-    const resolution = await resolveAssistantApp(req.header('x-ekoa-app-id'));
-    if (resolution.status === 'invalid-id') {
-      sendError(res, 'VALIDATION_FAILED', 'Cabeçalho X-Ekoa-App-Id em falta ou inválido.');
-      return;
-    }
-    if (resolution.status === 'not-found') {
-      sendError(res, 'NOT_FOUND', 'Aplicação não encontrada.');
-      return;
-    }
-    const app = resolution.app;
-
-    // Owner-activation gate (Amendment 2 second admission plane; fail-closed CONV-2).
-    const activation = getActivation(app.ownerUserId);
-    if (!activation || activation.active === false) {
-      sendError(res, 'ACCOUNT_DISABLED', 'A conta associada a esta aplicação está bloqueada. Contacte o suporte.');
-      return;
-    }
-    if (activation.billingLocked) {
-      sendError(res, 'BILLING_LOCKED', 'A conta associada a esta aplicação tem um problema de faturação.');
-      return;
-    }
-
-    // Owner org — resolved server-side from the owner user record, NEVER from the visitor's body.
-    const owner = (await users.get(app.ownerUserId)) as { orgId?: string } | null;
-    const orgId = owner?.orgId ?? '';
+    const admission = await admitServedApp(req, res);
+    if (!admission) return;
 
     // The app's declared action manifest (persisted at activation on the artifact data bag).
     // Validate it against the shared contract; absent/invalid → no operate surface (null).
-    const art = await artifacts.get(app.appId);
+    const art = await artifacts.get(admission.appId);
     const rawManifest = (art?.data as { actionManifest?: unknown } | undefined)?.actionManifest;
     const parsedManifest = rawManifest ? AppActionManifest.safeParse(rawManifest) : null;
     const actionManifest = parsedManifest?.success ? parsedManifest.data : null;
 
-    req.ekoaAssistant = { owner: { userId: app.ownerUserId, orgId }, artifactId: app.appId, actionManifest };
+    req.ekoaAssistant = { owner: admission.owner, artifactId: admission.appId, actionManifest };
     next();
   };
 
@@ -260,7 +200,7 @@ export function appAssistantRouter(deps: AppAssistantDeps = prodDeps): Router {
    * app existence).
    */
   const whoami = async (req: Request, res: Response): Promise<void> => {
-    const resolution = await resolveAssistantApp(req.header('x-ekoa-app-id'));
+    const resolution = await resolveServedApp(req.header('x-ekoa-app-id'));
     if (resolution.status === 'invalid-id') {
       sendError(res, 'VALIDATION_FAILED', 'Cabeçalho X-Ekoa-App-Id em falta ou inválido.');
       return;

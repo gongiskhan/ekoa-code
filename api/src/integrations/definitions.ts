@@ -152,6 +152,22 @@ export interface IntegrationAction {
    */
   backingType?: IntegrationActionBackingType;
   /**
+   * WHAT the action is, as a platform-level classification — the vocabulary a consumer discovers
+   * an action BY, instead of matching its name. `'email-send'` marks a sender, `'email-draft'` an
+   * action that parks a provider-side draft, `'email-draft-send'` one that sends an existing draft.
+   *
+   * The point is the coupling it removes: without it, every served app that wants to send mail has
+   * to hardcode `actionName === 'send_email'` (and a different literal per provider), so renaming
+   * or adding a provider action silently breaks apps nobody is looking at. ABSENT ⇒ the action
+   * carries no declared capability and is invisible to capability-based discovery, which is why
+   * this is additive (Rule 7): no existing package changes behaviour by not declaring one.
+   *
+   * NOT an authorisation input. A capability says what an action IS, never who may run it — the
+   * write gate (`platform-call.ts`) and the consent store decide that, and they never read this
+   * field. An action that declares `'email-send'` and mutates is gated exactly as before.
+   */
+  capabilities?: string[];
+  /**
    * Wire protocol the action needs. ABSENT ⇒ `'http'` (every shipped action today), so this is
    * additive and migration-free. A package may declare a protocol the executor does not implement
    * (the `imap` package declares `'imap'`); `executeUserIntegrationAction` then refuses the action

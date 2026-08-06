@@ -86,6 +86,7 @@
       "actionName": "send_email",
       "description": "Send an email from the authenticated user's Gmail account. The raw field must be a base64url-encoded RFC 2822 message.",
       "mutates": true,
+      "capabilities": ["email-send"],
       "argsSchema": {
         "type": "object",
         "properties": {
@@ -116,6 +117,7 @@
       "actionName": "send_email_simple",
       "description": "Send an email from the authenticated user's Gmail account using STRUCTURED fields (to, subject, body). Optionally attach ONE file by passing attachmentBase64 (base64-encoded bytes, no data URI prefix), attachmentFilename, and attachmentMimeType. Prefer this over send_email when you cannot pre-encode RFC 2822 yourself.",
       "mutates": true,
+      "capabilities": ["email-send"],
       "argsSchema": {
         "type": "object",
         "properties": {
@@ -159,6 +161,104 @@
         },
         "bodyTemplate": {
           "raw": "{{raw}}"
+        }
+      }
+    },
+    {
+      "actionName": "create_draft_simple",
+      "description": "Create a draft email in the authenticated user's Gmail Drafts folder using STRUCTURED fields (to, subject, body). Returns the Gmail draft, including its id. Gmail exposes no per-draft deep link, so open the Drafts folder to review it.",
+      "mutates": true,
+      "capabilities": ["email-draft"],
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient email address (single address; comma-separate for multiple)"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject line"
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body as plain text"
+          }
+        },
+        "required": ["to", "subject", "body"]
+      },
+      "returnSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" }
+        }
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/drafts",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "message": {
+            "raw": "{{raw}}"
+          }
+        }
+      }
+    },
+    {
+      "actionName": "send_draft",
+      "description": "Send an existing draft from the authenticated user's Gmail Drafts folder. The draft is sent exactly as it stands, including any edits made in Gmail.",
+      "mutates": true,
+      "capabilities": ["email-draft-send"],
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "description": "The Gmail draft id to send"
+          }
+        },
+        "required": ["draftId"]
+      },
+      "returnSchema": {
+        "type": "object"
+      },
+      "httpConfig": {
+        "method": "POST",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/drafts/send",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}",
+          "Content-Type": "application/json"
+        },
+        "bodyTemplate": {
+          "id": "{{draftId}}"
+        }
+      }
+    },
+    {
+      "actionName": "get_profile",
+      "description": "Get the authenticated account's Gmail profile (email address, message totals).",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "returnSchema": {
+        "type": "object",
+        "properties": {
+          "emailAddress": { "type": "string" }
+        }
+      },
+      "httpConfig": {
+        "method": "GET",
+        "baseUrl": "https://gmail.googleapis.com",
+        "path": "/gmail/v1/users/me/profile",
+        "headers": {
+          "Authorization": "Bearer {{access_token}}"
         }
       }
     },

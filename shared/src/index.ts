@@ -28,6 +28,8 @@ import { uploadsEndpoints } from './uploads.js';
 import { registoEndpoints } from './registo.js';
 import { changeRequestsEndpoints } from './change-request.js';
 import { appAssistantEndpoints } from './app-assistant.js';
+import { appEmailEndpoints } from './app-email.js';
+import { appVisionEndpoints } from './app-vision.js';
 import { servedAppEndpoints } from './served-app.js';
 import { ekoaLocalEndpoints } from './ekoa-local.js';
 import { gatewayKeysEndpoints } from './gateway-keys.js';
@@ -69,6 +71,8 @@ export * from './capabilities.js';
 export * from './action-manifest.js';
 export * from './artifact-type.js';
 export * from './app-assistant.js';
+export * from './app-email.js';
+export * from './app-vision.js';
 // Portal connector records (mega-run E1) - no descriptor map of its own; the one route
 // that returns them (legalPortalDossier) lives in servedAppEndpoints below.
 export * from './portal.js';
@@ -111,6 +115,8 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   registo: registoEndpoints,
   changeRequests: changeRequestsEndpoints,
   appAssistant: appAssistantEndpoints,
+  appEmail: appEmailEndpoints,
+  appVision: appVisionEndpoints,
   servedApp: servedAppEndpoints,
   ekoaLocal: ekoaLocalEndpoints,
   gatewayKeys: gatewayKeysEndpoints,
