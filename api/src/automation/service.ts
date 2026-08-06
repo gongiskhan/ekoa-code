@@ -77,6 +77,15 @@ const VALID_STEP_TYPES: ReadonlySet<string> = new Set([
  * mapper would hand any gateway-key holder those authoring powers - a decision for the owner, not a
  * mapper detail.
  *
+ * `integration` USED TO BE IN THIS TABLE and is not any more (2026-08-06). It is the one
+ * parametrised type the wire now carries, because it differs in KIND from the rest: it names a
+ * package the run's own org already has, it is resolved at execution under the run's principal
+ * like every other rail, and a mutating action still meets the write gate and comes back
+ * `awaiting_consent` without a live approval. The worst it can express is a call the same caller
+ * could already make through `POST /integrations/:key/actions/:name/execute`. The others stay out:
+ * a local command, an arbitrary outbound HTTP request and a Cofre-referencing declaration are new
+ * powers, not a new spelling of an existing one.
+ *
  * What was NOT deliberate was storing the step anyway. A `tool` in this table can only ever fail at
  * execution, and it fails blaming the caller for a field the API itself discarded - `integration
  * step <id> missing integrationKey or integrationAction` (engine.ts), `local_command step <id>
@@ -92,7 +101,6 @@ const VALID_STEP_TYPES: ReadonlySet<string> = new Set([
  */
 const STEP_TYPE_UNCARRIED_PARAMS: Readonly<Record<string, string>> = {
   navigate: 'url',
-  integration: 'integrationKey, integrationAction',
   sub_automation: 'subAutomationId',
   local_command: 'commandTemplate.argv',
   api_call: 'apiRequest.method, apiRequest.url',
@@ -112,7 +120,18 @@ const WIRE_AUTHORABLE_STEP_TYPES: readonly string[] = [...VALID_STEP_TYPES].filt
  * value that is not a step type is refused - it used to be silently coerced to `browser`, which
  * turned a typo into a running automation that does something else.
  */
-function mapWireStepToEngine(s: { stepId?: string; description?: string; tool?: string; argv?: string[] }, i: number): Step {
+function mapWireStepToEngine(
+  s: {
+    stepId?: string;
+    description?: string;
+    tool?: string;
+    argv?: string[];
+    integrationKey?: string;
+    integrationAction?: string;
+    argsTemplate?: Record<string, string>;
+  },
+  i: number,
+): Step {
   const where = `O passo ${i + 1}${s.stepId ? ` (stepId="${s.stepId}")` : ''}`;
   const tool = s.tool ?? 'browser';
   if (!VALID_STEP_TYPES.has(tool)) {
@@ -131,7 +150,31 @@ function mapWireStepToEngine(s: { stepId?: string; description?: string; tool?: 
         `(o planeador constrói estes passos) e execute-a com POST /api/v1/automations/{id}/runs.`,
     );
   }
-  return { id: s.stepId ?? `step-${i}-${randomUUID().slice(0, 6)}`, description: s.description ?? '', type: tool as StepType };
+  const base: Step = {
+    id: s.stepId ?? `step-${i}-${randomUUID().slice(0, 6)}`,
+    description: s.description ?? '',
+    type: tool as StepType,
+  };
+  if (tool !== 'integration') return base;
+
+  // The ONE parametrised type this endpoint carries. Shape is checked here so a step that cannot
+  // run is refused at authoring rather than at 3am; WHICH integration and WHETHER the action may
+  // run are NOT decided here on purpose - the engine resolves the package under the run's own
+  // principal and the write gate re-evaluates every mutating action at call time, so duplicating
+  // either would be a second copy of a decision that must stay in one place.
+  if (!s.integrationKey || !s.integrationAction) {
+    throw new AutomationServiceError(
+      'VALIDATION',
+      `${where} tem tool="integration" mas não indica ${!s.integrationKey ? 'integrationKey' : 'integrationAction'}. ` +
+        `Um passo de integração precisa de ambos - use GET /api/v1/integrations para os valores válidos.`,
+    );
+  }
+  return {
+    ...base,
+    integrationKey: s.integrationKey,
+    integrationAction: s.integrationAction,
+    ...(s.argsTemplate ? { argsTemplate: s.argsTemplate } : {}),
+  };
 }
 
 function toWireAutomation(doc: StoredAutomation): WireAutomation {
@@ -139,7 +182,19 @@ function toWireAutomation(doc: StoredAutomation): WireAutomation {
     id: doc.id,
     name: doc.name,
     ...(doc.description ? { description: doc.description } : {}),
-    plan: { steps: doc.steps.map((s) => ({ stepId: s.id, description: s.description, tool: s.type })) },
+    // The parametrised fields travel BACK too. Projecting only {stepId, description, tool} is what
+    // made the original loss invisible: a client could not see that what it sent was not what was
+    // stored, and found out only when the run failed.
+    plan: {
+      steps: doc.steps.map((s) => ({
+        stepId: s.id,
+        description: s.description,
+        tool: s.type,
+        ...(s.integrationKey ? { integrationKey: s.integrationKey } : {}),
+        ...(s.integrationAction ? { integrationAction: s.integrationAction } : {}),
+        ...(s.argsTemplate ? { argsTemplate: s.argsTemplate } : {}),
+      })),
+    },
     ownerId: doc.ownerUserId,
     orgId: doc.orgId,
     ...(doc.visibility ? { visibility: doc.visibility } : {}),

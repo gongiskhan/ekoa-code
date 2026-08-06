@@ -147,7 +147,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   the message naming `integrationKey, integrationAction` and `POST /api/v1/automations/plan`, and the
   refused automation absent from the following list). Reverted-and-verified: with the old mapper body
   restored, 5 of the 6 turn red and the compatibility guard stays green.
-  **STILL OPEN - THE WIDENING QUESTION, DELIBERATELY NOT ANSWERED HERE.** Whether this endpoint should
+  **THE WIDENING QUESTION: ANSWERED 2026-08-06, NARROWLY.** `integration` now travels; nothing else
+  does. The distinction is kind, not degree: an integration step can only name a package the RUN's
+  own org already has, it resolves at execution under the run's principal like every other rail,
+  and a mutating action still meets the write gate and returns `awaiting_consent` without a live
+  approval - so the worst it expresses is a call the same caller could already make through
+  `POST /integrations/:key/actions/:name/execute`. `commandTemplate`, `apiRequest`, `ekoaAction`,
+  `subAutomationId` and `declaration` remain unauthorable, and their step types stay in the refusal
+  table. `PlanStep` gains `integrationKey` / `integrationAction` / `argsTemplate` (shared/, additive
+  under rule 7, OpenAPI + generated client regenerated); the service validates SHAPE only - a
+  half-specified step is a 400 naming the missing field - and deliberately does NOT re-check which
+  integration or whether the action may run, because the engine and the write gate already own both
+  decisions and a second copy would drift. `toWireAutomation` projects the three fields BACK, which
+  is the half that matters: returning only `{stepId, description, tool}` is what made the original
+  loss invisible. Pinned by 4 new cases (service + contract) and verified LIVE with a real gateway
+  key: authored, stored, read back on the wire, run `completed`.
+  The historical record of the refusal follows.
+  **THE ORIGINAL WIDENING QUESTION, AS IT STOOD.** Whether this endpoint should
   carry the parametrised step fields AT ALL is a security decision for the owner, not a bug fix. Engine
   `Step` (`api/src/automation/types.ts:258+`) also carries `commandTemplate` (a local command),
   `apiRequest` (an arbitrary outbound HTTP call), `ekoaAction`, `subAutomationId` and `declaration`

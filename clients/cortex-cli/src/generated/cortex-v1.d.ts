@@ -752,9 +752,14 @@ export interface components {
             runId?: components["schemas"]["Id"];
         };
         PlanStep: {
+            argsTemplate?: {
+                [key: string]: string;
+            };
             argv?: string[];
             description?: string;
             index?: number;
+            integrationAction?: string;
+            integrationKey?: string;
             stepId?: components["schemas"]["Id"];
             tool?: string;
         } & {

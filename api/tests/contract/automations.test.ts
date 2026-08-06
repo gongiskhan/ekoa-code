@@ -141,14 +141,16 @@ describe('automations contract (§3.8.18)', () => {
    */
   it('a step the wire plan cannot express is refused with the error envelope, and never stored', async () => {
     const t = await adminToken();
-    const step = { description: 'List Gmail labels', tool: 'integration', integrationKey: 'google-workspace', integrationAction: 'list_labels' };
+    // `local_command` stands in for the types that stay unauthorable here. `integration` LEFT this
+    // set 2026-08-06 and is now carried end to end - covered by the case below.
+    const step = { description: 'listar /tmp', tool: 'local_command' };
     const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-etiquetas', plan: { steps: [step] } }) });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(ErrorEnvelope.safeParse(body).success).toBe(true);
     expect(body.error.code).toBe('VALIDATION_FAILED');
     // Actionable: names the fields that cannot travel and the route that CAN author them.
-    expect(body.error.message).toContain('integrationKey, integrationAction');
+    expect(body.error.message).toContain('commandTemplate.argv');
     expect(body.error.message).toContain('POST /api/v1/automations/plan');
 
     // PATCH refuses identically, and the stored plan is untouched.
@@ -163,6 +165,43 @@ describe('automations contract (§3.8.18)', () => {
     expect(list.items.some((a) => a.name === 'CT-etiquetas')).toBe(false);
   });
 
+  /**
+   * The widening, over the real router: an integration step is carried, stored and READ BACK. The
+   * read-back half is the one that matters — projecting only {stepId, description, tool} is what
+   * made the original loss invisible to every client.
+   */
+  it('an integration step is authored, stored and projected back over the wire', async () => {
+    const t = await adminToken();
+    const step = {
+      description: 'List Gmail labels',
+      tool: 'integration',
+      integrationKey: 'google-workspace',
+      integrationAction: 'list_labels',
+      argsTemplate: { q: '{{input.query}}' },
+    };
+    const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-integracao', plan: { steps: [step] } }) });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { id: string; plan: { steps: Array<Record<string, unknown>> } };
+    expect(created.plan.steps[0]).toMatchObject({
+      tool: 'integration',
+      integrationKey: 'google-workspace',
+      integrationAction: 'list_labels',
+      argsTemplate: { q: '{{input.query}}' },
+    });
+
+    const reread = (await (await api(`/api/v1/automations/${created.id}`, t)).json()) as { plan: { steps: Array<Record<string, unknown>> } };
+    expect(reread.plan.steps[0]).toMatchObject({ integrationKey: 'google-workspace', integrationAction: 'list_labels' });
+  });
+
+  it('a HALF-specified integration step is refused, naming the missing field', async () => {
+    const t = await adminToken();
+    const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-meio', plan: { steps: [{ description: 'algo', tool: 'integration', integrationKey: 'google-workspace' }] } }) });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+    expect(body.error.message).toContain('integrationAction');
+  });
+
   it('an unrecognised tool is refused, not coerced into a browser step', async () => {
     const t = await adminToken();
     const res = await api('/api/v1/automations', t, { method: 'POST', body: JSON.stringify({ name: 'CT-gralha', plan: { steps: [{ description: 'clicar em guardar', tool: 'brwoser' }] } }) });
@@ -170,7 +209,7 @@ describe('automations contract (§3.8.18)', () => {
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(ErrorEnvelope.safeParse(body).success).toBe(true);
     expect(body.error.code).toBe('VALIDATION_FAILED');
-    expect(body.error.message).toContain('browser, verify, wait'); // what this endpoint can express
+    expect(body.error.message).toContain('browser, verify, integration, wait'); // what this endpoint can express
     const list = (await (await api('/api/v1/automations', t)).json()) as { items: Array<{ name: string }> };
     expect(list.items.some((a) => a.name === 'CT-gralha')).toBe(false);
   });

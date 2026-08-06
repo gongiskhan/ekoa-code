@@ -4464,6 +4464,22 @@
             "items": {
               "type": "string"
             }
+          },
+          "integrationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "integrationAction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "argsTemplate": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": true

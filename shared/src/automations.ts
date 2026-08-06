@@ -19,6 +19,23 @@ export const RunStatus = z.enum([
 export type RunStatus = z.infer<typeof RunStatus>;
 
 /** A step in an automation plan. */
+/**
+ * A planned step.
+ *
+ * THE PARAMETRISED FIELDS ARE DELIBERATELY LIMITED TO `integration`. The engine's own `Step`
+ * additionally carries `commandTemplate` (a local command), `apiRequest` (an arbitrary outbound
+ * HTTP call), `ekoaAction`, `subAutomationId` and `declaration` (which governs WHERE a step runs
+ * and which Cofre items it may reference). This endpoint is `user-or-key`, so carrying those would
+ * hand every gateway-key holder those authoring powers; they stay unauthorable here and the
+ * service refuses a step that needs them, naming `POST /automations/plan` instead.
+ *
+ * `integration` is different in kind, not merely in degree: it can only ever name an integration
+ * the RUN's own org already has, it is resolved at execution under the run's principal like any
+ * other rail, and a mutating action still passes the write gate and comes back `awaiting_consent`
+ * without a live approval. So the worst an authored integration step can express is a call the
+ * caller could already make through
+ * `POST /integrations/:key/actions/:name/execute`.
+ */
 export const PlanStep = z
   .object({
     stepId: Id.optional(),
@@ -26,6 +43,11 @@ export const PlanStep = z
     description: z.string().optional(),
     tool: z.string().optional(),
     argv: z.array(z.string()).optional(),
+    /** `tool: 'integration'` only — which package, which action, and its argument template. */
+    integrationKey: z.string().min(1).max(128).optional(),
+    integrationAction: z.string().min(1).max(128).optional(),
+    /** Values are strings: a literal, or a `{{input.x}}` reference the engine interpolates. */
+    argsTemplate: z.record(z.string()).optional(),
   })
   .passthrough();
 export type PlanStep = z.infer<typeof PlanStep>;

@@ -124,11 +124,47 @@ describe('automation service surface (§3.8.18)', () => {
     integrationAction: 'list_labels',
   };
 
+  // `integration` LEFT the refusal table 2026-08-06: it is the one parametrised type the wire
+  // carries, because it can only name a package the run's org already has and a mutating action
+  // still meets the write gate. `local_command` stands in for the types that stay out.
+  const localCommandStep = { description: 'listar /tmp', tool: 'local_command' };
+
+  it('create carries an integration step end to end, and the stored plan reads back what was sent', async () => {
+    const a = await svc.createAutomation(admin, {
+      name: 'Etiquetas Gmail',
+      plan: { steps: [{ ...integrationStep, argsTemplate: { q: '{{input.query}}' } }] },
+    });
+    const stored = (await automations.get(a.id)) as unknown as { steps: Array<Record<string, unknown>> };
+    expect(stored.steps[0]).toMatchObject({
+      type: 'integration',
+      integrationKey: 'google-workspace',
+      integrationAction: 'list_labels',
+      argsTemplate: { q: '{{input.query}}' },
+    });
+    // …and the WIRE projection returns them, so a client can see what was stored. Projecting only
+    // {stepId, description, tool} is what made the original loss invisible.
+    expect(a.plan?.steps?.[0]).toMatchObject({
+      tool: 'integration',
+      integrationKey: 'google-workspace',
+      integrationAction: 'list_labels',
+    });
+  });
+
+  it('create refuses an integration step that names no action, and stores nothing', async () => {
+    const rejected = svc.createAutomation(admin, {
+      name: 'Meio passo',
+      plan: { steps: [{ description: 'algo', tool: 'integration', integrationKey: 'google-workspace' }] },
+    });
+    await expect(rejected).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(rejected).rejects.toThrow(/integrationAction/);
+    expect(await automations.find({})).toHaveLength(0);
+  });
+
   it('create refuses a step whose tool needs parameters the wire plan cannot carry, and stores nothing', async () => {
-    const rejected = svc.createAutomation(admin, { name: 'Etiquetas Gmail', plan: { steps: [integrationStep] } });
+    const rejected = svc.createAutomation(admin, { name: 'Comando local', plan: { steps: [localCommandStep] } });
     await expect(rejected).rejects.toMatchObject({ code: 'VALIDATION' });
     // The message names the fields that cannot be expressed AND the route that can author them.
-    await expect(rejected).rejects.toThrow(/integrationKey, integrationAction/);
+    await expect(rejected).rejects.toThrow(/commandTemplate\.argv/);
     await expect(rejected).rejects.toThrow(/POST \/api\/v1\/automations\/plan/);
     expect(await automations.find({})).toHaveLength(0); // refused at the door, never persisted
   });
@@ -140,7 +176,7 @@ describe('automation service surface (§3.8.18)', () => {
     });
     await expect(rejected).rejects.toMatchObject({ code: 'VALIDATION' });
     await expect(rejected).rejects.toThrow(/não é um tipo de passo/);
-    await expect(rejected).rejects.toThrow(/browser, verify, wait/); // the types this endpoint can express
+    await expect(rejected).rejects.toThrow(/browser, verify, integration, wait/); // the types this endpoint can express
     expect(await automations.find({})).toHaveLength(0);
   });
 
@@ -150,7 +186,7 @@ describe('automation service surface (§3.8.18)', () => {
       plan: { steps: [{ stepId: 's1', description: 'abrir o painel', tool: 'browser' }] },
     });
     await expect(
-      svc.patchAutomation(admin, a.id, { plan: { steps: [integrationStep] } }),
+      svc.patchAutomation(admin, a.id, { plan: { steps: [localCommandStep] } }),
     ).rejects.toMatchObject({ code: 'VALIDATION' });
     // No partial write: the refusal happens before the update, so the original plan survives.
     const after = await svc.getAutomation(admin, a.id);
