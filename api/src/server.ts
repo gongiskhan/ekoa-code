@@ -156,6 +156,7 @@ import {
 } from './automation/index.js';
 import { type ActionDrafter } from './integrations/integration-achieve.js';
 import { type CapabilityContext } from './integrations/integration-capability.js';
+import { platformStatus } from './integrations/platform-oauth.js';
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
@@ -959,9 +960,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       },
       deps,
     );
+  // Read side of the same custody. `platformStatus` reports the org's live connection without
+  // spending a token, so the catalog and the execute answer from the same place.
+  const platformConnected: CapabilityContext['platformConnected'] = async (orgId, integrationKey) => {
+    const provider = integrationKey === 'google-workspace' ? 'google' : 'microsoft';
+    const status = await platformStatus({ userId: '', orgId, role: 'user' }, provider);
+    return status.connected;
+  };
   app.use(
     '/api/v1/integrations',
-    integrationsRouter({ ...deps, runAutomationBackedAction, draftAction, callPlatform }),
+    integrationsRouter({ ...deps, runAutomationBackedAction, draftAction, callPlatform, platformConnected }),
   );
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
   app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));

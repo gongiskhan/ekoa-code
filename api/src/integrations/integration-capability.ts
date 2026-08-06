@@ -163,6 +163,12 @@ export interface CapabilityContext {
     args: Record<string, unknown>;
     actingUserId?: string;
   }) => Promise<ExecuteIntegrationActionResult>;
+  /**
+   * Whether the ORG's platform connection for this key is live — the read-side counterpart of
+   * `callPlatform`, so the catalog cannot claim a package is disconnected while the very next
+   * execute succeeds. Absent, the pre-existing user-config rule applies unchanged.
+   */
+  platformConnected?: (orgId: string, integrationKey: string) => Promise<boolean>;
 }
 
 /** A real tenant means BOTH halves are named. Neither an empty org nor an empty user is a tenant. */
@@ -231,6 +237,13 @@ export async function resolveCapabilityDefinition(
  * `connected` mirrors the executor's own two refusals (`not_connected`, `disabled`) rather than
  * inventing a third rule: a config that exists and is enabled, or an integration that needs no
  * config at all. Reporting anything else would let this read disagree with the very next execute.
+ *
+ * WHICH EXECUTOR, though. The two platform packages are dispatched to `callPlatformIntegration`
+ * (see `executeIntegrationCapabilityAction`), and their custody is an ORG-scoped OAuth row, not the
+ * per-user config this function reads — so the user-config rule reported `connected: false` for an
+ * org whose Google account was live and whose actions executed fine. That is the D3 failure in the
+ * opposite direction: the read and the write disagreeing about what the integration IS, with the
+ * read now the pessimistic one. The `platformConnected` seam answers for exactly those keys.
  */
 export async function getIntegrationCapability(
   ctx: CapabilityContext,
@@ -239,7 +252,12 @@ export async function getIntegrationCapability(
   const resolved = await resolveCapabilityDefinition(ctx.actor, integrationKey);
   if (!resolved.ok) return resolved;
   const { definition: def, config } = resolved.value;
-  const connected = config ? config.enabled !== false : def.authType === 'none';
+  const connected =
+    isPlatformIntegrationKey(integrationKey) && ctx.platformConnected
+      ? await ctx.platformConnected(ctx.actor.orgId, integrationKey)
+      : config
+        ? config.enabled !== false
+        : def.authType === 'none';
 
   // The SAME resolution the executor's gate uses, so `target`/`approved` here describe the call the
   // executor would actually make. Non-secret values only, straight off the un-decrypted row.

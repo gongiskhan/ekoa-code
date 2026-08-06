@@ -230,6 +230,19 @@ describe('the capability execute INHERITS the executor write gate', () => {
     expect(seen[0]).toMatchObject({ orgId: 'orgA', integrationKey: 'google-workspace', actionName: 'list_files', actingUserId: 'ownerA' });
   });
 
+  // The READ has to answer from the same custody as the WRITE. It did not: `connected` was derived
+  // from the per-user config row, which a platform package never has, so the catalog said
+  // "connected: false - actions will answer not_connected" while the very next execute returned
+  // real data. Same D3 disagreement as the definition-resolution one, with the read pessimistic.
+  it('the catalog reports a PLATFORM connection from the platform custody, not the user config', async () => {
+    await seed('google-workspace', [boundRead], { authType: 'oauth2' });
+    const { ctx } = ctxWithSpy('ownerA', 'orgA');
+    ctx.platformConnected = async () => true;
+
+    const view = valueOf(await getIntegrationCapability(ctx, 'google-workspace'));
+    expect(view.connected).toBe(true);
+  });
+
   it('with NO platform seam bound it fails closed, never falling through to another custody', async () => {
     const { ctx } = ctxWithSpy('ownerA', 'orgA');
     expect(ctx.callPlatform).toBeUndefined();

@@ -132,6 +132,7 @@ function capabilityCtxOf(
     runAutomationBackedAction?: AutomationBackedHandler;
     draftAction?: ActionDrafter;
     callPlatform?: CapabilityContext['callPlatform'];
+    platformConnected?: CapabilityContext['platformConnected'];
   },
 ): CapabilityContext & { draftAction?: ActionDrafter } {
   const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
@@ -148,6 +149,7 @@ function capabilityCtxOf(
     // a platform action then falls through to the user-credential rail and is refused there, which
     // is the correct closed answer rather than a silent cross-custody read.
     ...(deps.callPlatform ? { callPlatform: deps.callPlatform } : {}),
+    ...(deps.platformConnected ? { platformConnected: deps.platformConnected } : {}),
   };
 }
 
@@ -175,6 +177,8 @@ export function integrationsRouter(deps: {
   draftAction?: ActionDrafter;
   /** The PLATFORM seam: google-workspace / microsoft-365 run on org-scoped OAuth custody. */
   callPlatform?: CapabilityContext['callPlatform'];
+  /** Its read-side counterpart, so the catalog's `connected` agrees with that rail. */
+  platformConnected?: CapabilityContext['platformConnected'];
 }): Router {
   const r = Router();
 

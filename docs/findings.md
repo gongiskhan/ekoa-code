@@ -46,6 +46,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   consumer returned 100 real Drive files, and `send_email_simple` still answered 403
   `awaiting_consent` naming `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send`.
   `api/tests/security` + `api/tests/contract` + `api/tests/integrations` are 1750/1750 green.
+  RESIDUAL, FOUND AND CLOSED THE SAME DAY: the fix above moved the WRITE to platform custody and
+  left the READ behind, so `getIntegrationCapability` still derived `connected` from the per-user
+  config row (`config ? config.enabled !== false : def.authType === 'none'`) and reported
+  `connected: false` for a live Google account whose actions now executed fine - the UI rendered
+  "connected: false - actions will answer not_connected" directly above a successful call. That is
+  the same D3 read/write disagreement this module's docblock already complains about, with the read
+  the pessimistic one this time. Closed with a `platformConnected` seam bound from `platformStatus`
+  (no token spent), pinned by a case asserting the catalog answers from the platform custody.
 
 - **`a-parked-run-asked-a-question-no-external-client-could-read`** (FIXED 2026-08-06, MEDIUM,
   public capability surface / an endpoint whose auth class invites a caller who cannot use it -
