@@ -213,10 +213,17 @@ const MICROSOFT_SCOPES = [
   'profile',
   'email',
   'offline_access',
+  // `openid profile email` populate the ID TOKEN; they do NOT authorize the Graph `/me` RESOURCE,
+  // which needs User.Read. Without it `GET /v1.0/me` answers 403 Authorization_RequestDenied while
+  // every other surface works - and `/me` is exactly what a served app calls to show whether the
+  // workspace is connected, so the integration reads as broken while mail, files and SharePoint
+  // are all fine (measured on staging 2026-08-06).
+  'User.Read',
   'Mail.ReadWrite',
   'Mail.Send',
   'Calendars.ReadWrite',
   'Files.ReadWrite.All',
+  // The served-app SharePoint plane: `/sites?search=`, then folder/file writes into a site drive.
   'Sites.ReadWrite.All',
 ].join(' ');
 

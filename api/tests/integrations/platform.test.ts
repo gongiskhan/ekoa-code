@@ -134,6 +134,10 @@ describe('platform OAuth connect (ch03 §3.8.15)', () => {
     const scope = new URL(res.authUrl).searchParams.get('scope') ?? '';
     expect(scope).toContain('offline_access'); // no refresh token without it
     expect(scope).toContain('Sites.ReadWrite.All'); // served-app SharePoint folder creation
+    // `openid profile email` populate the id_token but do NOT authorize the /me RESOURCE, and
+    // /me is what a served app calls to decide whether to show "connected". Measured on staging:
+    // without this, /me answered 403 while mail, files and SharePoint all worked.
+    expect(scope).toContain('User.Read');
   });
 
   it('rejects an unknown provider', async () => {

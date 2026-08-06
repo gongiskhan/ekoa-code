@@ -239,6 +239,21 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   shown, the submit stays disabled, and no success banner appears. LESSON: a vision step whose
   "success" only appears after an auto-repair typed the passing input is testing the harness, not the
   product - graduate it to a spec that pins the pre-repair state.
+- **`microsoft-scopes-omitted-user-read-so-the-connection-probe-403d`** (FIXED 2026-08-06, MEDIUM,
+  an integration that works reporting itself broken). `MICROSOFT_SCOPES` listed `openid profile
+  email` and no `User.Read`. Those three populate the ID TOKEN; they do not authorize the Graph
+  `/me` RESOURCE. Measured on staging against a real work/school connection: `/me` answered
+  `403 Authorization_RequestDenied` while `/me/messages`, `/me/mailFolders/inbox/messages`,
+  `/me/drive` and the whole SharePoint site-drive surface answered 200. `/me?$select=mail,
+  userPrincipalName` is exactly what the SALOMAO ERP calls as its "is the workspace connected"
+  probe (two screens), so the product would have shown the integration as broken while mail, files
+  and SharePoint were all working.
+  FIXED by adding `User.Read` to the requested scopes, pinned in
+  `api/tests/integrations/platform.test.ts` alongside `offline_access` and `Sites.ReadWrite.All`.
+  NOTE FOR THE OPERATOR: scopes are granted at CONSENT, so an already-connected workspace keeps the
+  old grant - the Microsoft integration must be disconnected and reconnected once for `/me` to
+  start answering.
+
 - **`microsoft-connect-never-showed-an-account-picker`** (FIXED 2026-08-06, HIGH, a connect that
   binds the workspace to an account the user never chose - and cannot undo from the product).
   `microsoftAuthUrl` (`api/src/integrations/platform-oauth.ts`) sent no `prompt` parameter, while
