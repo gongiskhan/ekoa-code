@@ -239,6 +239,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   shown, the submit stays disabled, and no success banner appears. LESSON: a vision step whose
   "success" only appears after an auto-repair typed the passing input is testing the harness, not the
   product - graduate it to a spec that pins the pre-repair state.
+- **`zoho-sign-api-send-needs-a-paid-license`** (OPERATOR-BLOCKED 2026-08-06, external, not a
+  defect). Driving the ERP's signature path end to end on staging, `POST /api/zoho-sign/send`
+  reached Zoho and came back with `code 12000: Upgrade Zoho Sign license to send documents via
+  API`. Everything on our side worked: the served-app context resolved app -> owner, the stored
+  refresh token minted an access token against the platform OAuth client, the proposal HTML was
+  rendered to PDF by the in-container Chromium, and the request was accepted for transport by
+  Zoho's API - which then refused it on PLAN, not on auth or shape. The read side of the same
+  credential works (`test_connection` returns live requests), so this is specifically the
+  API-send entitlement.
+  The refusal surfaces correctly: a sanitized PT-PT message with Zoho's own code preserved for an
+  operator, and no token or secret in the body (`sendZohoError`).
+  TO FINISH THE FLOW: the Zoho account behind ZOHO_CLIENT_ID needs a Zoho Sign plan that includes
+  API sending. Production's account has it - that is why the SALOMAO flow runs there.
+
 - **`microsoft-scopes-omitted-user-read-so-the-connection-probe-403d`** (FIXED 2026-08-06, MEDIUM,
   an integration that works reporting itself broken). `MICROSOFT_SCOPES` listed `openid profile
   email` and no `User.Read`. Those three populate the ID TOKEN; they do not authorize the Graph
