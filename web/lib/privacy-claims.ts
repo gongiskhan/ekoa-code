@@ -241,7 +241,10 @@ export const PRIVACY_COPY = {
   installSimpleStep1: 'Abra o Terminal no seu computador.',
   installSimpleStep2: 'Cole o comando acima e prima Enter.',
   installSimpleStep3: 'Confirme o código no navegador para ligar à sua conta.',
-  installSimpleStep4: 'Pronto: deixe essa janela aberta enquanto usa a ponte.',
+  // Mac/Linux register the bridge with o sistema (launchd / systemd), so it starts on boot and the
+  // window can close. Windows still serves in the foreground — the wording covers both honestly.
+  installSimpleStep4:
+    'Pronto: no Mac e no Linux a ponte fica sempre ligada, mesmo depois de reiniciar; no Windows, deixe essa janela aberta.',
   installNodeNote:
     'O comando precisa do Node.js 20 ou superior (gratuito). Se não o tiver, o próprio comando diz-lhe exactamente como o instalar.',
   /** Why a command and not a double-click installer. Operational, not a legal claim. */
