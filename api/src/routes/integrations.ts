@@ -72,7 +72,7 @@ import {
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { requestAttendedCeremony } from '../bridge/attended.js';
-import { getConnectionByOwner } from '../bridge/registry.js';
+import { advertisesCapability, getConnectionByOwner } from '../bridge/registry.js';
 import { findSessionItemsForOrigin, sessionIsExpired } from '../cofre/sessions.js';
 import type { AutomationBackedHandler } from '../integrations/action-executor.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
@@ -712,19 +712,29 @@ async function newestUsableSession(
     const supported = !!connect?.loginUrl && definition.authType === 'browser_session';
     const captured = connect?.loginUrl ? await newestUsableSession(actor, connect.loginUrl) : null;
 
+    // A LIVE SOCKET IS NOT A CAPABLE MACHINE. `available` used to mean only "some daemon of this
+    // user's is connected", which was a promise the connected daemon might have no way to keep: the
+    // bridge's vendored wire contract did not carry `attended.request` at all, so the frame failed
+    // its union and was dropped by the transport with no log line and no error path. The user was
+    // told "Pronto", the POST answered `started: true`, and the ceremony could only expire.
+    // Advertisement (I-1) is what distinguishes the two, so ask for it here.
+    const capable = !!machine && (await advertisesCapability(machine.pairingId, 'attended.card_login'));
+
     res.json({
       integrationKey: key,
       status: captured ? 'captured' : 'none',
       sessionConnect: {
         supported,
-        available: supported && !!machine,
+        available: supported && capable,
         ...(connect?.loginUrl ? { loginUrl: connect.loginUrl } : {}),
         ...(connect?.guidePt ? { guide: connect.guidePt } : {}),
         message: !supported
           ? 'Esta integração não usa captura de sessão.'
-          : machine
+          : capable
             ? 'Pronto: a sessão é capturada na sua máquina.'
-            : 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões.',
+            : machine
+              ? 'A Ponte Ekoa ligada é demasiado antiga para capturar sessões. Atualize-a nessa máquina e volte a ligá-la.'
+              : 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões.',
       },
       session: captured
         ? { status: 'captured', capturedAt: captured.createdAt ?? null, expiresAt: captured.expiresAt ?? null }
@@ -758,6 +768,21 @@ async function newestUsableSession(
         session: {
           status: 'failed',
           message: 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões.',
+        },
+      });
+    }
+
+    // The same advertisement check the GET makes, repeated rather than inferred from it: the two are
+    // separate requests and a daemon can reconnect between them, but more importantly this is the
+    // call that PROMISES something. `sendToPairing` returns true for any live socket, so without
+    // this the endpoint answered `started: true` — "a browser is opening on your machine" — for a
+    // daemon whose wire contract could not parse the frame it had just been sent.
+    if (!(await advertisesCapability(machine.pairingId, 'attended.card_login'))) {
+      return res.json({
+        started: false,
+        session: {
+          status: 'failed',
+          message: 'A Ponte Ekoa ligada é demasiado antiga para capturar sessões. Atualize-a nessa máquina e volte a ligá-la.',
         },
       });
     }

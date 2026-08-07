@@ -432,3 +432,22 @@ export async function advertisedCapabilitiesForOrg(org: string): Promise<Array<{
   const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
   return rows.map((row) => ({ pairingId: row.pairingId, advertised: row.capabilities ?? [] }));
 }
+
+/**
+ * Does this machine ADVERTISE a capability — i.e. can the daemon actually perform it?
+ *
+ * This answers a different question from `isCapabilityGranted` ("may we route this tenant's work
+ * through it"), and anything Cortex ROUTES needs both. It exists on its own for the one case that
+ * is not routing: a user asking their OWN machine to hold an attended ceremony. There the tenant
+ * decision is the request itself, but "is the daemon new enough to understand the frame" is still
+ * a real question — and it went unasked, so a machine running a daemon that silently dropped
+ * `attended.request` was reported to its owner as ready to run one.
+ *
+ * A machine that has never sent `hello` advertises nothing and answers false: correct, because a
+ * daemon that never advertised is exactly the old build that cannot do this.
+ */
+export async function advertisesCapability(pairingId: string, capability: string): Promise<boolean> {
+  const row = (await bridgePairings.get(pairingId)) as PairingRow | null;
+  if (!row || row.revokedAt !== null) return false;
+  return (row.capabilities ?? []).includes(capability);
+}

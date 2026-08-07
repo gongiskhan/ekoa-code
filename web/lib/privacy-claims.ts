@@ -53,27 +53,66 @@ export const PRIVACY_SETTINGS_HREF = '/settings/privacy';
 /**
  * Local-bridge distribution (FC-405 install section). The bridge is published as GitHub Release
  * assets on `github.com/gongiskhan/ekoa-bridge` (canonical since 2026-07-11; the `latest/download`
- * URLs always resolve to the newest release): the double-click installers, a source tarball, and
- * the `curl | bash` / `install.ps1` scripts. All default to the release URLs so the download
- * buttons and install command work in every environment; override with `NEXT_PUBLIC_BRIDGE_MAC_URL`
- * / `NEXT_PUBLIC_BRIDGE_WIN_URL` / `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` / `NEXT_PUBLIC_BRIDGE_INSTALL_URL`
- * to point elsewhere (or set download to '' for the honest "not yet published" state — we never
- * point a Download button at a dead link). (The GCS bucket `ekoa-bridge-downloads` remains as a
- * secondary mirror.)
+ * URLs always resolve to the newest release): a source tarball and the `install.sh` / `install.ps1`
+ * scripts. All default to the release URLs so the install command works in every environment;
+ * override with `NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL` / `NEXT_PUBLIC_BRIDGE_INSTALL_URL` /
+ * `NEXT_PUBLIC_BRIDGE_INSTALL_PS1_URL` to point elsewhere. (The GCS bucket
+ * `ekoa-bridge-downloads` remains as a secondary mirror.)
  */
 const HOSTED_BRIDGE_BASE = 'https://github.com/gongiskhan/ekoa-bridge/releases/latest/download';
-/** Double-click installers (owner directive 2026-07-11: non-technical users must not touch a
- *  terminal). Mac = a zipped `.command` (double-click installs + pairs + serves via native
- *  dialogs); Windows = a `.bat` that runs the hosted install.ps1 with the same flow. */
-export const BRIDGE_MAC_URL =
-  process.env.NEXT_PUBLIC_BRIDGE_MAC_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Mac.zip`;
-export const BRIDGE_WIN_URL =
-  process.env.NEXT_PUBLIC_BRIDGE_WIN_URL ?? `${HOSTED_BRIDGE_BASE}/Instalar-Ponte-Ekoa-Windows.bat`;
-/** Advanced/manual path (Node.js + terminal), kept for technical users. */
+
+/**
+ * THE DOUBLE-CLICK INSTALLERS ARE GONE (2026-08-07). `Instalar Ponte Ekoa.command` /`.bat` existed
+ * so a non-technical user need not touch a terminal, and they failed at exactly that: a `.command`
+ * downloaded by a browser carries `com.apple.quarantine`, so macOS refuses to run it and offers no
+ * "open anyway" in the dialog — the user must go to Definições → Privacidade e Segurança and
+ * authorise a blocked item. That is a longer and stranger journey than pasting one line, and it is
+ * the one journey you cannot talk a non-technical user through. Notarisation would remove it and
+ * was declined. A command pasted into a terminal is never quarantined, because nothing was
+ * downloaded for Gatekeeper to mark — so the command IS the accessible path, not the advanced one.
+ */
 export const BRIDGE_DOWNLOAD_URL =
   process.env.NEXT_PUBLIC_BRIDGE_DOWNLOAD_URL ?? `${HOSTED_BRIDGE_BASE}/ekoa-bridge-latest.tgz`;
 export const BRIDGE_INSTALL_URL =
   process.env.NEXT_PUBLIC_BRIDGE_INSTALL_URL ?? `${HOSTED_BRIDGE_BASE}/install.sh`;
+export const BRIDGE_INSTALL_PS1_URL =
+  process.env.NEXT_PUBLIC_BRIDGE_INSTALL_PS1_URL ?? `${HOSTED_BRIDGE_BASE}/install.ps1`;
+
+/**
+ * THE EKOA ADDRESS TRAVELS IN THE COMMAND. The old launchers defaulted to
+ * `http://localhost:4111`, which on a user's own machine points at their own laptop — pairing could
+ * never connect, and that was a real field failure, not a theoretical one. The web app is the one
+ * place that knows its own API origin for certain, so it bakes it into the line the user copies
+ * and the scripts stop guessing.
+ */
+export function bridgeCortexUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  // Client-side fallback: same origin as the page. Never a localhost literal — that is the exact
+  // default that broke, and it is wrong for every user who is not sitting at the server.
+  if (typeof window !== 'undefined') return window.location.origin;
+  return '';
+}
+
+export type BridgeOs = 'mac' | 'windows' | 'linux';
+
+/**
+ * The copy-pasteable install line for one OS, with the Ekoa address already in it.
+ *
+ * Windows uses a scriptblock rather than `irm … | iex` because `iex` cannot take parameters, and
+ * the parameter is the whole point — a Windows user piping to `iex` would install a bridge pointing
+ * at nothing.
+ */
+export function bridgeInstallCommand(os: BridgeOs, cortexUrl = bridgeCortexUrl()): string {
+  if (os === 'windows') {
+    const url = cortexUrl ? ` -Url '${cortexUrl}'` : '';
+    return `& ([scriptblock]::Create((irm ${BRIDGE_INSTALL_PS1_URL})))${url}`;
+  }
+  const url = cortexUrl ? ` -s -- --url ${cortexUrl}` : '';
+  return `curl -fsSL ${BRIDGE_INSTALL_URL} | bash${url}`;
+}
+
+/** Back-compat for any caller that wants the plain macOS/Linux line. */
 export const BRIDGE_INSTALL_CMD = `curl -fsSL ${BRIDGE_INSTALL_URL} | bash`;
 
 /* ==========================================================================
@@ -186,28 +225,33 @@ export const PRIVACY_COPY = {
   installSectionTitle: 'Descarregar e instalar a ponte local',
   installSectionDesc:
     'A ponte local é uma pequena aplicação que corre no seu computador. Instale-a uma vez para o agente poder ler ficheiros no próprio local, sem os carregar.',
-  // -- Simple double-click install (primary) --
-  installSimpleTitle: 'Instalação simples',
+  // -- Command install (the ONLY path; see bridge-install-section.tsx for why) --
+  installSimpleTitle: 'Instalar num comando',
   installOsSelectLabel: 'Escolha o seu sistema',
   installOsMac: 'Mac',
   installOsWindows: 'Windows',
-  installDownloadForMac: 'Descarregar para Mac',
-  installDownloadForWindows: 'Descarregar para Windows',
-  installMacSecurityNote:
-    'Descompacte o ficheiro e faça duplo-clique. Na primeira vez, o Mac pode pedir confirmação: clique com o botão direito no ficheiro e escolha “Abrir”.',
-  installWinSecurityNote:
-    'Faça duplo-clique no ficheiro. Na primeira vez, o Windows pode mostrar um aviso: clique em “Mais informações” e depois “Executar mesmo assim”.',
-  installSimpleStep1: 'Descarregue o instalador para o seu sistema.',
-  installSimpleStep2: 'Faça duplo-clique no ficheiro descarregado — não precisa de escrever nada.',
-  installSimpleStep3: 'Quando aparecer, confirme o código no navegador para ligar à sua conta.',
-  installSimpleStep4: 'Pronto: a ponte fica ligada e já pode referenciar ficheiros.',
+  installOsLinux: 'Linux',
+  installCommandIntro:
+    'Copie a linha abaixo, cole-a no Terminal e prima Enter. Já leva o endereço da sua Ekoa incluído — instala a ponte, liga-a à sua conta e deixa-a a funcionar.',
+  installOpenTerminal: 'Como abrir o Terminal',
+  installHowToMac: 'Prima ⌘ + Barra de espaços, escreva “Terminal” e prima Enter.',
+  installHowToWindows: 'Prima a tecla Windows, escreva “PowerShell” e prima Enter.',
+  installHowToLinux: 'Prima Ctrl + Alt + T, ou procure “Terminal” no menu de aplicações.',
+  installPasteHint: 'Depois cole o comando (⌘ + V no Mac, Ctrl + V no Windows e Linux) e prima Enter.',
+  installSimpleStep1: 'Abra o Terminal no seu computador.',
+  installSimpleStep2: 'Cole o comando acima e prima Enter.',
+  installSimpleStep3: 'Confirme o código no navegador para ligar à sua conta.',
+  installSimpleStep4: 'Pronto: deixe essa janela aberta enquanto usa a ponte.',
   installNodeNote:
-    'O instalador precisa do Node.js (gratuito). Se não o tiver, abre a página de instalação e explica o que fazer.',
+    'O comando precisa do Node.js 20 ou superior (gratuito). Se não o tiver, o próprio comando diz-lhe exactamente como o instalar.',
+  /** Why a command and not a double-click installer. Operational, not a legal claim. */
+  installWhyCommand:
+    'Não existe instalador de duplo-clique: um ficheiro descarregado fica bloqueado pelo sistema e só corre depois de ser desbloqueado nas Definições de Privacidade e Segurança. Um comando colado no Terminal não passa por esse bloqueio.',
   // -- Advanced / manual install (technical users) --
-  installAdvancedTitle: 'Instalação avançada (com Node.js e Terminal)',
+  installAdvancedTitle: 'Instalação manual (avançado)',
   installCommandLabel: 'Instalar (requer o Node.js 20 ou superior)',
   installCommandHint:
-    'Cole este comando no Terminal (macOS/Linux) ou no PowerShell/WSL (Windows). Verifica o Node.js, instala a ponte e mostra os próximos passos.',
+    'Cole este comando no Terminal (macOS/Linux) ou no PowerShell (Windows). Verifica o Node.js, instala a ponte e mostra os próximos passos.',
   installCopyLabel: 'Copiar comando',
   installCopiedLabel: 'Copiado',
   installDownloadButton: 'Descarregar o pacote (.tgz)',

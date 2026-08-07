@@ -1,54 +1,71 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Download, ListChecks, Terminal, Check, Copy, MousePointerClick } from 'lucide-react';
+import { Download, ListChecks, Terminal, Check, Copy, Info } from 'lucide-react';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { buttonClasses } from '@/components/ui/button';
 import {
   PRIVACY_COPY,
-  BRIDGE_MAC_URL,
-  BRIDGE_WIN_URL,
   BRIDGE_DOWNLOAD_URL,
-  BRIDGE_INSTALL_CMD,
+  bridgeInstallCommand,
+  bridgeCortexUrl,
+  type BridgeOs,
 } from '@/lib/privacy-claims';
 
-type Os = 'mac' | 'windows';
-
 /**
- * FC-405 install/download (owner directive 2026-07-11: the bridge page must offer a way to
- * download the local bridge and clear instructions to install it, for NON-TECHNICAL users —
- * a double-click, no terminal).
+ * FC-405 install section.
  *
- * Primary path: pick your OS, download a double-click installer (mac `.command` zipped / Windows
- * `.bat`) that installs the bridge, pairs it, and starts it via native dialogs — no typing. The
- * terminal `curl | bash` / tarball route is kept in a collapsible "advanced" section for
- * technical users. Published to a public GCS bucket; honest-download discipline (§12.6): every
- * button is a real link, never a dead one. Sits above the status/pairing card.
+ * WHY THIS IS A COMMAND AND NOT A DOWNLOAD BUTTON. This section used to lead with double-click
+ * installers (a zipped `.command` for macOS, a `.bat` for Windows) precisely so a non-technical
+ * user would never see a terminal — and that is the user it failed. A `.command` downloaded by a
+ * browser carries `com.apple.quarantine`; macOS refuses to run it and its dialog offers no "open
+ * anyway", so the user has to visit Definições → Privacidade e Segurança and authorise a blocked
+ * item. Pasting one line is shorter, and unlike the quarantine journey it can be explained over the
+ * phone. Notarisation would fix the download path properly and was declined, so the download path
+ * is gone rather than left as a trap.
+ *
+ * WHY THERE IS NO "OPEN TERMINAL" BUTTON. A web page cannot launch a local application: the only
+ * mechanism a browser offers is a registered URL scheme, and neither macOS, Windows nor Linux
+ * registers one for their terminal by default. Anything that looked like such a button would either
+ * do nothing or (via `ssh://`, which macOS does route to Terminal.app) open a window already running
+ * the wrong program. So the button here is labelled for what it actually does — show you how — and
+ * it copies the command at the same time, which is the part that genuinely saves work.
  */
 export function BridgeInstallSection() {
-  const [os, setOs] = useState<Os>('mac');
+  const [os, setOs] = useState<BridgeOs>('mac');
   const [copied, setCopied] = useState(false);
+  const [showHowTo, setShowHowTo] = useState(false);
+  // The command is built on the client so the same-origin fallback in `bridgeCortexUrl()` can see
+  // `window.location`. Rendering it during SSR would bake in the empty-string branch and ship a
+  // command with no address in it.
+  const [command, setCommand] = useState('');
 
-  // Default the OS tab to the visitor's platform (best-effort; they can switch).
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
-    if (ua.includes('win')) setOs('windows');
-    else if (ua.includes('mac')) setOs('mac');
+    const detected: BridgeOs = ua.includes('win') ? 'windows' : ua.includes('mac') ? 'mac' : 'linux';
+    setOs(detected);
   }, []);
 
-  async function copyCommand() {
+  useEffect(() => {
+    setCommand(bridgeInstallCommand(os, bridgeCortexUrl()));
+  }, [os]);
+
+  async function copyCommand(): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(BRIDGE_INSTALL_CMD);
+      await navigator.clipboard.writeText(command);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+      return true;
     } catch {
-      // Clipboard blocked: the command stays visible to copy by hand.
+      // Clipboard blocked (insecure origin, or permission denied): the command stays on screen to
+      // copy by hand, which is why it is rendered as selectable text and not only as a button.
+      return false;
     }
   }
 
-  const downloadUrl = os === 'mac' ? BRIDGE_MAC_URL : BRIDGE_WIN_URL;
-  const downloadLabel = os === 'mac' ? PRIVACY_COPY.installDownloadForMac : PRIVACY_COPY.installDownloadForWindows;
-  const securityNote = os === 'mac' ? PRIVACY_COPY.installMacSecurityNote : PRIVACY_COPY.installWinSecurityNote;
+  const howTo =
+    os === 'mac' ? PRIVACY_COPY.installHowToMac : os === 'windows' ? PRIVACY_COPY.installHowToWindows : PRIVACY_COPY.installHowToLinux;
+
   const steps = [
     PRIVACY_COPY.installSimpleStep1,
     PRIVACY_COPY.installSimpleStep2,
@@ -62,52 +79,104 @@ export function BridgeInstallSection() {
       <CardDescription>{PRIVACY_COPY.installSectionDesc}</CardDescription>
 
       <Card className="mt-3">
-        {/* Primary: simple double-click install with an OS selector. */}
         <div className="flex items-center gap-2 text-xs font-semibold text-neutral-700">
-          <MousePointerClick className="h-4 w-4 text-teal-600" aria-hidden />
+          <Terminal className="h-4 w-4 text-teal-600" aria-hidden />
           {PRIVACY_COPY.installSimpleTitle}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          {/* OS toggle */}
-          <div
-            className="inline-flex rounded-lg border border-line p-0.5"
-            role="tablist"
-            aria-label={PRIVACY_COPY.installOsSelectLabel}
-            data-testid="bridge-os-toggle"
-          >
-            {(['mac', 'windows'] as Os[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                role="tab"
-                aria-selected={os === k}
-                onClick={() => setOs(k)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  os === k ? 'bg-teal-600 text-white' : 'text-neutral-600 hover:bg-neutral-50'
-                }`}
-                data-testid={`bridge-os-${k}`}
-              >
-                {k === 'mac' ? PRIVACY_COPY.installOsMac : PRIVACY_COPY.installOsWindows}
-              </button>
-            ))}
-          </div>
-
-          <a
-            href={downloadUrl}
-            className={buttonClasses('primary', 'md')}
-            data-testid={os === 'mac' ? 'bridge-download-mac' : 'bridge-download-win'}
-          >
-            <Download className="h-4 w-4" aria-hidden />
-            {downloadLabel}
-          </a>
+        {/* OS toggle — three now: Linux was silently unsupported before, though the script always
+            ran there. */}
+        <div
+          className="mt-3 inline-flex rounded-lg border border-line p-0.5"
+          role="tablist"
+          aria-label={PRIVACY_COPY.installOsSelectLabel}
+          data-testid="bridge-os-toggle"
+        >
+          {(['mac', 'windows', 'linux'] as BridgeOs[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              role="tab"
+              aria-selected={os === k}
+              onClick={() => setOs(k)}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                os === k ? 'bg-teal-600 text-white' : 'text-neutral-600 hover:bg-neutral-50'
+              }`}
+              data-testid={`bridge-os-${k}`}
+            >
+              {k === 'mac'
+                ? PRIVACY_COPY.installOsMac
+                : k === 'windows'
+                  ? PRIVACY_COPY.installOsWindows
+                  : PRIVACY_COPY.installOsLinux}
+            </button>
+          ))}
         </div>
 
-        <p className="mt-2 text-xs leading-relaxed text-neutral-500" data-testid="bridge-security-note">
-          {securityNote}
-        </p>
+        <p className="mt-3 text-sm leading-relaxed text-neutral-600">{PRIVACY_COPY.installCommandIntro}</p>
 
-        {/* The four-step simple flow. */}
+        <div className="mt-3 flex items-stretch gap-2" data-testid="bridge-install-command">
+          <code
+            className="flex-1 select-all overflow-x-auto whitespace-nowrap rounded-lg border border-line bg-neutral-50 px-3 py-2 font-mono text-xs text-neutral-800"
+            data-testid="bridge-install-command-text"
+          >
+            {command || ' '}
+          </code>
+          <button
+            type="button"
+            onClick={() => void copyCommand()}
+            className={`${buttonClasses('primary', 'sm')} shrink-0`}
+            data-testid="bridge-install-copy"
+            aria-label={PRIVACY_COPY.installCopyLabel}
+          >
+            {copied ? (
+              <>
+                <Check className="h-3.5 w-3.5" aria-hidden />
+                {PRIVACY_COPY.installCopiedLabel}
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" aria-hidden />
+                {PRIVACY_COPY.installCopyLabel}
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Copies first, then reveals the keystrokes — so by the time the user reaches the terminal
+            the command is already on the clipboard. */}
+        <button
+          type="button"
+          onClick={() => {
+            void copyCommand();
+            setShowHowTo((v) => !v);
+          }}
+          className={`${buttonClasses('secondary', 'sm')} mt-2`}
+          data-testid="bridge-open-terminal"
+          aria-expanded={showHowTo}
+        >
+          <Terminal className="h-3.5 w-3.5" aria-hidden />
+          {PRIVACY_COPY.installOpenTerminal}
+        </button>
+
+        {showHowTo && (
+          <div
+            className="mt-2 rounded-lg border border-line bg-neutral-50 px-3 py-2.5"
+            data-testid="bridge-terminal-howto"
+            role="status"
+          >
+            <p className="text-sm leading-relaxed text-neutral-700">{howTo}</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">{PRIVACY_COPY.installPasteHint}</p>
+          </div>
+        )}
+
+        <div className="mt-4 flex gap-2 rounded-lg border border-line bg-neutral-50 px-3 py-2.5">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neutral-400" aria-hidden />
+          <p className="text-xs leading-relaxed text-neutral-500" data-testid="bridge-why-command">
+            {PRIVACY_COPY.installWhyCommand}
+          </p>
+        </div>
+
         <div className="mt-4 border-t border-line pt-4">
           <div className="flex items-center gap-2 text-xs font-semibold text-neutral-700">
             <ListChecks className="h-4 w-4 text-teal-600" aria-hidden />
@@ -126,46 +195,13 @@ export function BridgeInstallSection() {
           <p className="mt-3 text-[11px] leading-relaxed text-neutral-400">{PRIVACY_COPY.installNodeNote}</p>
         </div>
 
-        {/* Advanced: terminal install for technical users. */}
         <details className="mt-4 border-t border-line pt-3" data-testid="bridge-advanced">
           <summary className="cursor-pointer text-xs font-medium text-neutral-500 hover:text-neutral-700">
             {PRIVACY_COPY.installAdvancedTitle}
           </summary>
           <div className="mt-3">
-            <div className="flex items-center gap-2 text-xs font-semibold text-neutral-700">
-              <Terminal className="h-4 w-4 text-teal-600" aria-hidden />
-              {PRIVACY_COPY.installCommandLabel}
-            </div>
-            <div className="mt-2 flex items-stretch gap-2" data-testid="bridge-install-command">
-              <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-lg border border-line bg-neutral-50 px-3 py-2 font-mono text-xs text-neutral-800">
-                {BRIDGE_INSTALL_CMD}
-              </code>
-              <button
-                type="button"
-                onClick={copyCommand}
-                className={`${buttonClasses('secondary', 'sm')} shrink-0`}
-                data-testid="bridge-install-copy"
-                aria-label={PRIVACY_COPY.installCopyLabel}
-              >
-                {copied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-teal-600" aria-hidden />
-                    {PRIVACY_COPY.installCopiedLabel}
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" aria-hidden />
-                    {PRIVACY_COPY.installCopyLabel}
-                  </>
-                )}
-              </button>
-            </div>
-            <p className="mt-2 text-xs leading-relaxed text-neutral-500">{PRIVACY_COPY.installCommandHint}</p>
-            <a
-              href={BRIDGE_DOWNLOAD_URL}
-              className={`${buttonClasses('secondary', 'sm')} mt-3`}
-              data-testid="bridge-download"
-            >
+            <p className="text-xs leading-relaxed text-neutral-500">{PRIVACY_COPY.installDownloadManualHint}</p>
+            <a href={BRIDGE_DOWNLOAD_URL} className={`${buttonClasses('secondary', 'sm')} mt-3`} data-testid="bridge-download">
               <Download className="h-3.5 w-3.5" aria-hidden />
               {PRIVACY_COPY.installDownloadButton}
             </a>

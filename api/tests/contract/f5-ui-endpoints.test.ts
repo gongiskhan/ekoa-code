@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, orgs, knowledgeSources } from '../../src/data/stores.js';
+import { users, orgs, knowledgeSources, bridgePairings } from '../../src/data/stores.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
@@ -42,7 +42,13 @@ beforeAll(async () => {
 afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
+  // Ceremonies and registry spies are PROCESS state, not store state: `__resetCeremoniesForTests`
+  // was imported here but never called, so an open ceremony and a mocked `getConnectionByOwner`
+  // both survived into the next test. That stayed invisible while no test asserted on a CLEAN
+  // starting point, and became an order-dependent failure the moment one did.
+  __resetCeremoniesForTests(); vi.restoreAllMocks();
   await users.deleteMany({}); await orgs.deleteMany({}); await knowledgeSources.deleteMany({});
+  await bridgePairings.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'A', createdAt: 'x' } as never);
   await orgs.insert({ _id: 'orgB', name: 'B', createdAt: 'x' } as never);
   await users.insert({ _id: 'u1', username: 'u1', passwordHash: await hashPassword('pw123456'), role: 'user', orgId: 'orgA', active: true });
@@ -196,6 +202,11 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
    */
   it('POST /:key/session opens a ceremony on the ACTOR\'s machine, for the PACKAGE\'s origin', async () => {
     const t = await tokenFor();
+    // The machine must ADVERTISE the capability, not merely hold a socket — see the
+    // "too old to capture" case below for what that distinction was added to stop.
+    await bridgeRegistry.registerPairing({
+      pairingId: 'pair-f5', org: 'orgA', ownerUserId: 'u1', capabilities: ['attended.card_login'],
+    });
     vi.spyOn(bridgeRegistry, 'getConnectionByOwner').mockReturnValue({
       pairingId: 'pair-f5',
       org: 'orgA',
@@ -221,6 +232,41 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     const text = JSON.stringify(body);
     expect(text).not.toContain('storageState');
     expect(text).not.toContain('cookies');
+  });
+
+  /**
+   * A LIVE SOCKET IS NOT A CAPABLE MACHINE — the regression this pins actually shipped.
+   *
+   * The bridge daemon's vendored wire contract did not carry `attended.request` at all, so the
+   * frame failed its union and was dropped by the transport with no log line and no error path.
+   * Cortex, meanwhile, checked only that SOME socket was open: `sendToPairing` returned true, the
+   * GET said "Pronto: a sessão é capturada na sua máquina", the POST answered `started: true`, and
+   * the ceremony sat open until it expired. Every layer reported success; no browser ever opened.
+   *
+   * Advertisement (I-1) is the fact that distinguishes the two, so both endpoints now ask for it.
+   * A machine that has never sent `hello` advertises nothing — which is exactly the older daemon.
+   */
+  it('a connected machine that does NOT advertise the capability is reported as unusable, not ready', async () => {
+    const t = await tokenFor();
+    await bridgeRegistry.registerPairing({ pairingId: 'pair-old', org: 'orgA', ownerUserId: 'u1' });
+    vi.spyOn(bridgeRegistry, 'getConnectionByOwner').mockReturnValue({
+      pairingId: 'pair-old', org: 'orgA', ownerUserId: 'u1',
+    } as unknown as ReturnType<typeof bridgeRegistry.getConnectionByOwner>);
+    const sendToPairing = vi.spyOn(bridgeRegistry, 'sendToPairing').mockReturnValue(true);
+
+    const get = await readJson(await authed('/api/v1/integrations/citius/session', t));
+    const connect = get.sessionConnect as { supported: boolean; available: boolean; message: string };
+    expect(connect.supported).toBe(true); // the PACKAGE still supports it
+    expect(connect.available).toBe(false); // this MACHINE cannot do it
+    expect(connect.message).toMatch(/antiga|atualize/i);
+
+    // And the POST must refuse rather than promise: this is the call that says "a browser is
+    // opening on your machine", so a `started: true` here is the lie the user actually sees.
+    const post = await readJson(await authed('/api/v1/integrations/citius/session', t, { method: 'POST' }));
+    expect(post.started).toBe(false);
+    expect((post.session as { status: string }).status).toBe('failed');
+    expect(sendToPairing).not.toHaveBeenCalled();
+    expect(__openCeremonyCount()).toBe(0);
   });
 
   it('POST /:key/session on a NON-session integration answers failed, never started', async () => {

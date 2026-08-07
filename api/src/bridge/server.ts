@@ -264,9 +264,36 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
     // CURRENT live socket - one that was revoked or REPLACED by a redial. Checking isLive(pairingId)
     // alone is insufficient: after a redial the replacement socket keeps the pairingId live, so a
     // late frame from the retired socket would still pass. Bind to the exact delivering ws.
-    if (getLiveConnection(pairingId)?.ws !== ws) return;
+    const live = getLiveConnection(pairingId);
+    if (live?.ws !== ws) return;
 
     switch (frame.type) {
+      case 'hello': {
+        // I-1: the machine advertises what it can do, and this is the ONLY way that list is ever
+        // populated. Without this case the frame fell through to `default` and was discarded, so
+        // every pairing row carried `capabilities: undefined` forever — which made `usableCapabilities`
+        // (advertised ∩ granted) empty for every machine, and left the integrations session endpoint
+        // reporting `available: true` on nothing more than "a socket is open".
+        //
+        // The org and owner come from the ADMITTED CONNECTION, never from the frame: a machine may
+        // describe its own abilities but must not be able to name the tenant it belongs to.
+        //
+        // Advertisement REPLACES the stored list (a machine that stops offering a capability must
+        // stop being selected for it) and authorises nothing by itself — `invokeTool` still requires
+        // an org grant (I-3, default deny).
+        try {
+          await registerPairing({
+            pairingId,
+            org: live.org,
+            ownerUserId: live.ownerUserId,
+            capabilities: frame.capabilities,
+            ...(frame.egressEndpoint ? { egressEndpoint: frame.egressEndpoint } : {}),
+          });
+        } catch {
+          console.warn(`[bridge][hello] could not record advertisement: pairing=${pairingId}`);
+        }
+        break;
+      }
       case 'provider_request': {
         // Bind the credential to THIS socket's pairing (§18.4.4): the frame's credential must
         // resolve to the pairing whose live socket it arrived on.
