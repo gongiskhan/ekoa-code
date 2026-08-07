@@ -3159,3 +3159,24 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   anywhere in that cycle can misbuild the same way. Close by breaking the cycle, or by a lint rule
   banning module-level `new RegExp(<imported>)` in `api/src/integrations/**`. Logged by the
   orchestrator because E2 correctly reported it rather than editing a file outside its ownership.
+
+- **`send-to-pairing-returning-true-is-not-delivery`** (OPEN 2026-08-07, MEDIUM, honest signalling
+  - found while verifying the attended ceremony live against a MacBook Air over a DERP relay).
+  `sendToPairing` resolves to "the frame was written to a live socket", and `requestAttendedCeremony`
+  treats that as the ceremony having started: it records the pending ceremony and the route answers
+  `started: true` / `waiting_login`, i.e. "a browser is opening on your machine". Observed for real:
+  a `POST /integrations/citius/session` returned `started: true`, the daemon's own log shows the
+  socket went `reconnecting` -> `open` moments later, and the frame appears NOWHERE in that log. The
+  write succeeded into a socket that died before delivery; the ceremony then sat open for its full
+  10-minute TTL and expired. A second POST on a stable link was delivered and ran correctly, so this
+  is transport churn, not the protocol gap fixed in `6186418`.
+  This is the SAME SHAPE as that bug one layer down: a success value that is true about this
+  process's action and silent about the outcome the user was promised. It matters more on a laptop
+  over a relay (sleep/wake, DERP) than on a wired peer, which is exactly where the card readers are.
+  THE FIX: the ceremony needs an ack. The daemon already knows when it has accepted an
+  `attended.request` (it logs and opens the browser), so an `attended.ack { requestId }` frame is
+  additive under Rule 7, and `requestAttendedCeremony` should hold the ceremony as `pending` until
+  it arrives, with a short timeout that reports honestly rather than a `started: true` that outlives
+  the socket. Re-delivery on reconnect is the larger version and is NOT proposed here: a ceremony
+  needs a human at the machine now, so replaying one minutes later asks at a moment nobody is
+  standing there (`bridge/attended.ts` already refuses queueing for that reason).
