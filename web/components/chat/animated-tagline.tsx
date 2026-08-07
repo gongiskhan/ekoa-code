@@ -25,13 +25,17 @@ export function AnimatedTagline({ className }: { className?: string }) {
   const verb = taglineVerbs[index] ?? "";
 
   return (
-    <h1 className={className}>
-      <span>{taglinePrefix}</span>
-      <span className="relative inline-block align-baseline">
+    // The accessible name is authored explicitly as the single current phrase so
+    // the rotating animation never exposes a concatenated word ("...automatizarconstruir"):
+    // the invisible width-reserving spacer below would otherwise leak into the
+    // name computed from content. Everything inside is aria-hidden.
+    <h1 className={className} aria-label={`${taglinePrefix}${verb}`}>
+      <span aria-hidden>{taglinePrefix}</span>
+      <span aria-hidden className="relative inline-block align-baseline">
         {/* Invisible widest-verb spacer reserves a constant width so the line never
             reflows: the verb's left edge stays pinned right after the prefix and the
             word only grows/shrinks to the right as it cycles. */}
-        <span aria-hidden className="invisible whitespace-nowrap">
+        <span className="invisible whitespace-nowrap">
           {taglineVerbs.reduce((longest, v) => (v.length > longest.length ? v : longest), "")}
         </span>
         <AnimatePresence mode="wait">

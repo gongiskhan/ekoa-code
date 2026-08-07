@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "google-workspace",
   "displayName": "Google Workspace",
-  "description": "Connects Gmail, Drive, Calendar, Sheets, and Docs via Google APIs.",
+  "description": "Liga o Gmail, o Drive, o Calendar, o Sheets e o Docs através das APIs da Google.",
   "authType": "oauth2",
   "provider": "Google",
   "category": "productivity",

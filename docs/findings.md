@@ -6,6 +6,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`change-password-escape-control-drill-asserted-forced-on-default`** (DISMISSED - not a product
+  defect - 2026-08-07, found by the drill batch fixer on `change-password#escape-control-present`).
+  The drill reported the forced-change escape control ("Terminar sessão") as absent. It was absent
+  because the run had landed on the OPTIONAL variant of `/change-password`, where the correct escape
+  control is "Voltar ao Dashboard" - and it was present. The product code is correct and already
+  variant-aware (`web/app/change-password/page.tsx`): `passwordChangeRequired` renders the sign-out
+  control in the forced variant and the back-to-dashboard link in the optional one, exactly one of
+  which is always on the page. The real fault was in the drill: the `escape-control-present` step
+  asserted the forced control on `state: default`, but the default landing is only forced on a fresh
+  stack where the seeded admin still owes the first-login change; once that change has been completed
+  the default page is the optional variant. FIX: drive that step through the `forced` state (its
+  reachPath signs in as an account owing the change) instead of relying on the default landing; the
+  optional case stays covered by `back-link-present`. No product change.
+
 - **`health-reported-the-SSE-count-as-bridgeConnections`** (FIXED 2026-08-07, MEDIUM, an
   observability field that lied in both directions - found while pairing a real daemon and not
   believing the number). `/health` answered `bridgeConnections: sseManager.connectionCount`

@@ -93,6 +93,22 @@ export const en: Translations = {
       backToDashboard: 'Back to Dashboard',
     },
 
+    activate: {
+      title: 'Authorize this device',
+      subtitle: 'Ekoa Local (your terminal) is asking to sign in to your Ekoa account.',
+      missingCode: 'No device code in the link. Re-run the login from your terminal.',
+      confirmMatch: 'Confirm this matches the code shown in your terminal',
+      signingInAs: 'Signing in as',
+      deny: 'Deny',
+      approve: 'Approve',
+      approvedTitle: 'Device approved',
+      approvedBody: "You can return to your terminal - it's signing in now.",
+      deniedTitle: 'Request denied',
+      deniedBody: 'The terminal was not signed in. You can close this tab.',
+      genericError: 'Could not authorize the device. The code may have expired.',
+      safetyFooter: 'Only approve if you started this login. The code must match your terminal.',
+    },
+
     builder: {
       title: 'Builder',
       whatToBuild: 'What do you want to build?',
@@ -393,6 +409,7 @@ export const en: Translations = {
     users: {
       title: 'Users & Teams',
       users: 'Users',
+      usersSingular: 'User',
       teams: 'Teams',
       addUser: 'Add User',
       addTeam: 'Add Team',
@@ -442,6 +459,21 @@ export const en: Translations = {
       resetUsageHint: 'The 30-day billing period restarts from now. The user can immediately resume making requests.',
       usernamePlaceholder: 'e.g. maria.santos',
       teamNamePlaceholder: 'e.g. Engineering',
+    },
+
+    devices: {
+      title: 'Device approval',
+      description: 'Authorise a new device to connect, for example the local bridge, by entering the code shown on that device.',
+      codeLabel: 'Device code',
+      codeHint: 'The code has the format XXXX-XXXX and is valid for 10 minutes.',
+      approve: 'Approve',
+      approving: 'Approving...',
+      deny: 'Deny',
+      denying: 'Denying...',
+      approved: 'Device approved. You can return to the device to continue.',
+      denied: 'Request denied. The device received no access.',
+      invalid: 'Invalid or expired device code.',
+      incomplete: 'Enter the full code (8 characters).',
     },
 
     settingsNav: {
@@ -1272,8 +1304,8 @@ What would make your day easier?`,
     taglineVerbs: ['build', 'automate', 'discuss', 'analyse'],
     shortcuts: {
       close: 'Esc to clear',
-      history: '⌘K for history',
-      shortcuts: '⌘/ for shortcuts',
+      history: '{mod}K for history',
+      shortcuts: '{mod}/ for shortcuts',
     },
     shortcutsModal: {
       title: 'Keyboard shortcuts',

@@ -83,6 +83,7 @@ export function IconButton({
     <button
       type={type}
       aria-label={label}
+      title={label}
       className={`${base} ${variantClasses[variant]} ${squareSize} justify-center p-0 ${className ?? ''}`}
       {...rest}
     >

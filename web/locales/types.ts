@@ -102,6 +102,22 @@ export interface Translations {
       backToDashboard: string;
     };
 
+    activate: {
+      title: string;
+      subtitle: string;
+      missingCode: string;
+      confirmMatch: string;
+      signingInAs: string;
+      deny: string;
+      approve: string;
+      approvedTitle: string;
+      approvedBody: string;
+      deniedTitle: string;
+      deniedBody: string;
+      genericError: string;
+      safetyFooter: string;
+    };
+
     // ============================================
     // BUILDER
     // ============================================
@@ -421,6 +437,7 @@ export interface Translations {
     users: {
       title: string;
       users: string;
+      usersSingular: string;
       teams: string;
       addUser: string;
       addTeam: string;
@@ -470,6 +487,21 @@ export interface Translations {
       resetUsageHint: string;
       usernamePlaceholder: string;
       teamNamePlaceholder: string;
+    };
+
+    devices: {
+      title: string;
+      description: string;
+      codeLabel: string;
+      codeHint: string;
+      approve: string;
+      approving: string;
+      deny: string;
+      denying: string;
+      approved: string;
+      denied: string;
+      invalid: string;
+      incomplete: string;
     };
 
     // ============================================

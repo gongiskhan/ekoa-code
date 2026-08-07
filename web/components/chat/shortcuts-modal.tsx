@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "@/stores/i18n";
+import { useModKeyPrefix } from "@/lib/use-mod-key";
 
 interface ShortcutsModalProps {
   isOpen: boolean;
@@ -11,6 +12,7 @@ interface ShortcutsModalProps {
 
 export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
   const { emptyState } = useTranslation();
+  const modKey = useModKeyPrefix();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -30,8 +32,8 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
     ["Enter", emptyState.shortcutsModal.send],
     ["Shift + Enter", emptyState.shortcutsModal.newLine],
     ["Esc", emptyState.shortcuts.close],
-    ["⌘K", emptyState.shortcuts.history],
-    ["⌘/", emptyState.shortcuts.shortcuts],
+    [`${modKey}K`, emptyState.shortcuts.history.replace("{mod}", modKey)],
+    [`${modKey}/`, emptyState.shortcuts.shortcuts.replace("{mod}", modKey)],
   ];
 
   return (

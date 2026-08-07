@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "imap",
   "displayName": "IMAP",
-  "description": "Polling email listener: fetches new messages from an IMAP mailbox and fires the trigger for each one. NOT AVAILABLE IN THIS VERSION: the generic listener rail is wired end to end, but the IMAP protocol transport itself is deferred (the integration executor runs HTTP-backed and automation-backed actions only), so a listener on this integration fails loudly on every tick instead of silently reporting an empty mailbox. Connect a Microsoft 365 or Google Workspace mailbox for a working email listener.",
+  "description": "Ouvinte de email por sondagem: obtém as mensagens novas de uma caixa de correio IMAP e dispara o acionador para cada uma. NÃO DISPONÍVEL NESTA VERSÃO: a via genérica do ouvinte está ligada de ponta a ponta, mas o transporte do protocolo IMAP em si está adiado (o executor de integrações corre apenas ações suportadas por HTTP e por automação), pelo que um ouvinte nesta integração falha de forma explícita em cada ciclo, em vez de reportar silenciosamente uma caixa vazia. Ligue uma caixa de correio do Microsoft 365 ou do Google Workspace para ter um ouvinte de email funcional.",
   "authType": "api_key",
   "provider": "IMAP",
   "category": "communication",

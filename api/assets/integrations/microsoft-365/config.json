@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "microsoft-365",
   "displayName": "Microsoft 365",
-  "description": "Connects Outlook, OneDrive, SharePoint, Teams, Excel, and Word via Microsoft Graph API.",
+  "description": "Liga o Outlook, o OneDrive, o SharePoint, o Teams, o Excel e o Word através da API do Microsoft Graph.",
   "authType": "oauth2",
   "provider": "Microsoft",
   "category": "productivity",

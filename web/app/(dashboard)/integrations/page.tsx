@@ -68,6 +68,28 @@ function formatShortDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('pt-PT');
 }
 
+/**
+ * Catalogue category slugs (from each integration's `config.json` `category`) are kebab-case
+ * machine keys; the card must show a human label. Known slugs map to European Portuguese; an
+ * unknown slug falls back to a prettified form (hyphens to spaces, first letter capitalised) so
+ * a newly-added category is never shown as a raw slug.
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  "document-signing": "Assinatura de documentos",
+  communication: "Comunicação",
+  invoicing: "Faturação",
+  legal: "Jurídico",
+  payments: "Pagamentos",
+  productivity: "Produtividade",
+  messaging: "Mensagens",
+};
+
+function categoryLabel(slug: string): string {
+  if (CATEGORY_LABELS[slug]) return CATEGORY_LABELS[slug];
+  const pretty = slug.replace(/-/g, " ");
+  return pretty.charAt(0).toUpperCase() + pretty.slice(1);
+}
+
 /* ---------- Animation Variants ---------- */
 
 const containerVariants = {
@@ -266,7 +288,7 @@ function IntegrationCard({
                 {skill.displayName}
               </h3>
               <p className="text-[11px] text-neutral-400 mt-0.5 truncate">
-                {skill.category}
+                {categoryLabel(skill.category)}
               </p>
             </div>
           </div>
@@ -507,7 +529,7 @@ function IntegrationCard({
               {skill.createdAt && (
                 <>
                   <Calendar size={11} />
-                  <span>{new Date(skill.createdAt).toLocaleDateString()}</span>
+                  <span>{formatShortDate(skill.createdAt)}</span>
                 </>
               )}
             </div>

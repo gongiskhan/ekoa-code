@@ -59,6 +59,15 @@ test.describe("Alterar Palavra-passe", () => {
     await expect(page.getByRole("button", { name: "Atualizar Palavra-passe" })).toHaveAttribute("disabled", "");
   });
 
+  test("back-link-present: The page always offers a documented way out, so the user is never trapped on it: a \"Voltar ao Dashboard\" link when the change is optional, or a \"Terminar sessão\" control when the change is forced and the rest of the app is not reachable yet. Exactly one of those is present and it works; a card with only the three password fields and a submit button is a dead end.", async ({ page }) => {
+    // Loaded-machine wait (F9): a batch run shares the machine with other
+    // parallel work — a pure timeout here should widen this wait, not be
+    // treated as a step defect.
+    await page.goto("http://localhost:3000/change-password", { timeout: 90000, waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
+    await expect(page.getByRole("link", { name: "Voltar ao Dashboard" })).toBeVisible();
+  });
+
   test("all-fields-have-reveal-toggle: Each of the three password fields offers its own \"Mostrar palavra-passe\" reveal toggle.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be

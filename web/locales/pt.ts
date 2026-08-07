@@ -93,6 +93,22 @@ export const pt: Translations = {
       backToDashboard: 'Voltar ao Dashboard',
     },
 
+    activate: {
+      title: 'Autorizar este dispositivo',
+      subtitle: 'O Ekoa Local (o seu terminal) está a pedir para iniciar sessão na sua conta Ekoa.',
+      missingCode: 'Nenhum código de dispositivo na ligação. Execute novamente o início de sessão a partir do seu terminal.',
+      confirmMatch: 'Confirme que corresponde ao código apresentado no seu terminal',
+      signingInAs: 'A iniciar sessão como',
+      deny: 'Recusar',
+      approve: 'Aprovar',
+      approvedTitle: 'Dispositivo aprovado',
+      approvedBody: 'Pode voltar ao seu terminal - está a iniciar sessão agora.',
+      deniedTitle: 'Pedido recusado',
+      deniedBody: 'O terminal não iniciou sessão. Pode fechar este separador.',
+      genericError: 'Não foi possível autorizar o dispositivo. O código pode ter expirado.',
+      safetyFooter: 'Apenas aprove se foi você que iniciou esta sessão. O código deve corresponder ao do seu terminal.',
+    },
+
     builder: {
       title: 'Construir',
       whatToBuild: 'O que pretende construir?',
@@ -394,6 +410,7 @@ export const pt: Translations = {
     users: {
       title: 'Utilizadores e Equipas',
       users: 'Utilizadores',
+      usersSingular: 'Utilizador',
       teams: 'Equipas',
       addUser: 'Adicionar Utilizador',
       addTeam: 'Adicionar Equipa',
@@ -443,6 +460,21 @@ export const pt: Translations = {
       resetUsageHint: 'O período de faturação de 30 dias reinicia a partir de agora. O utilizador pode retomar pedidos imediatamente.',
       usernamePlaceholder: 'ex. maria.santos',
       teamNamePlaceholder: 'ex. Engenharia',
+    },
+
+    devices: {
+      title: 'Aprovação de dispositivos',
+      description: 'Autorize a ligação de um novo dispositivo, por exemplo a ponte local, introduzindo o código apresentado nesse dispositivo.',
+      codeLabel: 'Código do dispositivo',
+      codeHint: 'O código tem o formato XXXX-XXXX e é válido durante 10 minutos.',
+      approve: 'Aprovar',
+      approving: 'A aprovar...',
+      deny: 'Recusar',
+      denying: 'A recusar...',
+      approved: 'Dispositivo aprovado. Pode regressar ao dispositivo para continuar.',
+      denied: 'Pedido recusado. O dispositivo não recebeu qualquer acesso.',
+      invalid: 'Código de dispositivo inválido ou expirado.',
+      incomplete: 'Introduza o código completo (8 caracteres).',
     },
 
     settingsNav: {
@@ -1273,8 +1305,8 @@ O que tornaria o seu dia mais fácil?`,
     taglineVerbs: ['construir', 'automatizar', 'discutir', 'analisar'],
     shortcuts: {
       close: 'Esc para limpar',
-      history: '⌘K para histórico',
-      shortcuts: '⌘/ para atalhos',
+      history: '{mod}K para histórico',
+      shortcuts: '{mod}/ para atalhos',
     },
     shortcutsModal: {
       title: 'Atalhos do teclado',

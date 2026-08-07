@@ -26,6 +26,14 @@ export function memoriesRouter(deps: { now: () => number; genId: () => string })
     const rows = await listVisibleMemories(actorOf(req));
     const tally = (pick: (m: (typeof rows)[number]) => string) =>
       rows.reduce<Record<string, number>>((acc, m) => { const k = pick(m); acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+    // 7-day recent count: memories created within the trailing week. A missing or unparseable
+    // createdAt is NOT recent (an honest zero beats a fabricated one), so it never inflates the stat.
+    const weekAgo = Date.now() - 7 * 86400000;
+    const recentCount = rows.filter((m) => {
+      if (!m.createdAt) return false;
+      const t = Date.parse(m.createdAt);
+      return Number.isFinite(t) && t >= weekAgo;
+    }).length;
     res.json({
       total: rows.length,
       byType: tally((m) => m.type ?? 'unknown'),
@@ -34,6 +42,9 @@ export function memoriesRouter(deps: { now: () => number; genId: () => string })
       // `verified` IS persisted (MemoryPatch declares it and updateMemory spreads the patch), so
       // count it. It was hardcoded to 0 behind a comment that claimed it was not stored — false.
       verified: rows.filter((m) => m.verified === true).length,
+      // Memories created in the trailing 7 days — the dashboard's "recentes (7d)" stat read this
+      // field before anything computed it, so it always rendered blank.
+      recentCount,
     });
   });
 

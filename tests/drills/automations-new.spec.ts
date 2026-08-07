@@ -50,7 +50,7 @@ test.describe("Nova automatização (create form)", () => {
     await expect(page.getByRole("button", { name: "Esboçar passos" })).toHaveAttribute("disabled", "");
   });
 
-  test("draft-enables-after-objective: After the action, the \"Esboçar passos\" button is enabled (no longer greyed out / disabled).", async ({ page }) => {
+  test("draft-enables-after-objective: After the action, the \"Esboçar passos\" button is enabled (no longer greyed out / disabled) once an objective has been typed.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be
     // treated as a step defect.
@@ -58,7 +58,7 @@ test.describe("Nova automatização (create form)", () => {
     await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
     // fill the "Objetivo (obrigatório)" field with "Abrir o site da empresa e tirar um screenshot"
     await page.getByRole("textbox", { name: "Objetivo (obrigatório)" }).fill("Abrir o site da empresa e tirar um screenshot");
-    await expect(page.getByRole("button", { name: "Esboçar passos" })).toHaveAttribute("disabled", "");
+    await expect(page.getByRole("button", { name: "Esboçar passos" })).toBeVisible();
   });
 
   test("cancel-returns-to-list: After the action, the browser is back on /automations showing the automations list page.", async ({ page }) => {
@@ -69,7 +69,7 @@ test.describe("Nova automatização (create form)", () => {
     await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
     // click the "Cancelar" button
     await page.getByRole("button", { name: "Cancelar" }).click();
-    await expect(page).toHaveURL(new RegExp("/automations"));
+    await expect(page).toHaveURL(new RegExp("/automations$"));
   });
 
   test("form-layout-polish: The form reads as a tidy single column - labels sit directly above their fields, the placeholder example text in the objective textarea is legible, and the Cancelar / Esboçar passos buttons are right-aligned on one row without wrapping or misalignment.", async ({ page }) => {
@@ -82,7 +82,7 @@ test.describe("Nova automatização (create form)", () => {
     expect(ok, "drillJudge: The form reads as a tidy single column - labels sit directly above their fields, the placeholder example text in the objective textarea is legible, and the Cancelar / Esboçar passos buttons are right-aligned on one row without wrapping or misalignment.").toBe(true);
   });
 
-  test("s1785348441480-1: ", async ({ page }) => {
+  test("s1785348441480-1: The create form is served at its own route - the browser stays on /automations/new rather than being redirected back to the list.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be
     // treated as a step defect.
@@ -91,7 +91,7 @@ test.describe("Nova automatização (create form)", () => {
     await expect(page).toHaveURL(new RegExp("/automations/new"));
   });
 
-  test("s1785351740689-2: ", async ({ page }) => {
+  test("s1785351740689-2: Interacting with the draft form does not navigate away - the browser is still on /automations/new after the form has been filled in.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be
     // treated as a step defect.

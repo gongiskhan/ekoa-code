@@ -1,7 +1,7 @@
 {
   "title": "Roadmap Ekoa: produção + concurso",
   "intro": "Regra de ouro: tudo o que está neste roadmap é feito no ekoa-code (versão nova). Nada é feito no ekoa dev (versão antiga). Zero novas features, zero correções na antiga, exceto emergência de cliente. Cada coisa feita na antiga cria nova divergência, invalida testes já feitos no novo e adia a produção.",
-  "updatedAt": "2026-07-31T14:58:47.786Z",
+  "updatedAt": "2026-08-06T07:55:51.242Z",
   "categories": [
     {
       "id": "f0",
@@ -157,6 +157,13 @@
         {
           "id": "f3.2",
           "text": "Tarefas delegáveis a agentes: uma tarefa pode ser entregue ao agente para execução, não só gerida por humanos. É isto que torna \"tarefas\" core no Ekoa e não mais uma app de listas.",
+          "done": false,
+          "sentToKanban": null,
+          "noteRef": null
+        },
+        {
+          "id": "f3.3",
+          "text": "In ekoa, we should have a kind of billing area that shows sources of token usage. Sometimes it will be an app that is using tokens. Other times, it will be the knowledge research of sources that the user added. Other times, it will be the user actually building something or using the assistant.\nEvery time it spends tokens, it should create a registry entry of what it did and how many tokens were spent. If the user clicks, we should have a button or something near the token meter so that the user can click to see the details of what they are spending and how they are spending it, so that it's clear.\nIn some places in the app, we should show warnings that the user is about to spend tokens. For example:- In the settings, if the user enables test mode for all the artifacts, then they're spending tokens. They should receive a warning.- If they add a knowledge source that will be indexed every night and updated every night, they should be warned that that will happen and that they will spend tokens.\n\nThis should be a policy of a code that is not annoying. On the assistant, obviously, we don't need to tell the user that they're going to spend tokens. They know that if they're using artificial intelligence, they are spending tokens. Everywhere where it's not obvious, we should have it as a policy to always provide warnings to the user.",
           "done": false,
           "sentToKanban": null,
           "noteRef": null
@@ -335,6 +342,20 @@
           "done": false,
           "sentToKanban": null,
           "noteRef": "n-premios"
+        }
+      ]
+    },
+    {
+      "id": "c1",
+      "title": "MISC",
+      "noteRef": null,
+      "items": [
+        {
+          "id": "c1.1",
+          "text": "funds app - I want to create an app on ekoa for working with public funds and European funds, support for companies, big and small, but not for small companies, and maybe even for individuals as well. This includes hiring support from the IEFB, the PRR funds, European funds, and other kinds of support that we can add to the basic sources of knowledge of ekoa.  The app is able to guide the user through the processes. The idea is that it leverages what ekoa has a lot, so it leverages knowledge, but it leverages the brand research. Brand research should be augmented to capture what it can about the company to pre-fill in this app the details about the company that it can capture. It should help the user and guide the user while providing support, with means to have all the documents in there.  The users should be able to select to have advice on what programs are available for him, or if they know where they want to go, they can go directly to the programs. We guide them in a visual way, like the other apps in Accor. They can do things by clicking and filling input fields, everything, or they can ask the assistant to do it. That should be suggested very often because this is a cumbersome process. It's better for them to use natural language talking to the assistant than filling out input boxes and pressing buttons.  The idea is that there's an area after they add what type of support, or after it creates a profile of the company. It asks a few questions about what the company is, what they could be looking for, and what they can benefit from, and then it uses the knowledge sources to figure out what is available.  Every time the user uses the app, or maybe nightly when he does the update of the index document, we could have a trigger event that the app listens to for specific sources. If a source was updated, then it will check for the profile of the company to see if it fits any new program with the dates for subscribing. It should notify the user, that kind of stuff.  But this app should not do that by default. That should be enabled when the user uses the app, because that will be expensive and the user has to make a conscious choice that he is going to use it.",
+          "done": false,
+          "sentToKanban": null,
+          "noteRef": null
         }
       ]
     }

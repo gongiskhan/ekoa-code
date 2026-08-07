@@ -39,6 +39,7 @@ import { PRIVACY_COPY } from "@/lib/privacy-claims";
 import type { PendingReference } from "@/lib/bridge-local";
 import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useModKeyPrefix } from "@/lib/use-mod-key";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
 
 // ============================================
@@ -122,6 +123,7 @@ export default function UnifiedChatPage() {
     s.isLoaded ? s.settings.general.vertical === "legal" : false,
   );
   const { chatPanel, emptyState, sheetFeed, sessionsPanel, language: uiLanguage } = useTranslation();
+  const modKey = useModKeyPrefix();
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
 
@@ -688,8 +690,11 @@ export default function UnifiedChatPage() {
               nothing to preview, so we ignore it here. */
           <>
           <div className="flex flex-1 flex-col bg-white min-w-0">
-            {/* Header + artifact stripe — centered single column. */}
-            <div className="flex-1 overflow-y-auto px-4 md:px-8 py-10 md:py-14 scrollbar-light min-w-0">
+            {/* Header + artifact stripe — centered single column. The generous
+                bottom padding keeps the starter-card rail clear of the floating
+                composer below, so its cards and captions are never sliced by the
+                composer's top edge on a standard desktop viewport. */}
+            <div className="flex-1 overflow-y-auto px-4 md:px-8 pt-10 md:pt-14 pb-28 md:pb-32 scrollbar-light min-w-0">
               <div className="max-w-3xl mx-auto space-y-10">
                 {isOnboardingSession ? (
                   /* Active onboarding session, no messages yet: guided welcome
@@ -862,8 +867,8 @@ export default function UnifiedChatPage() {
                 {/* Keyboard hints only on devices that actually have one. */}
                 <div className="hidden md:flex justify-center flex-wrap gap-x-6 gap-y-1 pt-1 text-[11px] text-neutral-400">
                   <span>{emptyState.shortcuts.close}</span>
-                  <span>{emptyState.shortcuts.history}</span>
-                  <span>{emptyState.shortcuts.shortcuts}</span>
+                  <span>{emptyState.shortcuts.history.replace("{mod}", modKey)}</span>
+                  <span>{emptyState.shortcuts.shortcuts.replace("{mod}", modKey)}</span>
                 </div>
               </div>
             </div>

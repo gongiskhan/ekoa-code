@@ -204,11 +204,22 @@ function getArtifactAppUrl(artifact: ArtifactInstance): string | null {
   return null;
 }
 
-function formatDate(
-  dateStr: string,
-  labels?: { yesterday: string; daysAgo: (n: number) => string },
-): string {
+// Parse a timestamp defensively. The API can hand back a null, empty, or
+// malformed value (e.g. an artifact that never recorded a build time); `new
+// Date(...)` would then yield an Invalid Date whose formatters print the
+// literal "Invalid Date". Return null instead so callers omit the field.
+function toValidDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr) return null;
   const date = new Date(dateStr);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDate(
+  dateStr: string | null | undefined,
+  labels?: { yesterday: string; daysAgo: (n: number) => string },
+): string | null {
+  const date = toValidDate(dateStr);
+  if (!date) return null;
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -503,11 +514,13 @@ function ArtifactCard({
       <div className="pt-3 mt-2 border-t border-line">
         {/* Created date */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-neutral-400 flex items-center gap-1">
-            <Calendar size={11} />
-            {formatDate(artifact.createdAt, a)}
-          </span>
-          {artifact.updatedAt && artifact.updatedAt !== artifact.createdAt && (
+          {formatDate(artifact.createdAt, a) && (
+            <span className="text-xs text-neutral-400 flex items-center gap-1">
+              <Calendar size={11} />
+              {formatDate(artifact.createdAt, a)}
+            </span>
+          )}
+          {artifact.updatedAt && artifact.updatedAt !== artifact.createdAt && formatDate(artifact.updatedAt, a) && (
             <span className="text-xs text-neutral-400 flex items-center gap-1">
               <Clock size={11} />
               {formatDate(artifact.updatedAt, a)}
@@ -1188,14 +1201,16 @@ function ArtifactDetail({
             )}
 
             <div className="flex items-center gap-4 text-[11px] text-neutral-400 mb-3">
-              <span className="flex items-center gap-1">
-                <Calendar size={11} />
-                {a.createdOn} {new Date(artifact.createdAt).toLocaleDateString()}
-              </span>
-              {artifact.updatedAt && (
+              {toValidDate(artifact.createdAt) && (
+                <span className="flex items-center gap-1">
+                  <Calendar size={11} />
+                  {a.createdOn} {toValidDate(artifact.createdAt)!.toLocaleDateString()}
+                </span>
+              )}
+              {toValidDate(artifact.updatedAt) && (
                 <span className="flex items-center gap-1">
                   <Clock size={11} />
-                  {a.updatedOn} {new Date(artifact.updatedAt).toLocaleDateString()}
+                  {a.updatedOn} {toValidDate(artifact.updatedAt)!.toLocaleDateString()}
                 </span>
               )}
             </div>
@@ -1403,17 +1418,19 @@ function ArtifactDetail({
                   {artifact.shareable ? a.yes : a.no}
                 </dd>
               </div>
-              <div className="flex items-center justify-between text-sm">
-                <dt className="text-neutral-500">{a.detailCreated}</dt>
-                <dd className="text-neutral-700">
-                  {new Date(artifact.createdAt).toLocaleString()}
-                </dd>
-              </div>
-              {artifact.updatedAt && (
+              {toValidDate(artifact.createdAt) && (
+                <div className="flex items-center justify-between text-sm">
+                  <dt className="text-neutral-500">{a.detailCreated}</dt>
+                  <dd className="text-neutral-700">
+                    {toValidDate(artifact.createdAt)!.toLocaleString()}
+                  </dd>
+                </div>
+              )}
+              {toValidDate(artifact.updatedAt) && (
                 <div className="flex items-center justify-between text-sm">
                   <dt className="text-neutral-500">{a.detailUpdated}</dt>
                   <dd className="text-neutral-700">
-                    {new Date(artifact.updatedAt).toLocaleString()}
+                    {toValidDate(artifact.updatedAt)!.toLocaleString()}
                   </dd>
                 </div>
               )}
@@ -2312,8 +2329,11 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
               </div>
             </PageHeader>
 
-            {/* Starting Points strip */}
-            {featuredArtifacts.length > 0 && (
+            {/* Starting Points strip. Hidden while a text search is active: a
+                search narrows to the user's own matching artifacts, so leaving
+                the unfiltered template strip up would keep non-matching cards
+                (and their headings) on screen and contradict the search. */}
+            {featuredArtifacts.length > 0 && !search.trim() && (
                 <section data-testid="starting-points-strip">
                   <button
                     onClick={toggleFeatured}

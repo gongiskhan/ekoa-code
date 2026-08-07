@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "adobe-acrobat-sign",
   "displayName": "Adobe Acrobat Sign",
-  "description": "Send documents for e-signature with Adobe Acrobat Sign, track agreement status, fetch the signer's signing link, list agreements and cancel them. Document upload + agreement creation for served apps go through the platform's /api/adobe-sign proxy (it renders to PDF and uploads server-side); these generic actions cover status, listing and signing links.",
+  "description": "Enviar documentos para assinatura eletrónica com o Adobe Acrobat Sign, acompanhar o estado dos acordos, obter a hiperligação de assinatura do signatário, listar acordos e cancelá-los. O carregamento de documentos e a criação de acordos das aplicações servidas passam pelo proxy /api/adobe-sign da plataforma (que renderiza para PDF e carrega no servidor); estas ações genéricas cobrem o estado, a listagem e as hiperligações de assinatura.",
   "authType": "api_key",
   "provider": "Adobe",
   "category": "document-signing",

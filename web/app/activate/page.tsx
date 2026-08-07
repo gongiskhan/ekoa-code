@@ -15,6 +15,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { ShieldCheck, Terminal, Check, X, AlertTriangle } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
+import { useTranslation } from "@/stores/i18n";
 import { api, tryCall } from "@/lib/api";
 
 type Phase = "loading" | "ready" | "working" | "approved" | "denied" | "error";
@@ -31,6 +32,8 @@ function Activate() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAuthenticated, hasHydrated, user } = useAuthStore();
+  const { pages } = useTranslation();
+  const t = pages.activate;
 
   const code = (searchParams.get("code") || "").trim();
 
@@ -43,7 +46,7 @@ function Activate() {
     if (!hasHydrated) return;
     if (!code) {
       setPhase("error");
-      setMessage("No device code in the link. Re-run the login from your terminal.");
+      setMessage(t.missingCode);
       return;
     }
     if (!isAuthenticated) {
@@ -52,7 +55,7 @@ function Activate() {
       return;
     }
     setPhase((p) => (p === "loading" ? "ready" : p));
-  }, [hasHydrated, isAuthenticated, code, router]);
+  }, [hasHydrated, isAuthenticated, code, router, t.missingCode]);
 
   const decide = useCallback(
     async (deny: boolean) => {
@@ -62,10 +65,10 @@ function Activate() {
         setPhase(deny ? "denied" : "approved");
       } else {
         setPhase("error");
-        setMessage(res.error.message || "Could not authorize the device. The code may have expired.");
+        setMessage(res.error.message || t.genericError);
       }
     },
-    [code],
+    [code, t.genericError],
   );
 
   return (
@@ -86,9 +89,9 @@ function Activate() {
                 <Terminal size={22} className="text-teal-400" />
               </div>
             </div>
-            <h1 className="text-[22px] font-semibold text-white tracking-tight">Authorize this device</h1>
+            <h1 className="text-[22px] font-semibold text-white tracking-tight">{t.title}</h1>
             <p className="text-[13px] text-slate-400 mt-1.5">
-              Ekoa Local (your terminal) is asking to sign in to your Ekoa account.
+              {t.subtitle}
             </p>
           </div>
 
@@ -102,14 +105,14 @@ function Activate() {
             {phase === "ready" && (
               <div className="space-y-5">
                 <div className="text-center">
-                  <p className="text-xs text-slate-500 mb-2">Confirm this matches the code shown in your terminal</p>
+                  <p className="text-xs text-slate-500 mb-2">{t.confirmMatch}</p>
                   <div className="font-mono text-2xl tracking-[0.3em] text-white bg-white/[0.04] border border-white/[0.08] rounded-xl py-3">
                     {code}
                   </div>
                 </div>
                 {user?.username && (
                   <p className="text-center text-[13px] text-slate-400">
-                    Signing in as <span className="text-teal-400 font-medium">{user.username}</span>
+                    {t.signingInAs} <span className="text-teal-400 font-medium">{user.username}</span>
                   </p>
                 )}
                 <div className="flex gap-3 pt-1">
@@ -118,14 +121,14 @@ function Activate() {
                     onClick={() => decide(true)}
                     className="flex-1 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 font-medium py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <X size={15} /> Deny
+                    <X size={15} /> {t.deny}
                   </button>
                   <button
                     type="button"
                     onClick={() => decide(false)}
                     className="flex-1 bg-gradient-to-r from-teal-600 to-teal-500 hover:from-teal-500 hover:to-teal-400 text-white font-medium py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-teal-900/25"
                   >
-                    <ShieldCheck size={15} /> Approve
+                    <ShieldCheck size={15} /> {t.approve}
                   </button>
                 </div>
               </div>
@@ -142,8 +145,8 @@ function Activate() {
                 <div className="w-12 h-12 rounded-full bg-teal-500/10 border border-teal-500/25 flex items-center justify-center mx-auto">
                   <Check size={24} className="text-teal-400" />
                 </div>
-                <h2 className="text-white font-medium text-[17px]">Device approved</h2>
-                <p className="text-[13px] text-slate-400">You can return to your terminal — it&apos;s signing in now.</p>
+                <h2 className="text-white font-medium text-[17px]">{t.approvedTitle}</h2>
+                <p className="text-[13px] text-slate-400">{t.approvedBody}</p>
               </div>
             )}
 
@@ -152,8 +155,8 @@ function Activate() {
                 <div className="w-12 h-12 rounded-full bg-slate-500/10 border border-slate-500/25 flex items-center justify-center mx-auto">
                   <X size={24} className="text-slate-400" />
                 </div>
-                <h2 className="text-white font-medium text-[17px]">Request denied</h2>
-                <p className="text-[13px] text-slate-400">The terminal was not signed in. You can close this tab.</p>
+                <h2 className="text-white font-medium text-[17px]">{t.deniedTitle}</h2>
+                <p className="text-[13px] text-slate-400">{t.deniedBody}</p>
               </div>
             )}
 
@@ -169,7 +172,7 @@ function Activate() {
         </div>
 
         <p className="text-center text-[11px] text-slate-600 mt-6">
-          Only approve if you started this login. The code must match your terminal.
+          {t.safetyFooter}
         </p>
       </div>
     </div>

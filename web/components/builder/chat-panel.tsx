@@ -533,8 +533,11 @@ export default function ChatPanel({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-white border-r border-neutral-200 relative min-w-0">
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-light">
+      {/* Messages area. The inner max-w-3xl keeps the transcript a readable
+          centred column: when the side panel is hidden this rail goes full
+          width, and without the cap the bubbles would hug the far edge over a
+          wide empty gutter. At the 380px panel-open width the cap is inert. */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-light mx-auto w-full max-w-3xl">
         {isEmpty && !isExecuting ? (
           <div className="flex flex-col items-center justify-center flex-1 text-center px-4">
             <img
@@ -615,8 +618,9 @@ export default function ChatPanel({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input area */}
-      <div className="p-4 bg-white border-t border-neutral-100">
+      {/* Input area. Same centred max-w-3xl as the transcript so the composer
+          stays aligned with the message column when the panel is hidden. */}
+      <div className="p-4 bg-white border-t border-neutral-100 mx-auto w-full max-w-3xl">
         {/* Quick actions */}
         {isEmpty && showExampleCards && (
           <div className="flex flex-wrap gap-1.5 mb-3">

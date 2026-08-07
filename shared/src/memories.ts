@@ -60,6 +60,8 @@ export const MemoryStats = z
     byTier: z.record(z.number()).optional(),
     byVisibility: z.record(z.number()).optional(),
     verified: z.number().int().nonnegative().optional(),
+    // Memories created in the trailing 7 days (dashboard "recentes (7d)" stat).
+    recentCount: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 export type MemoryStats = z.infer<typeof MemoryStats>;

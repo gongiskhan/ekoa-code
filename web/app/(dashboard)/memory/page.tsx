@@ -419,6 +419,8 @@ function MemoryFormDialog({
   // FC-503: visibility is the shared 'private' | 'org' field.
   const [visibility, setVisibility] = useState(initialData?.visibility || "org");
   const [scope, setScope] = useState(initialData?.scope || "company");
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [contentError, setContentError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -428,11 +430,17 @@ function MemoryFormDialog({
       setTagsStr(initialData?.tags?.join(", ") || "");
       setVisibility(initialData?.visibility || "org");
       setScope(initialData?.scope || "company");
+      setTitleError(null);
+      setContentError(null);
     }
   }, [open, initialData]);
 
   function submitForm() {
-    if (!title.trim() || !content.trim()) return;
+    const missingTitle = !title.trim();
+    const missingContent = !content.trim();
+    setTitleError(missingTitle ? "Indique um título." : null);
+    setContentError(missingContent ? "Indique o conteúdo." : null);
+    if (missingTitle || missingContent) return;
     const tags = tagsStr
       .split(",")
       .map((s: string) => s.trim())
@@ -469,7 +477,11 @@ function MemoryFormDialog({
         <Input
           label={t.form.title}
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            if (titleError) setTitleError(null);
+          }}
+          error={titleError ?? undefined}
           placeholder="e.g. Always use Tailwind for styling"
           required
         />
@@ -485,7 +497,11 @@ function MemoryFormDialog({
         <Textarea
           label={t.form.content}
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={(e) => {
+            setContent(e.target.value);
+            if (contentError) setContentError(null);
+          }}
+          error={contentError ?? undefined}
           rows={4}
           required
         />
@@ -794,7 +810,7 @@ export default function MemoryPage() {
                 <div className="flex items-center space-x-4 text-xs text-neutral-500">
                   <span>{stats.total} {t.stats.total.toLowerCase()}</span>
                   <span>{stats.verified} {t.stats.verified.toLowerCase()}</span>
-                  <span>{stats.recentCount} {t.stats.recent.toLowerCase()}</span>
+                  <span>{stats.recentCount ?? 0} {t.stats.recent.toLowerCase()}</span>
                   {stats.topTags && stats.topTags.length > 0 && (
                     <span>
                       {t.stats.topTags}: {stats.topTags.slice(0, 3).map((tt: any) => tt.tag).join(", ")}

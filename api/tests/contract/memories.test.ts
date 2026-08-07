@@ -238,6 +238,19 @@ describe('F5 subset: memory endpoints the UI calls', () => {
     expect(m.verified).toBe(true);
   });
 
+  it('GET /memories/stats counts memories created in the trailing 7 days (recentCount)', async () => {
+    // The seeded rows carry createdAt:'x' (unparseable) → NOT recent, so they never inflate the stat.
+    await seedMemories();
+    const t = await tokenFor();
+    const now = Date.now();
+    await memories.insert({ _id: 'm-recent', orgId: 'orgA', userId: 'u1', visibility: 'private', type: 'fact', tier: 'active', title: 'R', content: 'R', createdAt: new Date(now - 2 * 86400000).toISOString(), updatedAt: 'x' } as never);
+    await memories.insert({ _id: 'm-old', orgId: 'orgA', userId: 'u1', visibility: 'private', type: 'fact', tier: 'active', title: 'O', content: 'O', createdAt: new Date(now - 30 * 86400000).toISOString(), updatedAt: 'x' } as never);
+    const body = await readJson(await authed('/api/v1/memories/stats', t));
+    expect(MemoryStats.safeParse(body).success).toBe(true);
+    // Only m-recent falls inside the window; the 30-day-old row and the unparseable seeds do not.
+    expect(body.recentCount).toBe(1);
+  });
+
   it('POST /memories/signals rejects an invalid signal value with a 400 envelope', async () => {
     const t = await tokenFor();
     const res = await authed('/api/v1/memories/signals', t, { method: 'POST', body: JSON.stringify({ runId: 'r', signal: 'maybe' }) });

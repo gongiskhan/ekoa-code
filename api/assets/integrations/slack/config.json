@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "slack",
   "displayName": "Slack",
-  "description": "Send messages to Slack channels and list workspace channels using a Bot Token.",
+  "description": "Enviar mensagens para canais do Slack e listar os canais do espaço de trabalho utilizando um Bot Token.",
   "authType": "api_key",
   "provider": "Slack",
   "category": "communication",

@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "stripe",
   "displayName": "Stripe",
-  "description": "Receive Stripe webhook events (payment_intent.succeeded, charge.refunded, …) and auto-register the webhook endpoint via the Stripe API.",
+  "description": "Receber eventos de webhook do Stripe (payment_intent.succeeded, charge.refunded, …) e registar automaticamente o ponto de acesso do webhook através da API do Stripe.",
   "authType": "api_key",
   "provider": "Stripe",
   "category": "payments",

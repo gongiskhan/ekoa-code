@@ -3,7 +3,7 @@
   "skillType": "integration",
   "integrationKey": "zoho-sign",
   "displayName": "Zoho Sign",
-  "description": "Send documents for e-signature with Zoho Sign, track request status, mint embedded signing links, list requests and recall (cancel) them. Document upload + request creation for served apps go through the platform's /api/zoho-sign proxy (it renders to PDF, uploads and auto-places signature fields server-side); these generic actions cover status, listing and recall.",
+  "description": "Enviar documentos para assinatura eletrónica com o Zoho Sign, acompanhar o estado dos pedidos, gerar hiperligações de assinatura incorporadas, listar pedidos e revogá-los (cancelar). O carregamento de documentos e a criação de pedidos das aplicações servidas passam pelo proxy /api/zoho-sign da plataforma (que renderiza para PDF, carrega e coloca automaticamente os campos de assinatura no servidor); estas ações genéricas cobrem o estado, a listagem e a revogação.",
   "authType": "oauth2",
   "provider": "Zoho",
   "category": "document-signing",

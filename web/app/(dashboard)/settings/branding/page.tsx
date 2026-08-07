@@ -24,6 +24,7 @@ import { api, tryCall, openJobStream } from "@/lib/api";
 import { useApi } from "@/components/providers/api-provider";
 import { useI18nStore } from "@/stores/i18n";
 import { toast } from "@/stores/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
@@ -515,6 +516,7 @@ function BrandPreview({
 export default function BrandingSettingsPage() {
   const { pages, common } = useTranslation();
   const b = pages.branding;
+  const confirm = useConfirm();
 
   const { company, isLoading, error, fetchCompany, updateBranding } =
     useCompanyStore();
@@ -695,29 +697,37 @@ export default function BrandingSettingsPage() {
     }
   }
 
-  function handleReset() {
-    if (company) {
-      const branding = (company.branding ?? {}) as {
+  async function handleReset() {
+    if (!company) return;
+    const ok = await confirm({
+      title: "Repor alterações?",
+      description:
+        "As alterações de branding por guardar serão descartadas e o formulário volta aos últimos valores guardados.",
+      confirmLabel: common.reset,
+      tone: "danger",
+    });
+    if (!ok) return;
+    const branding = (company.branding ?? {}) as {
       primaryColor?: string;
       accentColor?: string;
       logo?: string;
       [key: string]: unknown;
     };
-      setLocalPrimaryColor(branding.primaryColor || null);
-      setLocalAccentColor(branding.accentColor || null);
-      setLocalFontFamily(
-        (branding as Record<string, unknown>).fontFamily as string || "Inter"
-      );
-      setLocalDisplayName(company.displayName || "");
-      const rawInstructions = (branding as Record<string, unknown>).instructions;
-      setLocalInstructions(typeof rawInstructions === "string" ? rawInstructions : "");
-      if (branding.logo) {
-        setLogoPreview(branding.logo);
-      } else {
-        setLogoPreview(null);
-      }
-      setLogoFile(null);
+    setLocalPrimaryColor(branding.primaryColor || null);
+    setLocalAccentColor(branding.accentColor || null);
+    setLocalFontFamily(
+      (branding as Record<string, unknown>).fontFamily as string || "Inter"
+    );
+    setLocalDisplayName(company.displayName || "");
+    const rawInstructions = (branding as Record<string, unknown>).instructions;
+    setLocalInstructions(typeof rawInstructions === "string" ? rawInstructions : "");
+    if (branding.logo) {
+      setLogoPreview(branding.logo);
+    } else {
+      setLogoPreview(null);
     }
+    setLogoFile(null);
+    toast.success("Alterações repostas.");
   }
 
   async function handleStartResearch() {

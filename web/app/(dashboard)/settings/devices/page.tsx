@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, tryCall } from '@/lib/api';
 import { normalizeUserCode } from '@/lib/device-code';
+import { useTranslation } from '@/stores/i18n';
 
 /**
  * Device approval page (run s3; D5). The RFC-8628-style device flow's approval half
@@ -19,25 +20,11 @@ import { normalizeUserCode } from '@/lib/device-code';
  * (`POST /api/v1/auth/device/approve`); this page is their first in-app consumer.
  */
 
-const COPY = {
-  title: 'Aprovação de dispositivos',
-  description:
-    'Autorize a ligação de um novo dispositivo, por exemplo a ponte local, introduzindo o código apresentado nesse dispositivo.',
-  codeLabel: 'Código do dispositivo',
-  codeHint: 'O código tem o formato XXXX-XXXX e é válido durante 10 minutos.',
-  approve: 'Aprovar',
-  approving: 'A aprovar...',
-  deny: 'Recusar',
-  denying: 'A recusar...',
-  approved: 'Dispositivo aprovado. Pode regressar ao dispositivo para continuar.',
-  denied: 'Pedido recusado. O dispositivo não recebeu qualquer acesso.',
-  invalid: 'Código de dispositivo inválido ou expirado.',
-  incomplete: 'Introduza o código completo (8 caracteres).',
-} as const;
-
 type Outcome = { kind: 'approved' | 'denied' | 'error'; message: string } | null;
 
 export default function DevicesSettingsPage() {
+  const { pages } = useTranslation();
+  const t = pages.devices;
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState<'approve' | 'deny' | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
@@ -46,7 +33,7 @@ export default function DevicesSettingsPage() {
 
   async function submit(deny: boolean) {
     if (!complete) {
-      setOutcome({ kind: 'error', message: COPY.incomplete });
+      setOutcome({ kind: 'error', message: t.incomplete });
       return;
     }
     setBusy(deny ? 'deny' : 'approve');
@@ -54,21 +41,21 @@ export default function DevicesSettingsPage() {
     const res = await tryCall(() => api.auth.deviceApprove(deny ? { userCode: code, deny: true } : { userCode: code }));
     setBusy(null);
     if (!res.ok) {
-      setOutcome({ kind: 'error', message: COPY.invalid });
+      setOutcome({ kind: 'error', message: t.invalid });
       return;
     }
-    setOutcome(deny ? { kind: 'denied', message: COPY.denied } : { kind: 'approved', message: COPY.approved });
+    setOutcome(deny ? { kind: 'denied', message: t.denied } : { kind: 'approved', message: t.approved });
     setCode('');
   }
 
   return (
     <PageShell testId="settings-devices-page">
-      <PageHeader icon={MonitorSmartphone} title={COPY.title} description={COPY.description} />
+      <PageHeader icon={MonitorSmartphone} title={t.title} description={t.description} />
 
       <Card className="max-w-lg">
         <Input
-          label={COPY.codeLabel}
-          hint={COPY.codeHint}
+          label={t.codeLabel}
+          hint={t.codeHint}
           placeholder="XXXX-XXXX"
           autoComplete="off"
           spellCheck={false}
@@ -90,7 +77,7 @@ export default function DevicesSettingsPage() {
             onClick={() => void submit(false)}
             data-testid="device-approve"
           >
-            {busy === 'approve' ? COPY.approving : COPY.approve}
+            {busy === 'approve' ? t.approving : t.approve}
           </Button>
           <Button
             variant="danger-ghost"
@@ -100,7 +87,7 @@ export default function DevicesSettingsPage() {
             onClick={() => void submit(true)}
             data-testid="device-deny"
           >
-            {busy === 'deny' ? COPY.denying : COPY.deny}
+            {busy === 'deny' ? t.denying : t.deny}
           </Button>
         </div>
 

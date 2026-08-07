@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useCofreStore, UNLOCK_DURATIONS, offersDurationControl } from '@/stores/cofre';
@@ -168,6 +169,7 @@ export default function CofrePage() {
   return (
     <PageShell>
       <PageHeader
+        icon={Lock}
         title="Cofre"
         description="As suas credenciais são cifradas com chaves guardadas em hardware dedicado. Nenhum modelo de IA vê as suas palavras-passe. Cada utilização fica registada no seu Registo."
         actions={
@@ -186,9 +188,11 @@ export default function CofrePage() {
         {isLoading && items.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">A carregar…</div>
         ) : items.length === 0 ? (
-          <div className="p-6 text-sm text-muted-foreground">
-            Ainda não há credenciais no cofre. Ligue uma integração ou capture uma sessão para começar.
-          </div>
+          <EmptyState
+            icon={Lock}
+            title="Ainda não há credenciais no cofre."
+            description="Ligue uma integração ou capture uma sessão para começar - as credenciais capturadas aparecem aqui, cifradas."
+          />
         ) : (
           <Table>
             <THead>

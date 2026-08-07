@@ -586,7 +586,7 @@ export default function SettingsUsersPage() {
                 <CardTitle icon={Shield}>{t.overview}</CardTitle>
                 <div className="flex items-center space-x-4 text-xs text-neutral-500">
                   <span>
-                    {users.length} {t.users.toLowerCase()}
+                    {users.length} {(users.length === 1 ? t.usersSingular : t.users).toLowerCase()}
                   </span>
                   <span>
                     {users.filter((u) => u.role === "org-admin" || u.role === "super-admin").length}{" "}
