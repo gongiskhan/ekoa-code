@@ -47,7 +47,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -911,7 +911,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       meteringAnomalies: llm.meteringAnomalies,
       gatewayUnmeteredCalls: llm.gatewayUnmeteredCalls,
       clockSkewSec: 0,
-      bridgeConnections: sseManager.connectionCount,
+      // LIVE DAEMON SOCKETS, which is what the field name promises. This reported
+      // `sseManager.connectionCount` - the browser SSE count - so `/health` answered 1 when a
+      // dashboard tab was open and 0 with a bridge genuinely connected, in both directions at
+      // once. `bridgeConnectionCount()` is documented in bridge/registry.ts as this field's
+      // source and had no callers.
+      bridgeConnections: bridgeConnectionCount(),
       pendingEvents: 0,
     });
   });

@@ -724,7 +724,7 @@ async function newestUsableSession(
           ? 'Esta integração não usa captura de sessão.'
           : machine
             ? 'Pronto: a sessão é capturada na sua máquina.'
-            : 'Nenhuma máquina ligada. Abra o ekoa-local na máquina onde tem o certificado ou o leitor de cartões.',
+            : 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões.',
       },
       session: captured
         ? { status: 'captured', capturedAt: captured.createdAt ?? null, expiresAt: captured.expiresAt ?? null }
@@ -757,7 +757,7 @@ async function newestUsableSession(
         started: false,
         session: {
           status: 'failed',
-          message: 'Nenhuma máquina ligada. Abra o ekoa-local na máquina onde tem o certificado ou o leitor de cartões.',
+          message: 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões.',
         },
       });
     }

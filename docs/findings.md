@@ -6,6 +6,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`health-reported-the-SSE-count-as-bridgeConnections`** (FIXED 2026-08-07, MEDIUM, an
+  observability field that lied in both directions - found while pairing a real daemon and not
+  believing the number). `/health` answered `bridgeConnections: sseManager.connectionCount`
+  (`api/src/server.ts:914`) - the browser SSE client count. So the field read 1 with a dashboard tab
+  open and no daemon anywhere, and 0 with a daemon genuinely connected and reporting
+  `Estado da ligação: open`. Both directions wrong at once, which is what made it convincing: it
+  moved when things happened, just never for the reason the name claimed.
+  `bridge/registry.ts:306` already exports `bridgeConnectionCount()` (`live.size`) whose docblock
+  names it as THIS FIELD'S source - "reported separately from SSE `connections`" - and nothing
+  called it. Fixed by calling it. Verified live end to end: a MacBook Air paired over tailscale
+  (`goncalos-macbook-air.local-6ad045e2`), `ekoa-bridge serve` reconnected by itself across an api
+  restart, and `/health` went 0 -> 1 with no SSE client attached.
+  WHY IT MATTERED HERE beyond a wrong number: this field is the readiness signal for the attended
+  ceremony rail (a ceremony REFUSES when no machine is live), so "is a machine connected?" was
+  being answered by "is a browser tab open?". Anyone diagnosing a failed ceremony would have been
+  reading noise.
+
 - **`the-attended-session-ceremony-was-built-tested-and-unreachable`** (FIXED 2026-08-06, MEDIUM,
   a complete rail with no ignition - found while answering "how else could an agent authenticate to
   a site" rather than by a suite). Everything needed to capture a human-established browser session
