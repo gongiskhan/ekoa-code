@@ -27,6 +27,11 @@ only — NEVER copy secret values. Old-cortex content (prompts, skills, tests) m
 with runtime-truth validation against THIS repo's code (old claims about APIs/tools must be
 verified before they ship in content).
 
+## Deployment targets (as of 2026-08 — pre-cutover)
+- **Staging = the GCP VM `ekoa-staging`** (`https://staging.ekoa.io`, `deploy/staging/`) — the ONLY machine ekoa-code deploys to. **Production = the OLD platform (ekoa-dev, `api.ekoa.io`) on its own GCP VM (`ekoa-app-europe-west4-a`, deployed by ekoa-deploy) — NEVER touch it**; the prod cutover to ekoa-code is founder-gated and has not happened.
+- **The operator may say "deploy to production" and MEAN staging** (their own warning, 2026-08-06). Until the cutover, read every deploy request against this mapping and deploy to `ekoa-staging`; touching the production VM is never implied by a prompt's wording.
+- **Staging reflects `main`.** Deploy `main`, never an ad-hoc work branch — commit/merge the work to `main` first, then deploy (operator correction, 2026-08-06).
+
 ## Archive
 `spec/` (19 chapters + reference audits), `RUN_LOG.md`, `PLAN.md`, and the run evidence were
 retired 2026-07 by operator decision. Everything is recoverable from git history at tag
