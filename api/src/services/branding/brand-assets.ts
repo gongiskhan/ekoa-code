@@ -12,15 +12,31 @@
  * validated as an image and the size is capped.
  */
 
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { guardedFetchFollow } from '../url-fetcher.js';
 import { isBuilderPromoAsset, type SiteBuilder } from './site-builder.js';
+import {
+  probeImageDims,
+  isSocialBannerShape,
+  logoShapeScore,
+  downscaleToStorableLogo,
+  STORED_LOGO_MAX_SIDE,
+  type ImageDims,
+} from './image-fit.js';
 
 /** Max bytes accepted for a single brand image (brief: ~1.5MB). */
 const MAX_IMAGE_BYTES = 1_500_000;
+/**
+ * Max SOURCE bytes for a logo candidate before the downscale rescue. Real logos ship as
+ * huge unoptimized PNGs (live 2026-08-07: ekoa.io serves its 2048x2048 logo as 4.5MB);
+ * the flat {MAX_IMAGE_BYTES} cap silently discarded the rendered-header harvest's correct
+ * pick and left only derived assets to choose from. Oversized rasters are accepted up to
+ * this cap and downscaled to a stored size within {MAX_IMAGE_BYTES}.
+ */
+const MAX_LOGO_SOURCE_BYTES = 12_000_000;
 /** Minimum bytes for a candidate to count as a real logo (not an icon/pixel). */
 const MIN_LOGO_SIZE = 500;
 
@@ -93,18 +109,18 @@ function generateFilename(content: Buffer, url: string, contentType?: string): s
 }
 
 /**
- * Read a Response body into a Buffer, capping at MAX_IMAGE_BYTES. Returns null if
+ * Read a Response body into a Buffer, capping at `maxBytes`. Returns null if
  * the stream exceeds the cap (a server that lies about content-length can't make
  * us buffer 100MB).
  */
-async function readCapped(res: Response): Promise<Buffer | null> {
+async function readCapped(res: Response, maxBytes: number): Promise<Buffer | null> {
   const reader = res.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (let r = await reader.read(); !r.done; r = await reader.read()) {
     total += r.value.byteLength;
-    if (total > MAX_IMAGE_BYTES) {
+    if (total > maxBytes) {
       reader.cancel().catch(() => {});
       return null;
     }
@@ -114,45 +130,55 @@ async function readCapped(res: Response): Promise<Buffer | null> {
 }
 
 /**
+ * Fetch an external image (SSRF-guarded) into memory. Shared by the generic proxy path
+ * (flat {MAX_IMAGE_BYTES} cap) and the logo path (larger source cap + downscale rescue).
+ */
+async function fetchImageBytes(
+  imageUrl: string,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; contentType: string } | { error: string }> {
+  const response = await guardedFetchFollow(imageUrl, { headers: IMAGE_HEADERS, timeoutMs: 12_000 });
+  if (!response.ok) return { error: `HTTP ${response.status}` };
+
+  const contentType = response.headers.get('content-type') || '';
+  const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+
+  if (!contentType.includes('image') && !contentType.includes('svg')) {
+    return { error: `Not an image: ${contentType}` };
+  }
+  if (contentLength > maxBytes) return { error: `Too large: ${contentLength}B` };
+  if (contentLength > 0 && contentLength < 100) return { error: 'Too small (tracking pixel)' };
+
+  const buffer = await readCapped(response, maxBytes);
+  if (!buffer) return { error: `Too large (> ${maxBytes}B)` };
+  return { buffer, contentType };
+}
+
+/** Write image bytes into the brand-assets store and return the served path. */
+function storeImageBytes(buffer: Buffer, imageUrl: string, contentType: string): { localUrl: string; filename: string } {
+  const dir = ensureBrandAssetsDir();
+  const filename = generateFilename(buffer, imageUrl, contentType);
+  writeFileSync(join(dir, filename), buffer);
+  return { localUrl: `/brand-assets/${filename}`, filename };
+}
+
+/**
  * Download an external image (SSRF-guarded) and cache it locally. Returns a
  * relative URL path (`/brand-assets/<file>`) on success.
  */
 export async function downloadAndProxyImage(imageUrl: string): Promise<ProxyResult> {
   try {
-    const response = await guardedFetchFollow(imageUrl, { headers: IMAGE_HEADERS, timeoutMs: 12_000 });
-    if (!response.ok) {
-      return { success: false, originalUrl: imageUrl, error: `HTTP ${response.status}` };
-    }
+    const fetched = await fetchImageBytes(imageUrl, MAX_IMAGE_BYTES);
+    if ('error' in fetched) return { success: false, originalUrl: imageUrl, error: fetched.error };
 
-    const contentType = response.headers.get('content-type') || '';
-    const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
-
-    if (!contentType.includes('image') && !contentType.includes('svg')) {
-      return { success: false, originalUrl: imageUrl, error: `Not an image: ${contentType}` };
-    }
-    if (contentLength > MAX_IMAGE_BYTES) {
-      return { success: false, originalUrl: imageUrl, error: `Too large: ${contentLength}B` };
-    }
-    if (contentLength > 0 && contentLength < 100) {
-      return { success: false, originalUrl: imageUrl, error: 'Too small (tracking pixel)' };
-    }
-
-    const buffer = await readCapped(response);
-    if (!buffer) {
-      return { success: false, originalUrl: imageUrl, error: `Too large (> ${MAX_IMAGE_BYTES}B)` };
-    }
-
-    const dir = ensureBrandAssetsDir();
-    const filename = generateFilename(buffer, imageUrl, contentType);
-    writeFileSync(join(dir, filename), buffer);
-
+    const stored = storeImageBytes(fetched.buffer, imageUrl, fetched.contentType);
     return {
       success: true,
-      localUrl: `/brand-assets/${filename}`,
-      filename,
+      localUrl: stored.localUrl,
+      filename: stored.filename,
       originalUrl: imageUrl,
-      contentType,
-      size: buffer.length,
+      contentType: fetched.contentType,
+      size: fetched.buffer.length,
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -184,6 +210,15 @@ export interface LogoCandidate {
   source: string; // 'rendered-header' | 'agent' | 'og-image' | 'common-path' | 'favicon' | 'design-system' | ...
   /** Placement score from the rendered-header harvest (higher = more logo-like). */
   harvestScore?: number;
+  /** Pixel dimensions of the STORED image (absent for svg/ico/unparseable). */
+  dims?: ImageDims;
+  /**
+   * Social-card shape (og:image 1200x630 and friends). A banner is never the logo, no
+   * matter which source proposed it: live 2026-08-07 (ekoa.io/info), the og:image banner
+   * arrived through the design-system favicon list - the source label alone could not
+   * demote it, and the byte-size tie-break crowned it over the real 256x256 icon.
+   */
+  banner?: boolean;
 }
 
 /**
@@ -208,33 +243,41 @@ export function storeSvgLogo(svgText: string): { localPath: string; filename: st
   }
 }
 
-/** Try to download a logo from a URL. Returns null if it fails or is too small. */
+/** Try to download a logo from a URL. Returns null if it fails or is too small. Oversized
+ *  rasters (bytes or pixels) are downscale-rescued instead of silently dropped. */
 async function tryDownloadLogo(imageUrl: string, source: string, harvestScore?: number): Promise<LogoCandidate | null> {
   try {
-    const result = await downloadAndProxyImage(imageUrl);
-    if (!result.success || !result.localUrl || !result.filename) return null;
+    const fetched = await fetchImageBytes(imageUrl, MAX_LOGO_SOURCE_BYTES);
+    if ('error' in fetched) return null;
 
-    const size = result.size ?? 0;
-    if (size < MIN_LOGO_SIZE) {
-      const filePath = join(getBrandAssetsDir(), result.filename);
-      if (existsSync(filePath)) {
-        try {
-          unlinkSync(filePath);
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
-      return null;
+    let { buffer, contentType } = fetched;
+    let dims = await probeImageDims(buffer, contentType);
+    const tooManyBytes = buffer.length > MAX_IMAGE_BYTES;
+    const tooManyPixels = dims !== null && Math.max(dims.width, dims.height) > STORED_LOGO_MAX_SIDE;
+    if (tooManyBytes || tooManyPixels) {
+      const rescued = await downscaleToStorableLogo(buffer);
+      if (!rescued) return null;
+      console.log(
+        `[brand-assets] downscaled oversized ${source} candidate ${imageUrl} (${buffer.length}B${dims ? ` ${dims.width}x${dims.height}` : ''} -> ${rescued.buf.length}B)`,
+      );
+      buffer = rescued.buf;
+      contentType = rescued.contentType;
+      dims = await probeImageDims(buffer, contentType);
     }
+
+    if (buffer.length < MIN_LOGO_SIZE) return null;
+    const stored = storeImageBytes(buffer, imageUrl, contentType);
 
     return {
       url: imageUrl,
-      localPath: result.localUrl,
-      filename: result.filename,
-      size,
-      contentType: result.contentType || 'image/png',
+      localPath: stored.localUrl,
+      filename: stored.filename,
+      size: buffer.length,
+      contentType: contentType || 'image/png',
       source,
       ...(harvestScore !== undefined ? { harvestScore } : {}),
+      ...(dims ? { dims } : {}),
+      ...(isSocialBannerShape(dims) ? { banner: true } : {}),
     };
   } catch {
     return null;
@@ -252,6 +295,7 @@ export async function extractLogoCandidates(
   websiteUrl: string,
   extraUrls: Array<{ url: string; source: string; score?: number }> = [],
   builder?: SiteBuilder | null,
+  opts: { ogImageUrl?: string | null } = {},
 ): Promise<LogoCandidate[]> {
   const candidates: LogoCandidate[] = [];
   const tried = new Set<string>();
@@ -267,12 +311,18 @@ export async function extractLogoCandidates(
     }
   };
 
+  // The og:image is a social banner whatever route it arrives by. The design-system
+  // extractor lists it among "favicons" (live 2026-08-07, ekoa.io/info), and first-source-wins
+  // dedup then hid the honest 'og-image' label - so the label is forced by URL, not by route.
+  const ogImageUrl = opts.ogImageUrl ? resolveUrl(opts.ogImageUrl) : '';
+
   const tryUrl = async (url: string | null | undefined, source: string, score?: number): Promise<void> => {
     if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
     if (tried.has(url)) return;
     tried.add(url);
     if (builder && isBuilderPromoAsset(url, builder, siteHost)) return;
-    const c = await tryDownloadLogo(url, source, score);
+    const effectiveSource = ogImageUrl && url === ogImageUrl ? 'og-image' : source;
+    const c = await tryDownloadLogo(url, effectiveSource, score);
     if (c) candidates.push(c);
   };
 
@@ -291,7 +341,10 @@ export async function extractLogoCandidates(
         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
       if (ogMatch?.[1]) htmlUrls.push({ url: resolveUrl(ogMatch[1]), source: 'og-image' });
 
-      const headerHtml = html.substring(0, Math.floor(html.length * 0.3));
+      // Header-area heuristic: 60% of the document, not 30% - modern sites inline enough
+      // CSS/JS in <head> to push the header markup past a third of the bytes (live
+      // 2026-08-07: ekoa.io/info's header logo <img> sits at 41% of the HTML).
+      const headerHtml = html.substring(0, Math.floor(html.length * 0.6));
       const imgRegex = /<img[^>]*(?:class|alt|src|id)=[^>]*logo[^>]*>/gi;
       let imgMatch: RegExpExecArray | null;
       while ((imgMatch = imgRegex.exec(headerHtml)) !== null) {
@@ -319,7 +372,9 @@ export async function extractLogoCandidates(
   await Promise.allSettled(priorityPaths.map((p) => tryUrl(`${origin}${p}`, 'common-path')));
 
   console.log(
-    `[brand-assets] Found ${candidates.length} logo candidate(s): ${candidates.map((c) => `${c.source}:${c.filename}(${c.size}B)`).join(', ')}`,
+    `[brand-assets] Found ${candidates.length} logo candidate(s): ${candidates
+      .map((c) => `${c.source}:${c.filename}(${c.size}B${c.dims ? ` ${c.dims.width}x${c.dims.height}` : ''}${c.banner ? ' BANNER' : ''})`)
+      .join(', ')}`,
   );
   return candidates;
 }
@@ -330,8 +385,11 @@ export async function extractLogoCandidates(
  * `<img class=...logo>`, an agent/design-system-provided logo, or a `/logo.svg` at a
  * conventional path); DERIVED assets (og:image, favicon, touch-icon) are the last resort —
  * they are almost never the logo (og:image is a social banner; a 380KB touch-icon was served
- * as "the logo" pre-fix, operator report 2026-07-11). Within a tier: harvest score, then
- * format (SVG > PNG > other, photos/JPEGs demoted).
+ * as "the logo" pre-fix, operator report 2026-07-11). Below everything sits any candidate
+ * whose MEASURED shape is a social card (`banner`), whatever its source label: the og:image
+ * banner reached tier 1 through the design-system favicon list and won on byte size (live
+ * 2026-08-07, ekoa.io/info). Within a tier: harvest score, then format (SVG > PNG > other,
+ * photos/JPEGs demoted), then measured logo-shape fit, and only then bytes (capped).
  */
 const SOURCE_TIER: Record<string, number> = {
   'rendered-header': 3,
@@ -345,14 +403,20 @@ const SOURCE_SCORE: Record<string, number> = {
   'og-image': 3, 'agent-icon': 2, 'apple-touch-icon': 2, 'favicon-link': 0, favicon: 0,
 };
 
+/** A banner-shaped candidate drops below every honest tier, whatever its source. */
+function tierOf(c: LogoCandidate): number {
+  if (c.banner) return 0;
+  return SOURCE_TIER[c.source] ?? 2;
+}
+
 export function selectBestLogo(candidates: LogoCandidate[]): LogoCandidate | null {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0] ?? null;
 
   return (
     [...candidates].sort((a, b) => {
-    const aTier = SOURCE_TIER[a.source] ?? 2;
-    const bTier = SOURCE_TIER[b.source] ?? 2;
+    const aTier = tierOf(a);
+    const bTier = tierOf(b);
     if (aTier !== bTier) return bTier - aTier;
 
     // Rendered-harvest placement score dominates within its tier.
@@ -368,6 +432,12 @@ export function selectBestLogo(candidates: LogoCandidate[]): LogoCandidate | nul
     const aIsJpeg = a.contentType.includes('jpeg') || a.contentType.includes('jpg') ? 1 : 0;
     const bIsJpeg = b.contentType.includes('jpeg') || b.contentType.includes('jpg') ? 1 : 0;
     if (aIsJpeg !== bIsJpeg) return aIsJpeg - bIsJpeg;
+
+    // Measured shape beats byte size: a 256x256 mark is a better logo bet than a big
+    // wide raster, whatever their file sizes. Dimension-less candidates score 0.
+    const aShape = logoShapeScore(a.dims);
+    const bShape = logoShapeScore(b.dims);
+    if (aShape !== bShape) return bShape - aShape;
 
     const aScore = SOURCE_SCORE[a.source] ?? 1;
     const bScore = SOURCE_SCORE[b.source] ?? 1;
@@ -394,6 +464,9 @@ export interface ResolveBrandLogoInput {
   websiteUrl: string;
   extraUrls?: Array<{ url: string; source: string; score?: number }>;
   builder?: SiteBuilder | null;
+  /** The site's og:image URL - candidates matching it are labelled (and demoted) as such
+   *  regardless of which extractor proposed them. */
+  ogImageUrl?: string | null;
   /** Inline-SVG logos already stored by the caller (rendered-header harvest). */
   preStored?: Array<{ localPath: string; filename: string; size: number; score: number }>;
   /** Vision confirmation inputs - omitted in tests / when the render produced no header shot. */
@@ -404,7 +477,9 @@ export interface ResolveBrandLogoInput {
 }
 
 export async function resolveBrandLogo(input: ResolveBrandLogoInput): Promise<string | null> {
-  const candidates = await extractLogoCandidates(input.websiteUrl, input.extraUrls ?? [], input.builder);
+  const candidates = await extractLogoCandidates(input.websiteUrl, input.extraUrls ?? [], input.builder, {
+    ogImageUrl: input.ogImageUrl ?? null,
+  });
   for (const p of input.preStored ?? []) {
     candidates.push({
       url: '',
@@ -425,6 +500,15 @@ export async function resolveBrandLogo(input: ResolveBrandLogoInput): Promise<st
     try {
       const picked = await input.vision.pick({ headerShot: input.vision.headerShot, candidates });
       if (picked) {
+        // A measured social-card shape is never the logo. The vision pick proved
+        // non-deterministic on banner-vs-mark (live 2026-08-07: same site, two runs, two
+        // different answers) - so a banner-flagged pick only stands when there is nothing
+        // but banners to choose from.
+        const visionPickedBanner = picked.banner && candidates.some((c) => !c.banner);
+        if (visionPickedBanner) {
+          console.log(`[brand-assets] vision picked a banner-shaped candidate (${picked.filename}) - keeping heuristic pick ${best.filename}`);
+          return best.localPath;
+        }
         if (picked.localPath !== best.localPath) {
           console.log(`[brand-assets] vision overrode heuristic pick: ${best.source}:${best.filename} -> ${picked.source}:${picked.filename}`);
         }

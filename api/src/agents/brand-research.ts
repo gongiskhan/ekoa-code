@@ -314,6 +314,7 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
         websiteUrl: site.finalUrl,
         extraUrls: logoHints,
         builder: detectSiteBuilder(site.finalUrl, site.generator),
+        ogImageUrl: site.ogImage,
         preStored: logoPreStored,
         ...(headerShot
           ? {

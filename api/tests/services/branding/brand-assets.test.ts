@@ -53,6 +53,34 @@ describe('selectBestLogo', () => {
     const png = cand({ source: 'favicon-link', contentType: 'image/png', filename: 'icon.png', size: 2_000 });
     expect(selectBestLogo([photo, png])).toBe(png);
   });
+
+  it('a banner-shaped candidate loses to a real icon regardless of source and byte size - live: the og:image banner beat the 256x256 icon on bytes (ekoa.io/info, 2026-08-07)', () => {
+    // Both arrived labelled `favicon` via the design-system extractor; only the measured
+    // shape tells them apart.
+    const ogBanner = cand({ source: 'favicon', filename: 'og.png', size: 380_761, dims: { width: 1200, height: 630 }, banner: true });
+    const icon = cand({ source: 'favicon', filename: 'icon.png', size: 53_781, dims: { width: 256, height: 256 } });
+    expect(selectBestLogo([ogBanner, icon])).toBe(icon);
+  });
+
+  it('a banner-shaped candidate drops below even a favicon-link from another tier', () => {
+    const banner = cand({ source: 'html-logo-img', filename: 'wide.png', size: 900_000, dims: { width: 1200, height: 630 }, banner: true });
+    const fav = cand({ source: 'favicon-link', filename: 'fav.png', size: 2_000 });
+    expect(selectBestLogo([banner, fav])).toBe(fav);
+  });
+
+  it('within a tier, measured logo shape beats raw byte size', () => {
+    // An ultra-wide strip (page divider / decorative band, aspect > 6) vs a square mark:
+    // the mark wins even though the strip has far more bytes.
+    const strip = cand({ source: 'favicon', filename: 'strip.png', size: 450_000, dims: { width: 1400, height: 160 } });
+    const mark = cand({ source: 'favicon', filename: 'mark.png', size: 20_000, dims: { width: 512, height: 512 } });
+    expect(selectBestLogo([strip, mark])).toBe(mark);
+  });
+
+  it('dimension-less candidates keep the pre-dims byte-size behaviour', () => {
+    const small = cand({ source: 'favicon', filename: 'a.png', size: 10_000 });
+    const big = cand({ source: 'favicon', filename: 'b.png', size: 90_000 });
+    expect(selectBestLogo([small, big])).toBe(big);
+  });
 });
 
 describe('storeSvgLogo', () => {
