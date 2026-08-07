@@ -401,7 +401,15 @@ export function canCreateAutomation(actor: Actor, orgSettings?: { allowBuilderAu
 
 export async function createAutomation(
   actor: Actor,
-  input: { name: string; description?: string; plan?: { steps?: Array<{ stepId?: string; description?: string; tool?: string; argv?: string[] }> }; visibility?: 'private' | 'org' },
+  // The steps type mirrors mapWireStepToEngine's input — the integration-step fields ride the
+  // wire since 2026-08-06 (the mapper widening above); the old narrower type here silently
+  // predated them while the runtime already carried them end to end.
+  input: {
+    name: string;
+    description?: string;
+    plan?: { steps?: Array<Parameters<typeof mapWireStepToEngine>[0]> };
+    visibility?: 'private' | 'org';
+  },
   orgSettings?: { allowBuilderAutomations?: boolean },
 ): Promise<WireAutomation> {
   if (!canCreateAutomation(actor, orgSettings)) {

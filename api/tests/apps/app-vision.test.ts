@@ -62,8 +62,8 @@ function cannedModel(reply: string | (() => never)) {
   const deps: AppVisionDeps = {
     oneShot: async (opts, attribution) => {
       calls.push({ opts, attribution });
-      if (typeof reply !== 'string') reply();
-      return { text: reply, usage: { input_tokens: 1, output_tokens: 1 } as never };
+      const text = typeof reply === 'string' ? reply : reply();
+      return { text, usage: { input_tokens: 1, output_tokens: 1 } as never };
     },
     decide: () => ({ tier: 'WORKHORSE', model: 'test-model', effort: 'medium' }) as never,
     extractPdfText: (bytes) => extractPdfText(bytes),
@@ -113,15 +113,15 @@ describe('app-vision extract — a text PDF is read without a vision call', () =
     expect(res).toEqual({ success: true, data: { numeroFatura: 'FT 2026/18', valorTotal: 1230 } });
     expect(calls).toHaveLength(1);
     // The characters from the file reached the model verbatim...
-    expect(calls[0].opts.prompt).toContain('FT 2026/18');
+    expect(calls[0]!.opts.prompt).toContain('FT 2026/18');
     // ...and no image was attached, so this cost no vision tokens.
-    expect(calls[0].opts.images).toBeUndefined();
+    expect(calls[0]!.opts.images).toBeUndefined();
   });
 
   it('bills the app OWNER against the app’s artifact id, never the visitor', async () => {
     const { deps, calls } = cannedModel('{"ok":true}');
     await appVisionExtract({ ...base, pdfBase64: b64(await pdfWithText(INVOICE_TEXT)) }, deps);
-    expect(calls[0].attribution).toEqual({
+    expect(calls[0]!.attribution).toEqual({
       kind: 'user_work',
       agentType: 'app-vision-extract',
       billeeUserId: 'owner-1',
@@ -132,8 +132,8 @@ describe('app-vision extract — a text PDF is read without a vision call', () =
   it('holds a bank statement to the statement schema, not the invoice one', async () => {
     const { deps, calls } = cannedModel('{"transacoes":[]}');
     await appVisionExtract({ ...base, kind: 'bank-statement', pdfBase64: b64(await pdfWithText(INVOICE_TEXT)) }, deps);
-    expect(calls[0].opts.systemPrompt).toContain('extratos bancários');
-    expect(calls[0].opts.systemPrompt).not.toContain('extrator de dados de faturas');
+    expect(calls[0]!.opts.systemPrompt).toContain('extratos bancários');
+    expect(calls[0]!.opts.systemPrompt).not.toContain('extrator de dados de faturas');
   });
 });
 
@@ -172,13 +172,13 @@ describe('app-vision extract — the image path', () => {
       deps,
     );
     expect(res).toEqual({ success: true, data: { valorTotal: 42 } });
-    expect(calls[0].opts.images).toEqual([{ mediaType: 'image/png', data: 'AAAA' }]);
+    expect(calls[0]!.opts.images).toEqual([{ mediaType: 'image/png', data: 'AAAA' }]);
   });
 
   it('defaults an unstated media type to JPEG rather than refusing a plain upload', async () => {
     const { deps, calls } = cannedModel('{}');
     await appVisionExtract({ ...base, imageBase64: 'AAAA' }, deps);
-    expect(calls[0].opts.images?.[0].mediaType).toBe('image/jpeg');
+    expect(calls[0]!.opts.images?.[0]!.mediaType).toBe('image/jpeg');
   });
 
   it('refuses a media type the model cannot read, before spending anything', async () => {
