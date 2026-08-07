@@ -2293,6 +2293,47 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
 
+## Recently fixed - 2026-08-07 brand research stored the og:image banner as the logo
+
+- **`brand-logo-og-banner`** (medium, product). Brand research on `https://ekoa.io/info`
+  filled `branding.logo` with the site's 1200x630 og:image social card instead of the logo -
+  the dual light/dark preview then showed the banner twice on `/settings/branding`. Two runs
+  minutes apart gave different logos ("earlier today it worked"): the ONE best-effort vision
+  call was the only thing standing between the banner and the logo slot. Root chain, proven
+  live: (1) the rendered-header harvest proposed the REAL logo
+  (`/assets/ekoa_logo.png`, walk score 125) but the site serves it as a 4.5MB 2048x2048 PNG
+  and the flat 1.5MB download cap silently dropped it; (2) the static-HTML fallback scan
+  looked only at the first 30% of the HTML and the header `<img>` sits at 41%; (3) the
+  surviving candidates were dembrandt's favicon list - the real 256x256 icon and the og
+  banner, BOTH labelled `favicon`, so the og-image tier demotion never applied and the
+  "bigger file wins" tie-break crowned the banner; (4) the vision gate picked the icon in one
+  run and the banner in the next (the banner contains the header lockup, so a FAST-tier
+  match is a coin flip). **Fix** (`services/branding/image-fit.ts` + `brand-assets.ts` +
+  `logo-vision.ts`): oversized rasters are downscale-rescued via sharp (12MB source cap,
+  stored bounded to 1024px/1.5MB) instead of dropped; every stored candidate gets probed
+  dimensions; the social-card shape is flagged `banner` and demoted below every source tier;
+  a candidate matching the site's og:image URL is force-labelled `og-image` whatever route
+  proposed it; the HTML scan cutoff widened to 60%; the vision prompt states a social card is
+  never the logo, receives per-candidate dimensions, always logs its verdict, and a
+  banner-shaped vision pick is refused while any non-banner candidate exists. Pinned by
+  `api/tests/services/branding/image-fit.test.ts` + new `selectBestLogo` cases. Verified
+  live: re-research of ekoa.io/info stores the real mark deterministically.
+
+## Recently fixed - 2026-08-07 tailnet-bound dev stack: preview iframe CSP-blocked
+
+- **`tailnet-preview-frame-ancestors`** (low, dev-harness). A stack booted for another device
+  (`EKOA_PUBLIC_WEB_HOST`, e.g. a tailscale hostname — the phone-driving setup) served the
+  dashboard from that origin, but the api's `/apps/*` `frame-ancestors` allowlist
+  (`security-headers.ts` `dashboardOrigins()`) still defaulted to `http://localhost:3000`, so
+  the artifact preview iframe was CSP-blocked with only a browser console line
+  (`Framing 'http://…:4111/' violates … frame-ancestors`) to show for it. Found live 2026-08-07
+  while verifying Conduzir/steer over the tailnet. **Fix:** the driver
+  (`.claude/skills/run-ekoa-code/driver.mjs` bootApi) now derives
+  `EKOA_DASHBOARD_ORIGINS=http://localhost:<web-port>,http://<public-host>:<web-port>` whenever
+  `EKOA_PUBLIC_WEB_HOST` is set and no explicit allowlist was given — the api's existing env
+  contract, just plumbed; localhost stays so a local browser keeps working. Verified live:
+  the header now names both origins and the preview renders over the tailnet.
+
 ## Recently fixed - 2026-07-15 api runtime image defects (staging bring-up)
 
 Three defects in the shipped api image, all of the same class - **the image builds fine but the

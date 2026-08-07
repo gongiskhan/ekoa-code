@@ -97,7 +97,7 @@ beforeAll(() => {
   git(originDir, 'config', 'user.name', 't');
   baseSha = commit(originDir, 'a.txt', 'base commit');
 
-  for (const [dir] of [[devDir], [peerDir]]) {
+  for (const dir of [devDir, peerDir]) {
     execFileSync('git', ['clone', '-q', originDir, dir]);
     git(dir, 'config', 'user.email', 't@t');
     git(dir, 'config', 'user.name', 't');

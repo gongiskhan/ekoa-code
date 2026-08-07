@@ -8,7 +8,8 @@
  */
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Per-tier model routing config (ch06 §6.2.3). Model ids + billing weights live here,
  *  env-overridable, and NOWHERE else outside api/src/llm/. Tier configs carry `effort`
@@ -16,13 +17,13 @@ import { join } from 'node:path';
  *  are not carried. */
 export interface LlmTierConfig {
   model: string;
-  effort: 'low' | 'medium' | 'high';
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Billing weight snapshotted onto every ledger event (ch06 §6.5.2). */
   weight: number;
 }
 
 export interface LlmConfig {
-  tiers: { FAST: LlmTierConfig; WORKHORSE: LlmTierConfig; EXPERT: LlmTierConfig };
+  tiers: { FAST: LlmTierConfig; WORKHORSE: LlmTierConfig; EXPERT: LlmTierConfig; GENIUS: LlmTierConfig };
   /** Cache-read discount factor in the metering formula (ch06 §6.5.2), default 0.25. */
   cacheReadFactor: number;
   /** Provider base URL for the direct Messages REST transport + gateway forward.
@@ -65,6 +66,10 @@ export interface AgentsConfig {
   memoryAutoExtractEnabled: boolean;
   /** 5.7.1 tool_event result/args truncation length. */
   toolResultTruncateChars: number;
+  /** Design-skill plugin dir mounted into build runs as an Agent SDK local plugin
+   *  (frontend-design + design-taste-frontend, vendored under api/content/plugins/ekoa-design).
+   *  Empty string disables the mount (EKOA_DESIGN_PLUGIN_DIR=""). */
+  designPluginDir: string;
 }
 
 export interface Config {
@@ -100,14 +105,30 @@ function provisionedGatewayKey(): string {
   return bootGatewayKey;
 }
 
+/** Parse an effort env override, falling back to `dflt` on unset/invalid. */
+function envEffort(name: string, dflt: LlmTierConfig['effort']): LlmTierConfig['effort'] {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  return raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
+    ? raw
+    : dflt;
+}
+
 export function defaultLlmConfig(): LlmConfig {
   return {
     tiers: {
-      FAST: { model: process.env.LLM_MODEL_FAST ?? 'claude-haiku-4-5-20251001', effort: 'low', weight: envFloat('LLM_WEIGHT_FAST', 0.02) },
+      FAST: { model: process.env.LLM_MODEL_FAST ?? 'claude-haiku-4-5-20251001', effort: envEffort('LLM_EFFORT_FAST', 'low'), weight: envFloat('LLM_WEIGHT_FAST', 0.02) },
       // D7 (consumer run): refreshed to the current Sonnet id. Same $3/$15 sticker price as
       // sonnet-4-6, so the tier weight stands (billing re-check 2026-07-11); env overrides win.
-      WORKHORSE: { model: process.env.LLM_MODEL_WORKHORSE ?? 'claude-sonnet-5', effort: 'medium', weight: envFloat('LLM_WEIGHT_WORKHORSE', 0.1) },
-      EXPERT: { model: process.env.LLM_MODEL_EXPERT ?? 'claude-opus-4-8[1m]', effort: 'high', weight: envFloat('LLM_WEIGHT_EXPERT', 0.4) },
+      WORKHORSE: { model: process.env.LLM_MODEL_WORKHORSE ?? 'claude-sonnet-5', effort: envEffort('LLM_EFFORT_WORKHORSE', 'medium'), weight: envFloat('LLM_WEIGHT_WORKHORSE', 0.1) },
+      // Model refresh 2026-08-07: claude-opus-5 is a drop-in for opus-4-8 at the SAME $5/$25
+      // sticker price (weight stands) with 1M context as the DEFAULT — no `[1m]` marker needed.
+      EXPERT: { model: process.env.LLM_MODEL_EXPERT ?? 'claude-opus-5', effort: envEffort('LLM_EFFORT_EXPERT', 'high'), weight: envFloat('LLM_WEIGHT_EXPERT', 0.4) },
+      // GENIUS (2026-08-07): claude-fable-5 — the frontier tier for first builds and other
+      // design/architecture-critical work. $10/$50 = 2x the EXPERT sticker, so weight 0.8.
+      // Fable ALWAYS thinks (the Agent SDK never sends a thinking config, so no 400 risk) and
+      // supports the full effort ladder; `max` trades latency for the most rigorous output,
+      // which is exactly the first-build posture (quality over cost — operator directive).
+      GENIUS: { model: process.env.LLM_MODEL_GENIUS ?? 'claude-fable-5', effort: envEffort('LLM_EFFORT_GENIUS', 'max'), weight: envFloat('LLM_WEIGHT_GENIUS', 0.8) },
     },
     cacheReadFactor: envFloat('LLM_CACHE_READ_FACTOR', 0.25),
     providerBaseUrl: process.env.LLM_PROVIDER_BASE_URL ?? '',
@@ -130,9 +151,12 @@ function envInt(name: string, dflt: number): number {
 export function defaultAgentsConfig(): AgentsConfig {
   return {
     chatRunTimeoutMs: envInt('CHAT_RUN_TIMEOUT_MS', 300_000),
-    buildInactivityTimeoutMs: envInt('BUILD_INACTIVITY_TIMEOUT_MS', 300_000),
-    buildWallClockMs: envInt('BUILD_WALL_CLOCK_MS', 2_400_000),
-    firstBuildReservationTtlMs: envInt('FIRST_BUILD_RESERVATION_TTL_MS', 2_700_000),
+    // GENIUS first builds (claude-fable-5 at max effort) legitimately think for minutes
+    // between messages and run long overall — 10 min inactivity / 60 min wall clock keep the
+    // timers as runaway backstops, never a cutter of healthy frontier-tier turns.
+    buildInactivityTimeoutMs: envInt('BUILD_INACTIVITY_TIMEOUT_MS', 600_000),
+    buildWallClockMs: envInt('BUILD_WALL_CLOCK_MS', 3_600_000),
+    firstBuildReservationTtlMs: envInt('FIRST_BUILD_RESERVATION_TTL_MS', 3_900_000),
     // Turn ceilings are runaway backstops well above real use — the inactivity + wall-clock
     // timers are the operative bounds. A turn ceiling must never stop a user's task mid-way
     // (operator directive 2026-07-11: the verify agent died at 15 turns mid-verification).
@@ -144,6 +168,13 @@ export function defaultAgentsConfig(): AgentsConfig {
     agentFaceStreamCloseTimeoutMs: envInt('AGENT_FACE_STREAM_CLOSE_TIMEOUT_MS', 180_000),
     memoryAutoExtractEnabled: process.env.MEMORY_AUTO_EXTRACT_ENABLED !== 'false',
     toolResultTruncateChars: envInt('TOOL_RESULT_TRUNCATE_CHARS', 200),
+    // Resolved relative to this module so src/ and dist/ both land on api/content/ (same
+    // pattern as content/index.ts's baseline dir). An explicit env var always wins; an
+    // explicitly-empty one disables the mount.
+    designPluginDir:
+      process.env.EKOA_DESIGN_PLUGIN_DIR !== undefined
+        ? process.env.EKOA_DESIGN_PLUGIN_DIR
+        : join(dirname(fileURLToPath(import.meta.url)), '..', 'content', 'plugins', 'ekoa-design'),
   };
 }
 

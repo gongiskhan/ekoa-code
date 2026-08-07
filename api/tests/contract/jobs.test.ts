@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { JobCreateRequest, JobCreateResponse, Job, JobCancelResponse, ErrorEnvelope } from '@ekoa/shared';
+import { JobCreateRequest, JobCreateResponse, Job, JobCancelResponse, JobSteerResponse, ErrorEnvelope } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, userSettings } from '../../src/data/stores.js';
@@ -63,6 +63,21 @@ describe('build jobs contract (§3.8.8)', () => {
 
     const cancelled = await api(`/api/v1/jobs/${jobId}/cancel`, t, { method: 'POST' });
     expect(JobCancelResponse.safeParse(await cancelled.json()).success).toBe(true);
+  });
+
+  it('POST steer → JobSteerResponse (false on a terminal/unknown job — the queue fallback); empty message is a 400 envelope', async () => {
+    const t = await tokenFor();
+    // The build above has settled by now; steered:false is the honest terminal shape and still
+    // validates the schema. The accepted-steer path is unit-pinned in agents/steering.test.ts.
+    const unknown = await api('/api/v1/jobs/does-not-exist/steer', t, { method: 'POST', body: JSON.stringify({ message: 'usa a marca nova' }) });
+    expect(unknown.status).toBe(200);
+    const body = (await unknown.json()) as { steered: boolean };
+    expect(JobSteerResponse.safeParse(body).success).toBe(true);
+    expect(body.steered).toBe(false);
+
+    const bad = await api('/api/v1/jobs/does-not-exist/steer', t, { method: 'POST', body: JSON.stringify({ message: '' }) });
+    expect(bad.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await bad.json()).success).toBe(true);
   });
 
   it('JobCreateRequest carries knowledgeDocs (additive, bounded) - codex F1 finding 1', () => {

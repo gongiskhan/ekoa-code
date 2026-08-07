@@ -1,0 +1,5 @@
+{
+  "name": "ekoa-design",
+  "version": "2.0.0",
+  "description": "Platform design-craft plugin for Cortex build runs. Ships the frontend-design skill (Apache 2.0 - distinctive production-grade UI, anti-generic-design guidance) and the design-taste-frontend skill (MIT - anti-slop landing pages/portfolios/redesigns), loaded by the coding agent via Agent SDK local-plugin mount."
+}

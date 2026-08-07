@@ -99,9 +99,20 @@ function bootApi() {
     args.push('--built');
   }
   log(`booting API on :${API_PORT} (mode=${API_MODE})`);
+  // A stack bound to a public host (EKOA_PUBLIC_WEB_HOST, e.g. a tailnet name) serves the
+  // dashboard from that origin — the api's /apps/* frame-ancestors allowlist must name it or
+  // the artifact preview iframe is CSP-blocked with only a browser console line to show for
+  // it (found live 2026-08-07 driving the stack from a phone over tailscale). An explicit
+  // EKOA_DASHBOARD_ORIGINS always wins; localhost stays so a local browser keeps working.
+  const env = { ...process.env, PORT: API_PORT };
+  const publicWebHost = process.env.EKOA_PUBLIC_WEB_HOST?.trim();
+  if (publicWebHost && !process.env.EKOA_DASHBOARD_ORIGINS) {
+    env.EKOA_DASHBOARD_ORIGINS = `http://localhost:${WEB_PORT},http://${publicWebHost}:${WEB_PORT}`;
+    log(`api frame-ancestors allowlist: ${env.EKOA_DASHBOARD_ORIGINS}`);
+  }
   const child = spawn('node', args, {
     cwd: ROOT,
-    env: { ...process.env, PORT: API_PORT },
+    env,
     stdio: ['ignore', 'inherit', 'inherit'],
   });
   child.on('exit', (code) => { if (!tearingDown) { log(`API exited (${code})`); teardown(1); } });

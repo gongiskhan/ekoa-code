@@ -5,11 +5,11 @@
  * and attaches to `events/`. Routes never touch `data/` (ch02 §2.7) — persistence is `agents/`.
  */
 import { Router, type Request, type Response } from 'express';
-import { ChatRunCreateRequest } from '@ekoa/shared';
+import { ChatRunCreateRequest, ChatRunSteerRequest } from '@ekoa/shared';
 import { requireAuth, verifySseToken, type AuthedRequest } from '../auth/middleware.js';
 import { can } from '../auth/capabilities.js';
 import { sseManager } from '../events/sse-manager.js';
-import { createChatRun, executeChatRun, getRun, cancelRun } from '../agents/index.js';
+import { createChatRun, executeChatRun, getRun, cancelRun, steerLiveRun } from '../agents/index.js';
 import { chatRunView } from '../agents/registry.js';
 import { ownedSession } from '../services/platform-crud.js';
 import { actorOf, notFound, parseBody, sendError } from './helpers.js';
@@ -74,6 +74,14 @@ export function chatRouter(deps: { now: () => number; genId: () => string }): Ro
 
   r.post('/runs/:id/cancel', (req: AuthedRequest, res: Response) => {
     res.json(cancelRun(req.params.id as string, actorOf(req)));
+  });
+
+  // Conduzir: push a message into the IN-FLIGHT run (owner-only; `steered: false` = the client
+  // falls back to queue-and-flush, never an error — so no 404/409 distinction on purpose).
+  r.post('/runs/:id/steer', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, ChatRunSteerRequest, req.body);
+    if (!body) return;
+    res.json(await steerLiveRun(req.params.id as string, actorOf(req), body.message, deps));
   });
 
   return r;

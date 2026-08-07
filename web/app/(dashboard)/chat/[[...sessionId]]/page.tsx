@@ -896,6 +896,7 @@ export default function UnifiedChatPage() {
                 isExecuting={isExecuting}
                 isBuildSession={isBuildSession}
                 onSendMessage={runtime.sendMessage}
+                onSteerQueued={runtime.steerQueued}
                 onCancel={runtime.cancelActive}
                 onFirstMessage={runtime.sendMessage}
                 onResend={runtime.retryActive}

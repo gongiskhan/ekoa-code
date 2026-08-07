@@ -32,6 +32,9 @@ export interface LiveRunEntry {
   /** Build jobs: the artifact this run targets (follow-up 409 query, §5.3.5). */
   artifactId?: string;
   sessionId?: string;
+  /** Conduzir: set by the executor once the agent handle exists — pushes a user message into
+   *  the IN-FLIGHT run (llm/ AgentRunHandle.steer). Absent = the run is not steerable (yet). */
+  steer?: (text: string) => boolean;
   /** Terminal snapshot for chat runs (kept readable until process exit, §5.2.1/§5.6.8). */
   status?: 'running' | 'complete' | 'cancelled' | 'error';
   result?: unknown;
@@ -148,6 +151,26 @@ function canCancel(entry: LiveRunEntry, actor: Actor): boolean {
   if (actor.role === 'super-admin') return true;
   if (actor.role === 'org-admin' && entry.kind === 'build' && entry.orgId && entry.orgId === actor.orgId) return true;
   return false;
+}
+
+/**
+ * Conduzir: push a user message into a live run (§5.3.1's set-lookup discipline, same idempotent
+ * posture as cancel — a false is a fallback signal, never an error). OWNER ONLY, stricter than
+ * cancel on purpose: the steered text persists to the transcript as the owner's user turn, so an
+ * admin steering someone else's run would be impersonation, where an admin Stop is just custody.
+ */
+export function steerRun(id: string, actor: Actor, text: string): { steered: boolean } {
+  const entry = runs.get(id);
+  if (!entry || entry.finalized || entry.cancelled) return { steered: false };
+  if (entry.ownerUserId !== actor.userId) return { steered: false };
+  if (!entry.steer) return { steered: false };
+  try {
+    return { steered: entry.steer(text) };
+  } catch {
+    // `steered: false` IS the protocol (the client's queue-and-flush fallback) — a throw out
+    // of the handle (e.g. the anonymise pass) must not turn a soft refusal into a 500.
+    return { steered: false };
+  }
 }
 
 // --- First-build reservation map (§5.3.3) ------------------------------------------------

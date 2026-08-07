@@ -247,6 +247,12 @@ const BUILD_SYSTEM_PROMPT = [
   'Your FINAL message is read by a non-technical end user. Write it in the language of their request.',
   'In that final message NEVER mention internal platform APIs (window.__ekoa or any of its members), file paths, bundlers, manifests, libraries, or any implementation machinery.',
   'Describe what the app DOES in product terms ("um botão que descarrega o documento em PDF"), never HOW it is wired.',
+  // Design quality bar (operator directive 2026-08-07): the frontend-design and
+  // design-taste-frontend skills ship as a plugin on every build run — use their craft, but the
+  // deliverable stays the compiled React entrypoint (no standalone-HTML deliverable framing in
+  // skill text overrides the entrypoint rule).
+  'For any user-facing UI you create or restyle, consult the frontend-design skill (distinctive production-grade UI; use design-taste-frontend additionally for landing/marketing pages) and apply their craft INSIDE the React app under frontend/src/.',
+  'Never ship a default-looking UI: no framework-default styling, no generic AI aesthetics (Inter-on-white, purple gradients, cookie-cutter cards). Pick a deliberate visual direction that fits the domain and execute it consistently.',
 ].join('\n');
 
 /**
@@ -357,8 +363,11 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (projectDir) await mech.watchRebuilds({ artifactId, projectDir, onRebuild: () => sink.previewReload() });
     }
 
-    // Routing floored at the expert tier (§5.2 step 5); emit the routing event.
-    const decision = decideForTask(input.description, undefined, 'EXPERT');
+    // Routing floor (§5.2 step 5): a FIRST build runs on the frontier GENIUS tier at its
+    // configured (max) effort — the initial architecture + design of an app is the single
+    // highest-leverage model call the platform makes (operator directive 2026-08-07: best
+    // model, high/max effort for new apps). Follow-ups keep the EXPERT floor.
+    const decision = decideForTask(input.description, undefined, opts.firstBuild ? 'GENIUS' : 'EXPERT');
     sink.routing(decision.tier, opts.firstBuild ? 'first build' : 'follow-up build');
     await patchJob(jobId, { routing: { tier: decision.tier, reason: opts.firstBuild ? 'first build' : 'follow-up build' } });
 
@@ -448,7 +457,13 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         ],
         cwd: projectDir || undefined,
         homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
+        // Design-skill plugin (frontend-design + design-taste-frontend, vendored under
+        // api/content/plugins/ekoa-design): mounted as an Agent SDK local plugin so the skills
+        // load by progressive disclosure on design-shaped work. Server-resolved config path;
+        // EKOA_DESIGN_PLUGIN_DIR="" disables.
+        ...(cfg.designPluginDir ? { plugins: [cfg.designPluginDir] } : {}),
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+        steerable: true, // Conduzir: mid-run user messages join this run (POST /jobs/:id/steer)
         signal: abort.signal,
         callbacks: {
           onToolEvent: (e) => { resetInactivity(); sink.toolEvent(e); },
@@ -458,6 +473,8 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       },
       { kind: 'user_work', agentType: 'build', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId: jobId, artifactId },
     );
+    const liveEntry = getRun(jobId);
+    if (liveEntry) liveEntry.steer = (text) => handle.steer(text);
 
     // Two channels, mirroring chat.ts (§5.6.1): the ANSWER stream (`text`) and the working
     // commentary (`thinking` — intermediate-turn narration + thinking blocks, where the engine

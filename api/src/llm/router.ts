@@ -18,14 +18,17 @@
  */
 import { loadConfig, type LlmTierConfig } from '../config.js';
 
-/** The three execution tiers (ch06 §6.2.3). String union so it is structurally identical to
- *  `billing/`'s `Tier` and rides the metering call without a mapping table. */
-export type Tier = 'FAST' | 'WORKHORSE' | 'EXPERT';
+/** The four execution tiers (ch06 §6.2.3 + GENIUS extension 2026-08-07). String union so it
+ *  is structurally identical to `billing/`'s `Tier` and rides the metering call without a
+ *  mapping table. GENIUS is the frontier tier (claude-fable-5): reachable only via an
+ *  explicit floor (first builds) or a `critical` complexity hint — keyword scoring never
+ *  escalates past EXPERT on its own. */
+export type Tier = 'FAST' | 'WORKHORSE' | 'EXPERT' | 'GENIUS';
 
-export const TIERS: readonly Tier[] = ['FAST', 'WORKHORSE', 'EXPERT'] as const;
+export const TIERS: readonly Tier[] = ['FAST', 'WORKHORSE', 'EXPERT', 'GENIUS'] as const;
 
 /** Ordinal for floor comparisons (higher = stronger/costlier). */
-const TIER_ORDER: Record<Tier, number> = { FAST: 1, WORKHORSE: 2, EXPERT: 3 };
+const TIER_ORDER: Record<Tier, number> = { FAST: 1, WORKHORSE: 2, EXPERT: 3, GENIUS: 4 };
 
 /** Optional context passed to the classifier to influence tier selection. The old
  *  `isCodeGen` (dead integration-builder flag, conflict 9) and `previousFailures` (never
@@ -121,8 +124,8 @@ export function classify(taskDescription: string, context?: ClassificationContex
       case 'trivial': return 'FAST';
       case 'low': return 'FAST';        // retired REASONING_LIGHT collapses onto FAST
       case 'medium': return 'WORKHORSE';
-      case 'high':
-      case 'critical': return 'EXPERT';
+      case 'high': return 'EXPERT';
+      case 'critical': return 'GENIUS'; // frontier tier: explicit-hint-only escalation
     }
   }
 

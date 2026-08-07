@@ -62,6 +62,17 @@ export type ChatRunCreateResponse = z.infer<typeof ChatRunCreateResponse>;
 export const ChatRunCancelResponse = z.object({ cancelled: z.boolean() });
 export type ChatRunCancelResponse = z.infer<typeof ChatRunCancelResponse>;
 
+/** Steer (Conduzir): inject a user message into the IN-FLIGHT run instead of queueing it for
+ *  after. The server pushes it into the live Agent SDK session (streaming input); `steered:
+ *  false` means the run was no longer accepting input (finished, not steerable, or lost the
+ *  close race) — the client falls back to the ordinary queue-and-flush path, so a false is
+ *  never an error. */
+export const ChatRunSteerRequest = z.object({ message: z.string().min(1) });
+export type ChatRunSteerRequest = z.infer<typeof ChatRunSteerRequest>;
+
+export const ChatRunSteerResponse = z.object({ steered: z.boolean() });
+export type ChatRunSteerResponse = z.infer<typeof ChatRunSteerResponse>;
+
 export const chatEndpoints = {
   createRun: {
     method: 'POST',
@@ -89,5 +100,12 @@ export const chatEndpoints = {
     path: '/api/v1/chat/runs/:id/cancel',
     auth: 'user',
     response: ChatRunCancelResponse,
+  },
+  steerRun: {
+    method: 'POST',
+    path: '/api/v1/chat/runs/:id/steer',
+    auth: 'user',
+    request: ChatRunSteerRequest,
+    response: ChatRunSteerResponse,
   },
 } as const satisfies DomainDescriptorMap;

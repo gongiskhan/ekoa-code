@@ -180,6 +180,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
         disallowedTools: policy.disallowedTools,
         maxTurns: policy.maxTurns,
         ...(sdkTools ? { sdkTools } : {}),
+        steerable: true, // Conduzir: mid-run user messages join this run (POST /chat/runs/:id/steer)
         signal: entry.abort.signal,
         callbacks: {
           onToolEvent: (e) => sink.toolEvent(e),
@@ -187,6 +188,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       },
       { kind: 'user_work', agentType: 'chat', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId },
     );
+    entry.steer = (text) => handle.steer(text);
 
     // Live stream: marker-filter every delta so no marker — partial or whole — leaks on the
     // wire (§5.7.2), on EITHER channel. The thinking channel (intermediate turns + thinking

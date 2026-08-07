@@ -97,6 +97,10 @@ const COVERED = new Set<string>([
   // G7B — agent execution: chat runs + build jobs (chat.test.ts, jobs.test.ts)
   'chat.createRun', 'chat.getRun', 'chat.runEvents', 'chat.cancelRun',
   'jobs.create', 'jobs.get', 'jobs.cancel', 'jobs.events',
+  // 2026-08-07 — Conduzir/steer: inject a queued message into the IN-FLIGHT run (chat.test.ts,
+  // jobs.test.ts contract; agents/steering.test.ts + llm/steering.test.ts unit). Additive
+  // endpoints: covering both keeps EXPECTED_PENDING_COUNT unchanged.
+  'chat.steerRun', 'jobs.steer',
   // batch1 F2 — model-credential provisioning (credentials.test.ts)
   'credentials.set',
   // batch1 F5 subset — the UI-called endpoints (memories.test.ts, f5-ui-endpoints.test.ts)

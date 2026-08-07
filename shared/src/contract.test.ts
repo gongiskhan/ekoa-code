@@ -13,11 +13,13 @@ import {
  * validation lands with the contract suite from G2 onward.
  */
 describe('shared contract', () => {
-  it('loads all 30 domain descriptor maps', () => {
+  it('loads all 32 domain descriptor maps', () => {
     // 24 rc-1 domains + credentials (F2, batch1) + changeRequests (operator-run H4)
     // + gatewayKeys (cortex-gateway S4a, run 20260717) + sheets (mega-run B1, decision B.B)
-    // + cofre (WS-B B-3, 2026-07-27) + memvault (capability-contract E2, run 20260730).
-    expect(Object.keys(ALL_ENDPOINTS).length).toBe(30);
+    // + cofre (WS-B B-3, 2026-07-27) + memvault (capability-contract E2, run 20260730)
+    // + appEmail + appVision (ekoa-dev parity port fd8ad72, 2026-08-06 — landed without
+    //   bumping this pin; repaired 2026-08-07).
+    expect(Object.keys(ALL_ENDPOINTS).length).toBe(32);
   });
 
   it('every endpoint descriptor is well-formed', () => {

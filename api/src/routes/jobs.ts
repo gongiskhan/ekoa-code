@@ -5,12 +5,12 @@
  * persisted record (P-10); events stream over `events/` via ?token=. Routes never touch `data/`.
  */
 import { Router, type Request, type Response } from 'express';
-import { JobCreateRequest } from '@ekoa/shared';
+import { JobCreateRequest, JobSteerRequest } from '@ekoa/shared';
 import { requireAuth, verifySseToken, type AuthedRequest } from '../auth/middleware.js';
 import { can } from '../auth/capabilities.js';
 import { loadWritable } from '../apps/app-paths.js';
 import { sseManager } from '../events/sse-manager.js';
-import { handleBuildCreate, cancelRun } from '../agents/index.js';
+import { handleBuildCreate, cancelRun, steerLiveRun } from '../agents/index.js';
 import { getJob, jobView } from '../agents/jobs.js';
 import { actorOf, notFound, parseBody, sendError } from './helpers.js';
 
@@ -92,6 +92,14 @@ export function jobsRouter(deps: { now: () => number; genId: () => string }): Ro
 
   r.post('/:id/cancel', (req: AuthedRequest, res: Response) => {
     res.json(cancelRun(req.params.id as string, actorOf(req)));
+  });
+
+  // Conduzir: push a message into the IN-FLIGHT build run (owner-only; `steered: false` = the
+  // client falls back to queue-and-flush, never an error — so no 404/409 distinction on purpose).
+  r.post('/:id/steer', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, JobSteerRequest, req.body);
+    if (!body) return;
+    res.json(await steerLiveRun(req.params.id as string, actorOf(req), body.message, deps));
   });
 
   return r;

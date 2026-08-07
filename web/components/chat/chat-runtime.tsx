@@ -105,6 +105,10 @@ export interface ChatRuntime {
   initialized: boolean;
   /** Unified send router: queue-while-building, then chat vs build by session data. */
   sendMessage: (text: string, opts?: SendMessageOptions) => void;
+  /** Conduzir: send queued message `index` INTO the running agent instead of waiting for it
+   *  to finish. False = the run no longer accepts input — the message stays queued and
+   *  flushes normally when the run ends (the caller surfaces a soft notice, never an error). */
+  steerQueued: (index: number) => Promise<boolean>;
   /** Kick a first build directly (empty-state build-category prompts). */
   kickBuildFirst: (message: string, overrides?: { templateId?: string; skipUserMessage?: boolean }) => void;
   /** Stop the active run and hand the last message back for editing. */
@@ -163,6 +167,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
   const enqueueMessage = useOrchestrationStore((s) => s.enqueueMessage);
   const drainQueue = useOrchestrationStore((s) => s.drainQueue);
   const clearQueue = useOrchestrationStore((s) => s.clearQueue);
+  const removeQueuedMessage = useOrchestrationStore((s) => s.removeQueuedMessage);
   const popLastUserTurn = useOrchestrationStore((s) => s.popLastUserTurn);
   const setComposerDraft = useOrchestrationStore((s) => s.setComposerDraft);
 
@@ -949,6 +954,41 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
     ],
   );
 
+  /**
+   * Conduzir: send queued message `index` into the RUNNING agent instead of waiting.
+   * Target: the live build job when one exists, else the in-flight chat run. On success the
+   * message leaves the queue and joins the transcript with persist:false — the server already
+   * persisted it (agents/steering.ts), and a second POST would double it on reload.
+   */
+  const steerQueued = useCallback(
+    async (index: number): Promise<boolean> => {
+      const sid = activeSessionId;
+      if (!sid) return false;
+      const text = useOrchestrationStore.getState().queuedMessages[sid]?.[index];
+      if (!text) return false;
+      // Only target the build job while it is actually LIVE — jobId lingers on the session
+      // after completion, and steering a finished job would eat a valid chat-run steer.
+      const job = sessionJobs[sid];
+      const jobId = job && (job.status === 'queued' || job.status === 'running') ? job.jobId : null;
+      const chatRunId = chatTraceIdRef.current;
+      try {
+        let steered = false;
+        if (jobId) {
+          steered = (await api.jobs.steer({ id: jobId, message: text })).steered;
+        } else if (chatRunId) {
+          steered = (await api.chat.steerRun({ id: chatRunId, message: text })).steered;
+        }
+        if (!steered) return false;
+        removeQueuedMessage(sid, index);
+        addMessage(sid, { role: 'user', content: text }, { persist: false });
+        return true;
+      } catch {
+        return false; // stays queued; the ordinary flush covers it
+      }
+    },
+    [activeSessionId, sessionJobs, removeQueuedMessage, addMessage],
+  );
+
   // Flush queued messages (FIFO) when the active run finishes. isExecuting is a
   // GLOBAL flag that also flips false on session switch, so we track which session
   // was actually executing and only flush that one while it's still active —
@@ -1048,6 +1088,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
     () => ({
       initialized,
       sendMessage,
+      steerQueued,
       kickBuildFirst,
       cancelActive,
       retryActive,
@@ -1060,6 +1101,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
     [
       initialized,
       sendMessage,
+      steerQueued,
       kickBuildFirst,
       cancelActive,
       retryActive,

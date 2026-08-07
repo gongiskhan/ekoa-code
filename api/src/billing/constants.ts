@@ -11,7 +11,7 @@
 
 import { loadConfig, type LlmConfig } from '../config.js';
 
-export type Tier = 'FAST' | 'WORKHORSE' | 'EXPERT';
+export type Tier = 'FAST' | 'WORKHORSE' | 'EXPERT' | 'GENIUS';
 
 export interface BillingConfig {
   periodDays: number;

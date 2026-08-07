@@ -222,6 +222,7 @@ export function GlobalChatDock({ mode = 'classic', host }: GlobalChatDockProps) 
         isExecuting={isExecuting}
         isBuildSession={runtime.isBuildSession}
         onSendMessage={runtime.sendMessage}
+        onSteerQueued={runtime.steerQueued}
         onCancel={runtime.cancelActive}
         onFirstMessage={runtime.sendMessage}
         onResend={runtime.retryActive}

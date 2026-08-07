@@ -9,6 +9,11 @@ import { matchFamilyTier } from '../../src/llm/client.js';
  */
 describe('matchFamilyTier', () => {
   const cases: Array<[string, string | null]> = [
+    // GENIUS family (2026-08-07): the frontier tier ids map by family like every other tier.
+    ['claude-fable-5', 'GENIUS'],
+    ['claude-mythos-5', 'GENIUS'],
+    ['claude-fable-5[1m]', 'GENIUS'],
+    ['fabled-model-x', null], // token boundary: 'fabled' is not a 'fable' token
     ['claude-opus-4-8', 'EXPERT'],
     ['claude-opus-4-8[1m]', 'EXPERT'],
     ['claude-opus-4-5-20260115', 'EXPERT'],

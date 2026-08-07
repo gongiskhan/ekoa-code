@@ -27,6 +27,7 @@ import {
   Clock,
   Copy,
   Check,
+  CornerDownRight,
   Pencil,
   FileText,
 } from "lucide-react";
@@ -201,6 +202,9 @@ interface ChatPanelProps {
   // the mic (the voice send path below), absent for the ordinary composer. Shape-compatible
   // with the runtime's SendMessageOptions so `onSendMessage={runtime.sendMessage}` wires directly.
   onSendMessage: (message: string, opts?: { source?: "voice" }) => void;
+  /** Conduzir: send queued message `index` into the RUNNING agent (chat-runtime.steerQueued).
+   *  Resolves false when the run no longer accepts input — the message stays queued. */
+  onSteerQueued?: (index: number) => Promise<boolean>;
   onCancel: () => void;
   onFirstMessage: (message: string, opts?: { source?: "voice" }) => void;
   onResend?: () => void;
@@ -252,6 +256,7 @@ export default function ChatPanel({
   isExecuting,
   isBuildSession,
   onSendMessage,
+  onSteerQueued,
   onCancel,
   onFirstMessage,
   onResend,
@@ -267,6 +272,10 @@ export default function ChatPanel({
   const [elapsedTime, setElapsedTime] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  /** Conduzir: index of the queued message currently being steered (busy state), and the
+   *  soft "run no longer accepts input" notice when a steer came back false. */
+  const [steeringIndex, setSteeringIndex] = useState<number | null>(null);
+  const [steerFailedNotice, setSteerFailedNotice] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachMenuRef = useRef<HTMLDivElement>(null);
@@ -285,6 +294,26 @@ export default function ChatPanel({
     sessionId ? s.queuedMessages[sessionId] || EMPTY_QUEUE : EMPTY_QUEUE
   );
   const removeQueuedMessage = useOrchestrationStore((s) => s.removeQueuedMessage);
+
+  /** Conduzir: steer queued message `i` into the running agent; a false outcome (run stopped
+   *  accepting input) surfaces the soft notice and leaves the message queued for the flush. */
+  const handleSteerQueued = useCallback(
+    async (index: number) => {
+      if (!onSteerQueued || steeringIndex !== null) return;
+      setSteerFailedNotice(false);
+      setSteeringIndex(index);
+      try {
+        const ok = await onSteerQueued(index);
+        if (!ok) {
+          setSteerFailedNotice(true);
+          window.setTimeout(() => setSteerFailedNotice(false), 5000);
+        }
+      } finally {
+        setSteeringIndex(null);
+      }
+    },
+    [onSteerQueued, steeringIndex],
+  );
   const composerDraft = useOrchestrationStore((s) =>
     sessionId ? s.composerDraft[sessionId] : undefined
   );
@@ -695,7 +724,7 @@ export default function ChatPanel({
           </div>
         )}
 
-        {/* Queued messages — sent (FIFO) when the current run finishes */}
+        {/* Queued messages — steer (Conduzir) into the running agent, or sent (FIFO) when it finishes */}
         {queuedMessages.length > 0 && (
           <div className="flex flex-col gap-1 mb-2">
             {queuedMessages.map((q, i) => (
@@ -709,18 +738,47 @@ export default function ChatPanel({
                   <Clock size={12} className="mr-1.5 flex-shrink-0 text-amber-500" />
                   <span className="truncate">{q}</span>
                 </span>
-                <button
-                  onClick={() => sessionId && removeQueuedMessage(sessionId, i)}
-                  className="ml-2 flex-shrink-0 text-amber-500 hover:text-amber-700"
-                  title={chatPanelT.removeFromQueue}
-                  aria-label={chatPanelT.removeFromQueue}
-                >
-                  <X size={12} />
-                </button>
+                <span className="flex items-center flex-shrink-0">
+                  {onSteerQueued && isExecuting && (
+                    <button
+                      onClick={() => void handleSteerQueued(i)}
+                      disabled={steeringIndex !== null}
+                      data-testid="steer-queued"
+                      className="ml-2 flex items-center gap-1 rounded-md border border-amber-300 bg-white/60 px-1.5 py-0.5 font-medium text-amber-700 hover:bg-white hover:text-amber-900 disabled:opacity-50 transition-colors"
+                      title={chatPanelT.steerExplanation}
+                      aria-label={chatPanelT.steerNow}
+                    >
+                      {steeringIndex === i ? (
+                        <Spinner size="xs" className="text-amber-600" />
+                      ) : (
+                        <CornerDownRight size={11} />
+                      )}
+                      {chatPanelT.steerNow}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => sessionId && removeQueuedMessage(sessionId, i)}
+                    className="ml-2 flex-shrink-0 text-amber-500 hover:text-amber-700"
+                    title={chatPanelT.removeFromQueue}
+                    aria-label={chatPanelT.removeFromQueue}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
               </div>
             ))}
-            <span className="pl-0.5 text-[10px] text-neutral-400">
-              {chatPanelT.queuedNotice}
+            <span className="pl-0.5 text-[10px] text-neutral-400" data-testid="queued-notice">
+              {steerFailedNotice ? (
+                chatPanelT.steerFailed
+              ) : (
+                <>
+                  {chatPanelT.queuedNotice}
+                  {/* The Conduzir explanation is desktop-only; mobile keeps the button alone. */}
+                  {onSteerQueued && isExecuting && (
+                    <span className="hidden sm:inline"> · {chatPanelT.steerExplanation}</span>
+                  )}
+                </>
+              )}
             </span>
           </div>
         )}

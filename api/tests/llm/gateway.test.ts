@@ -80,7 +80,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('POST /messages — forward + tier-matched metering (§6.5.4, rc-1 amendment 2026-07-11)', () => {
   it('api-key principal asking for the CONFIGURED EXPERT model: runs + bills at EXPERT against the platform admin', async () => {
     __setTransportForTests(stubTransport({ async messages() { return { status: 200, headers: { 'content-type': 'application/json' }, body: providerBody(200, 40) }; } }));
-    const res = await api('/api/v1/llm/messages', { method: 'POST', headers: { 'x-api-key': GATEWAY_KEY }, body: JSON.stringify({ model: 'claude-opus-4-8[1m]', messages: [{ role: 'user', content: 'hi' }] }) });
+    const res = await api('/api/v1/llm/messages', { method: 'POST', headers: { 'x-api-key': GATEWAY_KEY }, body: JSON.stringify({ model: 'claude-opus-5', messages: [{ role: 'user', content: 'hi' }] }) });
     expect(res.status).toBe(200);
     expect((await json(res)).content[0].text).toBe('hi');
 
@@ -88,7 +88,7 @@ describe('POST /messages — forward + tier-matched metering (§6.5.4, rc-1 amen
     expect(rows).toHaveLength(1);
     // The requested model IS the configured EXPERT tier model → honored + metered at EXPERT
     // (the pre-amendment gateway clamped this to FAST, silently degrading subprocess traffic).
-    expect(rows[0]).toMatchObject({ tier: 'EXPERT', model: 'claude-opus-4-8[1m]', billeeUserId: '', metered: 96 }); // round(0.4*240)
+    expect(rows[0]).toMatchObject({ tier: 'EXPERT', model: 'claude-opus-5', billeeUserId: '', metered: 96 }); // round(0.4*240)
   });
 
   it('api-key principal with an UNKNOWN model: clamped + billed at FAST (legacy behavior pinned)', async () => {
@@ -188,9 +188,10 @@ describe('POST /classify — deterministic keyword mode, never 500s', () => {
     expect(LlmModelsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
     const ids = body.data.map((m: { id: string }) => m.id);
     expect(ids).toContain('claude-haiku-4-5-20251001');
-    // S2 honesty fix: all three tiers are listed (WORKHORSE was missing).
+    // S2 honesty fix: all tiers are listed (WORKHORSE was missing); GENIUS joined 2026-08-07.
     expect(ids).toContain('claude-sonnet-5');
-    expect(ids).toContain('claude-opus-4-8[1m]');
-    expect(ids).toHaveLength(3);
+    expect(ids).toContain('claude-opus-5');
+    expect(ids).toContain('claude-fable-5');
+    expect(ids).toHaveLength(4);
   });
 });

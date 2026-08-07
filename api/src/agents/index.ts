@@ -12,6 +12,7 @@ export { runBrandResearch, type BrandResearchInput } from './brand-research.js';
 
 // Registry (cancel + introspection consumed by routes/).
 export { cancelRun, getRun, liveRunCount } from './registry.js';
+export { steerLiveRun } from './steering.js';
 
 // Persistent job registry + boot orphan sweep (server.ts calls sweepOrphans at boot).
 export { getJob, jobView, sweepOrphans, type JobRecord } from './jobs.js';

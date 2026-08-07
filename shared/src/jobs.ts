@@ -65,6 +65,14 @@ export type JobCreateResponse = z.infer<typeof JobCreateResponse>;
 export const JobCancelResponse = z.object({ cancelled: z.boolean() });
 export type JobCancelResponse = z.infer<typeof JobCancelResponse>;
 
+/** Steer (Conduzir): inject a user message into the IN-FLIGHT build run (same contract as
+ *  chat.steerRun — `steered: false` is the queue-and-flush fallback signal, never an error). */
+export const JobSteerRequest = z.object({ message: z.string().min(1) });
+export type JobSteerRequest = z.infer<typeof JobSteerRequest>;
+
+export const JobSteerResponse = z.object({ steered: z.boolean() });
+export type JobSteerResponse = z.infer<typeof JobSteerResponse>;
+
 export const jobsEndpoints = {
   create: {
     method: 'POST',
@@ -85,6 +93,13 @@ export const jobsEndpoints = {
     path: '/api/v1/jobs/:id/cancel',
     auth: 'user',
     response: JobCancelResponse,
+  },
+  steer: {
+    method: 'POST',
+    path: '/api/v1/jobs/:id/steer',
+    auth: 'user',
+    request: JobSteerRequest,
+    response: JobSteerResponse,
   },
   events: {
     method: 'GET',

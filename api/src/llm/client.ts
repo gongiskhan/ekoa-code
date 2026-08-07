@@ -181,6 +181,59 @@ async function anonContextFor(
 
 // --- Transport seam ----------------------------------------------------------------------
 
+/**
+ * Pushable mid-run input for a steerable agent run (Conduzir). Plain strings only — no SDK
+ * type leaves the chokepoint. The transport drains it as the tail of a streaming-input prompt
+ * (`query` accepts `AsyncIterable<SDKUserMessage>`); on each SDK `result` with nothing left
+ * unconsumed the transport calls `close()`, ending the input stream so the query exits — the
+ * un-steered run therefore behaves exactly like the string-prompt path (one turn, one result).
+ * `push()` after close returns false; the caller treats that as "not steered" and falls back
+ * to the ordinary queue-and-flush, so the close race is never an error.
+ */
+export class SteerQueue {
+  private buffered: string[] = [];
+  private waiter: ((value: string | null) => void) | null = null;
+  private closed = false;
+
+  /** Hand a message to the in-flight run. False once the input stream closed. */
+  push(text: string): boolean {
+    if (this.closed) return false;
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w(text);
+    } else {
+      this.buffered.push(text);
+    }
+    return true;
+  }
+
+  /** A message pushed but not yet handed to the SDK — the "don't close yet" signal. */
+  hasUnconsumed(): boolean {
+    return this.buffered.length > 0;
+  }
+
+  /** End the input stream (idempotent). Late `push()` calls return false from here on. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w(null);
+    }
+  }
+
+  /** Next message, or null when closed. Single consumer: the transport's input generator. */
+  take(): Promise<string | null> {
+    if (this.buffered.length > 0) return Promise.resolve(this.buffered.shift()!);
+    if (this.closed) return Promise.resolve(null);
+    return new Promise((res) => {
+      this.waiter = res;
+    });
+  }
+}
+
 export interface SdkCallParams {
   prompt: string;
   model: string;
@@ -195,8 +248,16 @@ export interface SdkCallParams {
   maxTurns?: number;
   /** In-process MCP tool specs the spawn mounts (§5.4.4; instantiated in sdk-tools.ts). */
   sdkTools?: SdkToolSpec[];
+  /** Platform-owned Agent SDK local-plugin directories to mount (skills etc.). Paths are
+   *  server-resolved config (never model/user input); `settingSources: []` stays — plugins are
+   *  the one sanctioned skill-loading path (design skill, ch05 §5.4.4 extension 2026-08-07). */
+  plugins?: string[];
   /** Base64 image attachments for vision one-shots (§6.2.1 runOneShot). */
   images?: Array<{ mediaType: string; data: string }>;
+  /** Present on a steerable run: the transport switches to streaming input and drains this
+   *  queue as additional user turns in the SAME session (Conduzir). Text arrives already
+   *  anonymised — runAgent tokenizes through the run's vault before pushing. */
+  steer?: SteerQueue;
   signal?: AbortSignal;
 }
 
@@ -380,6 +441,9 @@ function sdkOptions(p: SdkCallParams): Record<string, unknown> {
     ...(p.systemPrompt ? { systemPrompt: p.systemPrompt } : {}),
     // In-process MCP tools (§5.4.4) — instantiated at spawn time, in-process only (no egress).
     ...(p.sdkTools?.length ? { mcpServers: buildMcpServers(p.sdkTools) } : {}),
+    // Platform-owned local plugins (skills). settingSources stays [] — plugins are explicit
+    // server-resolved mounts, never inherited developer/user settings (FIXED-6 intact).
+    ...(p.plugins?.length ? { plugins: p.plugins.map((path) => ({ type: 'local' as const, path })) } : {}),
   };
 }
 
@@ -405,6 +469,30 @@ async function* imagePromptInput(
   } as SDKUserMessage;
 }
 
+/**
+ * Streaming-input prompt for a steerable run (Conduzir): the initial prompt first, then every
+ * steered message as its own user turn in the same SDK session. Ends when the queue closes —
+ * which the `result` handler below does as soon as nothing remains unconsumed, so a run that
+ * is never steered exits after its first result exactly like the string-prompt path.
+ */
+async function* steerablePromptInput(initial: string, steer: SteerQueue): AsyncGenerator<SDKUserMessage> {
+  const userMsg = (text: string): SDKUserMessage =>
+    ({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: text } } as SDKUserMessage);
+  yield userMsg(initial);
+  for (;;) {
+    const next = await steer.take();
+    if (next === null) return;
+    yield userMsg(next);
+  }
+}
+
+const addUsage = (a: RawUsage, b: RawUsage): RawUsage => ({
+  input: a.input + b.input,
+  output: a.output + b.output,
+  cacheCreate: a.cacheCreate + b.cacheCreate,
+  cacheRead: a.cacheRead + b.cacheRead,
+});
+
 const defaultTransport: ChokepointTransport = {
   async *streamAgent(p) {
     let text = '';
@@ -418,9 +506,13 @@ const defaultTransport: ChokepointTransport = {
     let partialAnswer = '';
     let partialThinking = '';
     let partialRetracted = false;
+    const steer = p.steer;
     try {
+      // Steerable runs use streaming input (the ONLY SDK mode that accepts mid-run user turns);
+      // everything else keeps the plain string prompt, byte-identical behavior.
+      const promptInput = steer ? steerablePromptInput(p.prompt, steer) : p.prompt;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const q = query({ prompt: p.prompt, options: { ...sdkOptions(p), includePartialMessages: true } as any });
+      const q = query({ prompt: promptInput, options: { ...sdkOptions(p), includePartialMessages: true } as any });
       for await (const msg of q) {
         // sdkSessionId is reported once on the first message carrying one (§5.4.5).
         if (!sessionEmitted) {
@@ -487,20 +579,30 @@ const defaultTransport: ChokepointTransport = {
           // timer; they are never forwarded to the wire (§5.7.3, P-11).
           yield { kind: 'plan' };
         } else if (msg.type === 'result') {
-          usage = rawFromSdkUsage((msg as { usage?: unknown }).usage);
+          // ACCUMULATE across results: a steered query emits one result per completed run and
+          // each carries that run's own usage — the whole steered conversation must bill. A
+          // never-steered run has exactly one result, so summing from zero is value-identical
+          // to the old overwrite.
+          usage = addUsage(usage, rawFromSdkUsage((msg as { usage?: unknown }).usage));
           // F20: the accumulated deltas ARE the answer — the SDK result field can carry only the
           // LAST delta, and overwriting the accumulation truncated complete.result + the persisted
           // assistant message to a tail. Fall back to it only when nothing streamed.
           if (msg.subtype === 'success' && !text) text = (msg as { result: string }).result;
+          // Steering close point: every handed-over turn has resolved and no steer is waiting —
+          // end the input stream so the query exits. A steer that lands after this close gets
+          // `push() === false` and falls back to the ordinary post-run queue (never an error).
+          if (steer && !steer.hasUnconsumed()) steer.close();
         }
       }
     } catch (err) {
+      steer?.close();
       if (isAbortError(err, p.signal)) {
         yield { kind: 'final', text, usage, aborted: true };
         return;
       }
       throw err;
     }
+    steer?.close();
     yield { kind: 'final', text, usage, aborted: false };
   },
 
@@ -724,6 +826,12 @@ export interface AgentRunOptions {
   streamCloseTimeoutMs?: number;
   /** In-process MCP tools this run mounts (§5.4.4) — plain specs; the chokepoint instantiates. */
   sdkTools?: SdkToolSpec[];
+  /** Platform-owned Agent SDK local-plugin dirs (skills) this run mounts. Server-resolved
+   *  config paths only (agents config), never model/user-supplied. */
+  plugins?: string[];
+  /** Conduzir: accept mid-run user messages via `handle.steer()` (streaming-input transport
+   *  mode). Only the interactive run classes (chat, build) set this. */
+  steerable?: boolean;
   callbacks?: AgentRunCallbacks;
 }
 
@@ -752,6 +860,11 @@ export interface AgentRunHandle {
   result: Promise<AgentRunResult>;
   /** Cancel the run. */
   abort(): void;
+  /** Conduzir: push a user message into the IN-FLIGHT run (anonymised through the run's vault
+   *  like the prompt, §17.3 — no bypass). True when the run accepted it; false when the run is
+   *  not steerable, has not reached the transport yet, or already stopped accepting input —
+   *  the caller then falls back to the ordinary queue-and-flush. */
+  steer(text: string): boolean;
 }
 
 /**
@@ -794,6 +907,10 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
 
   let resolveResult!: (r: AgentRunResult) => void;
   let rejectResult!: (e: unknown) => void;
+  // Conduzir: bound inside run() once the anonymise context exists (steer text tokenizes into
+  // the SAME session vault as the prompt). Null before the transport starts and after the run
+  // stops accepting input — steer() then reports false and the caller queues normally.
+  let steerAccept: ((text: string) => boolean) | null = null;
   const result = new Promise<AgentRunResult>((res, rej) => { resolveResult = res; rejectResult = rej; });
   // Every consumer drains `events` first and only then awaits `result`, so a stream error throws
   // out of the `for await` and `result`'s rejection is never observed — an UNHANDLED rejection on
@@ -826,6 +943,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     // The thinking channel gets its own straddle buffer: interleaving both channels through
     // one detokenizer would mis-stitch a token split across a thinking/text boundary.
     const detokThinking = createDetokenizer(handle);
+    // Conduzir: the steer queue rides the transport params; steer() anonymises through the
+    // run's vault (same ctx as the prompt — §17.3, no bypass) before pushing.
+    const steerQueue = opts.steerable ? new SteerQueue() : undefined;
+    if (steerQueue) {
+      steerAccept = (steerText: string) => steerQueue.push(anonymize(steerText, ctx).text);
+    }
     let rawText = ''; // the tokenized text as it comes off the transport
     let rawThinking = ''; // tokenized working commentary (intermediate turns + thinking blocks)
     const cb = opts.callbacks;
@@ -857,6 +980,8 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
         cwd: runCwd,
         maxTurns: opts.maxTurns,
         sdkTools: opts.sdkTools,
+        ...(opts.plugins?.length ? { plugins: opts.plugins } : {}),
+        ...(steerQueue ? { steer: steerQueue } : {}),
         signal: ac.signal,
       });
       for await (const msg of stream) {
@@ -913,6 +1038,8 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       const tail = detok.end();
       if (tail) yield { type: 'text', text: tail };
     } catch (err) {
+      steerAccept = null;
+      steerQueue?.close();
       if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
       discardSandbox(sandbox);
       // Clear the ephemeral vault on the ERROR/abort path too (§17.5, Codex checkpoint M1): the
@@ -921,6 +1048,8 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       rejectResult(err);
       throw err;
     }
+    steerAccept = null;
+    steerQueue?.close();
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
     discardSandbox(sandbox);
     text = deanonymize(rawText, handle); // final result is cleartext (incl any tool_use values)
@@ -934,7 +1063,12 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
     return r;
   }
 
-  return { events: run(), result, abort: () => ac.abort() };
+  return {
+    events: run(),
+    result,
+    abort: () => ac.abort(),
+    steer: (text: string) => (steerAccept ? steerAccept(text) : false),
+  };
 }
 
 export interface OneShotOptions {
@@ -1114,7 +1248,7 @@ function matchConfiguredTier(requestedModel: string): Tier | null {
   if (!requestedModel) return null;
   const strip = (m: string): string => m.replace(/\[1m\]$/, '');
   const tiers = loadConfig().llm.tiers;
-  for (const t of ['FAST', 'WORKHORSE', 'EXPERT'] as const) {
+  for (const t of ['FAST', 'WORKHORSE', 'EXPERT', 'GENIUS'] as const) {
     if (strip(tiers[t].model) === strip(requestedModel)) return t;
   }
   return null;
@@ -1129,6 +1263,7 @@ function matchConfiguredTier(requestedModel: string): Tier | null {
  *  configured-tier match always wins first. Checked opus -> sonnet -> haiku for determinism. */
 export function matchFamilyTier(requestedModel: string): Tier | null {
   const tokens = requestedModel.replace(/\[1m\]$/, '').toLowerCase().split(/[^a-z0-9]+/);
+  if (tokens.includes('fable') || tokens.includes('mythos')) return 'GENIUS';
   if (tokens.includes('opus')) return 'EXPERT';
   if (tokens.includes('sonnet')) return 'WORKHORSE';
   if (tokens.includes('haiku')) return 'FAST';

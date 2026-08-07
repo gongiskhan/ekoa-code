@@ -555,6 +555,18 @@
         "note": "mega-run 20260717-190134 slice B2: tests/agents/reply-summary.test.ts (the decision-B.E post-run hook in isolation over the fake chokepoint transport - fresh-sheet turn emits ONE FAST user_work reply-summary call + ONE schema-valid reply_summary notification; revision turn feeds the model the edit instruction + compact diff basis, never the whole reply; model failure / unparseable output emit NO event and never throw; compactDiffBasis caps). Pipeline threading (event ids == the persisted turn's derived sheet ids, notifications channel not the run stream) is pinned in chat-lifecycle.test.ts; the event schema representability in shared/src/contract.test.ts. Green in the per-PR vitest lane from landing; ratchet applies."
       },
       {
+        "group": "steer/Conduzir (mid-run message injection, 2026-08-07)",
+        "count": 2,
+        "targetGate": "G12",
+        "note": "Conduzir: the queued-message banner's steer path - inject a queued message into the IN-FLIGHT run instead of waiting (Agent SDK streaming-input mode at the chokepoint). tests/llm/steering.test.ts (SteerQueue order/close/push-after-close; the REAL default transport over a mocked SDK query: streaming input engaged only when steerable, a steered message becomes a second user turn in the SAME query, input closes on the first result with nothing unconsumed so an un-steered run exits after one turn, usage BILLS across all results; runAgent handle.steer accept-window). tests/agents/steering.test.ts (steerLiveRun over the fake transport: entry.steer wiring, steered message persists as a REAL user turn on the session transcript, OWNER-ONLY - stricter than cancel, an admin steering would be impersonation - and terminal/unknown runs refuse with steered:false, the queue-and-flush fallback). Contract halves live in contract/chat.test.ts + contract/jobs.test.ts (steer endpoints validate vs ChatRunSteerResponse/JobSteerResponse, empty message 400 envelope, schema-coverage COVERED). Green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
+        "group": "brand-logo image fit (dimension probing + banner demotion + oversized rescue, 2026-08-07)",
+        "count": 1,
+        "targetGate": "G12",
+        "note": "Live defect 2026-08-07 (ekoa.io/info): the og:image social banner was stored as the brand logo. tests/services/branding/image-fit.test.ts (probeImageDims via sharp; isSocialBannerShape truth table - 1200x630/1024x512/16:9 flagged, marks/lockups/thumbnails never; logoShapeScore ordering; downscaleToStorableLogo bounds a 2048x2048 png to 1024 keeping png, never enlarges, rejects non-rasters - the rescue for real logos served as multi-MB PNGs that the flat download cap used to silently drop). The selection-side halves (banner-flagged candidate drops below every source tier, measured shape beats byte size, dimension-less candidates keep byte-size behaviour) are pinned in the existing tests/services/branding/brand-assets.test.ts. Green in the per-PR vitest lane from landing; ratchet applies."
+      },
+      {
         "group": "agent-revision routing B5 (chip -> revision on the SAME sheet)",
         "count": 0,
         "targetGate": "G12",

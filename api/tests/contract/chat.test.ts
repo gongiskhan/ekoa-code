@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { ChatRunCreateResponse, ChatRun, ChatRunCancelResponse, ErrorEnvelope } from '@ekoa/shared';
+import { ChatRunCreateResponse, ChatRun, ChatRunCancelResponse, ChatRunSteerResponse, ErrorEnvelope } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users, userSettings, sessions } from '../../src/data/stores.js';
@@ -115,6 +115,28 @@ describe('chat runs contract (§3.8.7)', () => {
       expect(ErrorEnvelope.safeParse(body).success).toBe(true);
       expect((body as { error: { code: string } }).error.code).toBe('NOT_FOUND');
     }
+  });
+
+  it('POST steer → ChatRunSteerResponse (false on a terminal/unknown run — the queue fallback); empty message is a 400 envelope', async () => {
+    const t = await tokenFor();
+    // A created run settles fast under the fake transport; steered:false is the honest shape
+    // for a run no longer accepting input, and it still validates the response schema. The
+    // accepted-steer path is unit-pinned in agents/steering.test.ts (this suite is contract).
+    const created = await api('/api/v1/chat/runs', t, { method: 'POST', body: JSON.stringify({ sessionId: 's1', message: 'hi', language: 'pt' }) });
+    const runId = ((await created.json()) as { runId: string }).runId;
+    const steered = await api(`/api/v1/chat/runs/${runId}/steer`, t, { method: 'POST', body: JSON.stringify({ message: 'afinal quero um site' }) });
+    expect(steered.status).toBe(200);
+    expect(ChatRunSteerResponse.safeParse(await steered.json()).success).toBe(true);
+
+    const unknown = await api('/api/v1/chat/runs/does-not-exist/steer', t, { method: 'POST', body: JSON.stringify({ message: 'x' }) });
+    expect(unknown.status).toBe(200);
+    const unknownBody = (await unknown.json()) as { steered: boolean };
+    expect(ChatRunSteerResponse.safeParse(unknownBody).success).toBe(true);
+    expect(unknownBody.steered).toBe(false);
+
+    const bad = await api(`/api/v1/chat/runs/${runId}/steer`, t, { method: 'POST', body: JSON.stringify({ message: '' }) });
+    expect(bad.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await bad.json()).success).toBe(true);
   });
 
   it('GET an unknown run → 404 error envelope', async () => {

@@ -210,16 +210,27 @@ the integration-builder agent authors user-defined integrations at runtime.
 
 ## Billing
 
-Three tiers (`config.ts`, env-overridable): FAST (`claude-haiku-4-5-20251001`, weight 0.02),
-WORKHORSE (`claude-sonnet-4-6`, weight 0.1), EXPERT (`claude-opus-4-8[1m]`, weight 0.4). `billing/`
+Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,
+effort low, weight 0.02), WORKHORSE (`claude-sonnet-5`, effort medium, weight 0.1), EXPERT
+(`claude-opus-5`, effort high, weight 0.4), GENIUS (`claude-fable-5`, effort max, weight 0.8 - the
+frontier tier, 2026-08-07). GENIUS is floor/hint-only: keyword routing never escalates past EXPERT;
+first builds floor at GENIUS (`agents/build.ts`), follow-ups at EXPERT, and a `critical` complexity
+hint resolves GENIUS. `billing/`
 owns the metering formula; `llm/client.ts` is the single metering point and `billing/tracker.ts` the
 single `token_events` writer. Metered tokens =
 `round(w * (input + output + cacheCreate) + w * 0.25 * cacheRead)`; `tierWeight` is snapshotted at
 write time so historical events re-total identically. `GET /billing/breakdown` groups by the
 `agentType` tag. Gateway wire-tier billing (amended 2026-07-11): the gateway matches the requested
-model against the three configured tier models - a match runs AND meters at that tier (EXPERT ~20x
-FAST cost); any other model keeps the FAST clamp. This deliberately un-clamps EXPERT so the
-strict-JSON planner and thinking-heavy builds do not starve on FAST.
+model against the configured tier models - a match (exact or family: fable/mythos → GENIUS, opus →
+EXPERT, sonnet → WORKHORSE, haiku → FAST) runs AND meters at that tier (GENIUS ~40x FAST cost); any
+other model keeps the FAST clamp. This deliberately un-clamps the strong tiers so the strict-JSON
+planner and thinking-heavy builds do not starve on FAST.
+
+Build runs additionally mount the design-skill plugin (frontend-design [Apache 2.0] +
+design-taste-frontend [MIT], vendored under `api/content/plugins/ekoa-design/`) as an Agent SDK
+local plugin (`AgentsConfig.designPluginDir`, `EKOA_DESIGN_PLUGIN_DIR` override, empty disables).
+The spawn keeps `settingSources: []` (FIXED-6); the plugin is the one sanctioned skill-loading
+path, and the build system prompt pins the skills' craft to the compiled React entrypoint.
 
 Non-token usage (mega-run C2, BRIEF §5 "Shared surface"): quantities that are not tokens ride the
 SAME single writer (`recordUsageCounters` in `billing/tracker.ts`) into the sibling append-only

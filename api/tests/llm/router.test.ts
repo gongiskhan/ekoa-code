@@ -59,7 +59,9 @@ describe('complexity hints + file-count heuristics', () => {
     expect(classify('anything', { complexityHint: 'low' })).toBe('FAST');
     expect(classify('anything', { complexityHint: 'medium' })).toBe('WORKHORSE');
     expect(classify('anything', { complexityHint: 'high' })).toBe('EXPERT');
-    expect(classify('anything', { complexityHint: 'critical' })).toBe('EXPERT');
+    // GENIUS (frontier tier): reachable via the explicit `critical` hint or a floor — never
+    // keyword scoring (asserted below).
+    expect(classify('anything', { complexityHint: 'critical' })).toBe('GENIUS');
   });
 
   it('escalates by estimated file count', () => {
@@ -73,7 +75,8 @@ describe('RouterDecision resolution (config-driven models + weights)', () => {
   it('decisionForTier reads model/effort/weight from config', () => {
     expect(decideForTier('FAST')).toEqual({ tier: 'FAST', model: 'claude-haiku-4-5-20251001', effort: 'low', weight: 0.02 });
     expect(decideForTier('WORKHORSE')).toEqual({ tier: 'WORKHORSE', model: 'claude-sonnet-5', effort: 'medium', weight: 0.1 });
-    expect(decideForTier('EXPERT')).toEqual({ tier: 'EXPERT', model: 'claude-opus-4-8[1m]', effort: 'high', weight: 0.4 });
+    expect(decideForTier('EXPERT')).toEqual({ tier: 'EXPERT', model: 'claude-opus-5', effort: 'high', weight: 0.4 });
+    expect(decideForTier('GENIUS')).toEqual({ tier: 'GENIUS', model: 'claude-fable-5', effort: 'max', weight: 0.8 });
   });
 
   it('decideForTask applies a minimum-tier floor (only raises, never lowers)', () => {
@@ -81,5 +84,12 @@ describe('RouterDecision resolution (config-driven models + weights)', () => {
     expect(decideForTask('list the files', undefined, 'WORKHORSE').tier).toBe('WORKHORSE');
     // a build already EXPERT is not lowered by a WORKHORSE floor.
     expect(decideForTask('build a complex dashboard application', undefined, 'WORKHORSE').tier).toBe('EXPERT');
+    // the GENIUS floor (first builds) raises anything to the frontier tier.
+    expect(decideForTask('list the files', undefined, 'GENIUS').tier).toBe('GENIUS');
+  });
+
+  it('keyword scoring never escalates past EXPERT on its own (GENIUS is floor/hint-only)', () => {
+    expect(classify('build and deploy one complex dashboard application')).toBe('EXPERT');
+    expect(classify('architect a novel multi-file security audit refactor')).toBe('EXPERT');
   });
 });

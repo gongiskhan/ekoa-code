@@ -160,7 +160,9 @@ function sseErrorFrame(errorBody: string): string {
 
 // --- Routes ------------------------------------------------------------------------------
 
-const TIER_ORDER: Record<Tier, number> = { FAST: 1, WORKHORSE: 2, EXPERT: 3 };
+// The TUI /classify endpoint deliberately stays three-tier (FAST/WORKHORSE/EXPERT): GENIUS is
+// an explicit-floor tier (first builds, `critical` hints), never a per-turn classifier outcome.
+const TIER_ORDER: Record<Tier, number> = { FAST: 1, WORKHORSE: 2, EXPERT: 3, GENIUS: 4 };
 
 /** Build the gateway router. Mounted at /api/v1/llm by the composition root. */
 export function gatewayRouter(deps: GatewayDeps): Router {
@@ -361,13 +363,14 @@ export function gatewayRouter(deps: GatewayDeps): Router {
     }
     const tiers = loadConfig().llm.tiers;
     // Anthropic-style envelope per the shared LlmModelsResponse contract: { data: [...] }.
-    // All three tiers are listed (S2 honesty fix: WORKHORSE was missing) — family mapping makes
+    // All four tiers are listed (S2 honesty fix: WORKHORSE was missing) — family mapping makes
     // every tier reachable through this gateway, not only the FAST wire tier.
     res.json({
       data: [
         { id: tiers.FAST.model, route: 'gateway', note: 'wire tier (OAuth-compatible)' },
         { id: tiers.WORKHORSE.model, route: 'gateway', note: 'workhorse tier' },
         { id: tiers.EXPERT.model, route: 'sdk', note: 'SDK-only strong tier' },
+        { id: tiers.GENIUS.model, route: 'sdk', note: 'SDK-only frontier tier' },
       ],
     });
   });

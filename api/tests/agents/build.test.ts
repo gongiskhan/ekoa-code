@@ -134,6 +134,37 @@ describe('build execution (§5.4, §5.6.2)', () => {
     expect(call.allowedTools).not.toContain('knowledge_search'); // the plain name is translated, not duplicated
   });
 
+  it('a FIRST build routes on the GENIUS frontier tier (claude-fable-5, max effort) and mounts the design-skill plugin (operator directive 2026-08-07)', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a dashboard', language: 'pt', deps: deps() });
+    const call = t.streamCalls[0]!;
+    expect(call.model).toBe('claude-fable-5');
+    expect(call.effort).toBe('max');
+    // huashu-design rides as an Agent SDK local plugin (settingSources stays [] — FIXED-6).
+    expect(call.plugins?.some((p) => p.endsWith('content/plugins/ekoa-design'))).toBe(true);
+    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
+    expect(job.routing?.tier).toBe('GENIUS');
+  });
+
+  it('a FOLLOW-UP build keeps the EXPERT floor (claude-opus-5) and still mounts the design-skill plugin', async () => {
+    const t = resetAgentState({ finalText: 'edited' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = 'job-followup-tier';
+    const abort = new AbortController();
+    registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, artifactId: 'artX', sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', sessionId: 's1', artifactId: 'artX', request: { description: 'tweak the header', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'tweak the header', language: 'pt', deps: deps() }, abort, { firstBuild: false, artifactId: 'artX' });
+    const call = t.streamCalls[0]!;
+    expect(call.model).toBe('claude-opus-5');
+    expect(call.plugins?.some((p) => p.endsWith('content/plugins/ekoa-design'))).toBe(true);
+    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
+    expect(job.routing?.tier).toBe('EXPERT');
+  });
+
   it('persists a CHANGED sdkSessionId but not an unchanged one (§5.4.5)', async () => {
     // Changed: resume 'old-sess', SDK reports 'new-sess'.
     let t = resetAgentState({ finalText: 'ok', stream: [{ kind: 'session', sessionId: 'new-sess' }] });

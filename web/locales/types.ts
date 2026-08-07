@@ -789,6 +789,11 @@ export interface Translations {
     queueMessage: string;
     removeFromQueue: string;
     queuedNotice: string;
+    // Conduzir: steer a queued message into the RUNNING agent (button label, the desktop-only
+    // explanation, and the soft "no longer accepting input" fallback notice).
+    steerNow: string;
+    steerExplanation: string;
+    steerFailed: string;
     feedbackHelpful: string;
     feedbackNotHelpful: string;
     copyMessage: string;
