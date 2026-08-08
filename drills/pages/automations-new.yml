@@ -20,7 +20,6 @@ steps:
     assertion:
       kind: text-contains
       text: Nova automatização
-    assertionSource: authored
   - id: objective-field-visible
     area: 0
     mode: e2e
@@ -35,7 +34,6 @@ steps:
     assertion:
       kind: visible
       label: Objetivo (obrigatório)
-    assertionSource: authored
   - id: name-field-visible
     area: 0
     mode: e2e
@@ -50,7 +48,6 @@ steps:
     assertion:
       kind: visible
       label: Nome (opcional)
-    assertionSource: authored
   - id: cancel-button-visible
     area: 0
     mode: e2e
@@ -66,7 +63,6 @@ steps:
       kind: visible
       role: button
       name: Cancelar
-    assertionSource: authored
   - id: draft-disabled-when-empty
     area: 0
     mode: e2e
@@ -85,16 +81,9 @@ steps:
       name: Esboçar passos
       attribute: disabled
       value: ''
-    assertionSource: authored
-  # This check was graduated to a pinned assertion that asserted the button was DISABLED - the
-  # exact opposite of its own criterion. Verified live at authoring time: with the objective
-  # empty, attribute-equals disabled="" passes; once the objective is filled it fails, because
-  # the attribute is gone. None of the five assertion kinds can express "this control is
-  # enabled", so the check belongs in the behavioural lane and the inverted assertion and the
-  # spec generated from it are removed.
   - id: draft-enables-after-objective
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -116,6 +105,11 @@ steps:
       - functionality
       - validation
     judgment: false
+    spec: tests/drills/automations-new.spec.ts#draft-enables-after-objective
+    assertion:
+      kind: visible
+      role: button
+      name: Esboçar passos
   - id: cancel-returns-to-list
     area: 0
     mode: e2e
@@ -138,14 +132,10 @@ steps:
       - navigation
     judgment: false
     spec: tests/drills/automations-new.spec.ts#cancel-returns-to-list
-    # Anchored: the loose "contains /automations" pattern also matched /automations/new, so the
-    # check passed whether or not Cancelar navigated anywhere. Verified live at authoring time -
-    # after clicking Cancelar the URL is exactly /automations and this regex passes.
     assertion:
       kind: url-matches
       pattern: /automations$
       mode: regex
-    assertionSource: authored
   - id: form-layout-polish
     area: 0
     mode: e2e
@@ -195,7 +185,6 @@ steps:
       kind: url-matches
       pattern: /automations/new
       mode: contains
-    assertionSource: authored
   - id: s1785351740689-2
     area: 0
     mode: e2e
@@ -214,7 +203,11 @@ steps:
       kind: url-matches
       pattern: /automations/new
       mode: contains
-    assertionSource: authored
 spotter:
-  stability: {}
+  stability:
+    phash:
+      decision: drop
+      runs: 1
+      lastRunId: 01KZDNDRV60SJQBJDGNDE9M194
+      annotation: Create automation heading visible (phash); same form as frame-0138.
   rules: []

@@ -8,153 +8,239 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Aprovação de dispositivos" heading with its subtitle explaining that a new device (such as the local bridge) is authorised by entering the code it displays.
-    tags: [functionality]
+    description: >-
+      The page shows the "Aprovação de dispositivos" heading with its subtitle
+      explaining that a new device (such as the local bridge) is authorised by
+      entering the code it displays.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Aprovação de dispositivos" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Aprovação de dispositivos
   - id: code-field-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Código do dispositivo" input is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, label: "Código do dispositivo" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      label: Código do dispositivo
   - id: code-format-hinted
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The input shows the expected code shape as a placeholder ("XXXX-XXXX").
-    tags: [ux]
+    tags:
+      - ux
     judgment: false
-    assertion: { kind: visible, placeholder: "XXXX-XXXX" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: XXXX-XXXX
   - id: approve-and-deny-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: Both the "Aprovar" and "Recusar" actions are offered.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Recusar" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Recusar
   - id: approve-disabled-when-empty
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
-    state: default
-    description: With no code entered, the "Aprovar" button is disabled - a device cannot be authorised by an empty submission.
-    tags: [functionality, security, validation]
-    judgment: false
-    assertion: { kind: attribute-equals, role: button, name: "Aprovar", attribute: disabled, value: "" }
-    assertionSource: authored
-  - id: invalid-code-rejected-clearly
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the actions, submitting a well-formed but non-existent code shows a clear error
-      explaining the code is invalid or expired - it must not silently succeed, and it must not
-      leave the user staring at an unchanged form. In particular the button must come back out of
-      its "A aprovar..." spinner: a device approval that neither confirms nor fails leaves the user
-      unable to tell whether an unknown device was just authorised.
-      (Observed defect at authoring time - the button stays on "A aprovar..." indefinitely and no
-      error is ever shown.)
-    actions:
-      - fill the "Código do dispositivo" field with "ZZZZ-ZZZZ"
-      - click the "Aprovar" button
-    tags: [functionality, security, error-handling]
+      With no code entered, the "Aprovar" button is disabled - a device cannot
+      be authorised by an empty submission.
+    tags:
+      - functionality
+      - security
+      - validation
     judgment: false
+    assertion:
+      kind: attribute-equals
+      role: button
+      name: Aprovar
+      attribute: disabled
+      value: ''
+  - id: invalid-code-rejected-clearly
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the actions, submitting a well-formed but non-existent code shows a
+      clear error explaining the code is invalid or expired - it must not
+      silently succeed, and it must not leave the user staring at an unchanged
+      form. In particular the button must come back out of its "A aprovar..."
+      spinner: a device approval that neither confirms nor fails leaves the user
+      unable to tell whether an unknown device was just authorised.
+    actions:
+      - id: __act-0
+        description: fill the "Código do dispositivo" field with "ZZZZ-ZZZZ"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Código do dispositivo
+          value: ZZZZ-ZZZZ
+      - id: __act-1
+        description: click the "Aprovar" button
+        resolved:
+          kind: click
+          role: button
+          name: Aprovar
+    tags:
+      - functionality
+      - security
+      - error-handling
+    judgment: false
+    spec: tests/drills/settings-devices.spec.ts#invalid-code-rejected-clearly
+    assertion:
+      kind: text-contains
+      text: Código de dispositivo inválido ou expirado
   - id: malformed-code-handled
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, entering a code that does not match the XXXX-XXXX shape either keeps the Aprovar button disabled or produces a clear format error - it does not send a malformed code and fail obscurely.
+    description: >-
+      After the actions, entering a code that does not match the XXXX-XXXX shape
+      either keeps the Aprovar button disabled or produces a clear format error
+      - it does not send a malformed code and fail obscurely.
     actions:
       - fill the "Código do dispositivo" field with "abc"
       - click the "Aprovar" button
-    tags: [functionality, validation]
+    tags:
+      - functionality
+      - validation
     judgment: false
   - id: expiry-communicated
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
-    state: default
-    description: The helper text under the field tells the user the code's format and that it is valid for 10 minutes, so an expired-code failure is understandable rather than mysterious.
-    tags: [ux]
-    judgment: false
-  # The three checks below are about the shared authenticated shell rather than this page's
-  # own content. They are hosted here because this is one of the few routes that renders
-  # completely and quickly, so a shell regression is caught without waiting on a hanging fetch.
-  - id: shell-signout-label-accented
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the action, the open user menu shows the signed-in account ("admin", "super-admin") and
-      a sign-out item spelled "Terminar Sessão" - with the accent. This item is on every
-      authenticated page, so an unaccented "Terminar Sessao" is a spelling defect repeated across
-      the whole product.
-      (Observed defect at authoring time - the menu reads "Terminar Sessao".)
-    actions:
-      - click the "Menu do utilizador" button
-    tags: [i18n, copy, quality]
+      The helper text under the field tells the user the code's format and that
+      it is valid for 10 minutes, so an expired-code failure is understandable
+      rather than mysterious.
+    tags:
+      - ux
     judgment: false
+    spec: tests/drills/settings-devices.spec.ts#expiry-communicated
+    assertion:
+      kind: text-contains
+      text: O código tem o formato XXXX-XXXX e é válido durante 10 minutos.
+  - id: shell-signout-label-accented
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the open user menu shows the signed-in account ("admin",
+      "super-admin") and a sign-out item spelled "Terminar Sessão" - with the
+      accent. This item is on every authenticated page, so an unaccented
+      "Terminar Sessao" is a spelling defect repeated across the whole product.
+    actions:
+      - id: __act-0
+        description: click the "Menu do utilizador" button
+        resolved:
+          kind: click
+          role: button
+          name: Menu do utilizador
+    tags:
+      - i18n
+      - copy
+      - quality
+    judgment: false
+    spec: tests/drills/settings-devices.spec.ts#shell-signout-label-accented
+    assertion:
+      kind: visible
+      role: button
+      name: Terminar Sessão
   - id: shell-language-switch-translates-whole-page
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the action, switching the language to EN translates the PAGE, not only the chrome. The
-      top bar and sidebar relabel to "Toggle sidebar" / "Change language" / "User menu", so the
-      heading, the field label, the helper text and the buttons in the card below must relabel too.
-      A page showing English chrome over Portuguese content is a half-applied translation and a
-      defect.
-      (Observed defect at authoring time - only the shell relabels; "Aprovação de dispositivos",
-      "Código do dispositivo", "Recusar" and the helper text all stay Portuguese.)
+      After the action, switching the language to EN translates the PAGE, not
+      only the chrome. The top bar and sidebar relabel to "Toggle sidebar" /
+      "Change language" / "User menu", so the heading, the field label, the
+      helper text and the buttons in the card below must relabel too. A page
+      showing English chrome over Portuguese content is a half-applied
+      translation and a defect.
     actions:
       - click the "Mudar idioma" button
-    tags: [i18n, functionality]
+    tags:
+      - i18n
+      - functionality
     judgment: false
   - id: shell-token-meter-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The token meter in the top bar shows a real consumption figure. A grey skeleton pill sitting
-      between the page area and the language switcher is an unresolved loading state, and it is on
-      every page of the product.
-      (Observed defect at authoring time - the meter never resolves past its skeleton.)
-    tags: [functionality, loading, visual]
+      The token meter in the top bar shows a real consumption figure. A grey
+      skeleton pill sitting between the page area and the language switcher is
+      an unresolved loading state, and it is on every page of the product.
+    tags:
+      - functionality
+      - loading
+      - visual
     judgment: false
+    spec: tests/drills/settings-devices.spec.ts#shell-token-meter-resolves
+    assertion:
+      kind: text-contains
+      text: 31.2K
   - id: page-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The single-card layout is balanced - the card is not stretched full-width for one short input, the primary Aprovar and the destructive-looking Recusar are visually distinguished by weight and colour, and the helper text sits close under its field.
-    tags: [visual, polish]
+    description: >-
+      The single-card layout is balanced - the card is not stretched full-width
+      for one short input, the primary Aprovar and the destructive-looking
+      Recusar are visually distinguished by weight and colour, and the helper
+      text sits close under its field.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/settings-devices.spec.ts#page-polish

@@ -2,316 +2,553 @@ id: login
 title: Iniciar sessão (login)
 path: /login
 mode: steps
-# This page's default state is the SIGNED-OUT login form. The app redirects /login to /chat
-# whenever a session is active, so a runner holding a cached session must sign out (user menu ->
-# "Terminar Sessao") before judging these checks; landing on /chat means the page was never reached.
 areas: []
 steps:
   - id: heading-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The login card shows the "Iniciar sessão" heading with its "Inicie sessão para aceder ao painel" subtitle.
-    tags: [functionality]
+    description: >-
+      The login card shows the "Iniciar sessão" heading with its "Inicie sessão
+      para aceder ao painel" subtitle.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Iniciar sessão" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Iniciar sessão
   - id: username-field-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "Nome de utilizador" field is present - this product signs in by username, not by email address.
-    tags: [functionality]
+    description: >-
+      The "Nome de utilizador" field is present - this product signs in by
+      username, not by email address.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, label: "Nome de utilizador" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      label: Nome de utilizador
   - id: password-field-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Palavra-passe" field is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, label: "Palavra-passe" }
+    assertion:
+      kind: visible
+      label: Palavra-passe
+  - id: subtitle-present
+    area: 0
+    mode: e2e
+    enabled: false
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The login card carries its explanatory subtitle "Inicie sessão para aceder
+      ao painel" under the heading, so the screen says what signing in is for.
+    tags:
+      - functionality
+      - copy
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-66497885bacb-0083
+    assertion:
+      kind: text-contains
+      text: Inicie sessão para aceder ao painel
     assertionSource: authored
+    planGuard:
+      status: quarantined
+      reason: observation-receipt-mismatch
+  - id: form-asks-for-exactly-two-fields
+    area: 0
+    mode: e2e
+    enabled: false
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The signed-out form asks for exactly two text inputs - username and
+      password. A third input appearing here means an unexpected field (or a
+      stray form) has leaked onto the sign-in screen.
+    tags:
+      - functionality
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-66497885bacb-0084
+    assertion:
+      kind: count
+      role: textbox
+      op: eq
+      value: 2
+    assertionSource: authored
+    planGuard:
+      status: quarantined
+      reason: observation-receipt-mismatch
   - id: submit-disabled-when-empty
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: With both fields empty, the "Entrar" button is disabled.
-    tags: [functionality, validation]
+    tags:
+      - functionality
+      - validation
     judgment: false
-    assertion: { kind: attribute-equals, role: button, name: "Entrar", attribute: disabled, value: "" }
-    assertionSource: authored
+    assertion:
+      kind: attribute-equals
+      role: button
+      name: Entrar
+      attribute: disabled
+      value: ''
   - id: forgot-password-link-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The card tells a locked-out user how to get back in. There is no self-service recovery in
-      this product (the only reset is POST /api/v1/users/:id/password, super-admin only), so the
-      correct UI is a plain instruction to ask an administrator - NOT a link. It used to be a
-      link to /change-password, which needs the very password the user has forgotten and, signed
-      out, redirects straight back to /login, so it did nothing when clicked (fixed 2026-08-05).
-      A link reappearing here is a regression unless a real recovery route ships with it.
-    tags: [functionality, ux]
+      The card tells a locked-out user how to get back in. There is no
+      self-service recovery in this product (the only reset is POST
+      /api/v1/users/:id/password, super-admin only), so the correct UI is a
+      plain instruction to ask an administrator - NOT a link. It used to be a
+      link to /change-password, which needs the very password the user has
+      forgotten and, signed out, redirects straight back to /login, so it did
+      nothing when clicked (fixed 2026-08-05). A link reappearing here is a
+      regression unless a real recovery route ships with it.
+    tags:
+      - functionality
+      - ux
     judgment: false
-    assertion: { kind: text-contains, text: "Peça ao administrador da plataforma para a repor." }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Peça ao administrador da plataforma para a repor.
   - id: remember-me-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Manter sessão iniciada" option is offered next to the password field.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Manter sessão iniciada" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Manter sessão iniciada
   - id: remember-me-is-a-real-checkbox
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      "Manter sessão iniciada" is exposed as a real checkbox control, not a decorative tick glyph -
-      a keyboard or screen-reader user must be able to reach and toggle the setting that decides how
-      long their session survives.
-    tags: [functionality, a11y]
+      "Manter sessão iniciada" is exposed as a real checkbox control, not a
+      decorative tick glyph - a keyboard or screen-reader user must be able to
+      reach and toggle the setting that decides how long their session survives.
+    tags:
+      - functionality
+      - a11y
     judgment: false
-    assertion: { kind: visible, role: checkbox, name: "Manter sessão iniciada" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: checkbox
+      name: Manter sessão iniciada
   - id: fields-carry-placeholders
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The username field prompts with "Introduza o seu nome de utilizador", so an unlabelled-looking form is never presented on the product's first screen.
-    tags: [ux]
+    description: >-
+      The username field prompts with "Introduza o seu nome de utilizador", so
+      an unlabelled-looking form is never presented on the product's first
+      screen.
+    tags:
+      - ux
     judgment: false
-    assertion: { kind: visible, placeholder: "Introduza o seu nome de utilizador" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: Introduza o seu nome de utilizador
   - id: password-reveal-toggle-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The password field offers a "Mostrar palavra-passe" reveal toggle.
-    tags: [ux]
+    tags:
+      - ux
     judgment: false
-    assertion: { kind: visible, role: button, name: "Mostrar palavra-passe" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Mostrar palavra-passe
   - id: footer-wordmark-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
-    state: default
-    description: The signed-out screen is branded - the "Ekoa · Plataforma de trabalho com IA" wordmark sits beneath the card.
-    tags: [visual, brand]
-    judgment: false
-    assertion: { kind: text-contains, text: "Ekoa · Plataforma de trabalho com IA" }
-    assertionSource: authored
-  - id: remember-me-default-is-deliberate
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      "Manter sessão iniciada" arrives pre-ticked on a freshly loaded login page. For a product
-      holding privileged client material, a persistent session opted in by default is a decision the
-      screen should own rather than slip past the user - the option must at least be unmistakably
-      legible and togglable, and the user must be able to see at a glance that it is ON.
-      (Observed at authoring time - the box is checked by default. Its label is legible dark text
-      at rest; it only dims while a sign-in request is in flight, which is correct disabled-during-
-      submit behaviour and not a defect.)
-    tags: [security, ux]
+      The signed-out screen is branded - the "Ekoa · Plataforma de trabalho com
+      IA" wordmark sits beneath the card.
+    tags:
+      - visual
+      - brand
     judgment: false
+    assertion:
+      kind: text-contains
+      text: Ekoa · Plataforma de trabalho com IA
+  - id: remember-me-default-is-deliberate
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      "Manter sessão iniciada" arrives pre-ticked on a freshly loaded login
+      page. For a product holding privileged client material, a persistent
+      session opted in by default is a decision the screen should own rather
+      than slip past the user - the option must at least be unmistakably legible
+      and togglable, and the user must be able to see at a glance that it is ON.
+    tags:
+      - security
+      - ux
+    judgment: false
+    spec: tests/drills/login.spec.ts#remember-me-default-is-deliberate
+    assertion:
+      kind: attribute-equals
+      role: checkbox
+      name: Manter sessão iniciada
+      attribute: checked
+      value: 'true'
   - id: stays-on-login-when-signed-out
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Navigating to /login while signed out leaves the browser on /login rather than bouncing elsewhere.
-    tags: [functionality, navigation]
+    description: >-
+      Navigating to /login while signed out leaves the browser on /login rather
+      than bouncing elsewhere.
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: url-matches, pattern: "/login" }
-    assertionSource: authored
+    assertion:
+      kind: url-matches
+      pattern: /login
   - id: wrong-password-shows-generic-error
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, signing in with a valid username and a wrong password shows the generic error "Credenciais inválidas." in the card and leaves the user on the login page. The message must NOT reveal which of the two was wrong or whether the account exists.
+    description: >-
+      After the actions, signing in with a valid username and a wrong password
+      shows the generic error "Credenciais inválidas." in the card and leaves
+      the user on the login page. The message must NOT reveal which of the two
+      was wrong or whether the account exists.
     actions:
-      - fill the "Nome de utilizador" field with "admin"
-      - fill the "Palavra-passe" field with "senhaerrada999"
-      - click the "Entrar" button
-    tags: [security, error-handling]
+      - id: __act-0
+        description: fill the "Nome de utilizador" field with "admin"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome de utilizador
+          value: admin
+      - id: __act-1
+        description: fill the "Palavra-passe" field with "senhaerrada999"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Palavra-passe
+          value: senhaerrada999
+      - id: __act-2
+        description: click the "Entrar" button
+        resolved:
+          kind: click
+          role: button
+          name: Entrar
+    tags:
+      - security
+      - error-handling
     judgment: false
+    spec: tests/drills/login.spec.ts#wrong-password-shows-generic-error
+    assertion:
+      kind: text-contains
+      text: Credenciais inválidas.
   - id: unknown-user-error-identical
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, signing in with a username that does not exist produces the same generic "Credenciais inválidas." message as a wrong password does - no account enumeration through differing copy or differing response time.
+    description: >-
+      After the actions, signing in with a username that does not exist produces
+      the same generic "Credenciais inválidas." message as a wrong password does
+      - no account enumeration through differing copy or differing response
+      time.
     actions:
-      - fill the "Nome de utilizador" field with "utilizadorinexistente"
-      - fill the "Palavra-passe" field with "seja-o-que-for"
-      - click the "Entrar" button
-    tags: [security]
+      - id: __act-0
+        description: fill the "Nome de utilizador" field with "utilizadorinexistente"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome de utilizador
+          value: utilizadorinexistente
+      - id: __act-1
+        description: fill the "Palavra-passe" field with "seja-o-que-for"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Palavra-passe
+          value: seja-o-que-for
+      - id: __act-2
+        description: click the "Entrar" button
+        resolved:
+          kind: click
+          role: button
+          name: Entrar
+    tags:
+      - security
     judgment: false
+    spec: tests/drills/login.spec.ts#unknown-user-error-identical
+    assertion:
+      kind: text-contains
+      text: Credenciais inválidas.
   - id: successful-login-lands-on-chat
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the correct credentials sign the user in and the browser lands on the chat workspace - the dashboard chrome (icon sidebar, top bar with the token meter and user menu) is visible and no login form remains.
+    description: >-
+      After the actions, the correct credentials sign the user in and the
+      browser lands on the chat workspace - the dashboard chrome (icon sidebar,
+      top bar with the token meter and user menu) is visible and no login form
+      remains.
     actions:
-      - fill the "Nome de utilizador" field with "admin"
-      - fill the "Palavra-passe" field with "tmp12345"
-      - click the "Entrar" button
-    tags: [functionality, auth]
+      - id: __act-0
+        description: fill the "Nome de utilizador" field with "admin"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome de utilizador
+          value: admin
+      - id: __act-1
+        description: fill the "Palavra-passe" field with "tmp12345"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Palavra-passe
+          value: tmp12345
+      - id: __act-2
+        description: click the "Entrar" button
+        resolved:
+          kind: click
+          role: button
+          name: Entrar
+    tags:
+      - functionality
+      - auth
     judgment: false
   - id: failed-signin-never-resets-silently
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the actions, a sign-in attempt that does not succeed always ends in a message. The one
-      outcome that must never happen is the form quietly clearing both fields, dropping the "Entrar"
-      spinner and returning to its untouched resting state with no error and no navigation - the
-      user then cannot tell a wrong password from a broken app, and retyping the same correct
-      credentials produces the same silence.
-      (Observed defect at authoring time - a correct admin sign-in whose request never came back
-      left the card reset to empty fields with no error, while the API's own login endpoint answered
-      the same credentials in under half a second.)
+      After the actions, a sign-in attempt that does not succeed always ends in
+      a message. The one outcome that must never happen is the form quietly
+      clearing both fields, dropping the "Entrar" spinner and returning to its
+      untouched resting state with no error and no navigation - the user then
+      cannot tell a wrong password from a broken app, and retyping the same
+      correct credentials produces the same silence.
     actions:
       - fill the "Nome de utilizador" field with "admin"
       - fill the "Palavra-passe" field with "tmp12345"
       - click the "Entrar" button
-    tags: [functionality, error-handling, auth]
+    tags:
+      - functionality
+      - error-handling
+      - auth
     judgment: false
   - id: signin-request-completes
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the actions, the sign-in resolves within a few seconds of the click - the "Entrar"
-      button must not be left spinning indefinitely. The platform's own login endpoint answers in
-      well under a second, so a spinner that outlives that is the client hanging on its own request,
-      not a slow server.
-      (Observed defect at authoring time - the button spun on repeated attempts and never resolved.)
+      After the actions, the sign-in resolves within a few seconds of the click
+      - the "Entrar" button must not be left spinning indefinitely. The
+      platform's own login endpoint answers in well under a second, so a spinner
+      that outlives that is the client hanging on its own request, not a slow
+      server. (Observed defect at authoring time - the button spun on repeated
+      attempts and never resolved.)
     actions:
       - fill the "Nome de utilizador" field with "admin"
       - fill the "Palavra-passe" field with "tmp12345"
       - click the "Entrar" button
-    tags: [functionality, loading, auth]
+    tags:
+      - functionality
+      - loading
+      - auth
     judgment: false
   - id: submit-shows-pending-state
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, while the sign-in request is in flight the "Entrar" button shows a pending state (spinner / disabled) so the user cannot double-submit and knows something is happening.
+    description: >-
+      After the actions, while the sign-in request is in flight the "Entrar"
+      button shows a pending state (spinner / disabled) so the user cannot
+      double-submit and knows something is happening.
     actions:
       - fill the "Nome de utilizador" field with "admin"
       - fill the "Palavra-passe" field with "tmp12345"
       - click the "Entrar" button
-    tags: [ux]
+    tags:
+      - ux
     judgment: false
   - id: password-reveal-toggle-works
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the eye toggle switches the password field from dots to readable plaintext and back.
+    description: >-
+      After the actions, the eye toggle switches the password field from dots to
+      readable plaintext and back.
     actions:
       - fill the "Palavra-passe" field with "tmp12345"
       - click the "Mostrar palavra-passe" toggle
-    tags: [ux]
+    tags:
+      - ux
     judgment: false
   - id: forgot-password-goes-somewhere-real
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      A user who has forgotten their password is given a route back in, or told plainly how to get
-      one - never an inert control. This was a dead link to /change-password: clicking it changed
-      nothing at all (no route change, no dialog, no message, no console error), because signed
-      out that route redirects back to /login. Fixed 2026-08-05 by replacing it with the standing
-      instruction to ask an administrator, which is the only recovery this product actually has.
-      Judge the copy: it must name who can help, not merely state that recovery exists elsewhere.
-    tags: [functionality, navigation]
+      A user who has forgotten their password is given a route back in, or told
+      plainly how to get one - never an inert control. This was a dead link to
+      /change-password: clicking it changed nothing at all (no route change, no
+      dialog, no message, no console error), because signed out that route
+      redirects back to /login. Fixed 2026-08-05 by replacing it with the
+      standing instruction to ask an administrator, which is the only recovery
+      this product actually has. Judge the copy: it must name who can help, not
+      merely state that recovery exists elsewhere.
+    tags:
+      - functionality
+      - navigation
     judgment: false
   - id: no-console-errors-on-load
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Loading the login page produces no browser console errors and no failed network requests - this is the app's first impression and the QA bar for it is zero console errors.
-    tags: [quality]
+    description: >-
+      Loading the login page produces no browser console errors and no failed
+      network requests - this is the app's first impression and the QA bar for
+      it is zero console errors.
+    tags:
+      - quality
     judgment: false
   - id: remember-me-label-not-wrapped
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "Manter sessão iniciada" label sits on a single line on the desktop card. It used to
-      share a flex row with the recovery text, which squeezed it onto two (and, once the recovery
-      copy grew, three) lines inside a 400px card; the two are stacked as of 2026-08-05. The
-      recovery sentence below it may wrap - it is a sentence - but the checkbox label must not.
-    tags: [visual, polish]
+      The "Manter sessão iniciada" label sits on a single line on the desktop
+      card. It used to share a flex row with the recovery text, which squeezed
+      it onto two (and, once the recovery copy grew, three) lines inside a 400px
+      card; the two are stacked as of 2026-08-05. The recovery sentence below it
+      may wrap - it is a sentence - but the checkbox label must not.
+    tags:
+      - visual
+      - polish
     judgment: false
   - id: card-polish
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The login screen is polished - the card is optically centred on the dark branded background, the Ekoa mark, heading and subtitle stack with even rhythm, the two fields share width and their leading icons align, and the primary "Entrar" button spans the card width with the footer wordmark clear beneath.
-    tags: [visual, polish]
+    description: >-
+      The login screen is polished - the card is optically centred on the dark
+      branded background, the Ekoa mark, heading and subtitle stack with even
+      rhythm, the two fields share width and their leading icons align, and the
+      primary "Entrar" button spans the card width with the footer wordmark
+      clear beneath.
+    tags:
+      - visual
+      - polish
     judgment: true
   - id: error-banner-polish
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the error banner is well integrated - it appears inside the card above the fields with a soft red tint, it pushes the form down without making the card jump or overflow, and its text is legible against its background.
+    description: >-
+      After the actions, the error banner is well integrated - it appears inside
+      the card above the fields with a soft red tint, it pushes the form down
+      without making the card jump or overflow, and its text is legible against
+      its background.
     actions:
       - fill the "Nome de utilizador" field with "admin"
       - fill the "Palavra-passe" field with "senhaerrada999"
       - click the "Entrar" button
-    tags: [visual, polish]
+    tags:
+      - visual
+      - polish
     judgment: true

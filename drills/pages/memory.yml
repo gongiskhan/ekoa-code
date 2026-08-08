@@ -8,204 +8,435 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Memória" heading with its subtitle about knowledge learned from agent interactions.
-    tags: [functionality]
+    description: >-
+      The page shows the "Memória" heading with its subtitle about knowledge
+      learned from agent interactions.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Memória" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Memória
   - id: add-memory-button-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Adicionar Memória" button is present in the page header.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Adicionar Memória" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Adicionar Memória
   - id: search-box-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Pesquisar memórias..." search box is present in the filter bar.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, placeholder: "Pesquisar memórias..." }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: Pesquisar memórias...
   - id: filter-selects-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The filter bar offers the type filter ("Todos os tipos") alongside scope and visibility filters.
-    tags: [functionality]
+    description: >-
+      The filter bar offers the type filter ("Todos os tipos") alongside scope
+      and visibility filters.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Todos os tipos" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Todos os tipos
+  - id: total-card-stats-carry-numbers
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Every stat in the "Total" summary card carries its numeric value - "N
+      total", "N verificadas" and "N recentes (7d)" each show a number (0
+      counts). A stat label rendered without any number beside it is a broken
+      counter, not an intentional empty state.
+    authoringObservation:
+      kind: snapshot
+      observedAt: '2026-08-06T19:10:14.990Z'
+      conditions:
+        - observedAt: '2026-08-06T19:10:14.990Z'
+          requestedPath: /memory
+          finalPath: /memory
+          requestedOrigin: http://localhost:3000
+          finalOrigin: http://localhost:3000
+          actionsSinceOpen: 0
+          viewport:
+            id: desktop
+            width: 1280
+            height: 800
+          quiet:
+            outcome: budget-exhausted
+            waitedMs: 4001
+            quietForMs: 600
+            readyState: complete
+            networkQuiet: true
+            domStable: false
+            timedOut: true
+            budgetMs: 4000
+            pendingRequests: 0
+            persistentRequests: 2
+          browserContext:
+            persistentProfile: true
+            tabAgeMs: 719876
+            navigationAgeMs: 4095
+          source: open
+          networkSummary:
+            total: 24
+            pending: 0
+            persistent: 2
+            non2xx: 2
+            redirects: 0
+            notModified: 2
+            httpErrors: 0
+            otherNon2xx: 0
+            transportFailures: 1
+            completed2xx: 19
+            historyDroppedCount: 1879
+            historyKnown: true
+            historyTruncated: false
+    tags:
+      - functionality
+      - data-integrity
+    judgment: false
   - id: tabs-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The tab row includes "Guardrails" alongside Visão geral, Sempre ativa, Padroes recentes and Configurações.
-    tags: [functionality, navigation]
+    description: >-
+      The tab row includes "Guardrails" alongside Visão geral, Sempre ativa,
+      Padroes recentes and Configurações.
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: text-contains, text: "Guardrails" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Guardrails
   - id: chrome-copy-correctly-accented
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The page's own chrome is spelled in correct Portuguese. The subtitle must
+      read "Conhecimento aprendido a partir das interações dos agentes", the
+      fourth tab must read "Padrões recentes", and the scope filter must read
+      "Todos os âmbitos". Unaccented "interacoes", "Padroes" and "ambitos" are
+      spelling defects sitting in permanent navigation and header copy.
+    tags:
+      - i18n
+      - copy
+      - quality
+    judgment: false
+    spec: tests/drills/memory.spec.ts#chrome-copy-correctly-accented
+    assertion:
+      kind: text-contains
+      text: Todos os âmbitos
+  - id: filter-options-correctly-accented
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The page's own chrome is spelled in correct Portuguese. The subtitle must read "Conhecimento
-      aprendido a partir das interações dos agentes", the fourth tab must read "Padrões recentes",
-      and the scope filter must read "Todos os âmbitos". Unaccented "interacoes", "Padroes" and
-      "ambitos" are spelling defects sitting in permanent navigation and header copy.
-      (Observed defect at authoring time - all three render without their accents.)
-    tags: [i18n, copy, quality]
+      The options inside the two filter dropdowns are spelled in correct
+      Portuguese, not just the dropdown labels. In the type filter the options
+      must read "Preferência" and "Padrão" (never "Preferencia" or "Padrao"),
+      and in the scope filter "Técnico" must carry its accent (never "Tecnico").
+      Sibling options such as "Lição" are accented, so an unaccented neighbour
+      is a defect and not a deliberate style.
+    actions:
+      - click the type filter dropdown ("Todos os tipos") to reveal its options
+    tags:
+      - i18n
+      - copy
+      - quality
     judgment: false
   - id: memory-list-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      Below the filter bar the memory area settles into a real result - either memory cards or the
-      written empty state. It must not be left on the "Carregando..." spinner: a loading state that
-      never resolves is a failure, not a slow success.
-      (Observed defect at authoring time - the area stays on "Carregando..." indefinitely.)
-    tags: [functionality, loading]
+      Below the filter bar the memory area settles into a real result - either
+      memory cards or the written empty state. It must not be left on the
+      "Carregando..." spinner: a loading state that never resolves is a failure,
+      not a slow success.
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/memory.spec.ts#memory-list-resolves
+    assertion:
+      kind: text-contains
+      text: Sem memórias
   - id: loading-copy-is-european-portuguese
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      Any loading text on this page uses the same wording as the rest of the product, which says
-      "A carregar...". "Carregando..." is Brazilian Portuguese and is inconsistent with the pt-PT
-      copy used everywhere else in the app.
-      (Observed defect at authoring time - the list area shows "Carregando...".)
-    tags: [i18n, copy, consistency]
+      Any loading text on this page uses the same wording as the rest of the
+      product, which says "A carregar...". "Carregando..." is Brazilian
+      Portuguese and is inconsistent with the pt-PT copy used everywhere else in
+      the app.
+    tags:
+      - i18n
+      - copy
+      - consistency
     judgment: false
+    spec: tests/drills/memory.spec.ts#loading-copy-is-european-portuguese
+    assertion:
+      kind: visible
+      role: heading
+      name: Memória
   - id: add-memory-dialog-opens
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Adicionar Memória" dialog is open with Titulo, Tipo, Conteudo, Etiquetas, Visibilidade and Ambito fields plus Cancelar / Guardar buttons.
+    description: >-
+      After the action, the "Adicionar Memória" dialog is open with Titulo,
+      Tipo, Conteudo, Etiquetas, Visibilidade and Ambito fields plus Cancelar /
+      Guardar buttons.
     actions:
-      - click the "Adicionar Memória" button
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Adicionar Memória" button
+        resolved:
+          kind: click
+          role: button
+          name: Adicionar Memória
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/memory.spec.ts#add-memory-dialog-opens
+    assertion:
+      kind: visible
+      role: dialog
+      name: Adicionar Memória
   - id: save-requires-title
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions - filling only the content and pressing Guardar with the Titulo left empty - the dialog stays open AND the user is told why, through a visible validation message or an error highlight on the Titulo field. A silent no-op with no feedback fails this check. (Observed at authoring time - saving without a title silently did nothing.)
+    description: >-
+      After the actions - filling only the content and pressing Guardar with the
+      Titulo left empty - the dialog stays open AND the user is told why,
+      through a visible validation message or an error highlight on the Titulo
+      field. A silent no-op with no feedback fails this check.
     actions:
       - click the "Adicionar Memória" button
-      - fill the "Conteudo" field with "O cliente prefere respostas curtas e directas."
+      - >-
+        fill the "Conteudo" field with "O cliente prefere respostas curtas e
+        directas."
       - click the "Guardar" button
-    tags: [functionality, validation, ux]
+    tags:
+      - functionality
+      - validation
+      - ux
     judgment: false
   - id: create-memory-adds-card
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the dialog closes and the new memory appears as a card in the list showing the title "Preferência de tom do cliente" and the content text, and the Total counter reflects at least 1 memory.
+    description: >-
+      After the actions, the dialog closes and the new memory appears as a card
+      in the list showing the title "Preferência de tom do cliente" and the
+      content text, and the Total counter reflects at least 1 memory.
     actions:
       - click the "Adicionar Memória" button
       - fill the "Titulo" field with "Preferência de tom do cliente"
-      - fill the "Conteudo" field with "O cliente prefere respostas curtas e directas."
+      - >-
+        fill the "Conteudo" field with "O cliente prefere respostas curtas e
+        directas."
       - click the "Guardar" button
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
   - id: memory-card-date-valid
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: populated
-    description: Each memory card's footer shows a real, readable date - never the literal string "Invalid Date". (Observed defect at authoring time - a just-created memory rendered "Invalid Date".)
-    tags: [functionality, ux]
+    description: >-
+      Each memory card's footer shows a real, readable date - never the literal
+      string "Invalid Date".
+    tags:
+      - functionality
+      - ux
     judgment: false
   - id: memory-card-title-not-clipped
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: populated
-    description: A memory card's title is readable - it is not truncated with an ellipsis while wide empty space remains beside it in the card, and the card's badges (type, usage mode, origin) sit on tidy rows rather than overlapping or wrapping mid-word.
-    tags: [visual, polish]
+    description: >-
+      A memory card's title is readable - it is not truncated with an ellipsis
+      while wide empty space remains beside it in the card, and the card's
+      badges (type, usage mode, origin) sit on tidy rows rather than overlapping
+      or wrapping mid-word.
+    tags:
+      - visual
+      - polish
     judgment: true
   - id: how-it-works-expands
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Como funciona a Memória" panel expands and reveals explanatory text about how memory works (it is a collapsible disclosure, not a dead header).
+    description: >-
+      After the action, the "Como funciona a Memória" panel expands and reveals
+      explanatory text about how memory works (it is a collapsible disclosure,
+      not a dead header).
     actions:
-      - click the "Como funciona a Memória" panel header
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Como funciona a Memória" panel header
+        resolved:
+          kind: click
+          role: button
+          name: Como funciona a Memória
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/memory.spec.ts#how-it-works-expands
+    assertion:
+      kind: text-contains
+      text: As memórias são extraídas automaticamente das interações com os agentes.
   - id: guardrails-tab-renders
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the Guardrails tab is selected and its panel renders real content - a guardrails list or a clear empty state - never a blank region or an error.
+    description: >-
+      After the action, the Guardrails tab is selected and its panel renders
+      real content - a guardrails list or a clear empty state - never a blank
+      region or an error.
     actions:
-      - click the "Guardrails" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Guardrails" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Guardrails
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/memory.spec.ts#guardrails-tab-renders
+    assertion:
+      kind: text-contains
+      text: Sem guardrails definidas
   - id: settings-tab-renders
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Configurações" tab is selected and shows memory configuration controls, not a blank panel.
+    description: >-
+      After the action, the "Configurações" tab is selected and shows memory
+      configuration controls, not a blank panel.
     actions:
-      - click the "Configurações" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Configurações" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Configurações
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/memory.spec.ts#settings-tab-renders
+    assertion:
+      kind: visible
+      role: heading
+      name: Configurações de Memória
   - id: empty-state-copy
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: When no memories exist the page shows the "Sem memórias" empty state with its explanation and an "Adicionar Memória" call to action, centred and legible. (If memories already exist this check does not apply - the list renders instead.)
-    tags: [ux]
+    description: >-
+      When no memories exist the page shows the "Sem memórias" empty state with
+      its explanation and an "Adicionar Memória" call to action, centred and
+      legible. (If memories already exist this check does not apply - the list
+      renders instead.)
+    tags:
+      - ux
     judgment: true
+    spec: tests/drills/memory.spec.ts#empty-state-copy
   - id: page-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page reads as one coherent layout - the header, the collapsible info panel, the tab row, the totals bar and the filter bar are consistently spaced full-width blocks, and the memory cards below align to the same grid without stray gaps.
-    tags: [visual, polish]
+    description: >-
+      The page reads as one coherent layout - the header, the collapsible info
+      panel, the tab row, the totals bar and the filter bar are consistently
+      spaced full-width blocks, and the memory cards below align to the same
+      grid without stray gaps.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/memory.spec.ts#page-polish
 states:
   - id: populated
     label: At least one memory exists in the list
@@ -215,6 +446,8 @@ states:
       - id: fill-title
         description: fill the "Titulo" field with "Preferência de tom do cliente"
       - id: fill-content
-        description: fill the "Conteudo" field with "O cliente prefere respostas curtas e directas."
+        description: >-
+          fill the "Conteudo" field with "O cliente prefere respostas curtas e
+          directas."
       - id: save
         description: click the "Guardar" button and wait for the dialog to close

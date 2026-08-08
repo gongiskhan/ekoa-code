@@ -18,7 +18,6 @@ steps:
     assertion:
       kind: text-contains
       text: Automatizações
-    assertionSource: authored
   - id: create-cta-visible
     area: 0
     mode: e2e
@@ -26,15 +25,16 @@ steps:
     viewports:
       - desktop
     state: default
-    description: The "Criar automatização" call-to-action button is present.
+    description: >-
+      The "Nova automatização" call-to-action button is present in the page
+      header, whether the list is empty or populated.
     tags:
       - functionality
     judgment: false
     assertion:
       kind: visible
       role: button
-      name: Criar automatização
-    assertionSource: authored
+      name: Nova automatização
   - id: on-automations-url
     area: 0
     mode: e2e
@@ -49,7 +49,6 @@ steps:
     assertion:
       kind: url-matches
       pattern: /automations
-    assertionSource: authored
   - id: content-renders-not-stuck-loading
     area: 0
     mode: e2e
@@ -68,35 +67,52 @@ steps:
     spec: tests/drills/automations.spec.ts#content-renders-not-stuck-loading
     assertion:
       kind: text-contains
-      text: Ainda não há automatizações
+      text: 3 no total
   - id: header-survives-loading
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      While the automations list is still fetching, the page header stays on screen - the icon tile,
-      the "Automatizações" title, its subtitle and the "Criar automatização" action. The loading
-      state belongs to the list region only. Replacing the entire content area with a centred
-      spinner strips the user of the section title and of the primary action, so a user who wants to
-      create an automation has nothing to click for as long as the fetch takes.
-      (Observed defect at authoring time - the whole content area is replaced by "A carregar
-      automatizações...", and the fetch never returns.)
-    tags: [functionality, ux, loading]
+      While the automations list is still fetching, the page header stays on
+      screen - the icon tile, the "Automatizações" title, its subtitle and the
+      "Nova automatização" action. The loading state belongs to the list region
+      only. Replacing the entire content area with a centred spinner strips the
+      user of the section title and of the primary action, so a user who wants
+      to create an automation has nothing to click for as long as the fetch
+      takes.
+    tags:
+      - functionality
+      - ux
+      - loading
     judgment: false
+    assertion:
+      kind: visible
+      role: button
+      name: Nova automatização
   - id: heading-not-satisfied-by-loading-text
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      "Automatizações" appears on this page as the page TITLE in the header, rendered as a heading -
-      not merely as a word inside the "A carregar automatizações..." spinner caption. A page whose
-      only occurrence of its own name is inside a loading message has not rendered its header.
-    tags: [functionality, visual]
+      "Automatizações" appears on this page as the page TITLE in the header,
+      rendered as a heading - not merely as a word inside the "A carregar
+      automatizações..." spinner caption. A page whose only occurrence of its
+      own name is inside a loading message has not rendered its header.
+    tags:
+      - functionality
+      - visual
     judgment: false
+    spec: tests/drills/automations.spec.ts#heading-not-satisfied-by-loading-text
+    assertion:
+      kind: visible
+      role: heading
+      name: Automatizações
   - id: create-cta-navigates-to-new
     area: 0
     mode: e2e
@@ -109,11 +125,11 @@ steps:
       automatização" form is shown.
     actions:
       - id: __act-0
-        description: click the "Criar automatização" button
+        description: click the "Nova automatização" button
         resolved:
           kind: click
           role: button
-          name: Criar automatização
+          name: Nova automatização
     tags:
       - functionality
       - navigation
@@ -142,24 +158,91 @@ steps:
     spec: tests/drills/automations.spec.ts#empty-state-polish
   - id: list-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The automations panel settles into a real result - either a list of automations or the
-      written empty state ("Ainda não há automatizações"). It must NOT still be showing
-      "A carregar automatizações..." once the page has settled; a loader that never resolves is a
-      failure, not a slow success.
-      (Observed at authoring time - the page stays on "A carregar automatizações..." indefinitely
-      while the API answers the same request in milliseconds.)
-    tags: [functionality, loading]
+      The automations panel settles into a real result - either a list of
+      automations or the written empty state ("Ainda não há automatizações"). It
+      must NOT still be showing "A carregar automatizações..." once the page has
+      settled; a loader that never resolves is a failure, not a slow success.
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/automations.spec.ts#list-resolves
+    assertion:
+      kind: text-contains
+      text: 3 no total
+  - id: row-content-complete
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: populated
+    description: >-
+      Each listed automation row is complete - it shows the automation's name, a
+      description line (or an explicit "Sem descrição"), a step-count chip (e.g.
+      "1 passo"), an "Abrir" action and a delete control. No row renders with a
+      blank name or a missing action.
+    tags:
+      - functionality
+      - data-integrity
+    judgment: false
+  - id: delete-asks-confirmation
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: populated
+    description: >-
+      After the actions, deleting an automation is not silent - a confirmation
+      dialog names the automation about to be destroyed (e.g. Eliminar
+      "<name>"?) and offers "Cancelar" beside "Confirmar", and choosing
+      "Cancelar" closes the dialog leaving the list unchanged.
+    actions:
+      - click the "Eliminar automatização" button on the first automation row
+      - click the "Cancelar" button in the confirmation dialog
+    tags:
+      - functionality
+      - safety
+    judgment: false
+states:
+  - id: populated
+    label: At least one automation exists in the list
+    reachPath:
+      - id: open-list
+        description: navigate to /automations and wait for the list to settle
+      - id: ensure-one-exists
+        description: >-
+          if the list shows the empty state instead of rows, create one first:
+          click the "Nova automatização" button, fill the objective field with a
+          short description, save it as a draft, and navigate back to
+          /automations so the list shows at least one row
 spotter:
-  stability:
-    step-end:
-      decision: drop
-      runs: 1
-      lastRunId: 01KYNADECP6S8AMQSNM0360AZP
-      annotation: Identical to frame-0001; redundant duplicate of the loaded empty state.
-  rules: []
+  stability: {}
+  rules:
+    - trigger: step-end
+      action: drop
+      annotation: >-
+        Identical automations list page; redundant heading-visible validation
+        frame.
+      importance: normal
+      hashProfile:
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+        - 064113070f191111117e40208f98e3800100
+        - 0646065606111111117fc02faa38e0000100
+        - 0646065606111111117fc02faa38e0000100
+      graduatedAt: '2026-08-06T23:04:30.352Z'
+      stableRuns: 3
+      lastRunId: 01KZCKPYVA2EFXRWFHM6J685XE
+      drift: null

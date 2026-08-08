@@ -8,74 +8,276 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Authorize this device" heading explaining that Ekoa Local (the terminal) is asking to sign in to the account.
-    tags: [functionality]
+    description: >-
+      The page shows the "Autorizar este dispositivo" heading explaining that
+      Ekoa Local (the terminal) is asking to sign in to the account.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Authorize this device" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Autorizar este dispositivo
   - id: missing-code-error-shown
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Opening the page without a device code in the link shows the explicit error "No device code in the link. Re-run the login from your terminal." rather than a blank or spinning page.
-    tags: [functionality, error-handling]
+    description: >-
+      Opening the page without a device code in the link shows the explicit
+      error "Nenhum código de dispositivo na ligação. Execute novamente o início
+      de sessão a partir do seu terminal." rather than a blank or spinning page.
+    tags:
+      - functionality
+      - error-handling
     judgment: false
-    assertion: { kind: text-contains, text: "No device code in the link. Re-run the login from your terminal." }
-    assertionSource: authored
+    spec: tests/drills/activate.spec.ts#missing-code-error-shown
+    assertion:
+      kind: text-contains
+      text: >-
+        Nenhum código de dispositivo na ligação. Execute novamente o início de
+        sessão a partir do seu terminal.
   - id: phishing-warning-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The safety warning "Only approve if you started this login. The code must match your terminal." is shown - this is the page's defence against a user approving someone else's device.
-    tags: [security, ux]
+    description: >-
+      The safety warning "Apenas aprove se foi você que iniciou esta sessão. O
+      código deve corresponder ao do seu terminal." is shown - this is the
+      page's defence against a user approving someone else's device.
+    tags:
+      - security
+      - ux
     judgment: false
-    assertion: { kind: text-contains, text: "Only approve if you started this login. The code must match your terminal." }
-    assertionSource: authored
+    spec: tests/drills/activate.spec.ts#phishing-warning-present
+    assertion:
+      kind: text-contains
+      text: >-
+        Apenas aprove se foi você que iniciou esta sessão. O código deve
+        corresponder ao do seu terminal.
   - id: no-approve-control-without-code
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: With no device code in the link, the page offers no approve action at all - there is no clickable "Approve"/"Authorize" button that could authorise an unknown device.
-    tags: [security]
+    description: >-
+      With no device code in the link, the page offers no approve action at all
+      - there is no clickable "Aprovar"/"Autorizar" button that could authorise
+      an unknown device.
+    tags:
+      - security
     judgment: false
+    assertion:
+      kind: count
+      role: button
+      name: Aprovar
+      op: eq
+      value: 0
+    authoringObservation:
+      kind: snapshot
+      observedAt: '2026-08-06T12:34:24.081Z'
+      conditions:
+        - observedAt: '2026-08-06T12:34:24.081Z'
+          requestedPath: /activate
+          finalPath: /activate
+          requestedOrigin: http://localhost:3000
+          finalOrigin: http://localhost:3000
+          actionsSinceOpen: 0
+          viewport:
+            id: desktop
+            width: 1280
+            height: 800
+          quiet:
+            outcome: quiet
+            waitedMs: 953
+            quietForMs: 600
+            readyState: complete
+            networkQuiet: true
+            domStable: true
+            timedOut: false
+            budgetMs: 4000
+            pendingRequests: 0
+            persistentRequests: 2
+          browserContext:
+            persistentProfile: true
+            tabAgeMs: 1357228
+            navigationAgeMs: 1049
+          source: open
+          networkSummary:
+            total: 3
+            pending: 0
+            persistent: 2
+            non2xx: 0
+            redirects: 0
+            notModified: 0
+            httpErrors: 0
+            otherNon2xx: 0
+            transportFailures: 0
+            completed2xx: 1
+            historyDroppedCount: 1148
+            historyKnown: true
+            historyTruncated: false
   - id: invalid-code-rejected
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: bad-code
-    description: With a made-up device code in the URL, the page reports that the code is invalid or expired and offers no way to approve it. It must never present an approve button for a code the server did not issue.
-    tags: [security, error-handling]
+    description: >-
+      After the action, approving a device code the server never issued is
+      refused - the page reports a clear failure (an invalid or expired code) in
+      Portuguese and never reports success. This is the criterion that carries
+      the security weight: the page deliberately shows the code and lets the
+      user approve it after comparing with their terminal, so the guarantee is
+      that a code the server did not issue cannot be turned into a session.
+    actions:
+      - click the "Aprovar" button
+    tags:
+      - security
+      - error-handling
+    judgment: false
+  - id: code-displayed-for-comparison
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: bad-code
+    description: >-
+      The device code carried in the link is rendered prominently in the card,
+      spaced for reading, under the instruction "Confirme que corresponde ao
+      código apresentado no seu terminal". Comparing this code against the one
+      the terminal printed is the user's only defence against approving someone
+      else's device, so the code must actually be shown - an approve screen that
+      hides the code makes the safety warning unactionable.
+    tags:
+      - security
+      - ux
+    judgment: false
+  - id: approving-account-is-named
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: bad-code
+    description: >-
+      The card names the account the device would be authorised as ("A iniciar
+      sessão como <utilizador>"), so a user with more than one account cannot
+      approve a terminal into the wrong one without noticing.
+    tags:
+      - security
+      - ux
+    judgment: false
+  - id: refuse-action-offered
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: bad-code
+    description: >-
+      The card offers an explicit "Recusar" action beside "Aprovar", and the
+      approve control is the visually dominant one only to the extent that
+      refusing stays an obvious, easily hit choice. A user who does not
+      recognise the code must have a way to decline that is not "close the tab".
+    tags:
+      - security
+      - ux
+    judgment: false
+  - id: signed-out-visitor-cannot-approve
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: bad-code-signed-out
+    description: >-
+      A visitor who opens an activation link while signed out is sent to the
+      login screen rather than being shown the approve controls. Device approval
+      binds a terminal to a specific account, so it must never be reachable
+      without a session.
+    tags:
+      - security
+      - auth
     judgment: false
   - id: page-language-matches-app
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: This page's copy is in the same language as the rest of the product. The whole app renders in Portuguese, so an entirely English page here ("Authorize this device", "No device code in the link...") is an untranslated-page failure. (Observed defect at authoring time - the page is fully English.)
-    tags: [i18n, ux]
+    description: >-
+      This page's copy is in the same language as the rest of the product. The
+      whole app renders in Portuguese, so the page must read in Portuguese
+      ("Autorizar este dispositivo", "Nenhum código de dispositivo na
+      ligação...") - an entirely English page here is an untranslated-page
+      failure.
+    tags:
+      - i18n
+      - ux
     judgment: false
+    spec: tests/drills/activate.spec.ts#page-language-matches-app
+    assertion:
+      kind: visible
+      role: heading
+      name: Autorizar este dispositivo
   - id: card-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The dark centred card is well composed - the Ekoa mark above it, the terminal glyph, heading and explanation stack with even rhythm, the red error badge reads clearly against the dark surface without vibrating, and the footer caution line is legible rather than lost in the background.
-    tags: [visual, polish]
+    description: >-
+      The dark centred card is well composed - the Ekoa mark above it, the
+      terminal glyph, heading and explanation stack with even rhythm, the red
+      error badge reads clearly against the dark surface without vibrating, and
+      the footer caution line is legible rather than lost in the background.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/activate.spec.ts#card-polish
 states:
   - id: bad-code
     label: The activation link carries a device code the server never issued
     reachPath:
+      - id: sign-in-first
+        description: >-
+          sign in through the login form as the test admin, so the browser
+          carries a session before the activation link is opened
       - id: open-with-bad-code
-        description: navigate to /activate?code=ZZZZ-ZZZZ so the page loads with an unrecognised device code
+        description: >-
+          navigate to /activate?code=ZZZZ-ZZZZ so the page loads with an
+          unrecognised device code
+  - id: bad-code-signed-out
+    label: An activation link opened with no session
+    reachPath:
+      - id: ensure-signed-out
+        description: >-
+          end any active session (sign out, or clear the site's stored
+          credentials) so the browser carries no token
+      - id: open-link-signed-out
+        description: navigate to /activate?code=ZZZZ-ZZZZ while signed out
+spotter:
+  stability:
+    phash:
+      decision: keep
+      runs: 1
+      lastRunId: 01KZDNDRV60SJQBJDGNDE9M194
+      annotation: >-
+        App initializing, Portuguese authorization screen with heading
+        'Autorizar este dispositivo' and loading spinner visible.
+  rules: []

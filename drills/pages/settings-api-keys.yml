@@ -8,152 +8,298 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Chaves de API" heading with its subtitle explaining that keys connect Anthropic-compatible tools and that consumption is billed to the account.
-    tags: [functionality]
+    description: >-
+      The page shows the "Chaves de API" heading with its subtitle explaining
+      that keys connect Anthropic-compatible tools and that consumption is
+      billed to the account.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Chaves de API" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Chaves de API
   - id: name-field-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Nome da chave" input is present in the create-key card.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, label: "Nome da chave" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      label: Nome da chave
   - id: create-disabled-when-unnamed
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: With no key name entered, the "Criar chave" button is disabled.
-    tags: [functionality, validation]
+    tags:
+      - functionality
+      - validation
     judgment: false
-    assertion: { kind: attribute-equals, role: button, name: "Criar chave", attribute: disabled, value: "" }
-    assertionSource: authored
+    assertion:
+      kind: attribute-equals
+      role: button
+      name: Criar chave
+      attribute: disabled
+      value: ''
   - id: keys-section-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "As suas chaves" section listing existing keys is present below the create form.
-    tags: [functionality]
+    description: >-
+      The "As suas chaves" section listing existing keys is present below the
+      create form.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "As suas chaves" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: As suas chaves
   - id: create-submit-settles
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      After the actions, the create-key submission finishes: the button comes back out of its
-      "A criar..." spinner - either to the reveal panel and a populated list, or to a written error.
-      A button left spinning on "A criar..." with the key list still empty is a failure, and so is a
-      page that quietly reverts to the blank form on reload with no key created and no error shown.
-      (Observed at authoring time - the button stayed on "A criar..." indefinitely and no key was
-      ever created.)
+      After the actions, the create-key submission finishes: the button comes
+      back out of its "A criar..." spinner - either to the reveal panel and a
+      populated list, or to a written error. A button left spinning on "A
+      criar..." with the key list still empty is a failure, and so is a page
+      that quietly reverts to the blank form on reload with no key created and
+      no error shown.
     actions:
-      - fill the "Nome da chave" field with "Chave de teste drill"
-      - click the "Criar chave" button
-    tags: [functionality, loading, error-handling]
+      - id: __act-0
+        description: fill the "Nome da chave" field with "Chave de teste drill"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome da chave
+          value: Chave de teste drill
+      - id: __act-1
+        description: click the "Criar chave" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar chave
+    tags:
+      - functionality
+      - loading
+      - error-handling
     judgment: false
+    spec: tests/drills/settings-api-keys.spec.ts#create-submit-settles
+    assertion:
+      kind: text-contains
+      text: Guarde a sua chave agora
   - id: keys-section-has-empty-state
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      With no keys created yet, the "As suas chaves" section says so in words - an empty-state line
-      such as "Ainda nao criou nenhuma chave" (correctly accented) or an empty table with its column
-      headers. A bare "As suas chaves" heading followed by nothing but white space is a defect: the
-      user cannot tell an account with no keys apart from a list that failed to load.
-      (Observed at authoring time - the heading renders with completely empty space beneath it.)
-    tags: [functionality, ux, empty-state]
+      With no keys created yet, the "As suas chaves" section says so in words -
+      an empty-state line such as "Ainda nao criou nenhuma chave" (correctly
+      accented) or an empty table with its column headers. A bare "As suas
+      chaves" heading followed by nothing but white space is a defect: the user
+      cannot tell an account with no keys apart from a list that failed to load.
+    tags:
+      - functionality
+      - ux
+      - empty-state
     judgment: false
+    spec: tests/drills/settings-api-keys.spec.ts#keys-section-has-empty-state
+    assertion:
+      kind: visible
+      role: columnheader
+      name: NOME
   - id: create-reveals-key-once
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the new key is revealed exactly once in a highlighted "Guarde a sua chave agora" panel that warns "Esta chave não volta a ser mostrada", shows the full ekoa_gk_ token in a selectable field with a "Copiar chave" button, and offers a "Já guardei a chave" dismiss control.
+    description: >-
+      After the actions, the new key is revealed exactly once in a highlighted
+      "Guarde a sua chave agora" panel that warns "Esta chave não volta a ser
+      mostrada", shows the full ekoa_gk_ token in a selectable field with a
+      "Copiar chave" button, and offers a "Já guardei a chave" dismiss control.
     actions:
-      - fill the "Nome da chave" field with "Chave de teste drill"
-      - click the "Criar chave" button
-    tags: [functionality, security]
+      - id: __act-0
+        description: fill the "Nome da chave" field with "Chave de teste drill"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome da chave
+          value: Chave de teste drill
+      - id: __act-1
+        description: click the "Criar chave" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar chave
+    tags:
+      - functionality
+      - security
     judgment: false
+    spec: tests/drills/settings-api-keys.spec.ts#create-reveals-key-once
+    assertion:
+      kind: visible
+      role: button
+      name: Já guardei a chave
   - id: client-config-snippet-shown
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the reveal panel includes a "Configuração do cliente" snippet giving both ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN, and the base URL points at this platform's own LLM gateway path (/api/v1/llm) rather than at api.anthropic.com directly.
+    description: >-
+      After the actions, the reveal panel includes a "Configuração do cliente"
+      snippet giving both ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN, and the
+      base URL points at this platform's own LLM gateway path (/api/v1/llm)
+      rather than at api.anthropic.com directly.
     actions:
-      - fill the "Nome da chave" field with "Chave de teste drill"
-      - click the "Criar chave" button
-    tags: [functionality, security]
+      - id: __act-0
+        description: fill the "Nome da chave" field with "Chave de teste drill"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome da chave
+          value: Chave de teste drill
+      - id: __act-1
+        description: click the "Criar chave" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar chave
+    tags:
+      - functionality
+      - security
     judgment: false
+    spec: tests/drills/settings-api-keys.spec.ts#client-config-snippet-shown
+    assertion:
+      kind: text-contains
+      text: /api/v1/llm
   - id: key-masked-in-list
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: populated
-    description: In the "As suas chaves" table the key value is masked (an ekoa_gk_ prefix, an ellipsis and only a short suffix) - the full secret is never shown again after the one-time reveal.
-    tags: [security]
+    description: >-
+      In the "As suas chaves" table the key value is masked (an ekoa_gk_ prefix,
+      an ellipsis and only a short suffix) - the full secret is never shown
+      again after the one-time reveal.
+    tags:
+      - security
     judgment: false
   - id: key-row-metadata-correct
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: populated
-    description: A newly created key's row shows its name, a real CRIADA date (today's date, not a dash or "Invalid Date"), "Nunca usada" under ÚLTIMA UTILIZAÇÃO, and an "Ativa" status pill.
-    tags: [functionality, data]
+    description: >-
+      A newly created key's row shows its name, a real CRIADA date (today's
+      date, not a dash or "Invalid Date"), "Nunca usada" under ÚLTIMA
+      UTILIZAÇÃO, and an "Ativa" status pill.
+    tags:
+      - functionality
+      - data
     judgment: false
   - id: revoke-confirms-first
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: populated
-    description: After the action, revoking a key asks for confirmation before it takes effect - clicking the red revoke icon must not irreversibly kill the key with no prompt; once confirmed, the row's status stops reading "Ativa".
+    description: >-
+      After the action, revoking a key asks for confirmation before it takes
+      effect - clicking the red revoke icon must not irreversibly kill the key
+      with no prompt; once confirmed, the row's status stops reading "Ativa".
     actions:
       - click the red revoke icon at the end of the key's row
-    tags: [functionality, safety]
+    tags:
+      - functionality
+      - safety
     judgment: false
   - id: dismiss-hides-reveal-panel
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, pressing "Já guardei a chave" removes the reveal panel and the plaintext key is no longer anywhere on the page, while the key itself remains listed (masked) in "As suas chaves".
+    description: >-
+      After the actions, pressing "Já guardei a chave" removes the reveal panel
+      and the plaintext key is no longer anywhere on the page, while the key
+      itself remains listed (masked) in "As suas chaves".
     actions:
-      - fill the "Nome da chave" field with "Chave de teste drill"
-      - click the "Criar chave" button
-      - click the "Já guardei a chave" button
-    tags: [functionality, security]
+      - id: __act-0
+        description: fill the "Nome da chave" field with "Chave de teste drill"
+        resolved:
+          kind: fill
+          role: textbox
+          name: Nome da chave
+          value: Chave de teste drill
+      - id: __act-1
+        description: click the "Criar chave" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar chave
+      - id: __act-2
+        description: click the "Já guardei a chave" button
+        resolved:
+          kind: click
+          role: button
+          name: Já guardei a chave
+    tags:
+      - functionality
+      - security
     judgment: false
+    spec: tests/drills/settings-api-keys.spec.ts#dismiss-hides-reveal-panel
+    assertion:
+      kind: count
+      selector: .reveal-panel, [data-testid='reveal-panel']
+      op: eq
+      value: 0
   - id: page-polish
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page is well composed - the create-key card, the reveal panel and the key table share the same width and left edge, the warning line about the key not being shown again is unmistakably urgent without being garish, and the config snippet uses a legible monospace block.
-    tags: [visual, polish]
+    description: >-
+      The page is well composed - the create-key card, the reveal panel and the
+      key table share the same width and left edge, the warning line about the
+      key not being shown again is unmistakably urgent without being garish, and
+      the config snippet uses a legible monospace block.
+    tags:
+      - visual
+      - polish
     judgment: true
 states:
   - id: populated

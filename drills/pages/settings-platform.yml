@@ -8,178 +8,310 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Configurações da Plataforma" heading with its "Configuração geral e opções avançadas" subtitle.
-    tags: [functionality]
+    description: >-
+      The page shows the "Configurações da Plataforma" heading with its
+      "Configuração geral e opções avançadas" subtitle.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Configurações da Plataforma" }
+    assertion:
+      kind: text-contains
+      text: Configurações da Plataforma
     assertionSource: authored
   - id: platform-name-setting-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Nome da Plataforma" setting is present in the Geral section.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Nome da Plataforma" }
+    assertion:
+      kind: text-contains
+      text: Nome da Plataforma
     assertionSource: authored
   - id: timezone-setting-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Fuso Horário" setting is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Fuso Horário" }
+    assertion:
+      kind: text-contains
+      text: Fuso Horário
     assertionSource: authored
   - id: language-setting-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The Idioma setting offers "Português (Portugal)" alongside English.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Português (Portugal)" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Portuguese (Portugal)
+    spec: tests/drills/settings-platform.spec.ts#language-setting-present
   - id: chat-settings-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The Chat section exposes the "Modo Guiado" toggle governing assistant behaviour.
-    tags: [functionality]
+    description: >-
+      The Chat section exposes the "Modo Guiado" toggle governing assistant
+      behaviour.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Modo Guiado" }
+    assertion:
+      kind: text-contains
+      text: Modo Guiado
     assertionSource: authored
   - id: guidance-level-section-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Nível de orientação" section is present further down the page.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Nível de orientação" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Nível de orientação
   - id: language-selection-matches-ui
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The Idioma control's highlighted option agrees with the language the app is actually rendering and with the top bar's language indicator. Since the whole interface renders in Portuguese and the top bar reads "PT", "Inglês" must not be the selected option. (Observed defect at authoring time - "Inglês" was highlighted on a fully Portuguese UI.)
-    tags: [functionality, i18n]
+    description: >-
+      The Idioma control's highlighted option agrees with the language the app
+      is actually rendering and with the top bar's language indicator. Since the
+      whole interface renders in Portuguese and the top bar reads "PT", "Inglês"
+      must not be the selected option.
+    tags:
+      - functionality
+      - i18n
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#language-selection-matches-ui
+    assertion:
+      kind: text-contains
+      text: English
   - id: platform-name-persists
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, changing the platform name and reloading the page keeps the new value in the field - the setting is saved, not lost on navigation. If saving requires an explicit save button, that button must be visible rather than assumed.
+    description: >-
+      After the actions, changing the platform name and reloading the page keeps
+      the new value in the field - the setting is saved, not lost on navigation.
+      If saving requires an explicit save button, that button must be visible
+      rather than assumed.
     actions:
-      - fill the "Nome da Plataforma" field with "Ekoa QA"
-      - press Tab to blur the field
-      - reload the page
-    tags: [functionality, persistence]
+      - id: __act-0
+        description: fill the "Nome da Plataforma" field with "Ekoa QA"
+        resolved:
+          kind: fill
+          selector: input[placeholder='Ekoa']
+          value: Ekoa QA
+      - id: __act-1
+        description: press Tab to blur the field
+        resolved:
+          kind: press
+          selector: input[placeholder='Ekoa QA']
+          value: Tab
+      - id: __act-2
+        description: reload the page
+        resolved:
+          kind: press
+          selector: body
+          value: F5
+    tags:
+      - functionality
+      - persistence
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#platform-name-persists
+    assertion:
+      kind: attribute-equals
+      selector: input[value='Ekoa QA']
+      attribute: value
+      value: Ekoa QA
   - id: language-switch-changes-ui
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, selecting "Português (Portugal)" leaves the interface fully in Portuguese with no untranslated English strings appearing in the navigation or section headers.
+    description: >-
+      After the action, selecting "Português (Portugal)" leaves the interface
+      fully in Portuguese with no untranslated English strings appearing in the
+      navigation or section headers.
     actions:
-      - click the "Português (Portugal)" language option
-    tags: [functionality, i18n]
+      - id: __act-0
+        description: click the "Português (Portugal)" language option
+        resolved:
+          kind: click
+          role: button
+          name: Portuguese (Portugal)
+    tags:
+      - functionality
+      - i18n
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#language-switch-changes-ui
+    assertion:
+      kind: visible
+      role: button
+      name: Português (Portugal)
   - id: guided-mode-toggle-responds
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, toggling "Modo Guiado" visibly flips the switch and the change is acknowledged (saved indicator or persisted state) - it does not spring back to its original position.
+    description: >-
+      After the action, toggling "Modo Guiado" visibly flips the switch and the
+      change is acknowledged (saved indicator or persisted state) - it does not
+      spring back to its original position.
     actions:
-      - click the "Modo Guiado" toggle switch
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Modo Guiado" toggle switch
+        resolved:
+          kind: click
+          selector: text=Modo Guiado
+    tags:
+      - functionality
     judgment: false
   - id: timezone-dropdown-populated
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Fuso Horário" dropdown opens with a real list of selectable timezones - not an empty list or a single hardcoded entry.
+    description: >-
+      After the action, the "Fuso Horário" dropdown opens with a real list of
+      selectable timezones - not an empty list or a single hardcoded entry.
     actions:
       - click the "Fuso Horário" dropdown
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
   - id: settings-rows-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Every settings row follows one pattern - label and description on the left, control right-aligned on the same baseline, rows separated by hairline dividers within a card, and sections introduced by a small title plus grey caption. No control is orphaned or vertically misaligned with its label.
-    tags: [visual, polish]
+    description: >-
+      Every settings row follows one pattern - label and description on the
+      left, control right-aligned on the same baseline, rows separated by
+      hairline dividers within a card, and sections introduced by a small title
+      plus grey caption. No control is orphaned or vertically misaligned with
+      its label.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/settings-platform.spec.ts#settings-rows-polish
   - id: settings-form-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The platform settings form actually renders, rather than being left indefinitely on its
-      "A carregar as configurações..." loader with none of the settings below reachable.
-      (Re-checked 2026-08-05: this page DOES resolve, but only after about two minutes on the
-      loader - the same delay described in the Book's standing defect. Everything below it then
-      renders correctly. Judge it on whether the form arrives in a reasonable time, not on whether
-      it arrives at all. Note also that the loader copy is correct European Portuguese - an earlier
-      note in this Book called it Brazilian "Carregando configurações...", which is not what the
-      page shows.)
-    tags: [functionality, loading]
+      The platform settings form actually renders, rather than being left
+      indefinitely on its "A carregar as configurações..." loader with none of
+      the settings below reachable. (Re-checked 2026-08-05: this page DOES
+      resolve, but only after about two minutes on the loader - the same delay
+      described in the Book's standing defect. Everything below it then renders
+      correctly. Judge it on whether the form arrives in a reasonable time, not
+      on whether it arrives at all. Note also that the loader copy is correct
+      European Portuguese - an earlier note in this Book called it Brazilian
+      "Carregando configurações...", which is not what the page shows.)
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#settings-form-resolves
+    assertion:
+      kind: visible
+      role: heading
+      name: Configurações da Plataforma
   - id: default-language-is-portuguese
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "Idioma" setting - described as "Definir o idioma predefinido para a interface da
-      plataforma e conteúdo gerado" - has "Português (Portugal)" as the selected segment, not
-      "Inglês". This product ships a Portuguese interface, its top-bar switcher reads PT, and every
-      string on this very page is Portuguese, so a platform default of English contradicts the
-      product the user is looking at and would drive generated content into the wrong language.
-      (Observed defect at authoring time - the "Inglês" segment is the highlighted/selected one.)
-    tags: [i18n, functionality, defaults]
+      The "Idioma" setting - described as "Definir o idioma predefinido para a
+      interface da plataforma e conteúdo gerado" - has "Português (Portugal)" as
+      the selected segment, not "Inglês". This product ships a Portuguese
+      interface, its top-bar switcher reads PT, and every string on this very
+      page is Portuguese, so a platform default of English contradicts the
+      product the user is looking at and would drive generated content into the
+      wrong language.
+    tags:
+      - i18n
+      - functionality
+      - defaults
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#default-language-is-portuguese
+    assertion:
+      kind: visible
+      role: button
+      name: Português (Portugal)
   - id: platform-name-shows-saved-value
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "Nome da Plataforma" field shows the platform's saved name as an actual editable VALUE
-      in dark text, not as a grey placeholder. A placeholder reading "Ekoa" is ambiguous in a way
-      that matters on a settings form: the user cannot tell whether the name is set to "Ekoa" or
-      simply unset with "Ekoa" suggested, and saving the form with the field untouched may clear
-      or default the setting without them intending it.
-      (Observed at authoring time - "Ekoa" renders in the grey placeholder treatment, matching the
-      empty-field styling rather than the filled-field styling used by "Europe/Lisbon (WET)" in the
-      row beneath it.)
-    tags: [functionality, ux, data]
+      The "Nome da Plataforma" field shows the platform's saved name as an
+      actual editable VALUE in dark text, not as a grey placeholder. A
+      placeholder reading "Ekoa" is ambiguous in a way that matters on a
+      settings form: the user cannot tell whether the name is set to "Ekoa" or
+      simply unset with "Ekoa" suggested, and saving the form with the field
+      untouched may clear or default the setting without them intending it." in
+      the row beneath it.)
+    tags:
+      - functionality
+      - ux
+      - data
     judgment: false
+    spec: tests/drills/settings-platform.spec.ts#platform-name-shows-saved-value
+    assertion:
+      kind: attribute-equals
+      selector: input[placeholder='Ekoa']
+      attribute: value
+      value: Ekoa QA

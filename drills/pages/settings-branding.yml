@@ -8,142 +8,268 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The page shows the "Marca" heading.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Marca" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Marca
   - id: reset-button-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Repor" reset button is present in the page header.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Repor" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Repor
   - id: tabs-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The tab row offers Pesquisa, Marca and "Sistema de Design".
-    tags: [functionality, navigation]
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: text-contains, text: "Sistema de Design" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Sistema de Design
   - id: url-field-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "URL do Website" input is present with its https://exemplo.com placeholder.
-    tags: [functionality]
+    description: >-
+      The "URL do Website" input is present with its https://exemplo.com
+      placeholder.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, placeholder: "https://exemplo.com" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: https://exemplo.com
   - id: research-disabled-when-empty
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: With no URL entered, the "Pesquisar Marca" button is disabled.
-    tags: [functionality, validation]
+    tags:
+      - functionality
+      - validation
     judgment: false
-    assertion: { kind: attribute-equals, role: button, name: "Pesquisar Marca", attribute: disabled, value: "" }
-    assertionSource: authored
+    assertion:
+      kind: attribute-equals
+      role: button
+      name: Pesquisar Marca
+      attribute: disabled
+      value: ''
   - id: ai-and-memory-warnings-shown
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
-    state: default
-    description: Both advisory callouts are shown before any research runs - "Os resultados podem necessitar de revisao" (AI-extracted results need checking) and "A memória da empresa sera atualizada" (saving replaces existing company-identity memories). These set expectations for a destructive, AI-driven action and must not be hidden behind a click.
-    tags: [ux, safety]
-    judgment: false
-  - id: warning-copy-correctly-accented
-    area: 0
-    mode: vision
-    enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The two amber callouts are spelled in correct Portuguese. Their headings must read
-      "Os resultados podem necessitar de revisão" and "A memória da empresa será atualizada" -
-      with the accents on "revisão" and "será". Unaccented "revisao" and "sera" are spelling
-      defects, not stylistic choices, and they sit in the most prominent warning copy on the page.
-      (Observed defect at authoring time - both headings render unaccented.)
-    tags: [i18n, copy, quality]
+      Both advisory callouts are shown before any research runs - "Os resultados
+      podem necessitar de revisao" (AI-extracted results need checking) and "A
+      memória da empresa sera atualizada" (saving replaces existing
+      company-identity memories). These set expectations for a destructive,
+      AI-driven action and must not be hidden behind a click.
+    tags:
+      - ux
+      - safety
     judgment: false
+    spec: tests/drills/settings-branding.spec.ts#ai-and-memory-warnings-shown
+    assertion:
+      kind: text-contains
+      text: A memória da empresa será atualizada
+  - id: warning-copy-correctly-accented
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The two amber callouts are spelled in correct Portuguese. Their headings
+      must read "Os resultados podem necessitar de revisão" and "A memória da
+      empresa será atualizada" - with the accents on "revisão" and "será".
+      Unaccented "revisao" and "sera" are spelling defects, not stylistic
+      choices, and they sit in the most prominent warning copy on the page.
+    tags:
+      - i18n
+      - copy
+      - quality
+    judgment: false
+    spec: tests/drills/settings-branding.spec.ts#warning-copy-correctly-accented
+    assertion:
+      kind: text-contains
+      text: Os resultados podem necessitar de revisão
   - id: research-enables-with-url
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Pesquisar Marca" button becomes enabled (no longer greyed out) once a website URL has been entered.
+    description: >-
+      After the action, the "Pesquisar Marca" button becomes enabled (no longer
+      greyed out) once a website URL has been entered.
     actions:
-      - fill the "URL do Website" field with "https://www.anthropic.com"
-    tags: [functionality, validation]
+      - id: __act-0
+        description: fill the "URL do Website" field with "https://www.anthropic.com"
+        resolved:
+          kind: fill
+          role: textbox
+          name: URL do Website
+          value: https://www.anthropic.com
+    tags:
+      - functionality
+      - validation
     judgment: false
+    spec: tests/drills/settings-branding.spec.ts#research-enables-with-url
+    assertion:
+      kind: attribute-equals
+      role: button
+      name: Pesquisar Marca
+      attribute: disabled
+      value: ''
   - id: invalid-url-rejected
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, submitting a string that is not a URL does not start a silent failing research run - the page either blocks it with visible validation feedback on the field or surfaces a clear error message.
+    description: >-
+      After the actions, submitting a string that is not a URL does not start a
+      silent failing research run - the page either blocks it with visible
+      validation feedback on the field or surfaces a clear error message.
     actions:
-      - fill the "URL do Website" field with "isto nao e um url"
-      - click the "Pesquisar Marca" button
-    tags: [functionality, validation]
+      - id: __act-0
+        description: fill the "URL do Website" field with "isto nao e um url"
+        resolved:
+          kind: fill
+          role: textbox
+          name: URL do Website
+          value: isto nao e um url
+      - id: __act-1
+        description: click the "Pesquisar Marca" button
+        resolved:
+          kind: click
+          role: button
+          name: Pesquisar Marca
+    tags:
+      - functionality
+      - validation
     judgment: false
+    spec: tests/drills/settings-branding.spec.ts#invalid-url-rejected
+    assertion:
+      kind: text-contains
+      text: A pesquisa falhou. Tente novamente.
   - id: brand-tab-renders
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Marca" tab is selected and shows the brand identity fields (such as colours, logo and company details) or a clear empty state - never a blank panel.
+    description: >-
+      After the action, the "Marca" tab is selected and shows the brand identity
+      fields (such as colours, logo and company details) or a clear empty state
+      - never a blank panel.
     actions:
-      - click the "Marca" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Marca" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Marca
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/settings-branding.spec.ts#brand-tab-renders
+    assertion:
+      kind: visible
+      role: textbox
+      name: Nome da Empresa
   - id: design-system-tab-renders
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Sistema de Design" tab is selected and shows the design-system settings (tokens, typography, palette) or a clear empty state - never a blank panel.
+    description: >-
+      After the action, the "Sistema de Design" tab is selected and shows the
+      design-system settings (tokens, typography, palette) or a clear empty
+      state - never a blank panel.
     actions:
-      - click the "Sistema de Design" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Sistema de Design" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Sistema de Design
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/settings-branding.spec.ts#design-system-tab-renders
+    assertion:
+      kind: text-contains
+      text: Sistema de design ainda não extraído
   - id: reset-asks-before-discarding
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, "Repor" does not silently discard the stored brand - it asks for confirmation or clearly reports what it reset.
+    description: >-
+      After the action, "Repor" does not silently discard the stored brand - it
+      asks for confirmation or clearly reports what it reset.
     actions:
       - click the "Repor" button
-    tags: [functionality, safety]
+    tags:
+      - functionality
+      - safety
     judgment: false
   - id: page-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page is visually coherent - the two amber warning callouts are clearly warnings without shouting, the URL field and its button sit on one aligned row, and the dashed placeholder panel below reads as an intentional empty state rather than a rendering failure.
-    tags: [visual, polish]
+    description: >-
+      The page is visually coherent - the two amber warning callouts are clearly
+      warnings without shouting, the URL field and its button sit on one aligned
+      row, and the dashed placeholder panel below reads as an intentional empty
+      state rather than a rendering failure.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/settings-branding.spec.ts#page-polish

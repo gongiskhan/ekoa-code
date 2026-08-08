@@ -8,138 +8,251 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Utilização" heading with its subtitle about per-user token consumption and limit management.
-    tags: [functionality]
+    description: >-
+      The page shows the "Utilização" heading with its subtitle about per-user
+      token consumption and limit management.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Utilização" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Utilização
   - id: table-headers-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The usage table renders its column headers, including UTILIZADOR.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "UTILIZADOR" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: UTILIZADOR
   - id: last-login-column-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The table includes the "ÚLTIMO INÍCIO DE SESSÃO" column.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "ÚLTIMO INÍCIO DE SESSÃO" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: ÚLTIMO INÍCIO DE SESSÃO
   - id: reset-action-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: Each user row offers a "Repor" (reset quota) action.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Repor" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Repor
   - id: current-user-row-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The signed-in admin account appears as a row in the usage table.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "admin" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: admin
   - id: last-login-reflects-session
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "ÚLTIMO INÍCIO DE SESSÃO" cell for the signed-in admin shows a real timestamp, since this very run logged in as that account. It must not read "nunca". (Observed defect at authoring time - the column read "nunca" while the session was active.)
-    tags: [functionality, data]
+    description: >-
+      The "ÚLTIMO INÍCIO DE SESSÃO" cell for the signed-in admin shows a real
+      timestamp, since this very run logged in as that account. It must not read
+      "nunca".
+    tags:
+      - functionality
+      - data
     judgment: false
   - id: quota-figures-consistent
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: For each row the USADO, RESTANTE and % values are mutually consistent - the percentage matches used against the total quota, and the remaining figure equals the quota minus what was used.
-    tags: [functionality, data]
+    description: >-
+      For each row the USADO, RESTANTE and % values are mutually consistent -
+      the percentage matches used against the total quota, and the remaining
+      figure equals the quota minus what was used.
+    tags:
+      - functionality
+      - data
     judgment: true
+    spec: tests/drills/usage.spec.ts#quota-figures-consistent
   - id: reset-confirms-before-acting
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, pressing "Repor" does not silently wipe the quota - it either asks for confirmation first or gives clear visible feedback that the quota was reset (and the row's USADO / % update accordingly).
+    description: >-
+      After the action, pressing "Repor" does not silently wipe the quota - it
+      either asks for confirmation first or gives clear visible feedback that
+      the quota was reset (and the row's USADO / % update accordingly).
     actions:
-      - click the "Repor" button on the admin row
-    tags: [functionality, ux]
+      - id: __act-0
+        description: click the "Repor" button on the admin row
+        resolved:
+          kind: click
+          role: button
+          name: Repor
+    tags:
+      - functionality
+      - ux
     judgment: false
+    spec: tests/drills/usage.spec.ts#reset-confirms-before-acting
+    assertion:
+      kind: visible
+      role: dialog
+      name: Repor consumo de admin?
   - id: table-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The usage table looks clean - numeric columns are right-aligned, the percentage badge is consistently styled, the header row is visually distinct from the body, and the table card does not stretch awkwardly wide relative to its content.
-    tags: [visual, polish]
+    description: >-
+      The usage table looks clean - numeric columns are right-aligned, the
+      percentage badge is consistently styled, the header row is visually
+      distinct from the body, and the table card does not stretch awkwardly wide
+      relative to its content.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/usage.spec.ts#table-polish
   - id: table-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The consumption table settles into a real result - either per-user rows or a written empty
-      state. The page must not stop at its heading and subtitle with nothing but blank space where
-      the table belongs. Note that "Nenhum utilizador encontrado." does NOT count as settling into
-      a real result here; see usage-empty-state-is-a-lie below.
-      (Observed at authoring time - the table never renders; the page shows only its header block.)
-    tags: [functionality, loading]
+      The consumption table settles into a real result - per-user rows with
+      their quota figures. The page must not stop at its heading and subtitle
+      with nothing but blank space where the table belongs, and must not still
+      be showing a skeleton or spinner once it has settled.
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/usage.spec.ts#table-resolves
+    assertion:
+      kind: visible
+      selector: table
   - id: usage-empty-state-is-a-lie
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The page never states that no users exist. At minimum the signed-in admin has an account and
-      has consumed tokens, so "Nenhum utilizador encontrado." is always false on this screen. A
-      read that did not return must be shown as a failure the user can retry.
-      (Observed defect at authoring time - roughly two minutes after load the page replaced its
-      spinner with the "Nenhum utilizador encontrado." empty state, while GET /api/v1/users
-      returned the admin account in milliseconds.)
-    tags: [functionality, error-handling, data-integrity]
+      The page never states that no users exist. At minimum the signed-in admin
+      has an account and has consumed tokens, so "Nenhum utilizador encontrado."
+      is always false on this screen. A read that did not return must be shown
+      as a failure the user can retry.
+    tags:
+      - functionality
+      - error-handling
+      - data-integrity
     judgment: false
+    spec: tests/drills/usage.spec.ts#usage-empty-state-is-a-lie
+    assertion:
+      kind: visible
+      selector: table tr td
+  - id: origin-breakdown-section-present
+    area: 0
+    mode: e2e
+    enabled: false
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The "Consumo por origem" section renders below the per-user table, with
+      its subtitle explaining it breaks the current period's consumption down by
+      origin.
+    tags:
+      - functionality
+    judgment: false
+    authoringObservation:
+      kind: snapshot
+      receipts:
+        - observation-efbc4ab5bfb7-0026
+    assertion:
+      kind: text-contains
+      text: Consumo por origem
+    assertionSource: authored
+    planGuard:
+      status: quarantined
+      reason: observation-receipt-mismatch
+  - id: origin-breakdown-rows-coherent
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      When consumption exists, each row of the "Consumo por origem" table names
+      its origin and carries a token figure and a percentage, and the
+      percentages across the rows account for the whole (they sum to roughly
+      100%). A row with a blank origin, a missing figure, or percentages that
+      plainly cannot describe the same total is inconsistent data. With no
+      consumption yet, an explicit empty state in Portuguese is the acceptable
+      alternative.
+    tags:
+      - functionality
+      - data
+    judgment: true
+    spec: tests/drills/usage.spec.ts#origin-breakdown-rows-coherent
   - id: failed-load-is-not-silent
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      When the consumption data cannot be loaded, this page SAYS SO. It is the worst offender of
-      the product's failed-read handling: sibling pages at least render a red banner above their
-      false empty state, whereas this one shows the empty illustration and "Nenhum utilizador
-      encontrado." with no banner, no retry control and nothing in the console - the user is given
-      a confident, wrong answer and no way to tell it is wrong or to try again. A failed load must
-      produce a visible, Portuguese, retryable error.
-      (Observed defect at authoring time - the timeout produced a completely silent false empty
-      state, with no error affordance anywhere on the page.)
-    tags: [functionality, error-handling, ux]
+      When the consumption data cannot be loaded, this page SAYS SO. A failed
+      read must surface as a visible Portuguese error with a way to retry -
+      never as the empty illustration and "Nenhum utilizador encontrado." on
+      their own, which tell the user a confident, wrong answer with no way to
+      tell it is wrong.
+    tags:
+      - functionality
+      - error-handling
+      - ux
     judgment: false

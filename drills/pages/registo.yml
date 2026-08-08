@@ -8,176 +8,303 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Registo" heading with its subtitle explaining that only metadata and artifacts are logged, never conversations.
-    tags: [functionality]
+    description: >-
+      The page shows the "Registo" heading with its subtitle explaining that
+      only metadata and artifacts are logged, never conversations.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Registo" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Registo
   - id: filter-bar-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The filter bar offers the office scope filter ("Todos os escritórios") alongside user, action-type and date-range filters.
-    tags: [functionality]
+    description: >-
+      The filter bar offers the office scope filter ("Todos os escritórios")
+      alongside user, action-type and date-range filters.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Todos os escritórios" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Todos os escritórios
   - id: action-type-filter-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: 'The "Tipo de ação" filter input is present with its "ex.: build" placeholder.'
-    tags: [functionality]
+    description: >-
+      The "Tipo de ação" filter input is present with its "ex.: build"
+      placeholder.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, placeholder: "ex.: build" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      placeholder: 'ex.: build'
   - id: apply-button-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Aplicar" button that submits the filter selection is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Aplicar" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Aplicar
   - id: activity-table-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "ATIVIDADE" section renders with its entry count and the log table below it.
-    tags: [functionality]
+    description: >-
+      The "ATIVIDADE" section renders with its entry count and the log table
+      below it.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "ATIVIDADE" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: ATIVIDADE
   - id: login-event-recorded
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The audit log records the sign-in that this run performed - an "auth.login" entry is present.
-    tags: [functionality, audit]
+    description: >-
+      The audit log records the sign-in that this run performed - an
+      "auth.login" entry is present.
+    tags:
+      - functionality
+      - audit
     judgment: false
-    assertion: { kind: text-contains, text: "auth.login" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: auth.login
   - id: action-filter-narrows-log
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the activity table shows only rows whose AÇÃO badge starts with "session" - the entry count above the table updates to match, and unrelated actions such as auth.login are gone.
+    description: >-
+      After the actions, the activity table shows only rows whose AÇÃO badge
+      starts with "session" - the entry count above the table updates to match,
+      and unrelated actions such as auth.login are gone.
     actions:
-      - type "session" into the "Tipo de ação" filter field
-      - click the "Aplicar" button
-    tags: [functionality, filtering]
+      - id: __act-0
+        description: type "session" into the "Tipo de ação" filter field
+        resolved:
+          kind: fill
+          role: textbox
+          name: 'ex.: build'
+          value: session
+      - id: __act-1
+        description: click the "Aplicar" button
+        resolved:
+          kind: click
+          role: button
+          name: Aplicar
+    tags:
+      - functionality
+      - filtering
     judgment: false
   - id: no-conversation-content-leaked
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Consistent with the page's own promise ("Apenas metadados e artefactos - nunca conversas"), no row exposes chat message text or prompt content - the ARTEFACTOS column holds only identifiers, never prose the user typed into the assistant.
-    tags: [privacy, security]
+    description: >-
+      Consistent with the page's own promise ("Apenas metadados e artefactos -
+      nunca conversas"), no row exposes chat message text or prompt content -
+      the ARTEFACTOS column holds only identifiers, never prose the user typed
+      into the assistant.
+    tags:
+      - privacy
+      - security
     judgment: true
+    spec: tests/drills/registo.spec.ts#no-conversation-content-leaked
   - id: timestamps-well-formed
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Every DATA E HORA cell shows a properly formatted date and time - no "Invalid Date", no raw epoch numbers, no empty cells.
-    tags: [functionality, data]
+    description: >-
+      Every DATA E HORA cell shows a properly formatted date and time - no
+      "Invalid Date", no raw epoch numbers, no empty cells.
+    tags:
+      - functionality
+      - data
     judgment: false
+    spec: tests/drills/registo.spec.ts#timestamps-well-formed
+    assertion:
+      kind: text-contains
+      text: 06/08/2026
   - id: date-range-filter-works
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, applying a date range that ends before any activity existed leaves the table with no rows and a clear empty indication rather than silently showing the unfiltered log.
+    description: >-
+      After the actions, applying a date range that ends before any activity
+      existed leaves the table with no rows and a clear empty indication rather
+      than silently showing the unfiltered log.
     actions:
-      - fill the "De" date field with "01/01/2020"
-      - fill the "Até" date field with "01/02/2020"
-      - click the "Aplicar" button
-    tags: [functionality, filtering]
+      - id: __act-0
+        description: fill the "De" date field with "01/01/2020"
+        resolved:
+          kind: fill
+          selector: input[type='date']:first-of-type
+          value: '2020-01-01'
+      - id: __act-1
+        description: fill the "Até" date field with "01/02/2020"
+        resolved:
+          kind: fill
+          selector: input[type='date']:last-of-type
+          value: '2020-02-01'
+      - id: __act-2
+        description: click the "Aplicar" button
+        resolved:
+          kind: click
+          role: button
+          name: Aplicar
+    tags:
+      - functionality
+      - filtering
     judgment: false
   - id: table-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The log reads cleanly at a glance - action names render as consistently styled badges, the long artifact UUIDs use a monospace treatment and do not push other columns out of alignment, and rows have enough vertical rhythm to scan without eye strain.
-    tags: [visual, polish]
+    description: >-
+      The log reads cleanly at a glance - action names render as consistently
+      styled badges, the long artifact UUIDs use a monospace treatment and do
+      not push other columns out of alignment, and rows have enough vertical
+      rhythm to scan without eye strain.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/registo.spec.ts#table-polish
   - id: table-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The audit table settles into a real result - either event rows or a written empty state.
-      The filter bar rendering on its own, with nothing below it, is a failure: this page's whole
-      purpose is the record, and a blank record is indistinguishable from "nothing ever happened".
-      (Observed at authoring time - only the header and filter bar render; the table never arrives.)
-    tags: [functionality, loading]
+      The audit table settles into a real result - either event rows or a
+      written empty state. The filter bar rendering on its own, with nothing
+      below it, is a failure: this page's whole purpose is the record, and a
+      blank record is indistinguishable from "nothing ever happened".
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/registo.spec.ts#table-resolves
+    assertion:
+      kind: count
+      role: row
+      op: gte
+      value: 2
   - id: audit-log-does-not-fake-empty
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The audit log never reports "Sem entradas no registo." when the request behind it failed.
-      This run signed in, so at least one auth event exists to show, and on an audit surface a
-      false empty is the most serious form of this bug in the whole product: the record of who did
-      what is precisely the thing that must never quietly read as "nothing happened". A failed read
+      The audit log never reports "Sem entradas no registo." when the request
+      behind it failed. This run signed in, so at least one auth event exists to
+      show, and on an audit surface a false empty is the most serious form of
+      this bug in the whole product: the record of who did what is precisely the
+      thing that must never quietly read as "nothing happened". A failed read
       has to be an error the user can retry.
-      (Observed defect at authoring time - about two minutes after load the page showed the red
-      "Request timed out after 120000ms" banner and, beneath it, the "Sem entradas no registo."
-      empty state, in a session that had performed several logins.)
-    tags: [functionality, error-handling, data-integrity, audit]
+    tags:
+      - functionality
+      - error-handling
+      - data-integrity
+      - audit
     judgment: false
+    spec: tests/drills/registo.spec.ts#audit-log-does-not-fake-empty
+    assertion:
+      kind: text-contains
+      text: auth.login
   - id: date-filters-use-portuguese-format
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "De" and "Até" date inputs present dates in the European day-month-year order this
-      product's locale uses - dd/mm/aaaa - not the American month-day-year order. Getting this
-      wrong is not cosmetic on an audit filter: "03/04" silently means two different days to the
-      app and to a Portuguese user, so a search returns the wrong window with no sign of an error.
-      (Observed defect at authoring time - both inputs render the placeholder "mm/dd/yyyy", the US
-      order, and in English abbreviations, on a page whose every other string is Portuguese.)
-    tags: [i18n, functionality, data]
+      The "De" and "Até" date inputs present dates in the European
+      day-month-year order this product's locale uses - dd/mm/aaaa - not the
+      American month-day-year order. Getting this wrong is not cosmetic on an
+      audit filter: "03/04" silently means two different days to the app and to
+      a Portuguese user, so a search returns the wrong window with no sign of an
+      error.
+    tags:
+      - i18n
+      - functionality
+      - data
     judgment: false
   - id: load-error-is-in-portuguese
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      A failure to load the audit log is reported in Portuguese and in human terms, offering the
-      retry. A raw English developer string quoting a millisecond timeout is a defect here as
-      everywhere else in this product.
-      (Observed defect at authoring time - the banner read literally "Request timed out after
-      120000ms", in English, beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the authoring-time observation behind this check was a dev-harness artifact (a leaking CORS proxy), not a product hang - the page renders normally in a clean browser. The CHECK stands: web/lib/api/core.ts really can surface a raw English timeout string and a failed read really must not render as an empty state, so this is kept as the guard for those paths.
-    tags: [i18n, error-handling, ux]
+      A failure to load the audit log is reported in Portuguese and in human
+      terms, offering the retry. A raw English developer string quoting a
+      millisecond timeout is a defect here as everywhere else in this product.
+      (Observed defect at authoring time - the banner read literally "Request
+      timed out after 120000ms", in English, beside a Portuguese "Tentar
+      novamente" link.) NOTE 2026-08-05: the authoring-time observation behind
+      this check was a dev-harness artifact (a leaking CORS proxy), not a
+      product hang - the page renders normally in a clean browser. The CHECK
+      stands: web/lib/api/core.ts really can surface a raw English timeout
+      string and a failed read really must not render as an empty state, so this
+      is kept as the guard for those paths.
+    tags:
+      - i18n
+      - error-handling
+      - ux
     judgment: false
+    spec: tests/drills/registo.spec.ts#load-error-is-in-portuguese
+    assertion:
+      kind: visible
+      role: table

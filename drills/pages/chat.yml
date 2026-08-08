@@ -2,9 +2,6 @@ id: chat
 title: Chat (assistant workspace)
 path: /chat
 mode: steps
-# NOTE for the runner: this page's hero headline runs a looping type-on animation
-# ("O que vamos automatizar" / "construir"), so the DOM is never fully still. Deterministic
-# assertions on this route sometimes cannot be receipted; that is the animation, not a defect.
 areas: []
 steps:
   - id: composer-visible
@@ -15,7 +12,8 @@ steps:
       - desktop
     state: default
     description: >-
-      The message composer is present, prompting with "Descreva o que precisa...".
+      The message composer is present, prompting with "Descreva o que
+      precisa...".
     tags:
       - functionality
     judgment: false
@@ -26,10 +24,9 @@ steps:
     assertion:
       kind: visible
       placeholder: Descreva o que precisa...
-    assertionSource: authored
   - id: send-button-visible
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -38,6 +35,11 @@ steps:
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#send-button-visible
+    assertion:
+      kind: visible
+      role: button
+      name: Enviar mensagem
   - id: attach-button-visible
     area: 0
     mode: e2e
@@ -46,8 +48,8 @@ steps:
       - desktop
     state: default
     description: >-
-      The composer offers an "Anexar" attachment control, so a user can bring a file into the
-      conversation without leaving the workspace.
+      The composer offers an "Anexar" attachment control, so a user can bring a
+      file into the conversation without leaving the workspace.
     tags:
       - functionality
     judgment: false
@@ -59,23 +61,28 @@ steps:
       kind: visible
       role: button
       name: Anexar
-    assertionSource: authored
   - id: composer-input-affordances
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The composer's action row offers the three ways to bring material in - "Anexar" (file),
-      "Captura" (screen capture) and "Cola URL" - each with an icon and a legible label, and it
-      states the "Shift+Enter para nova linha" hint. Every control in that row must be a real
-      labelled button, not a bare glyph.
+      The composer's action row offers the three ways to bring material in -
+      "Anexar" (file), "Captura" (screen capture) and "Cola URL" - each with an
+      icon and a legible label, and it states the "Shift+Enter para nova linha"
+      hint. Every control in that row must be a real labelled button, not a bare
+      glyph.
     tags:
       - functionality
       - ux
     judgment: false
+    spec: tests/drills/chat.spec.ts#composer-input-affordances
+    assertion:
+      kind: visible
+      role: button
+      name: Anexar
   - id: topbar-controls-visible
     area: 0
     mode: e2e
@@ -95,33 +102,44 @@ steps:
       kind: visible
       role: button
       name: Menu do utilizador
-    assertionSource: authored
   - id: language-switcher-visible
     area: 0
-    mode: vision
-    enabled: true
-    viewports:
-      - desktop
-    state: default
-    description: The "Mudar idioma" language switcher is present in the top bar, showing the active locale ("PT").
-    tags:
-      - functionality
-    judgment: false
-  - id: token-meter-visible
-    area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The top bar shows the token usage meter - the word "Tokens" with a real quota readout of the
-      form "<used>/<quota>" (e.g. "0/10.0M") and its progress bar beneath, never a grey skeleton
-      pill left in place after the page has settled.
+      The "Mudar idioma" language switcher is present in the top bar, showing
+      the active locale ("PT").
+    tags:
+      - functionality
+    judgment: false
+    spec: tests/drills/chat.spec.ts#language-switcher-visible
+    assertion:
+      kind: visible
+      role: button
+      name: Mudar idioma
+  - id: token-meter-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The top bar shows the token usage meter - the word "Tokens" with a real
+      quota readout of the form "<used>/<quota>" (e.g. "0/10.0M") and its
+      progress bar beneath, never a grey skeleton pill left in place after the
+      page has settled.
     tags:
       - functionality
       - loading
     judgment: false
+    spec: tests/drills/chat.spec.ts#token-meter-visible
+    assertion:
+      kind: text-contains
+      text: 31.2K/10.0M
   - id: lands-on-chat-url
     area: 0
     mode: e2e
@@ -142,7 +160,6 @@ steps:
     assertion:
       kind: url-matches
       pattern: /chat
-    assertionSource: authored
   - id: starting-points-rail-present
     area: 0
     mode: e2e
@@ -151,8 +168,9 @@ steps:
       - desktop
     state: default
     description: >-
-      The empty workspace is not a blank page - it offers a "PONTOS DE PARTIDA" rail of ready-made
-      build templates so a first-time user has something concrete to click.
+      The empty workspace is not a blank page - it offers a "PONTOS DE PARTIDA"
+      rail of ready-made build templates so a first-time user has something
+      concrete to click.
     tags:
       - functionality
       - ux
@@ -164,7 +182,6 @@ steps:
     assertion:
       kind: text-contains
       text: PONTOS DE PARTIDA
-    assertionSource: authored
   - id: sessions-rail-toggle-present
     area: 0
     mode: e2e
@@ -172,7 +189,9 @@ steps:
     viewports:
       - desktop
     state: default
-    description: The sessions rail can be reached from the workspace via an "Expandir Sessões" control.
+    description: >-
+      The sessions rail can be reached from the workspace via an "Expandir
+      Sessões" control.
     tags:
       - functionality
       - navigation
@@ -185,22 +204,27 @@ steps:
       kind: visible
       role: button
       name: Expandir Sessões
-    assertionSource: authored
   - id: onboarding-banner-offers-guidance
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The "Novo por aqui?" banner sits above the starter rail with its explanatory line and a
-      primary "Começar com orientação" action. The banner must read as an invitation and the
-      action must be the visually dominant control inside it.
+      The "Novo por aqui?" banner sits above the starter rail with its
+      explanatory line and a primary "Começar com orientação" action. The banner
+      must read as an invitation and the action must be the visually dominant
+      control inside it.
     tags:
       - ux
       - onboarding
     judgment: false
+    spec: tests/drills/chat.spec.ts#onboarding-banner-offers-guidance
+    assertion:
+      kind: visible
+      role: button
+      name: Começar com orientação
   - id: starter-cards-not-clipped-by-composer
     area: 0
     mode: vision
@@ -209,11 +233,13 @@ steps:
       - desktop
     state: default
     description: >-
-      The "PONTOS DE PARTIDA" cards are fully readable on a desktop viewport - each visible card
-      shows its preview, its title and whatever caption it carries. The floating composer sits
-      over the bottom of the scroll area, so the failure to look for is a card row sliced through
-      the middle by the composer's edge, with titles half-hidden behind it and no way to see the
-      whole card without scrolling a region the user has no reason to think is scrollable.
+      The "PONTOS DE PARTIDA" cards are fully readable on a desktop viewport -
+      each visible card shows its preview, its title and whatever caption it
+      carries. The floating composer sits over the bottom of the scroll area, so
+      the failure to look for is a card row sliced through the middle by the
+      composer's edge, with titles half-hidden behind it and no way to see the
+      whole card without scrolling a region the user has no reason to think is
+      scrollable.
     tags:
       - visual
       - polish
@@ -221,39 +247,62 @@ steps:
     judgment: true
   - id: starter-card-carousel-advances
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      After the action, the "PONTOS DE PARTIDA" rail has scrolled to a further set of template
-      cards - the "Seguinte" arrow actually advances the carousel rather than sitting inert.
+      After the action, the "PONTOS DE PARTIDA" rail has scrolled to a further
+      set of template cards - the "Seguinte" arrow actually advances the
+      carousel rather than sitting inert.
     actions:
-      - click the "Seguinte" button
+      - id: __act-0
+        description: click the "Seguinte" button
+        resolved:
+          kind: click
+          role: button
+          name: Seguinte
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#starter-card-carousel-advances
+    assertion:
+      kind: text-contains
+      text: Catálogo E-commerce
   - id: suggestion-chip-fills-composer
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      After the action, clicking a suggestion chip puts that suggestion to work - the composer is
-      populated with the chip's text ready to send, or the chat starts on that prompt. A chip that
-      does nothing when clicked is a defect.
+      After the action, clicking a suggestion chip puts that suggestion to work
+      - the composer is populated with the chip's text ready to send, or the
+      chat starts on that prompt. A chip that does nothing when clicked is a
+      defect.
     actions:
-      - click the "Quero construir um CRM para a minha equipa de vendas" suggestion chip
+      - id: __act-0
+        description: >-
+          click the "Quero construir um CRM para a minha equipa de vendas"
+          suggestion chip
+        resolved:
+          kind: click
+          role: button
+          name: Quero construir um CRM para a minha equipa de vendas
     tags:
       - functionality
       - ux
     judgment: false
+    spec: tests/drills/chat.spec.ts#suggestion-chip-fills-composer
+    assertion:
+      kind: url-matches
+      pattern: /chat/
+      mode: contains
   - id: sessions-panel-opens
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -262,13 +311,23 @@ steps:
       After the action, the sessions panel is open, it shows the "SESSÕES"
       header, a "Pesquisar sessões..." search box, and a "Nova Sessão" button.
     actions:
-      - click the "Expandir Sessões" button
+      - id: __act-0
+        description: click the "Expandir Sessões" button
+        resolved:
+          kind: click
+          role: button
+          name: Expandir Sessões
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#sessions-panel-opens
+    assertion:
+      kind: visible
+      role: textbox
+      name: Pesquisar sessões...
   - id: new-session-starts-empty-chat
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -278,14 +337,29 @@ steps:
       area is empty (no prior user or agent messages) and the composer is ready
       for input.
     actions:
-      - click the "Expandir Sessões" button
-      - click the "Nova Sessão" button
+      - id: __act-0
+        description: click the "Expandir Sessões" button
+        resolved:
+          kind: click
+          role: button
+          name: Expandir Sessões
+      - id: __act-1
+        description: click the "Nova Sessão" button
+        resolved:
+          kind: click
+          role: button
+          name: Nova Sessão
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#new-session-starts-empty-chat
+    assertion:
+      kind: url-matches
+      pattern: /chat$
+      mode: regex
   - id: typed-message-appears-in-transcript
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -295,32 +369,70 @@ steps:
       message bubble in the chat transcript (an agent error reply is acceptable
       - only the user bubble is being checked).
     actions:
-      - type "Olá, teste de drill" into the "Descreva o que precisa..." composer
-      - click the "Enviar mensagem" button
+      - id: __act-0
+        description: >-
+          type "Olá, teste de drill" into the "Descreva o que precisa..."
+          composer
+        resolved:
+          kind: fill
+          role: textbox
+          name: Descreva o que precisa...
+          value: Olá, teste de drill
+      - id: __act-1
+        description: click the "Enviar mensagem" button
+        resolved:
+          kind: click
+          role: button
+          name: Enviar mensagem
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#typed-message-appears-in-transcript
+    assertion:
+      kind: text-contains
+      text: Olá, teste de drill
   - id: send-clears-the-composer
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      After the actions, sending empties the composer and returns it to its placeholder state, so
-      the next message starts from a clean field - the sent text must not be left behind where a
-      second Enter would send it twice.
+      After the actions, sending empties the composer and returns it to its
+      placeholder state, so the next message starts from a clean field - the
+      sent text must not be left behind where a second Enter would send it
+      twice.
     actions:
-      - type "Olá, teste de drill" into the "Descreva o que precisa..." composer
-      - click the "Enviar mensagem" button
+      - id: __act-0
+        description: >-
+          type "Olá, teste de drill" into the "Descreva o que precisa..."
+          composer
+        resolved:
+          kind: fill
+          role: textbox
+          name: Escreva a sua mensagem...
+          value: Olá, teste de drill
+      - id: __act-1
+        description: click the "Enviar mensagem" button
+        resolved:
+          kind: click
+          role: button
+          name: Enviar mensagem
     tags:
       - functionality
       - ux
     judgment: false
+    spec: tests/drills/chat.spec.ts#send-clears-the-composer
+    assertion:
+      kind: attribute-equals
+      role: textbox
+      name: Escreva para pôr em fila...
+      attribute: value
+      value: ''
   - id: sidebar-expands-with-labels
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -332,14 +444,24 @@ steps:
       plus Privacidade e ponte local, Chaves de API and Configurações at the
       bottom.
     actions:
-      - click the "Alternar barra lateral" button
+      - id: __act-0
+        description: click the "Alternar barra lateral" button
+        resolved:
+          kind: click
+          role: button
+          name: Alternar barra lateral
     tags:
       - functionality
       - navigation
     judgment: false
+    spec: tests/drills/chat.spec.ts#sidebar-expands-with-labels
+    assertion:
+      kind: visible
+      role: link
+      name: Automatizações
   - id: user-menu-shows-account-and-logout
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -348,13 +470,23 @@ steps:
       After the action, the user menu is open and shows the account name
       "admin", the role "super-admin" and a "Terminar Sessão" logout entry.
     actions:
-      - click the "Menu do utilizador" button
+      - id: __act-0
+        description: click the "Menu do utilizador" button
+        resolved:
+          kind: click
+          role: button
+          name: Menu do utilizador
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#user-menu-shows-account-and-logout
+    assertion:
+      kind: visible
+      role: button
+      name: Terminar Sessão
   - id: output-panel-hides
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -363,13 +495,23 @@ steps:
       After the action, the right-hand "Folhas" output panel is collapsed/hidden
       and the chat transcript column widens to use the freed space.
     actions:
-      - click the "Ocultar painel" button
+      - id: __act-0
+        description: click the "Ocultar painel" button
+        resolved:
+          kind: click
+          role: button
+          name: Ocultar painel
     tags:
       - functionality
     judgment: false
+    spec: tests/drills/chat.spec.ts#output-panel-hides
+    assertion:
+      kind: visible
+      role: button
+      name: Mostrar painel
   - id: chat-layout-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -383,6 +525,7 @@ steps:
       - visual
       - polish
     judgment: true
+    spec: tests/drills/chat.spec.ts#chat-layout-polish
   - id: hero-headline-animation-is-clean
     area: 0
     mode: vision
@@ -391,29 +534,34 @@ steps:
       - desktop
     state: default
     description: >-
-      The hero headline ("O que vamos ..." with a rotating final word, the rotating word in the
-      brand teal) reads as one complete phrase at every moment. What must never show is two words
-      run together into a non-word ("automatizarconstruir"), a word half-deleted, or the line
-      re-flowing and shoving the content beneath it as the word changes length.
+      The hero headline ("O que vamos ..." with a rotating final word, the
+      rotating word in the brand teal) reads as one complete phrase at every
+      moment. What must never show is two words run together into a non-word
+      ("automatizarconstruir"), a word half-deleted, or the line re-flowing and
+      shoving the content beneath it as the word changes length.
     tags:
       - visual
       - polish
     judgment: true
   - id: date-line-is-formatted-portuguese
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The small caps date above the headline reads as a real formatted Portuguese date - weekday,
-      day and month, e.g. "QUARTA · 5 DE AGOSTO" - never an English weekday, a raw timestamp or
-      "Invalid Date".
+      The small caps date above the headline reads as a real formatted
+      Portuguese date - weekday, day and month, e.g. "QUARTA · 5 DE AGOSTO" -
+      never an English weekday, a raw timestamp or "Invalid Date".
     tags:
       - functionality
       - i18n
     judgment: false
+    spec: tests/drills/chat.spec.ts#date-line-is-formatted-portuguese
+    assertion:
+      kind: text-contains
+      text: DE AGOSTO
   - id: transcript-readability
     area: 0
     mode: vision
@@ -432,18 +580,19 @@ steps:
     judgment: true
   - id: workspace-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The chat workspace actually renders and is usable within the normal couple-of-seconds
-      settle - the starter rail and the composer are present, so the user can type. The pane must
-      NOT be left on a bare centred spinner, on "A preparar o seu espaço de trabalho...", on "A
-      preparar tudo para si..." or on "A pensar na melhor abordagem..." before the user has asked
-      anything. This is the app's landing surface: if it never resolves, the product is unusable
-      on arrival, not merely slow.
+      The chat workspace actually renders and is usable within the normal
+      couple-of-seconds settle - the starter rail and the composer are present,
+      so the user can type. The pane must NOT be left on a bare centred spinner,
+      on "A preparar o seu espaço de trabalho...", on "A preparar tudo para
+      si..." or on "A pensar na melhor abordagem..." before the user has asked
+      anything. This is the app's landing surface: if it never resolves, the
+      product is unusable on arrival, not merely slow.
     tags:
       - functionality
       - loading
@@ -452,17 +601,23 @@ steps:
       kind: snapshot
       receipts:
         - observation-2d0d2a21441f-0024
+    spec: tests/drills/chat.spec.ts#workspace-resolves
+    assertion:
+      kind: visible
+      role: textbox
+      name: Escreva a sua mensagem...
   - id: token-meter-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      The token meter in the top bar resolves to a real reading rather than staying as a grey
-      skeleton placeholder. A skeleton that never fills is a broken widget, and this one sits in
-      the shell on every authenticated page, so it is visible everywhere.
+      The token meter in the top bar resolves to a real reading rather than
+      staying as a grey skeleton placeholder. A skeleton that never fills is a
+      broken widget, and this one sits in the shell on every authenticated page,
+      so it is visible everywhere.
     tags:
       - functionality
       - loading
@@ -472,6 +627,10 @@ steps:
       kind: snapshot
       receipts:
         - observation-2d0d2a21441f-0024
+    spec: tests/drills/chat.spec.ts#token-meter-resolves
+    assertion:
+      kind: text-contains
+      text: 31.2K/10.0M
   - id: stale-session-id-recovers
     area: 0
     mode: vision
@@ -480,13 +639,15 @@ steps:
       - desktop
     state: default
     description: >-
-      Landing on /chat with a remembered session id that the backend no longer knows must recover,
-      not strand. The client restores the last session id from browser storage and redirects to
-      /chat/<that id>; when that session does not exist server-side, the workspace must fall back
-      to a new empty session (or say the conversation could not be found), never sit indefinitely
-      on "A preparar o seu espaço de trabalho...". This is easy to hit in normal use: any session
-      deleted on one device, or expired server-side, would otherwise leave the other browser stuck
-      on the app's landing screen with no way back except clearing site storage.
+      Landing on /chat with a remembered session id that the backend no longer
+      knows must recover, not strand. The client restores the last session id
+      from browser storage and redirects to /chat/<that id>; when that session
+      does not exist server-side, the workspace must fall back to a new empty
+      session (or say the conversation could not be found), never sit
+      indefinitely on "A preparar o seu espaço de trabalho...". This is easy to
+      hit in normal use: any session deleted on one device, or expired
+      server-side, would otherwise leave the other browser stuck on the app's
+      landing screen with no way back except clearing site storage.
     tags:
       - functionality
       - error-handling
@@ -494,16 +655,42 @@ steps:
     judgment: false
   - id: no-console-errors
     area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Loading the chat workspace produces no browser console errors. Note that
+      this app can fail a fetch without logging anything, so a clean console is
+      necessary but not sufficient - also confirm the workspace actually
+      rendered its content.
+    tags:
+      - quality
+    judgment: false
+    spec: tests/drills/chat.spec.ts#no-console-errors
+    assertion:
+      kind: visible
+      role: textbox
+      name: Escreva a sua mensagem...
+  - id: shortcut-hints-match-the-platform
+    area: 0
     mode: vision
     enabled: true
     viewports:
       - desktop
     state: default
     description: >-
-      Loading the chat workspace produces no browser console errors. Note that this app can fail a
-      fetch without logging anything, so a clean console is necessary but not sufficient - also
-      confirm the workspace actually rendered its content.
+      The keyboard hint row under the composer names keys the viewer's machine
+      actually has. On a non-Apple desktop the hints must read as Ctrl shortcuts
+      (e.g. "Ctrl+K para histórico", "Ctrl+/ para atalhos"); rendering the Apple
+      Command symbol as the only affordance there tells a Windows or Linux user
+      to press a key their keyboard does not have. "Esc para limpar" and
+      "Shift+Enter para nova linha" are platform-neutral and correct as they
+      stand.
     tags:
+      - ux
+      - copy
       - quality
     judgment: false
 states:
@@ -517,3 +704,13 @@ states:
           click the first session card in the sessions list; if the list is
           empty, first send the message "Olá" from the composer and wait for the
           reply to appear, then this session is the populated one
+spotter:
+  stability:
+    phash:
+      decision: keep
+      runs: 1
+      lastRunId: 01KZDNDRV60SJQBJDGNDE9M194
+      annotation: >-
+        Chat page loaded via phash trigger; confirms successful navigation to
+        chat URL and interface render
+  rules: []

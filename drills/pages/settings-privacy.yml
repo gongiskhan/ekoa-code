@@ -8,176 +8,352 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Privacidade e ponte local" heading with its subtitle about the local bridge, read permissions and the log of everything leaving this computer.
-    tags: [functionality]
+    description: >-
+      The page shows the "Privacidade e ponte local" heading with its subtitle
+      about the local bridge, read permissions and the log of everything leaving
+      this computer.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Privacidade e ponte local" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Privacidade e ponte local
   - id: simple-install-section
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "Instalação simples" card is present with the platform download control.
-    tags: [functionality]
+    description: >-
+      The one-command install card ("Instalar num comando") is present - the
+      product replaced the old double-click "Instalação simples" installer with
+      a single copy-paste command (macOS quarantines downloaded .command files),
+      so this card is the primary install path.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Instalação simples" }
+    assertion:
+      kind: text-contains
+      text: Instalar num comando
     assertionSource: authored
   - id: platform-toggle-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The Mac/Windows platform toggle is present, with Windows offered as an alternative to the default.
-    tags: [functionality]
+    description: >-
+      The Mac/Windows platform toggle is present, with Windows offered as an
+      alternative to the default.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Windows" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Windows
   - id: step-by-step-guide-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Como ligar a ponte, passo a passo" numbered guide is present.
-    tags: [functionality, ux]
+    tags:
+      - functionality
+      - ux
     judgment: false
-    assertion: { kind: text-contains, text: "Como ligar a ponte, passo a passo" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Como ligar a ponte, passo a passo
   - id: pairing-section-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The "Estado da ponte e emparelhamento" section is present.
-    tags: [functionality]
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Estado da ponte e emparelhamento" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Estado da ponte e emparelhamento
   - id: unpaired-status-shown
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: With no bridge paired, the status reads "Ponte não emparelhada".
-    tags: [functionality]
+    description: >-
+      The pairing status pill in "Estado da ponte e emparelhamento" resolves to
+      a definite state - "Ponte ligada" when a bridge is connected, or "Ponte
+      não emparelhada" when none is. Either is correct depending on whether a
+      local bridge is running; what must never show is a blank pill, a stuck
+      "checking" state, or a status contradicting the sections below it.
+    authoringObservation:
+      kind: snapshot
+      observedAt: '2026-08-07T06:43:31.429Z'
+      conditions:
+        - observedAt: '2026-08-07T06:43:31.429Z'
+          requestedPath: /settings/privacy
+          finalPath: /settings/privacy
+          requestedOrigin: http://localhost:3000
+          finalOrigin: http://localhost:3000
+          actionsSinceOpen: 0
+          viewport:
+            id: desktop
+            width: 1280
+            height: 800
+          quiet:
+            outcome: quiet
+            waitedMs: 1243
+            quietForMs: 600
+            readyState: complete
+            networkQuiet: true
+            domStable: true
+            timedOut: false
+            budgetMs: 4000
+            pendingRequests: 0
+            persistentRequests: 2
+          browserContext:
+            persistentProfile: true
+            tabAgeMs: 514739
+            navigationAgeMs: 1318
+          source: open
+          networkSummary:
+            total: 28
+            pending: 0
+            persistent: 2
+            non2xx: 2
+            redirects: 0
+            notModified: 2
+            httpErrors: 0
+            otherNon2xx: 0
+            transportFailures: 3
+            completed2xx: 21
+            historyDroppedCount: 622
+            historyKnown: true
+            historyTruncated: false
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Ponte não emparelhada" }
-    assertionSource: authored
+    spec: tests/drills/settings-privacy.spec.ts#unpaired-status-shown
+    assertion:
+      kind: text-contains
+      text: Ponte ligada
   - id: pairing-button-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The "Gerar código de emparelhamento" button is present in the pairing section.
-    tags: [functionality]
+    description: >-
+      The "Gerar código de emparelhamento" button is present in the pairing
+      section.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: visible, role: button, name: "Gerar código de emparelhamento" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Gerar código de emparelhamento
   - id: platform-toggle-switches-download
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, selecting Windows updates the download control to offer the Windows installer (its label stops saying "para Mac") and the accompanying unpack instructions change to the Windows wording.
+    description: >-
+      After the action, selecting Windows updates the download control to offer
+      the Windows installer (its label stops saying "para Mac") and the
+      accompanying unpack instructions change to the Windows wording.
     actions:
-      - click the "Windows" toggle option
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Windows" toggle option
+        resolved:
+          kind: click
+          role: tab
+          name: Windows
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/settings-privacy.spec.ts#platform-toggle-switches-download
+    assertion:
+      kind: attribute-equals
+      role: tab
+      name: Windows
+      attribute: aria-selected
+      value: 'true'
   - id: pairing-code-generated
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, a pairing code is displayed for the user to enter in the bridge app - a visible code (with an expiry or copy affordance), not an unchanged page or an error.
+    description: >-
+      After the action, a pairing code is displayed for the user to enter in the
+      bridge app - a visible code (with an expiry or copy affordance), not an
+      unchanged page or an error.
     actions:
-      - click the "Gerar código de emparelhamento" button
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Gerar código de emparelhamento" button
+        resolved:
+          kind: click
+          role: button
+          name: Gerar código de emparelhamento
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/settings-privacy.spec.ts#pairing-code-generated
+    assertion:
+      kind: text-contains
+      text: Válido durante 10 minutos
   - id: advanced-install-expands
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Instalação avançada (com Node.js e Terminal)" disclosure expands to reveal the terminal-based instructions.
+    description: >-
+      After the action, the "Instalação avançada (com Node.js e Terminal)"
+      disclosure expands to reveal the terminal-based instructions.
     actions:
-      - click the "Instalação avançada (com Node.js e Terminal)" disclosure
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Instalação avançada (com Node.js e Terminal)" disclosure
+        resolved:
+          kind: click
+          selector: text=Instalação manual (avançado)
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/settings-privacy.spec.ts#advanced-install-expands
+    assertion:
+      kind: text-contains
+      text: Instalação manual (avançado)
   - id: egress-log-reachable
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page delivers on the part of its subtitle about "o registo de tudo o que sai deste computador" - scrolling down reveals the read-permission controls and the egress log (or an explicit link to it), not just bridge installation instructions.
-    tags: [functionality, privacy]
+    description: >-
+      The page delivers on the part of its subtitle about "o registo de tudo o
+      que sai deste computador" - scrolling down reveals the read-permission
+      controls and the egress log (or an explicit link to it), not just bridge
+      installation instructions.
+    tags:
+      - functionality
+      - privacy
     judgment: true
+    spec: tests/drills/settings-privacy.spec.ts#egress-log-reachable
   - id: unpaired-sections-explain-themselves
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      With no bridge paired, the four lower sections - "Autorizações de leitura ativas", "Registo de
-      leituras locais", "Atividade de mascaramento" and "Comandos locais aprovados" - each say in
-      words why they are empty and what the user must do first ("a lista é servida pela ponte local;
-      ligue a ponte..."), rather than showing an empty table or a bare column header row. A privacy
-      page that goes quiet is worse than one that says nothing is being read.
-    tags: [functionality, privacy, empty-state]
+      With no bridge paired, the four lower sections - "Autorizações de leitura
+      ativas", "Registo de leituras locais", "Atividade de mascaramento" and
+      "Comandos locais aprovados" - each say in words why they are empty and
+      what the user must do first ("a lista é servida pela ponte local; ligue a
+      ponte..."), rather than showing an empty table or a bare column header
+      row. A privacy page that goes quiet is worse than one that says nothing is
+      being read.
+    tags:
+      - functionality
+      - privacy
+      - empty-state
     judgment: false
   - id: lower-sections-resolve
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      None of the lower sections is left mid-flight once the page has settled - "Comandos locais
-      aprovados" must not stay on "A carregar..." and "Atividade de mascaramento" must not stay on
-      "Verificação em curso". On a privacy page an indefinite "checking..." reads as if an audit is
-      running when nothing is.
-      (Observed defect at authoring time - both sit in those states indefinitely with no bridge paired.)
-    tags: [functionality, loading, privacy]
+      None of the lower sections is left mid-flight once the page has settled -
+      "Comandos locais aprovados" must not stay on "A carregar..." and
+      "Atividade de mascaramento" must not stay on "Verificação em curso". On a
+      privacy page an indefinite "checking..." reads as if an audit is running
+      when nothing is.
+    tags:
+      - functionality
+      - loading
+      - privacy
     judgment: false
+    spec: tests/drills/settings-privacy.spec.ts#lower-sections-resolve
+    assertion:
+      kind: count
+      selector: text=A carregar
+      op: eq
+      value: 0
   - id: egress-log-columns-present
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The "Registo de leituras locais" table declares what it will record - MOMENTO, TIPO, FICHEIRO,
-      INTERVALO, DIMENSÃO and SESSÃO - so the user can see the shape of the evidence the product
-      promises to keep before any bridge is connected.
-    tags: [functionality, privacy, transparency]
+      The "Registo de leituras locais" table declares what it will record -
+      MOMENTO, TIPO, FICHEIRO, INTERVALO, DIMENSÃO and SESSÃO - so the user can
+      see the shape of the evidence the product promises to keep before any
+      bridge is connected.
+    tags:
+      - functionality
+      - privacy
+      - transparency
     judgment: false
+    spec: tests/drills/settings-privacy.spec.ts#egress-log-columns-present
+    assertion:
+      kind: text-contains
+      text: MOMENTO
   - id: instructions-readable
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The step-by-step instructions are genuinely followable by a non-technical user - each numbered step is a single concrete action, the numbered badges align with their text, and the Node.js caveat is visibly de-emphasised as a footnote rather than competing with the main steps.
-    tags: [ux, polish]
+    description: >-
+      The step-by-step instructions are genuinely followable by a non-technical
+      user - each numbered step is a single concrete action, the numbered badges
+      align with their text, and the Node.js caveat is visibly de-emphasised as
+      a footnote rather than competing with the main steps.
+    tags:
+      - ux
+      - polish
     judgment: true
+    spec: tests/drills/settings-privacy.spec.ts#instructions-readable
   - id: page-polish
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page reads as consistently structured sections - each has an icon-led title, a one-line explanation and a card below; the cards share a width and the pairing status pill is clearly a status rather than a button.
-    tags: [visual, polish]
+    description: >-
+      The page reads as consistently structured sections - each has an icon-led
+      title, a one-line explanation and a card below; the cards share a width
+      and the pairing status pill is clearly a status rather than a button.
+    tags:
+      - visual
+      - polish
     judgment: true
+    spec: tests/drills/settings-privacy.spec.ts#page-polish

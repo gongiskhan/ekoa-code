@@ -8,136 +8,413 @@ steps:
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page shows the "Integrações" heading with the integration count subtitle.
-    tags: [functionality]
+    description: >-
+      The page shows the "Integrações" heading with the integration count
+      subtitle.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Integrações" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Integrações
   - id: three-tabs-visible
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The three tabs "Integrações da Plataforma", "Minhas Integrações" and "Webhooks" are present.
-    tags: [functionality, navigation]
+    description: >-
+      The three tabs "Integrações da Plataforma", "Minhas Integrações" and
+      "Webhooks" are present.
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: visible, role: tab, name: "Webhooks" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: tab
+      name: Webhooks
   - id: refresh-action-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The page header offers an "Atualizar" refresh action, so a user whose catalogue failed to load has a way to retry without a full page reload.
-    tags: [functionality, ux]
+    description: >-
+      The page header offers an "Atualizar" refresh action, so a user whose
+      catalogue failed to load has a way to retry without a full page reload.
+    tags:
+      - functionality
+      - ux
     judgment: false
-    assertion: { kind: visible, role: button, name: "Atualizar" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: button
+      name: Atualizar
   - id: search-box-visible
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The platform tab renders its filter row above the card grid - the "Pesquisar integrações."
-      search box and the Todas / Ativadas / Configuradas / Disponíveis count chips. A catalogue of
-      this size is unusable without them.
-      (Observed defect at authoring time - no search box and no count chips are rendered at all;
-      the tab goes straight from the description line to the cards.)
-    tags: [functionality, ux]
+      The platform tab renders its filter row above the card grid - the
+      "Pesquisar integrações." search box and the Todas / Ativadas /
+      Configuradas / Disponíveis count chips. A catalogue of this size is
+      unusable without them.
+    tags:
+      - functionality
+      - ux
     judgment: false
+    spec: tests/drills/integrations.spec.ts#search-box-visible
+    assertion:
+      kind: visible
+      role: textbox
+      name: Pesquisar integrações...
   - id: platform-grid-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      Every card in the platform grid settles into a real integration - a logo, a name, a
-      description and a status pill. Grey skeleton placeholder cards still sitting in the grid once
-      the page has loaded are a failure, not a slow success.
-      (Observed defect at authoring time - only the first three cards resolve; the remaining rows
-      stay as grey skeletons indefinitely.)
-    tags: [functionality, loading]
+      Every card in the platform grid settles into a real integration - a logo,
+      a name, a description and a status pill. Grey skeleton placeholder cards
+      still sitting in the grid once the page has loaded are a failure, not a
+      slow success.
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/integrations.spec.ts#platform-grid-resolves
+    assertion:
+      kind: count
+      role: heading
+      op: gte
+      value: 4
   - id: platform-cards-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The platform tab lists the built-in integrations - Google Workspace is among the cards.
-    tags: [functionality]
+    description: >-
+      The platform tab lists the built-in integrations - Google Workspace is
+      among the cards.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: text-contains, text: "Google Workspace" }
-    assertionSource: authored
+    assertion:
+      kind: text-contains
+      text: Google Workspace
   - id: connect-buttons-present
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Unconnected account integrations (Google Workspace, Microsoft 365) each offer a "Ligar" connect button.
-    tags: [functionality]
+    description: >-
+      The platform catalogue offers at least two "Ligar" connect buttons - every
+      account or catalogue integration that is not yet connected exposes its
+      connect action directly on its card.
+    tags:
+      - functionality
     judgment: false
-    assertion: { kind: count, role: button, name: "Ligar", op: gte, value: 2 }
-    assertionSource: authored
+    assertion:
+      kind: count
+      role: button
+      name: Ligar
+      op: gte
+      value: 2
+  - id: account-connection-state-coherent
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Each account integration card (Google Workspace, Microsoft 365) presents a
+      coherent connection state - either the "Não ligado" pill with a "Ligar"
+      button, or the "Ligado" pill together with the connected account's
+      identity (its email address) and a "Desligar" action. A card claiming
+      "Ligado" without naming the account it is connected as, or one offering
+      "Ligar" while marked "Ligado", is incoherent.
+    authoringObservation:
+      kind: snapshot
+      observedAt: '2026-08-06T18:59:14.089Z'
+      conditions:
+        - observedAt: '2026-08-06T18:59:14.089Z'
+          requestedPath: /integrations
+          finalPath: /integrations
+          requestedOrigin: http://localhost:3000
+          finalOrigin: http://localhost:3000
+          actionsSinceOpen: 0
+          viewport:
+            id: desktop
+            width: 1280
+            height: 800
+          quiet:
+            outcome: budget-exhausted
+            waitedMs: 4003
+            quietForMs: 600
+            readyState: complete
+            networkQuiet: true
+            domStable: false
+            timedOut: true
+            budgetMs: 4000
+            pendingRequests: 0
+            persistentRequests: 2
+          browserContext:
+            persistentProfile: true
+            tabAgeMs: 58954
+            navigationAgeMs: 4372
+          source: open
+          networkSummary:
+            total: 30
+            pending: 0
+            persistent: 2
+            non2xx: 3
+            redirects: 0
+            notModified: 1
+            httpErrors: 2
+            otherNon2xx: 0
+            transportFailures: 1
+            completed2xx: 24
+            historyDroppedCount: 0
+            historyKnown: true
+            historyTruncated: false
+    tags:
+      - functionality
+      - data-integrity
+    judgment: false
+    spec: tests/drills/integrations.spec.ts#account-connection-state-coherent
+    assertion:
+      kind: text-contains
+      text: goncalo.p.gomes@gmail.com
+  - id: pipedream-explore-expands
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the Pipedream card expands inline into the "Milhares de
+      aplicações" panel - a "Procurar entre milhares de aplicações..." search
+      box above a grid of app tiles (Notion, Slack, Airtable, ...) each carrying
+      an app name and a Portuguese category label, plus a "Recolher" control
+      that collapses the panel back to the card.
+    actions:
+      - id: __act-0
+        description: click the "Explorar" button
+        resolved:
+          kind: click
+          role: button
+          name: Explorar
+    tags:
+      - functionality
+      - navigation
+    judgment: false
+    spec: tests/drills/integrations.spec.ts#pipedream-explore-expands
+    assertion:
+      kind: visible
+      role: button
+      name: Recolher
   - id: webhooks-tab-shows-webhooks-panel
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the URL carries tab=webhooks and the panel shows the "Webhooks" heading, its description about routing external events to an artifact backend, a "Criar webhook" button, and (with no webhooks yet) the "Ainda não existem webhooks" empty-state message.
+    description: >-
+      After the action, the URL carries tab=webhooks and the panel shows the
+      "Webhooks" heading, its description about routing external events to an
+      artifact backend, a "Criar webhook" button, and (with no webhooks yet) the
+      "Ainda não existem webhooks" empty-state message.
     actions:
-      - click the "Webhooks" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Webhooks" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Webhooks
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/integrations.spec.ts#webhooks-tab-shows-webhooks-panel
+    assertion:
+      kind: url-matches
+      pattern: tab=webhooks
+      mode: contains
   - id: create-webhook-dialog-opens
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the actions, the "Novo webhook" dialog is open with an "Integração" select, an "Evento" field, an "Artefacto de destino" select, a "Função do backend" field, and Cancelar / Criar buttons.
+    description: >-
+      After the actions, the "Novo webhook" dialog is open with an "Integração"
+      select, an "Evento" field, an "Artefacto de destino" select, a "Função do
+      backend" field, and Cancelar / Criar buttons.
     actions:
-      - click the "Webhooks" tab
-      - click the "Criar webhook" button
-    tags: [functionality]
+      - id: __act-0
+        description: click the "Webhooks" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Webhooks
+      - id: __act-1
+        description: click the "Criar webhook" button
+        resolved:
+          kind: click
+          role: button
+          name: Criar webhook
+    tags:
+      - functionality
     judgment: false
+    spec: tests/drills/integrations.spec.ts#create-webhook-dialog-opens
+    assertion:
+      kind: visible
+      role: heading
+      name: Novo webhook
   - id: my-integrations-tab-renders
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the "Minhas Integrações" panel renders real content - either the user's connected integrations or a clear empty-state message - never a blank area or an error.
+    description: >-
+      After the action, the "Minhas Integrações" panel renders real content -
+      either the user's connected integrations or a clear empty-state message -
+      never a blank area or an error.
     actions:
-      - click the "Minhas Integrações" tab
-    tags: [functionality, navigation]
+      - id: __act-0
+        description: click the "Minhas Integrações" tab
+        resolved:
+          kind: click
+          role: tab
+          name: Minhas Integrações
+    tags:
+      - functionality
+      - navigation
     judgment: false
+    spec: tests/drills/integrations.spec.ts#my-integrations-tab-renders
+    assertion:
+      kind: text-contains
+      text: Ainda não há integrações
   - id: search-filters-integrations
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: After the action, the card grid narrows to integrations matching "Google" (Google Workspace remains; unrelated cards such as Ifthenpay disappear).
+    description: >-
+      After the action, the card grid narrows to integrations matching "Google"
+      (Google Workspace remains; unrelated cards such as Ifthenpay disappear).
     actions:
-      - type "Google" into the "Pesquisar integrações." search box
-    tags: [functionality, search]
+      - id: __act-0
+        description: type "Google" into the "Pesquisar integrações." search box
+        resolved:
+          kind: fill
+          role: textbox
+          name: Pesquisar integrações...
+          value: Google
+    tags:
+      - functionality
+      - search
     judgment: false
+    spec: tests/drills/integrations.spec.ts#search-filters-integrations
+    assertion:
+      kind: visible
+      role: button
+      name: Limpar
   - id: cards-grid-polish
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Integration cards form a tidy uniform grid - provider logos render (no
+      broken images), status pills ("Não ligado", "Disponíveis") are
+      consistently styled, card descriptions truncate cleanly, and the count
+      chips row (Todas / Ativadas / Configuradas / Disponíveis) is aligned with
+      the search box.
+    tags:
+      - visual
+      - polish
+    judgment: true
+    spec: tests/drills/integrations.spec.ts#cards-grid-polish
+  - id: catalogue-copy-is-portuguese
     area: 0
     mode: vision
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: Integration cards form a tidy uniform grid - provider logos render (no broken images), status pills ("Não ligado", "Disponíveis") are consistently styled, card descriptions truncate cleanly, and the count chips row (Todas / Ativadas / Configuradas / Disponíveis) is aligned with the search box.
-    tags: [visual, polish]
-    judgment: true
+    description: >-
+      Every card in the platform catalogue is described in Portuguese, the same
+      as the Google Workspace and Microsoft 365 cards ("Liga Gmail, Drive,
+      Calendar, Sheets e Docs"). An English description sitting beside them -
+      for example an Adobe Acrobat Sign card reading "Send documents for
+      e-signature ... track agreement status" - is a defect, and so is a raw
+      kebab-case category slug such as "document-signing" used as the card's
+      subtitle where the others carry a human label ("Rede Pipedream").
+    tags:
+      - i18n
+      - copy
+      - quality
+    judgment: false
+  - id: card-dates-use-portuguese-format
+    area: 0
+    mode: vision
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Any date shown on an integration card is formatted the way the rest of the
+      product formats dates in Portuguese - day first, zero-padded, e.g.
+      "07/01/2026". A US-style "7/1/2026" is both the wrong order and the wrong
+      padding, and is ambiguous to a Portuguese reader.
+    tags:
+      - i18n
+      - data
+      - quality
+    judgment: false
+  - id: no-console-errors
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      Loading /integrations produces no browser console errors and no failed
+      network requests - every API read the catalogue fires (including
+      per-integration status probes such as the CITIUS sync state) answers
+      successfully rather than 404ing into the console.
+    tags:
+      - quality
+    judgment: false
+    spec: tests/drills/integrations.spec.ts#no-console-errors
+    assertion:
+      kind: visible
+      role: heading
+      name: Integrações

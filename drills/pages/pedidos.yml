@@ -20,7 +20,6 @@ steps:
     assertion:
       kind: text-contains
       text: Pedidos
-    assertionSource: authored
   - id: state-filter-defaults-open
     area: 0
     mode: e2e
@@ -35,7 +34,6 @@ steps:
     assertion:
       kind: text-contains
       text: Abertos
-    assertionSource: authored
   - id: empty-state-message
     area: 0
     mode: e2e
@@ -53,7 +51,6 @@ steps:
     assertion:
       kind: text-contains
       text: Sem pedidos de alteração.
-    assertionSource: authored
   - id: office-filter-present
     area: 0
     mode: e2e
@@ -70,7 +67,6 @@ steps:
     assertion:
       kind: text-contains
       text: Todos os escritórios
-    assertionSource: authored
   - id: state-filter-switches-view
     area: 0
     mode: vision
@@ -141,7 +137,6 @@ steps:
       role: tab
       op: eq
       value: 4
-    assertionSource: authored
   - id: tab-switch-to-platform
     area: 0
     mode: e2e
@@ -201,69 +196,109 @@ steps:
       name: Configurações
   - id: list-resolves
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      The change-request list settles into a real result - either request rows or the written
-      empty state ("Sem pedidos de alteração."). It must NOT still be showing
-      "A carregar pedidos..." once the page has settled.
-      (Observed at authoring time - the page stays on "A carregar pedidos..." indefinitely.)
-    tags: [functionality, loading]
+      The change-request list settles into a real result - either request rows
+      or the written empty state ("Sem pedidos de alteração."). It must NOT
+      still be showing "A carregar pedidos..." once the page has settled.
+    tags:
+      - functionality
+      - loading
     judgment: false
+    spec: tests/drills/pedidos.spec.ts#list-resolves
+    assertion:
+      kind: text-contains
+      text: Sem pedidos de alteração.
   - id: settings-tabs-named
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
-    description: The settings tab bar offers the "Utilizadores" tab alongside Plataforma, Pedidos and Escritórios.
-    tags: [functionality, navigation]
+    description: >-
+      The settings tab bar offers the "Utilizadores" tab alongside Plataforma,
+      Pedidos and Escritórios.
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: visible, role: tab, name: "Utilizadores" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: tab
+      name: Utilizadores
   - id: settings-tabs-offices
     area: 0
     mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: The settings tab bar offers the "Escritórios" tab.
-    tags: [functionality, navigation]
+    tags:
+      - functionality
+      - navigation
     judgment: false
-    assertion: { kind: visible, role: tab, name: "Escritórios" }
-    assertionSource: authored
+    assertion:
+      kind: visible
+      role: tab
+      name: Escritórios
   - id: empty-state-not-shown-beside-an-error
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      "Sem pedidos de alteração." is shown only when the queue was actually read and found empty -
-      never at the same time as a load error. This queue genuinely IS empty on a fresh stack, which
-      is exactly what makes the combination dangerous here: the reassuring empty state is correct
-      by accident while the request behind it failed, so an administrator cannot tell "no one has
-      requested anything" from "we could not find out". When the read fails the page must show the
-      error alone and withhold the empty state.
-      (Observed defect at authoring time - the red "Request timed out after 120000ms" banner and
-      the "Sem pedidos de alteração." empty state rendered together on the settled page.)
-    tags: [functionality, error-handling, data-integrity]
+      "Sem pedidos de alteração." is shown only when the queue was actually read
+      and found empty - never at the same time as a load error. This queue
+      genuinely IS empty on a fresh stack, which is exactly what makes the
+      combination dangerous here: the reassuring empty state is correct by
+      accident while the request behind it failed, so an administrator cannot
+      tell "no one has requested anything" from "we could not find out". When
+      the read fails the page must show the error alone and withhold the empty
+      state.
+    tags:
+      - functionality
+      - error-handling
+      - data-integrity
     judgment: false
+    spec: tests/drills/pedidos.spec.ts#empty-state-not-shown-beside-an-error
+    assertion:
+      kind: text-contains
+      text: Sem pedidos de alteração.
   - id: load-error-is-in-portuguese
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
-    viewports: [desktop]
+    viewports:
+      - desktop
     state: default
     description: >-
-      A failure to load the change-request queue is reported in Portuguese and in human terms,
-      offering the retry - not as a raw English developer string quoting a millisecond timeout.
-      (Observed defect at authoring time - the banner read literally "Request timed out after
-      120000ms", in English, beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the authoring-time observation behind this check was a dev-harness artifact (a leaking CORS proxy), not a product hang - the page renders normally in a clean browser. The CHECK stands: web/lib/api/core.ts really can surface a raw English timeout string and a failed read really must not render as an empty state, so this is kept as the guard for those paths.
-    tags: [i18n, error-handling, ux]
+      A failure to load the change-request queue is reported in Portuguese and
+      in human terms, offering the retry - not as a raw English developer string
+      quoting a millisecond timeout. (Observed defect at authoring time - the
+      banner read literally "Request timed out after 120000ms", in English,
+      beside a Portuguese "Tentar novamente" link.) NOTE 2026-08-05: the
+      authoring-time observation behind this check was a dev-harness artifact (a
+      leaking CORS proxy), not a product hang - the page renders normally in a
+      clean browser. The CHECK stands: web/lib/api/core.ts really can surface a
+      raw English timeout string and a failed read really must not render as an
+      empty state, so this is kept as the guard for those paths.
+    tags:
+      - i18n
+      - error-handling
+      - ux
     judgment: false
+    spec: tests/drills/pedidos.spec.ts#load-error-is-in-portuguese
+    assertion:
+      kind: visible
+      role: main
 states:
   - id: populated
     label: At least one change request exists

@@ -66,6 +66,40 @@ steps:
       kind: visible
       role: button
       name: Todos
+  - id: shared-filter-chip-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      The chip row also carries the "Partilhados" filter, so artifacts shared
+      with the account are reachable from the same row as the status filters.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: visible
+      role: button
+      name: Partilhados
+  - id: sort-control-visible
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      A sort control labelled "Recentes" sits beside the filter chips, so the
+      gallery order is explicit and changeable rather than arbitrary.
+    tags:
+      - functionality
+    judgment: false
+    assertion:
+      kind: visible
+      role: button
+      name: Recentes
   - id: gallery-resolves
     area: 0
     mode: e2e
@@ -85,7 +119,7 @@ steps:
     spec: tests/drills/artifacts.spec.ts#gallery-resolves
     assertion:
       kind: text-contains
-      text: 41 artefactos construídos
+      text: 42 artefactos construídos
   - id: count-matches-grid
     area: 0
     mode: e2e
@@ -111,7 +145,7 @@ steps:
     spec: tests/drills/artifacts.spec.ts#count-matches-grid
     assertion:
       kind: text-contains
-      text: 41 artefactos construídos
+      text: 42 artefactos construídos
   - id: cards-render
     area: 0
     mode: e2e
@@ -170,7 +204,7 @@ steps:
       value: 0
   - id: card-hover-overlay-actions
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -192,6 +226,11 @@ steps:
       - functionality
       - ux
     judgment: false
+    spec: tests/drills/artifacts.spec.ts#card-hover-overlay-actions
+    assertion:
+      kind: visible
+      role: button
+      name: Continuar a trabalhar
   - id: delete-action-confirms
     area: 0
     mode: e2e
@@ -251,7 +290,7 @@ steps:
     spec: tests/drills/artifacts.spec.ts#refresh-control-works
     assertion:
       kind: text-contains
-      text: 41 artefactos construídos
+      text: 42 artefactos construídos
   - id: search-filters-grid
     area: 0
     mode: e2e
@@ -277,7 +316,7 @@ steps:
     spec: tests/drills/artifacts.spec.ts#search-filters-grid
     assertion:
       kind: count
-      role: img
+      role: heading
       op: eq
       value: 1
   - id: status-chip-filters
@@ -306,6 +345,65 @@ steps:
     assertion:
       kind: text-contains
       text: Nenhum artefacto corresponde aos filtros.
+  - id: applications-section-collapses
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the "Aplicações" showcase collapses: its large preview
+      cards give way to the compact artifact grid (cards carrying a status
+      badge, a type label and per-card actions), and the section header toggle
+      now reads "Mostrar" with the artifact count. Clicking the same toggle
+      again restores the showcase. Nothing errors and the page never goes blank.
+    actions:
+      - id: __act-0
+        description: click the "Ocultar" toggle on the "Aplicações" section header
+        resolved:
+          kind: click
+          role: button
+          name: >-
+            Aplicações Aplicações prontas a usar - abra, use e adapte às suas
+            necessidades. Ocultar
+    tags:
+      - functionality
+    judgment: false
+    spec: tests/drills/artifacts.spec.ts#applications-section-collapses
+    assertion:
+      kind: visible
+      role: button
+      name: >-
+        Aplicações Aplicações prontas a usar - abra, use e adapte às suas
+        necessidades. Mostrar (42)
+  - id: compact-grid-titles-identifiable
+    area: 0
+    mode: e2e
+    enabled: true
+    viewports:
+      - desktop
+    state: default
+    description: >-
+      After the action, the compact artifact cards read cleanly - status badge,
+      type label and action icons aligned on each card - and every card title
+      keeps enough characters to identify which artifact it is. A title
+      truncated so short that it could name several different artifacts fails
+      the check.
+    actions:
+      - id: __act-0
+        description: click the "Ocultar" toggle on the "Aplicações" section header
+        resolved:
+          kind: click
+          role: button
+          name: >-
+            Aplicações Aplicações prontas a usar - abra, use e adapte às suas
+            necessidades. Mostrar (42)
+    tags:
+      - visual
+      - polish
+    judgment: true
+    spec: tests/drills/artifacts.spec.ts#compact-grid-titles-identifiable
   - id: thumbnails-render
     area: 0
     mode: e2e
@@ -351,12 +449,5 @@ states:
           make sure the "Todos" filter chip is the selected one so the grid is
           not narrowed by a filter
 spotter:
-  stability:
-    step-end:
-      decision: drop
-      runs: 1
-      lastRunId: 01KZC6PWCMGQ6CYG995S09TF6M
-      annotation: >-
-        Step-end frame pixel-identical to frame-0001; same fully-loaded
-        artifacts grid, redundant duplicate.
+  stability: {}
   rules: []

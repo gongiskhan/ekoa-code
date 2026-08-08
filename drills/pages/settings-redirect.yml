@@ -7,7 +7,7 @@ areas: []
 steps:
   - id: redirects-into-a-settings-tab
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -20,9 +20,14 @@ steps:
       - functionality
       - navigation
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#redirects-into-a-settings-tab
+    assertion:
+      kind: url-matches
+      pattern: /settings/platform
+      mode: contains
   - id: settings-tabs-present
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -35,6 +40,12 @@ steps:
       - functionality
       - navigation
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#settings-tabs-present
+    assertion:
+      kind: count
+      role: tab
+      op: eq
+      value: 4
   - id: pedidos-tab-present
     area: 0
     mode: vision
@@ -75,7 +86,7 @@ steps:
       reason: observation-receipt-mismatch
   - id: landed-tab-is-highlighted
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -88,9 +99,16 @@ steps:
       - ux
       - navigation
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#landed-tab-is-highlighted
+    assertion:
+      kind: attribute-equals
+      role: tab
+      name: Plataforma
+      attribute: aria-selected
+      value: 'true'
   - id: destination-renders-its-page
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -105,9 +123,14 @@ steps:
       - functionality
       - loading
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#destination-renders-its-page
+    assertion:
+      kind: visible
+      role: heading
+      name: Configurações da Plataforma
   - id: redirect-is-clean
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -120,9 +143,14 @@ steps:
       - ux
       - navigation
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#redirect-is-clean
+    assertion:
+      kind: url-matches
+      pattern: /settings/platform
+      mode: contains
   - id: no-console-errors
     area: 0
-    mode: vision
+    mode: e2e
     enabled: true
     viewports:
       - desktop
@@ -133,3 +161,8 @@ steps:
     tags:
       - quality
     judgment: false
+    spec: tests/drills/settings-redirect.spec.ts#no-console-errors
+    assertion:
+      kind: visible
+      role: heading
+      name: Configurações da Plataforma
