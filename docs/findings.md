@@ -6,6 +6,55 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`registo-anon-audit-actor-blank`** (FIXED 2026-08-08, HIGH, empirically confirmed against the
+  live dev DB - 175 of 256 `activity_logs` rows failing validation - found chasing the dashboard's
+  "Response for GET /api/v1/registo failed contract validation"). The anonymisation-audit write
+  (`llm/anonymise/audit.ts`) recorded `userId: actor.userId ?? ''` / `username: ... ?? ''` /
+  `orgId: actor.orgId ?? ''`. `registoEntry()` (`services/platform-crud.ts`) maps
+  `actor: a.userId`, and the shared `RegistoEntry.actor` is `Id = z.string().min(1)` - so every row
+  with a blank `userId` failed `RegistoListResponse` validation for any reader (`web/lib/api/core.ts`
+  contract check). Only a super-admin ever saw it (its `readRegisto` query is unscoped `find({})`;
+  an org-admin's is `{orgId: actor.orgId}`, which a blank `orgId` never matches), which is why the
+  defect went unnoticed until a super-admin opened the dashboard.
+  ROOT CAUSE, traced past the obvious `ctx.actor ?? {}` fallback in `anonymise/index.ts` (that
+  fallback's own call sites - `runAgent`/`runOneShot`/`completeFast` via `anonContextFor` - already
+  stamp a real actor from the required `LlmAttribution.billeeUserId`, so it was live-but-idle
+  defensive code, not the volume source): the REAL source is `llm/client.ts`
+  `proxyGatewayMessages`/`proxyGatewayCountTokens`, called from `llm/gateway.ts` with
+  `billeeOf(principal)` for the STATIC gateway-key principal (`kind: 'apikey'`) - the credential
+  EVERY Agent SDK subprocess presents (`credentials.ts` `buildSubprocessEnv`,
+  `env.ANTHROPIC_API_KEY = cfg.llm.gatewayApiKey`) when it calls back into this same chokepoint
+  over `ANTHROPIC_BASE_URL` for every turn of its own agentic tool loop. That HTTP boundary
+  genuinely carries no per-request user identity - the static key is shared by every subprocess
+  regardless of which user's run spawned it - so `billeeUserId` is `''`, and a single chat/build
+  turn's subprocess makes many such calls (one per tool-loop turn), which is why this dominated the
+  ratio: metering already drew this exact distinction (`kind: 'platform'`, `pi-fast-loop`,
+  "platform overhead billed to the platform admin") but the anon-audit actor did not.
+  The bridge path (`bridge/provider.ts` -> `proxyGatewayMessages(reqBody, pairing.ownerUserId, ...)`)
+  was never affected - it always carries a real principal, the pairing owner.
+  FIX, three parts. (1) PRIMARY: `proxyGatewayMessages`/`proxyGatewayCountTokens` now omit `actor`
+  entirely when `billeeUserId` is empty, instead of stamping empty-string fields - an honest "no
+  principal here" rather than a shape that looks like a real-but-blank identity. Every OTHER call
+  site already had a real principal to propagate (see above); minting a per-run scoped gateway key
+  so the static-key path could carry one too is a materially larger change (key issuance/lookup
+  lifecycle) and is out of scope here - reported honestly rather than half-done. (2) BELT:
+  `audit.ts`'s default sink now falls back to the `'system'` sentinel - `actor.userId || 'system'`
+  (matching the `server.ts:767` content-loader-audit precedent). Deliberately `||`, not `??`:
+  `actor.userId` can already BE an empty string (not `undefined`) at the gateway call sites above,
+  which `??` would not replace. (3) BONUS (same PR): `routes/registo.ts` forwarded
+  `userId`/`type`/`orgId`/`limit`/`offset` but silently dropped `from`/`to`, which
+  `RegistoQuery` (`shared/src/registo.ts`) declares and the UI's date filters
+  (`web/stores/registo.ts`) send; `readRegisto` had no date filter either. Wired both through
+  (`platform-crud.ts` filters `activityLogs` rows by ISO-8601 string comparison against
+  `timestamp`).
+  Tests: `api/tests/contract/registo.test.ts` (new `describe` blocks) drive the REAL audit path -
+  `proxyGatewayMessages(body, '')` - and assert the persisted row and the `GET /api/v1/registo`
+  response both carry `'system'`, validate against `RegistoEntry`/`RegistoListResponse`, and that
+  an org-admin never sees the system-attributed row; a third case proves `from`/`to` narrow the
+  result set. `api/tests/llm/anonymise-chokepoint.test.ts` adds the matching unit-level case
+  against the real Mongo-backed default sink. All pre-existing anonymise/gateway/registo suites
+  still pass unmodified.
+
 - **`change-password-escape-control-drill-asserted-forced-on-default`** (DISMISSED - not a product
   defect - 2026-08-07, found by the drill batch fixer on `change-password#escape-control-present`).
   The drill reported the forced-change escape control ("Terminar sessão") as absent. It was absent
@@ -2292,6 +2341,43 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 - **`remote-tag-f25`** (operator action). The remote tag `batch1-f25` still points at the broken
   commit `8a2a67b`; re-point with `git push origin +refs/tags/batch1-f25:refs/tags/batch1-f25` (local
   is already at `af8b556`).
+
+### Featured-artifact audit (WS10 Stage A, 2026-08-08)
+
+Full per-artifact evidence and dispositions: `docs/featured-artifacts-ledger.md`. Three concrete
+defects surfaced by that review, logged here per the discovery-run rule (never silently absorbed
+into a ledger note):
+
+- **`featured-invoice-manager-noncompliant-invoicing`** (HIGH, compliance). The `invoice-manager`
+  featured artifact (`api/assets/featured-artifacts/invoice-manager/scaffold/`) natively generates
+  and prints fiscal-looking invoices: `InvoicesPage.jsx`'s `nextInvoiceNumber()` mints sequential
+  `FT {year}/{seq}` numbers and `InvoicePrintPage.jsx` renders a full issuer/client-NIF, IVA-broken-
+  out, printable document via `window.print()`. This directly contradicts the platform's own stated
+  policy elsewhere in the same gallery (`legal-financas`'s manifest: "a emissão de faturas
+  certificadas passa exclusivamente pela integração InvoiceXpress (AT) - a Ekoa nunca emite faturas
+  nativamente") - Portuguese law requires certified invoicing software for professional fees, so a
+  lawyer forking this template to bill honorários would be issuing a non-compliant fatura. Disposed
+  DEMOTE in the ledger; Stage B/C should either remove the native-emission flow entirely or redirect
+  it through a certified-integration stub before this artifact stays in the gallery in any form.
+- **`featured-legal-spine-screenshots-unseeded`** (medium, gallery presentation). Most `legal-*`
+  screenshots (`~/.ekoa/data/artifact-screenshots/legal-*.png`, captured 2026-07-18) show an empty/
+  zero-data state ("Sem clientes - abra um no Núcleo", empty KPI tiles) because the capture runs the
+  artifact standalone without the shared spine's demo data seeded first. Several of the affected
+  artifacts (`legal-agenda`, `legal-citius`, `legal-calculos`, `legal-nucleo`, `legal-injuncoes`,
+  `legal-insolvencias` among others) are functionally deep on inspection of source, but their gallery
+  thumbnail currently undersells that. Recommend recapturing with the seeded spine before any Stage C
+  visual "before" comparison.
+- **`featured-gallery-data-hygiene`** (low, data). Two data-hygiene gaps in
+  `api/assets/featured-artifacts/*/manifest.json`'s `featuredRank` (`shared/src/artifacts.ts`
+  `featuredRank: z.number().int().optional()`): (1) `legal-agenda-reservas` has no `featuredRank` at
+  all - schema-valid but likely an oversight, since every other artifact has one; (2) `sales-crm`
+  (rank 10) and `task-manager` (rank 20) still outrank every `legal-*` artifact even though this
+  audit demotes both as redundant with `legal-nucleo`/`legal-kanban` - a leftover from before the
+  platform's legal specialization. Also two screenshots show a genuinely broken render rather than
+  just empty data: `booking-system.png` (blank content pane, sidebar renders fine) and
+  `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
+  disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
+  `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
 ## Recently fixed - 2026-08-07 brand research stored the og:image banner as the logo
 
