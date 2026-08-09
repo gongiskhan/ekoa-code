@@ -16,8 +16,12 @@
  *                 operator assistant panel runtime mounts INTO it in a later slice.
  *                 It ships EMPTY on purpose. Never remove it, and never remove the
  *                 data-demo-target attributes on the shell landmarks.
+ *  - Brand     -> the top bar reads the runtime logo tokens (--logo-icon-url,
+ *                 then --logo-url, published by /api/design-tokens.css) at mount
+ *                 and renders the brand mark only when the organisation has one.
+ *                 Never hardcode or invent a logo.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getCurrentUser } from './lib/auth';
 import { ErrorBoundary } from './lib/ErrorBoundary';
 
@@ -42,15 +46,31 @@ function HomePage() {
   );
 }
 
-// Register one entry per page. The shell renders the active page inside the
-// content region. Keep ids stable and unique; the first entry is the default.
+// Register one entry per page: { id, label, component, icon? }. The shell
+// renders the active page inside the content region. Keep ids stable and
+// unique; the first entry is the default page. `icon` is OPTIONAL - when set
+// it must be an inline <svg> element (viewBox 0 0 24 24, fill "none",
+// stroke="currentColor", stroke-width 1.5-1.75) and the nav renders it before
+// the label. Never use emoji or unicode glyphs as icons.
 const PAGES = [
   { id: 'home', label: 'Início', component: HomePage },
 ];
 
+// Extracts a plain URL from a CSS token whose computed value looks like
+// url("/brand-assets/mark.png"). Returns '' when the token is unset/none.
+function cssUrlValue(raw) {
+  const value = (raw || '').trim();
+  if (!value || value === 'none') return '';
+  const match = value.match(/url\(\s*(["']?)(.*?)\1\s*\)/);
+  return match ? match[2] : '';
+}
+
 export default function App() {
   const [activeId, setActiveId] = useState(PAGES[0].id);
   const [user, setUser] = useState(null);
+  const [brandMark, setBrandMark] = useState('');
+  const navRef = useRef(null);
+  const navScrollArmed = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -58,6 +78,26 @@ export default function App() {
       .then((u) => { if (alive) setUser(u); })
       .catch(() => { /* best-effort personalisation only */ });
     return () => { alive = false; };
+  }, []);
+
+  // Brand mark slot: /api/design-tokens.css publishes --logo-icon-url (compact
+  // mark) and --logo-url when the organisation has a logo. Read them at mount
+  // and re-check on window load in case the stylesheet lands after first
+  // paint. When both are empty, render no image - the app name is the brand.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const read = () => {
+      const styles = window.getComputedStyle(document.documentElement);
+      const url = cssUrlValue(styles.getPropertyValue('--logo-icon-url'))
+        || cssUrlValue(styles.getPropertyValue('--logo-url'));
+      if (url) setBrandMark(url);
+    };
+    read();
+    if (document.readyState !== 'complete') {
+      window.addEventListener('load', read, { once: true });
+      return () => window.removeEventListener('load', read);
+    }
+    return undefined;
   }, []);
 
   // Expose the shell's navigation to the operator assistant runtime (operator-run
@@ -75,6 +115,25 @@ export default function App() {
     return () => { if (window.__ekoaApp) delete window.__ekoaApp.navigate; };
   }, []);
 
+  // Keep the active nav item in view - matters for the horizontal scrolling
+  // nav on small screens. Skips the initial render and honours
+  // prefers-reduced-motion (instant jump instead of a smooth scroll).
+  useEffect(() => {
+    if (!navScrollArmed.current) { navScrollArmed.current = true; return; }
+    const nav = navRef.current;
+    if (!nav) return;
+    const item = nav.querySelector('.app-nav-item.is-active');
+    if (!item || typeof item.scrollIntoView !== 'function') return;
+    const reduceMotion = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    item.scrollIntoView({
+      behavior: reduceMotion ? 'auto' : 'smooth',
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [activeId]);
+
   const appName = (typeof document !== 'undefined' && document.title) || 'App';
   const active = PAGES.find((p) => p.id === activeId) ?? PAGES[0];
   const ActivePage = active.component;
@@ -82,12 +141,22 @@ export default function App() {
   return (
     <div className="app-shell" data-demo-target="app-shell">
       <header className="app-topbar" data-demo-target="app-topbar">
-        <span className="app-topbar-name">{appName}</span>
+        <span className="app-topbar-brand">
+          {brandMark ? (
+            <img
+              className="app-topbar-mark"
+              src={brandMark}
+              alt=""
+              onError={() => setBrandMark('')}
+            />
+          ) : null}
+          <span className="app-topbar-name">{appName}</span>
+        </span>
         <span className="app-topbar-user">{user ? (user.name || user.email) : ''}</span>
       </header>
 
       <div className="app-body">
-        <nav className="app-nav" data-demo-target="app-nav" aria-label="Navegação principal">
+        <nav className="app-nav" data-demo-target="app-nav" aria-label="Navegação principal" ref={navRef}>
           {PAGES.map((p) => (
             <button
               key={p.id}
@@ -96,7 +165,8 @@ export default function App() {
               aria-current={p.id === activeId ? 'page' : undefined}
               onClick={() => setActiveId(p.id)}
             >
-              {p.label}
+              {p.icon ? <span className="app-nav-icon" aria-hidden="true">{p.icon}</span> : null}
+              <span className="app-nav-label">{p.label}</span>
             </button>
           ))}
         </nav>

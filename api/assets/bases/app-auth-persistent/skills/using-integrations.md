@@ -5,7 +5,7 @@ description: How to call connected integrations (email, calendar, files, etc.) a
 
 # Using Integrations
 
-This base provides a single helper: `callIntegration<T>()` (in `frontend/src/lib/integrations.ts`). Always use it for any cross-service call — Gmail send, Calendar list, Drive read, Slack post, etc.
+This base provides a single helper: `callIntegration<T>()` (in `frontend/src/lib/integrations.ts`). Always use it for any cross-service call - Gmail send, Calendar list, Drive read, Slack post, etc.
 
 ## The contract
 
@@ -19,12 +19,12 @@ const result = await callIntegration('email', 'send', {
 });
 
 if (result.ok) {
-  // result.data — the integration's typed response
+  // result.data - the integration's typed response
 } else if (result.status === 'needs_integration') {
   // No connected provider for this category.
-  // result.integration — category that's missing ('email', 'calendar', …)
-  // result.options    — array of provider keys the user can pick from
-  // result.message    — short human-readable explanation
+  // result.integration - category that's missing ('email', 'calendar', …)
+  // result.options - array of provider keys the user can pick from
+  // result.message - short human-readable explanation
   // Render <IntegrationNeededBoundary /> in this branch.
 }
 ```
@@ -37,7 +37,7 @@ The orchestrator detects integrations from this closed enum:
 
 `email | calendar | files-storage | payments | external-api | spreadsheets | crm | sms | maps`
 
-Never invent a new category in your UI — pick the closest match.
+Never invent a new category in your UI - pick the closest match.
 
 ## The IntegrationNeededBoundary
 
@@ -67,5 +67,5 @@ The boundary surfaces a "Connect to {provider}" call-to-action that deep-links t
 ## What to NOT do
 
 - Do not assume an integration is connected. Always handle `needs_integration`.
-- Do not hard-code provider names ("Gmail", "Outlook") into your business logic. Use the category. The user might have either Gmail or Outlook connected — the helper picks the right one.
+- Do not hard-code provider names ("Gmail", "Outlook") into your business logic. Use the category. The user might have either Gmail or Outlook connected - the helper picks the right one.
 - Do not store integration credentials in app-data. The platform handles credentials; you only ever receive a typed response.

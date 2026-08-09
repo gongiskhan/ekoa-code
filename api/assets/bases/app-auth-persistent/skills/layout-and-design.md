@@ -5,13 +5,13 @@ description: How to apply the runtime design tokens and the left-nav shell layou
 
 # Layout & Design
 
-This base ships a left-nav shell layout. Visual styling is delivered at runtime via the platform's design-tokens stylesheet — never bake hex literals into the app.
+This base ships a left-nav shell layout. Visual styling is delivered at runtime via the platform's design-tokens stylesheet - never bake hex literals into the app.
 
 ## Runtime design tokens
 
-The platform serves a global stylesheet at `GET /api/design-tokens.css` that publishes the locked CSS variable contract (see `ekoa-data/bases/CSS_VARS_CONTRACT.md`). Every app's `index.html` already links to it via the scaffold template. **Do not duplicate the link tag; do not re-emit these variables on `:root` in your own CSS.**
+The platform serves a global stylesheet at `GET /api/design-tokens.css` that publishes the locked CSS variable contract (see `api/assets/bases/CSS_VARS_CONTRACT.md`). Every app's `index.html` already links to it via the scaffold template. **Do not duplicate the link tag; do not re-emit these variables on `:root` in your own CSS.**
 
-When the company branding changes, this endpoint regenerates and every running app picks up the new colours on next reload — no rebuild.
+When the company branding changes, this endpoint regenerates and every running app picks up the new colours on next reload - no rebuild.
 
 ### How to consume
 
@@ -38,9 +38,9 @@ Write every style using the variable contract with a fallback:
 
 ### What NOT to do
 
-- Do **not** inline a hex literal in any style — it breaks brand inheritance.
-- Do **not** import `tokens.json` and spread it onto `:root` — that pattern is legacy; the runtime endpoint is the single source of truth.
-- Do **not** use Tailwind colour utilities (`bg-teal-500`, `text-slate-700`) — they bypass the variable contract.
+- Do **not** inline a hex literal in any style - it breaks brand inheritance.
+- Do **not** import `tokens.json` and spread it onto `:root` - that pattern is legacy; the runtime endpoint is the single source of truth.
+- Do **not** use Tailwind colour utilities (`bg-teal-500`, `text-slate-700`) - they bypass the variable contract.
 
 ## The left-nav shell
 
@@ -58,8 +58,8 @@ Use `var(--space-*)` for paddings, `var(--shadow-md, …)` for the top bar eleva
 Every page must include:
 
 1. **Header** with page title from the route.
-2. **Empty state** when the collection is empty — use the `empty-state.json` recipe shape.
-3. **Error boundary** wrapping any data-fetching component — use the `error-boundary.json` recipe shape.
+2. **Empty state** when the collection is empty - use the `empty-state.json` recipe shape.
+3. **Error boundary** wrapping any data-fetching component - use the `error-boundary.json` recipe shape.
 
 ## Multi-page
 
@@ -69,12 +69,12 @@ The shell is multi-page. Use React Router (already wired in the base). Do not wr
 
 Use the locked scale:
 
-- `--text-xs` (12px) — labels, captions
-- `--text-sm` (14px) — secondary text
-- `--text-base` (15px) — body
-- `--text-lg` (18px) — section headings
-- `--text-xl` (20px) — card titles
-- `--text-2xl` (24px) — page titles
-- `--text-3xl` (30px) — hero / landing only
+- `--text-xs` (12px) - labels, captions
+- `--text-sm` (14px) - secondary text
+- `--text-base` (15px) - body
+- `--text-lg` (18px) - section headings
+- `--text-xl` (20px) - card titles
+- `--text-2xl` (24px) - page titles
+- `--text-3xl` (30px) - hero / landing only
 
 Do not invent sizes outside this scale.

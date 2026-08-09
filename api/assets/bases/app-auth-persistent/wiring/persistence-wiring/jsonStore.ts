@@ -42,7 +42,7 @@ export async function create<T extends AnyRecord = AnyRecord>(collection: string
   return unwrap<T>(res);
 }
 
-// The server registers PUT (shallow-merge) for updates — not PATCH.
+// The server registers PUT (shallow-merge) for updates - not PATCH.
 export async function update<T extends AnyRecord = AnyRecord>(collection: string, id: string, patch: AnyRecord): Promise<T> {
   const res = await ekoaFetch()(`/api/app-data/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`, {
     method: 'PUT',

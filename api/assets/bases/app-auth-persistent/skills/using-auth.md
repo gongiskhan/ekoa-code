@@ -10,9 +10,9 @@ This base provides authenticated sessions out of the box. You do not need to inv
 ## What you get
 
 - A logged-in session is guaranteed by the time `App.jsx` mounts. The user reaches the app via Ekoa's authenticated routes; if no session exists they are bounced to `/login` upstream.
-- `window.__EKOA_TOKEN` — the user's JWT, available globally. Use it for backend calls if you ever need raw fetch.
-- `window.__EKOA_APP_ID` — this app's id; you rarely need it directly.
-- `window.__ekoa.fetch()` — the wrapper that auto-attaches the token. **Always prefer this over raw `fetch`.**
+- `window.__EKOA_TOKEN` - the user's JWT, available globally. Use it for backend calls if you ever need raw fetch.
+- `window.__EKOA_APP_ID` - this app's id; you rarely need it directly.
+- `window.__ekoa.fetch()` - the wrapper that auto-attaches the token. **Always prefer this over raw `fetch`.**
 
 ## What to NOT do
 

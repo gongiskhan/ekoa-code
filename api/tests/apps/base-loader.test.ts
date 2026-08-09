@@ -9,10 +9,10 @@ vi.mock('../../src/services/artifact-screenshot.js', async (importOriginal) => {
     captureArtifactScreenshot: vi.fn(async () => ({ path: '', url: '', width: 1280, height: 800 })),
   };
 });
-import { mkdtemp, rm, readFile, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, access } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { users } from '../../src/data/stores.js';
@@ -85,6 +85,50 @@ describe('base-loader — registry + loader (B1)', () => {
     const projectFiles = baseProjectFiles(base);
     expect(projectFiles.map((f) => f.path)).toContain('frontend/src/lib/protocol-client.ts');
   });
+});
+
+// impeccable-bases pass (2026-08-09): landing and presentation scaffolds previously had ZERO
+// content coverage — a syntax error in either would ship silently and only surface as a live
+// build failure. Every base that carries a scaffold/ must assemble (baseProjectFiles) and
+// bundle through the REAL builder pipeline, mirroring exactly what prepareFirstBuild feeds it.
+describe('base-loader — every scaffold-carrying base compiles through the real builder', () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ekoa-base-compile-'));
+  });
+
+  afterAll(async () => {
+    await appBuilder.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('assembles and bundles each scaffold base (app, landing, presentation, document)', async () => {
+    const covered: string[] = [];
+    for (const id of BASE_IDS) {
+      const base = await loadBase(id);
+      if (base.scaffoldFiles.length === 0) continue; // wiring-only bases have no shell to compile
+      covered.push(id);
+      const projectDir = join(dir, id);
+      for (const f of baseProjectFiles(base)) {
+        const p = join(projectDir, f.path);
+        await mkdir(dirname(p), { recursive: true });
+        await writeFile(p, f.content, 'utf-8');
+      }
+      await writeFile(
+        join(projectDir, 'manifest.json'),
+        JSON.stringify({ id, name: `Base ${id}`, version: '1.0.0', entryPoint: 'frontend/src/index.jsx', outputDir: 'dist/', type: 'jsx-app' }),
+        'utf-8',
+      );
+      const result = await appBuilder.build(id, projectDir);
+      expect(result.success, `base "${id}" failed to bundle: ${result.errors.join('; ')}`).toBe(true);
+      const bundle = await readFile(join(projectDir, 'dist', 'bundle.js'), 'utf-8');
+      expect(bundle.length, `base "${id}" produced an empty bundle`).toBeGreaterThan(1000);
+    }
+    // The four shells the platform actually scaffolds from today. If a base gains or
+    // loses its scaffold/, this list is the deliberate diff.
+    expect(covered.sort()).toEqual(['app', 'document', 'landing', 'presentation']);
+  }, 120_000);
 });
 
 describe('base-loader — build-flow wiring (B1 integration)', () => {

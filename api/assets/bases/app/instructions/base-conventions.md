@@ -36,13 +36,38 @@ The wiring libraries under `frontend/src/lib/` are shipped and ready - import th
 3. **NEVER remove the `data-demo-target` attributes** on the shell landmarks (`app-shell`, `app-topbar`, `app-nav`, `app-content`, `assistant-root`). Platform tooling targets them by those stable selectors.
 4. **Never call an external service directly** - no OAuth, no API keys, no SDKs. Declare cross-service actions as `integration.call` capabilities in `MANIFEST.md` (platform-executed); use `graphFetch` only for the visitor's Microsoft 365. When a needed integration is not connected, render `<IntegrationNeededBoundary />`.
 5. **Always wrap data-rendering subtrees in `<ErrorBoundary>`** (already at the page root; add more around risky subtrees). Never swallow a fetch error silently - surface it.
-6. **Always render an empty state** for a collection that can be empty (`empty-state` recipe).
-7. **Style only through the CSS-variable contract with fallbacks.** No hex literals in component code. The brand arrives at runtime via `/api/design-tokens.css`.
+6. **Always render an empty state** for a collection that can be empty - use the shipped `.empty-state` block (`.empty-state-title` + `.empty-state-subtitle`) from `index.css`. Say what the collection is and what the user does first; never just "Sem dados".
+7. **Style only through the CSS-variable contract with fallbacks.** No hex literals in component code. The brand arrives at runtime via `/api/design-tokens.css`. On a primary-filled surface the label colour is `var(--color-on-primary, #FFFFFF)`, never `--color-bg`.
 8. **Never use `localStorage`/`sessionStorage`/`indexedDB` for primary data.** Use the app-data API (`lib/jsonStore`).
+9. **Compose the shipped primitives before writing component CSS.** `index.css` ships a crafted, brand-adaptive vocabulary with every state already covered - `.btn` (`.btn-primary`/`.btn-secondary`/`.btn-ghost`/`.btn-danger`, `.btn-sm`), `.field`/`.field-label`/`.field-error` with `.input`/`.select`/`.textarea`, `.card`, `.table` inside `.table-scroll`, `.badge` variants, `.skeleton`, and the `.page`/`.page-header`/`.page-title`/`.page-subtitle` frame. Plain `h2`/`h3`/`p` inside `.page` already sit on the vertical rhythm. Reach for a new class when the product needs one, not to re-solve a button.
 
 ## The assistant mount SUPERSEDES the "no side panel" rule
 
 The prior app base forbade inventing a side panel or chat mode. **That prohibition is lifted for exactly one thing: the platform-provided `#ekoa-assistant-root` mount, which is part of this shell and which you must keep.** It is NOT license to build your own assistant: you still must not invent a chat UI, a wizard, or a second assistant surface of your own. The single sanctioned assistant surface is the platform mount; leave it empty and untouched.
+
+## Routing (only if you add react-router)
+
+The shipped shell switches pages with plain component state, not URL routes - most builds never
+need more. If your product needs deep-linkable or parameterized routes (e.g. `/contactos/:id`)
+and you add `react-router-dom`, one thing is easy to get wrong and breaks the whole app:
+
+**A top-level `<BrowserRouter>` MUST derive `basename` at mount time - never omit it, never
+hardcode it.** The built app is served at `/apps/<id>/`, not at the domain root, so
+`window.location.pathname` there is `/apps/<id>/...`. A `<BrowserRouter>` with no basename (it
+defaults to `/`) matches routes as if the app owned the whole domain - it never matches the real
+served path, and the app renders blank or falls into its own not-found route.
+
+```js
+const m = window.location.pathname.match(/^(\/apps\/[^/]+)/);
+const basename = m ? m[1] : '/';
+
+root.render(<BrowserRouter basename={basename}><App /></BrowserRouter>);
+```
+
+(Deriving from `window.__EKOA_APP_ID` instead is equally correct. `HashRouter`/`MemoryRouter`
+don't need this - they don't route off the served path.) A repo-wide test
+(`api/tests/apps/featured-router-catalog-guard.test.ts`) builds every scaffold that mounts a
+`BrowserRouter` and fails loudly, by name, if this is missing or wrong.
 
 ## Naming
 

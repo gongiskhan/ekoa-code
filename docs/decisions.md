@@ -255,3 +255,110 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   design defaults landing first) should recapture screenshots with the shared spine's demo data
   seeded first - most `legal-*` thumbnails currently show an empty state that understates
   functionally deep artifacts (`featured-legal-spine-screenshots-unseeded` in `docs/findings.md`).
+
+- 2026-08-08 - WS4a: `POST /api/v1/uploads` MOUNTED, AND THE TEXT-ATTACHMENTS RUN CLASS GETS ITS
+  ATTACHMENT-PATH PLUMBING. Live defect: `shared/src/uploads.ts` declared the composer's staging
+  endpoint but it was never mounted (`uploads.create` sat in `mount-coverage.test.ts`'s DESCOPED
+  set) - every file/screenshot/folder attach 404'd silently. Separately, even a successful stage
+  would not have reached the model: `chat-runtime.tsx` and `useAgentExecution.ts` built the wire
+  `UploadRef` from `FileAttachment.attachmentId` (a composer-chip id the UI mints locally, never
+  sent to the server) instead of `.path` (where `file-picker.ts`'s `stageFile()` actually puts the
+  real server-issued `uploadId`) - an id-source mix-up, not a missing endpoint. And a THIRD gap,
+  named plainly by the 2026-07-25 docx-tools entry above: the `text-attachments` run class (chat
+  runs whose `attachments` is non-empty) got the Read/Glob/Grep tool policy but "no attachment-path
+  plumbing" - an empty F25 sandbox with nothing in it to Read.
+  DECIDED, three ways. (1) NEW MODULE `api/src/uploads/` (tier 3, knowledge/'s family - imports
+  `data/` + `config.ts` only, never `llm/`), two files: `paths.ts` (per-USER, not per-org, blob
+  layout under `<EKOA_DATA_DIR>/uploads/<userId>/...`; filename/folder segments sanitized,
+  `uploadId`/`userId` server-generated so inherently path-safe) and `service.ts` (`stageUpload` the
+  write; `resolveUpload` the single-file read-back). Per-user rather than per-org on purpose: these
+  are ephemeral single-turn composer attachments, not the org knowledge vault - a colleague in the
+  SAME org must not resolve another user's staged upload by guessing its id (pinned by a contract
+  test). `routes/uploads.ts` mounted at `/api/v1/uploads` (`auth: 'user'`, platform session only,
+  same raw-body + `X-Filename`/`X-Folder` protocol as `routes/knowledge.ts`'s `/uploads` sub-route);
+  `uploads.create` removed from the DESCOPED set (shrink-only rule). (2) THE RUN-SIDE FIX REUSES THE
+  F25 SANDBOX CONVENTION RATHER THAN EXTENDING THE CHOKEPOINT: `stageRunAttachments` (still in
+  `uploads/`, tier 3, so `agents/` at tier 5 can reach it downward) resolves a run's `UploadRef`s and
+  copies ONLY those blobs into a FRESH temp directory - never the user's whole upload history, which
+  would hand a Glob/Read-capable run every file ever attached in any session, not just this turn's.
+  `agents/chat.ts` points `cwd`/`homeDir` at that directory exactly the way build runs already point
+  them at `projectDir` (`llm/client.ts`'s F25 comment: "build runs already set both to their project
+  dir"); `llm/client.ts` itself is untouched - no chokepoint change, no adversarial-review trigger.
+  A system-prompt line names the staged file(s) (tool PERMISSION alone does not tell the model
+  something is there to Read). The directory is discarded through the run's existing `cleanup()`
+  path (fire-and-forget `rm`, same shape as `llm/client.ts`'s `discardSandbox`) so every terminal
+  path - complete, error, cancel, timeout - reclaims it exactly once. (3) UNKNOWN/FOREIGN REFS
+  DEGRADE, NEVER HARD-FAIL: a stale or already-reclaimed `uploadId` is dropped by `resolveUpload`
+  returning null; the turn still runs (an honest degraded reply beats an error over a composer chip
+  the user can no longer even see). ACCEPTED GAP, NAMED: there is no list/delete surface (the
+  contract declares `create` only) and no retention job - a staged blob under a user's upload
+  directory lives until the host volume is reclaimed; worth a follow-up if usage makes it matter,
+  not before. Client-side attachment interactions (drag-drop, paste, the composer's
+  `onReferencePicked` wiring) are WS4b, not this slice - `chat-runtime.tsx`'s attachment path has
+  the id-source fix but, unlike `useAgentExecution.ts`'s, no fresh unit-test coverage yet (no prior
+  test harness existed for that 600+ line provider component; building one belongs with WS4b, which
+  needs the same composer test scaffolding for its drag-drop/paste work anyway). Suites:
+  `api/tests/contract/uploads.test.ts` (mount, 400/401 envelopes, folder-batch grouping, per-user
+  isolation, path-traversal id rejection), `api/tests/agents/chat-attachments.test.ts` (the actual
+  seam: `cwd` at the moment the model would call Read, the staged file's bytes readable then, the
+  system-prompt line, the no-attachments/unknown-ref fallback to the ordinary empty sandbox, cleanup
+  after settle), `web/__tests__/attachment-upload-refs.test.ts` (the wire shape leaving the browser
+  never carries the chip id). Diagram: `docs/diagrams/02-module-map.excalidraw` gains the AS-BUILT
+  annotation (FIXED-12); the tier table and module-map prose in `docs/architecture.md` updated.
+
+- 2026-08-08 - THE MOUNTED DESIGN SKILL IS IMPECCABLE, AND IT RUNS OFFLINE. The vendored
+  `pbakaus/impeccable` v4.0.4 (Apache-2.0, `api/content/plugins/impeccable`, LICENSE+NOTICE
+  carried) replaces ekoa-design as the build-run design plugin. Two design skills with competing
+  directives is the contradiction class the WS7 incident traced, so the swap is a replacement,
+  never a second mount; ekoa-design stays on disk unmounted for reference. What impeccable buys
+  over the retired pair: a concept-seed roll that externally assigns which of the model's own
+  candidate directions gets built (upstream measured 30/35 identical concepts without it - the
+  convergence rut IS the "AI slop" the operator keeps seeing), per-surface modes
+  (Persuade/Operate/Read/Experience), a craft floor, and a mechanical slop detector the agent runs
+  on changed files before finishing. Interactive steps degrade exactly as upstream documents for
+  headless harnesses (assigned direction, no question rounds, no sketches) - stated in the build
+  system prompt rather than forked into the skill, so the vendored tree stays byte-comparable with
+  upstream for updates. Tenant builds must not contact third parties: `bootState` forces the
+  documented offline/degraded roll (`IMPECCABLE_API_URL` unroutable + `DO_NOT_TRACK=1`, inherited
+  by every agent subprocess via `buildSubprocessEnv`'s env copy). The degraded roll loses the
+  challenger deck, never the assignment - the anti-convergence core is local. Brand truth rides
+  the same change: the prompt now names `--logo-url`/`/brand-assets/` as the real-logo contract
+  (place it on Persuade surfaces, never invent a substitute), closing the "builds ignore the
+  company logo" gap the operator reported on the first post-WS7 site build.
+
+- 2026-08-09 - THE BASE TEMPLATES CARRY THE CRAFT FLOOR, NOT JUST THE STRUCTURE. Running impeccable
+  over the default bases (`api/assets/bases/*`) settled a question the WS7/impeccable work left
+  open: what a build starts FROM. The design plugin only ever engages once the coding agent is
+  writing; every build's first paint - and every build the agent leaves largely alone - was the
+  scaffold as shipped, and the shipped scaffolds were timid (a 30px "hero", three clone cards, a
+  1.875rem slide h1 that reads as a document rather than a deck, browser defaults for selection,
+  focus, and scrollbars). The three visual shells (`app`, `landing`, `presentation`) were rebuilt
+  to the craft floor; `document` was deliberately NOT touched (its print/OOXML shell is already
+  craft, is byte-asserted by `web/e2e/document-redline.spec.ts`, and its own conventions forbid
+  restyling). NO NEW BASE was added: `baseForType` already maps all five artifact types onto
+  existing bases, so coverage was complete and the whole gap was quality - a new base would have
+  added a registry entry and no capability. Three contract consequences, all additive so no
+  consumer moves (Rule 7): (1) the locked CSS-variable vocabulary gained display type
+  (`--text-4xl/5xl/6xl`), section rhythm (`--space-20/24/32`), `--font-display`, `--radius-xl` and
+  `--shadow-xl` - the old scale stopped at 30px text and 64px spacing, which made genuinely modern
+  hero and projection typography impossible WITHIN the rules, so the rules were the defect, not the
+  scaffolds' timidity. (2) `--color-primary-hover` changed default from `#0D9488` to `#115E59`: the
+  old value was LIGHTER than `--color-primary`, so every consumer painting a white label on it, or
+  using it as link-hover text, measured 3.74:1 against a 4.5:1 floor - hovering the most prominent
+  control on a page dropped it out of AA, platform-wide, and the `document` base had already
+  hardcoded `#115E59` locally, which is what surfaced the mismatch. (3) `--color-on-primary` (new,
+  `#FFFFFF`) separates the label colour on a primary-filled surface from `--color-bg`; consumers
+  reaching for the page background there break silently for any brand whose background resolves
+  dark. The scaffolds additionally defend themselves: a primary hover is composed with
+  `color-mix(primary, #000)` so an org-supplied hover that lightens still cannot fail, each
+  color-mix carrying a plain-property fallback line for engines without it. Verification is the
+  part worth keeping: base scaffolds had NO content coverage at all for `landing` and `presentation`
+  (a syntax error would have shipped silently and surfaced only as a live build failure), so
+  `api/tests/apps/base-loader.test.ts` gained a guard that assembles every scaffold-carrying base
+  through `baseProjectFiles` and bundles it with the REAL `appBuilder` esbuild pipeline, with the
+  covered set pinned so a base gaining or losing its `scaffold/` is a deliberate diff. Four
+  pre-existing base defects found by the consumption audit are logged in `docs/findings.md`
+  (`base-template-consumption-gaps`) rather than fixed here: orphaned `recipes/` the loader never
+  reads, `app-auth-persistent` producing an unbuildable project if ever selected explicitly,
+  `app-integration-heavy` being a base with no files at all, and `manifest.extends` never being
+  validated against `BASE_IDS` on the import path.

@@ -1,0 +1,621 @@
+/*
+ * Landing shell styles - platform-provided starting point for the `landing` base.
+ *
+ * AGENT: uses ONLY the locked CSS-variable contract (served at runtime by
+ * /api/design-tokens.css) - every colour/size/space/radius/shadow value goes through
+ * var(--x, fallback) with the fallback equal to the contract default, so the shell
+ * degrades gracefully if the endpoint is briefly unreachable. Brand-adaptive tints are
+ * built with color-mix() over the token colours, ALWAYS with a plain fallback property
+ * declared on the line before. Light and professional by default (house style,
+ * api/src/agents/build.ts BUILD_SYSTEM_PROMPT). Do NOT inline hex literals or Tailwind
+ * colour utilities - raw colour values may appear only inside var() fallbacks or on the
+ * plain-fallback line that precedes a color-mix() declaration.
+ *
+ * Structure: base + browser surfaces, buttons, header/nav (translucent sticky + mobile
+ * sheet), hero (display type + brand-tinted radial field + the ONE authored entrance),
+ * trust strip, feature ledger (lead row + keyline rows), numbered step path, pricing
+ * placeholder slot, typographic pull-quote, animated FAQ rows, tinted full-bleed final
+ * CTA band, columned footer. All other motion is interactive-state transitions
+ * (120-200ms ease-out) and every AUTO-PLAYING animation sits inside a
+ * `prefers-reduced-motion: no-preference` guard. The one deliberate exception is the
+ * scroll-scrubbed header divider (`animation-timeline: scroll()`): it never auto-plays and
+ * moves nothing - it only fades a border colour as the reader scrolls, so it carries no
+ * motion to reduce.
+ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border, #E2E8F0) transparent;
+}
+
+body {
+  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-text, #0F172A);
+  background: var(--color-bg, #FFFFFF);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+  caret-color: var(--color-primary, #0F766E);
+}
+
+img { max-width: 100%; display: block; }
+
+/* Browser surfaces the design still owns: selection, focus, underlines. */
+::selection {
+  background: rgba(15, 118, 110, 0.18);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 18%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary, #0F766E);
+  outline-offset: 2px;
+}
+
+a { text-underline-offset: 0.2em; }
+
+/* Sticky header must never cover an anchored section heading. */
+section[id], main[id] { scroll-margin-top: var(--space-20, 5rem); }
+
+h1, h2, h3 { text-wrap: balance; }
+
+h2 {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-3xl, 1.875rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin-bottom: var(--space-8, 2rem);
+}
+
+/* -- Buttons ------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2, 0.5rem);
+  padding: var(--space-3, 0.75rem) var(--space-6, 1.5rem);
+  border-radius: var(--radius-md, 0.5rem);
+  font-family: inherit;
+  font-size: var(--text-base, 0.9375rem);
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease-out, border-color 0.15s ease-out,
+    color 0.15s ease-out, box-shadow 0.15s ease-out, transform 0.12s ease-out;
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled, .btn[aria-disabled='true'] { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
+
+.btn-primary {
+  background: var(--color-primary, #0F766E);
+  /* The label sits ON the primary fill, so it reads --color-on-primary, never --color-bg
+     (which would vanish under a brand whose page background is dark). */
+  color: var(--color-on-primary, #FFFFFF);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.05));
+}
+.btn-primary:hover {
+  /* Darken on hover (never lighten): the label must hold >= 4.5:1. The token is the
+     fallback, but the color-mix wins where supported - it darkens whatever primary the org
+     ships, so a brand whose own primaryHover happens to lighten still cannot fail here.
+     Any org primary that passes at rest passes even better on hover. */
+  background: var(--color-primary-hover, #115E59);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 85%, #000);
+  box-shadow: var(--shadow-md, 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04));
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-text, #0F172A);
+  border-color: var(--color-text-subtle, #64748B);
+}
+.btn-outline:hover {
+  border-color: var(--color-text, #0F172A);
+  background: var(--color-surface, #F8FAFC);
+}
+
+/* -- Header ------------------------------------------------------------------- */
+
+.landing-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--color-bg, #FFFFFF);
+  background: color-mix(in srgb, var(--color-bg, #FFFFFF) 86%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+/* Progressive enhancement: divider fades in on scroll where scroll-driven
+   animations exist; everyone else keeps the constant hairline above. */
+@supports (animation-timeline: scroll()) {
+  .landing-header {
+    border-bottom-color: transparent;
+    animation: landing-header-divider linear both;
+    animation-timeline: scroll();
+    animation-range: 0 var(--space-24, 6rem);
+  }
+}
+@keyframes landing-header-divider {
+  to { border-bottom-color: var(--color-border, #E2E8F0); }
+}
+
+.landing-header-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6, 1.5rem);
+  padding: var(--space-3, 0.75rem) var(--space-6, 1.5rem);
+}
+
+.landing-logo {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-weight: 700;
+  font-size: var(--text-lg, 1.125rem);
+  letter-spacing: -0.01em;
+  color: var(--color-text, #0F172A);
+  text-decoration: none;
+}
+
+.landing-nav { display: none; gap: var(--space-6, 1.5rem); align-items: center; }
+.landing-nav a:not(.btn) {
+  color: var(--color-text-muted, #475569);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.4em;
+  font-size: var(--text-sm, 0.875rem);
+  transition: color 0.15s ease-out, text-decoration-color 0.15s ease-out;
+}
+.landing-nav a:not(.btn):hover {
+  color: var(--color-text, #0F172A);
+  text-decoration-color: var(--color-primary, #0F766E);
+}
+/* Pressed state: the link commits to the brand colour it only hinted at on hover. */
+.landing-nav a:not(.btn):active { color: var(--color-primary, #0F766E); }
+
+.landing-header-cta {
+  display: none;
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  font-size: var(--text-sm, 0.875rem);
+}
+
+.landing-nav-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2, 0.5rem);
+  background: none;
+  border: none;
+  border-radius: var(--radius-md, 0.5rem);
+  cursor: pointer;
+  color: var(--color-text, #0F172A);
+  transition: background-color 0.15s ease-out;
+}
+.landing-nav-toggle:hover { background: var(--color-surface-muted, #F1F5F9); }
+.landing-nav-toggle:active { background: var(--color-border, #E2E8F0); }
+
+/* Mobile: the open nav is a full-width sheet under the header, not an inline row. */
+.landing-nav-cta { display: none; }
+
+@media (max-width: 767.98px) {
+  .landing-nav-open {
+    display: flex;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--space-2, 0.5rem) var(--space-6, 1.5rem) var(--space-6, 1.5rem);
+    background: var(--color-bg, #FFFFFF);
+    border-bottom: 1px solid var(--color-border, #E2E8F0);
+    box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.05));
+  }
+  .landing-nav-open a:not(.btn) {
+    display: block;
+    padding: var(--space-3, 0.75rem) 0;
+    border-bottom: 1px solid var(--color-border, #E2E8F0);
+    font-size: var(--text-base, 0.9375rem);
+    color: var(--color-text, #0F172A);
+  }
+  .landing-nav-open .landing-nav-cta {
+    display: inline-flex;
+    margin-top: var(--space-4, 1rem);
+  }
+}
+@media (max-width: 767.98px) and (prefers-reduced-motion: no-preference) {
+  .landing-nav-open { animation: landing-sheet-in 0.18s ease-out; }
+}
+@keyframes landing-sheet-in {
+  from { opacity: 0; transform: translateY(calc(-1 * var(--space-2, 0.5rem))); }
+}
+
+@media (min-width: 768px) {
+  .landing-nav { display: flex; margin-left: auto; }
+  .landing-header-cta { display: inline-flex; }
+  .landing-nav-toggle { display: none; }
+}
+
+/* -- Section rhythm ------------------------------------------------------------ */
+
+section { padding: var(--space-16, 4rem) var(--space-6, 1.5rem); }
+@media (min-width: 768px) {
+  section { padding: var(--space-24, 6rem) var(--space-6, 1.5rem); }
+}
+
+.landing-features, .landing-steps, .landing-pricing,
+.landing-testimonials, .landing-faq {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* -- Hero ------------------------------------------------------------------------
+   Full-bleed section carrying a quiet brand-tinted radial field; content constrained
+   by .landing-hero-inner. The entrance below is the page's ONE authored motion moment. */
+
+.landing-hero {
+  text-align: center;
+  padding: var(--space-20, 5rem) var(--space-6, 1.5rem) var(--space-16, 4rem);
+  background: radial-gradient(90% 70% at 50% -10%, rgba(15, 118, 110, 0.1), transparent 70%);
+  background: radial-gradient(90% 70% at 50% -10%, color-mix(in srgb, var(--color-primary, #0F766E) 10%, transparent), transparent 70%);
+}
+@media (min-width: 768px) {
+  .landing-hero { padding: var(--space-32, 8rem) var(--space-6, 1.5rem) var(--space-24, 6rem); }
+}
+
+.landing-hero-inner { max-width: 1200px; margin: 0 auto; }
+
+.landing-hero h1 {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  /* Display scale: --text-4xl on the narrowest screens, --text-6xl at the widest, fluid
+     between the two (the preferred term is a viewport ramp, not a token step). */
+  font-size: clamp(var(--text-4xl, 2.25rem), 1.35rem + 3vw, var(--text-6xl, 3.75rem));
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  max-width: 22ch;
+  margin: 0 auto var(--space-6, 1.5rem);
+}
+
+.landing-hero-sub {
+  font-size: var(--text-lg, 1.125rem);
+  color: var(--color-text-muted, #475569);
+  max-width: 55ch;
+  margin: 0 auto var(--space-8, 2rem);
+}
+
+.landing-hero-ctas {
+  display: flex;
+  gap: var(--space-4, 1rem);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-hero h1 { animation: landing-hero-enter 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .landing-hero-sub { animation: landing-hero-enter 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both; }
+  .landing-hero-ctas { animation: landing-hero-enter 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.16s both; }
+}
+@keyframes landing-hero-enter {
+  from { opacity: 0; transform: translateY(var(--space-3, 0.75rem)); }
+}
+
+/* -- Trust strip ----------------------------------------------------------------- */
+
+.landing-trust {
+  text-align: center;
+  padding: var(--space-8, 2rem) var(--space-6, 1.5rem);
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+.landing-trust-label {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text-subtle, #64748B);
+  margin-bottom: var(--space-6, 1.5rem);
+}
+.landing-trust-logos {
+  display: flex;
+  gap: var(--space-6, 1.5rem) var(--space-12, 3rem);
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.landing-trust-logos span {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text-subtle, #64748B);
+}
+
+/* -- Features: a ledger, not clone cards -------------------------------------------
+   The first row (.landing-feature-lead) carries the lead benefit at display size;
+   the remaining rows sit on keylines with a title column and a body column. */
+
+.landing-features-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.landing-feature-card {
+  background: transparent;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  padding: var(--space-6, 1.5rem) 0;
+}
+.landing-feature-card h3 {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  margin-bottom: var(--space-2, 0.5rem);
+}
+.landing-feature-card p {
+  color: var(--color-text-muted, #475569);
+  max-width: 65ch;
+}
+
+.landing-feature-lead { padding: var(--space-8, 2rem) 0; }
+.landing-feature-lead h3 {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-2xl, 1.5rem);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-3, 0.75rem);
+}
+.landing-feature-lead p { font-size: var(--text-lg, 1.125rem); }
+
+@media (min-width: 768px) {
+  .landing-feature-card:not(.landing-feature-lead) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    gap: var(--space-6, 1.5rem);
+    align-items: start;
+  }
+  .landing-feature-card:not(.landing-feature-lead) h3 { margin-bottom: 0; }
+}
+
+/* -- Steps: a numbered path ---------------------------------------------------------
+   The numeral is typographic information (sequence), followed by a connector keyline. */
+
+.landing-steps-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-8, 2rem);
+}
+@media (min-width: 768px) {
+  .landing-steps-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+.landing-step { background: transparent; }
+
+.landing-step-marker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4, 1rem);
+  margin-bottom: var(--space-4, 1rem);
+}
+.landing-step-marker::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border, #E2E8F0);
+}
+.landing-step:last-child .landing-step-marker::after { display: none; }
+
+.landing-step-number {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-4xl, 2.25rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-primary, #0F766E);
+}
+
+.landing-step h3 {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  margin-bottom: var(--space-2, 0.5rem);
+}
+.landing-step p { color: var(--color-text-muted, #475569); }
+
+/* -- Pricing placeholder slot -------------------------------------------------------- */
+
+.landing-pricing-note {
+  max-width: 640px;
+  border: 1px dashed var(--color-border, #E2E8F0);
+  border-radius: var(--radius-lg, 0.75rem);
+  padding: var(--space-8, 2rem);
+  text-align: center;
+  color: var(--color-text-muted, #475569);
+}
+
+/* -- Testimonial: typographic pull-quote ---------------------------------------------- */
+
+.landing-testimonial { max-width: 720px; }
+
+.landing-testimonial-mark {
+  display: block;
+  margin-bottom: var(--space-4, 1rem);
+  color: var(--color-primary, #0F766E);
+  color: color-mix(in srgb, var(--color-primary, #0F766E) 35%, transparent);
+}
+
+.landing-testimonial p {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-2xl, 1.5rem);
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-6, 1.5rem);
+}
+
+.landing-testimonial cite {
+  display: block;
+  font-style: normal;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 500;
+  color: var(--color-text-muted, #475569);
+}
+.landing-testimonial cite::before {
+  content: '';
+  display: block;
+  width: var(--space-8, 2rem);
+  height: 1px;
+  background: var(--color-border, #E2E8F0);
+  margin-bottom: var(--space-3, 0.75rem);
+}
+
+/* -- FAQ: full-row summaries, rotating chevron, smooth open --------------------------- */
+
+.landing-faq-list {
+  max-width: 780px;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+}
+
+.landing-faq-item { border-bottom: 1px solid var(--color-border, #E2E8F0); }
+
+.landing-faq-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4, 1rem);
+  padding: var(--space-4, 1rem) 0;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-sm, 0.25rem);
+  transition: color 0.15s ease-out;
+}
+.landing-faq-item summary::-webkit-details-marker { display: none; }
+.landing-faq-item summary:hover { color: var(--color-primary, #0F766E); }
+.landing-faq-item summary:active { color: var(--color-primary-hover, #115E59); }
+
+.landing-faq-chevron { flex: none; color: var(--color-text-subtle, #64748B); }
+.landing-faq-item[open] .landing-faq-chevron { transform: rotate(180deg); }
+
+.landing-faq-answer { display: grid; grid-template-rows: 1fr; }
+.landing-faq-answer > div { overflow: hidden; }
+.landing-faq-answer p {
+  padding-bottom: var(--space-4, 1rem);
+  color: var(--color-text-muted, #475569);
+  max-width: 65ch;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-faq-chevron { transition: transform 0.18s ease-out; }
+  .landing-faq-item[open] .landing-faq-answer { animation: landing-faq-open 0.24s ease-out; }
+}
+@keyframes landing-faq-open {
+  from { grid-template-rows: 0fr; opacity: 0; }
+  to { grid-template-rows: 1fr; opacity: 1; }
+}
+
+/* -- Final CTA: full-bleed brand-tinted band ------------------------------------------- */
+
+.landing-final-cta {
+  text-align: center;
+  background: var(--color-surface, #F8FAFC);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 6%, var(--color-bg, #FFFFFF));
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.landing-final-cta-inner { max-width: 720px; margin: 0 auto; }
+
+.landing-final-cta h2 {
+  font-size: var(--text-4xl, 2.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-4, 1rem);
+}
+
+.landing-final-cta-note {
+  color: var(--color-text-muted, #475569);
+  max-width: 45ch;
+  margin: 0 auto var(--space-8, 2rem);
+}
+
+/* -- Footer: brand + nav + legal columns, then a fine-print row ------------------------- */
+
+.landing-footer {
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  padding: var(--space-16, 4rem) var(--space-6, 1.5rem) var(--space-8, 2rem);
+  font-size: var(--text-sm, 0.875rem);
+}
+
+.landing-footer-inner { max-width: 1200px; margin: 0 auto; }
+
+.landing-footer-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-8, 2rem);
+  margin-bottom: var(--space-12, 3rem);
+}
+@media (min-width: 768px) {
+  .landing-footer-grid { grid-template-columns: 2fr 1fr 1fr; gap: var(--space-12, 3rem); }
+}
+
+.landing-footer-brand p {
+  color: var(--color-text-muted, #475569);
+  margin-top: var(--space-3, 0.75rem);
+  max-width: 36ch;
+}
+
+.landing-footer-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2, 0.5rem);
+}
+.landing-footer-col h3 {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  margin-bottom: var(--space-2, 0.5rem);
+}
+.landing-footer-col a {
+  color: var(--color-text-muted, #475569);
+  text-decoration: none;
+  transition: color 0.15s ease-out;
+}
+.landing-footer-col a:hover { color: var(--color-text, #0F172A); text-decoration: underline; }
+.landing-footer-col a:active { color: var(--color-primary, #0F766E); text-decoration: underline; }
+
+.landing-footer-fine {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4, 1rem);
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  padding-top: var(--space-6, 1.5rem);
+  color: var(--color-text-subtle, #64748B);
+}
+
+.landing-footer-top {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+  color: var(--color-text-muted, #475569);
+  text-decoration: none;
+  transition: color 0.15s ease-out;
+}
+.landing-footer-top:hover { color: var(--color-text, #0F172A); }
+.landing-footer-top:active { color: var(--color-primary, #0F766E); }
+
+/* -- Reduced motion -------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

@@ -6,6 +6,137 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`base-template-consumption-gaps`** (2026-08-09, LOW-MEDIUM, found by a consumption-map audit
+  during the impeccable-bases template pass; none are regressions - all predate the pass). Four
+  distinct gaps in how `api/assets/bases/*` content is (not) consumed:
+  1. **`recipes/` is orphaned content.** `base-loader.ts loadBase()` never reads `recipes/`; yet
+     `app/instructions/base-conventions.md` rule 6 tells the build agent to use the `empty-state`
+     recipe it never receives. Either inject recipes as prompt sections or drop the references.
+     (The impeccable-bases pass mitigates the empty-state case specifically: the app scaffold's
+     `index.css` now ships a crafted `.empty-state` implementation directly, and the base
+     conventions describe it in-file.)
+  2. **`app-auth-persistent` produces an unbuildable project if explicitly selected.** It has no
+     `scaffold/`, only 4 wiring files, so `scaffold.ts` takes the template branch (files > 0),
+     suppresses the generic starters, and the project has no `index.jsx`/`App.jsx`; its
+     `mustEdit: ["frontend/src/App.jsx"]` then names a file that never exists, so
+     `assertProgress` can never pass. Unreachable in practice (nothing sets `templateId` to it -
+     `baseForType` never returns it), which is why it has not burned a user; still a landmine.
+  3. **`app-integration-heavy` is a base in name only** (no scaffold, no wiring; degrades
+     gracefully to generic starters + prompt sections). Same unreachability.
+     Disposition for 2+3: fold both into the `app` base (delete, or give them real scaffolds)
+     the next time base selection grows a second app flavour; until then they stay as prompt-only
+     variants reachable only by explicit `templateId`.
+  4. **`manifest.extends` is never validated against `BASE_IDS` on the import path**
+     (`manifest.ts` accepts any non-empty string); an arbitrary value silently resolves to `null`
+     base at `build-mechanics.ts resolveFollowUp`, i.e. base conventions vanish from follow-up
+     builds with no signal. Needs a warn-or-fail decision at import time.
+
+- **`landing-presentation-scaffold-zero-coverage`** (2026-08-09, FIXED same day). The `landing`
+  and `presentation` scaffolds had no test reading them at all - a syntax error would ship
+  silently and surface only as a live build failure. Fixed by the scaffold compile guard in
+  `api/tests/apps/base-loader.test.ts` ("every scaffold-carrying base compiles through the real
+  builder"): each base with a `scaffold/` is assembled via `baseProjectFiles` and bundled through
+  the real `appBuilder` esbuild pipeline; the covered set is pinned to
+  `app/document/landing/presentation` so a base gaining or losing its scaffold is a deliberate
+  diff.
+
+- **`featured-router-basename-missing`** (all 4 known instances FIXED 2026-08-08, MEDIUM, plus a
+  standing regression guard added for the whole class - found chasing two "real broken state, not
+  just empty data" screenshots the WS10 featured-artifact audit flagged: `booking-system` rendered
+  a fully blank content pane (sidebar visible, body white); `sales-crm` rendered a "Página não
+  encontrada" 404 instead of its dashboard). Reproduced from CURRENT source, not a stale
+  screenshot ghost: built each scaffold with the real `appBuilder.build()` esbuild pipeline and
+  served the dist under `/apps/<id>/` (the exact path prefix `serving.ts` mounts every artifact
+  at), byte-identical `injectAppContext()` included. Both reproduced exactly as screenshotted;
+  Playwright's console capture on `booking-system` even printed react-router's own diagnostic
+  verbatim: `No routes matched location "/apps/booking-system/"`.
+  ROOT CAUSE, systemic in the sense that it recurs (a scaffold-authoring omission, not a bug in
+  the builder/serving/route-mounting layer itself - proven by the 29 `legal-*` scaffolds + `cobrancas`
+  that all serve correctly through the exact same pipeline): every served artifact lives at
+  `/apps/<id>/`, so `window.location.pathname` there is `/apps/<id>/...`, never bare `/`. A
+  scaffold that mounts `<BrowserRouter>` with NO `basename` declares routes as absolute paths from
+  the domain root (`/`, `/calendario`, `/contactos`, …) which then never match the actual served
+  pathname. `injected-context.ts` even documents the trap inline (the `<base href>` comment: "react
+  router uses its basename, not the DOM base") - the platform's own `<base>` tag fixes RELATIVE
+  ASSET urls but does nothing for react-router's path matching, which reads
+  `window.location.pathname` directly. The symptoms are the SAME defect wearing different costumes
+  depending on whether the scaffold's own route table happens to declare a catch-all:
+  `booking-system` has none, so `<Routes>` matched nothing and rendered `null` (blank content
+  pane, sidebar chrome unaffected since `Shell` renders unconditionally around `{children}`);
+  `sales-crm` has an explicit `<Route path="*" element={<NotFound/>}>`, so the mismatch rendered
+  its own "Página não encontrada" empty-state instead of the dashboard; `ecommerce-catalog` and
+  `invoice-manager` both redirect to `/` on an unmatched path (`<Route path="*" element={<Navigate
+  to="/" replace/>}>`), which - THIS IS THE THIRD COSTUME, found while writing the regression
+  guard below - does not print "no routes matched" at all: react-router instead warns `<Router
+  basename="..."> is not able to match the URL "..." because it does not start with the basename,
+  so the <Router> won't render anything`, a DIFFERENT diagnostic for the sub-case where the
+  (defaulted) basename isn't even a prefix of the served path. Three symptom shapes, one cause.
+  BLAST RADIUS: exactly 4 of the 42 featured artifacts omitted `basename` on `BrowserRouter`
+  (grepped every scaffold: 33 declare a top-level Router, 29 of those - every `legal-*` +
+  `cobrancas` - already derived and passed `basename` correctly). All 4 are now fixed.
+  `ecommerce-catalog` and `invoice-manager` are Stage A DEMOTE dispositions
+  (`docs/featured-artifacts-ledger.md`) - fixed anyway, on explicit instruction, because the
+  operator had not yet approved any demotion and both were live, broken, featured artifacts in
+  the meantime; a pending disposition decision is not a reason to ship known-broken apps.
+  FIX (all four): mount the router with `basename` derived from `window.location.pathname` at
+  render time - the exact pattern every `legal-*` scaffold's `index.jsx` already carries:
+  `window.location.pathname.match(/^(\/apps\/[^/]+)/)`, falling back to `/` when unmatched
+  (SSR/tests/`file://`). No platform code changed - the serving pipeline, `injectAppContext`, and
+  every other scaffold using the convention correctly were already fine; this is a four-file
+  scaffold-content fix.
+  CLASS GUARD (the more durable half - built per explicit follow-up instruction, not left as a
+  recommendation): `api/tests/apps/featured-router-catalog-guard.test.ts`. Deliberately
+  BEHAVIORAL, not a source-text pattern match - the actual invariant is "does the built artifact
+  render its routed content when served at `/apps/<id>/`", not "does the source look like the
+  fix", and a text pattern cannot honestly stand in for that (it would reject the equally-correct
+  `window.__EKOA_APP_ID`-based derivation, and it would ACCEPT a dynamic-looking-but-wrong
+  derivation - proven below, not asserted). The guard builds each scaffold with the real
+  `appBuilder.build()`, serves it under its real `/apps/<id>/` prefix with the real
+  `injectAppContext()`, and asks a real (Playwright-launched) browser whether react-router ever
+  emitted either of its two "won't render" diagnostics (see the finding's own root-cause
+  paragraph above - discovering the second diagnostic mid-build IS the proof the naive
+  single-pattern version would have been wrong). A "guard correctness" sub-suite runs the check
+  against six synthetic fixtures first: FAILS on no-basename (the original bug), FAILS on a
+  hardcoded literal basename, FAILS on a basename that is dynamically COMPUTED but WRONG (the
+  fixture that caught the missing second diagnostic - first attempt at this exact case falsely
+  PASSED before the fix), PASSES on the shipped `window.location.pathname` derivation, PASSES on
+  a deliberately DIFFERENT correct derivation (`window.__EKOA_APP_ID`-based) proving the guard
+  does not merely pattern-match this incident's specific fix, and PASSES on a `HashRouter` with no
+  basename at all. HashRouter/MemoryRouter DECISION: both pass by construction, not
+  special-cased - HashRouter resolves from `window.location.hash`, entirely independent of the
+  served path prefix; MemoryRouter never reads the browser URL at all. The guard only builds
+  scaffolds that source-declare `BrowserRouter` (a coarse scoping scan, never the pass/fail
+  verdict itself) - 33 of 42 today. A "census against the real catalog" test then runs the same
+  behavioral check against all 33 real scaffolds and asserts zero failures, with a failure message
+  that names the artifact, states the `/apps/<id>/` prefix rule, and shows the one-line fix -
+  written for a 2am reader with no context, per the ask. Currently green (0/33 failing).
+  KNOWN FRAGILITY, named rather than hidden: the guard's failure detection is coupled to
+  react-router's current diagnostic wording (both exact strings, matched by regex) - a
+  react-router upgrade that changes either message needs a companion update here. This is the
+  honest cost of a behavioral check over library internals; the mitigation is catching both known
+  variants instead of the one this defect happened to hit first.
+  SUITE_LEDGER.json: deliberately NOT registered there. `scripts/suite-ledger-run.mjs` strict
+  count-censuses three categories only - `web/e2e/*.spec.ts`, `api/tests/e2e/*.e2e.mjs` drivers,
+  and `web/__tests__` frontend unit files (its own header: "this runner censuses the
+  externally-authored estate... `module_tests_146` runs via plain `npm test`, not this runner").
+  This is none of those three; it is a new `api/tests/apps/*.test.ts` vitest module test, which
+  the ledger's design deliberately does not count-census (`module_tests_146`/
+  `contract_tests_from_ruleset` track the historical migration carryover, not an ongoing inventory
+  of every current test file). It runs, and is gated, the same way every other
+  `api/tests/apps/*.test.ts` file is - `npm test --workspace api`, step 3 of the per-PR CI lane.
+  RECOMMENDATION STILL OPEN: a line in the scaffold-authoring guidance under `api/assets/bases/`
+  (so the NEXT scaffold is written correctly rather than merely caught by the guard) - not added
+  here; that directory is owned by another in-flight workstream and needs sequencing first.
+  Tests: the class guard above (7 tests: 6 synthetic-fixture guard-correctness + 1 real-catalog
+  census, all green) supersedes an earlier, narrower `featured-router-basename.test.ts` (a static
+  source-text pin covering only booking-system + sales-crm, since removed - the behavioral guard's
+  real-catalog census covers the same two apps at strictly higher fidelity, so keeping both would
+  have meant maintaining two tests of different rigor for one invariant). Evidence for the
+  render-level behavior (react-router's own diagnostics before, the full page content after) is a
+  set of Playwright screenshots/console transcripts per artifact taken during diagnosis, not
+  checked in as test assets - the class guard is the durable regression gate; the visual proof was
+  for diagnosing THIS incident, not a permanent fixture.
+
 - **`registo-anon-audit-actor-blank`** (FIXED 2026-08-08, HIGH, empirically confirmed against the
   live dev DB - 175 of 256 `activity_logs` rows failing validation - found chasing the dashboard's
   "Response for GET /api/v1/registo failed contract validation"). The anonymisation-audit write
@@ -47,13 +178,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   (`web/stores/registo.ts`) send; `readRegisto` had no date filter either. Wired both through
   (`platform-crud.ts` filters `activityLogs` rows by ISO-8601 string comparison against
   `timestamp`).
+  (4) MITIGATION (same PR, added after review): the fix makes these rows RENDER instead of
+  breaking the page, and `category: 'anonymisation'` already made up >=68% of the WHOLE
+  `activity_logs` collection before this fix (the 175 blank rows were ALL of them - every other
+  category's `audit()` helper refuses to write without a real actor) - so a super-admin's
+  UNSCOPED "all offices" view would now show mostly `'system'` rows drowning out
+  human-attributable ones, growing with usage. Every org-scoped view (every org-admin, and a
+  super-admin who picks one office) was never affected either way - `orgId` never matches a real
+  org for these rows, blank or `'system'`. `readRegisto` now hides `category: 'anonymisation'` by
+  default UNLESS an explicit `type` filter or `includeAnonymisation=true` is given
+  (`RegistoQuery.includeAnonymisation`, documented on the wire and in the handler) - and this is a
+  VISIBLE default, never a silent one: `web/app/(dashboard)/registo/page.tsx` shows a permanent
+  notice stating the rows are hidden by default, with a one-click `Switch` to include them
+  (`web/stores/registo.ts` `setIncludeAnonymisation`, auto-refetches).
   Tests: `api/tests/contract/registo.test.ts` (new `describe` blocks) drive the REAL audit path -
   `proxyGatewayMessages(body, '')` - and assert the persisted row and the `GET /api/v1/registo`
-  response both carry `'system'`, validate against `RegistoEntry`/`RegistoListResponse`, and that
-  an org-admin never sees the system-attributed row; a third case proves `from`/`to` narrow the
-  result set. `api/tests/llm/anonymise-chokepoint.test.ts` adds the matching unit-level case
-  against the real Mongo-backed default sink. All pre-existing anonymise/gateway/registo suites
-  still pass unmodified.
+  response both carry `'system'`, validate against `RegistoEntry`/`RegistoListResponse`, that an
+  org-admin never sees the system-attributed row, that `from`/`to` narrow the result set, that the
+  mask row is absent by default and present with `includeAnonymisation=true`, and that an explicit
+  `type` filter always wins. `api/tests/llm/anonymise-chokepoint.test.ts` adds the matching
+  unit-level sentinel case against the real Mongo-backed default sink. Every lookup lands on the
+  exact row via its OWN `metadata.correlationId` (never a coarse `{category:'anonymisation'}` /
+  `{userId:'system'}` query) - this file's own build-job tests, and other `proxyGatewayMessages`
+  calls elsewhere in the suite, write the SAME category through the SAME fire-and-forget path
+  (`audit.ts`), and a coarse query caught one such straggler mid-review. All pre-existing
+  anonymise/gateway/registo suites still pass unmodified. The web-side toggle/banner has no
+  dedicated automated test (this page had zero web-layer test coverage before this change either);
+  the filtering logic itself is fully covered server-side.
 
 - **`change-password-escape-control-drill-asserted-forced-on-default`** (DISMISSED - not a product
   defect - 2026-08-07, found by the drill batch fixer on `change-password#escape-control-present`).
@@ -2344,9 +2495,11 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ### Featured-artifact audit (WS10 Stage A, 2026-08-08)
 
-Full per-artifact evidence and dispositions: `docs/featured-artifacts-ledger.md`. Three concrete
-defects surfaced by that review, logged here per the discovery-run rule (never silently absorbed
-into a ledger note):
+Full per-artifact evidence and dispositions: `docs/featured-artifacts-ledger.md` (the two review
+passes done this day are merged into that one canonical file - a second, more detailed brief arrived
+after the first pass had already shipped a doc at a different path; both are consolidated, nothing
+dropped). Concrete defects surfaced by the review, logged here per the discovery-run rule (never
+silently absorbed into a ledger note):
 
 - **`featured-invoice-manager-noncompliant-invoicing`** (HIGH, compliance). The `invoice-manager`
   featured artifact (`api/assets/featured-artifacts/invoice-manager/scaffold/`) natively generates
@@ -2366,7 +2519,52 @@ into a ledger note):
   artifacts (`legal-agenda`, `legal-citius`, `legal-calculos`, `legal-nucleo`, `legal-injuncoes`,
   `legal-insolvencias` among others) are functionally deep on inspection of source, but their gallery
   thumbnail currently undersells that. Recommend recapturing with the seeded spine before any Stage C
-  visual "before" comparison.
+  visual "before" comparison. ROOT CAUSE, since found: `legal-nucleo`'s `DashboardPage.jsx` is the
+  only scaffold with an "Instalar dados de demonstração" button (`instalarDemo()` in the family's
+  shared `demo-spine.js`); nothing else ever installs the demo data, and the shared scope is keyed by
+  OWNER (all 29 `legal-*` artifacts share one), so installing once via `legal-nucleo` seeds the whole
+  family. FIX WRITTEN (not yet committed/tested): `ensureLegalDemoSpineInstalled()` in
+  `api/src/apps/featured-builder.ts` drives that button before any `legal-*` screenshot is
+  (re)captured; a deliberate-recapture CLI (`npm run tool:recapture-featured-screenshots --workspace
+  api`) forces the 29 already-stale PNGs to refresh, since self-heal only fires on a missing PNG.
+  Verified live in an isolated scratch stack (own MongoMemoryServer, own ephemeral port, nowhere near
+  the shared dev stack) - real before/after screenshots for `legal-nucleo` (Processos Ativos 0->6,
+  Prazos Vencidos/Hoje/7dias 0/0/0->1/1/3, a populated Radar de Prazos and Notificações) and
+  `legal-prazos` (cross-artifact confirmation - same four cases surface via the shared owner scope).
+  Stays OPEN here until the fix is committed with a test, per the ledger convention.
+- **`featured-erp-imobiliario-ptbr-contamination`** (medium, copy quality, KEEP artifact). Grepped
+  all 42 artifacts' scaffold source for PT-BR-only markers (`usuário`, `cadastro/cadastrar/
+  cadastrado`, `celular`, `aplicativo`, `tela` as "screen"). `erp-imobiliario`'s `App.jsx` uses
+  "cadastrado"/"cadastro" roughly 20 times where PT-PT says "registado"/"registo" (e.g. "Nenhum
+  cliente cadastrado", "não está cadastrado. Cadastre-o antes de salvar") and "aplicativo da CGD"
+  where PT-PT says "aplicação". `invoice-manager` has one instance too ("O cadastro central das
+  entidades") but is already demoted for the compliance reason above, so this is moot for it. The
+  entire 29-artifact `legal-*` family came back clean (`ecrã`, never `tela`; `registo`/`registar`
+  throughout). `erp-imobiliario` is disposed KEEP+UPGRADE in the ledger - this PT-BR cleanup is a
+  named Stage C work item, not just an observation, alongside its already-required apartment-
+  portfolio de-verticalization.
+- **`featured-icon-field-dead`** (low, dead code/content). All 42 featured-artifact manifests omit
+  `icon` (the seeder's internal `FeaturedArtifactManifest` type declares it optional). The field is
+  unused end-to-end, not 42 individual oversights: `shared/src/artifacts.ts`'s wire `Artifact` schema
+  carries no `icon` field at all, and no web component under `web/components/artifacts/` or
+  `chat-stripes.tsx` reads `.icon`. Someone should either wire it into the gallery card or delete it
+  from the manifest interface - leaving it declared-but-ignored misleads whoever authors the next
+  featured artifact.
+- **`featured-seed-data-json-dead`** (low, dead code/stale comment). Eight non-`legal-*` featured
+  artifacts ship a root-level `seed-data.json` alongside their scaffold
+  (`api/assets/featured-artifacts/{ai-assistant,booking-system,cobrancas,ecommerce-catalog,
+  help-desk,invoice-manager,sales-crm,task-manager}/seed-data.json`) that NO code path reads
+  anywhere in `api/src` (grepped for the literal filename and for `seedData` - zero hits outside the
+  asset directories themselves). `api/src/apps/artifact-bundle.ts`'s own header comment claims
+  "featured seed-data is not carried into the bundle (seed lives in the featured catalog and is
+  applied by fork)" - that comment is simply false today: there is no fork-time (or any other) code
+  path that reads a featured artifact's `seed-data.json` and applies it to a new instance's
+  `/api/app-data/*` rows. A stale comment asserting a mechanism that does not exist is worse than no
+  comment, since the next reader will trust it. Not fixing the underlying gap here (all eight lack
+  any install mechanism at all - no scaffold wires a button to consume this file the way
+  `legal-nucleo`'s does for the shared spine - and four of the eight are DEMOTE candidates in
+  `docs/featured-artifacts-ledger.md` anyway: `ecommerce-catalog`, `invoice-manager`, `sales-crm`,
+  `task-manager`); recording it accurately is the whole ask.
 - **`featured-gallery-data-hygiene`** (low, data). Two data-hygiene gaps in
   `api/assets/featured-artifacts/*/manifest.json`'s `featuredRank` (`shared/src/artifacts.ts`
   `featuredRank: z.number().int().optional()`): (1) `legal-agenda-reservas` has no `featuredRank` at

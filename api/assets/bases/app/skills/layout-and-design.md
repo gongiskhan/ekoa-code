@@ -62,4 +62,21 @@ Write every style using the variable contract with a fallback:
 
 ## Typography scale
 
-Use the locked scale only: `--text-xs` (12) labels, `--text-sm` (14) secondary, `--text-base` (15) body, `--text-lg` (18) section headings, `--text-xl` (20) card titles, `--text-2xl` (24) page titles, `--text-3xl` (30) hero. Do not invent sizes outside it.
+Use the locked scale only: `--text-xs` (12) labels, `--text-sm` (14) secondary, `--text-base` (15) body, `--text-lg` (18) section headings, `--text-xl` (20) card titles, `--text-2xl` (24) page titles, `--text-3xl` (30) hero. The display steps above it - `--text-4xl` (36), `--text-5xl` (48), `--text-6xl` (60) - exist for marketing and projection surfaces; inside a working app screen they are almost always wrong. Do not invent sizes outside the scale.
+
+Headings use `var(--font-display, …)` (it follows the brand font automatically). At `--text-4xl` and up, tighten leading to 1.05-1.2 and tracking to -0.01em..-0.025em - the scale gives you the size, not the setting.
+
+## The shipped primitive vocabulary
+
+`index.css` already ships a crafted, brand-adaptive set. **Use these classes instead of writing new component CSS** - they cover their own hover, focus-visible, active, and disabled states, and they inherit the org's brand through the token contract:
+
+- Buttons: `.btn` plus `.btn-primary` / `.btn-secondary` / `.btn-ghost` / `.btn-danger`, size `.btn-sm`.
+- Forms: `.field`, `.field-label`, `.field-error`, `.input`, `.select`, `.textarea`.
+- Containers: `.card`, `.page`, `.page-header`, `.page-title`, `.page-subtitle`.
+- Data: the `.table` pattern inside a `.table-scroll` container (row hover and tabular numerals included).
+- Status: `.badge` plus `.badge-success` / `.badge-warning` / `.badge-danger` / `.badge-info`.
+- Async and empty: `.skeleton` for loading, `.empty-state` (with `.empty-state-title` / `.empty-state-subtitle`) for every collection that can be empty.
+
+Plain `h2`/`h3`/`p` inside `.page` already land on the vertical rhythm - you do not need per-page spacing CSS for ordinary prose. Add new classes when the product genuinely needs them; keep every value on the token contract with a fallback.
+
+On a primary-filled surface, the label colour is `var(--color-on-primary, #FFFFFF)` - never `--color-bg`, which breaks for a brand whose background resolves dark.

@@ -4,7 +4,16 @@
  * Uses ONLY the locked CSS-variable contract (served at runtime by
  * /api/design-tokens.css), every var with a fallback so the shell degrades
  * gracefully if the endpoint is briefly unreachable. Do NOT inline hex
- * literals in component styles - they break brand inheritance.
+ * literals in component styles - they break brand inheritance. Where a
+ * brand-adaptive tint is needed we use color-mix(in srgb, ...) with a plain
+ * fallback property declared on the line before it.
+ *
+ * AGENT: pages inherit a small primitive vocabulary defined below - .btn,
+ * .field/.input/.select/.textarea, .card, .badge, .table (+ .table-scroll),
+ * .skeleton, .page/.page-header and .empty-state. Reach for these before
+ * writing new CSS; extend them, do not fork them. Bare h2/h3/h4 and p written
+ * straight into a .page or .card (no class) inherit the default flow rhythm
+ * defined under "Default flow rhythm" - do not re-declare margins for them.
  */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -12,12 +21,19 @@
 html, body, #root { height: 100%; }
 
 body {
-  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
+  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
   font-size: var(--text-base, 0.9375rem);
   line-height: 1.5;
   color: var(--color-text, #0F172A);
   background: var(--color-bg, #FFFFFF);
+  caret-color: var(--color-primary, #0F766E);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Headings pick up the display face so a brand font lands automatically. */
+h1, h2, h3, h4 {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  text-wrap: balance;
 }
 
 code {
@@ -26,6 +42,59 @@ code {
   background: var(--color-surface-muted, #F1F5F9);
   padding: 0.1em 0.35em;
   border-radius: var(--radius-sm, 0.25rem);
+}
+
+/* -- Browser surfaces ------------------------------------------------------
+ * The parts nobody draws still carry the brand: selection, focus rings,
+ * scrollbars, link underlines and the caret (set on body above).
+ */
+
+::selection {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 20%, transparent);
+  color: var(--color-text, #0F172A);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary, #0F766E);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--color-primary, #0F766E);
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--color-primary, #0F766E);
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  transition: color 150ms ease-out, text-decoration-color 150ms ease-out;
+}
+
+a:hover {
+  color: var(--color-primary-hover, #115E59);
+  color: color-mix(in srgb, var(--color-primary, #0F766E) 85%, var(--color-text, #0F172A));
+  text-decoration-color: currentColor;
+}
+
+html,
+.app-content,
+.app-nav,
+.table-scroll,
+.textarea {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border, #E2E8F0) transparent;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border, #E2E8F0);
+  border: 2px solid transparent;
+  border-radius: var(--radius-full, 9999px);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-subtle, #64748B);
+  background-color: color-mix(in srgb, var(--color-text-subtle, #64748B) 45%, var(--color-border, #E2E8F0));
 }
 
 /* -- Shell layout --------------------------------------------------------- */
@@ -41,17 +110,36 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4, 1rem);
-  height: 48px;
-  flex: 0 0 48px;
+  height: 56px;
+  flex: 0 0 56px;
   padding: 0 var(--space-6, 1.5rem);
-  background: var(--color-surface, #F8FAFC);
+  background: var(--color-bg, #FFFFFF);
   border-bottom: 1px solid var(--color-border, #E2E8F0);
-  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.05));
+}
+
+.app-topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3, 0.75rem);
+  min-width: 0;
+}
+
+/* Runtime brand mark - rendered by the shell only when the organisation has
+ * a logo (--logo-icon-url / --logo-url). Never fake one with initials. */
+.app-topbar-mark {
+  display: block;
+  flex: none;
+  height: 26px;
+  width: auto;
+  max-width: 140px;
+  object-fit: contain;
 }
 
 .app-topbar-name {
-  font-size: var(--text-lg, 1.125rem);
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-base, 0.9375rem);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--color-text, #0F172A);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -62,6 +150,8 @@ code {
   font-size: var(--text-sm, 0.875rem);
   color: var(--color-text-muted, #475569);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-body {
@@ -74,8 +164,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-1, 0.25rem);
-  width: 220px;
-  flex: 0 0 220px;
+  width: 232px;
+  flex: 0 0 232px;
   padding: var(--space-4, 1rem) var(--space-3, 0.75rem);
   background: var(--color-surface, #F8FAFC);
   border-right: 1px solid var(--color-border, #E2E8F0);
@@ -83,8 +173,11 @@ code {
 }
 
 .app-nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
   width: 100%;
+  min-height: 36px;
   text-align: left;
   padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
   border: none;
@@ -93,18 +186,50 @@ code {
   color: var(--color-text-muted, #475569);
   font: inherit;
   font-size: var(--text-sm, 0.875rem);
+  font-weight: 500;
   cursor: pointer;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
 }
 
+/* Hover (neutral) is deliberately distinct from active (primary-tinted pill). */
 .app-nav-item:hover {
   background: var(--color-surface-muted, #F1F5F9);
   color: var(--color-text, #0F172A);
 }
 
-.app-nav-item.is-active {
+.app-nav-item:active {
+  background: var(--color-border, #E2E8F0);
+}
+
+.app-nav-item.is-active,
+.app-nav-item.is-active:hover,
+.app-nav-item.is-active:active {
   background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 10%, transparent);
+  /* Raw primary on the 10% tint is only 4.56:1 with the default teal - it would
+   * fail outright under any brand whose primary is lighter. Deepening it toward
+   * --color-text keeps the brand hue and buys the headroom (5.52:1 default). */
   color: var(--color-primary, #0F766E);
+  color: color-mix(in srgb, var(--color-primary, #0F766E) 85%, var(--color-text, #0F172A));
   font-weight: 600;
+}
+
+/* Optional per-page icon slot ({ icon } in PAGES): inline SVG inheriting
+ * currentColor, so it follows the item's rest/hover/active colour. */
+.app-nav-icon {
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.app-nav-icon svg { width: 100%; height: 100%; }
+
+.app-nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-content {
@@ -114,7 +239,10 @@ code {
   padding: var(--space-8, 2rem);
 }
 
-/* -- Page + starting-point content ---------------------------------------- */
+/* -- Page scaffold ---------------------------------------------------------
+ * Every page: <section class="page"> with a .page-header (title + optional
+ * subtitle) before the content.
+ */
 
 .page {
   max-width: 1200px;
@@ -126,60 +254,422 @@ code {
 .page-title {
   font-size: var(--text-2xl, 1.5rem);
   font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
   color: var(--color-text, #0F172A);
 }
 
 .page-subtitle {
   margin-top: var(--space-2, 0.5rem);
   font-size: var(--text-base, 0.9375rem);
+  line-height: 1.55;
   color: var(--color-text-muted, #475569);
-  max-width: 60ch;
+  max-width: 65ch;
 }
 
+/* -- Default flow rhythm ---------------------------------------------------
+ * The global reset zeroes every margin, so plain prose written straight into a
+ * page - a bare h2/h3/h4 or p between primitives - would otherwise stack with
+ * no vertical space at all. This is the default rhythm every generated page
+ * gets for free: MORE space above a heading than below it, so the heading binds
+ * to the text it introduces instead of floating between blocks.
+ *
+ * It applies only to BARE elements (`:not([class])`). Anything carrying a class
+ * is a component that owns its own spacing - .page-title, .page-subtitle,
+ * .empty-state-*, .field-label are untouched by these rules. Rule of thumb:
+ * give an element a class and you own its spacing; leave it bare and it
+ * inherits this. .card gets the same rhythm one step tighter (below).
+ */
+
+.page h2:not([class]),
+.page h3:not([class]),
+.page h4:not([class]) {
+  margin-top: var(--space-8, 2rem);
+  margin-bottom: var(--space-3, 0.75rem);
+}
+
+/* Sub-headings, and any heading inside a card, sit tighter than a section break. */
+.page h3:not([class]),
+.page h4:not([class]),
+.card h2:not([class]),
+.card h3:not([class]),
+.card h4:not([class]) {
+  margin-top: var(--space-6, 1.5rem);
+}
+
+/* A heading that opens its container never pushes the container's top down. */
+.page h2:not([class]):first-child,
+.page h3:not([class]):first-child,
+.page h4:not([class]):first-child,
+.card h2:not([class]):first-child,
+.card h3:not([class]):first-child,
+.card h4:not([class]):first-child {
+  margin-top: 0;
+}
+
+.page p:not([class]) + p:not([class]),
+.card p:not([class]) + p:not([class]) {
+  margin-top: var(--space-3, 0.75rem);
+}
+
+/* -- Empty state -----------------------------------------------------------
+ * Rendered for any collection with zero items (empty-state recipe). The
+ * shell's HomePage uses it as the live building placeholder.
+ */
+
 .empty-state {
-  max-width: 480px;
-  margin: var(--space-12, 3rem) auto;
-  padding: var(--space-8, 2rem);
+  max-width: 460px;
+  margin: var(--space-16, 4rem) auto;
+  padding: var(--space-12, 3rem) var(--space-8, 2rem);
   text-align: center;
   background: var(--color-surface, #F8FAFC);
   border: 1px solid var(--color-border, #E2E8F0);
-  border-radius: var(--radius-lg, 0.75rem);
+  border-radius: var(--radius-xl, 1rem);
 }
 
 .empty-state-title {
   font-size: var(--text-xl, 1.25rem);
   font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   color: var(--color-text, #0F172A);
 }
 
 .empty-state-subtitle {
-  margin-top: var(--space-2, 0.5rem);
+  margin: var(--space-3, 0.75rem) auto 0;
   font-size: var(--text-base, 0.9375rem);
   color: var(--color-text-muted, #475569);
   line-height: 1.6;
+  max-width: 40ch;
 }
 
-/* Building-state pulse shown by the default HomePage while the agent works. */
+/* Building-state pulse shown by the default HomePage while the agent works -
+ * the shell's single authored motion moment. */
 .empty-state-dots {
   display: inline-flex;
   gap: var(--space-2, 0.5rem);
-  margin-bottom: var(--space-4, 1rem);
+  margin-bottom: var(--space-6, 1.5rem);
 }
 
 .empty-state-dots span {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--radius-full, 9999px);
   background: var(--color-primary, #0F766E);
-  animation: empty-state-pulse 1.2s ease-in-out infinite;
+  animation: empty-state-pulse 1.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
-.empty-state-dots span:nth-child(2) { animation-delay: 0.2s; }
-.empty-state-dots span:nth-child(3) { animation-delay: 0.4s; }
+.empty-state-dots span:nth-child(2) { animation-delay: 0.18s; }
+.empty-state-dots span:nth-child(3) { animation-delay: 0.36s; }
 
 @keyframes empty-state-pulse {
-  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
-  40% { opacity: 1; transform: scale(1); }
+  0%, 70%, 100% { opacity: 0.25; transform: scale(0.8); }
+  35% { opacity: 1; transform: scale(1); }
+}
+
+/* -- Buttons ---------------------------------------------------------------
+ * .btn plus exactly one variant: .btn-primary | .btn-secondary | .btn-ghost |
+ * .btn-danger. Add .btn-sm for dense rows. Focus ring comes from the global
+ * :focus-visible rule; all variants cover hover, active and disabled.
+ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2, 0.5rem);
+  min-height: 38px;
+  padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 0.5rem);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out,
+    color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn svg { width: 16px; height: 16px; flex: none; }
+
+.btn-sm {
+  min-height: 30px;
+  padding: var(--space-1, 0.25rem) var(--space-3, 0.75rem);
+}
+
+.btn-primary {
+  background: var(--color-primary, #0F766E);
+  /* Label ON a primary-filled surface - never --color-bg, which inverts to an
+   * unreadable label under a dark-background brand. */
+  color: var(--color-on-primary, #FFFFFF);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.05));
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, #115E59);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 90%, var(--color-text, #0F172A));
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--color-primary, #0F766E);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 82%, var(--color-text, #0F172A));
+}
+
+.btn-secondary {
+  background: var(--color-bg, #FFFFFF);
+  border-color: var(--color-text-subtle, #64748B);
+  border-color: color-mix(in srgb, var(--color-text-subtle, #64748B) 75%, var(--color-border, #E2E8F0));
+  color: var(--color-text, #0F172A);
+}
+
+.btn-secondary:hover:not(:disabled) { background: var(--color-surface, #F8FAFC); }
+.btn-secondary:active:not(:disabled) { background: var(--color-surface-muted, #F1F5F9); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-surface-muted, #F1F5F9);
+  color: var(--color-text, #0F172A);
+}
+
+.btn-ghost:active:not(:disabled) { background: var(--color-border, #E2E8F0); }
+
+.btn-danger {
+  background: var(--color-danger, #DC2626);
+  color: var(--color-bg, #FFFFFF);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.05));
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger, #DC2626);
+  background: color-mix(in srgb, var(--color-danger, #DC2626) 88%, var(--color-text, #0F172A));
+}
+
+.btn-danger:active:not(:disabled) {
+  background: var(--color-danger, #DC2626);
+  background: color-mix(in srgb, var(--color-danger, #DC2626) 78%, var(--color-text, #0F172A));
+}
+
+/* -- Form controls ---------------------------------------------------------
+ * Group each control in a .field with a .field-label; put the validation
+ * message in .field-error and set aria-invalid="true" on the control.
+ * Control borders meet 3:1 against the page ground.
+ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+}
+
+.field-label {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 500;
+  color: var(--color-text, #0F172A);
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--color-text, #0F172A);
+  background: var(--color-bg, #FFFFFF);
+  border: 1px solid var(--color-text-subtle, #64748B);
+  border-color: color-mix(in srgb, var(--color-text-subtle, #64748B) 75%, var(--color-border, #E2E8F0));
+  border-radius: var(--radius-md, 0.5rem);
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.input::placeholder,
+.textarea::placeholder { color: var(--color-text-subtle, #64748B); }
+
+.input:hover:not(:disabled):not(:focus-visible),
+.select:hover:not(:disabled):not(:focus-visible),
+.textarea:hover:not(:disabled):not(:focus-visible) {
+  border-color: var(--color-text-muted, #475569);
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-primary, #0F766E);
+  box-shadow: 0 0 0 3px var(--color-surface-muted, #F1F5F9);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary, #0F766E) 18%, transparent);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  background: var(--color-surface-muted, #F1F5F9);
+  color: var(--color-text-subtle, #64748B);
+  cursor: not-allowed;
+}
+
+.input[aria-invalid='true'],
+.select[aria-invalid='true'],
+.textarea[aria-invalid='true'] {
+  border-color: var(--color-danger, #DC2626);
+}
+
+.textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.field-error {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--color-danger, #DC2626);
+}
+
+/* -- Card ------------------------------------------------------------------
+ * A bounded content group. Not page structure: avoid grids of identical
+ * icon cards, and never nest cards.
+ */
+
+.card {
+  background: var(--color-surface, #F8FAFC);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-lg, 0.75rem);
+  padding: var(--space-6, 1.5rem);
+}
+
+/* -- Badges ----------------------------------------------------------------
+ * Quiet status markers: .badge (neutral) + .badge-success / .badge-warning /
+ * .badge-danger / .badge-info. Backgrounds are brand-adaptive tints via
+ * color-mix; text mixes toward --color-text to keep >= 4.5:1 on the tint.
+ * The pre-color-mix fallback line is deliberately the NEUTRAL muted text, not
+ * the raw status hue: on an engine without color-mix the badge lands on
+ * --color-surface-muted, where the raw hues measure 2.91:1 (warning), 3.01:1
+ * (success) and 4.41:1 (danger) - all under the floor. The neutral reads
+ * 6.92:1 there: a quieter badge on an old engine, but a legible one.
+ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 0.25rem);
+  padding: var(--space-1, 0.25rem) var(--space-2, 0.5rem);
+  border-radius: var(--radius-full, 9999px);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 500;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  background: var(--color-surface-muted, #F1F5F9);
+  color: var(--color-text-muted, #475569);
+}
+
+.badge-success {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-success, #16A34A) 12%, var(--color-bg, #FFFFFF));
+  color: var(--color-text-muted, #475569);
+  color: color-mix(in srgb, var(--color-success, #16A34A) 55%, var(--color-text, #0F172A));
+}
+
+.badge-warning {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-warning, #D97706) 12%, var(--color-bg, #FFFFFF));
+  color: var(--color-text-muted, #475569);
+  color: color-mix(in srgb, var(--color-warning, #D97706) 55%, var(--color-text, #0F172A));
+}
+
+.badge-danger {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-danger, #DC2626) 12%, var(--color-bg, #FFFFFF));
+  color: var(--color-text-muted, #475569);
+  color: color-mix(in srgb, var(--color-danger, #DC2626) 55%, var(--color-text, #0F172A));
+}
+
+.badge-info {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-info, #2563EB) 12%, var(--color-bg, #FFFFFF));
+  color: var(--color-text-muted, #475569);
+  color: color-mix(in srgb, var(--color-info, #2563EB) 55%, var(--color-text, #0F172A));
+}
+
+/* -- Table -----------------------------------------------------------------
+ * Put <table class="table"> inside a .table-scroll wrapper so wide tables
+ * scroll horizontally instead of breaking the page. Numerals are tabular.
+ */
+
+.table-scroll {
+  overflow-x: auto;
+  background: var(--color-bg, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-lg, 0.75rem);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm, 0.875rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.table th {
+  text-align: left;
+  padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted, #475569);
+  background: var(--color-surface, #F8FAFC);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+}
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.table tbody tr { transition: background-color 120ms ease-out; }
+.table tbody tr:hover { background: var(--color-surface, #F8FAFC); }
+
+/* -- Skeleton --------------------------------------------------------------
+ * Loading placeholder: size it like the content it stands for (e.g. height
+ * of a text line, width 60%). The shimmer stops under reduced motion.
+ *
+ * The sweep highlights to --color-bg, not --color-surface: muted -> surface is
+ * a 1.05:1 step that reads as a static grey bar while still burning animation
+ * frames. Against --color-bg the step is 1.10:1, and the highlight band is kept
+ * narrow (44%-56% of a 200%-wide image) so the moving edge is what the eye
+ * catches. Quiet, but actually visible.
+ */
+
+.skeleton {
+  display: block;
+  min-height: 1em;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--color-surface-muted, #F1F5F9);
+  background: linear-gradient(
+    100deg,
+    var(--color-surface-muted, #F1F5F9) 44%,
+    var(--color-bg, #FFFFFF) 50%,
+    var(--color-surface-muted, #F1F5F9) 56%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* -- Assistant mount point ------------------------------------------------ */
@@ -190,17 +680,66 @@ code {
  */
 #ekoa-assistant-root:empty { display: none; }
 
-/* -- Responsive ----------------------------------------------------------- */
+/* -- Responsive ------------------------------------------------------------
+ * Below 768px the left nav becomes a single horizontal, momentum-scrolling
+ * row under the top bar, with edge fades hinting at overflow; the shell's
+ * JS keeps the active item scrolled into view.
+ */
 
 @media (max-width: 768px) {
   .app-body { flex-direction: column; }
+
+  .app-topbar { padding: 0 var(--space-4, 1rem); }
+
   .app-nav {
     width: 100%;
     flex: 0 0 auto;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: var(--space-1, 0.25rem);
+    padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
     border-right: none;
     border-bottom: 1px solid var(--color-border, #E2E8F0);
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent,
+      black var(--space-4, 1rem),
+      black calc(100% - var(--space-4, 1rem)),
+      transparent
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black var(--space-4, 1rem),
+      black calc(100% - var(--space-4, 1rem)),
+      transparent
+    );
   }
+
+  .app-nav::-webkit-scrollbar { display: none; }
+
+  .app-nav-item {
+    width: auto;
+    flex: none;
+    white-space: nowrap;
+  }
+
   .app-content { padding: var(--space-6, 1.5rem); }
+}
+
+/* -- Reduced motion -------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-state-dots span {
+    animation: none;
+    opacity: 0.6;
+    transform: none;
+  }
+
+  .skeleton { animation: none; }
 }

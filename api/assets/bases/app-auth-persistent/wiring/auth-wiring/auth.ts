@@ -2,7 +2,7 @@
  * Auth wiring for app-auth-persistent.
  *
  * The platform injects `window.__EKOA_APP_ID` and the `window.__ekoa` helper
- * into every served app. There is no inline auth token — app-data is scoped
+ * into every served app. There is no inline auth token - app-data is scoped
  * per-app via header alone (see cortex/src/persistence/app-data.ts), so apps
  * read and write their own collections without authenticating.
  */
@@ -16,7 +16,7 @@ declare global {
 
 export function getAppId(): string {
   const id = typeof window !== 'undefined' ? window.__EKOA_APP_ID : undefined;
-  if (!id) throw new Error('No Ekoa app id in window — auth wiring not initialised');
+  if (!id) throw new Error('No Ekoa app id in window - auth wiring not initialised');
   return id;
 }
 

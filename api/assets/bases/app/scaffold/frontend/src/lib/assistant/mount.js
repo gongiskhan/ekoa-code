@@ -54,10 +54,13 @@ const LAUNCHER_STYLE =
   'display:inline-flex;align-items:center;gap:var(--space-2,0.5rem);' +
   'padding:var(--space-3,0.75rem) var(--space-4,1rem);' +
   'border:1px solid var(--color-primary,#0F766E);border-radius:var(--radius-lg,0.75rem);' +
-  'background:var(--color-primary,#0F766E);color:var(--color-bg,#FFFFFF);' +
+  'background:var(--color-primary,#0F766E);color:var(--color-on-primary,#FFFFFF);' +
   "font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);" +
   'font-size:var(--text-sm,0.875rem);font-weight:600;line-height:1;cursor:pointer;' +
-  'box-shadow:var(--shadow-md,0 8px 24px rgba(15,23,42,0.18));';
+  // A floating action button carries floating depth: --shadow-xl, with the
+  // contract default as the fallback (--shadow-md's default is a 4px card
+  // shadow, which never matched the heavy fallback this line used to carry).
+  'box-shadow:var(--shadow-xl,0 24px 48px -12px rgba(15, 23, 42, 0.18));';
 
 let injected = false;
 

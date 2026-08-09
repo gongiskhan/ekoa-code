@@ -35,7 +35,7 @@ const EKOA_FETCH: (input: RequestInfo, init?: RequestInit) => Promise<Response> 
     : typeof window !== 'undefined' && typeof window.fetch === 'function'
       ? window.fetch.bind(window)
       : (() => {
-          throw new Error('No fetch available — Ekoa runtime not initialised');
+          throw new Error('No fetch available - Ekoa runtime not initialised');
         });
 
 export async function callIntegration<T = unknown>(

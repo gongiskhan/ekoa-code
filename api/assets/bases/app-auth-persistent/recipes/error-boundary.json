@@ -10,10 +10,10 @@
     },
     "visualRules": [
       "Card with border var(--color-border), radius var(--radius-md), padding var(--spacing-md)",
-      "Headline: \"Ocorreu um problema\" — typography.h3",
+      "Headline: \"Ocorreu um problema\" - typography.h3",
       "Body: error.message, typography.body, color var(--color-text-muted)",
-      "Primary action: \"Tentar de novo\" — calls retry()",
-      "Secondary text link: \"Reportar\" — opens mailto or /support"
+      "Primary action: \"Tentar de novo\" - calls retry()",
+      "Secondary text link: \"Reportar\" - opens mailto or /support"
     ]
   },
   "rules": [

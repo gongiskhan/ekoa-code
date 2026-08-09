@@ -1,0 +1,446 @@
+/*
+ * Presentation shell styles - platform-provided for the `presentation` base.
+ *
+ * AGENT: this file already carries the deck's design system - the stage, the quiet
+ * chevron controls, the bottom-edge progress bar, projection-grade type sizes, and a
+ * slide vocabulary ready to compose: .slide-title, .slide-section, .slide-content,
+ * .slide-two-col, .slide-statement, .slide-figure, .slide-closing. Build slides by
+ * combining these classes; add new classes when the content needs them, but keep every value on the
+ * locked CSS-variable contract (served at runtime by /api/design-tokens.css), each
+ * var with a fallback so the deck degrades gracefully if the endpoint is briefly
+ * unreachable. Light and professional by default (house style, api/src/agents/build.ts
+ * BUILD_SYSTEM_PROMPT) - a dark deck follows from the org's own brand tokens resolving
+ * dark, never from inverting these variables. Do NOT inline hex literals in slide styles.
+ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+/* scrollbar-color inherits, so one declaration themes every scroll container */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border, #E2E8F0) transparent;
+}
+
+body {
+  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-text, #0F172A);
+  background: var(--color-bg, #FFFFFF);
+  -webkit-font-smoothing: antialiased;
+  caret-color: var(--color-primary, #0F766E);
+  overflow: hidden;
+}
+
+/* -- Browser surfaces (selection, focus, scrollbars carry the design too) --- */
+
+::selection {
+  background: var(--color-surface-muted, #F1F5F9);
+  background: color-mix(in srgb, var(--color-primary, #0F766E) 22%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary, #0F766E);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border, #E2E8F0);
+  border-radius: var(--radius-full, 9999px);
+}
+
+a {
+  color: var(--color-primary, #0F766E);
+  text-underline-offset: 0.16em;
+  text-decoration-thickness: 1px;
+  transition: color 0.15s ease-out, text-decoration-thickness 0.15s ease-out;
+}
+
+/* Hover darkens toward the text colour and thickens the underline - lightening on a
+   light ground would drop link text below the 4.5:1 floor at slide sizes. The plain
+   line before each color-mix is the graceful-degradation fallback. */
+a:hover {
+  color: var(--color-primary, #0F766E);
+  color: color-mix(in srgb, var(--color-primary, #0F766E) 80%, var(--color-text, #0F172A));
+  text-decoration-thickness: 2px;
+}
+
+a:active {
+  color: var(--color-primary, #0F766E);
+  color: color-mix(in srgb, var(--color-primary, #0F766E) 65%, var(--color-text, #0F172A));
+}
+
+/* -- Deck shell -------------------------------------------------------------- */
+
+.deck {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
+.deck-stage {
+  flex: 1;
+  display: flex;
+  overflow: auto;
+  padding: var(--space-12, 3rem) var(--space-20, 5rem) var(--space-16, 4rem);
+}
+
+/* margin:auto centers the slide when it fits and keeps the top reachable when
+   a long slide overflows the stage (flex centering would clip it). */
+.deck-slide-wrap {
+  margin: auto;
+  width: 100%;
+  max-width: 72rem;
+  animation: deck-slide-fade-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* The deck's ONE authored motion moment: each slide fades and rises in on an
+   exponential ease-out. Nothing else in the shell animates - keep it that way. */
+@keyframes deck-slide-fade-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deck-slide-wrap { animation: none; }
+  .deck-progress-fill { transition: none; }
+}
+
+/* -- Slide typography (projection-grade; slides read at a distance) ---------- */
+
+.slide h1,
+.slide h2,
+.slide h3 {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  color: var(--color-text, #0F172A);
+  text-wrap: balance;
+}
+
+.slide h1 {
+  font-size: var(--text-5xl, 3rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-6, 1.5rem);
+}
+
+.slide h2 {
+  font-size: var(--text-4xl, 2.25rem);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  margin-bottom: var(--space-8, 2rem);
+}
+
+.slide h3 {
+  font-size: var(--text-2xl, 1.5rem);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-4, 1rem);
+}
+
+.slide p,
+.slide li {
+  font-size: var(--text-xl, 1.25rem);
+  line-height: 1.55;
+  color: var(--color-text-muted, #475569);
+}
+
+.slide strong {
+  color: var(--color-text, #0F172A);
+  font-weight: 600;
+}
+
+/* In-slide prose rhythm: the global reset zeroes every margin, so flowing content
+   gets its spacing back here. A heading takes more space above (2rem) than it gives
+   below (1rem) so it stays attached to what follows it. */
+.slide p + p { margin-top: var(--space-4, 1rem); }
+.slide * + h3 { margin-top: var(--space-8, 2rem); }
+
+/* Images never escape the stage: an image at its natural size would overflow the
+   72rem slide into scroll - visibly broken on a projector. */
+.slide img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg, 0.75rem);
+}
+
+.slide figcaption {
+  margin-top: var(--space-3, 0.75rem);
+  font-size: var(--text-base, 0.9375rem);
+  color: var(--color-text-subtle, #64748B);
+}
+
+/* Digits line up in tables and the readout */
+.slide table,
+.deck-pagination {
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Slide vocabulary --------------------------------------------------------
+   One class per slide archetype; compose with .slide, e.g.
+   <section className="slide slide-content">. */
+
+/* .slide-title - hero composition: display h1, supporting subline,
+   optional .slide-title-meta row (orador, equipa, data) at the foot. */
+.slide-title { text-align: center; }
+
+.slide-title h1 {
+  max-width: 18ch;
+  margin-inline: auto;
+}
+
+.slide-subline {
+  font-size: var(--text-2xl, 1.5rem);
+  line-height: 1.4;
+  color: var(--color-text-muted, #475569);
+  max-width: 40ch;
+  margin-inline: auto;
+}
+
+.slide-title-meta {
+  margin-top: var(--space-12, 3rem);
+  font-size: var(--text-lg, 1.125rem);
+  color: var(--color-text-subtle, #64748B);
+  font-variant-numeric: tabular-nums;
+}
+
+/* .slide-section - section divider: oversized display type, one supporting line. */
+.slide-section h2 {
+  font-size: var(--text-6xl, 3.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  max-width: 16ch;
+  margin-bottom: var(--space-6, 1.5rem);
+}
+
+.slide-section p {
+  font-size: var(--text-2xl, 1.5rem);
+  max-width: 40ch;
+}
+
+/* .slide-content - h2 + bullets (max 7). Markers are authored: a short primary
+   dash on ul, a tabular counter on ol - never the browser's default disc. */
+.slide-content ul,
+.slide-content ol {
+  list-style: none;
+}
+
+.slide-content li {
+  position: relative;
+  padding-left: var(--space-8, 2rem);
+  max-width: 60ch;
+}
+
+.slide-content li + li { margin-top: var(--space-4, 1rem); }
+
+.slide-content ul > li::before {
+  content: '';
+  position: absolute;
+  left: var(--space-1, 0.25rem);
+  top: 0.72em;
+  width: var(--space-3, 0.75rem);
+  height: 3px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-primary, #0F766E);
+}
+
+.slide-content ol { counter-reset: deck-item; }
+
+.slide-content ol > li::before {
+  counter-increment: deck-item;
+  content: counter(deck-item);
+  position: absolute;
+  left: 0;
+  top: 0.2em;
+  font-size: var(--text-base, 0.9375rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-primary, #0F766E);
+}
+
+/* Nested bullets step down in size and quiet the marker */
+.slide-content ul ul {
+  margin-top: var(--space-3, 0.75rem);
+}
+
+.slide-content ul ul > li {
+  font-size: var(--text-lg, 1.125rem);
+}
+
+.slide-content ul ul > li + li { margin-top: var(--space-3, 0.75rem); }
+
+.slide-content ul ul > li::before {
+  width: var(--space-2, 0.5rem);
+  background: var(--color-text-subtle, #64748B);
+}
+
+/* .slide-two-col - two-column grid, h2 spanning both columns. Asymmetric splits:
+   add .lead-left or .lead-right alongside .slide-two-col. */
+.slide-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: var(--space-16, 4rem);
+  row-gap: var(--space-8, 2rem);
+  align-items: start;
+}
+
+.slide-two-col > h2 {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+
+.slide-two-col.lead-left { grid-template-columns: 1.6fr 1fr; }
+.slide-two-col.lead-right { grid-template-columns: 1fr 1.6fr; }
+
+/* .slide-statement - one big centered claim; keep it to a single sentence.
+   <strong> inside lifts a phrase in the brand colour. */
+.slide-statement { text-align: center; }
+
+.slide-statement p {
+  font-family: var(--font-display, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--text-6xl, 3.75rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  color: var(--color-text, #0F172A);
+  text-wrap: balance;
+  max-width: 18ch;
+  margin-inline: auto;
+}
+
+.slide-statement strong {
+  color: var(--color-primary, #0F766E);
+  font-weight: 600;
+}
+
+/* .slide-closing - final slide: thank-you line plus contact or next step. */
+.slide-closing { text-align: center; }
+
+.slide-closing h2 {
+  font-size: var(--text-5xl, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-6, 1.5rem);
+}
+
+.slide-closing p {
+  max-width: 44ch;
+  margin-inline: auto;
+}
+
+/* Tighter than the generic .slide p + p rhythm: contact lines read as one group. */
+.slide-closing p + p { margin-top: var(--space-3, 0.75rem); }
+
+/* .slide-figure - image-dominant: one dominant figure plus a short caption.
+   The baseline .slide img treatment above already keeps any image inside the stage;
+   this archetype makes the figure the slide. */
+.slide-figure figure {
+  max-width: 56rem;
+  margin-inline: auto;
+}
+
+.slide-figure img {
+  width: 100%;
+  box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.05));
+}
+
+.slide-figure figcaption { text-align: center; }
+
+/* -- Navigation + progress ---------------------------------------------------- */
+
+.deck-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  cursor: pointer;
+  transition: background 0.15s ease-out, color 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+.deck-nav svg { display: block; }
+
+.deck-nav:hover:not(:disabled) {
+  background: var(--color-surface, #F8FAFC);
+  border-color: var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+}
+
+.deck-nav:active:not(:disabled) { background: var(--color-surface-muted, #F1F5F9); }
+.deck-nav:disabled { opacity: 0.35; cursor: default; }
+.deck-nav-prev { left: var(--space-6, 1.5rem); }
+.deck-nav-next { right: var(--space-6, 1.5rem); }
+
+.deck-pagination {
+  position: absolute;
+  right: var(--space-6, 1.5rem);
+  bottom: var(--space-4, 1rem);
+  font-size: var(--text-sm, 0.875rem);
+  letter-spacing: 0.02em;
+  color: var(--color-text-subtle, #64748B);
+}
+
+/* Thin progress bar on the bottom edge; the fill width comes from the shell
+   ((index + 1) / total). Width changes ease out; reduced motion disables it. */
+.deck-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--color-surface-muted, #F1F5F9);
+}
+
+/* Full width, scaled from the left edge by the shell (transform, never width:
+   animating width would relayout the bar on every slide change). */
+.deck-progress-fill {
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  background: var(--color-primary, #0F766E);
+  transition: transform 0.3s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.deck-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-subtle, #64748B);
+  font-size: var(--text-lg, 1.125rem);
+}
+
+/* -- Narrow viewports (a deck opened on a phone still reads) ------------------ */
+
+@media (max-width: 720px) {
+  .deck-stage {
+    padding: var(--space-8, 2rem) var(--space-6, 1.5rem) var(--space-12, 3rem);
+  }
+
+  .slide h1 { font-size: var(--text-4xl, 2.25rem); }
+  .slide h2 { font-size: var(--text-3xl, 1.875rem); }
+  .slide-section h2,
+  .slide-statement p { font-size: var(--text-4xl, 2.25rem); }
+  .slide-subline { font-size: var(--text-xl, 1.25rem); }
+
+  .slide-two-col,
+  .slide-two-col.lead-left,
+  .slide-two-col.lead-right { grid-template-columns: 1fr; }
+
+  .deck-nav-prev { left: var(--space-2, 0.5rem); }
+  .deck-nav-next { right: var(--space-2, 0.5rem); }
+}
