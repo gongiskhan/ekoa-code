@@ -68,8 +68,13 @@ export interface AgentsConfig {
   toolResultTruncateChars: number;
   /** Design-skill plugin dir mounted into build runs as an Agent SDK local plugin
    *  (frontend-design + design-taste-frontend, vendored under api/content/plugins/ekoa-design).
-   *  Empty string disables the mount (EKOA_DESIGN_PLUGIN_DIR=""). */
+   *  Empty string disables the mount (EKOA_DESIGN_PLUGIN_DIR=""). Since the impeccable swap this
+   *  dir is no longer mounted on build runs; the field survives for operators who pinned it. */
   designPluginDir: string;
+  /** The mounted design plugin for build runs: the vendored impeccable skill
+   *  (api/content/plugins/impeccable, Apache-2.0, pbakaus/impeccable v4.0.4).
+   *  Empty string disables the mount (EKOA_IMPECCABLE_PLUGIN_DIR=""). */
+  impeccablePluginDir: string;
 }
 
 export interface Config {
@@ -77,6 +82,23 @@ export interface Config {
   jwtSecret: string;
   encryptionKey: string;
   nodeEnv: 'development' | 'test' | 'production';
+  /**
+   * Seed the first super-admin WITHOUT the forced password change (dev harnesses only).
+   *
+   * The seeded account is a published default credential (`EKOA_ADMIN_USERNAME` /
+   * `EKOA_ADMIN_PASSWORD`), so forcing a change on first login is the correct production
+   * posture and stays the default. In dev it is pure friction and actively breaks tooling:
+   * the Mongo behind `scripts/dev-api.mjs` is ephemeral, so EVERY boot re-seeds the admin and
+   * re-arms the prompt, and `scripts/dev-credential.mjs` (which provisions the model
+   * credential by logging in as `admin`/`tmp12345`) then fails with a 401 the moment the
+   * operator changes the password to get past it.
+   *
+   * FAIL-CLOSED twice over: honored only outside production (`loadConfig` forces it false when
+   * `NODE_ENV === 'production'`, so a stray env var in a deployed environment does nothing), and
+   * OPTIONAL here so the many test fixtures that build a bare `Config` literal keep the safe
+   * behaviour by omission - absent/undefined means the forced change stays ON.
+   */
+  seedAdminSkipsPasswordChange?: boolean;
   llmChokepointBaseUrl: string;
   llm: LlmConfig;
 }
@@ -160,7 +182,11 @@ export function defaultAgentsConfig(): AgentsConfig {
     // Turn ceilings are runaway backstops well above real use — the inactivity + wall-clock
     // timers are the operative bounds. A turn ceiling must never stop a user's task mid-way
     // (operator directive 2026-07-11: the verify agent died at 15 turns mid-verification).
-    maxTurnsBuild: envInt('MAX_TURNS_BUILD', 500),
+    // 500 was a ceiling nothing could ever hit usefully: a run that needs hundreds of turns has
+    // lost the plot, and the context window gives out first anyway (measured 2026-08-10: a
+    // 4-page site reached 142 turns and auto-compacted mid-run). 250 is still far above a
+    // healthy build and only bites runs that are already failing.
+    maxTurnsBuild: envInt('MAX_TURNS_BUILD', 250),
     maxTurnsText: envInt('MAX_TURNS_TEXT', 60),
     verifyWallClockMs: envInt('VERIFY_WALL_CLOCK_MS', 300_000),
     maxTurnsVerify: envInt('MAX_TURNS_VERIFY', 60),
@@ -175,6 +201,15 @@ export function defaultAgentsConfig(): AgentsConfig {
       process.env.EKOA_DESIGN_PLUGIN_DIR !== undefined
         ? process.env.EKOA_DESIGN_PLUGIN_DIR
         : join(dirname(fileURLToPath(import.meta.url)), '..', 'content', 'plugins', 'ekoa-design'),
+    // The impeccable design skill (vendored Apache-2.0 fork of pbakaus/impeccable v4.0.4).
+    // Replaces ekoa-design as the MOUNTED design plugin on build runs: two design skills with
+    // competing directives is the same contradiction the WS7 incident traced (base prompt said
+    // dark, skill said vary, coding agent said clean). ekoa-design stays on disk unmounted.
+    // An explicitly-empty env var disables the mount, same contract as designPluginDir.
+    impeccablePluginDir:
+      process.env.EKOA_IMPECCABLE_PLUGIN_DIR !== undefined
+        ? process.env.EKOA_IMPECCABLE_PLUGIN_DIR
+        : join(dirname(fileURLToPath(import.meta.url)), '..', 'content', 'plugins', 'impeccable'),
   };
 }
 
@@ -325,6 +360,10 @@ export function loadConfig(): Config {
     jwtSecret: required('JWT_SECRET'),
     encryptionKey: required('ENCRYPTION_KEY'),
     nodeEnv,
+    // Production ignores the opt-out outright, so a stray env var in a deployed environment
+    // can never ship a default-credential super-admin that is not forced to rotate it.
+    seedAdminSkipsPasswordChange:
+      nodeEnv !== 'production' && process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE === '1',
     llmChokepointBaseUrl: process.env.LLM_CHOKEPOINT_BASE_URL ?? 'http://127.0.0.1:4111/api/v1/llm',
     llm: defaultLlmConfig(),
   };

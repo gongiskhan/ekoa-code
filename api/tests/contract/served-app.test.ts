@@ -59,6 +59,10 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's';
   // buildApp pre-creates + mounts the artifact-screenshot dir — keep it off the real home dir.
   process.env.EKOA_DATA_DIR = await mkdtemp(join(tmpdir(), 'ekoa-served-data-'));
+  // The list route now fires a lazy screenshot backfill (§7.11) for any runnable,
+  // un-screenshotted artifact it returns - this real-server suite serves several. Disable it the
+  // same way featured.test.ts already does for the featured-catalog build pipeline.
+  process.env.EKOA_SCREENSHOTS_DISABLED = '1';
   __resetConfigForTests(); loadConfig();
   mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_g6');
   tmpRoot = await mkdtemp(join(tmpdir(), 'ekoa-served-'));
@@ -74,6 +78,7 @@ afterAll(async () => {
   await rm(tmpRoot, { recursive: true, force: true });
   if (process.env.EKOA_DATA_DIR) await rm(process.env.EKOA_DATA_DIR, { recursive: true, force: true });
   delete process.env.EKOA_DATA_DIR;
+  delete process.env.EKOA_SCREENSHOTS_DISABLED;
 });
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests(); __resetSlugIndexForTests(); __resetAppHealthDedupeForTests();
@@ -294,6 +299,45 @@ describe('static serving pipeline (ch07 §7.5, carried exactly)', () => {
     // assets are never gated (browsers do not propagate ?token= on sub-resources)
     const asset = await api('/apps/privslug/bundle.js');
     expect(asset.status).not.toBe(410);
+
+    // F44: a USER-JWT ?token= visit keeps its no-redirect behavior (the cookie handshake below
+    // is preview-token-only; cookying a full credential under an app path would widen it).
+    expect(directOwner.redirected).toBe(false);
+  });
+
+  it('F44 preview-token cookie handshake: ?token= 302s to the clean URL with an app-scoped cookie; the cookie alone then authorizes (anchor navigations survive)', async () => {
+    const { mintPreviewToken } = await import('../../src/services/preview-token.js');
+    await mkUser('owner2', 'owner2', 'orgA', 'user');
+    await mkServedApp('svanchor');
+    await artifacts.insert({ _id: 'svanchor', name: 'Anchor', slug: 'anchorslug', userId: 'owner2', orgId: 'orgA', visibility: 'private', shareable: false } as never);
+    indexSlug('anchorslug', 'svanchor');
+
+    const preview = mintPreviewToken('svanchor', 60_000);
+
+    // 1. The tokened visit converts to a cookie + clean-URL redirect (token leaves the URL bar).
+    const first = await api(`/apps/anchorslug/?token=${preview}`, { redirect: 'manual' });
+    expect(first.status).toBe(302);
+    expect(first.headers.get('location')).toBe('/apps/anchorslug/');
+    const setCookie = first.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('ekoa_preview=');
+    expect(setCookie).toContain('Path=/apps/anchorslug/');
+    expect(setCookie).toContain('HttpOnly');
+
+    // 2. The cookie alone authorizes the clean URL - this is the request every in-app anchor
+    //    click makes (the injected <base> turns "#x" into a real navigation with no query).
+    const cookie = /ekoa_preview=[^;]+/.exec(setCookie)![0];
+    const anchorNav = await api('/apps/anchorslug/', { headers: { cookie } });
+    expect(anchorNav.status).toBe(200);
+
+    // 3. Candidate order: a STALE cookie for another artifact must not shadow a fresh valid
+    //    ?token= on the same request (candidates validate in order, not first-non-empty-wins).
+    const wrongCookie = `ekoa_preview=${encodeURIComponent(mintPreviewToken('some-other-app', 60_000))}`;
+    const mixed = await api(`/apps/anchorslug/?token=${preview}`, { redirect: 'manual', headers: { cookie: wrongCookie } });
+    expect(mixed.status).toBe(302);
+
+    // 4. Without any credential the gate still holds.
+    const anon = await api('/apps/anchorslug/');
+    expect(anon.status).toBe(410);
   });
 
   it('lazy-heal jails a client-set data.projectDir - a `..` escape never serves outside the sandbox (Codex G6 finding 2)', async () => {

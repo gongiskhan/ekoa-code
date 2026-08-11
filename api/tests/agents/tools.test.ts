@@ -16,8 +16,12 @@ describe('toolPolicyFor (§5.4.4)', () => {
     expect(p.allowedTools).toContain(DELEGATION_TOOL);
     // 2C-S5: the three ekoa-docx tools are artifact-bound, so they ride the BUILD row only.
     for (const t of DOCX_TOOLS) expect(p.allowedTools).toContain(t);
-    // The config default (MAX_TURNS_BUILD, config.ts) — raised from 100 to 500 for real builds.
-    expect(p.maxTurns).toBe(500);
+    // The config default (MAX_TURNS_BUILD, config.ts): 100 -> 500 for real builds, then 500 -> 250
+    // (2026-08-10) once a live build was measured hitting 142 turns and exhausting its context
+    // window - a run needing more than this has lost the plot, and the window gives out first.
+    expect(p.maxTurns).toBe(250);
+    // No `Agent`: a build subagent re-pays the whole context per spawn (see CODING_PRESET).
+    expect(p.allowedTools).not.toContain('Agent');
   });
 
   it('a text+attachments run allows only Read/Glob/Grep', () => {

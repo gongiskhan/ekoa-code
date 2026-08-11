@@ -15,6 +15,15 @@ import { z } from 'zod';
 import { Id, IsoTimestamp, listResponse, itemsResponse, OkResponse, PaginationQuery, Language } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
+/**
+ * Which partition a browse call addressed (WS8a): the caller's OWN org vault (default, unchanged
+ * behaviour) or the reserved `_shared` corpus opened READ-ONLY for browsing. Mirrors the `scope`
+ * field a search hit already carries (see {@link KnowledgeSearchHit}) - one name for the same
+ * concept across both capability reads.
+ */
+export const KnowledgeScope = z.enum(['org', 'shared']);
+export type KnowledgeScope = z.infer<typeof KnowledgeScope>;
+
 export const KnowledgeDocSummary = z
   .object({
     id: Id,
@@ -27,19 +36,139 @@ export const KnowledgeDocSummary = z
     chunks: z.number().int().nonnegative().optional(),
     createdAt: IsoTimestamp.optional(),
     updatedAt: IsoTimestamp.optional(),
+    /** WS8a: which partition this row came from. Optional/additive - omitted by any caller that
+     *  predates the field, and always 'org' when omitted (the historical, only behaviour). */
+    scope: KnowledgeScope.optional(),
   })
   .passthrough();
 export type KnowledgeDocSummary = z.infer<typeof KnowledgeDocSummary>;
 
+/**
+ * A URL template expanded over a numeric range into many seed URLs (WS8c). The `{n}` placeholder
+ * is substituted with each value from `from` to `to` inclusive, stepping by `step` - lets one
+ * source enumerate an id space (`…/lei.php?nid={n}` over 1..4040) directly, past the anchor-depth
+ * budget. NOTE: this is a DIFFERENT concept from `seedId` below (the internal idempotent-seed
+ * marker) - an earlier slice conflated the two names on the wire (`seedTemplate` carried the
+ * `seedId` STRING); WS8c splits them back into their own fields, matching what the store's own
+ * `SeedTemplate`/`KnowledgeSource.seedId` TypeScript shapes already expected.
+ */
+export const SeedTemplate = z.object({
+  url: z.string(),
+  from: z.number().int(),
+  to: z.number().int(),
+  step: z.number().int().positive().optional(),
+});
+export type SeedTemplate = z.infer<typeof SeedTemplate>;
+
+/** One Domino database this source's harvest walks (WS8c - see {@link DominoSourceConfig}). */
+export const DominoDatabase = z.object({
+  /** Database file, e.g. `jstj.nsf`. */
+  db: z.string(),
+  /** View name override (falls back to the source's default view). */
+  view: z.string().optional(),
+  /** Max ReadViewEntries pages walked for THIS database, per run. */
+  maxPages: z.number().int().positive().optional(),
+});
+export type DominoDatabase = z.infer<typeof DominoDatabase>;
+
+/**
+ * A Lotus Domino harvest source (WS8c - e.g. dgsi.pt). Domino's `?ReadViewEntries` XML API
+ * enumerates a view's entries (with document UNIDs) with no JS rendering needed; each entry's
+ * document is then fetched at `<db>/0/<unid>?OpenDocument`. One source can cover many court
+ * databases (`kind: 'domino'` on {@link KnowledgeSource}).
+ */
+export const DominoSourceConfig = z.object({
+  /** Server base, e.g. `https://www.dgsi.pt`. */
+  baseUrl: z.string(),
+  /** Default view name for every database (e.g. `Por Ano`). */
+  view: z.string().optional(),
+  /** ReadViewEntries page size (default 1000). */
+  count: z.number().int().positive().optional(),
+  databases: z.array(DominoDatabase).min(1),
+});
+export type DominoSourceConfig = z.infer<typeof DominoSourceConfig>;
+
+/** One crawl/refresh run's outcome (WS8c) - the Sources tab's per-source result line and the
+ *  live `crawlStatus` progress share this shape (progress is the SAME fields mid-run). */
+export const KnowledgeCrawlSummary = z.object({
+  fetched: z.number().int().nonnegative(),
+  ingested: z.number().int().nonnegative(),
+  updated: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  discovered: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  /** True when the per-run page budget was hit - more frontier remains for the next run. */
+  capped: z.boolean(),
+  /** Frontier size after this run (pages still `pending`) - absent for a Domino harvest, which
+   *  has no anchor frontier. */
+  pendingRemaining: z.number().int().nonnegative().optional(),
+  durationMs: z.number().nonnegative(),
+  finishedAt: IsoTimestamp,
+  /** Present only when the whole run failed before completing. */
+  error: z.string().optional(),
+});
+export type KnowledgeCrawlSummary = z.infer<typeof KnowledgeCrawlSummary>;
+
+/** A crawl's live in-flight progress (WS8c) - the same counters as {@link KnowledgeCrawlSummary}
+ *  plus the run's identity/state, polled by `crawlStatus` while `started`/`alreadyRunning`. */
+export const CrawlProgress = z.object({
+  sourceId: z.string(),
+  state: z.enum(['running', 'done', 'error']),
+  fetched: z.number().int().nonnegative(),
+  ingested: z.number().int().nonnegative(),
+  updated: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  discovered: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  queued: z.number().int().nonnegative(),
+  capped: z.boolean(),
+  startedAt: IsoTimestamp,
+  error: z.string().optional(),
+});
+export type CrawlProgress = z.infer<typeof CrawlProgress>;
+
+/** Ledger page counts for a source (WS8c) - "X indexed / Y still queued" on the Sources tab. */
+export const CrawlLedgerStats = z.object({
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  ok: z.number().int().nonnegative(),
+  error: z.number().int().nonnegative(),
+  withDoc: z.number().int().nonnegative(),
+});
+export type CrawlLedgerStats = z.infer<typeof CrawlLedgerStats>;
+
 export const KnowledgeSource = z
   .object({
     id: Id,
+    label: z.string().optional(),
     url: z.string(),
     type: z.string().optional(),
     collection: z.string().optional(),
-    seedTemplate: z.string().nullable().optional(),
+    levels: z.number().int().positive().optional(),
+    maxPages: z.number().int().positive().optional(),
+    /** Link-follow scope during a crawl: the seed's own domain, or any domain discovered along
+     *  the way (WS8c). Deliberately NOT named `scope` - that name is reserved on this whole
+     *  domain for the `_shared`-corpus browse partition ({@link KnowledgeScope}), and no other
+     *  request/query field may spell it (enforced by tests/contract/knowledge.test.ts). */
+    crawlScope: z.enum(['same-domain', 'any']).optional(),
     enabled: z.boolean().optional(),
+    /** Render each page with a headless browser before extracting - JS/SPA sources (WS8c). */
+    render: z.boolean().optional(),
+    userAgent: z.string().optional(),
+    seeds: z.array(z.string()).optional(),
+    seedTemplate: SeedTemplate.nullable().optional(),
+    domino: DominoSourceConfig.optional(),
+    /** Internal idempotent-seed marker (WS8b/8c) - set only on a source the startup seeder
+     *  created; a hand-added source never carries it. NOT the same field as `seedTemplate`
+     *  above (see that field's doc for the WS8c split). */
+    seedId: z.string().optional(),
+    /** WS8c: an honest, human-readable reason a seeded source ships `enabled: false` (e.g. a
+     *  wholesale failure on its last live run that this build could not diagnose offline) -
+     *  present only when disabled-with-a-stated-reason, never fabricated. */
+    disabledReason: z.string().optional(),
     lastCrawledAt: IsoTimestamp.optional(),
+    lastRefreshAt: IsoTimestamp.optional(),
+    lastResult: KnowledgeCrawlSummary.nullable().optional(),
     createdAt: IsoTimestamp.optional(),
     updatedAt: IsoTimestamp.optional(),
   })
@@ -48,11 +177,20 @@ export type KnowledgeSource = z.infer<typeof KnowledgeSource>;
 
 export const SourceInput = z
   .object({
+    label: z.string().optional(),
     url: z.string(),
     type: z.string().optional(),
     collection: z.string().optional(),
-    seedTemplate: z.string().nullable().optional(),
+    levels: z.number().int().positive().optional(),
+    maxPages: z.number().int().positive().optional(),
+    /** See {@link KnowledgeSource.crawlScope} - same field, same "never named `scope`" rule. */
+    crawlScope: z.enum(['same-domain', 'any']).optional(),
     enabled: z.boolean().optional(),
+    render: z.boolean().optional(),
+    userAgent: z.string().optional(),
+    seeds: z.array(z.string()).optional(),
+    seedTemplate: SeedTemplate.nullable().optional(),
+    domino: DominoSourceConfig.optional(),
   })
   .passthrough();
 export type SourceInput = z.infer<typeof SourceInput>;
@@ -84,8 +222,22 @@ export type IndexStatus = z.infer<typeof IndexStatus>;
 export const CollectionsResponse = itemsResponse(z.string());
 export type CollectionsResponse = z.infer<typeof CollectionsResponse>;
 
+/**
+ * WS8a: `scope` opts a browse call into the reserved `_shared` corpus instead of the caller's own
+ * org vault. Additive and optional - an absent value is 'org', byte-identical to the pre-WS8a
+ * behaviour. This is NOT a tenant selector: the only two values are "mine" and "the one public
+ * corpus every org already searches" - there is no way to name another org's partition here, same
+ * as every other knowledge query/request shape (ch03 §3.8.20 invariant).
+ */
+export const CollectionsQuery = z.object({
+  scope: KnowledgeScope.optional(),
+});
+export type CollectionsQuery = z.infer<typeof CollectionsQuery>;
+
 export const DocumentsQuery = PaginationQuery.extend({
   collection: z.string().optional(),
+  /** WS8a: see {@link CollectionsQuery.scope}. */
+  scope: KnowledgeScope.optional(),
 });
 export type DocumentsQuery = z.infer<typeof DocumentsQuery>;
 
@@ -114,18 +266,32 @@ export const CrawlStartResponse = z.object({
 });
 export type CrawlStartResponse = z.infer<typeof CrawlStartResponse>;
 
+/**
+ * WS8c: `progress`/`stats` are now their REAL shapes - `progress` was `z.number()` (never
+ * matching what the crawl engine actually emits, {@link CrawlProgress}) and `stats` was an
+ * untyped record. Both are additive-safe changes (the fields were already optional / unread by
+ * anything conforming to the old, wrong shape).
+ */
 export const CrawlStatusResponse = z
   .object({
     running: z.boolean(),
-    progress: z.number().optional(),
-    stats: z.record(z.unknown()).optional(),
+    progress: CrawlProgress.nullable().optional(),
+    stats: CrawlLedgerStats.nullable().optional(),
   })
   .passthrough();
 export type CrawlStatusResponse = z.infer<typeof CrawlStatusResponse>;
 
+/** The nightly refresh schedule (WS8c: `schedule` is now its real shape, not an untyped record). */
+export const ScheduleInfo = z.object({
+  enabled: z.boolean(),
+  hour: z.number().int().min(0).max(23),
+  nextRunAt: IsoTimestamp,
+});
+export type ScheduleInfo = z.infer<typeof ScheduleInfo>;
+
 export const RefreshScheduleResponse = z
   .object({
-    schedule: z.record(z.unknown()).nullable(),
+    schedule: ScheduleInfo.nullable(),
   })
   .passthrough();
 export type RefreshScheduleResponse = z.infer<typeof RefreshScheduleResponse>;
@@ -246,6 +412,7 @@ export const knowledgeEndpoints = {
     method: 'GET',
     path: '/api/v1/knowledge/collections',
     auth: 'user-or-key',
+    query: CollectionsQuery,
     response: CollectionsResponse,
   },
   listDocuments: {
@@ -311,10 +478,17 @@ export const knowledgeEndpoints = {
     auth: 'user',
     response: OkResponse,
   },
+  /**
+   * WS8c: gated to `super-admin`, not the `user` tier the rest of the sources surface uses.
+   * Triggering a crawl WRITES into the reserved `_shared` corpus (every org's read-only legal
+   * spine) - unlike browsing it (WS8a, open to any authenticated org actor because search
+   * already grants that read for free), starting a crawl is a genuinely privileged action with
+   * no equivalent implicit grant, so it gets the platform's narrowest ordinary role.
+   */
   crawlSource: {
     method: 'POST',
     path: '/api/v1/knowledge/sources/:id/crawl',
-    auth: 'user',
+    auth: 'super-admin',
     response: CrawlStartResponse,
   },
   crawlStatus: {

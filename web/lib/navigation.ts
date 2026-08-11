@@ -8,9 +8,7 @@ import {
   Palette,
   Users,
   ScrollText,
-  Building2,
-  ShieldCheck,
-  KeyRound,
+  Vault,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -57,33 +55,17 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/settings/users", icon: Users, labelKey: "users", adminOnly: true, activePrefix: "/settings/users" },
   // FC-502: the Registo admin read surface (metadata + artifacts only).
   { href: "/registo", icon: ScrollText, label: "Registo", adminOnly: true },
-  // FC-501: super-admin org management lives under /settings/offices (settings tabs).
-  { href: "/settings/offices", icon: Building2, label: "Escritórios", superAdminOnly: true, activePrefix: "/settings/offices" },
-  // FC-404 (RESOLVED Q-07): the "Privacidade e ponte local" surface, absorbing the
-  // old orphan /settings/bridge. One settings-navigation entry.
-  {
-    href: "/settings/privacy",
-    icon: ShieldCheck,
-    label: "Privacidade e ponte local",
-    bottom: true,
-    activePrefix: "/settings/privacy",
-  },
-  // Cofre (WS-D, 2026-07-27): credential custody. Its OWN left-menu item, per the product spec —
+  // FC-501/FC-404/S4b (WS1, 2026-08-08): Escritórios, "Privacidade e ponte local" and
+  // "Chaves de API" moved off the left sidebar into tabs under /settings (see
+  // settings/layout.tsx ALL_TABS). Their pages and routes are unchanged.
+  // Cofre (WS-D, 2026-07-27): credential custody. Its OWN left-menu item, per the product spec -
   // not a settings sub-page, because locking a credential is an operational act a user reaches for
   // under time pressure, not a preference they configure once.
   {
     href: "/cofre",
-    icon: ShieldCheck,
+    icon: Vault,
     label: "Cofre",
     activePrefix: "/cofre",
-  },
-  // S4b (run 20260717): per-user gateway API keys for Anthropic-compatible clients.
-  {
-    href: "/settings/api-keys",
-    icon: KeyRound,
-    label: "Chaves de API",
-    bottom: true,
-    activePrefix: "/settings/api-keys",
   },
   {
     href: "/settings/platform",

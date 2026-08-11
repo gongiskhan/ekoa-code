@@ -513,6 +513,8 @@ export interface Translations {
       pedidos: string;
       users: string;
       offices: string;
+      privacy: string;
+      apiKeys: string;
     };
     knowledge: {
       description: string;
@@ -521,6 +523,17 @@ export interface Translations {
       agentsBannerBodyBefore: string;
       agentsBannerBodyEmphasis: string;
       agentsBannerBodyAfter: string;
+      scopeOrgLabel: string;
+      scopeSharedLabel: string;
+      scopeSharedHint: string;
+      sharedBadge: string;
+      collectionJurisprudencia: string;
+      collectionLegislacao: string;
+      collectionLegislacaoLaboral: string;
+      searchPlaceholder: string;
+      searchHint: string;
+      searchEmpty: string;
+      sourcesCrawlSuperAdminOnly: string;
     };
     resources: {
       title: string;

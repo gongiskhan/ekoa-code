@@ -7,6 +7,28 @@ import { z } from 'zod';
  * == client-subscribed, per stream.
  */
 
+/**
+ * The terminal `error` event, shared by all three run streams.
+ *
+ * `code` is the AUTHORITY (`RunErrorCode` in run-errors.ts) — the web derives its localized
+ * text from it and never renders `message`. `message` remains on the wire for non-web API
+ * clients and for logs, but producers MUST fill it from `runErrorText()`, never from an
+ * exception: `message` used to be free prose and that is how an internal credential-refresh
+ * string reached a user's transcript (finding `run-error-text-leak`).
+ *
+ * `params` carries the few STRUCTURED values a message legitimately needs (today: the billing
+ * URL), so that dynamic content stays typed and bounded instead of being smuggled in as text.
+ * Kept `code: z.string()` rather than the enum: the voice stream reuses this shape with its
+ * own VOICE_* codes, and widening to an enum would be a breaking change (Rule 7). Unknown
+ * codes normalize to UNKNOWN client-side, so a loose type here is still fail-closed.
+ */
+const RunErrorEvent = z.object({
+  type: z.literal('error'),
+  code: z.string(),
+  message: z.string(),
+  params: z.record(z.string()).optional(),
+});
+
 /** 1. GET /api/v1/chat/runs/:id/events (ch03 §3.6.1). */
 export const ChatRunEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), runId: z.string() }),
@@ -54,7 +76,7 @@ export const ChatRunEvent = z.discriminatedUnion('type', [
       .object({ kind: z.enum(['build', 'integration']), request: z.record(z.unknown()) })
       .optional(),
   }),
-  z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
+  RunErrorEvent,
 ]);
 export type ChatRunEvent = z.infer<typeof ChatRunEvent>;
 
@@ -105,7 +127,7 @@ export const JobEvent = z.discriminatedUnion('type', [
     slug: z.string().optional(),
     appUrl: z.string().optional(),
   }),
-  z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
+  RunErrorEvent,
 ]);
 export type JobEvent = z.infer<typeof JobEvent>;
 
@@ -173,7 +195,7 @@ export const AutomationRunEvent = z.discriminatedUnion('type', [
     reason: z.string(),
   }),
   z.object({ type: z.literal('complete'), summary: z.string() }),
-  z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
+  RunErrorEvent,
 ]);
 export type AutomationRunEvent = z.infer<typeof AutomationRunEvent>;
 
@@ -190,7 +212,12 @@ export const NotificationEvent = z.discriminatedUnion('type', [
     type: z.literal('build_intent'),
     sessionId: z.string(),
     sourceRunId: z.string(),
-    request: z.object({ description: z.string(), artifactId: z.string().optional() }).passthrough(),
+    // WS6 incident fix: `description` is the chat-agent's <=15-word build paraphrase (good for
+    // naming the artifact, NOT for classifying or briefing it - a paraphrase like "a construir
+    // uma apresentação..." used to be the classifier's and the build agent's ENTIRE input).
+    // `originalMessage` carries the user's own words alongside it, additively (Rule 7);
+    // `.passthrough()` already tolerated the extra field before this schema named it.
+    request: z.object({ description: z.string(), artifactId: z.string().optional(), originalMessage: z.string().optional() }).passthrough(),
   }),
   z.object({ type: z.literal('chat_answer'), sessionId: z.string(), sourceRunId: z.string(), text: z.string() }),
   z.object({ type: z.literal('integration_build_intent'), sessionId: z.string(), hint: z.string().optional() }),

@@ -59,7 +59,12 @@ async function mkUser(id: string, role: 'super-admin' | 'org-admin' | 'user', or
 const tokenFor = async (id: string) => (await login(id, 'pw123456', false, deps)).token;
 
 beforeAll(async () => {
-  process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's'; __resetConfigForTests(); loadConfig();
+  process.env.ENCRYPTION_KEY = 'k'; process.env.JWT_SECRET = 's';
+  // The list/get routes now fire a lazy screenshot backfill (§7.11) for a runnable,
+  // un-screenshotted artifact - several fixtures here are `status: 'active'`. Disable it (same
+  // guard featured.test.ts / artifact-family.test.ts already carry).
+  process.env.EKOA_SCREENSHOTS_DISABLED = '1';
+  __resetConfigForTests(); loadConfig();
   mem = await createMem(); await connectMongo(mem.getUri(), 'ekoa_artifacts_capability');
   await mkUser('userA', 'user', 'orgA');      // plain member — owns the artifacts below
   await mkUser('adminA', 'org-admin', 'orgA'); // same-org admin — has canBuildApps + canEditApps
@@ -73,7 +78,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => { server = app.listen(0, () => r()); });
   port = (server.address() as { port: number }).port;
 }, 60_000);
-afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); });
+afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); delete process.env.EKOA_SCREENSHOTS_DISABLED; });
 
 beforeEach(() => {
   importMock.mockReset().mockResolvedValue({ _id: 'imported1', name: 'Imported', slug: 'imported1', userId: 'adminA', orgId: 'orgA', visibility: 'private', status: 'active' });

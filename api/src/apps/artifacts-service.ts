@@ -16,10 +16,15 @@ export interface ArtifactDoc extends Doc {
   orgId: string;
   visibility: 'private' | 'org';
   featured?: boolean;
+  featuredRank?: number;
   shareable?: boolean;
   status?: string;
   data?: Record<string, unknown>;
   sharedData?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  /** In-page health probe verdict (`POST /api/app-health`) - row-level, never inside `data`. */
+  health?: { status: 'healthy' | 'broken'; lastCheckedAt?: string; lastReason?: string; lastError?: string };
 }
 
 export interface Deps { now: () => number; genId: () => string }
@@ -55,16 +60,38 @@ export function stripReservedDataKeys(data: Record<string, unknown>): Record<str
 
 const scoped = new OwnerVisibilityScoped<ArtifactDoc>(artifacts as never);
 
+/** Read one string field out of the server-owned `data` bag, or undefined. */
+function dataString(data: Record<string, unknown> | undefined, key: string): string | undefined {
+  const v = data?.[key];
+  return typeof v === 'string' ? v : undefined;
+}
+
 export function artifactView(a: ArtifactDoc) {
   // `data` stays OFF the wire on purpose: it holds server-owned keys (projectDir, sdkSessionId)
-  // that no client may see. `importedFrom` is lifted out of it as its own field because the import
-  // flow's update-or-copy match keys on it — while it lived only inside `data`, the client read
-  // `undefined` every time and silently created a duplicate instead of offering the choice.
-  const importedFrom = (a.data as Record<string, unknown> | undefined)?.importedFrom;
+  // that no client may see. A handful of fields are lifted out of it as their OWN top-level field
+  // because the client genuinely needs them and the whole bag must never ship - same precedent as
+  // `importedFrom` below. NEVER add a blanket `...data` here; each lift is a deliberate, narrow,
+  // additive field (Capability Contract Rule 7).
+  const data = a.data as Record<string, unknown> | undefined;
+  const importedFrom = dataString(data, 'importedFrom');
+  const sessionId = dataString(data, 'sessionId');
+  const outputKind = dataString(data, 'outputKind');
+  const appUrl = dataString(data, 'appUrl');
+  const description = dataString(data, 'description');
+  const updateAvailable = data?.updateAvailable;
   return {
     id: a._id, name: a.name, slug: a.slug, userId: a.userId, orgId: a.orgId,
     visibility: a.visibility, featured: !!a.featured, shareable: !!a.shareable, status: a.status,
+    ...(a.featuredRank !== undefined ? { featuredRank: a.featuredRank } : {}),
     ...(typeof importedFrom === 'string' ? { importedFrom } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(outputKind ? { outputKind } : {}),
+    ...(appUrl ? { appUrl } : {}),
+    ...(description ? { description } : {}),
+    ...(updateAvailable !== undefined ? { updateAvailable: updateAvailable as { version?: string } | null } : {}),
+    ...(a.health ? { health: a.health } : {}),
+    ...(a.createdAt ? { createdAt: a.createdAt } : {}),
+    ...(a.updatedAt ? { updatedAt: a.updatedAt } : {}),
     screenshotUrl: getArtifactScreenshotUrl(a._id),
   };
 }
@@ -94,7 +121,8 @@ export async function createArtifact(actor: Actor, input: { name: string; visibi
   const slug = await generateSlug(input.name, deps);
   await slugs.put({ _id: slug, artifactId: id }); // point the reservation at the new artifact
   indexSlug(slug, id); // keep the in-memory serving index current (ch07 §7.8)
-  const doc: ArtifactDoc = { _id: id, name: input.name, slug, userId: actor.userId, orgId: actor.orgId, visibility: input.visibility ?? 'private', status: 'draft' };
+  const now = new Date(deps.now()).toISOString();
+  const doc: ArtifactDoc = { _id: id, name: input.name, slug, userId: actor.userId, orgId: actor.orgId, visibility: input.visibility ?? 'private', status: 'draft', createdAt: now, updatedAt: now };
   await artifacts.insert(doc as never);
   return doc;
 }
@@ -103,7 +131,7 @@ export async function getVisibleArtifact(actor: Actor, id: string): Promise<Arti
   return scoped.getVisible(actor, id);
 }
 
-export async function patchArtifact(actor: Actor, id: string, patch: Record<string, unknown>): Promise<{ verdict: 'ok' | 'notfound' | 'forbidden'; artifact?: ArtifactDoc }> {
+export async function patchArtifact(actor: Actor, id: string, patch: Record<string, unknown>, deps: Deps): Promise<{ verdict: 'ok' | 'notfound' | 'forbidden'; artifact?: ArtifactDoc }> {
   const guard = await scoped.writeGuard(actor, id);
   if (guard.verdict !== 'ok') return { verdict: guard.verdict };
   // slug change checks uniqueness via the reservation collection.
@@ -113,7 +141,7 @@ export async function patchArtifact(actor: Actor, id: string, patch: Record<stri
     indexSlug(patch.slug, id); // serving resolves the new slug immediately (edits never orphan data)
   }
   const updated = (await artifacts.update(id, (a) => {
-    const next = { ...a, ...patch } as ArtifactDoc;
+    const next = { ...a, ...patch, updatedAt: new Date(deps.now()).toISOString() } as ArtifactDoc;
     // A client `data` patch MERGES onto the existing bag (never a wholesale replace) with the
     // server-owned reserved keys stripped, so the client can neither overwrite nor wipe them.
     if (patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {

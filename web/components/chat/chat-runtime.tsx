@@ -250,7 +250,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
   // ========================================
 
   const handleBuildFirstMessage = useCallback(
-    async (message: string, overrides?: { templateId?: string; skipUserMessage?: boolean }) => {
+    async (message: string, overrides?: { templateId?: string; skipUserMessage?: boolean; originalMessage?: string }) => {
       let sessionId = activeSessionId;
       if (!sessionId) {
         sessionId = await createSession();
@@ -289,6 +289,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
         // the user's message is already in the thread — don't let execute()
         // re-add it (that was the duplicated "sim" bug).
         _skipUserMessage: overrides?.skipUserMessage,
+        originalMessage: overrides?.originalMessage,
       });
       clearAttachments();
     },
@@ -309,7 +310,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
   // Follow-up messages in Build mode -- reuse existing artifact. Declared above
   // the build_intent listener so that listener can route follow-up edits here.
   const handleBuildSendMessage = useCallback(
-    (message: string, opts?: { skipUserMessage?: boolean }) => {
+    (message: string, opts?: { skipUserMessage?: boolean; originalMessage?: string }) => {
       if (!activeSessionId) return;
 
       setSidePanelState('build');
@@ -335,6 +336,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
         // When a build_intent redirect drives this (the user's message is
         // already in the onboarding thread), don't let execute() re-add it.
         _skipUserMessage: opts?.skipUserMessage,
+        originalMessage: opts?.originalMessage,
       });
 
       clearAttachments();
@@ -349,7 +351,7 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (!pendingDelegation || !activeSessionId || isExecuting) return;
 
-    const { description, templateId } = pendingDelegation;
+    const { description, templateId, originalMessage } = pendingDelegation;
     setPendingDelegation(null);
     setSidePanelState('build');
     setSidePanelTab('files');
@@ -364,6 +366,9 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
       // synthesized build brief, not the user's text — don't surface it as a
       // second user bubble.
       _skipUserMessage: true,
+      // WS6 incident fix: the user's own words ride separately so the build pipeline
+      // classifies AND briefs the build agent on what was actually asked, not this paraphrase.
+      originalMessage,
     });
   }, [
     pendingDelegation,
@@ -392,8 +397,12 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
     if (!notifications) return;
 
     return notifications.on('build_intent', (event) => {
-      const originalMessage = event.request.description || '';
-      if (!originalMessage || buildIntentHandledRef.current) return;
+      // `description` is the chat-agent's build paraphrase (used below to name/brief when no
+      // original text is available); `originalMessage` (WS6 incident fix) is the user's own
+      // words, when the server carried one - falls back to the paraphrase for older events.
+      const paraphrase = event.request.description || '';
+      const trueOriginalMessage = event.request.originalMessage || paraphrase;
+      if (!paraphrase || buildIntentHandledRef.current) return;
       // Origin filter: the notifications stream is per-user (every tab). Only the
       // tab whose chat run triggered the delegation may kick the build — without
       // this, each open tab fired its own build for one message.
@@ -426,9 +435,9 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
         ? useOrchestrationStore.getState().sessionJobs[sid]?.artifactInstanceId
         : null;
       if (event.request.artifactId || boundArtifact) {
-        handleBuildSendMessage(originalMessage, { skipUserMessage: true });
+        handleBuildSendMessage(paraphrase, { skipUserMessage: true, originalMessage: trueOriginalMessage });
       } else {
-        handleBuildFirstMessage(originalMessage, { skipUserMessage: true });
+        handleBuildFirstMessage(paraphrase, { skipUserMessage: true, originalMessage: trueOriginalMessage });
       }
     });
   }, [notifications, handleBuildFirstMessage, handleBuildSendMessage, addMessage, clearStreamingChat, language]);
@@ -600,9 +609,13 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
     try {
       // Map file/folder attachments to upload references (FC-013/060); URL
       // attachments are already prepended to the message text by the caller.
+      // WS4a fix: `attachmentId` is the composer chip's own client-generated id (never sent to
+      // the server); the real server-issued uploadId lives in `.path` (file-picker.ts's
+      // stageFile()). Sending attachmentId here meant every attachment silently failed to
+      // resolve server-side (a stale/garbage id, not this session's actual staged upload).
       const uploadRefs = pendingAttachments
         .filter((a) => a.type !== 'url')
-        .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
+        .map((a) => ({ uploadId: a.path, displayName: a.displayName }));
       if (pendingAttachments.length > 0) clearAttachments();
 
       // FC-400/D3 (run 20260711-111952 s5): pending references are minted into session
@@ -670,10 +683,13 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
         // we skip the assistant message append.
         if (event.delegate) {
           clearStreamingChat(sessionId!);
-          const request = event.delegate.request as { description?: unknown };
+          const request = event.delegate.request as { description?: unknown; originalMessage?: unknown };
           setPendingDelegation({
             description: typeof request.description === 'string' ? request.description : '',
             templateId: null,
+            // WS6 incident fix: the user's own words for this build, carried alongside the
+            // chat-agent's paraphrase (see api/src/agents/chat.ts finishComplete delegate payload).
+            originalMessage: typeof request.originalMessage === 'string' ? request.originalMessage : undefined,
           });
           return;
         }

@@ -80,6 +80,16 @@ export interface SessionDoc extends Doc {
    *  a one-sheet-per-assistant-message view at read time instead (data/session-sheets.ts);
    *  a write against a derived sheet materialises it here first. No backfill. */
   sheets?: SessionSheetDoc[];
+  /** WS6 (build-intent inference, DO #4): the artifact type the scoping classifier most
+   *  recently decided for a build in this session - persisted alongside the per-artifact
+   *  verdict so a follow-up chat turn (before or after the artifact exists) has something to
+   *  agree with, and so the decision is inspectable outside the per-build audit log. Internal
+   *  only - never carried on the wire `Session` schema (shared/src/sessions.ts), same posture
+   *  as `lastContext` below. */
+  lastArtifactType?: string;
+  /** The last persisted `<ekoa-context>` block (§5.6.1 step 6) - carried ad hoc (see
+   *  agents/persistence.ts / agents/context.ts), never modeled on the wire `Session` schema. */
+  lastContext?: string;
   createdAt: string;
   updatedAt: string;
 }

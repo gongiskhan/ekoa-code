@@ -31,6 +31,20 @@ export const RegistoQuery = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
   offset: z.coerce.number().int().nonnegative().optional(),
   orgId: Id.optional(),
+  /**
+   * DOCUMENTED DEFAULT (registo-anon-audit-actor-blank mitigation, docs/findings.md): without an
+   * explicit `type` filter, `readRegisto` (api/src/services/platform-crud.ts) hides
+   * `category: 'anonymisation'` rows - a single chat/build turn's Agent SDK subprocess writes
+   * many of these per one human action, most correctly `'system'`-attributed (no per-request
+   * principal exists at that HTTP boundary) rather than a person, so left in they swamp every
+   * human-attributable row in the one place this matters: a super-admin's unscoped cross-org
+   * view (an org-scoped view never sees them regardless - their `orgId` never matches a real
+   * org). The filtering is a documented, VISIBLE default, never a silent one: the web surfaces
+   * it as a notice with a one-click toggle (`web/app/(dashboard)/registo/page.tsx`), and an
+   * explicit `type` filter already bypasses it (unchanged reachability). `'true'`/`'false'` as
+   * strings since GET query values are always strings on the wire.
+   */
+  includeAnonymisation: z.enum(['true', 'false']).optional(),
 });
 export type RegistoQuery = z.infer<typeof RegistoQuery>;
 

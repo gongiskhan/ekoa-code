@@ -105,18 +105,19 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
     // Open a running (featured) artifact's detail — the preview affordance lives there.
     const card = page.getByRole('heading', { name: /Portfólio Agência/i }).first();
     await expect(card).toBeVisible({ timeout: 30_000 });
+    // WS3 click semantics (2026-08-08): clicking the card opens the preview overlay DIRECTLY -
+    // there is no intermediate detail pane and no separate preview button on this path anymore
+    // ("Ver detalhes" moved to the item menu). The old flow here (card -> detail -> button) fails
+    // on a missing element rather than on the framing behaviour this spec exists to protect.
     await card.click();
-    const previewButton = page.getByRole('button', { name: /pré-visualiza/i }).last();
-    await expect(previewButton).toBeVisible({ timeout: 30_000 });
-    await previewButton.click();
 
     // The overlay's iframe points at the api's /apps/* plane — cross-origin from the
     // dashboard. Pre-fix the api answered frame-ancestors 'self' + XFO SAMEORIGIN and the
     // browser refused the frame; now /apps/* allowlists the dashboard origin.
-    // PT-PT: the overlay's iframe is titled "Pré-visualização". `title*="Preview"` was an English
-    // selector that never matched the shipped UI, so this failed on a missing element rather than
-    // on the framing behaviour it exists to protect. Substring avoids the accent.
-    const frame = page.frameLocator('iframe[title*="visualiza"]');
+    // The overlay iframe's title is `Preview of <name>` (artifact-preview-overlay.tsx:157 — an
+    // English tooltip string, noted as a PT-PT copy gap). Match both spellings so a future
+    // localisation of that title does not silently break the framing spec again.
+    const frame = page.frameLocator('iframe[title*="Preview"], iframe[title*="visualiza"]');
     await expect(frame.locator('body')).not.toBeEmpty({ timeout: 30_000 });
 
     expect(errors, `console errors on /artifacts preview:\n${errors.join('\n')}`).toEqual([]);

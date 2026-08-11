@@ -8,7 +8,7 @@ import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { setCredential } from '../../src/llm/credentials.js';
-import { __setTransportForTests, __resetTransportForTests } from '../../src/llm/client.js';
+import { __setTransportForTests, __resetTransportForTests, proxyGatewayMessages } from '../../src/llm/client.js';
 import { makeFakeTransport } from '../agents/_fake-transport.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
@@ -66,6 +66,9 @@ beforeEach(async () => {
 });
 const tokenFor = async (u: string) => (await login(u, 'pw123456', false, deps)).token;
 const registo = async (t: string) => readJson(await authed('/api/v1/registo?limit=500', t));
+// The default-view masking-events filter (registo-anon-audit-actor-blank mitigation) is opted
+// back into with this - see the `F-registo-mask-default-filter` describe block below.
+const registoWithMasks = async (t: string) => readJson(await authed('/api/v1/registo?limit=500&includeAnonymisation=true', t));
 
 describe('F3 Registo: login + build + session rows, org-scoped, metadata-only', () => {
   it('a login produces an auth.login row visible to the org admin, schema-valid', async () => {
@@ -116,5 +119,144 @@ describe('F3 Registo: login + build + session rows, org-scoped, metadata-only', 
     expect(serialized).not.toContain('Petrova'); // the build description never reaches the audit surface
     expect(serialized).not.toContain('secreto');
     expect(serialized).not.toContain('pw123456'); // the password never reaches the audit surface
+  });
+});
+
+/**
+ * Find the anonymisation-audit row a specific `proxyGatewayMessages` call produced, by its
+ * OWN correlationId (the join key `recordAnonAudit` stamps into `metadata.correlationId`,
+ * ch17 §17.6) - never by a coarse `{category: 'anonymisation'}` / `{userId: 'system'}` query.
+ * Every describe block below calls `proxyGatewayMessages(..., '')`, and several other tests in
+ * this FILE (the build-job tests above, other `proxyGatewayMessages`/`runAgent` calls elsewhere
+ * in the suite) also write 'anonymisation' rows through the SAME fire-and-forget path
+ * (`audit.ts`); under load one can straggle past its own test's `beforeEach` cleanup and land
+ * during a later test's short polling window. A coarse query can silently pick up that leftover
+ * instead of the row this test caused (observed: a second, unrelated 'system' row landed mid-run
+ * once six-plus sibling agents were hammering the same machine) - matching on the exact
+ * correlationId this call minted makes the lookup correct regardless of that noise.
+ */
+async function findOwnMaskRow(correlationId: string): Promise<{ _id: string; userId?: string; username?: string; orgId?: string } | undefined> {
+  for (let i = 0; i < 50; i++) {
+    const rows = (await activityLogs.find({ category: 'anonymisation', 'metadata.correlationId': correlationId })) as Array<{ _id: string; userId?: string; username?: string; orgId?: string }>;
+    if (rows.length > 0) return rows[0];
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return undefined;
+}
+
+describe('F-registo-actor-blank: an anonymisation-audit row with no per-request principal still validates', () => {
+  // The empirically-confirmed root cause: `proxyGatewayMessages`/`proxyGatewayCountTokens`
+  // (llm/client.ts) are the real call path for the static gateway-key principal - the credential
+  // EVERY Agent SDK subprocess presents when it talks back to this chokepoint (buildSubprocessEnv,
+  // credentials.ts). That principal carries no per-request user identity, so `billeeUserId` is ''
+  // - which used to flow straight into the anon-audit actor and fail RegistoEntry's
+  // `actor: Id = z.string().min(1)` on read. Drive the REAL audit path (not a hand-inserted doc)
+  // and assert the persisted row now carries the 'system' sentinel and validates.
+  it('the row is tagged with the "system" sentinel (never blank) and only a super-admin sees it', async () => {
+    const result = await proxyGatewayMessages({ messages: [{ role: 'user', content: 'hello there' }] }, '');
+    const row = await findOwnMaskRow(result.correlationId);
+    expect(row, 'the anon-audit row for this call never landed').toBeTruthy();
+    expect(row!.userId).toBe('system'); // the belt-fix sentinel - never '' (audit.ts)
+    expect(row!.username).toBe('system');
+    expect(row!.orgId).toBe('system');
+
+    await users.insert({ _id: 'superA', username: 'superA', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'orgA', active: true });
+    setActivation('superA', { active: true, billingLocked: false });
+    const superT = await tokenFor('superA');
+    // includeAnonymisation=true: the default-view masking filter (F-registo-mask-default-filter,
+    // below) would otherwise hide this row from even a super-admin's unscoped view.
+    const body = await registoWithMasks(superT);
+    expect(RegistoListResponse.safeParse(body).success, JSON.stringify(RegistoListResponse.safeParse(body))).toBe(true);
+    const items = body.items as Array<Record<string, unknown>>;
+    const maskRow = items.find((r) => r.id === row!._id);
+    expect(maskRow).toBeTruthy();
+    expect(RegistoEntry.safeParse(maskRow).success, JSON.stringify(RegistoEntry.safeParse(maskRow))).toBe(true);
+    expect(maskRow!.actor).toBe('system'); // registoEntry() maps actor <- userId
+  });
+
+  it('an org-admin never sees the system-attributed row (orgId sentinel never matches a real org, AND the default masking filter hides it anyway)', async () => {
+    const result = await proxyGatewayMessages({ messages: [{ role: 'user', content: 'hi again' }] }, '');
+    const row = await findOwnMaskRow(result.correlationId);
+    expect(row).toBeTruthy();
+    const admT = await tokenFor('admA');
+    const items = (await registo(admT)).items as Array<Record<string, unknown>>;
+    expect(items.some((r) => r.id === row!._id)).toBe(false);
+    // even asking explicitly (org-admin, includeAnonymisation=true): still org-scoped out.
+    const itemsIncl = (await registoWithMasks(admT)).items as Array<Record<string, unknown>>;
+    expect(itemsIncl.some((r) => r.id === row!._id)).toBe(false);
+  });
+});
+
+describe('F-registo-mask-default-filter: category:\'anonymisation\' is hidden by default, visibly reversible', () => {
+  // registo-anon-audit-actor-blank mitigation (docs/findings.md): a single chat/build turn's
+  // Agent SDK subprocess writes many `anonymisation.egress-mask` rows per one human action, so
+  // `readRegisto` hides that category by default in the one place it would otherwise dominate -
+  // a super-admin's unscoped cross-org view. Never silent: `includeAnonymisation=true` or an
+  // explicit `type` always wins.
+  it('super-admin unscoped, no filters: the mask row is absent by default, present with includeAnonymisation=true', async () => {
+    const result = await proxyGatewayMessages({ messages: [{ role: 'user', content: 'default-filter probe' }] }, '');
+    const row = await findOwnMaskRow(result.correlationId);
+    expect(row).toBeTruthy();
+
+    await users.insert({ _id: 'superB', username: 'superB', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'orgA', active: true });
+    setActivation('superB', { active: true, billingLocked: false });
+    const superT = await tokenFor('superB');
+
+    const byDefault = await registo(superT);
+    expect(RegistoListResponse.safeParse(byDefault).success).toBe(true);
+    const defaultItems = byDefault.items as Array<Record<string, unknown>>;
+    expect(defaultItems.some((r) => r.id === row!._id)).toBe(false);
+    expect(defaultItems.some((r) => r.actionType === 'anonymisation.egress-mask')).toBe(false);
+
+    const included = await registoWithMasks(superT);
+    expect(RegistoListResponse.safeParse(included).success).toBe(true);
+    const includedItems = included.items as Array<Record<string, unknown>>;
+    expect(includedItems.some((r) => r.id === row!._id)).toBe(true);
+  });
+
+  it('an explicit type filter always wins, without includeAnonymisation', async () => {
+    const result = await proxyGatewayMessages({ messages: [{ role: 'user', content: 'explicit-type probe' }] }, '');
+    const row = await findOwnMaskRow(result.correlationId);
+    expect(row).toBeTruthy();
+
+    await users.insert({ _id: 'superC', username: 'superC', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'orgA', active: true });
+    setActivation('superC', { active: true, billingLocked: false });
+    const superT = await tokenFor('superC');
+
+    const body = await readJson(await authed('/api/v1/registo?limit=500&type=anonymisation.egress-mask', superT));
+    expect(RegistoListResponse.safeParse(body).success).toBe(true);
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items.some((r) => r.id === row!._id)).toBe(true);
+    expect(items.every((r) => r.actionType === 'anonymisation.egress-mask')).toBe(true);
+  });
+});
+
+describe('F-registo-date-filter: RegistoQuery.from/to are wired through to the read', () => {
+  it('to=<row A timestamp> excludes a later row; from=<row B timestamp> excludes the earlier one', async () => {
+    const t = await tokenFor('bldA');
+    await authed('/api/v1/sessions', t, { method: 'POST', body: JSON.stringify({ name: 'Early' }) });
+    const admT1 = await tokenFor('admA');
+    const early = ((await registo(admT1)).items as Array<Record<string, unknown>>).find((r) => r.actionType === 'session.create')!;
+    const earlyTs = early.timestamp as string;
+
+    await authed('/api/v1/sessions', t, { method: 'POST', body: JSON.stringify({ name: 'Late' }) });
+    const admT2 = await tokenFor('admA');
+    const late = ((await registo(admT2)).items as Array<Record<string, unknown>>).find(
+      (r) => r.actionType === 'session.create' && r.timestamp !== earlyTs,
+    )!;
+    const lateTs = late.timestamp as string;
+    expect(lateTs > earlyTs).toBe(true); // sanity: distinct, increasing timestamps
+
+    const admT3 = await tokenFor('admA');
+    const uptoEarly = await readJson(await authed(`/api/v1/registo?limit=500&to=${encodeURIComponent(earlyTs)}`, admT3));
+    expect(RegistoListResponse.safeParse(uptoEarly).success).toBe(true);
+    const uptoEarlyCreates = (uptoEarly.items as Array<Record<string, unknown>>).filter((r) => r.actionType === 'session.create');
+    expect(uptoEarlyCreates.map((r) => r.timestamp)).toEqual([earlyTs]);
+
+    const admT4 = await tokenFor('admA');
+    const fromLate = await readJson(await authed(`/api/v1/registo?limit=500&from=${encodeURIComponent(lateTs)}`, admT4));
+    expect(RegistoListResponse.safeParse(fromLate).success).toBe(true);
+    const fromLateCreates = (fromLate.items as Array<Record<string, unknown>>).filter((r) => r.actionType === 'session.create');
+    expect(fromLateCreates.map((r) => r.timestamp)).toEqual([lateTs]);
   });
 });

@@ -51,11 +51,21 @@ export default function MobileSidePanelDrawer({
               <div className="w-10 h-1 bg-neutral-300 rounded-full" />
             </div>
 
-            {/* Header */}
+            {/* Header. Sheet-feed carries no visible title (WS5): before the agent
+                has classified the job, "Folhas"/"Sheets" reads as a wrong tab name
+                for whatever the user actually asked for. The build/integrate
+                variants keep their own titles - they only render once the agent
+                has committed to a job kind. The sheet-feed locale string survives
+                as the row's accessible name so screen readers still get one. */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-100">
-              <span data-testid="mobile-drawer-title" className="text-sm font-bold text-neutral-700">
+              <span
+                data-testid="mobile-drawer-title"
+                role="group"
+                aria-label={panelKind === "sheet-feed" ? sheetFeed.title : undefined}
+                className="text-sm font-bold text-neutral-700"
+              >
                 {panelKind === "sheet-feed"
-                  ? sheetFeed.title
+                  ? ""
                   : panelKind === "integrate"
                     ? sp.integrationBuilder
                     : sp.preview}

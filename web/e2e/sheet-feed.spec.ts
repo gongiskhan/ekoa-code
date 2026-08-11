@@ -207,6 +207,17 @@ test.describe('sheet feed (B4)', () => {
     await expect(revLabel).toHaveText('Revisão 2 de 2');
     await expect(shortCard.getByTestId('sheet-body')).toContainText('artigo 569');
 
+    // 5. HEADER (WS5): before the agent has classified the job, a "Folhas" title
+    //    reads as a wrong tab name - so the desktop header row carries no visible
+    //    text. The row (and its collapse chevron) still exist, and the locale
+    //    string survives as the row's accessible name for screen readers.
+    const header = page.getByTestId('sheet-feed-header');
+    await expect(header).toBeVisible();
+    await expect(header).toHaveText('');
+    await expect(header).toHaveAttribute('aria-label', 'Folhas');
+    await page.getByRole('button', { name: 'Ocultar painel' }).click();
+    await expect(page.getByTestId('sheet-feed')).toBeHidden();
+
     // Zero console errors on the dashboard (carried e2e discipline).
     const real = errors.filter((e) => !/event.?source|notifications\/events|network error/i.test(e));
     expect(real, `console errors:\n${real.join('\n')}`).toEqual([]);

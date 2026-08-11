@@ -1,4 +1,4 @@
-import { Play, Pencil, TextCursorInput, CopyPlus, Trash2, Pin, PinOff, MonitorX } from 'lucide-react';
+import { Play, Pencil, TextCursorInput, CopyPlus, Trash2, Pin, PinOff, MonitorX, Info } from 'lucide-react';
 import { api, tryCall } from '@/lib/api';
 import { toast } from '@/stores/toast';
 import type { ActionDef, SurfaceHost } from '@/lib/os/types';
@@ -28,6 +28,11 @@ export interface ArtifactActionUi {
   startRename: (artifact: ArtifactLike) => void;
   requestDelete: (artifact: ArtifactLike) => void;
   refreshList: () => void;
+  /** Classic mount only: the in-page detail pane (versions/backups/backend/slug/visibility). The
+   *  card click itself now opens the running-app preview instead (unified click semantics), so
+   *  this is the detail pane's only remaining entry point for a RUNNING artifact. Optional - a
+   *  host with no equivalent surface (OS mode today) simply hides the menu item. */
+  viewDetails?: (artifact: ArtifactLike) => void;
   /** OS shell only: dock pinning + desktop membership (client state). */
   isPinned?: (artifact: ArtifactLike) => boolean;
   pinToDock?: (artifact: ArtifactLike) => void;
@@ -72,6 +77,15 @@ export function buildArtifactActions(
       label: labels.continueWorking,
       icon: Pencil,
       run: ({ artifact, ui }) => ui.continueInChat(artifact),
+    },
+    {
+      // Raw PT-PT label (OS_STRINGS-style precedent above): the detail pane is a secondary,
+      // power-user surface, not one that has earned a translated string of its own yet.
+      id: 'view-details',
+      label: 'Ver detalhes',
+      icon: Info,
+      available: ({ ui }) => !!ui.viewDetails,
+      run: ({ artifact, ui }) => ui.viewDetails?.(artifact),
     },
     {
       id: 'rename',

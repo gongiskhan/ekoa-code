@@ -4,8 +4,9 @@
  * - which makes its two rules worth pinning rather than assuming.
  *
  * RULE 1: the tab strip renders only on the tab routes. `/settings/*` also holds pages that are
- * NOT tabs (branding, privacy, api-keys, bridge, devices), and drawing a "Plataforma | Pedidos |
- * Utilizadores | Escritórios" bar above those would claim they belong to a group they do not.
+ * NOT tabs (branding, bridge, devices), and drawing a "Plataforma | Pedidos | Utilizadores |
+ * Escritórios | Privacidade | Chaves de API" bar above those would claim they belong to a group
+ * they do not.
  *
  * RULE 2: role gating is COSMETIC and is deliberately tested as such. Hiding a tab is not
  * authorization - the pages behind them read through the typed client, and the API refuses a
@@ -47,7 +48,14 @@ describe('settings tab-group layout', () => {
   it('shows every tab to a super-admin', () => {
     asRole('super-admin');
     render(<SettingsLayout><div>conteúdo</div></SettingsLayout>);
-    expect(tabLabels()).toEqual(['Plataforma', 'Pedidos', 'Utilizadores', 'Escritórios']);
+    expect(tabLabels()).toEqual([
+      'Plataforma',
+      'Pedidos',
+      'Utilizadores',
+      'Escritórios',
+      'Privacidade',
+      'Chaves de API',
+    ]);
   });
 
   it('hides Escritórios from an org-admin: it is a super-admin surface', () => {
@@ -56,15 +64,18 @@ describe('settings tab-group layout', () => {
     const labels = tabLabels();
     expect(labels).toContain('Utilizadores');
     expect(labels).toContain('Pedidos');
+    expect(labels).toContain('Privacidade');
+    expect(labels).toContain('Chaves de API');
     expect(labels).not.toContain('Escritórios');
   });
 
-  it('shows an ordinary user no tab strip at all, only the page', () => {
+  it('shows an ordinary user Privacidade and Chaves de API alongside Plataforma, but no admin tabs', () => {
+    // WS1 (2026-08-08): privacy and api-keys are per-user surfaces, not admin ones - they moved
+    // off the sidebar into this tab group ungated, same as they were ungated in NAV_ITEMS before.
     asRole('user');
     render(<SettingsLayout><div>conteúdo</div></SettingsLayout>);
-    // One visible tab is not a tab strip - the layout drops it rather than drawing a group of one.
-    expect(screen.queryAllByRole('option')).toHaveLength(0);
-    expect(screen.getByText('conteúdo')).toBeTruthy();
+    const labels = tabLabels();
+    expect(labels).toEqual(['Plataforma', 'Privacidade', 'Chaves de API']);
   });
 
   it('renders NO tab strip on a settings page outside the group', () => {

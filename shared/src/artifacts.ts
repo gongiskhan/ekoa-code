@@ -38,6 +38,47 @@ export const Artifact = z
     screenshotUrl: z.string().optional(),
     createdAt: IsoTimestamp.optional(),
     updatedAt: IsoTimestamp.optional(),
+    /**
+     * The chat session this artifact was built/continued from (`data.sessionId`), lifted the same
+     * way as `importedFrom`: the client needs it to resolve "continue working" to the right
+     * session without ever seeing the rest of the server-owned `data` bag (`projectDir`,
+     * `sdkSessionId`, ...). Set at first build (`prepareFirstBuild`) and re-linked server-side
+     * whenever a session is created FOR this artifact (`POST /sessions` with `artifactId`) - never
+     * client-writable via the artifact PATCH route (`sessionId` is a reserved `data` key).
+     */
+    sessionId: z.string().optional(),
+    /**
+     * The build pipeline's classified kind (`data.outputKind`) - web_app/agent_app/landing_page/
+     * presentation_html/... Only ever set for FEATURED artifacts today (the seeder stamps it from
+     * the catalog manifest); a chat-built own artifact has no producer for it yet and this stays
+     * absent, matching pre-existing behaviour. Used for the kind label + accent colour on cards.
+     */
+    outputKind: z.string().optional(),
+    /**
+     * The served app's own canonical URL (`data.appUrl`, `/apps/<id>/`), slug-drift-immune. Absent
+     * for an artifact that never built (no served app to link).
+     */
+    appUrl: z.string().optional(),
+    /** Short description shown on Starting Point / featured cards (`data.description`). */
+    description: z.string().optional(),
+    /** Featured update-by-consent badge (`data.updateAvailable`, §7.13): the newer manifest
+     *  version offered, or `null`/absent when none is pending. */
+    updateAvailable: z.object({ version: z.string().optional() }).nullable().optional(),
+    /**
+     * In-page health probe verdict (`POST /api/app-health`, §7.11) - a ROW-level field (never
+     * inside `data`, so no reserved-key concern), written passively by the served app itself.
+     * Never surfaced before this: the "broken" badge on an artifact card has been dead since the
+     * probe shipped.
+     */
+    health: z
+      .object({
+        status: z.enum(['healthy', 'broken']),
+        lastCheckedAt: z.string().optional(),
+        lastReason: z.string().optional(),
+        lastError: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 export type Artifact = z.infer<typeof Artifact>;

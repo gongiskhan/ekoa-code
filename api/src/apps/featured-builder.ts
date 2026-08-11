@@ -16,7 +16,13 @@
  *  - screenshots fire-and-forget, self-healing only when the prior PNG is missing;
  *  - scaffolds with a declared backend get the artifact's data.projectDir patched
  *    to the mirror dir (fresh-read-then-write; the residual race is documented
- *    and accepted - reference/invisible-behaviors §8.4).
+ *    and accepted - reference/invisible-behaviors §8.4);
+ *  - before a `legal-*` artifact's screenshot is (re)captured, the shared "Fonseca
+ *    & Associados" demo spine is ensured installed first (WS10 screenshot-seeding
+ *    fix, see `ensureLegalDemoSpineInstalled` below) - a bare, uninteracted page
+ *    load otherwise always shows the family's genuinely-empty first-run state,
+ *    understating every one of the 29 legal-* artifacts regardless of how deep
+ *    the app actually is.
  */
 import { readFile, readdir, mkdir, cp, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -29,6 +35,8 @@ import { artifacts } from '../data/stores.js';
 import { recordedProjectDir } from './app-paths.js';
 import { featuredArtifactsDir, featuredArtifactDir } from './featured-seeder.js';
 import { captureArtifactScreenshot, getArtifactScreenshotDir } from '../services/artifact-screenshot.js';
+import { getSharedBrowser } from '../services/browser-pool.js';
+import { loadConfig } from '../config.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -220,6 +228,59 @@ async function buildAndRegisterOne(scaffoldDir: string, manifest: ManifestLite):
   return { built: !scaffoldFresh };
 }
 
+/**
+ * ROOT CAUSE (WS10 screenshot-seeding gap). `captureArtifactScreenshot` does a bare,
+ * uninteracted `page.goto()` - no login, no clicks. The `legal-*` family's shared client/
+ * case spine (`window.__ekoa.shared`, served by `/api/app-shared/*`) requires no visitor
+ * auth either (`served-data.ts` `scopeFor` derives the scope from the app's OWNER, not
+ * the requester), so that is not the gate. The real gate is that the demo dataset itself
+ * is never auto-loaded: `legal-nucleo`'s `DashboardPage.jsx` is the ONLY scaffold that
+ * wires an "Instalar dados de demonstração" button (`data-testid="demo-instalar"`,
+ * calling `instalarDemo()` from the family's shared, byte-identical `demo-spine.js`), and
+ * a real user has to click it. Every other `legal-*` app only READS the same shared
+ * collections - installing once, via legal-nucleo, seeds the "Fonseca & Associados" set
+ * for the whole family in one shot, because the shared scope is keyed by OWNER
+ * (`usr.<ownerUserId>`), not by individual app id - all 29 legal-* artifacts share one
+ * owner (the bootstrap super-admin) and therefore one namespace.
+ *
+ * This function drives that exact button via a real page, rather than re-implementing
+ * the seed content server-side - the dataset's own file header is explicit that
+ * `demo-spine.js` is canonical and copied byte-for-byte into every scaffold
+ * (`web/e2e/legal-shared-drift.spec.ts` pins that); a second, server-side copy would be
+ * exactly the drift that spec exists to prevent. Idempotent and safe to call repeatedly:
+ * `instalarDemo()` itself no-ops when already installed (the card shows "Remover..."
+ * instead of "Instalar...", which this checks for before clicking anything).
+ *
+ * NOT called on every boot - only when the caller has decided a legal-* screenshot is
+ * about to be (re)captured (see `buildAndRegisterFeaturedArtifacts` below), so a normal
+ * steady-state boot with nothing to capture never pays for the extra page load.
+ */
+export async function ensureLegalDemoSpineInstalled(): Promise<{
+  installed: boolean;
+  alreadyInstalled: boolean;
+}> {
+  const browser = await getSharedBrowser();
+  const page = await browser.newPage();
+  try {
+    const target = `http://localhost:${loadConfig().port}/apps/legal-nucleo/`;
+    await page.goto(target, { waitUntil: 'networkidle', timeout: 30_000 });
+    const installButton = page.locator('[data-testid="demo-instalar"]');
+    if ((await installButton.count()) === 0) {
+      // No install button - either already installed (the card shows "Remover
+      // dados de demonstração" instead) or legal-nucleo isn't the build this
+      // page resolved to. Either way there is nothing safe to click.
+      return { installed: false, alreadyInstalled: true };
+    }
+    await installButton.click();
+    // instalarDemo() reloads the page itself on success or failure - wait for that
+    // navigation to settle rather than a fixed sleep, so this isn't flaky under load.
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    return { installed: true, alreadyInstalled: false };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 export interface FeaturedBuildResult {
   built: number;
   skipped: number;
@@ -236,6 +297,12 @@ export async function buildAndRegisterFeaturedArtifacts(overrideRoot?: string): 
 
   const dirEntries = await readdir(root, { withFileTypes: true });
   const ids = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
+  // legal-nucleo first, whenever present: it is the only scaffold that hosts the
+  // "Instalar dados de demonstração" button (ensureLegalDemoSpineInstalled navigates
+  // straight to it), so it must already be built + registered before any OTHER
+  // legal-* artifact in this same run can trigger that ensure step below.
+  ids.sort((a, b) => (a === 'legal-nucleo' ? -1 : b === 'legal-nucleo' ? 1 : 0));
+  let legalDemoEnsureAttempted = false;
 
   for (const id of ids) {
     const scaffoldDir = join(overrideRoot ? join(root, id) : featuredArtifactDir(id), 'scaffold');
@@ -272,6 +339,25 @@ export async function buildAndRegisterFeaturedArtifacts(overrideRoot?: string): 
       const shotPath = join(getArtifactScreenshotDir(), `${manifest.id}.png`);
       const needsShot = built || !existsSync(shotPath);
       if (needsShot && process.env.EKOA_SCREENSHOTS_DISABLED !== '1') {
+        // WS10 screenshot-seeding fix: a legal-* screenshot about to be (re)captured
+        // otherwise always shows the family's genuinely-empty first-run state. Ensure
+        // the shared demo spine is installed ONCE per run (legal-nucleo sorts first
+        // above, so it is already servable by the time any legal-* id reaches here) -
+        // awaited, not fire-and-forget, so it always completes before the capture that
+        // depends on it. A normal boot where nothing needs a shot never reaches this.
+        if (manifest.id.startsWith('legal-') && !legalDemoEnsureAttempted) {
+          legalDemoEnsureAttempted = true;
+          try {
+            const outcome = await ensureLegalDemoSpineInstalled();
+            if (outcome.installed) {
+              console.log('[featured-builder] legal-* shared demo spine installed for screenshot capture');
+            }
+          } catch (err) {
+            console.warn(
+              `[featured-builder] legal-* demo spine ensure failed (screenshots may show an empty state) - ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         void (async () => {
           try {
             await captureArtifactScreenshot(manifest.id);

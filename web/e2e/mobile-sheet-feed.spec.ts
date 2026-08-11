@@ -11,9 +11,11 @@ import { uiLogin } from './helpers/ui-login';
  *      FABs carrying LOCALIZED accessible names (the B3 review note: "mobile FAB strings
  *      still hardcoded English") - "Mostrar painel" + "Histórico de sessões".
  *   2. Tapping the panel FAB opens the bottom-sheet overlay whose content is the sheet
- *      feed (the B3 panel-union inheritance): drawer header names "Folhas" (not the build
- *      "Pré-visualização"), the feed's own desktop header row stays hidden (no double
- *      title), and the seeded sheet cards render.
+ *      feed (the B3 panel-union inheritance): the drawer title carries no visible text
+ *      for the sheet-feed kind (WS5 - "Folhas" reads as a wrong tab name before the
+ *      agent has classified the job; the locale string survives as its accessible
+ *      name), the feed's own desktop header row stays hidden (no double header), and
+ *      the seeded sheet cards render.
  *   3. Footer actions are reachable and tappable inside the overlay: the LAST card (below
  *      the fold - the overlay scrolls) takes a real copiar tap ("Copiado" feedback +
  *      clipboard holds the revision markdown) and editar opens the inline edit area.
@@ -134,9 +136,14 @@ test.describe('mobile sheet-feed overlay (B6)', () => {
     await expect(feed).toBeVisible({ timeout: 15_000 });
     const cards = drawer.getByTestId('sheet-card');
     await expect(cards).toHaveCount(3, { timeout: 30_000 });
-    // Drawer header names the sheet feed, not the build preview...
-    await expect(drawer.getByTestId('mobile-drawer-title')).toHaveText('Folhas');
-    // ...and the feed's own desktop header row stays hidden (no stacked double title).
+    // Drawer header hosts the sheet feed, not the build preview - but carries no
+    // visible title text (WS5): the row still exists and the locale string is its
+    // accessible name for screen readers, not on-screen text.
+    const drawerTitle = drawer.getByTestId('mobile-drawer-title');
+    await expect(drawerTitle).toBeVisible();
+    await expect(drawerTitle).toHaveText('');
+    await expect(drawerTitle).toHaveAttribute('aria-label', 'Folhas');
+    // ...and the feed's own desktop header row stays hidden (no stacked double header).
     await expect(feed.getByTestId('sheet-feed-header')).toBeHidden();
 
     // 3a. FOOTER ACTIONS REACHABLE: the LAST card sits below the fold; the overlay

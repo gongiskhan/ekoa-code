@@ -139,7 +139,30 @@ test('an own artifact card shows the universal "Usar" button', async ({ page, re
   expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
 });
 
-test('clicking a featured card routes to its chat (?continue=) instead of forking', async ({ page, request }) => {
+test('clicking an own (built) card opens the running app inline, not the detail pane', async ({ page, request }) => {
+  const errors = watchConsole(page);
+  const name = `E2E Own Click ${STAMP}`;
+  const imp = await importArtifact(request, token, makeBundle(name, `e2e-own-click-${STAMP}`));
+  expect(imp.id, 'import returned an artifact id').toBeTruthy();
+  cleanupIds.push(imp.id);
+
+  await login(page);
+  await page.goto('/artifacts');
+  const useBtn = page.getByTestId(`artifact-use-${imp.id}`);
+  await expect(useBtn).toBeVisible({ timeout: 15_000 });
+  // The card body, not the "Usar" button itself (that opens a new tab and is asserted elsewhere).
+  await page.getByText(name).first().click();
+
+  // Unified click semantics (WS3): a runnable own card opens the ArtifactPreviewOverlay inline -
+  // it no longer opens the in-page detail pane (that survives as the "Ver detalhes" item-menu
+  // action, and as the fallback for a NOT-YET-RUNNABLE artifact).
+  await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
+  expect(page.url()).toContain('/artifacts');
+
+  expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+});
+
+test('clicking a featured card opens the running app inline (preview overlay), never a fork', async ({ page, request }) => {
   const errors = watchConsole(page);
   const featured = await listFeatured(request);
   expect(featured.length).toBeGreaterThan(0);
@@ -154,7 +177,35 @@ test('clicking a featured card routes to its chat (?continue=) instead of forkin
   await expect(card).toBeVisible({ timeout: 20_000 });
   await card.click();
 
-  // The card click routes to the direct-edit chat via ?continue=<featuredId>.
+  // Unified click semantics (WS3): the card click opens the RUNNING APP inline in the existing
+  // ArtifactPreviewOverlay - it no longer jumps to chat (that is now the explicit "Personalizar no
+  // chat" affordance, covered below). The page stays on /artifacts; the overlay is a dialog.
+  await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
+  expect(page.url()).toContain('/artifacts');
+
+  const afterCount = (await listArtifacts(request, token)).items.length;
+  expect(afterCount).toBe(beforeCount);
+
+  expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
+});
+
+test('"Personalizar no chat" on a featured card routes to its chat (?continue=) instead of forking', async ({ page, request }) => {
+  const errors = watchConsole(page);
+  const featured = await listFeatured(request);
+  expect(featured.length).toBeGreaterThan(0);
+  const target = featured[0];
+
+  // No fork must be created: own-instance count stays the same.
+  const beforeCount = (await listArtifacts(request, token)).items.length;
+
+  await login(page);
+  await page.goto('/artifacts');
+  const customize = page.getByTestId(`starting-point-customize-${target.id}`);
+  await expect(customize).toBeVisible({ timeout: 20_000 });
+  await customize.click();
+
+  // The explicit "Personalizar no chat" affordance routes to the direct-edit chat via
+  // ?continue=<featuredId> - the card click itself (tested above) no longer does this.
   await page.waitForURL(new RegExp(`/chat\\?continue=${target.id}`), { timeout: 15_000 });
 
   const afterCount = (await listArtifacts(request, token)).items.length;

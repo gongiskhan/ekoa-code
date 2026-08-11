@@ -232,6 +232,137 @@ describe('cross-org isolation', () => {
 });
 
 // =================================================================================================
+// WS8a - additive `scope` on the two BROWSE endpoints (listCollections/listDocuments). The
+// `_shared` legal corpus was always SEARCHABLE (search unions org + `_shared` for every caller);
+// it was never BROWSABLE, which is why a fresh org with zero private uploads saw an empty
+// Biblioteca even though the shared corpus held 262k+ documents. `scope` fixes the visibility gap
+// without touching search or any write path.
+// =================================================================================================
+
+describe('WS8a: browsing the `_shared` corpus (scope=shared)', () => {
+  it('omitting `scope` behaves exactly like the explicit default `scope=org` - never the shared doc', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    await ingest(t, 'jurisprudencia', 'Doc próprio', 'conteúdo próprio');
+    await plantSharedDoc('jurisprudencia', 'shared-1', 'Doc partilhado', 'conteúdo partilhado');
+
+    const withoutScope = await api('/api/v1/knowledge/documents', t);
+    const withOrgScope = await api('/api/v1/knowledge/documents?scope=org', t);
+    const withoutScopeText = await withoutScope.text();
+    expect(withoutScopeText).toBe(await withOrgScope.text());
+    const body: unknown = JSON.parse(withoutScopeText);
+    expect(DocumentsResponse.safeParse(body).success).toBe(true);
+    expect((body as { total: number }).total).toBe(1); // never the shared doc
+    expect((body as { items: Array<{ scope?: string }> }).items[0]?.scope).toBe('org');
+
+    const collWithout = await api('/api/v1/knowledge/collections', t);
+    const collWithOrgScope = await api('/api/v1/knowledge/collections?scope=org', t);
+    expect(await collWithout.text()).toBe(await collWithOrgScope.text());
+  });
+
+  it('scope=shared browses the reserved corpus for ANY org actor (read-only; nobody ever wrote it)', async () => {
+    await mkUser('a', 'orgA', 'user');
+    await mkUser('b', 'orgB', 'user');
+    const ta = await tokenFor('a');
+    const tb = await tokenFor('b');
+    await ingest(ta, 'jurisprudencia', 'Só da orgA', 'privado da orgA');
+    await plantSharedDoc('jurisprudencia', 'sup-1', 'Acórdão STJ', 'conteúdo do acórdão');
+    await plantSharedDoc('legislacao', 'lei-1', 'Código Civil', 'conteúdo do código');
+
+    for (const t of [ta, tb]) {
+      const collections = await api('/api/v1/knowledge/collections?scope=shared', t);
+      expect(collections.status).toBe(200);
+      const cbody = await collections.json();
+      expect(CollectionsResponse.safeParse(cbody).success).toBe(true);
+      expect((cbody as { items: string[] }).items.sort()).toEqual(['jurisprudencia', 'legislacao']);
+
+      const docs = await api('/api/v1/knowledge/documents?scope=shared', t);
+      expect(docs.status).toBe(200);
+      const dbody = await docs.json();
+      expect(DocumentsResponse.safeParse(dbody).success).toBe(true);
+      expect((dbody as { total: number }).total).toBe(2);
+      const items = (dbody as { items: Array<{ title: string; scope?: string }> }).items;
+      expect(items.every((i) => i.scope === 'shared')).toBe(true);
+      // orgA's own PRIVATE doc never shows up under scope=shared, for anyone (incl. orgA itself).
+      expect(items.map((i) => i.title)).not.toContain('Só da orgA');
+    }
+  });
+
+  it('scope=shared is collection-filterable and paginated exactly like scope=org', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    for (let i = 0; i < 3; i++) await plantSharedDoc('jurisprudencia', `j-${i}`, `Doc ${i}`, `conteúdo ${i}`);
+    await plantSharedDoc('legislacao', 'lei-1', 'Lei única', 'conteúdo da lei');
+
+    const filtered = await api('/api/v1/knowledge/documents?scope=shared&collection=legislacao', t);
+    expect(((await filtered.json()) as { total: number }).total).toBe(1);
+
+    const paged = await api('/api/v1/knowledge/documents?scope=shared&collection=jurisprudencia&limit=2&offset=0', t);
+    const pbody = (await paged.json()) as { total: number; items: unknown[] };
+    expect(pbody.total).toBe(3);
+    expect(pbody.items).toHaveLength(2);
+  });
+
+  it('scope is READ-ONLY: declared on no write descriptor, and a spurious body field is inert', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+
+    // Contract level: `scope` appears ONLY on the two browse query schemas across the whole domain
+    // - the same "no field can even be spelled" discipline the org/tenant check above enforces.
+    type ShapedDescriptor = { request?: { shape?: Record<string, unknown> }; query?: { shape?: Record<string, unknown> } };
+    for (const [name, d] of Object.entries(knowledgeEndpoints) as Array<[string, ShapedDescriptor]>) {
+      const reqKeys = Object.keys(d.request?.shape ?? {});
+      const queryKeys = Object.keys(d.query?.shape ?? {});
+      if (name === 'listCollections' || name === 'listDocuments') {
+        expect(queryKeys, name).toContain('scope');
+      } else {
+        expect(reqKeys, name).not.toContain('scope');
+        expect(queryKeys, name).not.toContain('scope');
+      }
+    }
+
+    // Behaviourally: a spurious `scope: 'shared'` on the CREATE body is stripped by zod (not in
+    // CreateDocumentRequest's shape) and the document lands in the caller's OWN partition - there
+    // is no bypass into `_shared` through the write path.
+    const res = await api('/api/v1/knowledge/documents', t, {
+      method: 'POST',
+      body: JSON.stringify({ collection: 'jurisprudencia', title: 'Tentativa', text: 'x', scope: 'shared' }),
+    });
+    expect(res.status).toBe(201);
+    expect(((await (await api('/api/v1/knowledge/documents?scope=org', t)).json()) as { total: number }).total).toBe(1);
+    expect(((await (await api('/api/v1/knowledge/documents?scope=shared', t)).json()) as { total: number }).total).toBe(0);
+  });
+
+  it('an invalid scope value is a 400 validation envelope, not a silent fallback to org', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    const res = await api('/api/v1/knowledge/documents?scope=everything', t);
+    expect(res.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await res.json()).success).toBe(true);
+    const res2 = await api('/api/v1/knowledge/collections?scope=everything', t);
+    expect(res2.status).toBe(400);
+    expect(ErrorEnvelope.safeParse(await res2.json()).success).toBe(true);
+  });
+
+  it('browsing scope=shared under a KEY is audited exactly like scope=org, with the scope recorded', async () => {
+    await mkUser('u1', 'orgA', 'user');
+    const t = await tokenFor('u1');
+    const minted = await mintKeyFor(t, 'ws8a');
+    await plantSharedDoc('jurisprudencia', 'aud-1', 'Auditado', 'conteúdo');
+    await activityLogs.deleteMany({});
+
+    const keyed = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { headers: { authorization: `Bearer ${minted.key}` } });
+    expect((await keyed('/api/v1/knowledge/collections?scope=shared')).status).toBe(200);
+    expect((await keyed('/api/v1/knowledge/documents?scope=shared')).status).toBe(200);
+
+    const rows = await activityLogs.find({ category: 'knowledge' } as never);
+    const metas = rows.map((r) => r as unknown as { metadata: Record<string, unknown> });
+    expect(metas).toHaveLength(2);
+    expect(metas.every((m) => m.metadata.scope === 'shared')).toBe(true);
+  });
+});
+
+// =================================================================================================
 // SLICE E5 — the capability READ surface: search + read-one over REST, `user-or-key`.
 // =================================================================================================
 
@@ -250,9 +381,13 @@ describe('E5 descriptors: which knowledge endpoints are a capability, and which 
 
   it('the WRITE + admin half is untouched: no ingestion surface is open to a key', () => {
     for (const name of ['createDocument', 'deleteDocument', 'createUpload', 'deleteUpload', 'listUploads',
-      'listSources', 'createSource', 'updateSource', 'deleteSource', 'crawlSource', 'crawlStatus', 'refreshSchedule'] as const) {
+      'listSources', 'createSource', 'updateSource', 'deleteSource', 'crawlStatus', 'refreshSchedule'] as const) {
       expect(knowledgeEndpoints[name].auth, name).toBe('user');
     }
+    // WS8c: triggering a crawl WRITES into the reserved `_shared` corpus, unlike every other
+    // route in this list (browse/status/schedule are reads) - it gets the platform's narrowest
+    // ordinary role, not the domain's default `user` tier.
+    expect(knowledgeEndpoints.crawlSource.auth).toBe('super-admin');
     for (const name of ['reindex', 'indexStatus'] as const) {
       expect(knowledgeEndpoints[name].auth, name).toBe('org-admin');
     }

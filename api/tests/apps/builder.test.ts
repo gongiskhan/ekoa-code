@@ -192,6 +192,50 @@ describe('AppBuilder — backend bundle (ch07 §7.2, Layer 2)', () => {
   });
 });
 
+describe('AppBuilder — pre-installed dependency resolution (WS7, motion/react)', () => {
+  // WS7 design-defaults incident follow-up: the build prompt (api/src/agents/build.ts
+  // BUILD_SYSTEM_PROMPT), the presentation base conventions, and coding-agent/SKILL.md all now
+  // tell the build agent `import { motion, AnimatePresence } from 'motion/react'` bundles. That
+  // claim was verified by hand against this same builder before it was written into any prompt -
+  // this test PINS it, so a future dependency bump or lockfile change that silently breaks the
+  // import does not leave a load-bearing prompt claim quietly false. NOTE the mechanism: bare
+  // specifier imports are NEVER routed through the CDN resolver (cdnResolverPlugin only
+  // intercepts literal `https://` URL imports, per its onResolve filters) - `motion/react`
+  // bundles here ONLY because `motion` is an explicit `api/package.json` dependency, resolved by
+  // esbuild's own local resolution (nodePaths). Removing that dependency would make this test
+  // fail with "Could not resolve", not silently fall back to a CDN fetch.
+  it("`import { motion, AnimatePresence } from 'motion/react'` resolves locally and bundles", async () => {
+    const dir = await mkTemp();
+    await mkdir(join(dir, 'frontend', 'src'), { recursive: true });
+    await writeManifest(dir);
+    await writeFile(
+      join(dir, 'frontend', 'src', 'index.jsx'),
+      [
+        "import { createRoot } from 'react-dom/client';",
+        "import { motion, AnimatePresence } from 'motion/react';",
+        'function App() {',
+        '  return (',
+        '    <AnimatePresence>',
+        '      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>Hello</motion.div>',
+        '    </AnimatePresence>',
+        '  );',
+        '}',
+        "const el = document.getElementById('root');",
+        'if (el) createRoot(el).render(<App />);',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await appBuilder.build('motion-app', dir);
+    expect(result.success).toBe(true);
+    expect(result.errors).toEqual([]);
+
+    const bundle = await readFile(join(dir, 'dist', 'bundle.js'), 'utf-8');
+    expect(bundle).toContain('AnimatePresence'); // the real library landed in the bundle
+  });
+});
+
 describe('scaffoldApp (ch07 §7.3)', () => {
   it('creates the starter tree, seeds git, and is idempotent (skip-if-exists)', async () => {
     const dir = await mkTemp();

@@ -105,6 +105,20 @@ describe('buildPrompt', () => {
     expect(p).toContain('FAIL - ');
   });
 
+  // Live failure 2026-08-10 (artifact 7d82d4b7): a build shipped with its middle sections at
+  // opacity 0 - entrance reveals whose trigger never fired. Zero console errors, page "rendered",
+  // every existing check passed, and most of the content was invisible. The check is a DOM query
+  // rather than a judgement call, so it must survive verbatim in the prompt.
+  it('demands the invisible-content check, as an executable query, and calls it a FAIL', () => {
+    const p = buildPrompt(input);
+    expect(p).toContain('INVISIBLE-CONTENT CHECK');
+    expect(p).toContain('scroll the full page');
+    expect(p).toContain('getComputedStyle');
+    expect(p).toContain('parseFloat(s.opacity) < 0.05');
+    expect(p).toContain('visibility === "hidden"');
+    expect(p).toContain('That is a FAIL');
+  });
+
   it('selects the scoped pass wording on follow-up builds', () => {
     const p = buildPrompt({ ...input, depth: 'scoped' });
     expect(p).toContain('SCOPED pass');

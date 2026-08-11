@@ -7,7 +7,9 @@
  * (step 5, ch07 §7.2.6), the provider-error reroute (§5.3.7), the dual-fire guard (§5.3.4), and
  * the P-10 persistence + in-process zombie net.
  */
+import { runErrorText, type RunErrorCode } from '@ekoa/shared';
 import type { Actor } from '@ekoa/shared';
+import { join } from 'node:path';
 import { loadAgentsConfig } from '../config.js';
 import { checkAllowance } from '../billing/index.js';
 import { BILLING_PAGE_URL } from '../billing/constants.js';
@@ -24,7 +26,8 @@ import {
   bindReservation,
   releaseReservation,
 } from './registry.js';
-import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './streaming.js';
+import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer, type ToolEventInput } from './streaming.js';
+import { classifyRunFailure } from './run-failure.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
@@ -42,6 +45,7 @@ import {
 import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, ingestBuildKnowledge, verifyRunner } from './seams.js';
 import { detectDomainHeavy, knowledgeScopingNarration, knowledgeIndexedNarration, knowledgeNotIndexedNarration } from './domain-scoping.js';
 import { logActivity } from '../data/activity.js';
+import { loadHistory, renderPrompt, capHistory } from './context.js';
 
 /** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
  *  or any prompt text). The single audit write path (FIXED-8); best-effort so bookkeeping never
@@ -56,6 +60,19 @@ function auditBuild(input: BuildCreateInput, type: string, metadata: Record<stri
   ).catch(() => undefined);
 }
 
+/** Attachment display names (DO #4): `attachments` rides as opaque `UploadRef[]`-shaped
+ *  `unknown[]` on the wire; pull out just the filenames the classifier prompt wants. Tolerant of
+ *  any shape - never throws, drops anything that isn't a real string name. */
+function attachmentNamesOf(attachments: unknown[] | undefined): string[] {
+  if (!attachments) return [];
+  return attachments
+    .map((a) => {
+      const name = a && typeof a === 'object' ? (a as Record<string, unknown>).displayName : undefined;
+      return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+    })
+    .filter((n): n is string => Boolean(n));
+}
+
 export interface BuildCreateInput {
   actor: Actor;
   username: string;
@@ -68,6 +85,15 @@ export interface BuildCreateInput {
   attachments?: unknown[];
   fieldValues?: Record<string, unknown>;
   configValues?: Record<string, unknown>;
+  /** WS6 incident fix: the user's ORIGINAL words for this build request, carried alongside
+   *  `description` (the chat-agent's <=15-word build paraphrase, when this request came from a
+   *  chat delegation). `description` still names the artifact (it is good at that); this drives
+   *  the artifact-type classifier AND is what the build agent is actually briefed on - a
+   *  paraphrase used to be the classifier input, the artifact name, AND the build agent's entire
+   *  prompt, so "a construir uma apresentação do teu produto Cobranças" briefed a slide deck when
+   *  the user asked for a website. Absent on a direct composer build, where `description` already
+   *  IS the user's own text (nothing to carry separately). */
+  originalMessage?: string;
   /** F1 knowledge-during-build: scoping-provided reference documents to ingest into the org
    *  knowledge area DURING a domain-heavy first build (org-scoped by the run's actor, immediately
    *  searchable to the run's knowledge tools). Additive + optional; carried by JobCreateRequest
@@ -237,22 +263,120 @@ interface ExecOpts {
  *  this re-cap protects direct programmatic callers of handleBuildCreate. */
 const MAX_KNOWLEDGE_DOCS = 20;
 
+/**
+ * One user-facing progress line for a tool event, or null when the event is not worth narrating.
+ *
+ * PT-PT and product-level on purpose: this text lands in the same transcript the end user reads,
+ * so it obeys the white-label rule the final message does - no file paths dressed up as progress, no
+ * bundler/tool names. `frontend/src/pages/Contactos.jsx` narrates as "Contactos", not as a path.
+ * Returns null for the read-only tools (Read/Glob/Grep) - they are how the agent thinks, not what
+ * it is doing, and narrating them buries the real steps.
+ */
+export function buildProgressLine(e: ToolEventInput): string | null {
+  // Only the leading edge narrates: `started` and `finished` both fire for one step, and
+  // reporting both would double every line. The rule lives HERE rather than in the caller so it
+  // cannot be lost by a second call site.
+  if (e.phase !== 'started') return null;
+  const args = (e.args ?? {}) as Record<string, unknown>;
+  const rawPath = typeof args.file_path === 'string' ? args.file_path : '';
+  const screenName = (p: string): string => {
+    const base = (p.split('/').pop() ?? '').replace(/\.(jsx|tsx|js|ts|css)$/i, '');
+    if (!base) return '';
+    if (/^index$/i.test(base)) return '';
+    if (/^App$/i.test(base)) return '';
+    // PascalCase / kebab-case -> a human label ("CasosRecentes" -> "Casos Recentes").
+    return base.replace(/[-_]+/g, ' ').replace(/([a-z\d])([A-Z])/g, '$1 $2').trim();
+  };
+
+  switch (e.tool) {
+    case 'Write':
+    case 'Edit': {
+      if (/\.css$/i.test(rawPath)) return 'A afinar o aspeto e o espaçamento...';
+      if (/MANIFEST\.md$/i.test(rawPath)) return 'A declarar as capacidades da aplicação...';
+      if (/App\.(jsx|tsx)$/i.test(rawPath)) return 'A montar a estrutura da aplicação...';
+      const name = screenName(rawPath);
+      return name ? `A construir "${name}"...` : 'A escrever a aplicação...';
+    }
+    case 'Bash':
+      return 'A compilar e verificar...';
+    case 'knowledge_search':
+    case 'knowledge_read':
+      return 'A consultar a base de legislação e jurisprudência...';
+    default:
+      return null; // Read/Glob/Grep and everything else: thinking, not progress.
+  }
+}
+
 const BUILD_SYSTEM_PROMPT = [
   'You are building a web app inside an Ekoa app workspace.',
   'The served application is compiled from the manifest entrypoint: frontend/src/index.jsx, which renders frontend/src/App.jsx.',
   'Make ALL user-visible changes by editing frontend/src/App.jsx (and files it imports under frontend/src/).',
   'NEVER write a standalone top-level *.html file as the deliverable - top-level HTML files are not served; only the compiled entrypoint bundle is.',
   'Do not edit dist/ by hand - it is build output, regenerated from frontend/src/.',
+  // Turn economy (operator directive 2026-08-10). Every turn replays the whole context, so turn
+  // count - not code size - is what a build actually costs. The measured failure mode was a run
+  // that explored, re-read files it had just written, and nibbled at CSS one Edit at a time until
+  // it exhausted the context window.
+  'Work in few, large steps. Decide the structure first, then WRITE each file complete in one pass - do not build a file up through a series of small edits, and do not re-read a file you just wrote (you know what is in it). Read a file only when you genuinely do not know its contents. Do not explore the tree beyond what the task needs: the scaffold layout is described above and in the base conventions.',
+  'Prefer editing the files the scaffold already gives you over adding new ones. A handful of well-organised files beats a deep tree of tiny components for an artifact of this size.',
   // White-label (ch12; operator report 2026-07-11: the final summary named `window.__ekoa.exportPdf`).
   'Your FINAL message is read by a non-technical end user. Write it in the language of their request.',
   'In that final message NEVER mention internal platform APIs (window.__ekoa or any of its members), file paths, bundlers, manifests, libraries, or any implementation machinery.',
   'Describe what the app DOES in product terms ("um botão que descarrega o documento em PDF"), never HOW it is wired.',
-  // Design quality bar (operator directive 2026-08-07): the frontend-design and
-  // design-taste-frontend skills ship as a plugin on every build run — use their craft, but the
+  // Design quality bar (operator directive 2026-08-07, plugin swapped to impeccable
+  // 2026-08-08): the impeccable skill ships as a plugin on every build run — use its craft, but the
   // deliverable stays the compiled React entrypoint (no standalone-HTML deliverable framing in
   // skill text overrides the entrypoint rule).
-  'For any user-facing UI you create or restyle, consult the frontend-design skill (distinctive production-grade UI; use design-taste-frontend additionally for landing/marketing pages) and apply their craft INSIDE the React app under frontend/src/.',
-  'Never ship a default-looking UI: no framework-default styling, no generic AI aesthetics (Inter-on-white, purple gradients, cookie-cutter cards). Pick a deliberate visual direction that fits the domain and execute it consistently.',
+  // The impeccable skill is the design authority on build runs (mounted below as a plugin). The
+  // three lines that follow are its Cortex operating contract: WHICH flows to run, and how its
+  // interactive steps degrade in this headless harness. Kept in the prompt (not a skill fork) so
+  // the vendored skill stays byte-comparable with upstream for updates.
+  // 2026-08-10 (operator directive, after a live "site about our legal apps" build): the previous
+  // two lines ordered the agent through impeccable's new-work flow INCLUDING the concept-seed
+  // roll. Measured cost of that instruction on job 48c1c600: 142 turns, ~15M tokens, 34+ minutes,
+  // a context-window exhaustion + auto-compaction mid-run - and the roll assigned an "atrium with
+  // porticoes and floors" world rendered in dark teal, i.e. it contradicted the house-style line
+  // that follows it AND re-created the WS7 incident (a site request answered with a dark themed
+  // artefact) through a different door. `reference/` is 315 KB of markdown; the flow pulls
+  // several of those docs into a context that already carries the base conventions.
+  // The craft floor is what actually produced quality, so it is stated HERE, compactly, instead
+  // of being loaded. The plugin stays mounted for its mechanical detector and for named commands
+  // on refinements - it is simply no longer the thing that decides the design.
+  'Do NOT run impeccable\'s new-work flow or its concept-seed roll, and do not read its reference/ docs for a routine build - the direction is already decided by the house style below and the base scaffold you were given. Build on the scaffold that is already in frontend/src/ (it ships the design system for this artifact type: tokens, primitives, states, motion) rather than inventing a visual world. On a REFINEMENT of an existing surface you may load one matching impeccable command doc (polish, layout, typeset...) if it earns its place.',
+  'Craft floor, applied without announcing it: body text >= 4.5:1 contrast and large text >= 3:1; shadows carry an offset and a soft blur; tighter space inside a group than between groups, and more space above a heading than below it; body measure 65-75ch; display type gets tight leading and slightly negative tracking; every interactive element covers hover, active, focus-visible and disabled; real empty, loading and error states; theme the browser surfaces you did not draw (text selection, caret, focus ring, scrollbars); copy in the product\'s own language, where controls name their action and errors name the problem and the recovery.',
+  // Restored from the craft floor after the FIRST build on this prompt shipped a page whose
+  // middle sections were permanently invisible (2026-08-10, artifact 7d82d4b7): the agent wrote
+  // entrance reveals with an `opacity: 0` resting state and a trigger that never fired, so the
+  // content existed in the DOM at opacity 0 with no animation attached. Invisible content is a
+  // worse failure than no animation, so the rule is stated as a hard floor, not a nicety.
+  'Motion: ONE authored moment, not an identical entrance bolted onto every section, and it animates FROM AN ALREADY-VISIBLE DEFAULT. Never leave content at `opacity: 0` (or hidden/zero-height) waiting to be revealed - if the trigger does not fire, the page ships blank and that is a broken build, not a missed flourish. Scroll-triggered reveals must therefore start visible and only enhance; prefer CSS transitions on hover/focus/state, which cannot strand content. Everything animated respects prefers-reduced-motion.',
+  'Anti-slop, these are the category defaults you must NOT reach for: a grid of same-size cards (icon + heading + text) as the page structure; nested cards; a small uppercase kicker/eyebrow above a heading (never - the heading carries itself); section numbers unless the sequence is information; gradient text; glass/blur as decoration; a coloured left border thicker than 1px; hard offset shadows; monospace as a costume for "technical"; unicode glyphs or emoji standing in for icons (draw an SVG); sparklines and progress rings standing in for content.',
+  'This harness is headless and unattended: there is no user to ask mid-build, and no image generation. Never block on a question, a decision page, or a generated asset - decide, build, and state your assumptions in the run output. Screenshot/inspection passes are bounded: build it fully, inspect once, fix what that pass shows, and stop. Open-ended self-QA loops are the single most expensive way to make a build slightly worse.',
+  'Company brand: /api/design-tokens.css is the authority for colors and fonts. When it defines --logo-url (non-empty), the company has a REAL logo served under /brand-assets/ - place it in the header (and footer where one exists) of any Persuade surface (site, landing, marketing) via that CSS variable or an <img> to the same asset. NEVER invent, draw, or generate a substitute logo; when --logo-url is empty, use the company name as text in the surface\'s own typography.',
+  // WS7 house style (operator directive 2026-08-08, post-incident: a "site" request built a
+  // dark serif slide deck). "Pick a deliberate visual direction" alone was permission enough for
+  // that answer - replaced with an explicit default direction. A build may still deviate FROM it
+  // deliberately when the user's own brand/request calls for something else (e.g. an existing
+  // dark brand), but the default the agent reaches for absent such a signal is this one.
+  'Never ship a default-looking UI: no framework-default styling, no generic AI aesthetics (Inter-on-white, purple gradients, cookie-cutter cards).',
+  'House style, unless the user\'s brand or request clearly calls for something else: clean, professional, modern, high-impact. Light background by default (dark themes are a deliberate choice for a specific brand, never the default reach). Generous whitespace over dense packing. Confident sans-first typography - a serif is a deliberate choice for an editorial/luxury/publication brand, never the default. Purposeful motion: staggered entrance reveals, smooth state/page transitions, hover and scroll-triggered micro-interactions - subtle and consistent, never gratuitous.',
+  // Motion library availability (verified 2026-08-08 against the REAL builder pipeline -
+  // api/apps/builder.ts sharedBuildOptions, not a standalone esbuild invocation - api/package.json
+  // carries `motion` as an explicit dependency so this is a guaranteed part of the build, not an
+  // accident of some other package hoisting it in): `import { motion, AnimatePresence } from
+  // 'motion/react'` bundles correctly, pinned by api/tests/apps/builder.test.ts.
+  // Cost measured 2026-08-08 with THIS builder (it never minifies - sharedBuildOptions hardcodes
+  // minify:false - so these are the exact bytes served, not a hypothetical minified estimate): a
+  // baseline app (React + ReactDOM, no motion) bundles to ~1,126 KB; the same app importing motion
+  // for ONE fading div bundles to ~1,444 KB - a ~318 KB tax paid the moment `motion/react` is
+  // imported AT ALL. Going from that one fade all the way to AnimatePresence + drag + gestures +
+  // orchestrated variants adds only ~12 KB more - esbuild does not meaningfully tree-shake this
+  // library under IIFE, so the cost tracks WHETHER you import it, not how much of it you use. The
+  // decision is binary: pay ~318 KB once where motion IS the point, or don't import it at all.
+  "The `motion` package is available and bundles at build time: `import { motion, AnimatePresence } from 'motion/react'` works. Importing it costs a flat ~318 KB of served JS the moment you use it at all - using more of it (AnimatePresence, gestures, variants) barely adds to that once the tax is paid, so if you reach for it, use it well. Reach for it where motion IS the point: presentations, landing/marketing pages, portfolio work, a hero moment. For dense, data-heavy screens (tables, forms, dashboards a professional uses all day) prefer plain CSS transitions and keyframes, which cost nothing and cover hover, focus and simple state changes well. Do not import `motion/react` merely to fade a list in.",
+  // Stack reconciliation (WS7): the design skills' own examples assume Tailwind + Next.js - this
+  // platform is neither. Told here so the agent is not left to resolve the contradiction itself.
+  "The impeccable skill's examples and detector were authored against general web stacks (Tailwind, Next.js, Astro...). This platform is plain React (JSX, automatic runtime) bundled by esbuild - there is no Next.js, no Tailwind, no package.json, no npm install (content/coding-agent). Take the skill's DESIGN judgment (worlds, composition, hierarchy, craft floor, anti-slop rules) and express it as plain CSS using the runtime design-tokens contract (`var(--color-…)`, `var(--space-…)`, `var(--text-…)`, served by /api/design-tokens.css) - never Tailwind classes or `next/font`/`next/image` code. Its PRODUCT.md/DESIGN.md live in the project root and survive follow-up builds: write DESIGN.md at finish exactly as the skill directs, so the next build inherits the world instead of re-rolling it.",
 ].join('\n');
 
 /**
@@ -275,10 +399,23 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
   let resumeSessionId: string | undefined;
   let terminalReached = false;
 
-  const finishError = async (code: string): Promise<void> => {
+  /**
+   * Terminal failure. Takes a CODE (+ structured params); the user-facing text comes from the
+   * one shared vocabulary at the sink. `detail` is the honest internal cause: it is logged and
+   * persisted on the JobRecord (operators read it there and via the audit trail) but NEVER put
+   * on the wire — `jobView` has always stripped the persisted message for exactly this reason,
+   * and the stream now matches it (finding `run-error-text-leak`).
+   */
+  const finishError = async (code: RunErrorCode, params?: Record<string, string>, detail?: unknown): Promise<void> => {
     if (finalizeOnce(jobId)) {
-      sink.error(code, 'A construção falhou.');
-      await patchJob(jobId, { status: 'failed', error: { code, message: 'A construção falhou.' }, endedAt: new Date(input.deps.now()).toISOString() });
+      if (detail !== undefined) {
+        console.error(`[build][job ${jobId}] terminal ${code}:`, detail instanceof Error ? (detail.stack ?? detail.message) : detail);
+      }
+      sink.error(code, params);
+      const persisted = detail === undefined
+        ? runErrorText(code, 'pt', params)
+        : `${runErrorText(code, 'pt', params)} | ${detail instanceof Error ? detail.message : String(detail)}`;
+      await patchJob(jobId, { status: 'failed', error: { code, message: persisted }, endedAt: new Date(input.deps.now()).toISOString() });
       if (artifactId) await resetArtifactToDraft(artifactId); // artifact stays draft on error (§5.6.2)
     }
     terminalReached = true;
@@ -310,7 +447,8 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       clearTimers();
       if (finalizeOnce(jobId)) {
         const url = allow.billingUrl ?? BILLING_PAGE_URL;
-        sink.error('BILLING_BLOCKED', `${allow.message ?? 'Faturação bloqueada.'} ${url}`);
+        // The billing URL is STRUCTURED (`params.billingUrl`), not concatenated into prose.
+        sink.error('BILLING_BLOCKED', { billingUrl: url });
         await patchJob(jobId, { status: 'failed', error: { code: 'BILLING_BLOCKED', message: allow.message ?? 'Faturação bloqueada.' }, endedAt: new Date(input.deps.now()).toISOString() });
       }
       terminalReached = true;
@@ -320,7 +458,15 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // First-build vs follow-up resolution.
     let basePromptSections: string[] = [];
     if (opts.firstBuild) {
-      const prep = await mech.prepareFirstBuild({ userId: input.actor.userId, sessionId: input.sessionId, description: input.description, language: input.language, ...(input.templateId ? { templateId: input.templateId } : {}) });
+      const prep = await mech.prepareFirstBuild({
+        userId: input.actor.userId,
+        sessionId: input.sessionId,
+        description: input.description,
+        language: input.language,
+        ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.originalMessage?.trim() ? { originalMessage: input.originalMessage } : {}),
+        ...(input.attachments ? { attachmentNames: attachmentNamesOf(input.attachments) } : {}),
+      });
       artifactId = prep.artifactId;
       projectDir = prep.projectDir;
       slug = prep.slug;
@@ -338,9 +484,8 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (writeVerdict !== 'ok') {
         clearTimers();
         if (finalizeOnce(jobId)) {
-          const message = 'Já não tem permissão para alterar esta aplicação.';
-          sink.error('EDIT_FORBIDDEN', message);
-          await patchJob(jobId, { status: 'failed', error: { code: 'EDIT_FORBIDDEN', message }, endedAt: new Date(input.deps.now()).toISOString() });
+          sink.error('EDIT_FORBIDDEN');
+          await patchJob(jobId, { status: 'failed', error: { code: 'EDIT_FORBIDDEN', message: `write revalidation: ${writeVerdict}` }, endedAt: new Date(input.deps.now()).toISOString() });
         }
         terminalReached = true;
         return;
@@ -414,22 +559,64 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     let liveMarkers = new MarkerProcessor(); // replaced on `text_reset` (B7 retraction)
     let capturedSessionId: string | undefined;
 
+    // Progress narration (operator directive 2026-08-10). Before this, a build emitted
+    // `knowledge-scope` and then NOTHING until the post-agent `verifying` phase - on a 34-minute
+    // run that is half an hour of "A analisar..." with no evidence anything is happening, which
+    // reads as a hang. The agent's own streamed commentary is not a substitute: it arrives as
+    // unpunctuated mid-thought fragments on the thinking channel.
+    // Derived from tool events, so it reports what the run DID, never what it promised. Deduped
+    // on the rendered line: a file edited five times narrates once, and the noisy tools
+    // (Read/Glob/Grep) never narrate at all.
+    const narratedSteps = new Set<string>();
+    const narrateProgress = (e: ToolEventInput): void => {
+      const line = buildProgressLine(e); // null for read-only tools and non-`started` edges
+
+      if (!line || narratedSteps.has(line)) return;
+      narratedSteps.add(line);
+      sink.planStep('building', line);
+    };
+
     // The coding kind's content sections lead the build system prompt (before this run's F16
     // entrypoint steering) — pre-fix, builds sent ONLY the 6-line inline prompt and the whole
     // coding-agent content package was dead weight. The grounding block self-gates (legal-context
     // builds only, §5.5.2 layer 2); both layers are non-fatal.
+    // WS6 incident fix: the model is briefed on the user's ORIGINAL words, never the chat-agent's
+    // <=15-word build paraphrase (`input.description`) - that paraphrase is what used to be the
+    // build agent's ENTIRE prompt, so "a construir uma apresentação do teu produto Cobranças"
+    // briefed a slide deck when the user asked for a website. `description` keeps doing what it
+    // is good at: naming the artifact (deriveAppName, build-mechanics.ts) and the classifier text
+    // when no original message is carried (a direct composer build, where description already IS
+    // the user's own words).
+    const buildQuery = input.originalMessage?.trim() || input.description;
     let contentSections: string[] = [];
     let groundingBlock = '';
     try {
       contentSections = (await assembleAgentContext({ agentKind: 'coding', userId: input.actor.userId })).promptSections;
-      groundingBlock = await knowledgeGrounding({ userId: input.actor.userId, orgId: input.actor.orgId, query: input.description, agentKind: 'coding' });
+      groundingBlock = await knowledgeGrounding({ userId: input.actor.userId, orgId: input.actor.orgId, query: buildQuery, agentKind: 'coding' });
     } catch (err) {
       console.warn('[build] content/grounding assembly failed (non-fatal):', err instanceof Error ? err.message : err);
     }
 
+    // First-build conversation continuity (WS6 DO #2): no SDK session exists yet to resume, so
+    // without this the build agent sees ONLY the current message - the same loss chat.ts already
+    // fixed for chat turns (context.ts renderPrompt). Follow-ups skip this: they resume the real
+    // SDK session (`resumeSessionId` below), which already carries the prior turns; re-injecting
+    // history there would just duplicate context the engine already has. Capped like ekoa-dev's
+    // conversation-transcript injection (cortex/src/adapters/external.ts) - non-fatal, a history
+    // load failure just falls back to the bare query.
+    let buildPrompt = buildQuery;
+    if (opts.firstBuild && input.sessionId) {
+      try {
+        const history = capHistory(await loadHistory(input.sessionId), { maxTurns: 16, totalBudgetChars: 48_000, maxTurnChars: 24_000 });
+        buildPrompt = renderPrompt(history, buildQuery);
+      } catch (err) {
+        console.warn('[build] conversation-history injection failed (non-fatal):', err instanceof Error ? err.message : err);
+      }
+    }
+
     const handle = runAgent(
       {
-        prompt: input.description,
+        prompt: buildPrompt,
         // F16: pin the agent to the served entrypoint. Nothing else names it (settingSources is
         // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
         // never served while the scaffold keeps being compiled. Flows through runAgent's
@@ -437,7 +624,20 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         // Base conventions (operator-run B1) sit between the universal coding sections and
         // the grounding block: universal judgment first, then the selected base's structural
         // invariants, then dynamic knowledge, then the F16 entrypoint steer.
-        systemPrompt: [...contentSections, ...basePromptSections, groundingBlock, BUILD_SYSTEM_PROMPT].filter(Boolean).join('\n\n'),
+        systemPrompt: [
+          ...contentSections,
+          ...basePromptSections,
+          groundingBlock,
+          BUILD_SYSTEM_PROMPT,
+          // The impeccable scripts' concrete location. Without this the agent guesses the
+          // upstream default (`.claude/skills/impeccable/...`), finds nothing in the sandbox,
+          // and SELF-ASSIGNS its direction - observed on the second live build (2026-08-08):
+          // "scripts do plugin indisponiveis no sandbox" in its DESIGN.md, i.e. the argmax rut
+          // the concept-seed roll exists to break. Absolute path, resolved server-side.
+          cfg.impeccablePluginDir
+            ? `The impeccable skill's scripts live at ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts')} (absolute path; the upstream docs' \`.claude/skills/impeccable/...\` path does not exist in this sandbox). Example: \`node ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts', 'concept-seed.mjs')} --scope direction --mode persuade\`. Run them from your project directory; never copy them into it.`
+            : '',
+        ].filter(Boolean).join('\n\n'),
         decision,
         allowedTools: policy.allowedTools,
         maxTurns: policy.maxTurns,
@@ -457,16 +657,20 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         ],
         cwd: projectDir || undefined,
         homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
-        // Design-skill plugin (frontend-design + design-taste-frontend, vendored under
-        // api/content/plugins/ekoa-design): mounted as an Agent SDK local plugin so the skills
-        // load by progressive disclosure on design-shaped work. Server-resolved config path;
-        // EKOA_DESIGN_PLUGIN_DIR="" disables.
-        ...(cfg.designPluginDir ? { plugins: [cfg.designPluginDir] } : {}),
+        // Design-skill plugin: the vendored impeccable skill (api/content/plugins/impeccable,
+        // Apache-2.0 fork of pbakaus/impeccable v4.0.4), mounted as an Agent SDK local plugin so
+        // it loads by progressive disclosure on design-shaped work. It REPLACES the ekoa-design
+        // mount: two design skills with competing directives is the same class of contradiction
+        // the WS7 incident traced. Server-resolved config path; EKOA_IMPECCABLE_PLUGIN_DIR=""
+        // disables. Its concept-seed/serve-question scripts self-detect this headless harness and
+        // degrade exactly as their own docs specify (assigned direction, no browser page); the
+        // roll API is additionally forced offline via env at server boot (server.ts).
+        ...(cfg.impeccablePluginDir ? { plugins: [cfg.impeccablePluginDir] } : {}),
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         steerable: true, // Conduzir: mid-run user messages join this run (POST /jobs/:id/steer)
         signal: abort.signal,
         callbacks: {
-          onToolEvent: (e) => { resetInactivity(); sink.toolEvent(e); },
+          onToolEvent: (e) => { resetInactivity(); sink.toolEvent(e); narrateProgress(e); },
           onSessionId: (sid) => { capturedSessionId = sid; },
           onPlanNotification: () => resetInactivity(),
         },
@@ -543,10 +747,12 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     const progress = await mech.assertProgress({ artifactId, projectDir });
     if (!progress.clean) {
       if (finalizeOnce(jobId)) {
+        // `progress.reasons` are gate diagnostics (entrypoint subtrees, scaffold fingerprints):
+        // operator detail, not user copy. Persisted + logged, never streamed.
         const detail = progress.reasons.join('; ');
-        const message = `A construção não chegou à aplicação servida (a página continua o modelo inicial). ${detail}`.trim();
-        sink.error('BUILD_UNFULFILLED', message);
-        await patchJob(jobId, { status: 'failed', error: { code: 'BUILD_UNFULFILLED', message }, endedAt: new Date(input.deps.now()).toISOString() });
+        console.error(`[build][job ${jobId}] terminal BUILD_UNFULFILLED:`, detail);
+        sink.error('BUILD_UNFULFILLED');
+        await patchJob(jobId, { status: 'failed', error: { code: 'BUILD_UNFULFILLED', message: detail }, endedAt: new Date(input.deps.now()).toISOString() });
       }
       terminalReached = true;
       return;
@@ -640,9 +846,11 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       verifyLineBuf = '';
       if (verdict.ran && !verdict.passed) {
         if (finalizeOnce(jobId)) {
-          const message = `A verificação da aplicação falhou. ${verdict.note ?? ''}`.trim();
-          sink.error('VERIFY_FAILED', message);
-          await patchJob(jobId, { status: 'failed', error: { code: 'VERIFY_FAILED', message }, endedAt: new Date(input.deps.now()).toISOString() });
+          // `verdict.note` is MODEL-DERIVED and can quote app data (a NIF/IBAN the verifier read)
+          // — the same reason `jobView` refuses to serve the persisted message. It stays
+          // server-side; the stream carries the code alone.
+          sink.error('VERIFY_FAILED');
+          await patchJob(jobId, { status: 'failed', error: { code: 'VERIFY_FAILED', message: verdict.note ?? '' }, endedAt: new Date(input.deps.now()).toISOString() });
         }
         terminalReached = true;
         return;
@@ -670,14 +878,15 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     void runPostRunExtraction({ userId: input.actor.userId, username: input.username, orgId: input.actor.orgId, sessionId: input.sessionId, runId: jobId, transcript: `${input.description}\n\n${result.text}`, deps: input.deps }).catch(() => undefined);
   } catch (err) {
     clearTimers();
-    await finishError('ADAPTER_ERROR');
-    void err;
+    // Classify (a dead platform credential is AUTH_ERROR, not a retryable blip) and LOG. The old
+    // `void err` swallowed the cause outright: a failed build left nothing behind to diagnose it.
+    await finishError(classifyRunFailure(err), undefined, err);
   } finally {
     clearTimers();
     // In-process zombie net (§5.2.1): a run somehow still non-terminal after the pipeline exits is
     // flipped to failed { PIPELINE_STUCK } and its artifact reset to draft.
     if (!terminalReached && finalizeOnce(jobId)) {
-      sink.error('PIPELINE_STUCK', 'A construção terminou num estado inconsistente.');
+      sink.error('PIPELINE_STUCK');
       await patchJob(jobId, { status: 'failed', error: { code: 'PIPELINE_STUCK', message: 'Pipeline stuck.' }, endedAt: new Date(input.deps.now()).toISOString() });
       if (artifactId) await resetArtifactToDraft(artifactId);
     }

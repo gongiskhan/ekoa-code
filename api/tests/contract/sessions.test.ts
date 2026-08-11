@@ -174,3 +174,41 @@ describe('sessions contract (ch03 §3.8.6)', () => {
     expect((body.error as { code: string }).code).toBe('NOT_FOUND');
   });
 });
+
+/**
+ * WS3 continue-flow: `POST /sessions` accepting `artifactId` server-side-links the artifact to
+ * the new session (`data.sessionId`) - the only way it CAN be linked, since `sessionId` is a
+ * RESERVED artifact `data` key and a client PATCH is stripped of it at the route boundary
+ * (`api/src/apps/artifacts-service.ts` RESERVED_ARTIFACT_DATA_KEYS). Before this, the chat page's
+ * `?continue=` handler tried exactly that client PATCH, which silently no-opped, so continuing a
+ * never-before-continued artifact created a brand-new empty chat on EVERY click.
+ */
+describe('sessions x artifacts server-side link (continue-flow)', () => {
+  const createArtifact = async (t: string, name: string) =>
+    readJson(await authed('/api/v1/artifacts', t, { method: 'POST', body: JSON.stringify({ name }) }));
+
+  it('links the artifact\'s data.sessionId server-side; the artifact then surfaces it on the wire', async () => {
+    const t = await tokenFor();
+    const art = await createArtifact(t, 'Continue me');
+    expect(art.sessionId).toBeUndefined(); // fresh artifact, never linked
+
+    const session = await readJson(await createSession(t, { artifactId: art.id as string }));
+    expect(Session.safeParse(session).success).toBe(true);
+
+    const refreshed = await readJson(await authed(`/api/v1/artifacts/${art.id as string}`, t));
+    expect(refreshed.sessionId).toBe(session.id);
+  });
+
+  it('an actor who cannot write the artifact still gets a session - just not linked (best-effort, never fails session creation)', async () => {
+    const t1 = await tokenFor('u1'); // orgA
+    const t2 = await tokenFor('u2'); // orgB - cross-org, cannot write u1's private artifact
+    const art = await createArtifact(t1, 'private to u1');
+
+    const res = await createSession(t2, { artifactId: art.id as string });
+    expect(res.status).toBe(201);
+    expect(Session.safeParse(await readJson(res)).success).toBe(true);
+
+    const refreshed = await readJson(await authed(`/api/v1/artifacts/${art.id as string}`, t1));
+    expect(refreshed.sessionId).toBeUndefined();
+  });
+});

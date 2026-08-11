@@ -98,6 +98,11 @@ async function mkApp(
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'k';
   process.env.JWT_SECRET = 's';
+  // The list route now fires a lazy screenshot backfill (§7.11) for any runnable, un-screenshotted
+  // artifact it returns - this suite's `mkApp` fixtures are exactly that. Disable it here the same
+  // way featured.test.ts already does for the featured-catalog build pipeline: a contract suite
+  // has no business launching real headless Chromium.
+  process.env.EKOA_SCREENSHOTS_DISABLED = '1';
   sandbox = await mkdtemp(join(tmpdir(), 'ekoa-fam-sbx-'));
   process.env.SANDBOX_ROOT = sandbox;
   process.env.EKOA_DATA_DIR = await mkdtemp(join(tmpdir(), 'ekoa-fam-data-'));
@@ -122,6 +127,7 @@ afterAll(async () => {
   await mem.stop();
   await rm(sandbox, { recursive: true, force: true });
   if (process.env.EKOA_DATA_DIR) await rm(process.env.EKOA_DATA_DIR, { recursive: true, force: true });
+  delete process.env.EKOA_SCREENSHOTS_DISABLED;
 });
 
 beforeEach(async () => {
@@ -564,5 +570,69 @@ describe('PATCH data reserved-key strip (ch09 — no client-controlled build san
     const resolved = projectDirFor(row);
     expect(resolved).toBe(realDir);
     expect(resolved.startsWith(sandbox)).toBe(true);
+  });
+});
+
+/**
+ * WS3 wire fields: narrow, additive top-level lifts off the server-owned `data` bag (Capability
+ * Contract Rule 7) - same precedent as `importedFrom`. The whole bag must NEVER ship, even now
+ * that several of its keys have their own field.
+ */
+describe('wire fields: sessionId/outputKind/appUrl/description/updateAvailable/health (WS3)', () => {
+  it('are lifted onto the wire; the `data` bag itself and its server-only keys never are', async () => {
+    const t = await tokenFor('owner1');
+    await artifacts.insert({
+      _id: 'wire1', name: 'Wire', slug: 'wire1', userId: 'owner1', orgId: 'orgA',
+      visibility: 'private', status: 'active', shareable: true,
+      data: {
+        projectDir: '/should/never/ship', sdkSessionId: 'never-ship-either',
+        sessionId: 'sess-abc', appUrl: '/apps/wire1/', outputKind: 'web_app',
+        description: 'a short blurb', updateAvailable: { version: '9.9.9' },
+      },
+    } as never);
+    await slugs.put({ _id: 'wire1', artifactId: 'wire1' });
+
+    const res = await jwtApi('/api/v1/artifacts/wire1', t);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expectValid(Artifact, body);
+    expect(body.sessionId).toBe('sess-abc');
+    expect(body.appUrl).toBe('/apps/wire1/');
+    expect(body.outputKind).toBe('web_app');
+    expect(body.description).toBe('a short blurb');
+    expect(body.updateAvailable).toEqual({ version: '9.9.9' });
+    expect(body.data).toBeUndefined();
+    expect(body.projectDir).toBeUndefined();
+    expect(body.sdkSessionId).toBeUndefined();
+  });
+
+  it('health (row-level, written by POST /api/app-health) is surfaced - dead since the probe shipped', async () => {
+    const t = await tokenFor('owner1');
+    await artifacts.insert({
+      _id: 'wire2', name: 'Wire2', slug: 'wire2', userId: 'owner1', orgId: 'orgA',
+      visibility: 'private', status: 'active', shareable: true, data: {},
+      health: { status: 'broken', lastReason: 'uncaught-error', lastError: 'boom', lastCheckedAt: '2026-01-01T00:00:00.000Z' },
+    } as never);
+    await slugs.put({ _id: 'wire2', artifactId: 'wire2' });
+    const body = (await (await jwtApi('/api/v1/artifacts/wire2', t)).json()) as { health?: { status: string; lastError?: string } };
+    expectValid(Artifact, body);
+    expect(body.health?.status).toBe('broken');
+    expect(body.health?.lastError).toBe('boom');
+  });
+
+  it('createdAt/updatedAt/featuredRank: creation stamps timestamps, a PATCH bumps updatedAt, featuredRank rides the toggle', async () => {
+    const t = await tokenFor('owner1');
+    const created = (await (await jwtApi('/api/v1/artifacts', t, { method: 'POST', body: JSON.stringify({ name: 'Timestamped' }) })).json()) as Record<string, unknown>;
+    expectValid(Artifact, created);
+    expect(typeof created.createdAt).toBe('string');
+    expect(typeof created.updatedAt).toBe('string');
+
+    const patched = (await (await jwtApi(`/api/v1/artifacts/${created.id as string}`, t, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) })).json()) as Record<string, unknown>;
+    expect(patched.createdAt).toBe(created.createdAt); // creation stamp is never disturbed by a later patch
+    expect(typeof patched.updatedAt).toBe('string'); // this file's fake clock only advances on genId(), so a same-tick patch can equal created.updatedAt - presence + createdAt-stability is the meaningful assertion here
+
+    const sa = await tokenFor('sa');
+    const featured = (await (await jwtApi(`/api/v1/artifacts/${created.id as string}/featured`, sa, { method: 'PUT', body: JSON.stringify({ featured: true, featuredRank: 7 }) })).json()) as Record<string, unknown>;
+    expect(featured.featuredRank).toBe(7);
   });
 });

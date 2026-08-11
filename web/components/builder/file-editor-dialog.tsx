@@ -152,11 +152,39 @@ export function FileEditorDialog({
   const [size, setSize] = useState<DialogSize>(loadSavedSize);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [isEditorReady, setIsEditorReady] = useState(false);
+  const [monacoError, setMonacoError] = useState<string | null>(null);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const themeDefinedRef = useRef(false);
 
   const hasUnsavedChanges = originalContent !== currentContent;
+
+  // Detect Monaco init failure ourselves (the self-hosted loader.js/vs chunks
+  // 404 if public/monaco/vs is missing or stale - see copy-monaco.mjs). The
+  // <Editor> component already calls loader.init() internally, but it only
+  // console.errors a failure and leaves its own loading placeholder up forever;
+  // it exposes no onError prop. Calling loader.init() again here is safe (the
+  // loader is idempotent - it never re-injects the script) and gives us a
+  // promise we can turn into a readable, in-dialog message instead of a dead
+  // spinner. A non-Error rejection (the loader's script.onerror handler
+  // forwards the raw failed-script Event, not an Error) is normalized here.
+  useEffect(() => {
+    if (!open) return;
+    setMonacoError(null);
+    let cancelled = false;
+    loader.init().then(
+      () => {},
+      (reason: unknown) => {
+        if (cancelled) return;
+        const message = reason instanceof Error ? reason.message : 'Failed to load the code editor';
+        console.error('[FileEditorDialog] Monaco failed to initialize:', reason);
+        setMonacoError(message);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Load file content when dialog opens
   useEffect(() => {
@@ -351,6 +379,20 @@ export function FileEditorDialog({
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white p-8">
                     <AlertCircle className="w-12 h-12 text-red-500" />
                     <p className="text-sm text-neutral-500 text-center">{error}</p>
+                    <button
+                      onClick={() => onOpenChange(false)}
+                      className="px-4 py-2 text-sm font-medium text-neutral-600 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors"
+                    >
+                      {common.close}
+                    </button>
+                  </div>
+                ) : monacoError ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white p-8">
+                    <AlertCircle className="w-12 h-12 text-red-500" />
+                    <p className="text-sm text-neutral-700 text-center font-medium">
+                      Failed to load the code editor
+                    </p>
+                    <p className="text-xs text-neutral-500 text-center max-w-sm">{monacoError}</p>
                     <button
                       onClick={() => onOpenChange(false)}
                       className="px-4 py-2 text-sm font-medium text-neutral-600 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors"

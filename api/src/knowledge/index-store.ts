@@ -109,33 +109,75 @@ function connect(): Database.Database {
   // does not scale to a 500k-row shared corpus. The map turns every write/delete into a point
   // lookup + `DELETE ... WHERE rowid = ?`. It is derived data: rebuilt from one fts scan whenever
   // it drifts from the fts table (below), never migrated.
-  d.exec(
-    `CREATE TABLE IF NOT EXISTS knowledge_doc_map (
-       orgId TEXT NOT NULL, collection TEXT NOT NULL, docId TEXT NOT NULL,
-       ftsRowid INTEGER NOT NULL,
-       PRIMARY KEY (orgId, collection, docId)
-     ) WITHOUT ROWID;`,
-  );
+  //
+  // F43 (2026-08-08): the map ALSO carries the listing metadata (title/createdAt/sourceUrl/
+  // sourceType/language), not just `ftsRowid`, and gets two real B-tree indexes on top. Before this
+  // it carried ONLY the id→rowid pointer, so the BROWSE listing (`listDocsPage` below) had no way to
+  // page/order/count without going to the filesystem - `vault.listAllDocs` read and parsed EVERY
+  // file in the partition, sorted the lot, then sliced 20 off the front. Against the real 262k-doc
+  // `_shared` corpus that was a 57-SECOND request for a 20-row page (live-verified, task #43). This
+  // table is an ordinary (non-virtual) SQLite table, so - unlike `knowledge_fts` - it CAN carry real
+  // secondary indexes; an FTS5 virtual table's UNINDEXED columns cannot be indexed at all, which is
+  // why the fix lives here and not as an index on the fts table itself.
+  ensureDocMapTable(d);
   db = d;
   openPath = want;
   healDocMap(d);
   return d;
 }
 
+const DOC_MAP_LISTING_COLUMNS = ['title', 'createdAt', 'sourceUrl', 'sourceType', 'language'] as const;
+
+/** Create the map table (+ its listing indexes) if absent; if a PRE-F43 table exists without the
+ *  listing columns, drop and recreate it - derived data, never migrated. Dropping resets its row
+ *  count to 0, so the `healDocMap` count-mismatch check below rebuilds it from the fts table on the
+ *  same connection open, with no separate "did we just upgrade" flag needed. */
+function ensureDocMapTable(d: Database.Database): void {
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS knowledge_doc_map (
+       orgId TEXT NOT NULL, collection TEXT NOT NULL, docId TEXT NOT NULL,
+       ftsRowid INTEGER NOT NULL,
+       title TEXT NOT NULL DEFAULT '',
+       createdAt TEXT NOT NULL DEFAULT '',
+       sourceUrl TEXT NOT NULL DEFAULT '',
+       sourceType TEXT NOT NULL DEFAULT '',
+       language TEXT NOT NULL DEFAULT '',
+       PRIMARY KEY (orgId, collection, docId)
+     ) WITHOUT ROWID;`,
+  );
+  const cols = new Set((d.prepare('PRAGMA table_info(knowledge_doc_map)').all() as { name: string }[]).map((c) => c.name));
+  if (!DOC_MAP_LISTING_COLUMNS.every((c) => cols.has(c))) {
+    d.exec('DROP TABLE knowledge_doc_map');
+    ensureDocMapTable(d); // one level of recursion: re-creates with the current (post-drop) schema
+    return;
+  }
+  // Two indexes, not one: a browse call either names a collection (equality prefix, so the
+  // collection-inclusive index serves it) or lists every collection in the org (the collection-less
+  // index gives one globally createdAt-ordered scan instead of a per-collection scan + app-side
+  // merge).
+  d.exec('CREATE INDEX IF NOT EXISTS idx_doc_map_org_created ON knowledge_doc_map(orgId, createdAt, docId)');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_doc_map_org_coll_created ON knowledge_doc_map(orgId, collection, createdAt, docId)');
+}
+
 /** Self-heal the doc-map on open: if its row count differs from the fts table (a pre-map index, a
- *  crash between the two writes, or any drift), rebuild it from one fts scan. Derived data — no
- *  migration. Runs once per connection open; a fresh db has both counts 0 and is a no-op. */
+ *  crash between the two writes, a just-upgraded pre-F43 table, or any drift), rebuild it from one
+ *  fts scan. Derived data - no migration. Runs once per connection open; a fresh db has both counts
+ *  0 and is a no-op. */
 function healDocMap(d: Database.Database): void {
   const ftsCount = (d.prepare('SELECT COUNT(*) AS n FROM knowledge_fts').get() as { n: number }).n;
   const mapCount = (d.prepare('SELECT COUNT(*) AS n FROM knowledge_doc_map').get() as { n: number }).n;
   if (ftsCount === mapCount) return;
-  const rows = d.prepare('SELECT rowid, orgId, collection, docId FROM knowledge_fts').all() as {
+  const rows = d.prepare('SELECT rowid, orgId, collection, docId, title, createdAt, sourceUrl, sourceType, language FROM knowledge_fts').all() as {
     rowid: number; orgId: string; collection: string; docId: string;
+    title: string; createdAt: string; sourceUrl: string; sourceType: string; language: string;
   }[];
-  const ins = d.prepare('INSERT OR REPLACE INTO knowledge_doc_map(orgId, collection, docId, ftsRowid) VALUES (?, ?, ?, ?)');
+  const ins = d.prepare(
+    `INSERT OR REPLACE INTO knowledge_doc_map(orgId, collection, docId, ftsRowid, title, createdAt, sourceUrl, sourceType, language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
   const tx = d.transaction(() => {
     d.exec('DELETE FROM knowledge_doc_map');
-    for (const r of rows) ins.run(r.orgId, r.collection, r.docId, r.rowid);
+    for (const r of rows) ins.run(r.orgId, r.collection, r.docId, r.rowid, r.title, r.createdAt, r.sourceUrl, r.sourceType, r.language);
   });
   tx();
 }
@@ -162,25 +204,33 @@ export function bulkIndexDocs(rows: IndexRow[]): void {
      VALUES (@orgId, @collection, @docId, @title, @body, @createdAt, @sourceUrl, @sourceType, @language)`,
   );
   const upsertMap = d.prepare(
-    `INSERT INTO knowledge_doc_map(orgId, collection, docId, ftsRowid) VALUES (?, ?, ?, ?)
-     ON CONFLICT(orgId, collection, docId) DO UPDATE SET ftsRowid = excluded.ftsRowid`,
+    `INSERT INTO knowledge_doc_map(orgId, collection, docId, ftsRowid, title, createdAt, sourceUrl, sourceType, language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(orgId, collection, docId) DO UPDATE SET
+       ftsRowid = excluded.ftsRowid, title = excluded.title, createdAt = excluded.createdAt,
+       sourceUrl = excluded.sourceUrl, sourceType = excluded.sourceType, language = excluded.language`,
   );
   const tx = d.transaction((batch: IndexRow[]) => {
     for (const r of batch) {
       const existing = findRowid.get(r.orgId, r.collection, r.docId) as { ftsRowid: number } | undefined;
       if (existing) delFts.run(existing.ftsRowid);
+      const title = r.title;
+      const createdAt = r.createdAt ?? '';
+      const sourceUrl = r.sourceUrl ?? '';
+      const sourceType = r.sourceType ?? '';
+      const language = r.language ?? '';
       const info = insFts.run({
         orgId: r.orgId,
         collection: r.collection,
         docId: r.docId,
-        title: r.title,
+        title,
         body: r.body,
-        createdAt: r.createdAt ?? '',
-        sourceUrl: r.sourceUrl ?? '',
-        sourceType: r.sourceType ?? '',
-        language: r.language ?? '',
+        createdAt,
+        sourceUrl,
+        sourceType,
+        language,
       });
-      upsertMap.run(r.orgId, r.collection, r.docId, info.lastInsertRowid);
+      upsertMap.run(r.orgId, r.collection, r.docId, info.lastInsertRowid, title, createdAt, sourceUrl, sourceType, language);
     }
   });
   tx(rows);
@@ -269,6 +319,74 @@ export function search(orgId: string, query: string, limit = 5): SearchHit[] {
     }))
     .sort((a, b) => b.score - a.score);
   return ranked.slice(0, limit);
+}
+
+export interface IndexDocSummary {
+  docId: string;
+  collection: string;
+  title: string;
+  sourceUrl?: string;
+  sourceType?: string;
+  language?: string;
+  createdAt?: string;
+}
+
+interface RawMapRow {
+  docId: string;
+  collection: string;
+  title: string;
+  sourceUrl: string;
+  sourceType: string;
+  language: string;
+  createdAt: string;
+}
+
+/**
+ * Paginated, ORDERED browse listing for one partition (F43): backed by `knowledge_doc_map`'s
+ * B-tree indexes, never the filesystem. `total` and the page are each one index-covered query -
+ * O(page) + O(log n), not O(corpus). Fixes a 57-SECOND `_shared` browse call (262,672 docs) that
+ * `vault.listDocs` produced by reading and parsing every file, sorting the lot, then slicing 20
+ * off the front (live-verified against the real corpus, task #43). Deterministic order matches
+ * the filesystem path it replaces exactly: createdAt ascending, docId ascending as the tiebreak.
+ *
+ * Deliberately does NOT return `size` (VaultDoc's byte count) - the browse row never rendered it
+ * (`web/app/(dashboard)/knowledge/page.tsx` shows title/collection/createdAt/sourceUrl only, and
+ * no test asserted it either), and computing it here would mean a per-page file `stat()` call,
+ * re-introducing exactly the filesystem dependency this fix removes. `KnowledgeDocSummary.size`
+ * stays in the wire contract (additive/optional) for whichever caller does carry it; a browse
+ * listing simply omits it, same as it always omitted `date`/`snippet`.
+ */
+export function listDocsPage(
+  orgId: string,
+  opts: { collection?: string; offset?: number; limit?: number } = {},
+): { items: IndexDocSummary[]; total: number } {
+  const d = connect();
+  const offset = opts.offset ?? 0;
+  const limit = opts.limit ?? 50;
+  const params: string[] = opts.collection ? [orgId, opts.collection] : [orgId];
+  const whereCollection = opts.collection ? 'AND collection = ?' : '';
+  const total = (
+    d.prepare(`SELECT COUNT(*) AS n FROM knowledge_doc_map WHERE orgId = ? ${whereCollection}`).get(...params) as { n: number }
+  ).n;
+  const rows = d
+    .prepare(
+      `SELECT docId, collection, title, sourceUrl, sourceType, language, createdAt
+       FROM knowledge_doc_map
+       WHERE orgId = ? ${whereCollection}
+       ORDER BY createdAt ASC, docId ASC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as RawMapRow[];
+  const items = rows.map((r) => ({
+    docId: r.docId,
+    collection: r.collection,
+    title: r.title,
+    sourceUrl: r.sourceUrl || undefined,
+    sourceType: r.sourceType || undefined,
+    language: r.language || undefined,
+    createdAt: r.createdAt || undefined,
+  }));
+  return { items, total };
 }
 
 export interface IndexStatus {

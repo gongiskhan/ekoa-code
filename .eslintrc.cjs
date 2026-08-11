@@ -120,6 +120,7 @@ module.exports = {
                   './api/src/integrations',
                   './api/src/memory',
                   './api/src/knowledge',
+                  './api/src/uploads',
                   './api/src/bridge',
                   './api/src/streaming',
                   './api/src/voice',

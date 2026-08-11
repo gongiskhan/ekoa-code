@@ -67,8 +67,23 @@ export async function bumpTokenEpochDurable(userId: string, epochSec: number): P
   await users.update(userId, (u) => ({ ...u, tokenEpoch: epochSec }));
 }
 
-/** First-boot super-admin seeding: creates the founder's org + super-admin account if absent. */
-export async function seedAdmin(username: string, password: string, deps: Deps): Promise<void> {
+/**
+ * First-boot super-admin seeding: creates the founder's org + super-admin account if absent.
+ *
+ * The seeded password comes from `EKOA_ADMIN_PASSWORD`, i.e. a credential the operator already
+ * knows and that the dev harness publishes, so the account is created with
+ * `passwordChangeRequired: true` and the login flow forces a rotation. `opts.forcePasswordChange`
+ * may only turn that off for a LOCAL stack - the caller derives it from
+ * `config.seedAdminSkipsPasswordChange`, which is hard-false in production. Default true, so a
+ * caller that omits it gets the safe behaviour.
+ */
+export async function seedAdmin(
+  username: string,
+  password: string,
+  deps: Deps,
+  opts: { forcePasswordChange?: boolean } = {},
+): Promise<void> {
+  const forcePasswordChange = opts.forcePasswordChange ?? true;
   const existing = await users.find({ role: 'super-admin' });
   if (existing.length > 0) return;
   const orgId = deps.genId();
@@ -81,7 +96,7 @@ export async function seedAdmin(username: string, password: string, deps: Deps):
     role: 'super-admin',
     orgId,
     active: true,
-    passwordChangeRequired: true,
+    passwordChangeRequired: forcePasswordChange,
   });
   setActivation(userId, { active: true, billingLocked: false });
 }

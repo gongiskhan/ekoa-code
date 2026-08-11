@@ -19,6 +19,13 @@ export interface RegistoFilters {
   from: string;
   to: string;
   orgId: string;
+  /** The API hides `anonymisation.*` rows by default (registo-anon-audit-actor-blank mitigation,
+   *  docs/findings.md, `readRegisto` in api/src/services/platform-crud.ts): a single chat/build
+   *  turn's Agent SDK subprocess writes many of these per one human action, most now correctly
+   *  `'system'`-attributed rather than a person, so left in they would swamp every
+   *  human-attributable row. This is the one-click, VISIBLE opt back in - never a silent filter -
+   *  surfaced as a notice + toggle on the page, not tucked into the generic filters bar. */
+  includeAnonymisation: boolean;
 }
 
 const DEFAULT_FILTERS: RegistoFilters = {
@@ -27,6 +34,7 @@ const DEFAULT_FILTERS: RegistoFilters = {
   from: '',
   to: '',
   orgId: '',
+  includeAnonymisation: false,
 };
 
 const PAGE_SIZE = 50;
@@ -39,7 +47,10 @@ interface RegistoState {
   error: string | null;
 
   fetchRegisto: () => Promise<void>;
-  setFilter: (key: keyof RegistoFilters, value: string) => void;
+  setFilter: (key: Exclude<keyof RegistoFilters, 'includeAnonymisation'>, value: string) => void;
+  /** The one-click toggle for the masking-events default filter (see RegistoFilters doc).
+   *  Refetches immediately - it is a visible switch, not a "remember to click Apply" filter. */
+  setIncludeAnonymisation: (value: boolean) => void;
   clearFilters: () => void;
   clearError: () => void;
 }
@@ -70,6 +81,7 @@ export const useRegistoStore = create<RegistoState>()((set, get) => ({
     if (from) query.from = from;
     if (to) query.to = to;
     if (filters.orgId) query.orgId = filters.orgId;
+    if (filters.includeAnonymisation) query.includeAnonymisation = 'true';
 
     const response = await tryCall(() =>
       api.registo.listRegisto(query as unknown as Record<string, unknown>),
@@ -83,6 +95,11 @@ export const useRegistoStore = create<RegistoState>()((set, get) => ({
 
   setFilter: (key, value) => {
     set((state) => ({ filters: { ...state.filters, [key]: value } }));
+  },
+
+  setIncludeAnonymisation: (value) => {
+    set((state) => ({ filters: { ...state.filters, includeAnonymisation: value } }));
+    void get().fetchRegisto();
   },
 
   clearFilters: () => {

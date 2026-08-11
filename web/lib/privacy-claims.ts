@@ -183,6 +183,15 @@ export const PRIVACY_COPY = {
   /** Shown when a pending reference could not be turned into a grant at send time (D3). */
   referenceMintError:
     'Não foi possível autorizar a referência local. A mensagem foi enviada sem ela; verifique a ponte local e tente de novo.',
+  /**
+   * WS4b: a browser drop/paste carries only file BYTES, never a filesystem path - so a dropped
+   * file physically cannot become a Reference (that needs a real path to grant). When the bridge
+   * is connected the user has a lower-custody alternative available for local files; a drop
+   * still uploads (there is no other option for it), but the hint tells them where to find
+   * Reference for NEXT time. Dismissible, not a claim - operational routing copy only.
+   */
+  dropUploadsReferenceHint:
+    'Este ficheiro foi carregado para os nossos servidores. Para manter documentos no seu computador, use Anexar > Referenciar (local).',
 
   // -- FC-402 trust chip (mechanism labels; the masked-count CLAIM is gated) --
   chipReadPrefix: 'Leu',

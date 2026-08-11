@@ -208,6 +208,33 @@ export function renderPrompt(history: Array<{ role: string; content: string }>, 
 }
 
 /**
+ * Budget-based history cap for a ONE-SHOT prompt injection that has no SDK session to carry
+ * context across turns (WS6: a build's FIRST run). `renderPrompt` above is deliberately
+ * UNCAPPED for chat (full history, never clipped - item 5); a build's first run has no prior
+ * turn to resume, so instead of skipping continuity entirely it gets a bounded transcript,
+ * mirroring ekoa-dev's conversation-transcript cap (cortex/src/adapters/external.ts): the most
+ * recent `maxTurns` turns, budget allocated newest-first so a long pasted document in a recent
+ * turn is not evenly starved by older turns it doesn't need to share room with.
+ */
+export function capHistory(
+  history: Array<{ role: string; content: string }>,
+  opts: { maxTurns: number; totalBudgetChars: number; maxTurnChars: number },
+): Array<{ role: string; content: string }> {
+  const recent = history.slice(-opts.maxTurns);
+  const out: Array<{ role: string; content: string } | null> = new Array(recent.length).fill(null);
+  let remaining = opts.totalBudgetChars;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (remaining <= 0) break;
+    const turn = recent[i]!;
+    const cap = Math.min(opts.maxTurnChars, remaining);
+    const content = turn.content.length > cap ? `${turn.content.slice(0, cap)} […truncado]` : turn.content;
+    remaining -= content.length;
+    out[i] = { role: turn.role, content };
+  }
+  return out.filter((t): t is { role: string; content: string } => t !== null);
+}
+
+/**
  * FC-400/D4 (run s6): the ONE context line carrying the composer's reference tokens, so the
  * model calls `delegate_to_local` with real grantRefs instead of the user hand-typing them.
  * The refs are opaque (§18.2.1 S1) and the labels display-only; an empty list renders nothing.

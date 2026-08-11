@@ -7,6 +7,7 @@ import { SessionCreateRequest, SessionPatch, MessageCreateRequest, SheetRenameRe
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import { listSessions, createSession, ownedSession, updateSession, deleteSession, listMessages, addMessage, sessionView, messageView, listSessionSheetViews, addSessionSheetRevision, renameSessionSheet } from '../services/platform-crud.js';
 import { actorOf, notFound, parseBody } from './helpers.js';
+import { loadWritable, patchArtifactData } from '../apps/app-paths.js';
 
 export function sessionsRouter(deps: { now: () => number; genId: () => string }): Router {
   const r = Router();
@@ -22,7 +23,20 @@ export function sessionsRouter(deps: { now: () => number; genId: () => string })
   r.post('/', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SessionCreateRequest, req.body) as { name?: string; type?: string; artifactId?: string } | undefined;
     if (!body) return;
-    res.status(201).json(sessionView(await createSession(actorOf(req).userId, body, deps, audActor(req))));
+    const session = await createSession(actorOf(req).userId, body, deps, audActor(req));
+    // Reciprocal server-side link (ch03 §3.8.6 x §3.8.9 continue-flow): a session created FOR an
+    // artifact stamps the ARTIFACT's own `data.sessionId` too, through the same reserved-key path
+    // every other build/featured write uses (`patchArtifactData` - never the client PATCH route,
+    // `sessionId` is in RESERVED_ARTIFACT_DATA_KEYS). This is what lets `/chat?continue=<artifactId>`
+    // (chat page) resolve straight to this session on the NEXT load without a client `data` write,
+    // which cannot work - the route strips reserved keys at the boundary. Best-effort: a session is
+    // already created at this point regardless of whether the link lands; an ownership mismatch or
+    // missing artifact is silently skipped rather than failing session creation over it.
+    if (body.artifactId) {
+      const { verdict } = await loadWritable(actorOf(req), body.artifactId);
+      if (verdict === 'ok') await patchArtifactData(body.artifactId, { sessionId: session._id });
+    }
+    res.status(201).json(sessionView(session));
   });
 
   r.get('/:id', async (req: AuthedRequest, res: Response) => {

@@ -11,7 +11,32 @@
  */
 import { sseManager } from '../events/sse-manager.js';
 import { loadAgentsConfig } from '../config.js';
+import { runErrorText, type RunErrorCode } from '@ekoa/shared';
 import type { ChatRunEvent, JobEvent, NotificationEvent } from '@ekoa/shared';
+
+/**
+ * Build a terminal `error` payload. The sinks take a CODE (+ structured params) and NEVER a
+ * message: the wire text is derived here from the one shared table, so no producer can put an
+ * exception message, a provider body, or a model-derived note in front of a user (ch12; finding
+ * `run-error-text-leak`). Detail belongs in the server log and on the JobRecord, not on the wire.
+ *
+ * `RunErrorCode` is required at the type level, so adding a new failure mode forces a matching
+ * entry in the shared vocabulary rather than a one-off string.
+ */
+function errorPayload(code: RunErrorCode, params?: Record<string, string>): {
+  type: 'error';
+  code: string;
+  message: string;
+  params?: Record<string, string>;
+} {
+  return {
+    type: 'error',
+    code,
+    // PT is the wire language (the product default); the web re-derives in the user's locale.
+    message: runErrorText(code, 'pt', params),
+    ...(params ? { params } : {}),
+  };
+}
 
 /** Truncate a tool arg/result value's string form to the configured cap (§5.7.1). */
 function truncate(value: unknown): unknown {
@@ -84,8 +109,9 @@ export class ChatStreamSink {
   complete(result: unknown, durationMs: number, delegate?: { kind: 'build' | 'integration'; request: Record<string, unknown> }): void {
     this.emit({ type: 'complete', result, durationMs, ...(delegate ? { delegate } : {}) });
   }
-  error(code: string, message: string): void {
-    this.emit({ type: 'error', code, message });
+  /** Terminal failure. Takes a CODE, never prose — see `errorPayload`. */
+  error(code: RunErrorCode, params?: Record<string, string>): void {
+    this.emit(errorPayload(code, params) as ChatRunEvent);
   }
 }
 
@@ -130,15 +156,18 @@ export class JobStreamSink {
   complete(payload: { result?: unknown; artifactId?: string; slug?: string; appUrl?: string }, durationMs: number): void {
     this.emit({ type: 'complete', durationMs, ...payload });
   }
-  error(code: string, message: string): void {
-    this.emit({ type: 'error', code, message });
+  /** Terminal failure. Takes a CODE, never prose — see `errorPayload`. */
+  error(code: RunErrorCode, params?: Record<string, string>): void {
+    this.emit(errorPayload(code, params) as JobEvent);
   }
 }
 
 // --- Notifications channel (§3.6.4 `NotificationEvent`) -----------------------------------
 
-/** Fire a `build_intent` on the target user's notifications channel (§5.7.2). */
-export function emitBuildIntent(userId: string, ev: { sessionId: string; sourceRunId: string; request: { description: string; artifactId?: string } }): void {
+/** Fire a `build_intent` on the target user's notifications channel (§5.7.2). `request.description`
+ *  is the chat-agent's build paraphrase; `request.originalMessage` (WS6 incident fix) carries the
+ *  user's own words alongside it - see shared/src/events.ts for why both travel. */
+export function emitBuildIntent(userId: string, ev: { sessionId: string; sourceRunId: string; request: { description: string; artifactId?: string; originalMessage?: string } }): void {
   const payload: NotificationEvent = { type: 'build_intent', ...ev };
   sseManager.emit('notifications', userId, 'build_intent', payload);
 }

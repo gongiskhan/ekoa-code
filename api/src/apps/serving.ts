@@ -324,20 +324,28 @@ export function servingRouter(deps: ServingDeps): Router {
         // ?token= query (Q-05 resolved).
         const cookieHeader = (req.headers.cookie || '') as string;
         const cookieToken = /(?:^|;\s*)ekoa_token=([^;]+)/.exec(cookieHeader)?.[1];
+        // F44 anchor-navigation cookie (set below on a valid ?token= preview visit). Read
+        // SEPARATELY from ekoa_token and tried independently: a stale preview cookie must not
+        // shadow a fresh ?token= on the same request, so candidates are validated in order
+        // rather than first-non-empty-wins.
+        const previewCookieRaw = /(?:^|;\s*)ekoa_preview=([^;]+)/.exec(cookieHeader)?.[1];
+        const previewCookie = previewCookieRaw ? decodeURIComponent(previewCookieRaw) : undefined;
         const headerToken = (req.headers.authorization || '').replace(/^Bearer\s+/, '') || undefined;
         const queryToken = (req.query.token as string | undefined) || undefined;
-        const token = headerToken || cookieToken || queryToken;
 
         let isOwner = false;
-        if (token) {
+        let ownerViaQueryPreview = false;
+        for (const candidate of [headerToken, cookieToken, previewCookie, queryToken]) {
+          if (!candidate || isOwner) continue;
           // Purpose-scoped preview token first (the per-build verifier's capability: view THIS
           // artifact only, short TTL - never a user JWT in an agent transcript).
-          const previewArtifactId = verifyPreviewToken(token);
+          const previewArtifactId = verifyPreviewToken(candidate);
           if (previewArtifactId && previewArtifactId === canonicalAppId) {
             isOwner = true;
+            ownerViaQueryPreview = candidate === queryToken;
           } else {
             try {
-              const claims = deps.verifyToken(token);
+              const claims = deps.verifyToken(candidate);
               const resolvedAppId = getAppIdBySlug(appId) || appId;
               const artifact = await artifacts.get(resolvedAppId);
               if (artifact && artifact.userId === claims.sub) isOwner = true;
@@ -345,6 +353,28 @@ export function servingRouter(deps: ServingDeps): Router {
               /* invalid token -> not the owner */
             }
           }
+        }
+
+        // F44: a ?token= preview visit converts the query capability into an HttpOnly cookie
+        // scoped to THIS app's path, then redirects to the clean URL. Why: the served app
+        // injects <base href="/apps/<id>/">, so even a pure #anchor click is a real document
+        // navigation that DROPS the query string - the build verifier found every nav link in a
+        // non-shareable site landing on the 410 page ("Link já não disponível", 2026-08-08).
+        // With the cookie, those navigations re-authorize; the 302 also takes the token out of
+        // the address bar. PREVIEW tokens only - single-artifact capability with a short TTL.
+        // Cookying a user JWT under an app path would widen where a full credential travels, so
+        // the JWT query path keeps its existing (no-cookie) behavior.
+        if (isOwner && ownerViaQueryPreview) {
+          const cleanQuery = Object.entries(req.query)
+            .filter(([k]) => k !== 'token')
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+            .join('&');
+          res.setHeader(
+            'Set-Cookie',
+            `ekoa_preview=${encodeURIComponent(queryToken!)}; Path=/apps/${encodeURIComponent(appId)}/; HttpOnly; SameSite=Lax`,
+          );
+          res.redirect(302, `${urlPath}${cleanQuery ? `?${cleanQuery}` : ''}`);
+          return;
         }
 
         if (!isOwner) {

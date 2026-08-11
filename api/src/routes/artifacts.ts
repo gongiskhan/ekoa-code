@@ -31,6 +31,7 @@ import type { SnapshotAudit } from '../services/commit-guard.js';
 import { SecretCommitError } from '../services/commit-guard.js';
 import type { AppDataDeps } from '../apps/app-data-access.js';
 import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag, isAppArtifact } from '../apps/app-paths.js';
+import { ensureArtifactScreenshot } from '../services/artifact-screenshot.js';
 import { forkArtifact } from '../apps/artifact-fork.js';
 import { exportArtifact, importArtifact, updateArtifactFromBundle, ManifestIdMismatchError } from '../apps/artifact-bundle.js';
 import { applyFeaturedUpdate, ignoreFeaturedUpdate } from '../apps/artifact-featured-update.js';
@@ -103,6 +104,13 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
   // ---- base CRUD (ch03 §3.8.9) ----
   r.get('/', async (req: AuthedRequest, res: Response) => {
     const { items, featured } = await listArtifacts(actorOf(req));
+    // Lazy screenshot backfill (§7.11): a runnable artifact with no captured PNG gets one queued
+    // in the background - fire-and-forget, never awaited, so it can never slow this response.
+    for (const a of [...items, ...featured]) {
+      if (a.status === 'ready' || a.status === 'running' || a.status === 'active') {
+        ensureArtifactScreenshot(a._id);
+      }
+    }
     res.json({ items: items.map(artifactView), featured: featured.map(artifactView) });
   });
 
@@ -145,7 +153,7 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
     if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
       body.data = stripReservedDataKeys(body.data as Record<string, unknown>);
     }
-    const result = await patchArtifact(actorOf(req), req.params.id as string, body);
+    const result = await patchArtifact(actorOf(req), req.params.id as string, body, deps);
     if (result.verdict === 'notfound') return notFound(res);
     if (result.verdict === 'forbidden') {
       if (typeof body.slug === 'string') return sendError(res, 'SLUG_TAKEN', 'Slug já em uso.');

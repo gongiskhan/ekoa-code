@@ -312,4 +312,32 @@ describe('audit folds into the single Registo write path, metadata only (§17.6,
     assertTokensOnly(serialized);
     expect(serialized).not.toContain('valueToToken');
   });
+
+  it('a call with no per-request principal (the static gateway-key path) is tagged "system", never blank', async () => {
+    // proxyGatewayMessages with an empty billeeUserId is the REAL call shape for the static
+    // gateway-key principal (llm/gateway.ts `authenticate` -> `{ kind: 'apikey' }` ->
+    // `billeeOf` -> ''): the credential every Agent SDK subprocess presents when it calls back
+    // into this chokepoint (credentials.ts `buildSubprocessEnv`). That HTTP boundary carries no
+    // per-request user identity. Empirically this - not a `ctx.actor ?? {}` miss - was the
+    // dominant source of unattributable Registo rows: `RegistoEntry.actor: Id = z.string().min(1)`
+    // rejected the empty string every reader downstream.
+    __setTransportForTests(fakeTransport({
+      async messages(p: RestCallParams) { return { status: 200, headers: {}, body: bodyEcho((p.payload.messages as Array<{ content: string }>)[0]!.content) }; },
+    }));
+    await proxyGatewayMessages({ messages: [{ role: 'user', content: 'no principal here' }] }, '');
+
+    // Scoped to userId:'system' (not just category:'anonymisation'): the preceding test in this
+    // same describe block also writes an 'anonymisation' row (via completeFast, real actor 'u1')
+    // whose fire-and-forget write could still be landing when this poll starts under load - a
+    // broader query would risk grabbing that leftover instead of this call's own row.
+    let rows: Array<{ userId?: string; username?: string; orgId?: string }> = [];
+    for (let i = 0; i < 50 && rows.length === 0; i++) {
+      rows = (await activityLogs.find({ category: 'anonymisation', userId: 'system' })) as typeof rows;
+      if (rows.length === 0) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.userId).toBe('system');
+    expect(rows[0]!.username).toBe('system');
+    expect(rows[0]!.orgId).toBe('system');
+  });
 });

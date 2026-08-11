@@ -355,10 +355,14 @@ interface OrchestrationState {
   pendingDelegation: {
     description: string;
     templateId: string | null;
+    // WS6 incident fix: the user's own words for this build, carried alongside the chat-agent's
+    // paraphrase (`description`) so the build pipeline classifies AND briefs the build agent on
+    // what was actually asked, not the paraphrase. Absent only if the server didn't send one.
+    originalMessage?: string;
   } | null;
 
   // Actions
-  createSession: (params?: { name?: string; type?: string }) => Promise<string>;
+  createSession: (params?: { name?: string; type?: string; artifactId?: string }) => Promise<string>;
   /** Find-or-create the single persistent onboarding session. Unlike
    *  createSession, a server failure returns { persisted: false } WITHOUT
    *  minting a local phantom session, so the caller can surface an error. */
@@ -453,7 +457,7 @@ interface OrchestrationState {
   clearAttachments: () => void;
 
   // Delegation
-  setPendingDelegation: (delegation: { description: string; templateId: string | null } | null) => void;
+  setPendingDelegation: (delegation: { description: string; templateId: string | null; originalMessage?: string } | null) => void;
 
   // Initialization
   initializeBuilderSession: () => Promise<void>;
@@ -469,7 +473,9 @@ interface OrchestrationState {
   hydrateSessionFromArtifact: (sessionId: string, artifacts?: ArtifactRef[]) => Promise<boolean>;
 }
 
-// Shape returned by ekoa.templates list-instances, only the fields we use here.
+// Shape returned by the artifacts list (`shared/src/artifacts.ts` Artifact - only the fields we
+// use here). `sessionId`/`appUrl` are narrow top-level lifts off the server-owned `data` bag
+// (never the bag itself: `projectDir`/`sdkSessionId` stay server-only, ch09).
 export interface ArtifactRef {
   id: string;
   slug?: string;
@@ -477,11 +483,8 @@ export interface ArtifactRef {
   shareable?: boolean;
   updatedAt?: string;
   createdAt?: string;
-  data?: {
-    sessionId?: string;
-    projectDir?: string;
-    appUrl?: string;
-  };
+  sessionId?: string;
+  appUrl?: string;
 }
 
 // ============================================
@@ -1534,7 +1537,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         const artifactById = new Map<string, ArtifactRef>();
         for (const a of artifacts) {
           if (a?.id) artifactById.set(a.id, a);
-          const sid = a?.data?.sessionId;
+          const sid = a?.sessionId;
           // First-writer-wins keeps shared-session resolution deterministic
           // across reloads (vs. last-writer, which flips with list order).
           if (sid && !artifactBySessionId.has(sid)) artifactBySessionId.set(sid, a);
@@ -1580,7 +1583,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
                 artifactInstanceId: a.id,
                 slug: a.slug ?? null,
                 shareable: a.shareable === true,
-                projectPath: a.data?.projectDir ?? existingJob.projectPath ?? null,
+                // projectDir is server-owned and never on the wire (ch09) - keep whatever was
+                // already persisted; loadSessionFiles fills it in from a server round-trip.
+                projectPath: existingJob.projectPath ?? null,
                 status: existingJob.status === 'idle' ? 'completed' : existingJob.status,
               };
               const existingPreview = newPreviews[session.id] || getDefaultSessionPreview();
@@ -1589,7 +1594,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
               // previewId so the side panel can't fall back to it.
               newPreviews[session.id] = {
                 ...existingPreview,
-                appUrl: a.data?.appUrl ?? `/apps/${a.id}/`,
+                appUrl: a.appUrl ?? `/apps/${a.id}/`,
                 previewId: null,
                 status: existingPreview.status === 'idle' ? 'running' : existingPreview.status,
               };
@@ -1839,7 +1844,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         const match =
           (existing?.artifactInstanceId
             ? list?.find((a) => a?.id === existing.artifactInstanceId)
-            : undefined) ?? list?.find((a) => a?.data?.sessionId === sessionId);
+            : undefined) ?? list?.find((a) => a?.sessionId === sessionId);
 
         // No artifact resolved for this session. If the list fetch failed but we
         // already have a linked job, keep it and hydrate files; otherwise there
@@ -1871,7 +1876,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
           const isActive = state.activeSessionId === sessionId;
           const currentPanel = state.sessionSidePanelStates[sessionId];
           // Prefer the artifact's own id-based canonical URL (slug-drift-immune).
-          const canonicalAppUrl = match.data?.appUrl ?? `/apps/${match.id}/`;
+          const canonicalAppUrl = match.appUrl ?? `/apps/${match.id}/`;
           return {
             sessionJobs: {
               ...state.sessionJobs,
@@ -1880,7 +1885,9 @@ export const useOrchestrationStore = create<OrchestrationState>()(
                 artifactInstanceId: match.id,
                 slug: match.slug ?? null,
                 shareable: match.shareable === true,
-                projectPath: match.data?.projectDir ?? job.projectPath ?? null,
+                // projectDir is server-owned and never on the wire (ch09) - keep whatever the job
+                // already carried (e.g. from an earlier server round-trip via loadSessionFiles).
+                projectPath: job.projectPath ?? null,
                 status: job.status === 'idle' ? 'completed' : job.status,
                 lastBuildAt: match.updatedAt ?? match.createdAt ?? job.lastBuildAt,
               },

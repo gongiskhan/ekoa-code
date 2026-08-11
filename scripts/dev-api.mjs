@@ -83,6 +83,13 @@ const env = {
   JWT_SECRET: process.env.JWT_SECRET ?? 'dev-only-jwt-secret',
   EKOA_ADMIN_USERNAME: process.env.EKOA_ADMIN_USERNAME ?? 'admin',
   EKOA_ADMIN_PASSWORD: process.env.EKOA_ADMIN_PASSWORD ?? 'tmp12345',
+  // This stack's storage is ephemeral by default, so the admin is re-seeded on EVERY boot. With
+  // the production forced-rotation posture that means re-doing the password-change prompt every
+  // time, and the moment the operator changes it, `scripts/dev-credential.mjs` can no longer log
+  // in as admin/tmp12345 to provision the model credential (observed 2026-08-10: `[provision]
+  // login failed as admin: 401`). The seeded password here IS the published dev default, so
+  // rotating it protects nothing. The API ignores this flag entirely under NODE_ENV=production.
+  EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE: process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE ?? '1',
 };
 
 let child;

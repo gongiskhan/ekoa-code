@@ -41,6 +41,8 @@ import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips"
 import { copyToClipboard } from "@/lib/clipboard";
 import { useModKeyPrefix } from "@/lib/use-mod-key";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
+import { shouldStageAsTextAttachment } from "@/lib/file-picker";
+import { useBridgePresence } from "@/hooks/use-bridge-presence";
 
 // ============================================
 // HELPERS
@@ -122,7 +124,7 @@ export default function UnifiedChatPage() {
   const isLegalOrg = useSettingsStore((s) =>
     s.isLoaded ? s.settings.general.vertical === "legal" : false,
   );
-  const { chatPanel, emptyState, sheetFeed, sessionsPanel, language: uiLanguage } = useTranslation();
+  const { chatPanel, emptyState, sheetFeed, sessionsPanel, common, language: uiLanguage } = useTranslation();
   const modKey = useModKeyPrefix();
   const sessionJobs = useOrchestrationStore((s) => s.sessionJobs);
   const sessionPreviews = useOrchestrationStore((s) => s.sessionPreviews);
@@ -140,6 +142,14 @@ export default function UnifiedChatPage() {
   // FC-400 (run s6): reference tokens attached to the NEXT outgoing message (D4).
   const [referenceTokens, setReferenceTokens] = useState<PendingReference[]>([]);
   const [referenceMintError, setReferenceMintError] = useState(false);
+  // WS4b: drag-over visual affordance for the composer box (files dropped anywhere on it stage
+  // as attachments).
+  const [dragActive, setDragActive] = useState(false);
+  // WS4b: a browser drop/paste has no filesystem path, so it can only ever upload - never mint a
+  // Reference. When the bridge IS connected, an uploaded-by-drop file nudges the user toward
+  // Reference for next time (dismissible, shown once per stage, not a persistent nag).
+  const { connected: bridgeConnected } = useBridgePresence();
+  const [showBridgeHint, setShowBridgeHint] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlInputValue, setUrlInputValue] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -224,32 +234,30 @@ export default function UnifiedChatPage() {
           router.replace("/chat");
           return;
         }
+        // `sessionId`/`appUrl` are narrow top-level wire fields (`shared/src/artifacts.ts`
+        // Artifact) - the server-owned `data` bag itself is never on the wire, so a client PATCH
+        // can never set `data.sessionId` (it is in RESERVED_ARTIFACT_DATA_KEYS and is stripped at
+        // the route). The link has to be made server-side, which is exactly what
+        // `store.createSession({ artifactId })` does below (`POST /sessions` links the artifact's
+        // `data.sessionId` to the new session as part of creating it).
         const artifact = res.data as unknown as {
           id: string;
           slug?: string;
-          data?: { sessionId?: string; projectDir?: string; appUrl?: string };
+          sessionId?: string;
+          appUrl?: string;
         };
-        const artifactSessionId = artifact.data?.sessionId;
+        const artifactSessionId = artifact.sessionId;
 
         // Pick (or create) the target session: prefer the artifact's recorded
         // sessionId if it still exists on backend, otherwise create a fresh one
-        // and re-link the artifact so future loads find it.
+        // and let the server link the artifact to it so future loads find it.
         let targetSessionId: string | null = null;
         const sessionExists = artifactSessionId
           && store.sessions.some((s) => s.id === artifactSessionId);
         if (sessionExists) {
           targetSessionId = artifactSessionId!;
         } else {
-          const newId = await store.createSession();
-          targetSessionId = newId;
-          await api.artifacts.patch({
-            id: artifact.id,
-            data: {
-              sessionId: newId,
-              projectDir: artifact.data?.projectDir,
-              appUrl: artifact.data?.appUrl,
-            },
-          }).catch(() => {});
+          targetSessionId = await store.createSession({ artifactId: artifact.id });
         }
 
         if (!targetSessionId) {
@@ -260,13 +268,15 @@ export default function UnifiedChatPage() {
         store.setActiveSession(targetSessionId);
         store.setSessionJob(targetSessionId, {
           artifactInstanceId: artifact.id,
-          projectPath: artifact.data?.projectDir ?? null,
+          // projectDir is server-owned and never on the wire (ch09) - a server round-trip
+          // (loadSessionFiles / hydrateSessionFromArtifact) fills it in once needed.
+          projectPath: null,
           slug: artifact.slug ?? null,
           status: "completed",
         });
-        if (artifact.data?.appUrl) {
+        if (artifact.appUrl) {
           store.setSessionPreview(targetSessionId, {
-            appUrl: artifact.data.appUrl,
+            appUrl: artifact.appUrl,
             status: "running",
           });
         }
@@ -460,6 +470,58 @@ export default function UnifiedChatPage() {
     const folder = await pickFolder();
     if (folder) addAttachment(folder);
   }, [addAttachment]);
+
+  // WS4b: drag-and-drop onto the composer box. dragOver must call preventDefault or the browser
+  // refuses the drop outright; dragActive drives the visual highlight only.
+  const handleComposerDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (Array.from(e.dataTransfer.types).includes("Files")) setDragActive(true);
+  }, []);
+  const handleComposerDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+  }, []);
+  const handleComposerDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
+      const files = Array.from(e.dataTransfer.files || []);
+      if (files.length === 0) return;
+      const { stageFiles } = await import("@/lib/file-picker");
+      const staged = await stageFiles(files);
+      for (const att of staged) addAttachment(att);
+      // A drop has no filesystem path, so it can only ever upload - point at Reference for
+      // next time (only worth saying when the bridge is actually there to use).
+      if (staged.length > 0 && bridgeConnected) setShowBridgeHint(true);
+    },
+    [addAttachment, bridgeConnected]
+  );
+
+  // WS4b: paste onto the textarea. Files (a copied image, files copied in the OS file manager)
+  // stage as attachments and never touch the text buffer. Plain text longer than roughly one
+  // paragraph ALSO stages as an attachment instead of flooding the composer - a short paste is
+  // left alone (no preventDefault) so the browser's normal insert-at-cursor behavior is untouched.
+  const handleComposerPaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(e.clipboardData?.files || []);
+      if (files.length > 0) {
+        e.preventDefault();
+        const { stageFiles } = await import("@/lib/file-picker");
+        const staged = await stageFiles(files);
+        for (const att of staged) addAttachment(att);
+        if (staged.length > 0 && bridgeConnected) setShowBridgeHint(true);
+        return;
+      }
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (shouldStageAsTextAttachment(text)) {
+        e.preventDefault();
+        const { stagePastedText } = await import("@/lib/file-picker");
+        const att = await stagePastedText(text);
+        if (att) addAttachment(att);
+      }
+    },
+    [addAttachment, bridgeConnected]
+  );
 
   const handleCaptureScreen = useCallback(async () => {
     const { captureScreen } = await import("@/lib/file-picker");
@@ -739,12 +801,41 @@ export default function UnifiedChatPage() {
                   </p>
                 )}
 
-                <div className="relative flex flex-col bg-white border border-neutral-300 rounded-2xl focus-within:border-teal-600 focus-within:ring-1 focus-within:ring-teal-600/20 transition-shadow shadow-sm">
+                {/* WS4b: a dropped/pasted file has no filesystem path, so it can only ever
+                    upload - nudge toward Reference (which the bridge makes possible) for next
+                    time. */}
+                {showBridgeHint && (
+                  <div
+                    className="mb-2 flex items-start justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-teal-800"
+                    data-testid="drop-bridge-hint"
+                  >
+                    <span>{PRIVACY_COPY.dropUploadsReferenceHint}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowBridgeHint(false)}
+                      aria-label={common.dismiss}
+                      className="mt-0.5 flex-shrink-0 text-teal-500 hover:text-teal-800"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
+
+                <div
+                  data-testid="composer-drop-zone"
+                  onDragOver={handleComposerDragOver}
+                  onDragLeave={handleComposerDragLeave}
+                  onDrop={(e) => void handleComposerDrop(e)}
+                  className={`relative flex flex-col bg-white border rounded-2xl focus-within:border-teal-600 focus-within:ring-1 focus-within:ring-teal-600/20 transition-shadow shadow-sm ${
+                    dragActive ? "border-teal-500 ring-1 ring-teal-500/20 bg-teal-50/30" : "border-neutral-300"
+                  }`}
+                >
                   <textarea
                     ref={textareaRef}
                     value={chatInput}
                     onChange={handleChatTextareaChange}
                     onKeyDown={handleChatKeyDown}
+                    onPaste={(e) => void handleComposerPaste(e)}
                     placeholder={chatPanel.placeholderBuild}
                     rows={1}
                     className="w-full max-h-40 min-h-[52px] py-3.5 px-4 bg-transparent resize-none outline-none text-sm text-neutral-800 placeholder-neutral-400 leading-relaxed rounded-t-2xl"

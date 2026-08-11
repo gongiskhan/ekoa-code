@@ -49,6 +49,45 @@ export function accentForKind(kind?: string): string {
   return KIND_ACCENTS[kind] ?? DEFAULT_ACCENT;
 }
 
+/**
+ * A card's visual area: the screenshot when there is one and it loads, else the gradient
+ * placeholder. `imageUrl` on the wire does not guarantee the file still exists (a screenshot can
+ * be mid-capture, or the disk file can go missing) - `onError` falls back to the SAME placeholder
+ * a card with no screenshot yet shows, instead of a broken-image box. A tiny own component (not a
+ * ternary in the `cards.map` body) because the fallback needs its own per-card `useState`.
+ */
+function CardVisual({ imageUrl, accent }: { imageUrl?: string; accent?: string }) {
+  const [broken, setBroken] = useState(false);
+  if (imageUrl && !broken) {
+    return (
+      <div className="h-32 w-full overflow-hidden bg-neutral-100">
+        <img
+          src={api.resolveUrl(imageUrl)}
+          alt=""
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="h-full w-full object-cover"
+        />
+      </div>
+    );
+  }
+  return (
+    <div
+      className="h-32 w-full"
+      style={{
+        background: accent ?? DEFAULT_ACCENT,
+      }}
+      aria-hidden
+    >
+      <div className="flex items-center gap-1 px-4 pt-3">
+        <span className="w-2 h-2 rounded-full bg-white/70" />
+        <span className="w-2 h-2 rounded-full bg-white/70" />
+      </div>
+      <div className="mt-10 mx-4 h-1.5 rounded-full bg-white/55" />
+    </div>
+  );
+}
+
 export function HorizontalCardStripe({
   label,
   cards,
@@ -150,30 +189,7 @@ export function HorizontalCardStripe({
           style={{ scrollbarWidth: "none" }}
         >
           {cards.map((card) => {
-            const visual = card.imageUrl ? (
-              <div className="h-32 w-full overflow-hidden bg-neutral-100">
-                <img
-                  src={api.resolveUrl(card.imageUrl)}
-                  alt=""
-                  loading="lazy"
-                  className="h-full w-full object-cover"
-                />
-              </div>
-            ) : (
-              <div
-                className="h-32 w-full"
-                style={{
-                  background: card.accent ?? DEFAULT_ACCENT,
-                }}
-                aria-hidden
-              >
-                <div className="flex items-center gap-1 px-4 pt-3">
-                  <span className="w-2 h-2 rounded-full bg-white/70" />
-                  <span className="w-2 h-2 rounded-full bg-white/70" />
-                </div>
-                <div className="mt-10 mx-4 h-1.5 rounded-full bg-white/55" />
-              </div>
-            );
+            const visual = <CardVisual imageUrl={card.imageUrl} accent={card.accent} />;
             const body = (
               <div className="px-4 py-3">
                 <div className="text-sm font-semibold text-neutral-900 truncate">

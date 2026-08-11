@@ -33,7 +33,15 @@ import type { ArtifactDoc } from '../../src/apps/artifacts-service.js';
 let mem: MongoMemoryServer;
 let sandbox: string;
 let ids = 0;
-const deps = { now: () => Date.now(), genId: () => `test-art-${++ids}` };
+// WS6: classification is model-first on every first build now - this suite's "NO model call"
+// guarantee (see the module doc comment above) is restored by injecting a synchronously-throwing
+// classifier one-shot, so prepareFirstBuild falls back to the deterministic regex table
+// immediately instead of paying a real sandboxed model-call round trip nobody here asserts on.
+const deps = {
+  now: () => Date.now(),
+  genId: () => `test-art-${++ids}`,
+  classifyDeps: { oneShot: async () => { throw new Error('build-mechanics suite: no model call'); } },
+};
 const mech = createBuildMechanics(deps);
 const USER = 'user-abc';
 

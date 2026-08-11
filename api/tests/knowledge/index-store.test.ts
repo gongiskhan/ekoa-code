@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import {
   indexDoc, removeDoc, clearOrg, search, orgStatus, totalRows, closeIndex,
-  collectionAuthority, toMatchQuery, bulkIndexDocs, optimizeIndex, type IndexRow,
+  collectionAuthority, toMatchQuery, bulkIndexDocs, optimizeIndex, listDocsPage, type IndexRow,
 } from '../../src/knowledge/index-store.js';
 import { SHARED_ORG_ID, indexDbPath } from '../../src/knowledge/paths.js';
 
@@ -174,6 +174,105 @@ describe('doc-map (fast delete) + bulk index', () => {
     optimizeIndex();
     expect(search('orgA', 'prazo', 5).map((h) => h.docId)).toEqual(['d1']);
     expect(mapCount()).toBe(totalRows());
+  });
+});
+
+describe('listDocsPage (F43 - the paginated browse listing, index-backed not filesystem-backed)', () => {
+  it('orders by createdAt then docId, counts correctly, and pages', () => {
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd2', title: 'Segundo', body: 'x', createdAt: '2026-01-02T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd1', title: 'Primeiro', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd3', title: 'Terceiro', body: 'x', createdAt: '2026-01-03T00:00:00.000Z' });
+
+    const all = listDocsPage('orgA');
+    expect(all.total).toBe(3);
+    expect(all.items.map((d) => d.docId)).toEqual(['d1', 'd2', 'd3']); // createdAt ascending
+
+    const page1 = listDocsPage('orgA', { limit: 2, offset: 0 });
+    expect(page1.total).toBe(3);
+    expect(page1.items.map((d) => d.docId)).toEqual(['d1', 'd2']);
+    const page2 = listDocsPage('orgA', { limit: 2, offset: 2 });
+    expect(page2.total).toBe(3);
+    expect(page2.items.map((d) => d.docId)).toEqual(['d3']);
+  });
+
+  it('same createdAt ties break on docId ascending - deterministic, never flaky', () => {
+    for (const id of ['c', 'a', 'b']) {
+      indexDoc({ orgId: 'orgA', collection: 'x', docId: id, title: id, body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    }
+    expect(listDocsPage('orgA').items.map((d) => d.docId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('collection filter narrows within the org, and never leaks another org\'s rows', () => {
+    indexDoc({ orgId: 'orgA', collection: 'jurisprudencia', docId: 'j1', title: 'J', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgA', collection: 'legislacao', docId: 'l1', title: 'L', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgB', collection: 'jurisprudencia', docId: 'j2', title: 'Alheio', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+
+    const narrowed = listDocsPage('orgA', { collection: 'jurisprudencia' });
+    expect(narrowed.total).toBe(1);
+    expect(narrowed.items.map((d) => d.docId)).toEqual(['j1']);
+    expect(listDocsPage('orgA').total).toBe(2); // both collections, still never orgB's row
+    expect(listDocsPage('orgA').items.map((d) => d.title)).not.toContain('Alheio');
+  });
+
+  it('carries title/sourceUrl/sourceType/language/createdAt, omitting each when absent (never empty-string)', () => {
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'full', title: 'Com tudo', body: 'x', createdAt: '2026-01-01T00:00:00.000Z', sourceUrl: 'https://x.pt', sourceType: 'crawl', language: 'pt' });
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'bare', title: 'Só título', body: 'x', createdAt: '2026-01-02T00:00:00.000Z' });
+    const [full, bare] = listDocsPage('orgA').items;
+    expect(full).toMatchObject({ docId: 'full', title: 'Com tudo', sourceUrl: 'https://x.pt', sourceType: 'crawl', language: 'pt' });
+    expect(bare?.sourceUrl).toBeUndefined();
+    expect(bare?.sourceType).toBeUndefined();
+    expect(bare?.language).toBeUndefined();
+  });
+
+  it('a re-index (replace) updates the listing row - title/createdAt drift never survives a re-write', () => {
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd1', title: 'Velho', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd1', title: 'Novo', body: 'x', createdAt: '2026-02-01T00:00:00.000Z' }); // same docId, replace
+    const { items, total } = listDocsPage('orgA');
+    expect(total).toBe(1);
+    expect(items[0]).toMatchObject({ docId: 'd1', title: 'Novo', createdAt: '2026-02-01T00:00:00.000Z' });
+  });
+
+  it('removeDoc/clearOrg drop the row from the listing too, not just from search', () => {
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd1', title: 'D1', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    indexDoc({ orgId: 'orgA', collection: 'c', docId: 'd2', title: 'D2', body: 'x', createdAt: '2026-01-01T00:00:00.000Z' });
+    expect(listDocsPage('orgA').total).toBe(2);
+    removeDoc('orgA', 'c', 'd1');
+    expect(listDocsPage('orgA').total).toBe(1);
+    clearOrg('orgA');
+    expect(listDocsPage('orgA').total).toBe(0);
+  });
+
+  it('an empty partition answers total:0, items:[] - never throws', () => {
+    expect(listDocsPage('orgA-nunca-teve-nada')).toEqual({ items: [], total: 0 });
+  });
+
+  it('self-heals a PRE-F43 doc-map table (no listing columns) into the current schema on next open', async () => {
+    closeIndex(); // drop this test's already-open connection so the manual DDL below is the only writer
+    const dbPath = indexDbPath();
+    await mkdir(dirname(dbPath), { recursive: true });
+    const raw = new Database(dbPath);
+    raw.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+         orgId UNINDEXED, collection UNINDEXED, docId UNINDEXED, title, body,
+         createdAt UNINDEXED, sourceUrl UNINDEXED, sourceType UNINDEXED, language UNINDEXED,
+         tokenize = 'unicode61 remove_diacritics 2'
+       );`,
+    );
+    // The PRE-F43 shape: id -> ftsRowid only, no listing columns.
+    raw.exec(`CREATE TABLE knowledge_doc_map (orgId TEXT NOT NULL, collection TEXT NOT NULL, docId TEXT NOT NULL, ftsRowid INTEGER NOT NULL, PRIMARY KEY (orgId, collection, docId)) WITHOUT ROWID;`);
+    const info = raw
+      .prepare(`INSERT INTO knowledge_fts(orgId, collection, docId, title, body, createdAt, sourceUrl, sourceType, language) VALUES ('orgA','c','legacy','Doc legado','corpo','2026-01-01T00:00:00.000Z','','','')`)
+      .run();
+    raw.prepare('INSERT INTO knowledge_doc_map(orgId, collection, docId, ftsRowid) VALUES (?,?,?,?)').run('orgA', 'c', 'legacy', info.lastInsertRowid);
+    raw.close();
+
+    // The next call through the module re-opens the SAME db file - `ensureDocMapTable` must detect
+    // the missing listing columns, drop + recreate, and `healDocMap` must repopulate from the fts
+    // scan (the map's row count goes 1 -> 0 on drop, which is exactly what triggers the heal).
+    const { items, total } = listDocsPage('orgA');
+    expect(total).toBe(1);
+    expect(items[0]).toMatchObject({ docId: 'legacy', title: 'Doc legado', createdAt: '2026-01-01T00:00:00.000Z' });
+    expect(mapCount()).toBe(1);
   });
 });
 

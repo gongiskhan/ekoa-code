@@ -17,6 +17,11 @@
  *
  * These tests assert the post-fix behavior: a session that maps to an artifact
  * is reconciled to that artifact's CURRENT id / slug / appUrl on load.
+ *
+ * WS3 update: fixtures were mocking `data: { sessionId, appUrl }` on the artifact list
+ * response - exactly the shape `artifactView` (`api/src/apps/artifacts-service.ts`) never
+ * sends (`data` stays server-side on purpose). `sessionId`/`appUrl` are real, narrow
+ * top-level lifts now; the fixtures below carry them there, matching the actual wire.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -93,7 +98,10 @@ describe('hydrateSessionFromArtifact reconciles stale identity', () => {
         slug: 'property-management-5',
         shareable: true,
         updatedAt: '2026-06-16T11:15:23.000Z',
-        data: { sessionId: SID, appUrl: `/apps/${ARTIFACT_ID}/`, projectDir: '/sandbox/x' },
+        // Top-level, per the real wire shape (`shared/src/artifacts.ts` Artifact) - `data` is
+        // never on the wire; `sessionId`/`appUrl` are narrow lifts off it (WS3).
+        sessionId: SID,
+        appUrl: `/apps/${ARTIFACT_ID}/`,
       },
     ];
 
@@ -115,7 +123,8 @@ describe('hydrateSessionFromArtifact reconciles stale identity', () => {
         slug: 'property-management-5',
         shareable: false,
         updatedAt: '2026-06-16T11:15:23.000Z',
-        data: { sessionId: SID, appUrl: `/apps/${ARTIFACT_ID}/`, projectDir: '/sandbox/x' },
+        sessionId: SID,
+        appUrl: `/apps/${ARTIFACT_ID}/`,
       },
     ];
 
@@ -140,10 +149,10 @@ describe('hydrateSessionFromArtifact reconciles stale identity', () => {
     mockInstances = [
       // First in list order, also matches the session — the WRONG one.
       { id: 'sibling-original-id', slug: 'erp-original', shareable: true,
-        data: { sessionId: SID, appUrl: '/apps/sibling-original-id/' } },
+        sessionId: SID, appUrl: '/apps/sibling-original-id/' },
       // The artifact actually pinned to the session.
       { id: PINNED_ID, slug: 'erp-copy-5', shareable: true, updatedAt: '2026-06-16T11:15:23.000Z',
-        data: { sessionId: SID, appUrl: `/apps/${PINNED_ID}/` } },
+        sessionId: SID, appUrl: `/apps/${PINNED_ID}/` },
     ];
 
     const ok = await useOrchestrationStore.getState().hydrateSessionFromArtifact(SID);
@@ -187,7 +196,8 @@ describe('hydrateSessionFromArtifact reconciles stale identity', () => {
         slug: 'property-management-5',
         shareable: true,
         updatedAt: '2026-06-16T11:15:23.000Z',
-        data: { sessionId: SID, appUrl: `/apps/${ARTIFACT_ID}/`, projectDir: '/sandbox/x' },
+        sessionId: SID,
+        appUrl: `/apps/${ARTIFACT_ID}/`,
       },
     ];
 

@@ -21,12 +21,12 @@ interface ArtifactLike {
   status?: string;
   updatedAt?: string;
   screenshotUrl?: string;
-  data?: Record<string, unknown> | null;
-}
-
-function readData<T = unknown>(a: ArtifactLike, key: string): T | undefined {
-  if (!a.data || typeof a.data !== "object") return undefined;
-  return (a.data as Record<string, unknown>)[key] as T | undefined;
+  // Narrow top-level lifts off the server-owned `data` bag (`shared/src/artifacts.ts` Artifact) -
+  // `data` itself is never on the wire, so these replace the old (always-`undefined`) `a.data?.x`
+  // reads that made every card's kind label, session link, and app URL permanently dead.
+  outputKind?: string;
+  sessionId?: string;
+  appUrl?: string;
 }
 
 function formatRelativeTime(updatedAt: string | undefined, locale: string): string {
@@ -120,7 +120,7 @@ export function ChatStripes() {
       (a, b) => (a.featuredRank ?? Number.MAX_SAFE_INTEGER) - (b.featuredRank ?? Number.MAX_SAFE_INTEGER),
     );
     return sorted.map((a) => {
-      const kind = readData<string>(a, "outputKind");
+      const kind = a.outputKind;
       return {
         id: a.id,
         name: a.name ?? sp.title,
@@ -163,8 +163,8 @@ export function ChatStripes() {
       return bTime - aTime;
     });
     return sorted.slice(0, 24).map((a) => {
-      const kind = readData<string>(a, "outputKind") ?? readData<string>(a, "templateOutputKind");
-      const sessionId = readData<string>(a, "sessionId");
+      const kind = a.outputKind;
+      const sessionId = a.sessionId;
       return {
         id: a.id,
         name: a.name ?? "—",
@@ -174,7 +174,12 @@ export function ChatStripes() {
         imageUrl: a.screenshotUrl,
         onClick: () => {
           if (!sessionId) {
-            router.push(`/artifacts?focus=${encodeURIComponent(a.id)}`);
+            // No session was ever linked to this artifact (e.g. a bare create/import/fork that
+            // never went through a chat build) - route through the SAME ?continue= handler the
+            // chat page uses everywhere else, which creates a session and links it server-side,
+            // rather than the old dead-end `/artifacts?focus=` (that query param was never read
+            // by anything - clicking just dumped the user on the unfiltered gallery).
+            router.push(`/chat?continue=${encodeURIComponent(a.id)}`);
             return;
           }
           // Pin THIS artifact onto its session, then activate it, before
@@ -188,13 +193,15 @@ export function ChatStripes() {
           // self-sufficient: the session shows even when the URL-activation
           // effect no-ops because the route already matches (re-tapping a card
           // after the active session moved on — the "nothing happens" symptom).
-          const appUrl = (a.data?.appUrl as string | undefined) ?? `/apps/${a.id}/`;
+          const appUrl = a.appUrl ?? `/apps/${a.id}/`;
           const store = useOrchestrationStore.getState();
           store.setSessionJob(sessionId, {
             artifactInstanceId: a.id,
             slug: a.slug ?? null,
             shareable: a.shareable === true,
-            projectPath: (a.data?.projectDir as string | undefined) ?? null,
+            // projectDir is server-owned and never on the wire (ch09) - null is fine here, a
+            // server round-trip (loadSessionFiles / hydrateSessionFromArtifact) fills it in.
+            projectPath: null,
             status: "completed",
           });
           store.setSessionPreview(sessionId, {

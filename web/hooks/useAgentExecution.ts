@@ -51,6 +51,11 @@ interface ExecuteOptions {
   projectPath?: string;
   /** Internal: skip adding the user message (used by retry to avoid duplicates) */
   _skipUserMessage?: boolean;
+  /** WS6 incident fix: the user's own words for this build, when `message` (the first arg to
+   *  `execute`) is a paraphrase rather than the user's own text (a chat-agent delegation). Rides
+   *  the wire as JobCreateRequest.originalMessage; the build pipeline classifies AND briefs the
+   *  build agent on this, keeping `message`/`description` for naming the artifact. */
+  originalMessage?: string;
 }
 
 // ============================================
@@ -134,15 +139,20 @@ export function useAgentExecution(sessionId: string | null) {
       // attachments ride as uploadId references (never absolute server paths, §3.4).
       // A follow-up build is keyed by the existing artifact id; the server resolves
       // its project dir, so no client-side path is sent.
+      // WS4a fix: `attachmentId` is a CLIENT-generated chip id (file-picker.ts's makeId(),
+      // used only to key/remove the composer chip) - it names nothing on the server. The
+      // real server-issued uploadId lives in `.path` (file-picker.ts's stageFile() puts it
+      // there). Sending attachmentId here meant every attachment silently failed to resolve.
       const isFollowUp = !!options.artifactInstanceId;
       const backendAttachments = (options.attachments || [])
         .filter((a) => a.type !== 'url')
-        .map((a) => ({ uploadId: a.attachmentId, displayName: a.displayName }));
+        .map((a) => ({ uploadId: a.path, displayName: a.displayName }));
       const fieldValues = options.artifactFieldValues;
       const request = {
         kind: 'build' as const,
         description: message,
         sessionId,
+        ...(options.originalMessage?.trim() ? { originalMessage: options.originalMessage } : {}),
         ...(options.templateId ? { templateId: options.templateId } : {}),
         ...(options.integrationKeys ? { integrationKeys: options.integrationKeys } : {}),
         ...(options.artifactInstanceId ? { artifactId: options.artifactInstanceId } : {}),

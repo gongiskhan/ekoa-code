@@ -22,6 +22,16 @@ const Router = typeof window !== 'undefined' && window.location.protocol === 'fi
   ? HashRouter
   : BrowserRouter;
 
+// The app is served under /apps/<slug>/ - mount the router at that basename so the
+// flat routes (path="/", "/contactos", …) and NavLink resolve correctly, and a hard
+// reload of a sub-route still lands on the right screen (same convention as every
+// legal-* scaffold's index.jsx).
+const routerBasename = (() => {
+  if (typeof window === 'undefined') return '/';
+  const m = window.location.pathname.match(/^(\/apps\/[^/]+)/);
+  return m ? m[1] : '/';
+})();
+
 function NavIcon({ children }) {
   return <span className="nav-icon" aria-hidden="true">{children}</span>;
 }
@@ -116,7 +126,7 @@ function TopBar() {
 export default function App() {
   return (
     <DataProvider>
-      <Router>
+      <Router basename={routerBasename}>
         <div className="app-shell">
           <Sidebar />
           <div className="app-main">

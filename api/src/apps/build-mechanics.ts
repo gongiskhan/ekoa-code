@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { artifacts, slugs, users } from '../data/stores.js';
+import { artifacts, slugs, users, sessions } from '../data/stores.js';
 import { generateSlug, type ArtifactDoc } from './artifacts-service.js';
 import { newProjectDir, projectDirFor, patchArtifactData, loadWritable } from './app-paths.js';
 import { indexSlug } from './slug-index.js';
@@ -25,7 +25,7 @@ import { readManifest, writeManifest } from './manifest.js';
 import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-loader.js';
 import { readUiActions } from './action-manifest.js';
 import { readTours } from './tour-writer.js';
-import { classifyArtifactType, baseForType, typeForBase } from './artifact-type.js';
+import { classifyArtifactType, baseForType, typeForBase, type ClassifyDeps } from './artifact-type.js';
 import type { ArtifactType, Actor } from '@ekoa/shared';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
@@ -33,6 +33,13 @@ import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
 export interface BuildMechanicsDeps {
   now: () => number;
   genId: () => string;
+  /** Test-only override for the artifact-type classifier's one-shot (WS6: classification is now
+   *  MODEL FIRST on every first build, so an integration suite exercising the real esbuild+git
+   *  pipeline without a model credential would otherwise pay a real failed-model-call round trip
+   *  - sandbox setup, anonymisation, billing admission - on every prepareFirstBuild just to fall
+   *  back to the regex table anyway. Absent (production, server.ts) → the real chokepoint
+   *  one-shot, unchanged. */
+  classifyDeps?: ClassifyDeps;
 }
 
 const execFileAsync = promisify(execFile);
@@ -68,15 +75,30 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
    * B1: an EXPLICIT `templateId` naming a base wins (a known-but-broken base fails
    * LOUD; an unknown id warns and falls through to classification — featured ids
    * also travel this field historically). C1: with no explicit selection, the
-   * scoping classifier decides the artifact type (deterministic signals first,
-   * FAST chokepoint one-shot on ambiguity, `app` on any failure) and the type's
-   * base scaffolds the build. Only a base that fails to LOAD after classification
-   * degrades to the generic starters (warned, never silent).
+   * scoping classifier decides the artifact type (MODEL FIRST - labelled type
+   * table + worked examples, regex signals only as the offline/failure fallback,
+   * `app` on any failure) and the type's base scaffolds the build. Only a base
+   * that fails to LOAD after classification degrades to the generic starters
+   * (warned, never silent).
+   *
+   * WS6 incident fix: classifies the user's ORIGINAL words (`originalMessage`),
+   * never the chat-agent's <=15-word build paraphrase - a paraphrase like "A
+   * construir uma apresentação do teu produto Cobranças" used to brief the
+   * classifier (and then the build agent) on slides when the user asked for a
+   * website. `description` (the paraphrase) is still what names the artifact
+   * (deriveAppName below) - it is good at that, just not at classification.
+   * `attachments` (filenames) feed the classifier too (DO #4): a dropped-in
+   * .docx/.pdf is a stronger document-base signal than anything in the text.
+   * The decided type is ALSO persisted on the session (best-effort, non-fatal)
+   * so a later re-scope has something to agree with.
    */
   async function baseFor(
     templateId: string | undefined,
     description: string,
     userId: string,
+    originalMessage: string | undefined,
+    attachments: string[],
+    sessionId: string,
   ): Promise<{ base: LoadedBase | null; artifactType: ArtifactType }> {
     if (templateId && isBaseId(templateId)) {
       const base = await loadBase(templateId); // explicit selection: broken base fails loud
@@ -85,7 +107,14 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
     if (templateId) {
       console.warn(`[build-mechanics] templateId "${templateId}" names no internal base; classifying instead`);
     }
-    const artifactType = await classifyArtifactType(description, userId);
+    const classifyText = originalMessage?.trim() || description;
+    const { type: artifactType } = await classifyArtifactType(classifyText, userId, deps.classifyDeps ?? {}, { attachments });
+    // Best-effort session persistence (DO #4) - never blocks or fails the build.
+    try {
+      await sessions.update(sessionId, (s) => ({ ...s, lastArtifactType: artifactType }));
+    } catch (err) {
+      console.warn('[build-mechanics] failed to persist lastArtifactType on session (non-fatal):', err instanceof Error ? err.message : err);
+    }
     try {
       return { base: await loadBase(baseForType(artifactType)), artifactType };
     } catch (err) {
@@ -143,8 +172,17 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       description: string;
       language: string;
       templateId?: string;
+      originalMessage?: string;
+      attachmentNames?: string[];
     }): Promise<{ artifactId: string; projectDir: string; slug: string; appUrl: string; basePromptSections?: string[] }> {
-      const { base, artifactType } = await baseFor(input.templateId, input.description, input.userId);
+      const { base, artifactType } = await baseFor(
+        input.templateId,
+        input.description,
+        input.userId,
+        input.originalMessage,
+        input.attachmentNames ?? [],
+        input.sessionId,
+      );
       const artifactId = deps.genId();
       const name = deriveAppName(input.description);
       const slug = await generateSlug(name, deps);
@@ -156,6 +194,7 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       const projectDir = newProjectDir(input.userId, artifactId);
       const appUrl = `/apps/${artifactId}/`;
       const orgId = await orgIdFor(input.userId);
+      const now = new Date(deps.now()).toISOString();
 
       const doc: ArtifactDoc = {
         _id: artifactId,
@@ -165,6 +204,8 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         orgId,
         visibility: 'private',
         status: 'draft',
+        createdAt: now,
+        updatedAt: now,
         // artifactType (C1): the scoping classifier's verdict — the operator surface
         // exists only for 'app' artifacts (downstream slices read this, never re-classify).
         data: { projectDir, appUrl, sessionId: input.sessionId, artifactType },
@@ -369,7 +410,10 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
         delete prev.tours;
         delete prev.toursError;
         const data = { ...prev, appUrl: input.appUrl, ...uiActions, ...tours };
-        return { ...a, status: 'active', slug: input.slug, data };
+        // Every build completion (first build AND every follow-up) is the strongest "recently
+        // worked on" signal there is - bump it here so /artifacts and the chat "continue where you
+        // left off" stripe sort by real activity instead of never-updated creation order.
+        return { ...a, status: 'active', slug: input.slug, data, updatedAt: new Date().toISOString() };
       });
     },
 

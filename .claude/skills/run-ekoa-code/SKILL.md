@@ -82,6 +82,24 @@ operator's keychain (permission-gated) — when no credential is in the
 environment, **ask the operator to run the line above** (`! <command>` runs it
 in-session).
 
+### The seeded admin does NOT force a password change locally
+
+`scripts/dev-api.mjs` sets `EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE=1`, so the
+first-boot super-admin is seeded WITHOUT `passwordChangeRequired`. The login is
+plain `admin`/`tmp12345` every boot, with no change-password screen to clear.
+
+This matters beyond convenience: the dev Mongo is ephemeral, so the admin is
+re-seeded on **every** boot and the prompt used to re-arm every time — and the
+moment you changed the password to get past it, `provision-credential.mjs` (which
+logs in as `admin`/`tmp12345`) started failing with `login failed as admin: 401`,
+taking the model credential down with it.
+
+The gate is fail-closed twice: the API ignores the env var entirely under
+`NODE_ENV=production`, and `seedAdmin`'s option defaults to forcing the change, so
+anything that does not explicitly opt out keeps the production posture. If you
+*have* rotated the password on a running stack, pass it through:
+`EKOA_ADMIN_PASSWORD='<pw>' node .claude/skills/run-ekoa-code/provision-credential.mjs`.
+
 ## Run (agent path)
 
 ### One-shot proof — boot, real-UI login, screenshot, tear down

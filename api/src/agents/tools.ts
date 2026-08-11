@@ -10,7 +10,15 @@ import { loadAgentsConfig } from '../config.js';
 export const KNOWLEDGE_TOOLS = ['knowledge_search', 'knowledge_read'] as const;
 
 /** The full coding preset a build run gets (permission bypass, cwd = projectDir). */
-export const CODING_PRESET = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Agent'] as const;
+/**
+ * No `Agent`: a build subagent re-pays the WHOLE context (system prompt + base conventions +
+ * whatever design docs it loads) for every spawn, and its work comes back as a summary the main
+ * run then has to re-read. Measured on a live 4-page site build (2026-08-10, job 48c1c600): 142
+ * turns, ~15M tokens of which 13.9M was cache re-reads, two `Agent` spawns, and the run still
+ * exhausted its context window and auto-compacted mid-build. A single-agent build that writes
+ * whole files is both cheaper and more coherent.
+ */
+export const CODING_PRESET = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'] as const;
 
 /** The context-loading tool the coding agent uses to pull agent-context content at runtime. */
 export const CONTEXT_LOADING_TOOL = 'load_context';
@@ -27,8 +35,10 @@ export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
  * a Word document, link a source .docx to the artifact, and apply an atomic native-track-changes
  * batch to it. BUILD RUNS ONLY - they are artifact-bound (appId = the artifact being built), so
  * a hosted chat turn has nothing for them to operate on. The read-only `docx_read` subset for
- * chat-with-attachments is DESCOPED (docs/decisions.md 2026-07-25): ekoa-code's text-attachments
- * run class mounts no in-process tools and has no attachment-path plumbing today.
+ * chat-with-attachments stays DESCOPED (docs/decisions.md 2026-07-25): the text-attachments run
+ * class mounts no in-process (SDK) tools. It DOES now have attachment-path plumbing (WS4a,
+ * 2026-08-08, agents/chat.ts + uploads/service.ts): a staged upload is copied into the run's
+ * cwd, reachable through ATTACHMENT_TOOLS' plain filesystem Read - just not through a docx tool.
  */
 export const DOCX_TOOLS = ['docx_read', 'docx_source_set', 'docx_apply_edits'] as const;
 

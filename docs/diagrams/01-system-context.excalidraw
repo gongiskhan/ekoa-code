@@ -2397,6 +2397,38 @@
    "locked": false,
    "containerId": null,
    "lineHeight": 1.25
+  },
+  {
+   "type": "text",
+   "id": "annot-ws8c-crawler-egress-20260808",
+   "x": 60,
+   "y": 1100,
+   "width": 900.0,
+   "height": 162,
+   "text": "AS-BUILT 2026-08-08 (WS8c): the knowledge crawler adds a new OUTBOUND edge off Cortex - plain\nHTTP(S) GET to public Portuguese legal-portal websites (DGSI, PGDL, ACT, Diário da República)\nplus Lotus Domino's ?ReadViewEntries XML API, never through the LLM chokepoint (no model call\nanywhere in the crawl path - ch17 anonymisation does not apply here, there is no provider on\nthis edge). A resumable per-page ledger (<dataDir>/knowledge/ledger/) drives conditional-GET\nincremental re-fetch; every write lands in the SAME reserved `_shared` vault + FTS index this\ndiagram's org-tenancy edge already reaches (12-org-tenancy.excalidraw) - no new store. Crawl-\nTRIGGER is gated to `super-admin` (browsing `_shared`, WS8a, stays open to any org actor); a\nself-timed nightly scheduler (03:00 local) re-runs every enabled source unattended.",
+   "originalText": "AS-BUILT 2026-08-08 (WS8c): the knowledge crawler adds a new OUTBOUND edge off Cortex - plain\nHTTP(S) GET to public Portuguese legal-portal websites (DGSI, PGDL, ACT, Diário da República)\nplus Lotus Domino's ?ReadViewEntries XML API, never through the LLM chokepoint (no model call\nanywhere in the crawl path - ch17 anonymisation does not apply here, there is no provider on\nthis edge). A resumable per-page ledger (<dataDir>/knowledge/ledger/) drives conditional-GET\nincremental re-fetch; every write lands in the SAME reserved `_shared` vault + FTS index this\ndiagram's org-tenancy edge already reaches (12-org-tenancy.excalidraw) - no new store. Crawl-\nTRIGGER is gated to `super-admin` (browsing `_shared`, WS8a, stays open to any org actor); a\nself-timed nightly scheduler (03:00 local) re-runs every enabled source unattended.",
+   "fontSize": 14,
+   "fontFamily": 3,
+   "textAlign": "left",
+   "verticalAlign": "top",
+   "strokeColor": "#b45309",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 1,
+   "strokeStyle": "solid",
+   "roughness": 0,
+   "opacity": 100,
+   "angle": 0,
+   "seed": 20260808,
+   "version": 1,
+   "versionNonce": 20260808,
+   "isDeleted": false,
+   "groupIds": [],
+   "boundElements": null,
+   "link": null,
+   "locked": false,
+   "containerId": null,
+   "lineHeight": 1.25
   }
  ]
 }

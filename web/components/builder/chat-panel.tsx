@@ -50,6 +50,12 @@ import { useSettingsStore } from "@/stores/settings";
 import { getFriendlyPhaseMessage } from "@/lib/friendly-messages";
 import { useTranslation, useI18nStore } from "@/stores/i18n";
 import { api } from "@/lib/api";
+import type { SendMessageOptions } from "@/components/chat/chat-runtime";
+import type { PendingReference } from "@/lib/bridge-local";
+import { ReferenceTokenChips } from "@/components/privacy/reference-token-chips";
+import { PRIVACY_COPY } from "@/lib/privacy-claims";
+import { shouldStageAsTextAttachment } from "@/lib/file-picker";
+import { useBridgePresence } from "@/hooks/use-bridge-presence";
 
 // ============================================
 // MARKDOWN COMPONENTS
@@ -198,15 +204,15 @@ interface ChatPanelProps {
   sessionId: string | null;
   isExecuting: boolean;
   isBuildSession: boolean;
-  // C7: an optional send-options object carrying source:'voice' when the send originates from
-  // the mic (the voice send path below), absent for the ordinary composer. Shape-compatible
-  // with the runtime's SendMessageOptions so `onSendMessage={runtime.sendMessage}` wires directly.
-  onSendMessage: (message: string, opts?: { source?: "voice" }) => void;
+  // C7/FC-400: the runtime's full SendMessageOptions (source:'voice' for the mic path, plus
+  // references/onReferencesConsumed/onReferenceMintError for FC-400 reference tokens) -
+  // `onSendMessage={runtime.sendMessage}` wires directly since this IS that function's type.
+  onSendMessage: (message: string, opts?: SendMessageOptions) => void;
   /** Conduzir: send queued message `index` into the RUNNING agent (chat-runtime.steerQueued).
    *  Resolves false when the run no longer accepts input — the message stays queued. */
   onSteerQueued?: (index: number) => Promise<boolean>;
   onCancel: () => void;
-  onFirstMessage: (message: string, opts?: { source?: "voice" }) => void;
+  onFirstMessage: (message: string, opts?: SendMessageOptions) => void;
   onResend?: () => void;
   onEdit?: () => void;
   /** C4 fix 6: fires when the voice bar appears/disappears so the page can move fixed
@@ -263,7 +269,7 @@ export default function ChatPanel({
   onEdit,
   onVoiceBarActiveChange,
 }: ChatPanelProps) {
-  const { quickActions: quickActionsTranslations, chatPanel: chatPanelT, pages, sheetFeed } = useTranslation();
+  const { quickActions: quickActionsTranslations, chatPanel: chatPanelT, pages, sheetFeed, common } = useTranslation();
   const language = useI18nStore((s) => s.language);
   const quickActions = getQuickActions(quickActionsTranslations);
 
@@ -272,6 +278,18 @@ export default function ChatPanel({
   const [elapsedTime, setElapsedTime] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  // FC-400: reference tokens attached to the NEXT outgoing message (D4) - the same local-state
+  // pattern the empty-state composer (page.tsx) already uses; this panel had never grown one.
+  const [referenceTokens, setReferenceTokens] = useState<PendingReference[]>([]);
+  const [referenceMintError, setReferenceMintError] = useState(false);
+  // WS4b: drag-over visual affordance for the composer box (files dropped anywhere on it stage
+  // as attachments).
+  const [dragActive, setDragActive] = useState(false);
+  // WS4b: a browser drop/paste has no filesystem path, so it can only ever upload - never mint a
+  // Reference. When the bridge IS connected, an uploaded-by-drop file nudges the user toward
+  // Reference for next time (dismissible, shown once per stage, not a persistent nag).
+  const { connected: bridgeConnected } = useBridgePresence();
+  const [showBridgeHint, setShowBridgeHint] = useState(false);
   /** Conduzir: index of the queued message currently being steered (busy state), and the
    *  soft "run no longer accepts input" notice when a steer came back false. */
   const [steeringIndex, setSteeringIndex] = useState<number | null>(null);
@@ -433,11 +451,20 @@ export default function ChatPanel({
       textareaRef.current.style.height = "auto";
     }
 
+    // FC-400: reference tokens ride along, consumed/cleared only when the chat path actually
+    // captures them (mirrors the empty-state composer's sendFromComposer).
+    setReferenceMintError(false);
+    const sendOpts = {
+      references: referenceTokens,
+      onReferencesConsumed: () => setReferenceTokens([]),
+      onReferenceMintError: () => setReferenceMintError(true),
+    };
+
     // If no messages yet, this is the first message -> trigger wizard
     if (essentialMessages.length === 0) {
-      onFirstMessage(text);
+      onFirstMessage(text, sendOpts);
     } else {
-      onSendMessage(text);
+      onSendMessage(text, sendOpts);
     }
 
     clearAttachments();
@@ -526,6 +553,63 @@ export default function ChatPanel({
     const folder = await pickFolder();
     if (folder) addAttachment(folder);
   }, [addAttachment]);
+
+  // WS4b: drag-and-drop onto the composer box. dragOver must call preventDefault or the browser
+  // refuses the drop outright; dragActive drives the visual highlight only, cleared on drop AND
+  // on leave (a leave that isn't a genuine exit - moving over a child element - still fires, but
+  // re-entering immediately re-sets it, so the flicker is harmless).
+  const handleComposerDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (Array.from(e.dataTransfer.types).includes("Files")) setDragActive(true);
+  }, []);
+  const handleComposerDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+  }, []);
+  const handleComposerDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
+      const files = Array.from(e.dataTransfer.files || []);
+      if (files.length === 0) return;
+      const { stageFiles } = await import("@/lib/file-picker");
+      const staged = await stageFiles(files);
+      for (const att of staged) addAttachment(att);
+      // A drop has no filesystem path, so it can only ever upload - point at Reference for
+      // next time (only worth saying when the bridge is actually there to use).
+      if (staged.length > 0 && bridgeConnected) setShowBridgeHint(true);
+    },
+    [addAttachment, bridgeConnected]
+  );
+
+  // WS4b: paste onto the textarea. Files (an image copied from a screenshot tool, files copied
+  // in the OS file manager) stage as attachments and never touch the text buffer. Plain text
+  // longer than roughly one paragraph ALSO stages as an attachment instead of flooding the
+  // composer - a short paste is left alone (no preventDefault) so the browser's normal
+  // insert-at-cursor behavior is untouched.
+  const handleComposerPaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(e.clipboardData?.files || []);
+      if (files.length > 0) {
+        e.preventDefault();
+        const { stageFiles } = await import("@/lib/file-picker");
+        const staged = await stageFiles(files);
+        for (const att of staged) addAttachment(att);
+        // Same "no path" limitation as a drop (an image/file paste, unlike a bridge Reference
+        // pick, never carries one either).
+        if (staged.length > 0 && bridgeConnected) setShowBridgeHint(true);
+        return;
+      }
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (shouldStageAsTextAttachment(text)) {
+        e.preventDefault();
+        const { stagePastedText } = await import("@/lib/file-picker");
+        const att = await stagePastedText(text);
+        if (att) addAttachment(att);
+      }
+    },
+    [addAttachment, bridgeConnected]
+  );
 
   const activityMessage = useOrchestrationStore((s) =>
     sessionId ? s.activityMessages[sessionId] : null
@@ -724,6 +808,36 @@ export default function ChatPanel({
           </div>
         )}
 
+        {/* FC-400 reference tokens (mirrors the empty-state composer) */}
+        <ReferenceTokenChips
+          tokens={referenceTokens}
+          onRemove={(path) => setReferenceTokens((prev) => prev.filter((t) => t.path !== path))}
+        />
+        {referenceMintError && (
+          <p className="mb-2 text-[11px] leading-relaxed text-amber-700" data-testid="reference-mint-error">
+            {PRIVACY_COPY.referenceMintError}
+          </p>
+        )}
+
+        {/* WS4b: a dropped/pasted file has no filesystem path, so it can only ever upload -
+            nudge toward Reference (which the bridge makes possible) for next time. */}
+        {showBridgeHint && (
+          <div
+            className="mb-2 flex items-start justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-teal-800"
+            data-testid="drop-bridge-hint"
+          >
+            <span>{PRIVACY_COPY.dropUploadsReferenceHint}</span>
+            <button
+              type="button"
+              onClick={() => setShowBridgeHint(false)}
+              aria-label={common.dismiss}
+              className="mt-0.5 flex-shrink-0 text-teal-500 hover:text-teal-800"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         {/* Queued messages — steer (Conduzir) into the running agent, or sent (FIFO) when it finishes */}
         {queuedMessages.length > 0 && (
           <div className="flex flex-col gap-1 mb-2">
@@ -784,12 +898,21 @@ export default function ChatPanel({
         )}
 
         {/* Text input */}
-        <div className="relative flex flex-col bg-white border border-neutral-300 rounded-xl focus-within:border-neutral-900 focus-within:ring-1 focus-within:ring-neutral-900/10 transition-shadow shadow-sm">
+        <div
+          data-testid="composer-drop-zone"
+          onDragOver={handleComposerDragOver}
+          onDragLeave={handleComposerDragLeave}
+          onDrop={(e) => void handleComposerDrop(e)}
+          className={`relative flex flex-col bg-white border rounded-xl focus-within:border-neutral-900 focus-within:ring-1 focus-within:ring-neutral-900/10 transition-shadow shadow-sm ${
+            dragActive ? "border-teal-500 ring-1 ring-teal-500/20 bg-teal-50/30" : "border-neutral-300"
+          }`}
+        >
           <textarea
             ref={textareaRef}
             value={inputText}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => void handleComposerPaste(e)}
             placeholder={isExecuting ? chatPanelT.queuePlaceholder : chatPanelT.describeYourApp}
             rows={2}
             className="w-full max-h-32 min-h-[60px] py-2 px-3 bg-transparent resize-none outline-none text-xs text-neutral-800 placeholder-neutral-400 disabled:opacity-50"
@@ -810,6 +933,11 @@ export default function ChatPanel({
                   onClose={() => setShowAttachMenu(false)}
                   onUploadFile={handleAttachFile}
                   onUploadFolder={handleAttachFolder}
+                  onReferencePicked={(ref) =>
+                    setReferenceTokens((prev) =>
+                      prev.some((t) => t.path === ref.path) ? prev : [...prev, ref],
+                    )
+                  }
                 />
               </div>
               {/* C4 mic affordance: tap = manual dictation start/stop; press-and-hold =

@@ -1414,7 +1414,15 @@ export async function proxyGatewayMessages(
     sessionId,
     ruleset,
     correlationId,
-    actor: { userId: billeeUserId, orgId, username: billeeUserId },
+    // A real per-request principal exists for a JWT/user-key/bridge caller (`billeeUserId` set);
+    // the static gateway-key principal (platform overhead - the credential every Agent SDK
+    // subprocess presents via `buildSubprocessEnv` when it calls back into this chokepoint) has
+    // NO per-request user identity at this HTTP boundary. Leave `actor` unset rather than
+    // stamping empty-string fields onto it - the audit sink's `'system'` sentinel (`audit.ts`)
+    // makes the resulting row an honest, queryable "system" row instead of a blank one that used
+    // to fail `RegistoEntry.actor: Id` validation (mirrors the `kind: 'platform'` metering split
+    // below, §6.3 rule 3).
+    ...(billeeUserId ? { actor: { userId: billeeUserId, orgId, username: billeeUserId } } : {}),
   };
   const anon = anonymizeRequestBody(reqBody, anonCtx);
   // Forward ONLY the documented Messages API top-level fields (see GATEWAY_FORWARD_FIELDS):
@@ -1582,7 +1590,9 @@ export async function proxyGatewayCountTokens(
     sessionId,
     ruleset,
     correlationId,
-    actor: { userId: billeeUserId, orgId, username: billeeUserId },
+    // See proxyGatewayMessages: no actor for the billee-less static gateway-key principal (the
+    // audit sink's 'system' sentinel handles it honestly rather than blank strings).
+    ...(billeeUserId ? { actor: { userId: billeeUserId, orgId, username: billeeUserId } } : {}),
   };
   const anon = anonymizeRequestBody(reqBody, anonCtx);
   const forwarded: Record<string, unknown> = {};

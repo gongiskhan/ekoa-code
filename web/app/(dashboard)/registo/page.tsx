@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { ScrollText, AlertTriangle, X } from "lucide-react";
+import { ScrollText, AlertTriangle, Info, X } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useUsersStore } from "@/stores/users";
 import { useOrgsStore } from "@/stores/orgs";
@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { LoadingState } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -56,6 +57,7 @@ export default function RegistoPage() {
   const error = useRegistoStore((s) => s.error);
   const fetchRegisto = useRegistoStore((s) => s.fetchRegisto);
   const setFilter = useRegistoStore((s) => s.setFilter);
+  const setIncludeAnonymisation = useRegistoStore((s) => s.setIncludeAnonymisation);
   const clearFilters = useRegistoStore((s) => s.clearFilters);
   const clearError = useRegistoStore((s) => s.clearError);
 
@@ -83,7 +85,7 @@ export default function RegistoPage() {
   );
 
   const hasActiveFilters =
-    filters.userId || filters.type || filters.from || filters.to || filters.orgId;
+    filters.userId || filters.type || filters.from || filters.to || filters.orgId || filters.includeAnonymisation;
 
   return (
     <AdminGate allowOrgAdmin>
@@ -112,6 +114,28 @@ export default function RegistoPage() {
             </Button>
           </Card>
         )}
+
+        {/* registo-anon-audit-actor-blank mitigation: a VISIBLE, documented default - never a
+            silent one. A single chat/build turn's Agent SDK subprocess writes many masking-audit
+            rows per one human action (most now correctly attributed to "system", not a person),
+            so the API hides them here by default; this notice states that plainly and the switch
+            reverses it in one click (RegistoFilters.includeAnonymisation, stores/registo.ts). */}
+        <Card padding="sm" className="flex flex-wrap items-center justify-between gap-3 border-neutral-200 bg-neutral-50">
+          <div className="flex items-start gap-2 text-neutral-600">
+            <Info size={16} className="mt-0.5 shrink-0" aria-hidden />
+            <span className="text-xs">
+              {filters.includeAnonymisation
+                ? "A mostrar eventos de mascaramento (anonimização) - registos técnicos do sistema, não ações de pessoas."
+                : "Eventos de mascaramento (anonimização) ocultos por predefinição - são registos técnicos do sistema, não ações de pessoas, e seriam muito mais numerosos do que a restante atividade."}
+            </span>
+          </div>
+          <Switch
+            checked={filters.includeAnonymisation}
+            onChange={setIncludeAnonymisation}
+            label="Mostrar eventos de mascaramento"
+            data-testid="registo-toggle-anonymisation"
+          />
+        </Card>
 
         {/* Filters */}
         <Card padding="sm">

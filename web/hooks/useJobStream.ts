@@ -22,7 +22,7 @@ import {
   getFriendlySummary,
   getRotatingFillerMessage,
 } from '@/lib/friendly-messages';
-import { sanitizeUserFacingError } from '@/lib/sanitize-error';
+import { runErrorMessage, runErrorIsRetryable } from '@/lib/sanitize-error';
 
 // ============================================
 // TYPES
@@ -582,14 +582,18 @@ export function useJobStream(
             useOrchestrationStore.getState().clearStreamingChat(sessionId);
           }
           isCompleteRef.current = true;
-          // Strip any provider/engine leak before it reaches the user (backend
-          // already sanitizes the wire; this guards replays / any bypass).
-          const error = sanitizeUserFacingError(event.message, getLocale());
+          // Render from the CODE, never from `event.message`. The server's message is curated
+          // now, but the invariant must not depend on that: a code the client does not know
+          // degrades to the generic branded text rather than to whatever prose arrived
+          // (finding `run-error-text-leak` — an internal credential diagnostic once rendered
+          // here verbatim because the old denylist did not match it).
+          const code = event.code || 'STREAM_ERROR';
+          const error = runErrorMessage(code, getLocale(), event.params);
           setState(prev => ({
             ...prev,
             isComplete: true,
             isConnected: false,
-            error: { code: event.code || 'STREAM_ERROR', message: error },
+            error: { code, message: error },
           }));
 
           if (sessionId) {
@@ -598,7 +602,7 @@ export function useJobStream(
             store.addMessage(sessionId, {
               role: 'assistant',
               content: error,
-              metadata: { isEssential: true, type: 'error' },
+              metadata: { isEssential: true, type: 'error', errorCode: code, retryable: runErrorIsRetryable(code) },
             });
             store.setActivityMessage(sessionId, null);
             stopFillerTimer();

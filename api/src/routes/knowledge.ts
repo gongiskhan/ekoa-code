@@ -37,15 +37,23 @@ import {
   ingestDocument, listDocuments, listCollections, deleteDocument,
   createUpload, listUploads, deleteUpload, reindexOrg, indexStatus,
   searchDocuments, readDocument, auditKnowledgeDenied, auditKnowledgeBrowse, type KnowledgeCallContext,
+  type SourcePolicyInput, getSourceByIdUnscoped,
 } from '../knowledge/service.js';
+import { startCrawl, getCrawlProgress, isCrawlRunning } from '../knowledge/crawl/runner.js';
+import { knowledgeLedger } from '../knowledge/crawl/ledger.js';
+import { getScheduleInfo } from '../knowledge/crawl/scheduler.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 
-const SourceInput = z.object({ url: z.string(), kind: z.string().optional(), seedId: z.string().optional() });
+/** WS8a: `scope` opts a browse call into the reserved `_shared` corpus (read-only) instead of the
+ *  caller's own org vault. Absent = 'org', the pre-WS8a behaviour. */
+const ScopeParam = z.enum(['org', 'shared']).optional();
 const DocumentsQuery = z.object({
   collection: z.string().optional(),
   offset: z.coerce.number().int().nonnegative().optional(),
   limit: z.coerce.number().int().positive().max(500).optional(),
+  scope: ScopeParam,
 });
+const CollectionsQuery = z.object({ scope: ScopeParam });
 
 /** The Registo actor from the verified principal (logActivity needs a username, which the shared
  *  Actor type does not carry — same shape as routes/memvault.ts). */
@@ -91,9 +99,14 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
    */
   r.get('/collections', requireUserOrApiKey, async (req: AuthedRequest, res: Response) => {
     const t0 = Date.now();
+    const q = CollectionsQuery.safeParse(req.query);
+    if (!q.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: q.error.issues });
     try {
-      const items = await listCollections(actorOf(req));
-      await auditKnowledgeBrowse(ctxOf(req, res), 'collections', t0, { count: items.length });
+      const items = await listCollections(actorOf(req), { scope: q.data.scope });
+      await auditKnowledgeBrowse(ctxOf(req, res), 'collections', t0, {
+        count: items.length,
+        ...(q.data.scope === 'shared' ? { scope: 'shared' } : {}),
+      });
       res.json({ items });
     } catch (e) {
       if (e instanceof KnowledgeError) return sendError(res, e.code as 'FORBIDDEN', e.message);
@@ -114,6 +127,7 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
         ...(q.data.offset !== undefined ? { offset: q.data.offset } : {}),
         ...(q.data.limit !== undefined ? { limit: q.data.limit } : {}),
         ...(q.data.collection ? { collection: q.data.collection.slice(0, 128) } : {}),
+        ...(q.data.scope === 'shared' ? { scope: 'shared' } : {}),
       });
       res.json(page);
     } catch (e) {
@@ -203,11 +217,24 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
     res.json({ items: (await listSources(actorOf(req))).map(sourceView) });
   });
 
+  /** The wire contract's `type` field maps onto the store's `kind`, and `crawlScope` onto the
+   *  store's `scope` (the wire name is deliberately not `scope` - that name is reserved on this
+   *  whole domain for the browse partition, WS8a) - everything else on `SourceInput` matches the
+   *  service's `SourcePolicyInput` field-for-field (WS8c). */
+  function policyOf(body: Record<string, unknown>): Partial<SourcePolicyInput> {
+    const { type, crawlScope, ...rest } = body as { type?: string; crawlScope?: string } & Record<string, unknown>;
+    return {
+      ...(rest as Partial<SourcePolicyInput>),
+      ...(type !== undefined ? { kind: type as SourcePolicyInput['kind'] } : {}),
+      ...(crawlScope !== undefined ? { scope: crawlScope as SourcePolicyInput['scope'] } : {}),
+    };
+  }
+
   r.post('/sources', async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, SourceInput, req.body);
+    const body = parseBody(res, SourceInputSchema, req.body);
     if (!body) return;
     try {
-      const s = await addSource(actorOf(req), body as { url: string; kind?: string; seedId?: string }, deps);
+      const s = await addSource(actorOf(req), policyOf(body) as SourcePolicyInput, deps);
       res.status(201).json(sourceView(s));
     } catch (e) {
       if (e instanceof KnowledgeError) return sendError(res, e.code as 'VALIDATION_FAILED', e.message);
@@ -220,7 +247,7 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
     const body = parseBody(res, SourceInputSchema.partial(), req.body);
     if (body === undefined) return;
     try {
-      const s = await updateSource(actorOf(req), req.params.id as string, body as never);
+      const s = await updateSource(actorOf(req), req.params.id as string, policyOf(body));
       if (!s) return notFound(res);
       res.json(sourceView(s));
     } catch (e) {
@@ -230,25 +257,40 @@ export function knowledgeRouter(deps: { now: () => number; genId: () => string }
   });
 
   /**
-   * F5 crawl endpoints. There is NO crawler in this build. Per the F5 brief these answer their
-   * declared shape with truthful "nothing happened" values — never a fabricated completed crawl.
-   * A source the caller cannot see 404s first, so these do not leak another org's source ids.
+   * WS8c crawl endpoints (F5 stubs replaced with the real thing). A source the caller cannot see
+   * 404s first, so these never leak another org's source ids - unchanged from F5.
+   *
+   * AUTH: triggering a crawl is gated to `super-admin` at the descriptor level
+   * (`shared/src/knowledge.ts` `crawlSource`, `requireRole` below) - WRITING into the reserved
+   * `_shared` corpus is genuinely privileged, unlike BROWSING it (WS8a), which stays open to any
+   * authenticated org actor because search already grants that read for free. Status/schedule
+   * reads stay at the ordinary `user` tier alongside the rest of the sources surface.
    */
-  r.post('/sources/:id/crawl', async (req: AuthedRequest, res: Response) => {
+  r.post('/sources/:id/crawl', requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const s = await getVisibleSource(actorOf(req), req.params.id as string);
     if (!s) return notFound(res);
-    res.json({ started: false, alreadyRunning: false });
+    try {
+      const result = await startCrawl(s._id, getSourceByIdUnscoped);
+      res.json(result);
+    } catch (e) {
+      // A source misconfiguration (e.g. `kind: 'domino'` with no `domino.databases`, or the
+      // declared-but-unimplemented `kind: 'api'`) is the caller's fault, not a server fault.
+      return sendError(res, 'VALIDATION_FAILED', e instanceof Error ? e.message : 'Não foi possível iniciar a atualização.');
+    }
   });
 
   r.get('/sources/:id/crawl', async (req: AuthedRequest, res: Response) => {
     const s = await getVisibleSource(actorOf(req), req.params.id as string);
     if (!s) return notFound(res);
-    res.json({ running: false, stats: { reason: 'crawler not implemented in this build' } });
+    const running = isCrawlRunning(s._id);
+    const progress = getCrawlProgress(s._id);
+    const stats = await knowledgeLedger.stats(s._id);
+    res.json({ running, ...(progress ? { progress } : {}), stats });
   });
 
-  // F5: no refresh scheduler exists — `null` is the honest schedule, not an invented cadence.
+  // The nightly refresh schedule (WS8c - real, replacing the F5 `null` stub).
   r.get('/refresh-schedule', async (_req: AuthedRequest, res: Response) => {
-    res.json({ schedule: null });
+    res.json({ schedule: getScheduleInfo() });
   });
 
   r.delete('/sources/:id', async (req: AuthedRequest, res: Response) => {

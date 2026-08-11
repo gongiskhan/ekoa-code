@@ -50,12 +50,16 @@ export { mcpToolName, type SdkToolSpec } from './sdk-tools.js';
 
 // Central credential custody: boot load, the /health claudeAuth field, admin set +
 // the audit-logged HTTP provisioning path (F2).
+// `CredentialError` crosses the boundary so callers can tell a TERMINAL credential failure
+// (operator must re-arm) from a transient transport blip and pick the right terminal run-error
+// code — see agents/run-failure.ts. The type crosses; the custody internals do not.
 export {
   loadCredential,
   setCredential,
   provisionCredential,
   claudeAuthStatus,
   currentMode,
+  CredentialError,
   type ClaudeAuthStatus,
   type CredentialMode,
   type DecryptedCredential,

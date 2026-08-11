@@ -9,6 +9,13 @@
  * Semantics: knowledge is explicit-write-only (every doc is ingested
  * intentionally with provenance) and search is CITED-OR-SILENT -- an empty or
  * unmatched query returns no passages rather than fabricating a guess.
+ *
+ * WS8a: the browse list (`fetchCollections`/`fetchDocs`) now takes a `scope` --
+ * 'org' (default, the caller's own vault, unchanged) or 'shared' (the reserved
+ * `_shared` legal corpus, read-only, browsable by every org). `search` is a THIRD,
+ * separate surface: `POST /api/v1/knowledge/search` already unions org + `_shared`
+ * for any query regardless of the browse scope, so it needs no scope of its own --
+ * a hit just carries which partition it came from (`scope` on the hit itself).
  */
 
 import { create } from 'zustand';
@@ -18,16 +25,28 @@ import { api, tryCall, getToken } from '@/lib/api';
 // Types
 // ============================================
 
+/**
+ * A row from the browse list (`listDocuments`) - mirrors `shared/src/knowledge.ts`
+ * `KnowledgeDocSummary` field-for-field. WS8c fix: every field beyond `id`/`collection`/`title`
+ * used to be typed REQUIRED here (`sourceType`, `date`, `language`, `snippet`) even though the
+ * server never sends `date` (the real field is `createdAt`) or `snippet` at all on a browse row
+ * (only a SEARCH hit carries a snippet) - `fetchDocs` bridged the gap with `as unknown as
+ * KnowledgeDocSummary[]`, a cast that made the mismatch invisible instead of fixing it. A type
+ * that lies plus a cast that hides it is how the next reader gets a runtime `undefined`.
+ */
 export interface KnowledgeDocSummary {
   id: string;
   collection: string;
   title: string;
   sourceUrl?: string;
-  sourceType: string;
-  date: string;
-  language: string;
-  tags?: string[];
-  snippet: string;
+  sourceType?: string;
+  language?: string;
+  size?: number;
+  chunks?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  /** WS8a: which partition this row came from ('org' when omitted, the pre-WS8a-only value). */
+  scope?: KnowledgeScope;
 }
 
 export interface KnowledgePassage {
@@ -38,6 +57,21 @@ export interface KnowledgePassage {
   date: string;
   snippet: string;
   score: number;
+}
+
+/** Which partition a browse or search result came from (WS8a): the caller's own org vault, or
+ *  the reserved `_shared` corpus opened read-only for browsing (searches always union both). */
+export type KnowledgeScope = 'org' | 'shared';
+
+/** A search hit - mirrors `shared/src/knowledge.ts` `KnowledgeSearchHit`. */
+export interface KnowledgeSearchHit {
+  collection: string;
+  docId: string;
+  title?: string;
+  snippet?: string;
+  score?: number;
+  sourceUrl?: string;
+  scope: KnowledgeScope;
 }
 
 export interface IngestInput {
@@ -75,10 +109,18 @@ export interface KnowledgeSource {
   id: string;
   label: string;
   url: string;
+  /** Anchor crawler (default when absent), Lotus Domino harvest, or a declared-but-not-yet-
+   *  executed JSON API ingest (WS8c OPEN item - see docs/dev-parity.md). */
+  kind?: 'crawl' | 'api' | 'domino';
+  /** WS8c: an honest, human-readable reason this source ships disabled (e.g. a wholesale
+   *  failure on its last live run) - present only when disabled-with-a-stated-reason. */
+  disabledReason?: string;
   collection: string;
   levels: number;
   maxPages: number;
-  scope: 'same-domain' | 'any';
+  /** Link-follow scope during a crawl (never named `scope` - that name is reserved on this
+   *  domain for the `_shared` browse partition, WS8a). */
+  crawlScope: 'same-domain' | 'any';
   enabled: boolean;
   /** Render with a headless browser before extracting — for JS/SPA sites. */
   render?: boolean;
@@ -102,7 +144,7 @@ export interface SourceInput {
   collection: string;
   levels?: number;
   maxPages?: number;
-  scope?: string;
+  crawlScope?: string;
   enabled?: boolean;
   render?: boolean;
   userAgent?: string;
@@ -164,9 +206,17 @@ interface KnowledgeState {
   /** Current 0-based browse page. */
   docsPage: number;
   activeCollection: string;
+  /** WS8a: which vault the Fornecido browse list + collection chips address. */
+  scope: KnowledgeScope;
   sources: KnowledgeSource[];
   schedule: ScheduleInfo | null;
   uploads: UploadDoc[];
+
+  // Search (WS8a) - a separate surface from the browse list above; always unions org + `_shared`.
+  searchQuery: string;
+  searchHits: KnowledgeSearchHit[];
+  searching: boolean;
+  searchError: string | null;
 
   // Loading / error
   loading: boolean;
@@ -176,14 +226,21 @@ interface KnowledgeState {
 
   // Actions
   fetchCollections: () => Promise<void>;
-  /** Paginated browse over the whole base (Fornecido tab). Searching the base is
-   *  the agents' job (ripgrep, cited-or-silent) — no human search box; this list
-   *  only browses + filters. */
+  /** Paginated browse over the whole base (Fornecido tab), scoped to `scope`. */
   fetchDocs: (page?: number) => Promise<void>;
+  /** Switch the Fornecido browse between the org's own vault and the shared public corpus.
+   *  Resets the collection filter + page (a filter from one scope rarely names a collection
+   *  in the other) and refetches both collections and the first doc page. */
+  setScope: (scope: KnowledgeScope) => void;
   ingest: (input: IngestInput) => Promise<{ success: boolean; error?: string }>;
   remove: (collection: string, id: string) => Promise<{ success: boolean; error?: string }>;
   setActiveCollection: (collection: string) => void;
   clearError: () => void;
+
+  /** Free-text search over org + `_shared` (`POST /api/v1/knowledge/search`). Empty/blank query
+   *  clears the results rather than issuing a request (cited-or-silent applies to the box too). */
+  search: (query: string) => Promise<void>;
+  clearSearch: () => void;
 
   /** Page size for the Fornecido browse list. */
   readonly DOCS_PAGE_SIZE: number;
@@ -214,19 +271,26 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   docsTotal: 0,
   docsPage: 0,
   activeCollection: '',
+  scope: 'org',
   sources: [],
   schedule: null,
   uploads: [],
+  searchQuery: '',
+  searchHits: [],
+  searching: false,
+  searchError: null,
   loading: false,
   sourcesLoading: false,
   uploadsLoading: false,
   error: null,
 
   // -------------------------------------------
-  // Fetch collection names
+  // Fetch collection names (WS8a: scoped to `scope` - 'org' by default, byte-identical to the
+  // pre-WS8a request; 'shared' lists the reserved `_shared` corpus's collections instead).
   // -------------------------------------------
   fetchCollections: async () => {
-    const response = await tryCall(() => api.knowledge.listCollections());
+    const { scope } = get();
+    const response = await tryCall(() => api.knowledge.listCollections({ scope }));
     if (response.ok) {
       set({ collections: response.data.items ?? [] });
     }
@@ -234,21 +298,22 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   },
 
   // -------------------------------------------
-  // Browse docs — paginated over the whole base (Fornecido tab). Uses the
+  // Browse docs - paginated over the whole base (Fornecido tab), scoped to `scope`. Uses the
   // documents list (collection filter + offset/limit), a filesystem browse — NOT a search.
   // -------------------------------------------
   fetchDocs: async (page = 0) => {
-    const { activeCollection, DOCS_PAGE_SIZE } = get();
+    const { activeCollection, DOCS_PAGE_SIZE, scope } = get();
     set({ loading: true, error: null });
     const params: Record<string, unknown> = {
       offset: page * DOCS_PAGE_SIZE,
       limit: DOCS_PAGE_SIZE,
+      scope,
     };
     if (activeCollection) params.collection = activeCollection;
     const response = await tryCall(() => api.knowledge.listDocuments(params));
     if (response.ok) {
       set({
-        docs: (response.data.items ?? []) as unknown as KnowledgeDocSummary[],
+        docs: response.data.items ?? [],
         docsTotal: response.data.total ?? 0,
         docsPage: page,
         loading: false,
@@ -260,6 +325,40 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
       });
     }
   },
+
+  // -------------------------------------------
+  // Switch the Fornecido browse scope (WS8a).
+  // -------------------------------------------
+  setScope: (scope) => {
+    if (get().scope === scope) return;
+    set({ scope, activeCollection: '' });
+    void get().fetchCollections();
+    void get().fetchDocs(0);
+  },
+
+  // -------------------------------------------
+  // Free-text search (WS8a) - POST /api/v1/knowledge/search, already unions org + `_shared`.
+  // -------------------------------------------
+  search: async (query) => {
+    const trimmed = query.trim();
+    set({ searchQuery: query });
+    if (!trimmed) {
+      set({ searchHits: [], searching: false, searchError: null });
+      return;
+    }
+    set({ searching: true, searchError: null });
+    const response = await tryCall(() => api.knowledge.searchKnowledge({ query: trimmed, limit: 20 }));
+    // Stale-response guard: only apply the result if the query box still matches what we asked
+    // for (a slow early request must not clobber a faster later one).
+    if (get().searchQuery.trim() !== trimmed) return;
+    if (response.ok) {
+      set({ searchHits: (response.data.hits ?? []) as unknown as KnowledgeSearchHit[], searching: false });
+    } else {
+      set({ searchError: response.error.message || 'Falha na pesquisa', searching: false, searchHits: [] });
+    }
+  },
+
+  clearSearch: () => set({ searchQuery: '', searchHits: [], searching: false, searchError: null }),
 
   // -------------------------------------------
   // Ingest a new doc

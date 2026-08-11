@@ -70,6 +70,7 @@ import { DataBackupsPanel } from "@/components/artifacts/data-backups-panel";
 import { ArtifactBackendPanel } from "@/components/artifacts/artifact-backend-panel";
 import { BackendTriggerCard } from "@/components/artifacts/backend-trigger-card";
 import { VisibilityControl, type Visibility } from "@/components/sharing/visibility-control";
+import { accentForKind } from "@/components/chat/horizontal-card-stripe";
 
 /* ---------- Types ---------- */
 
@@ -89,6 +90,16 @@ interface ArtifactInstance {
   /** Org sharing visibility (Amendment 2, FC-503): 'private' | 'org'. */
   visibility?: Visibility;
   screenshotUrl?: string;
+  /** The chat session this artifact was built/continued from (`data.sessionId`, lifted). */
+  sessionId?: string;
+  /** The served app's own canonical URL (`data.appUrl`, lifted). */
+  appUrl?: string;
+  /** Build-pipeline output kind (`data.outputKind`, lifted) - only ever set for featured today. */
+  outputKind?: string;
+  /** Short description on Starting Point / featured cards (`data.description`, lifted). */
+  description?: string;
+  /** Featured update-by-consent badge (`data.updateAvailable`, lifted). */
+  updateAvailable?: { version?: string } | null;
   /** Declared Layer-2 backend handler names (enriched by the artifacts handler). */
   backendHandlers?: string[];
   health?: {
@@ -402,6 +413,9 @@ function ArtifactCard({
   const { onContextMenu: _lpContextMenu, ...longPress } = useLongPress(onOpenMenu);
   void _lpContextMenu;
   const appUrl = getArtifactAppUrl(artifact);
+  // A screenshotUrl the server sent can still 404 (capture failed after the id was minted, disk
+  // cleared, ...); fall back to the gradient placeholder rather than a broken-image box.
+  const [imgBroken, setImgBroken] = useState(false);
   const isRunnable =
     artifact.status === "running" ||
     artifact.status === "ready" ||
@@ -464,14 +478,28 @@ function ArtifactCard({
         </div>
       </div>
 
-      {/* Screenshot thumbnail */}
-      {artifact.screenshotUrl && (
+      {/* Screenshot thumbnail - a gradient placeholder (matching the chat stripe's) when there is
+          none yet or the image failed to load, instead of a blank gap or a broken-image box. */}
+      {artifact.screenshotUrl && !imgBroken ? (
         <img
           src={api.resolveUrl(artifact.screenshotUrl)}
           alt={getArtifactTitle(artifact)}
           loading="lazy"
+          onError={() => setImgBroken(true)}
           className="mb-3 h-32 w-full rounded-lg border border-line object-cover"
         />
+      ) : (
+        <div
+          className="mb-3 h-32 w-full overflow-hidden rounded-lg border border-line"
+          style={{ background: accentForKind(guessOutputKind(typeId)) }}
+          aria-hidden
+        >
+          <div className="flex items-center gap-1 px-4 pt-3">
+            <span className="h-2 w-2 rounded-full bg-white/70" />
+            <span className="h-2 w-2 rounded-full bg-white/70" />
+          </div>
+          <div className="mx-4 mt-10 h-1.5 rounded-full bg-white/55" />
+        </div>
       )}
 
       {/* Template/type subtitle */}
@@ -1659,6 +1687,9 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
   };
 
   const [featuredArtifacts, setFeaturedArtifacts] = useState<ArtifactInstance[]>([]);
+  // Featured cards render inline (not their own component), so a failed thumbnail load is
+  // tracked here by id rather than as per-card local state.
+  const [featuredImgBroken, setFeaturedImgBroken] = useState<Set<string>>(new Set());
 
   // Vertical skin: keep the backend's featuredRank order, but stably float the
   // active vertical's own starting points (e.g. `legal-*`) ahead of the generic
@@ -1698,7 +1729,11 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
           title: item.title || item.name || "Untitled",
           templateId: item.templateId || item.typeId,
         });
-        setInstances(raw.map(normalize));
+        // `items` is every artifact the actor can see, `featured` is the SAME featured rows again
+        // (listArtifacts returns both), so a featured artifact this org can also see appeared
+        // TWICE - once in the dedicated "Aplicações" strip and once more in the main grid below
+        // it. Exclude featured from the grid; the strip is its only home (mirrors chat-stripes.tsx).
+        setInstances(raw.filter((i) => !i.featured).map(normalize));
         setFeaturedArtifacts(featuredRaw.map(normalize));
       } else {
         setError(response.error.message || a.failedToLoad);
@@ -1775,10 +1810,27 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
     }
   }
 
-  // "Personalizar no chat" (and a featured card click): edit the featured app
-  // DIRECTLY via its chat — no fork. The build path materialises a working copy
-  // on the first real change (see execute-handler); until then the served app is
-  // the shared one, and the chat shows its preview so users see they can change it.
+  // Unified click semantics (operator-confirmed): clicking ANY artifact card - own or featured -
+  // opens the RUNNING APP inline in the existing ArtifactPreviewOverlay. Before this fix a click
+  // meant three different things depending on which card: an own card opened the in-page detail
+  // pane, a featured card jumped straight to chat, and the chat-page empty-state stripe did both
+  // (new tab + chat) at once. Only the explicit "Continuar a trabalhar" affordance (pencil / item
+  // menu / featured "Personalizar no chat") still opens the chat session - see
+  // handleContinueWorking / handleCustomizeFeatured below. getArtifactAppUrl returns null unless
+  // the artifact is ready/running/active, so a not-yet-built or stopped artifact falls back to the
+  // detail view instead of a dead click.
+  function handleOpenArtifact(artifact: ArtifactInstance) {
+    if (getArtifactAppUrl(artifact)) {
+      setPreviewArtifact(artifact);
+    } else {
+      setSelectedArtifact(artifact);
+    }
+  }
+
+  // "Personalizar no chat" (the featured card's own explicit affordance, never the card click
+  // itself - see handleOpenArtifact): edit the featured app DIRECTLY via its chat, no fork. The
+  // artifact keeps its id/slug/data; the build path materialises a working copy on the first real
+  // change (see build-mechanics.ts), so until then the served app stays the shared one.
   function handleCustomizeFeatured(featured: ArtifactInstance) {
     router.push(`/chat?continue=${encodeURIComponent(featured.id)}`);
   }
@@ -2031,6 +2083,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
           startRename: (artifact) => setRenamingArtifact(artifact as ArtifactInstance),
           requestDelete: (artifact) => setDeletingArtifact(artifact as ArtifactInstance),
           refreshList: () => void fetchInstances(),
+          viewDetails: (artifact) => setSelectedArtifact(artifact as ArtifactInstance),
         },
       }
     : null;
@@ -2379,24 +2432,37 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
                       >
                         <div className="grid grid-cols-1 gap-4 pb-1 @bp-md:grid-cols-2 @bp-lg:grid-cols-3 @bp-xl:grid-cols-4">
                           {orderedFeatured.map((f) => {
-                            const fData = f.data as Record<string, unknown> | undefined;
-                            const updateAvailable = (fData?.updateAvailable as { version?: string } | null | undefined) ?? null;
+                            const updateAvailable = f.updateAvailable ?? null;
+                            const imgOk = f.screenshotUrl && !featuredImgBroken.has(f.id);
                             return (
                             <div
                               key={f.id}
-                              onClick={() => handleCustomizeFeatured(f)}
+                              onClick={() => handleOpenArtifact(f)}
                               className="group flex cursor-pointer flex-col rounded-2xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong"
                               data-testid={`starting-point-card-${f.id}`}
                             >
-                              {f.screenshotUrl ? (
+                              {imgOk ? (
                                 <img
-                                  src={api.resolveUrl(f.screenshotUrl)}
+                                  src={api.resolveUrl(f.screenshotUrl!)}
                                   alt={f.title || f.name}
                                   loading="lazy"
+                                  onError={() =>
+                                    setFeaturedImgBroken((prev) => new Set(prev).add(f.id))
+                                  }
                                   className="mb-3 h-32 w-full rounded-lg border border-line object-cover"
                                 />
                               ) : (
-                                <div className="mb-3 h-32 w-full rounded-lg border border-line bg-neutral-50" />
+                                <div
+                                  className="mb-3 h-32 w-full overflow-hidden rounded-lg border border-line"
+                                  style={{ background: accentForKind(f.outputKind ?? guessOutputKind(getTemplateId(f))) }}
+                                  aria-hidden
+                                >
+                                  <div className="flex items-center gap-1 px-4 pt-3">
+                                    <span className="h-2 w-2 rounded-full bg-white/70" />
+                                    <span className="h-2 w-2 rounded-full bg-white/70" />
+                                  </div>
+                                  <div className="mx-4 mt-10 h-1.5 rounded-full bg-white/55" />
+                                </div>
                               )}
                               <div className="mb-1 flex items-start justify-between gap-2">
                                 <h3 className="truncate font-semibold text-neutral-900">
@@ -2417,7 +2483,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
                                 )}
                               </div>
                               <p className="mb-3 line-clamp-2 flex-1 text-xs text-neutral-500">
-                                {(fData?.description as string) || ""}
+                                {f.description || ""}
                               </p>
                               <div className="flex gap-2">
                                 {Array.isArray(f.backendHandlers) && f.backendHandlers.length > 0 && (
@@ -2510,7 +2576,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
                     <ArtifactCard
                       key={artifact.id}
                       artifact={artifact}
-                      onClick={() => setSelectedArtifact(artifact)}
+                      onClick={() => handleOpenArtifact(artifact)}
                       onDelete={(e) => {
                         e.stopPropagation();
                         setDeletingArtifact(artifact);
@@ -2620,10 +2686,7 @@ export function ArtifactsSurface({ host }: SurfaceProps) {
       {updateDialogFeatured && (
         <FeaturedUpdateDialog
           artifactName={getArtifactTitle(updateDialogFeatured)}
-          version={
-            ((updateDialogFeatured.data as Record<string, unknown> | undefined)
-              ?.updateAvailable as { version?: string } | null | undefined)?.version || ""
-          }
+          version={updateDialogFeatured.updateAvailable?.version || ""}
           isBusy={isUpdatingFeatured}
           onUpdate={() => void handleUpdateFeatured()}
           onKeepMine={() => void handleIgnoreFeaturedUpdate()}

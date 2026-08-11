@@ -1,6 +1,34 @@
 import type { NextConfig } from "next";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureMonacoAssets } from "./scripts/copy-monaco.mjs";
+import { ensureVoiceAssets } from "./scripts/copy-voice-assets.mjs";
+
+// Belt-and-braces for self-hosted runtime assets normally copied by predev/prebuild (see
+// copy-monaco.mjs / copy-voice-assets.mjs for the full why each exists). package.json's
+// predev/prebuild hooks only fire for `npm run dev`/`npm run build`; a dev server launched
+// any other way (bare `next dev`, an IDE run config, a fresh checkout's very first boot)
+// would silently skip them and 404 the same-origin assets these copy into public/. For
+// Monaco that surfaces immediately as an unhandled "Runtime Error: [object Event]" (a
+// @monaco-editor/loader bug - the failure escapes no matter how the caller handles its own
+// promise); for voice it is silent until a user reaches for the mic and MicVAD.new 404s its
+// worklet/model/wasm assets. Running both copies here, at config-eval time, covers every
+// invocation path instead of relying on which npm script was used.
+{
+  const monacoAssets = ensureMonacoAssets();
+  if (!monacoAssets.ok) {
+    console.warn(`[next.config] Monaco assets unavailable: ${monacoAssets.reason}`);
+  } else if (monacoAssets.copied) {
+    console.log(`[next.config] monaco-editor@${monacoAssets.version} -> public/monaco/vs`);
+  }
+
+  const voiceAssets = ensureVoiceAssets();
+  if (!voiceAssets.ok) {
+    console.warn(`[next.config] Voice assets unavailable: ${voiceAssets.reason}`);
+  } else if (voiceAssets.copied) {
+    console.log(`[next.config] ${voiceAssets.version} -> public/voice/vendor`);
+  }
+}
 
 // Resolve the cortex API URL at config-load time.
 //

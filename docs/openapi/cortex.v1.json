@@ -2295,6 +2295,16 @@
         "x-ekoa-domain": "knowledge",
         "x-ekoa-endpoint": "listCollections",
         "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/KnowledgeScope"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success.",
@@ -2302,6 +2312,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CollectionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2405,6 +2425,14 @@
             "schema": {
               "type": "integer",
               "minimum": 0
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/KnowledgeScope"
             }
           }
         ],
@@ -4038,6 +4066,9 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/KnowledgeScope"
           }
         },
         "required": [
@@ -4082,15 +4113,15 @@
           "updatedAt": {
             "$ref": "#/components/schemas/IsoTimestamp"
           },
-          "contentMd": {
-            "type": "string"
-          },
           "scope": {
             "type": "string",
             "enum": [
               "org",
               "shared"
             ]
+          },
+          "contentMd": {
+            "type": "string"
           },
           "createdAtRaw": {
             "type": "string",
@@ -4101,10 +4132,17 @@
           "id",
           "collection",
           "title",
-          "contentMd",
-          "scope"
+          "scope",
+          "contentMd"
         ],
         "additionalProperties": true
+      },
+      "KnowledgeScope": {
+        "type": "string",
+        "enum": [
+          "org",
+          "shared"
+        ]
       },
       "KnowledgeSearchHit": {
         "type": "object",

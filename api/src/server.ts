@@ -104,6 +104,7 @@ import { artifactsRouter } from './routes/artifacts.js';
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
 import { chatRouter } from './routes/chat.js';
 import { jobsRouter } from './routes/jobs.js';
+import { uploadsRouter } from './routes/uploads.js';
 import {
   setAssembleAgentContext,
   setKnowledgeGrounding,
@@ -127,7 +128,8 @@ import {
 // as a typed callback rather than an upward import.
 import { authorWithRepair } from './agents/authoring-core.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
-import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
+import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnowledgeIndex, readDocWithShared, seedKnowledgeSources } from './knowledge/index.js';
+import { startKnowledgeScheduler } from './knowledge/crawl/scheduler.js';
 // G8 — automation engine + integrations execution layer + delivery targets + canvas.
 import { automationsRouter } from './routes/automations.js';
 import { platformIntegrationsRouter, oauthCallbackRouter } from './routes/platform-integrations.js';
@@ -941,6 +943,10 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // internal paths determine the surface: /api/v1/chat/runs, /api/v1/jobs.
   app.use('/api/v1/chat', chatRouter(deps));
   app.use('/api/v1/jobs', jobsRouter(deps));
+  // WS4a - composer attachment staging (raw body + X-Filename/X-Folder, same protocol as
+  // knowledge's /uploads sub-route). Chat/job runs reference the returned uploadId, never a
+  // client-supplied path.
+  app.use('/api/v1/uploads', uploadsRouter(deps));
   // G7 — the ekoa-local LLM gateway sub-app (ch03 §3.10; metering inside the chokepoint,
   // §6.5.4). Mounted at /api/v1/llm; the token verifier AND the per-user key verifier (S4a)
   // are injected (llm/ needs no auth/ import — the gateway takes them as deps). A user-key
@@ -1307,6 +1313,13 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  *  boot obligations (ch07 §7.16): registry scan + slug-index load (parallel block),
  *  featured-artifact seeding + orphan sweep (sequential migrations). */
 export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> {
+  // The impeccable design plugin (mounted on build runs, agents/build.ts) ships scripts whose
+  // full mode makes one metadata GET to impeccable.style for its challenger catalog. Tenant
+  // builds must not contact third parties, so force the documented offline/degraded path via the
+  // env every agent subprocess inherits (llm/credentials.ts buildSubprocessEnv copies process.env).
+  // ||= so an operator who deliberately set either var keeps their value.
+  process.env.IMPECCABLE_API_URL ||= 'http://127.0.0.1:1'; // unroutable: instant local-roll fallback
+  process.env.DO_NOT_TRACK ||= '1';
   await connectMongo(); // fail-fast on a bad connection string
   const allUsers = await users.find({});
   // Reload the FULL admission state per user, not just `active` (H1): the durable `tokenEpoch` and
@@ -1364,7 +1377,14 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;
-  if (seedUser && seedPass) await seedAdmin(seedUser, seedPass, deps);
+  if (seedUser && seedPass) {
+    // The forced rotation is the default and the only production behaviour; a local stack may
+    // opt out (config gate is hard-false under NODE_ENV=production) because its Mongo is
+    // ephemeral, so the prompt re-arms on every boot and breaks credential provisioning.
+    await seedAdmin(seedUser, seedPass, deps, {
+      forcePasswordChange: !loadConfig().seedAdminSkipsPasswordChange,
+    });
+  }
 
   // ch07 §7.16 - parallel boot block, then sequential migrations.
   await Promise.all([appRegistry.start(appRegistry.sandboxRoot), loadSlugIndex()]);
@@ -1372,13 +1392,25 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   console.log(
     `[featured-seeder] seeded ${seeded.seeded}, refreshed ${seeded.refreshed}, orphans removed ${seeded.orphansRemoved}`,
   );
+
+  // WS8b - the default Portuguese legal crawl-source METADATA. Idempotent per seedId; a no-op
+  // once already seeded or before any super-admin exists (EKOA_ADMIN_* unset), in which case the
+  // next boot retries.
+  const sourcesSeeded = await seedKnowledgeSources();
+  console.log(
+    `[knowledge-sources-seeder] inserted ${sourcesSeeded.inserted}, skipped ${sourcesSeeded.skipped}, total ${sourcesSeeded.total}`,
+  );
 }
 
-/** Post-listen, fire-and-forget obligations (ch07 §7.16): featured prebuild. */
+/** Post-listen, fire-and-forget obligations (ch07 §7.16): featured prebuild, the knowledge
+ *  nightly refresh scheduler (WS8c - arms a timer for the next 03:00 local occurrence; never
+ *  fires immediately, so it is inert within a test's lifetime even though `buildApp`-only test
+ *  harnesses never call this function at all). */
 export function bootPostListen(): void {
   void buildAndRegisterFeaturedArtifacts()
     .then((r) => console.log(`[featured-builder] built ${r.built}, skipped ${r.skipped}, failed ${r.failed}, registered ${r.registered}`))
     .catch((err) => console.warn('[featured-builder] prebuild failed:', err instanceof Error ? err.message : err));
+  startKnowledgeScheduler();
 }
 
 /** Boot: validate config (fail-closed), install process guards, start listening. */

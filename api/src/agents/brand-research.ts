@@ -15,6 +15,7 @@
  */
 import { BrandResearchResult, type Actor } from '@ekoa/shared';
 import { checkAllowance } from '../billing/index.js';
+import { BILLING_PAGE_URL } from '../billing/constants.js';
 import { runOneShot, decideForTask, LlmAbortedError, type LlmAttribution } from '../llm/index.js';
 import { parseFirstJsonObject } from '../services/json-extract.js';
 import { getOrg, updateOrg } from '../services/platform-crud.js';
@@ -41,6 +42,7 @@ import {
 } from '../services/branding/index.js';
 import { registerRun, removeRun, finalizeOnce } from './registry.js';
 import { JobStreamSink, emitBrandingUpdated } from './streaming.js';
+import { classifyRunFailure } from './run-failure.js';
 import { persistJob, patchJob, jobView, type JobRecord } from './jobs.js';
 
 /** Research-metadata keys: ride the job record, never written onto org branding.
@@ -251,7 +253,7 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
     const allow = await checkAllowance(input.actor.userId);
     if (abort.signal.aborted) { removeRun(jobId); return; }
     if (!allow.ok) {
-      if (finalizeOnce(jobId)) { sink.error('BILLING_BLOCKED', allow.message ?? 'Faturação bloqueada.'); await patchJob(jobId, { status: 'failed', error: { code: 'BILLING_BLOCKED', message: allow.message ?? '' }, endedAt: new Date(input.deps.now()).toISOString() }); }
+      if (finalizeOnce(jobId)) { sink.error('BILLING_BLOCKED', { billingUrl: allow.billingUrl ?? BILLING_PAGE_URL }); await patchJob(jobId, { status: 'failed', error: { code: 'BILLING_BLOCKED', message: allow.message ?? '' }, endedAt: new Date(input.deps.now()).toISOString() }); }
       removeRun(jobId);
       return;
     }
@@ -364,7 +366,9 @@ async function executeBrandResearch(jobId: string, input: BrandResearchInput, ab
       });
     }
   } catch (err) {
-    if (finalizeOnce(jobId)) { sink.error('ADAPTER_ERROR', 'A pesquisa falhou.'); await patchJob(jobId, { status: 'failed', error: { code: 'ADAPTER_ERROR', message: err instanceof Error ? err.message : '' }, endedAt: new Date(input.deps.now()).toISOString() }); }
+    const code = classifyRunFailure(err);
+    console.error(`[brand-research][job ${jobId}] terminal ${code}:`, err instanceof Error ? (err.stack ?? err.message) : err);
+    if (finalizeOnce(jobId)) { sink.error(code); await patchJob(jobId, { status: 'failed', error: { code, message: err instanceof Error ? err.message : '' }, endedAt: new Date(input.deps.now()).toISOString() }); }
   } finally {
     removeRun(jobId);
   }

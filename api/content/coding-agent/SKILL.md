@@ -67,9 +67,14 @@ MANIFEST.md       (manifesto de capacidades - OBRIGATÓRIO na raiz)
    servidor próprios da app.
 9. **`localStorage`, `sessionStorage` e `indexedDB` são PROIBIDOS** - dados persistentes
    passam TODOS pela API `window.__ekoa` (perder dados no reload é um bug crítico).
-10. Dependências npm externas usam import normal (ex.: `import { Document } from 'docx'`);
-    a plataforma resolve-as em tempo de build (via CDN esm.sh). Não adiciones
-    bibliotecas de download tipo `file-saver`.
+10. Dependências npm PRÉ-INSTALADAS usam import normal - confirmadas: `react`, `react-dom`,
+    `docx` (`import { Document } from 'docx'`), `motion` (`import { motion } from 'motion/react'`).
+    Para QUALQUER outra biblioteca externa, importa pela URL completa do CDN:
+    `import algo from 'https://esm.sh/nome-do-pacote@versão'` - a plataforma faz o fetch e o
+    bundle em tempo de build (esbuild, verificado). Um import normal (`import x from
+    'nome-do-pacote'`) de uma biblioteca NÃO pré-instalada FALHA a compilar ("Could not
+    resolve") - não adivinhes que "vai passar pelo CDN sozinho". Não adiciones bibliotecas de
+    download tipo `file-saver`.
 11. Nomes de coleções e campos em português quando o domínio é português (`nif`,
     `tribunal`, `numeroProcesso`, `estado`); strings PT-PT; sem emoji na UI.
 
@@ -190,12 +195,44 @@ instales, importes ou configures SDKs/chaves de IA externos (OpenAI, Anthropic,
 Google AI, etc.). Regra inegociável de segurança, faturação e conformidade.
 
 ## Design
+- A autoridade de design é a skill `impeccable` (instalada como plugin em todos os builds).
+  Para QUALQUER UI nova ou redesenho, carrega-a e segue-a: uma superfície nova segue o fluxo
+  new-work dela INCLUINDO o roll do concept-seed (constrói a direção que o script atribuir);
+  um refinamento usa o comando correspondente (polish, bolder, layout, typeset...). Antes de
+  terminar, corre o detetor dela (`detect.mjs --json`) sobre os ficheiros alterados e corrige
+  o que for mecânico.
+- Este ambiente é headless e não assistido: não há utilizador para perguntas a meio do build
+  nem geração de imagens. Salta as rondas de perguntas e os passos de sketch/comp da skill;
+  um `serve-question.mjs` que sai com código 2 é o fallback documentado, não um erro.
 - Design limpo e moderno: espaçamento consistente, tipografia cuidada, hierarquia
   visual clara, layouts responsivos. Evita estética genérica de placeholder.
+- Logótipo real: quando `/api/design-tokens.css` define `--logo-url` (não vazio), a empresa
+  tem um logótipo real servido em `/brand-assets/` - coloca-o no cabeçalho (e rodapé, se
+  existir) de qualquer site/landing/superfície de marketing. NUNCA inventes, desenhes ou geres
+  um logótipo substituto; com `--logo-url` vazio, usa o nome da empresa em texto, na
+  tipografia da própria superfície.
+- Fundo claro por predefinição - um tema escuro é uma escolha deliberada para uma marca que o
+  peça, nunca o alcance por omissão (incidente WS7: um pedido de site produziu um deck escuro).
 - A marca da empresa chega via `/api/design-tokens.css` em runtime - JÁ INCLUÍDO
   automaticamente no index.html gerado. NUNCA o importes no código (`import`/`@import`
   rebentam o bundler); usa apenas as variáveis CSS (`var(--...)`) em vez de cores fixas
   quando existir marca ativa.
+- Movimento: `import { motion, AnimatePresence } from 'motion/react'` está disponível e compila
+  (biblioteca pré-instalada, ver regra 10 acima; comprovado com o builder REAL da plataforma,
+  não uma invocação isolada do esbuild - api/tests/apps/builder.test.ts fixa este comportamento).
+  CUSTO (medido a 2026-08-08 com o mesmo builder que serve as apps - este pipeline NUNCA
+  minifica, `minify:false` fixo em sharedBuildOptions, portanto são os bytes exatos servidos):
+  uma app sem `motion` compila para ~1126 KB; a mesma app a importar `motion` para desvanecer
+  UM elemento compila para ~1444 KB - uma taxa fixa de ~318 KB paga no momento em que importas
+  `motion/react`, seja o que for que uses dela. Usar muito mais da biblioteca (AnimatePresence,
+  gestos, variantes orquestradas) acrescenta só ~12 KB a mais - o esbuild não "tree-shakes" esta
+  biblioteca de forma significativa, portanto o custo não escala com o quanto usas, só com SE a
+  importas. A decisão é binária: paga os ~318 KB onde o movimento É a experiência - páginas de
+  apresentação, sites institucionais, apresentações, momentos de destaque numa app - e usa bem a
+  biblioteca já que a pagaste; ou não a importes de todo num ecrã denso de trabalho (tabelas,
+  formulários, painéis que um profissional usa o dia inteiro), onde uma transição CSS chega,
+  custa zero, e cobre bem hover, focus e mudanças de estado simples. Não importes `motion/react`
+  só para desvanecer uma lista.
 
 ## Validação do build
 No fim de cada alteração: estrutura canónica respeitada, imports todos resolvidos, e

@@ -40,6 +40,10 @@ import { memvaultEndpoints } from './memvault.js';
 export * from './descriptor.js';
 export * from './common.js';
 export * from './errors.js';
+// Terminal run-error vocabulary + the code->user-text tables. Schema-only like events.ts:
+// no descriptor map. It is the ONE definition of what a failed run says to a user, shared so
+// api/ and web/ cannot drift (and so web/ never renders server-supplied prose).
+export * from './run-errors.js';
 export * from './events.js';
 // Completeness-verified sync (slice CS3) - an INTERNAL data contract (SyncRunReport), schema-only
 // like events.ts/voice.ts: NO descriptor map, NOT in ALL_ENDPOINTS, never a REST/OpenAPI surface.

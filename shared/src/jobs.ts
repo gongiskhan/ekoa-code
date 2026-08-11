@@ -32,6 +32,13 @@ export const JobCreateRequest = z.object({
   // jobs RESOURCE for state/events — they are not creatable through this endpoint.
   kind: z.literal('build'),
   description: z.string(),
+  // WS6 incident fix (Rule 7, additive): `description` is often the chat-agent's <=15-word build
+  // paraphrase, not the user's own words - a paraphrase used to be the ENTIRE input to both the
+  // artifact-type classifier and the build agent's prompt, so "a construir uma apresentação..."
+  // briefed a slide deck when the user asked for a website. `originalMessage` carries the user's
+  // actual request text alongside it; `description` keeps naming the artifact (what it is good
+  // at). Absent on a direct composer build, where `description` already IS the user's own text.
+  originalMessage: z.string().optional(),
   sessionId: z.string(),
   language: z.enum(['pt', 'en']).default('pt'),
   templateId: z.string().optional(),

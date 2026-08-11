@@ -17,6 +17,8 @@ const ALL_TABS: (Omit<TabItem, "label"> & {
   { key: "pedidos", href: "/settings/pedidos", adminOnly: true },
   { key: "users", href: "/settings/users", adminOnly: true },
   { key: "offices", href: "/settings/offices", superAdminOnly: true },
+  { key: "privacy", href: "/settings/privacy" },
+  { key: "apiKeys", href: "/settings/api-keys" },
 ];
 
 const TAB_ROUTES = ALL_TABS.map((t) => t.href);

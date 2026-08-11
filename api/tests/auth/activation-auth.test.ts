@@ -148,6 +148,57 @@ describe('admin seeding (ch04 §4.8 item 12)', () => {
     expect(admins).toHaveLength(1);
     expect((await orgs.find({})).length).toBeGreaterThanOrEqual(1);
   });
+
+  // The seeded password is a credential the operator already knows (EKOA_ADMIN_PASSWORD, and in
+  // the dev harness a PUBLISHED default), so rotation-on-first-login is the default and the only
+  // production behaviour. A local stack may opt out because its Mongo is ephemeral: the admin is
+  // re-seeded on every boot, so the prompt re-arms every time and, once the operator changes the
+  // password to clear it, dev-credential.mjs can no longer log in to provision the model
+  // credential.
+  it('forces a password change by default, and when the caller asks for it explicitly', async () => {
+    await seedAdmin('founder', 'pw12345678', deps);
+    expect((await users.find({ role: 'super-admin' }))[0]?.passwordChangeRequired).toBe(true);
+
+    await users.deleteMany({});
+    await seedAdmin('founder', 'pw12345678', deps, { forcePasswordChange: true });
+    expect((await users.find({ role: 'super-admin' }))[0]?.passwordChangeRequired).toBe(true);
+  });
+
+  it('skips the forced change only when the caller opts out, and login then reports no change due', async () => {
+    await seedAdmin('founder', 'pw12345678', deps, { forcePasswordChange: false });
+    const seeded = (await users.find({ role: 'super-admin' }))[0];
+    expect(seeded?.passwordChangeRequired).toBe(false);
+    // The flag is what the login flow reads to decide whether to force the change screen.
+    const result = await login('founder', 'pw12345678', false, deps);
+    expect(result.passwordChangeRequired).toBe(false);
+  });
+
+  it('config gate: the env opt-out is ignored under NODE_ENV=production (fail-closed)', () => {
+    const prevEnv = process.env.NODE_ENV;
+    const prevFlag = process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE;
+    try {
+      process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE = '1';
+
+      process.env.NODE_ENV = 'production';
+      __resetConfigForTests();
+      expect(loadConfig().seedAdminSkipsPasswordChange).toBe(false);
+
+      process.env.NODE_ENV = 'development';
+      __resetConfigForTests();
+      expect(loadConfig().seedAdminSkipsPasswordChange).toBe(true);
+
+      // Unset means the safe default everywhere.
+      delete process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE;
+      __resetConfigForTests();
+      expect(loadConfig().seedAdminSkipsPasswordChange).toBe(false);
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+      if (prevFlag === undefined) delete process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE;
+      else process.env.EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE = prevFlag;
+      __resetConfigForTests();
+      loadConfig();
+    }
+  });
 });
 
 describe('boot fail-closed (ch09 §9.7)', () => {

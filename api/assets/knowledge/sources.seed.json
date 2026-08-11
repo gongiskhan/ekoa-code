@@ -1,0 +1,93 @@
+{
+  "version": 2,
+  "description": "Default Portuguese legal knowledge sources (WS8b), extended to a real crawl policy (WS8c). Values are the ACTUAL tuned production config read read-only from ekoa-dev's runtime state (~/.ekoa/data/knowledge/sources.json) on 2026-08-08, not the stale git-committed ekoa-data/knowledge/sources.seed.json this file superseded - that file's levels/maxPages were pre-tuning defaults and it carried no domino config at all. `id` is each source's REAL upstream id, kept deliberately so a pre-existing crawl ledger on a machine that already ran ekoa-dev's crawler (<dataDir>/knowledge/ledger/<id>.json) is picked up automatically instead of orphaned - see api/src/knowledge/sources-seeder.ts's module doc. Seeded idempotently at boot (keyed by seedId, race-free) under the bootstrap super-admin's org, mirroring api/src/apps/featured-seeder.ts.",
+  "sources": [
+    {
+      "id": "2e2a4255-1564-4f39-a993-f843dc3649b6",
+      "seedId": "pgdlisboa-leis",
+      "label": "PGDL - Legislação",
+      "url": "https://www.pgdlisboa.pt/leis/lei_main.php",
+      "collection": "legislacao",
+      "levels": 1,
+      "maxPages": 6000,
+      "scope": "same-domain",
+      "enabled": false,
+      "seedTemplate": {
+        "url": "https://www.pgdlisboa.pt/leis/lei_mostra_articulado.php?nid={n}&tabela=leis&so_miolo=S",
+        "from": 1,
+        "to": 4040,
+        "step": 1
+      },
+      "disabledReason": "Última execução real (2026-06-27) completou com sucesso e já apanhou tudo (5999/6000 páginas sem alterações) - desativada de propósito, não por falha; reative para retomar a atualização periódica."
+    },
+    {
+      "id": "201e8915-e060-486f-97c5-cdf67cdbf6d9",
+      "seedId": "dgsi",
+      "label": "DGSI - Jurisprudência",
+      "url": "https://www.dgsi.pt",
+      "collection": "jurisprudencia",
+      "kind": "domino",
+      "levels": 1,
+      "maxPages": 200000,
+      "scope": "same-domain",
+      "enabled": true,
+      "domino": {
+        "baseUrl": "https://www.dgsi.pt",
+        "view": "Por Ano",
+        "count": 1000,
+        "databases": [
+          { "db": "jstj.nsf" },
+          { "db": "jsta.nsf" },
+          { "db": "jtrl.nsf" },
+          { "db": "jtrp.nsf" },
+          { "db": "jtre.nsf" },
+          { "db": "jtrc.nsf" },
+          { "db": "jtrg.nsf" },
+          { "db": "jtca.nsf" }
+        ]
+      }
+    },
+    {
+      "id": "a9b29ac4-fc3e-40c3-9366-6a9a30177f24",
+      "seedId": "dgert-legislacao",
+      "label": "DGERT - Legislação Relevante",
+      "url": "https://www.dgert.gov.pt/legislacao-relevante",
+      "collection": "legislacao-laboral",
+      "levels": 2,
+      "maxPages": 200000,
+      "scope": "same-domain",
+      "enabled": false,
+      "disabledReason": "Última execução real (2026-07-21) falhou por completo: 3046/3046 pedidos falharam, 0 páginas obtidas, sem nenhum sucesso parcial. Causa não diagnosticada (não é possível testar ao vivo a partir daqui) - candidato provável: falha na cadeia de certificados TLS, a mesma classe de problema que afeta o ACT; a reparação automática de TLS não está portada nesta versão (ver docs/dev-parity.md). Reative manualmente após diagnosticar com um arranque real."
+    },
+    {
+      "id": "ebf654c0-4901-488e-b815-7c1e69019e87",
+      "seedId": "act-trabalho",
+      "label": "ACT - Autoridade para as Condições do Trabalho",
+      "url": "https://portal.act.gov.pt/",
+      "collection": "legislacao-laboral",
+      "levels": 2,
+      "maxPages": 200000,
+      "scope": "same-domain",
+      "enabled": true,
+      "render": true
+    },
+    {
+      "id": "152556fe-cd68-468d-b293-afda032fde98",
+      "seedId": "diario-republica",
+      "label": "Diário da República",
+      "url": "https://diariodarepublica.pt/",
+      "collection": "legislacao",
+      "levels": 2,
+      "maxPages": 2000,
+      "scope": "same-domain",
+      "enabled": true,
+      "render": false,
+      "userAgent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      "seeds": [
+        "https://diariodarepublica.pt/dr/legislacao-consolidada/lei/2009-34546475",
+        "https://diariodarepublica.pt/dr/legislacao-consolidada/decreto-lei/2015-105602322",
+        "https://diariodarepublica.pt/dr/legislacao-consolidada/lei/2014-57466875"
+      ]
+    }
+  ]
+}

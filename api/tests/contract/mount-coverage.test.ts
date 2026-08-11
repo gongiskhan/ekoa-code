@@ -98,7 +98,8 @@ describe('mount-coverage: every declared /api/v1 path is mounted (F5 drift gate)
     const DESCOPED = new Set<string>([
       // integrationBuilder.* mounted 2026-07-11 (the integration-builder backend landed) —
       // removed from this list per the shrink-only rule.
-      'uploads.create',
+      // uploads.create mounted 2026-08-08 (WS4a - routes/uploads.ts) - removed from this list
+      // per the shrink-only rule.
       'ekoaLocal.agentFaceRun', 'ekoaLocal.agentFaceCancel',
       'ekoaLocal.bridgeConnect', 'ekoaLocal.bridgeDebugInvoke', 'ekoaLocal.tuiEvents',
     ]);

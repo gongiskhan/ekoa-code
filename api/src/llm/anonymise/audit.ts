@@ -45,11 +45,24 @@ const GENESIS = '0'.repeat(64);
 let chainHead = GENESIS;
 let chainSeq = 0;
 
-/** The default sink: one row through the single Registo write path, category `anonymisation`. */
+/** The default sink: one row through the single Registo write path, category `anonymisation`.
+ *  A call with no per-request principal (the static gateway-key / platform-overhead path, e.g.
+ *  every Agent SDK subprocess talking back to the local chokepoint - `llm/client.ts`
+ *  `proxyGatewayMessages`/`proxyGatewayCountTokens` with an empty billee) falls back to the
+ *  `'system'` sentinel rather than `''`, matching the content-loader audit precedent
+ *  (`server.ts` `configureContentLoader` -> `{ userId: 'system', username: 'system', orgId: '' }`).
+ *  `Id = z.string().min(1)` (shared `RegistoEntry.actor`) rejects an empty string, so `''` here
+ *  used to fail every reader's contract validation (F3/F-registo-actor-blank class). `||`, not
+ *  `??`: `actor.userId` can be an already-present EMPTY STRING (not `undefined`), which `??`
+ *  would not replace. */
 const logActivitySink: AuditSink = {
   async write(actor, metadata) {
     await logActivity(
-      { userId: actor.userId ?? '', username: actor.username ?? actor.userId ?? '', orgId: actor.orgId ?? '' },
+      {
+        userId: actor.userId || 'system',
+        username: actor.username || actor.userId || 'system',
+        orgId: actor.orgId || 'system',
+      },
       'anonymisation',
       'egress-mask',
       { now: () => Date.now() },

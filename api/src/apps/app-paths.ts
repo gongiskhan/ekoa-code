@@ -111,14 +111,16 @@ export async function loadWritable(
   return { verdict: 'forbidden', art };
 }
 
-/** Merge a patch into an artifact's `data` bag and persist. */
+/** Merge a patch into an artifact's `data` bag and persist. Every call is server-driven build/
+ *  featured machinery touching this artifact, so it doubles as the "recently worked on" signal -
+ *  bumps the row-level `updatedAt` the same way `patchArtifact` does for a client PATCH. */
 export async function patchArtifactData(
   id: string,
   patch: Record<string, unknown>,
 ): Promise<ArtifactDoc | null> {
   return (await artifacts.update(id, (a) => {
     const data = { ...((a.data as Record<string, unknown>) ?? {}), ...patch };
-    return { ...a, data };
+    return { ...a, data, updatedAt: new Date().toISOString() };
   })) as ArtifactDoc | null;
 }
 

@@ -42,7 +42,21 @@ const login = await fetch(`${API}/api/v1/auth/login`, {
   body: JSON.stringify({ username: USER, password: PASS }),
 }).catch((e) => die(`cannot reach ${API} - is the stack up? (${e.message})`));
 
-if (!login.ok) die(`login failed as ${USER}: ${login.status}`);
+if (!login.ok) {
+  // A 401 here is almost always the seeded admin's password having been rotated away from the
+  // dev default - the operator changed it to clear a forced-change prompt, and this script still
+  // sends EKOA_ADMIN_PASSWORD (default `tmp12345`). Say so, instead of a bare status code.
+  if (login.status === 401) {
+    die(
+      `login failed as ${USER}: 401 (wrong password).\n` +
+      `  This stack's admin password is not "${PASS}". Re-run with the real one:\n` +
+      `    EKOA_ADMIN_PASSWORD='<password>' node ${process.argv[1].replace(process.cwd() + '/', '')}\n` +
+      `  A stack booted through scripts/dev-api.mjs seeds admin/tmp12345 and (since 2026-08-10)\n` +
+      `  no longer forces a change, so a restart also restores the default.`,
+    );
+  }
+  die(`login failed as ${USER}: ${login.status}`);
+}
 const { token } = await login.json();
 
 // POST /api/v1/credentials is super-admin only; it takes effect immediately (in-memory cache).

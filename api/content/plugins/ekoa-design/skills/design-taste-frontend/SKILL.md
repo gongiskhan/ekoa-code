@@ -8,6 +8,20 @@ description: Anti-slop frontend skill for landing pages, portfolios, and redesig
 > Landing pages, portfolios, and redesigns. Not dashboards, not data tables, not multi-step product UI.
 > Every rule below is **contextual**. None of it fires automatically. First read the brief, then pull only what fits.
 
+> **Platform note (Ekoa builds - reconciles a real stack mismatch, WS7):** this skill's DEFAULT
+> ARCHITECTURE section (§3) and code examples throughout assume Tailwind + Next.js + `next/font` +
+> a real npm toolchain. Ekoa's build sandbox is none of that: plain React (JSX, automatic runtime),
+> bundled by esbuild, no `package.json`, no `npm install` (`api/content/coding-agent/SKILL.md`).
+> Tailwind colour utilities are explicitly BANNED here (`api/assets/bases/app/skills/
+> layout-and-design.md`) in favour of a runtime CSS-variable contract served at
+> `/api/design-tokens.css`. Take this skill's DESIGN JUDGMENT - the anti-slop discipline, the
+> dial system, typography/colour/motion taste, the AI-tells checklist - and re-express it as
+> plain CSS using `var(--color-…)` / `var(--space-…)` / `var(--text-…)`, never the literal
+> Tailwind classes, `next/font`, `next/image`, or Server/Client Component split shown in this
+> skill's examples. The `motion` package (imported as `motion/react`) DOES bundle here - verified
+> against this platform's esbuild pipeline, `api/package.json` - so §3.A's animation guidance
+> applies as written; its framework/styling guidance does not.
+
 ---
 
 ## 0. BRIEF INFERENCE (Read the Room Before Anything Else)

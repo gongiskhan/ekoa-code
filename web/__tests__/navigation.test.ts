@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Vault } from 'lucide-react';
 import { NAV_ITEMS } from '@/lib/navigation';
 import { en } from '@/locales';
 
@@ -36,5 +37,16 @@ describe('lib/navigation NAV_ITEMS', () => {
     // The settings entry still covers the /settings subtree.
     const settings = NAV_ITEMS.find((i) => i.href === '/settings/platform');
     expect(settings?.activePrefix).toBe('/settings');
+  });
+
+  it('WS1 (2026-08-08): Escritórios, privacy and API keys are no longer sidebar rows - they moved into settings tabs', () => {
+    for (const href of ['/settings/offices', '/settings/privacy', '/settings/api-keys']) {
+      expect(NAV_ITEMS.find((i) => i.href === href)).toBeUndefined();
+    }
+  });
+
+  it('WS1: Cofre uses the Vault (safe) icon, not the privacy ShieldCheck icon it used to share', () => {
+    const cofre = NAV_ITEMS.find((i) => i.href === '/cofre');
+    expect(cofre?.icon).toBe(Vault);
   });
 });

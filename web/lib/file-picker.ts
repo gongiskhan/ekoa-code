@@ -82,15 +82,17 @@ function waitForFiles(input: HTMLInputElement): Promise<FileList | null> {
 
 // -- Public API --
 
-export async function pickFiles(): Promise<FileAttachment[]> {
-  const input = createFileInput(true, false);
-  const files = await waitForFiles(input);
-  if (!files || files.length === 0) return [];
-
+/**
+ * Stage a flat list of already-in-hand `File` objects (a native dialog pick, a drag-and-drop
+ * drop, or a clipboard paste - the browser hands all three of these the same `File` shape) and
+ * return them as composer chips. Per-file try/catch: one bad file must not lose the rest of a
+ * multi-file drop/paste.
+ */
+export async function stageFiles(files: File[], folder?: string): Promise<FileAttachment[]> {
   const results: FileAttachment[] = [];
-  for (const file of Array.from(files)) {
+  for (const file of files) {
     try {
-      const staged = await stageFile(file);
+      const staged = await stageFile(file, folder);
       results.push({
         attachmentId: makeId('file'),
         displayName: staged.displayName,
@@ -103,6 +105,65 @@ export async function pickFiles(): Promise<FileAttachment[]> {
     }
   }
   return results;
+}
+
+export async function pickFiles(): Promise<FileAttachment[]> {
+  const input = createFileInput(true, false);
+  const files = await waitForFiles(input);
+  if (!files || files.length === 0) return [];
+  return stageFiles(Array.from(files));
+}
+
+/**
+ * Composer paste-as-attachment: a pasted block of plain text longer than roughly one paragraph
+ * becomes a text attachment (matching Claude.ai/ChatGPT-style composers) instead of flooding the
+ * input box - the agent still gets the full text, just out of the way of what the user is typing.
+ * A shorter paste is left to the browser's normal insert-at-cursor behavior.
+ *
+ * Two independent signals, either one is enough:
+ *  - LENGTH: > 800 chars is comfortably past "one paragraph" (a typical paragraph runs
+ *    300-600 chars) without catching a long sentence, a URL, or a code one-liner.
+ *  - LINE COUNT: > 6 non-blank lines catches a short-line paste (a bullet list, a table row
+ *    dump, a stack trace, a snippet copied without fences) that reads as "a block", not "a
+ *    sentence", even while under the length threshold.
+ * Length alone was too blunt (a 500-char single sentence got swept up; a 9-line list of short
+ * bullet points did not) - `shouldStageAsTextAttachment` is the ONE place both composers and
+ * their tests make this call, so the two signals can't drift out of sync between them.
+ */
+export const PASTE_TEXT_LENGTH_THRESHOLD = 800;
+export const PASTE_TEXT_LINE_THRESHOLD = 6;
+
+export function shouldStageAsTextAttachment(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > PASTE_TEXT_LENGTH_THRESHOLD) return true;
+  const nonBlankLines = trimmed.split('\n').filter((l) => l.trim().length > 0).length;
+  return nonBlankLines > PASTE_TEXT_LINE_THRESHOLD;
+}
+
+/** Wrap pasted text as a `.txt` file attachment. Returns null for blank/whitespace-only text or
+ *  a failed stage (network hiccup) - the caller falls back to a normal paste in that case. */
+export async function stagePastedText(text: string): Promise<FileAttachment | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const oneLine = trimmed.replace(/\s+/g, ' ');
+  const label = oneLine.length > 60 ? `${oneLine.slice(0, 60).trim()}...` : oneLine;
+  const file = new File([trimmed], `${label.replace(/[^\w\- ]+/g, '').trim().slice(0, 40) || 'texto-colado'}.txt`, {
+    type: 'text/plain',
+  });
+  try {
+    const staged = await stageFile(file);
+    return {
+      attachmentId: makeId('text'),
+      displayName: label,
+      path: staged.path,
+      type: 'file',
+      size: staged.size,
+    };
+  } catch (err) {
+    console.error('[file-picker] Failed to stage pasted text:', err);
+    return null;
+  }
 }
 
 /**

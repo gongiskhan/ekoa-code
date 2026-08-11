@@ -38,7 +38,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  FileText,
   Pencil,
   Square,
   Volume2,
@@ -466,15 +465,18 @@ export default function SheetFeedPanel({ sessionId, onClose }: SheetFeedPanelPro
       {/* Header - mirrors the build variant's tab bar height + close affordance.
           Hidden below md: on mobile the ONLY host is the FAB overlay drawer, whose
           own header already names the sheet feed (B6) - two stacked title rows
-          would waste overlay height. */}
+          would waste overlay height.
+          No visible title text here (WS5): before the agent has classified the
+          job, "Folhas"/"Sheets" reads as a wrong tab name for whatever the user
+          actually asked for. The row keeps its height and hosts only the collapse
+          chevron; the locale string survives as the row's accessible name so
+          screen readers still get one. */}
       <div
         data-testid="sheet-feed-header"
-        className="hidden md:flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-2.5"
+        role="group"
+        aria-label={sheetFeed.title}
+        className="hidden md:flex items-center justify-end border-b border-neutral-200 bg-white px-4 py-2.5"
       >
-        <div className="flex items-center gap-2 text-sm font-medium text-neutral-800">
-          <FileText size={15} className="text-teal-600" />
-          {sheetFeed.title}
-        </div>
         {onClose && (
           <button
             onClick={onClose}

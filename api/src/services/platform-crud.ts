@@ -229,10 +229,32 @@ export function registoEntry(a: ActivityLogDoc) {
     orgId: a.orgId,
   };
 }
-export async function readRegisto(actor: Actor, username: string, q: { userId?: string; type?: string; orgId?: string; limit?: number; offset?: number }, deps: Deps) {
+/**
+ * DOCUMENTED DEFAULT (registo-anon-audit-actor-blank mitigation, docs/findings.md): with no
+ * explicit `type` filter and `includeAnonymisation` not set, `category: 'anonymisation'` rows
+ * are hidden. Rationale: a single chat/build turn's Agent SDK subprocess writes MANY of these
+ * per one human action (each turn of its own tool loop round-trips the local gateway), most of
+ * them now correctly `'system'`-attributed (no per-request principal exists at that HTTP
+ * boundary, `llm/anonymise/audit.ts`) rather than a person - left in by default they would
+ * outnumber every human-attributable row roughly 2:1 in the one place this is visible: a
+ * super-admin's UNSCOPED cross-org view (an org-scoped view - every org-admin, and a super-admin
+ * who picks one office - never sees them regardless, since neither `''` nor `'system'` ever
+ * equals a real `orgId`). This is a VISIBLE default, never a silent one: the web surfaces a
+ * notice with a one-click toggle (`registoPage`), and `RegistoQuery.includeAnonymisation` /
+ * shared/src/registo.ts documents it on the wire. An explicit `type` filter always wins - a
+ * caller asking for a specific action type (including an anonymisation one) is never
+ * second-guessed by this default.
+ */
+export async function readRegisto(actor: Actor, username: string, q: { userId?: string; type?: string; orgId?: string; from?: string; to?: string; limit?: number; offset?: number; includeAnonymisation?: boolean }, deps: Deps) {
   let rows = actor.role === 'super-admin' ? await activityLogs.find(q.orgId ? { orgId: q.orgId } : {}) : await activityLogs.find({ orgId: actor.orgId });
+  if (!q.type && !q.includeAnonymisation) rows = rows.filter((x) => x.category !== 'anonymisation');
   if (q.userId) rows = rows.filter((x) => x.userId === q.userId);
   if (q.type) rows = rows.filter((x) => `${x.category}.${x.type}` === q.type || x.type === q.type);
+  // Date-range filter (RegistoQuery.from/to, shared/src/registo.ts): ISO-8601 UTC timestamps
+  // compare correctly as strings. Wired through from the route (was silently dropped before -
+  // the UI's date filters had no effect).
+  if (q.from) rows = rows.filter((x) => x.timestamp >= q.from!);
+  if (q.to) rows = rows.filter((x) => x.timestamp <= q.to!);
   const total = rows.length;
   const page = rows.slice(q.offset ?? 0, (q.offset ?? 0) + (q.limit ?? 100));
   await logActivity({ userId: actor.userId, username, orgId: actor.orgId }, 'registo', 'read', deps);

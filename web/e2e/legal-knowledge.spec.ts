@@ -2,14 +2,22 @@ import { test, expect, type Page } from '@playwright/test';
 import { uiLogin } from './helpers/ui-login';
 
 /**
- * Knowledge UI after the agent-first redesign:
- *  - there is NO human search box anywhere (the "Pergunte à base" tab/box and the
- *    Fornecido browse-search were removed) — the base is searched by Ekoa's agents
- *    via ripgrep (knowledge-first, cited-or-silent). Backend search correctness is
- *    proven by the cortex suite (knowledge-ripgrep / knowledge-accents).
+ * Knowledge UI after the agent-first redesign, THEN WS8a's visibility fix on top of it:
+ *  - the "Pergunte à base" tab/box (`kn-tab-perguntar`, `kn-query`) and the old Fornecido
+ *    browse-search (`kn-browse-search`) stay gone - those specific affordances were removed
+ *    and never came back.
  *  - an "agents use this first (before the web)" banner explains the model.
- *  - the page still BROWSES + MANAGES the base: add a doc via Documentos, see it
- *    in the Fornecido browse.
+ *  - the page still BROWSES + MANAGES the base: add a doc via Documentos, see it in the
+ *    Fornecido browse.
+ *  - WS8a (2026-08-08) SUPERSEDES the "no human search box" half of the original design: a
+ *    262k-document reserved `_shared` legal corpus (Jurisprudência/Legislação/Legislação
+ *    laboral) is unions-searched by every org already, and paging through it by hand does not
+ *    scale - so a NEW search box (`kn-search`/`kn-search-input`, backed by the existing
+ *    POST /api/v1/knowledge/search) was added. It is a DIFFERENT affordance from the removed
+ *    ones above (different testids, always visible, not tab-gated), so this spec's original
+ *    absence assertions stay true; the new box's own coverage lives in
+ *    `knowledge-shared-scope.spec.ts`. Backend search correctness is proven by the cortex
+ *    suite (knowledge-ripgrep / knowledge-accents) and by `api/tests/contract/knowledge.test.ts`.
  */
 async function login(page: Page) {
   await uiLogin(page);
@@ -26,10 +34,13 @@ test('Knowledge UI: no search box, agents-first banner, browse + add via Documen
   await expect(page.getByTestId('kn-agents-banner')).toBeVisible();
   await expect(page.getByTestId('kn-agents-banner')).toContainText(/antes da web/i);
 
-  // NO human search box anywhere — neither the old ask tab nor a browse search.
+  // The OLD ask-tab and browse-search affordances stay gone - never resurrected.
   await expect(page.getByTestId('kn-tab-perguntar')).toHaveCount(0);
   await expect(page.getByTestId('kn-query')).toHaveCount(0);
   await expect(page.getByTestId('kn-browse-search')).toHaveCount(0);
+
+  // WS8a: a DIFFERENT, always-visible search box now exists (see knowledge-shared-scope.spec.ts).
+  await expect(page.getByTestId('kn-search-input')).toBeVisible();
 
   // Add a sourced doc via the Documentos tab. unique TITLE+BODY per run (ingest is
   // content-addressed, so a fixed body would dedup to a prior run's doc).

@@ -19,6 +19,10 @@ export {
   type CreateDocumentInput,
 } from './service.js';
 export { buildGroundingBlock, isLegalContext, type GroundingInput, type GroundingResult } from './grounding.js';
+// WS8b - idempotent boot seeding of the default Portuguese legal crawl-source metadata (the
+// Sources tab was empty because `knowledge_sources` had never been seeded in this build; the
+// crawler that would EXECUTE these sources is a separate workstream, WS8c).
+export { seedKnowledgeSources, type SeedSourcesResult } from './sources-seeder.js';
 export { closeIndex, bulkIndexDocs, optimizeIndex } from './index-store.js';
 // The reserved shared partition (a public legal corpus every org's searches also consult). A firm's
 // org id can never collide with it; it is written only by the offline importer CLI.

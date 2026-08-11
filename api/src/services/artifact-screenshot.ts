@@ -99,3 +99,51 @@ export function getArtifactScreenshotUrl(instanceId: string): string | undefined
   const filePath = join(getArtifactScreenshotDir(), `${instanceId}.png`);
   return existsSync(filePath) ? `/artifact-screenshots/${instanceId}.png` : undefined;
 }
+
+// ---- Lazy/on-demand backfill (§7.11) ------------------------------------------------------
+//
+// A card with no screenshot (16 of 27 own artifacts, measured locally - every artifact built
+// before this capture path existed) showed a blank/placeholder box forever: nothing ever
+// re-captured it. Rather than a boot-time sweep across every artifact (would stampede Playwright
+// across dozens of apps at once, the exact thing the featured-catalog boot build already has to
+// bound with its own concurrency), the LIST route (routes/artifacts.ts) calls `ensureArtifactScreenshot`
+// per listed artifact that lacks one: fire-and-forget, deduped per id so repeat list calls from
+// concurrent tabs/polling don't stack captures for the same artifact, and capped so a list full of
+// misses doesn't launch dozens of concurrent page loads at once either.
+
+const MAX_CONCURRENT_BACKFILLS = 2;
+const backfillInFlight = new Set<string>();
+const backfillQueue: string[] = [];
+let backfillActive = 0;
+
+function pumpBackfillQueue(): void {
+  while (backfillActive < MAX_CONCURRENT_BACKFILLS && backfillQueue.length > 0) {
+    const instanceId = backfillQueue.shift() as string;
+    backfillActive++;
+    captureArtifactScreenshot(instanceId)
+      .catch((err) => {
+        console.warn(`[artifact-screenshot] backfill capture failed for ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
+      })
+      .finally(() => {
+        backfillActive--;
+        backfillInFlight.delete(instanceId);
+        pumpBackfillQueue();
+      });
+  }
+}
+
+/**
+ * Kick a background capture for an artifact that has none yet. Fire-and-forget - never blocks the
+ * caller and never throws. A no-op when `EKOA_SCREENSHOTS_DISABLED` is set (tests / CI), a capture
+ * for this id is already queued or running, or one already exists on disk. Concurrency-capped
+ * across ALL callers (not just per-id) so a list response full of misses queues rather than
+ * stampedes.
+ */
+export function ensureArtifactScreenshot(instanceId: string): void {
+  if (process.env.EKOA_SCREENSHOTS_DISABLED === '1') return;
+  if (backfillInFlight.has(instanceId)) return;
+  if (getArtifactScreenshotUrl(instanceId)) return;
+  backfillInFlight.add(instanceId);
+  backfillQueue.push(instanceId);
+  pumpBackfillQueue();
+}

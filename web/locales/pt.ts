@@ -482,6 +482,8 @@ export const pt: Translations = {
       pedidos: 'Pedidos',
       users: 'Utilizadores',
       offices: 'Escritórios',
+      privacy: 'Privacidade',
+      apiKeys: 'Chaves de API',
     },
     knowledge: {
       description:
@@ -492,7 +494,19 @@ export const pt: Translations = {
         'O assistente, o agente de código e (em breve) as automações consultam esta base de conhecimento ',
       agentsBannerBodyEmphasis: 'antes da web',
       agentsBannerBodyAfter:
-        ' — citam a fonte ou ficam em silêncio, nunca inventam. Não há aqui uma caixa de pesquisa: a base é consultada pelos agentes; aqui apenas gere o que ela contém.',
+        ' - citam a fonte ou ficam em silêncio, nunca inventam. Pode também pesquisar diretamente abaixo.',
+      scopeOrgLabel: 'A minha organização',
+      scopeSharedLabel: 'Base pública',
+      scopeSharedHint:
+        'Jurisprudência, legislação e legislação laboral portuguesas, disponíveis para todas as organizações.',
+      sharedBadge: 'Base pública',
+      collectionJurisprudencia: 'Jurisprudência',
+      collectionLegislacao: 'Legislação',
+      collectionLegislacaoLaboral: 'Legislação laboral',
+      searchPlaceholder: 'Pesquisar na base de conhecimento…',
+      searchHint: 'Pesquisa na sua organização e na base pública.',
+      searchEmpty: 'Sem resultados para esta pesquisa.',
+      sourcesCrawlSuperAdminOnly: 'Apenas super-administradores podem atualizar fontes.',
     },
     resources: {
       title: 'Recursos',

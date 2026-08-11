@@ -181,6 +181,19 @@ export function buildPrompt(input: VerifyRunInput): string {
     '2. ACCEPTANCE CHECK: the interactive elements the request implies must exist and work (e.g. a',
     '   requested counter has a working button; a requested form submits). Missing expected',
     '   functionality is a FAIL even if the page renders without errors.',
+    // Live failure 2026-08-10 (artifact 7d82d4b7): a build shipped with its middle sections at
+    // `opacity: 0` and no animation attached - entrance reveals whose trigger never fired. The
+    // page had zero console errors and looked "clean", so every rendering-based check passed
+    // while most of the content was invisible to the user. Deterministic, so state it as a query.
+    '3. INVISIBLE-CONTENT CHECK (mandatory): scroll the full page, then evaluate in the page:',
+    '   [...document.querySelectorAll("section,article,div,li")].filter(el => {',
+    '     const s = getComputedStyle(el);',
+    '     return (el.textContent||"").trim().length > 20 &&',
+    '            (parseFloat(s.opacity) < 0.05 || s.visibility === "hidden");',
+    '   }).length',
+    '   A non-zero count means real content shipped invisible (the classic cause is a',
+    '   scroll-reveal animation with an opacity:0 resting state whose trigger never fires).',
+    '   That is a FAIL, however clean the page looks and however empty the console is.',
     '',
     'When you are done, output your verdict as the FINAL line, in exactly this form:',
     '  PASS - <short note>   (the app fulfils the request and all checks passed)',

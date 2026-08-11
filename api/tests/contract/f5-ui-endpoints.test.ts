@@ -12,6 +12,7 @@ import { managedAutomationId } from '../../src/automation/integration-automation
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import * as bridgeRegistry from '../../src/bridge/registry.js';
 import { __resetCeremoniesForTests, __openCeremonyCount } from '../../src/bridge/attended.js';
+import { __resetCrawlRunnerForTests } from '../../src/knowledge/crawl/runner.js';
 import {
   KnowledgeSource, CrawlStartResponse, CrawlStatusResponse, RefreshScheduleResponse,
   SessionCaptureStatus, ConnectSessionResponse, ProvisionAutomationsResponse, ErrorEnvelope,
@@ -47,6 +48,7 @@ beforeEach(async () => {
   // both survived into the next test. That stayed invisible while no test asserted on a CLEAN
   // starting point, and became an order-dependent failure the moment one did.
   __resetCeremoniesForTests(); vi.restoreAllMocks();
+  __resetCrawlRunnerForTests();
   await users.deleteMany({}); await orgs.deleteMany({}); await knowledgeSources.deleteMany({});
   await bridgePairings.deleteMany({});
   await orgs.insert({ _id: 'orgA', name: 'A', createdAt: 'x' } as never);
@@ -72,9 +74,12 @@ describe('knowledge: PATCH /sources/:id', () => {
     expect(body.id).toBe('s1');
     expect(body.enabled).toBe(false);
     expect(body.collection).toBe('docs');
-    // sourceView aligned to the contract: `kind` surfaces as `type`, `seedId` as `seedTemplate`
+    // sourceView aligned to the contract: `kind` surfaces as `type`. WS8c split the earlier
+    // naming collision - `seedId` (the internal idempotent-seed marker) and `seedTemplate` (the
+    // real `{url,from,to,step}` object) are now two distinct wire fields, never conflated.
     expect(body.type).toBe('web');
-    expect(body.seedTemplate).toBe('seed-1');
+    expect(body.seedId).toBe('seed-1');
+    expect(body.seedTemplate).toBeNull();
   });
 
   it('another org\'s source is invisible: 404 envelope, nothing written', async () => {
@@ -87,46 +92,101 @@ describe('knowledge: PATCH /sources/:id', () => {
   });
 });
 
-describe('knowledge: crawl endpoints (no crawler infra — honest, never a fake completed crawl)', () => {
-  it('POST /sources/:id/crawl answers CrawlStartResponse WITHOUT claiming a crawl started', async () => {
+describe('knowledge: crawl endpoints (WS8c - real crawler; trigger gated to super-admin)', () => {
+  /**
+   * `url` is a LOOPBACK address that `assertSafeUrl` refuses synchronously, zero live network:
+   * `startCrawl` still reserves the run and answers `started:true` (the reservation and the HTTP
+   * response happen before the background crawl's first fetch attempt), then the background job
+   * settles to `state:'error'` on its own. This file only proves the ENDPOINTS' wire contract and
+   * the auth gate - real HTTP transport against saved fixtures is covered separately in
+   * `tests/knowledge/crawl/*.test.ts`. Never point this at a real hostname (WS8c constraint: no
+   * test may make a live request to a real site).
+   */
+  const seedCrawlableSource = () =>
+    knowledgeSources.insert({ _id: 's1', orgId: 'orgA', url: 'http://127.0.0.1:1/refused-by-ssrf', kind: 'crawl' } as never);
+  const mkSuperAdmin = async () => {
+    await users.insert({ _id: 'admin1', username: 'admin1', passwordHash: await hashPassword('pw123456'), role: 'super-admin', orgId: 'orgA', active: true });
+    setActivation('admin1', { active: true, billingLocked: false });
+    return (await login('admin1', 'pw123456', false, deps)).token;
+  };
+
+  it('POST /sources/:id/crawl is refused for a plain user (403) - writing into `_shared` is privileged, unlike browsing it', async () => {
     await seedSource();
     const t = await tokenFor();
     const res = await authed('/api/v1/knowledge/sources/s1/crawl', t, { method: 'POST' });
+    expect(res.status).toBe(403);
+    expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
+  });
+
+  it('POST /sources/:id/crawl as super-admin genuinely starts a run (started:true), settling to an honest error with zero live network', async () => {
+    await seedCrawlableSource();
+    const admin = await mkSuperAdmin();
+    const res = await authed('/api/v1/knowledge/sources/s1/crawl', admin, { method: 'POST' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(CrawlStartResponse.safeParse(body).success).toBe(true);
-    expect(body.started).toBe(false);        // truthful: no crawler exists
+    expect(body.started).toBe(true);
     expect(body.alreadyRunning).toBe(false);
+
+    // Poll status until the (fast - no network ever attempted) background run settles.
+    let status: Record<string, unknown> = {};
+    for (let i = 0; i < 50; i++) {
+      status = await readJson(await authed('/api/v1/knowledge/sources/s1/crawl', admin));
+      if (status.running === false) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(CrawlStatusResponse.safeParse(status).success).toBe(true);
+    expect(status.running).toBe(false);
+    expect((status.progress as Record<string, unknown> | undefined)?.state).toBe('error');
   });
 
-  it('GET /sources/:id/crawl answers CrawlStatusResponse with running:false and an honest reason', async () => {
-    await seedSource();
+  it('a second POST while one is in flight answers alreadyRunning:true, never a duplicate run', async () => {
+    await seedCrawlableSource();
+    const admin = await mkSuperAdmin();
+    const first = authed('/api/v1/knowledge/sources/s1/crawl', admin, { method: 'POST' });
+    const second = await readJson(await authed('/api/v1/knowledge/sources/s1/crawl', admin, { method: 'POST' }));
+    expect(second.started).toBe(false);
+    expect(second.alreadyRunning).toBe(true);
+    await first; // drain the in-flight request before the test ends
+  });
+
+  it('GET /sources/:id/crawl (crawlStatus, ordinary `user` tier) validates with no run yet: running:false, no progress, real ledger stats', async () => {
+    await seedCrawlableSource();
     const t = await tokenFor();
     const res = await authed('/api/v1/knowledge/sources/s1/crawl', t);
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(CrawlStatusResponse.safeParse(body).success).toBe(true);
     expect(body.running).toBe(false);
-    expect(JSON.stringify(body)).toContain('crawler'); // the reason is surfaced, not hidden
+    expect(body.progress).toBeUndefined();
+    expect(body.stats).toMatchObject({ total: 0, pending: 0, ok: 0, error: 0, withDoc: 0 });
   });
 
-  it('crawl endpoints 404 on another org\'s source', async () => {
+  it('crawl endpoints 404 on another org\'s source (POST checked as super-admin, GET as an ordinary user)', async () => {
     await seedForeignSource();
+    const admin = await mkSuperAdmin();
+    const postRes = await authed('/api/v1/knowledge/sources/s-other/crawl', admin, { method: 'POST' });
+    expect(postRes.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await readJson(postRes)).success).toBe(true);
+
     const t = await tokenFor();
-    for (const init of [{ method: 'POST' }, {}]) {
-      const res = await authed('/api/v1/knowledge/sources/s-other/crawl', t, init);
-      expect(res.status).toBe(404);
-      expect(ErrorEnvelope.safeParse(await readJson(res)).success).toBe(true);
-    }
+    const getRes = await authed('/api/v1/knowledge/sources/s-other/crawl', t);
+    expect(getRes.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await readJson(getRes)).success).toBe(true);
   });
 
-  it('GET /knowledge/refresh-schedule answers RefreshScheduleResponse with a null schedule (none configured)', async () => {
+  it('GET /knowledge/refresh-schedule answers a REAL ScheduleInfo (WS8c - the scheduler is real now, never null)', async () => {
     const t = await tokenFor();
     const res = await authed('/api/v1/knowledge/refresh-schedule', t);
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(RefreshScheduleResponse.safeParse(body).success).toBe(true);
-    expect(body.schedule).toBeNull();
+    const schedule = body.schedule as Record<string, unknown>;
+    expect(schedule).toBeTruthy();
+    expect(typeof schedule.enabled).toBe('boolean');
+    expect(schedule.hour).toBeGreaterThanOrEqual(0);
+    expect(schedule.hour).toBeLessThanOrEqual(23);
+    expect(typeof schedule.nextRunAt).toBe('string');
   });
 });
 

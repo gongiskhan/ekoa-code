@@ -380,7 +380,21 @@ export interface FollowUpResolution {
  * honest no-ops so the lifecycle + guards are testable without the real esbuild pipeline.
  */
 export interface BuildMechanics {
-  prepareFirstBuild(input: { userId: string; sessionId: string; description: string; language: string; templateId?: string }): Promise<FirstBuildPrep>;
+  prepareFirstBuild(input: {
+    userId: string;
+    sessionId: string;
+    description: string;
+    language: string;
+    templateId?: string;
+    /** WS6 incident fix: the user's ORIGINAL words, not the chat-agent's <=15-word build
+     *  paraphrase (`description`) - this is what feeds the artifact-type classifier and the
+     *  build agent's prompt. Absent on a direct composer build, where `description` already IS
+     *  the user's own text. */
+    originalMessage?: string;
+    /** Attachment filenames (DO #4): feed the classifier (a dropped-in .docx/.pdf is a strong
+     *  document-base signal not present in the text). */
+    attachmentNames?: string[];
+  }): Promise<FirstBuildPrep>;
   resolveFollowUp(artifactId: string): Promise<FollowUpResolution | null>;
   /**
    * Re-validate at EXECUTION time that `actor` may still WRITE `artifactId` (H1 MEDIUM, TOCTOU

@@ -13,6 +13,7 @@ The user provides frontend requirements: a component, page, application, or inte
 Before coding, understand the context and commit to a BOLD aesthetic direction:
 - **Purpose**: What problem does this interface solve? Who uses it?
 - **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
+  - **On this platform specifically** (Ekoa builds - `api/src/agents/build.ts` BUILD_SYSTEM_PROMPT is the standing house style): the default reach, absent a strong signal from the user's brand or explicit request, is clean/professional/modern/high-impact - not editorial/magazine, not brutalist, not dark-by-default. Those remain valid CHOICES when the brief genuinely calls for them (a request for something editorial, a brand that already reads luxury/publication), never the unprompted extreme this list tempts toward. "Bold" and "intentional" still apply within that default - restraint executed with precision is not the same as picking the safest option.
 - **Constraints**: Technical requirements (framework, performance, accessibility).
 - **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
 
@@ -35,7 +36,7 @@ Focus on:
 
 NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
 
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same - vary fonts and aesthetic details across generations, and NEVER converge on common choices (Space Grotesk, for example). On this platform, that variety plays out WITHIN the light/professional house style far more often than as a swing to a dark theme - reach for dark only when the brand or the brief actually calls for it, not as a default rotation.
 
 **IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
 

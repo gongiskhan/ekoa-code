@@ -16,6 +16,13 @@
  * the capability-surface obligations bolted on: the org comes from the call context's actor and
  * from nowhere else, the reserved `_shared` partition can never BE that actor, and every call
  * leaves one activity row plus one structured console line.
+ *
+ * WS8a fixes a visibility bug, not a storage one: the 262k-document `_shared` legal corpus was
+ * always searchable (search already unions org + `_shared`) but never BROWSABLE - {@link
+ * listCollections}/{@link listDocuments} only ever listed the caller's own org vault, so an org
+ * with zero private uploads saw an empty Biblioteca even though the shared corpus was fully
+ * populated. Both gain an additive `scope` option (default `'org'`, unchanged); `'shared'`
+ * redirects the same read to the `_shared` partition. No write path gains this option.
  */
 import { knowledgeSources, knowledgeUploads } from '../data/stores.js';
 import { logActivity, type ActivityActor, type LogActivityDeps } from '../data/activity.js';
@@ -28,14 +35,76 @@ import { PathSafetyError, uploadBlobPath, uploadsDir, knowledgeRoot, SHARED_ORG_
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { relative } from 'node:path';
 
+/** A URL template expanded over a numeric range (WS8c) - mirrors the shared `SeedTemplate`. */
+export interface SeedTemplate {
+  url: string;
+  from: number;
+  to: number;
+  step?: number;
+}
+
+/** One Domino database a `kind: 'domino'` source's harvest walks (WS8c). */
+export interface DominoDatabase {
+  db: string;
+  view?: string;
+  maxPages?: number;
+}
+
+/** A Lotus Domino harvest config (WS8c) - see `crawl/domino.ts`. */
+export interface DominoSourceConfig {
+  baseUrl: string;
+  view?: string;
+  count?: number;
+  databases: DominoDatabase[];
+}
+
+/** One crawl/refresh run's outcome (WS8c) - mirrors the shared `KnowledgeCrawlSummary`. */
+export interface KnowledgeCrawlSummary {
+  fetched: number;
+  ingested: number;
+  updated: number;
+  unchanged: number;
+  discovered: number;
+  failed: number;
+  capped: boolean;
+  pendingRemaining?: number;
+  durationMs: number;
+  finishedAt: string;
+  error?: string;
+}
+
 export interface KnowledgeSourceDoc extends Doc {
   orgId: string;
   url: string;
-  kind?: string;
+  label?: string;
+  /** Source kind: anchor crawler (default when absent), JSON API-ingest (declared, NOT executed
+   *  in this build - WS8c OPEN item), or Domino harvest. */
+  kind?: 'crawl' | 'api' | 'domino';
+  domino?: DominoSourceConfig;
+  /** Internal idempotent-seed marker (WS8b/8c). Distinct from `seedTemplate` below - see the
+   *  shared contract's doc comment on that field for the history of the two being conflated. */
   seedId?: string;
   collection?: string;
+  /** Link-follow depth: 1 = the seed page's links; 2 = + the links on those pages. Unused by a
+   *  Domino harvest (it walks ReadViewEntries pages, not anchors). */
+  levels?: number;
+  /** Per-RUN page/document budget (crawl: pages; domino: documents) - resumable, not a total cap. */
+  maxPages?: number;
+  scope?: 'same-domain' | 'any';
   enabled?: boolean;
+  /** Render each page with the shared headless-browser pool before extracting (JS/SPA sources). */
+  render?: boolean;
+  userAgent?: string;
+  seeds?: string[];
+  seedTemplate?: SeedTemplate | null;
+  /** WS8c: an honest, human-readable reason a seeded source ships `enabled: false` (e.g. a
+   *  wholesale failure on its last live run this build could not diagnose offline). */
+  disabledReason?: string;
   lastCrawledAt?: string;
+  lastRefreshAt?: string;
+  lastResult?: KnowledgeCrawlSummary | null;
+  /** WS8b legacy free-form escape hatch, superseded by the typed fields above (kept optional for
+   *  any pre-WS8c row that still carries it; no longer written). */
   crawlConfig?: Record<string, unknown>;
 }
 
@@ -89,13 +158,157 @@ function assertNotSharedActor(actor: Actor): void {
   assertNotSharedOrg(actor.orgId);
 }
 
-// --- Sources (G4, unchanged) ---------------------------------------------------------------
+// --- Sources (G4; crawl policy fields WS8c) -------------------------------------------------
+
+/** Per-run page/document budget ceiling (WS8c, matches ekoa-dev's tuned value - the crawl is
+ *  resumable, so a big source is harvested across many runs rather than raising this further). */
+const MAX_PAGES_CEILING = 200_000;
+const MAX_LEVELS = 4;
+const MAX_SEEDS = 5000;
+const MAX_TEMPLATE_SEEDS = 100_000;
+
+function safeUrlOrThrow(url: string, field = 'URL'): void {
+  try {
+    assertSafeUrl(url);
+  } catch (e) {
+    if (e instanceof SsrfError) throw new KnowledgeError('VALIDATION_FAILED', 400, `${field} não permitido.`);
+    throw e;
+  }
+}
+
+/** Validate an explicit seed list: http(s) + SSRF-safe URLs, bounded count. Undefined when
+ *  absent/empty so the field is simply omitted. */
+function validateSeeds(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new KnowledgeError('VALIDATION_FAILED', 400, 'seeds deve ser uma lista de URLs.');
+  const seeds: string[] = [];
+  for (const item of raw) {
+    const u = typeof item === 'string' ? item.trim() : '';
+    if (!u) continue;
+    safeUrlOrThrow(u, 'seed');
+    seeds.push(u);
+  }
+  if (seeds.length > MAX_SEEDS) throw new KnowledgeError('VALIDATION_FAILED', 400, `seeds: máximo ${MAX_SEEDS}.`);
+  return seeds.length ? seeds : undefined;
+}
+
+/** Validate a seed template. Only the FIRST expansion is SSRF-checked (the host is constant
+ *  across the range); bounded so a malformed record can never spin the expansion forever. */
+function validateSeedTemplate(raw: SeedTemplate | null | undefined): SeedTemplate | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const { url, from, to, step } = raw;
+  if (!url || !/\{n\}/i.test(url)) throw new KnowledgeError('VALIDATION_FAILED', 400, 'seedTemplate.url deve conter o marcador {n}.');
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from > to) {
+    throw new KnowledgeError('VALIDATION_FAILED', 400, 'seedTemplate: from/to inválidos (inteiros, from <= to).');
+  }
+  const stepN = step === undefined ? 1 : step;
+  if (!Number.isSafeInteger(stepN) || stepN < 1) throw new KnowledgeError('VALIDATION_FAILED', 400, 'seedTemplate.step deve ser >= 1.');
+  const count = Math.floor((to - from) / stepN) + 1;
+  if (count > MAX_TEMPLATE_SEEDS) {
+    throw new KnowledgeError('VALIDATION_FAILED', 400, `seedTemplate: expande para ${count} URLs (máximo ${MAX_TEMPLATE_SEEDS}).`);
+  }
+  safeUrlOrThrow(url.replace(/\{n\}/gi, String(from)), 'seedTemplate.url');
+  return { url, from, to, step: stepN };
+}
+
+/** Validate a Domino harvest config (WS8c). */
+function validateDomino(raw: DominoSourceConfig | undefined): DominoSourceConfig | undefined {
+  if (raw === undefined) return undefined;
+  safeUrlOrThrow(raw.baseUrl, 'domino.baseUrl');
+  if (!Array.isArray(raw.databases) || raw.databases.length === 0) {
+    throw new KnowledgeError('VALIDATION_FAILED', 400, 'domino.databases é obrigatório.');
+  }
+  if (raw.databases.length > 50) throw new KnowledgeError('VALIDATION_FAILED', 400, 'domino.databases: máximo 50.');
+  for (const d of raw.databases) {
+    if (!d.db || !/^[a-zA-Z0-9._/-]+\.nsf$/i.test(d.db)) {
+      throw new KnowledgeError('VALIDATION_FAILED', 400, `domino.databases: db inválido (ex.: jstj.nsf): ${d.db}`);
+    }
+  }
+  return raw;
+}
+
+export interface SourcePolicyInput {
+  url: string;
+  label?: string;
+  kind?: 'crawl' | 'api' | 'domino';
+  collection?: string;
+  levels?: number;
+  maxPages?: number;
+  scope?: 'same-domain' | 'any';
+  enabled?: boolean;
+  render?: boolean;
+  userAgent?: string;
+  seeds?: string[];
+  seedTemplate?: SeedTemplate | null;
+  domino?: DominoSourceConfig;
+  seedId?: string;
+  disabledReason?: string;
+}
+
+/** Validate + normalize a full/partial source policy (WS8c). `partial` skips defaulting absent
+ *  fields (used by `updateSource`, which merges onto the stored record) vs. filling them (used
+ *  by `addSource`, which needs a complete row). Throws `KnowledgeError('VALIDATION_FAILED', ...)`
+ *  on any invalid PRESENT field - mirrors ekoa-dev's `normalizeSourceInput`/`normalizeSourcePatch`. */
+function normalizePolicy(input: Partial<SourcePolicyInput>, opts: { partial: boolean }): Partial<KnowledgeSourceDoc> {
+  const out: Partial<KnowledgeSourceDoc> = {};
+
+  if (input.url !== undefined) {
+    safeUrlOrThrow(input.url);
+    out.url = input.url;
+  }
+  if (input.label !== undefined) out.label = input.label;
+  else if (!opts.partial && input.url) {
+    // A source with no explicit label falls back to its hostname (matches ekoa-dev's
+    // normalizeSourceInput default) so a hand-created source never renders a blank card title.
+    try { out.label = new URL(input.url).hostname.replace(/^www\./, ''); } catch { /* url already validated above */ }
+  }
+  if (input.collection !== undefined) out.collection = input.collection;
+
+  if (input.levels !== undefined || !opts.partial) {
+    const levels = input.levels ?? 1;
+    if (!Number.isInteger(levels) || levels < 1 || levels > MAX_LEVELS) {
+      throw new KnowledgeError('VALIDATION_FAILED', 400, `levels deve ser entre 1 e ${MAX_LEVELS}.`);
+    }
+    out.levels = levels;
+  }
+  if (input.maxPages !== undefined || !opts.partial) {
+    let maxPages = input.maxPages ?? 2000;
+    if (!Number.isFinite(maxPages) || maxPages < 1) throw new KnowledgeError('VALIDATION_FAILED', 400, 'maxPages deve ser um inteiro positivo.');
+    if (maxPages > MAX_PAGES_CEILING) maxPages = MAX_PAGES_CEILING;
+    out.maxPages = maxPages;
+  }
+  if (input.scope !== undefined || !opts.partial) {
+    const scope = input.scope ?? 'same-domain';
+    if (scope !== 'same-domain' && scope !== 'any') throw new KnowledgeError('VALIDATION_FAILED', 400, "scope deve ser 'same-domain' ou 'any'.");
+    out.scope = scope;
+  }
+  if (input.enabled !== undefined) out.enabled = input.enabled;
+  else if (!opts.partial) out.enabled = true;
+  if (input.render !== undefined) out.render = input.render;
+  else if (!opts.partial) out.render = false;
+  if (input.userAgent !== undefined) out.userAgent = input.userAgent;
+  if (input.seeds !== undefined) out.seeds = validateSeeds(input.seeds) ?? [];
+  if (input.seedTemplate !== undefined) out.seedTemplate = validateSeedTemplate(input.seedTemplate) ?? null;
+  if (input.domino !== undefined) out.domino = validateDomino(input.domino);
+  if (input.disabledReason !== undefined) out.disabledReason = input.disabledReason;
+
+  // kind is inferred from the config supplied, else the explicit value.
+  let kind = input.kind;
+  if (input.domino) kind = 'domino';
+  if (kind !== undefined) {
+    if (kind === 'domino' && !(input.domino ?? out.domino)) {
+      throw new KnowledgeError('VALIDATION_FAILED', 400, 'fonte domino requer configuração domino.databases.');
+    }
+    out.kind = kind;
+  }
+
+  return out;
+}
 
 /**
- * Aligned to the shared `KnowledgeSource` contract (F5): the store's `kind`/`seedId` surface under
- * the contract's names `type`/`seedTemplate`, and `collection`/`enabled`/`lastCrawledAt` are
- * emitted so a client that validates the response does not reject it. `enabled` defaults to true —
- * a source with no explicit flag has always been crawled/considered, so `true` is the honest read.
+ * Wire view of a source (WS8c: the full crawl-policy surface, not just the G4 fields). `enabled`
+ * defaults to true - a source with no explicit flag has always been crawled/considered, so `true`
+ * is the honest read.
  */
 export function sourceView(s: KnowledgeSourceDoc) {
   return {
@@ -103,9 +316,22 @@ export function sourceView(s: KnowledgeSourceDoc) {
     url: s.url,
     type: s.kind,
     collection: s.collection,
-    seedTemplate: s.seedId ?? null,
     enabled: s.enabled ?? true,
+    ...(s.label ? { label: s.label } : {}),
+    ...(s.levels !== undefined ? { levels: s.levels } : {}),
+    ...(s.maxPages !== undefined ? { maxPages: s.maxPages } : {}),
+    // Wire name `crawlScope` (never `scope` - reserved on this domain for the browse partition).
+    ...(s.scope ? { crawlScope: s.scope } : {}),
+    ...(s.render !== undefined ? { render: s.render } : {}),
+    ...(s.userAgent ? { userAgent: s.userAgent } : {}),
+    ...(s.seeds && s.seeds.length ? { seeds: s.seeds } : {}),
+    seedTemplate: s.seedTemplate ?? null,
+    ...(s.domino ? { domino: s.domino } : {}),
+    ...(s.seedId ? { seedId: s.seedId } : {}),
+    ...(s.disabledReason ? { disabledReason: s.disabledReason } : {}),
     ...(s.lastCrawledAt ? { lastCrawledAt: s.lastCrawledAt } : {}),
+    ...(s.lastRefreshAt ? { lastRefreshAt: s.lastRefreshAt } : {}),
+    ...(s.lastResult ? { lastResult: s.lastResult } : {}),
   };
 }
 
@@ -113,16 +339,10 @@ export async function listSources(actor: Actor): Promise<KnowledgeSourceDoc[]> {
   return knowledgeSources.find({ orgId: actor.orgId }) as Promise<KnowledgeSourceDoc[]>;
 }
 
-export async function addSource(actor: Actor, input: { url: string; kind?: string; seedId?: string }, deps: Deps): Promise<KnowledgeSourceDoc> {
-  // SSRF-validate the user-supplied URL at write time (ch09 invariant 8).
-  try {
-    assertSafeUrl(input.url);
-  } catch (e) {
-    if (e instanceof SsrfError) throw new KnowledgeError('VALIDATION_FAILED', 400, 'URL não permitido.');
-    throw e;
-  }
+export async function addSource(actor: Actor, input: SourcePolicyInput, deps: Deps): Promise<KnowledgeSourceDoc> {
+  const norm = normalizePolicy(input, { partial: false });
   const id = deps.genId();
-  const doc: KnowledgeSourceDoc = { _id: id, orgId: actor.orgId, url: input.url, kind: input.kind, seedId: input.seedId };
+  const doc: KnowledgeSourceDoc = { _id: id, orgId: actor.orgId, url: input.url, ...norm };
   await knowledgeSources.insert(doc as never);
   return doc;
 }
@@ -133,34 +353,35 @@ export async function getVisibleSource(actor: Actor, id: string): Promise<Knowle
   return s;
 }
 
-/**
- * Patch a source (F5). Cross-org reads as not-found (uniform 404) before any write. The contract's
- * `type`/`seedTemplate` names are mapped back onto the store's `kind`/`seedId`. A changed `url` is
- * SSRF-validated exactly as `addSource` does — a patch must not be a bypass of that gate.
- */
-export async function updateSource(
-  actor: Actor,
-  id: string,
-  patch: { url?: string; type?: string; collection?: string; seedTemplate?: string | null; enabled?: boolean },
-): Promise<KnowledgeSourceDoc | null> {
+/** Patch a source (F5, extended WS8c). Cross-org reads as not-found (uniform 404) before any
+ *  write. A changed `url`/`seeds`/`seedTemplate`/`domino.baseUrl` is SSRF-validated exactly as
+ *  `addSource` does - a patch must not be a bypass of that gate. */
+export async function updateSource(actor: Actor, id: string, patch: Partial<SourcePolicyInput>): Promise<KnowledgeSourceDoc | null> {
   const s = await getVisibleSource(actor, id);
   if (!s) return null;
-  if (patch.url !== undefined) {
-    try {
-      assertSafeUrl(patch.url);
-    } catch (e) {
-      if (e instanceof SsrfError) throw new KnowledgeError('VALIDATION_FAILED', 400, 'URL não permitido.');
-      throw e;
-    }
-  }
-  const next: Partial<KnowledgeSourceDoc> = {
-    ...(patch.url !== undefined ? { url: patch.url } : {}),
-    ...(patch.type !== undefined ? { kind: patch.type } : {}),
-    ...(patch.collection !== undefined ? { collection: patch.collection } : {}),
-    ...(patch.seedTemplate !== undefined ? { seedId: patch.seedTemplate ?? undefined } : {}),
-    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-  };
+  const next = normalizePolicy(patch, { partial: true });
   return (await knowledgeSources.update(id, (cur) => ({ ...cur, ...next } as never))) as unknown as KnowledgeSourceDoc | null;
+}
+
+/** Patch crawl-state fields without re-validating the policy (WS8c - used by the crawl runner). */
+export async function patchSourceState(
+  id: string,
+  patch: Partial<Pick<KnowledgeSourceDoc, 'lastCrawledAt' | 'lastRefreshAt' | 'lastResult'>>,
+): Promise<void> {
+  await knowledgeSources.update(id, (cur) => ({ ...cur, ...patch } as never));
+}
+
+/**
+ * Look up a source by RAW id, no org filter (WS8c). Only for the crawl runner: `routes/
+ * knowledge.ts` always checks `getVisibleSource(actor, id)` (org ownership) BEFORE ever starting
+ * a crawl, so by the time the runner calls this the id is already proven to belong to the
+ * caller's org - the runner then re-fetches by this unscoped lookup (rather than a closure over
+ * the route's pre-fetch) so a long-running crawl sees the CURRENT row if it's edited/disabled
+ * mid-run, not a stale snapshot from when it was triggered. `routes/` may not import `data/`
+ * directly (FIXED-1 module tiers), so this is the domain-module seam it goes through instead.
+ */
+export async function getSourceByIdUnscoped(id: string): Promise<KnowledgeSourceDoc | null> {
+  return (await knowledgeSources.get(id)) as KnowledgeSourceDoc | null;
 }
 
 export async function deleteSource(actor: Actor, id: string): Promise<boolean> {
@@ -180,7 +401,9 @@ export interface CreateDocumentInput {
   language?: string;
 }
 
-function toSummary(d: vault.VaultDoc, now?: string) {
+/** F43: `listDocuments`'s browse row, sourced from `index.listDocsPage` (SQLite, never the
+ *  filesystem) - see that function's doc for why `size` is deliberately absent here. */
+function toSummary(d: index.IndexDocSummary, scope?: 'org' | 'shared') {
   return {
     id: d.docId,
     collection: d.collection,
@@ -188,8 +411,8 @@ function toSummary(d: vault.VaultDoc, now?: string) {
     sourceUrl: d.sourceUrl,
     sourceType: d.sourceType,
     language: d.language,
-    size: d.size,
-    createdAt: d.createdAt || now,
+    createdAt: d.createdAt,
+    ...(scope ? { scope } : {}),
   };
 }
 
@@ -230,19 +453,38 @@ export async function ingestDocument(actor: Actor, input: CreateDocumentInput, d
  * public and every org reads it — but about the invariant that NO request actor is ever the shared
  * partition. Keeping it uniform across every endpoint an actor can reach means the property is
  * "presenting `_shared` is refused", with no endpoint-by-endpoint exceptions to reason about.
+ *
+ * WS8a - `opts.scope`: additive, defaults to `'org'` (byte-identical to the pre-WS8a behaviour -
+ * the caller's own vault only). `'shared'` redirects the SAME browse to the reserved `_shared`
+ * partition instead, read-only: neither function ever accepts a scope on a write path (ingest,
+ * delete, upload all still address `actor.orgId` unconditionally), so there is no route through
+ * this option that can mutate the corpus. Auth stays `user-or-key` for both scopes - no extra
+ * gate - because every org's search already unions `_shared` for any authenticated actor (see
+ * {@link searchDocuments}); browsing it explicitly grants no capability a caller did not already
+ * have. `assertNotSharedActor` still refuses a caller whose OWN orgId is `_shared` regardless of
+ * `opts.scope` - that invariant is about who is calling, not which partition they asked to browse.
+ *
+ * F43: paginated from `index.listDocsPage` (SQLite, indexed) rather than `vault.listDocs`
+ * (filesystem, O(corpus) per page). The two are required to answer identically because they are
+ * two views of the SAME data - the index is written transactionally alongside every vault write
+ * (`ingestDocument`, `createUpload`, the crawler's ingest, `indexOrgFromVault`'s backfill), the
+ * same trust the search capability has always placed in the index. Live-verified against the
+ * operator's real 262,672-document `_shared` corpus: the identical `scope=shared&limit=20` call
+ * dropped from ~57s to sub-second.
  */
 export async function listDocuments(
   actor: Actor,
-  opts: { collection?: string; offset?: number; limit?: number },
+  opts: { collection?: string; offset?: number; limit?: number; scope?: 'org' | 'shared' },
 ): Promise<{ items: ReturnType<typeof toSummary>[]; total: number }> {
   assertNotSharedActor(actor);
-  const { items, total } = await vault.listDocs(actor.orgId, opts);
-  return { items: items.map((d) => toSummary(d)), total };
+  const shared = opts.scope === 'shared';
+  const { items, total } = index.listDocsPage(shared ? SHARED_ORG_ID : actor.orgId, opts);
+  return { items: items.map((d) => toSummary(d, shared ? 'shared' : 'org')), total };
 }
 
-export async function listCollections(actor: Actor): Promise<string[]> {
+export async function listCollections(actor: Actor, opts: { scope?: 'org' | 'shared' } = {}): Promise<string[]> {
   assertNotSharedActor(actor);
-  return vault.listCollections(actor.orgId);
+  return vault.listCollections(opts.scope === 'shared' ? SHARED_ORG_ID : actor.orgId);
 }
 
 /**

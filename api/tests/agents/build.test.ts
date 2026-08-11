@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { sseManager } from '../../src/events/sse-manager.js';
-import { handleBuildCreate, executeBuildJob, type BuildCreateInput } from '../../src/agents/build.js';
+import { handleBuildCreate, executeBuildJob, buildProgressLine, type BuildCreateInput } from '../../src/agents/build.js';
 import { registerRun, liveRunCount } from '../../src/agents/registry.js';
 import { persistJob, type JobRecord } from '../../src/agents/jobs.js';
 import { setBuildMechanics, setVerifyRunner, setIngestBuildKnowledge, __resetAgentSeamsForTests, type BuildMechanics, type VerifyRunResult, type BuildKnowledgeDoc } from '../../src/agents/seams.js';
@@ -142,10 +142,54 @@ describe('build execution (§5.4, §5.6.2)', () => {
     const call = t.streamCalls[0]!;
     expect(call.model).toBe('claude-fable-5');
     expect(call.effort).toBe('max');
-    // huashu-design rides as an Agent SDK local plugin (settingSources stays [] — FIXED-6).
-    expect(call.plugins?.some((p) => p.endsWith('content/plugins/ekoa-design'))).toBe(true);
+    // The impeccable design skill rides as an Agent SDK local plugin (settingSources stays [] — FIXED-6).
+    expect(call.plugins?.some((p) => p.endsWith('content/plugins/impeccable'))).toBe(true);
     const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
     expect(job.routing?.tier).toBe('GENIUS');
+  });
+
+  // Cost + quality guardrails on the build run (operator directive 2026-08-10, after a live site
+  // build spent 142 turns / ~15M tokens / 34 min and auto-compacted mid-run, on a dark "atrium"
+  // world the concept-seed roll assigned against the prompt's own light-background house style).
+  it('does NOT order the concept-seed / new-work flow, states the craft floor inline, and bans subagents', async () => {
+    const t = resetAgentState({ finalText: 'built' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'um site sobre as apps', language: 'pt', deps: deps() });
+    const call = t.streamCalls[0]!;
+    const prompt = String(call.systemPrompt ?? '');
+
+    // The roll is what assigned the world; the flow is what loaded 315 KB of reference docs.
+    expect(prompt).toMatch(/Do NOT run impeccable's new-work flow or its concept-seed roll/);
+    expect(prompt).not.toMatch(/build the direction it assigns/);
+
+    // What replaced it: the craft floor + anti-slop defaults stated in the prompt itself.
+    expect(prompt).toMatch(/Craft floor/);
+    expect(prompt).toMatch(/4\.5:1/);
+    expect(prompt).toMatch(/kicker\/eyebrow/);
+    expect(prompt).toMatch(/Work in few, large steps/);
+
+    // A build subagent re-pays the whole context; the run is single-agent.
+    expect(call.allowedTools).toContain('Write');
+    expect(call.allowedTools).not.toContain('Agent');
+  });
+
+  it('narrates real progress from tool events, deduped, and stays silent for read-only tools', async () => {
+    // Write/Edit/Bash are the steps a user can see; Read/Glob/Grep are how the agent thinks.
+    expect(buildProgressLine({ phase: 'started', tool: 'Write', args: { file_path: '/p/frontend/src/pages/Contactos.jsx' } }))
+      .toBe('A construir "Contactos"...');
+    expect(buildProgressLine({ phase: 'started', tool: 'Edit', args: { file_path: '/p/frontend/src/index.css' } }))
+      .toBe('A afinar o aspeto e o espaçamento...');
+    expect(buildProgressLine({ phase: 'started', tool: 'Bash', args: {} })).toBe('A compilar e verificar...');
+    expect(buildProgressLine({ phase: 'started', tool: 'Read', args: { file_path: '/p/frontend/src/App.jsx' } })).toBeNull();
+    expect(buildProgressLine({ phase: 'started', tool: 'Grep', args: {} })).toBeNull();
+    // A PascalCase screen name becomes a human label; the shell files do not masquerade as screens.
+    expect(buildProgressLine({ phase: 'started', tool: 'Write', args: { file_path: '/p/frontend/src/pages/CasosRecentes.jsx' } }))
+      .toBe('A construir "Casos Recentes"...');
+    expect(buildProgressLine({ phase: 'started', tool: 'Write', args: { file_path: '/p/frontend/src/App.jsx' } }))
+      .toBe('A montar a estrutura da aplicação...');
+    // Only the `started` edge narrates, so one step is not reported twice.
+    expect(buildProgressLine({ phase: 'finished', tool: 'Write', args: { file_path: '/p/frontend/src/pages/X.jsx' } })).toBeNull();
   });
 
   it('a FOLLOW-UP build keeps the EXPERT floor (claude-opus-5) and still mounts the design-skill plugin', async () => {
@@ -160,7 +204,7 @@ describe('build execution (§5.4, §5.6.2)', () => {
     await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'tweak the header', language: 'pt', deps: deps() }, abort, { firstBuild: false, artifactId: 'artX' });
     const call = t.streamCalls[0]!;
     expect(call.model).toBe('claude-opus-5');
-    expect(call.plugins?.some((p) => p.endsWith('content/plugins/ekoa-design'))).toBe(true);
+    expect(call.plugins?.some((p) => p.endsWith('content/plugins/impeccable'))).toBe(true);
     const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
     expect(job.routing?.tier).toBe('EXPERT');
   });

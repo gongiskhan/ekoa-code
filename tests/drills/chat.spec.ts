@@ -198,7 +198,7 @@ test.describe("Chat (assistant workspace)", () => {
     await expect(page.getByRole("button", { name: "Terminar Sessão" })).toBeVisible();
   });
 
-  test("output-panel-hides: After the action, the right-hand \"Folhas\" output panel is collapsed/hidden and the chat transcript column widens to use the freed space.", async ({ page }) => {
+  test("output-panel-hides: After the action, the right-hand output panel is collapsed/hidden and the chat transcript column widens to use the freed space.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be
     // treated as a step defect.
@@ -209,14 +209,14 @@ test.describe("Chat (assistant workspace)", () => {
     await expect(page.getByRole("button", { name: "Mostrar painel" })).toBeVisible();
   });
 
-  test("chat-layout-polish: The chat workspace looks polished - the icon sidebar, transcript column and \"Folhas\" output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.", async ({ page }) => {
+  test("chat-layout-polish: The chat workspace looks polished - the icon sidebar, transcript column and output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.", async ({ page }) => {
     // Loaded-machine wait (F9): a batch run shares the machine with other
     // parallel work — a pure timeout here should widen this wait, not be
     // treated as a step defect.
     await page.goto("http://localhost:3000/chat", { timeout: 90000, waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 90000 }).catch(() => {});
-    const ok = await drillJudge(page, "The chat workspace looks polished - the icon sidebar, transcript column and \"Folhas\" output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.");
-    expect(ok, "drillJudge: The chat workspace looks polished - the icon sidebar, transcript column and \"Folhas\" output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.").toBe(true);
+    const ok = await drillJudge(page, "The chat workspace looks polished - the icon sidebar, transcript column and output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.");
+    expect(ok, "drillJudge: The chat workspace looks polished - the icon sidebar, transcript column and output panel are cleanly separated with no overlapping or clipped elements, the composer sits flush at the bottom, and spacing/alignment are consistent across the three panes.").toBe(true);
   });
 
   test("date-line-is-formatted-portuguese: The small caps date above the headline reads as a real formatted Portuguese date - weekday, day and month, e.g. \"QUARTA · 5 DE AGOSTO\" - never an English weekday, a raw timestamp or \"Invalid Date\".", async ({ page }) => {

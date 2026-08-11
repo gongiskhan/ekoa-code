@@ -6,7 +6,8 @@
  * is owned exclusively by the finalize path (dual-fire guarded). Chat runs are ephemeral — they
  * live only in the in-memory registry (§5.2.1), so nothing persists to the jobs collection.
  */
-import type { Actor } from '@ekoa/shared';
+import { runErrorText, type RunErrorCode } from '@ekoa/shared';
+import type { Actor, UploadRef } from '@ekoa/shared';
 import { loadAgentsConfig } from '../config.js';
 import { checkAllowance } from '../billing/index.js';
 import { BILLING_PAGE_URL } from '../billing/constants.js';
@@ -20,6 +21,7 @@ import {
   type LiveRunEntry,
 } from './registry.js';
 import { ChatStreamSink, emitBuildIntent, emitIntegrationBuildIntent } from './streaming.js';
+import { classifyRunFailure } from './run-failure.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
@@ -29,6 +31,7 @@ import { assembleRunContext, renderPrompt, referencesContextLine } from './conte
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
 import { scheduleReplySummary } from './reply-summary.js';
 import { derivedSheetId, derivedRevisionId, findSessionSheet, appendSheetRevision } from '../data/session-sheets.js';
+import { stageRunAttachments, discardRunAttachments } from '../uploads/service.js';
 
 export interface StartChatRunInput {
   actor: Actor;
@@ -36,7 +39,12 @@ export interface StartChatRunInput {
   sessionId: string;
   message: string;
   language: string;
-  attachments?: unknown[];
+  /** WS4a (2026-08-08): staged-upload references (`shared/src/common.ts` UploadRef) - never a
+   *  client-supplied path. `hasAttachments` floors routing + swaps the tool policy to
+   *  'text-attachments'; `stageRunAttachments` (uploads/service.ts) resolves each `uploadId` and
+   *  copies the blob into THIS run's temp cwd so the ATTACHMENT_TOOLS (Read/Glob/Grep) can
+   *  actually reach it. */
+  attachments?: UploadRef[];
   /** FC-400/D4 (run s6): composer reference tokens — injected as ONE context line so the
    *  model calls delegate_to_local with real grantRefs (never hand-typed chat text). */
   references?: Array<{ grantRef: string; label: string }>;
@@ -91,22 +99,37 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
   // Timeout timer (§5.3.6): a single timer shared with cancel via the one AbortController; the
   // `timedOut` flag distinguishes a timeout (surfaces an error) from a user Stop (silent).
   let timer: NodeJS.Timeout;
+  // WS4a: set once (if ever) by the attachment-staging step below; every terminal path already
+  // funnels through `cleanup()`, so discarding it here - rather than at each call site - is what
+  // makes the temp dir's lifetime exactly "as long as this run, however it ends".
+  let attachmentsDir: string | undefined;
 
   // Chat runs keep a terminal snapshot in the registry (readable until process exit, §5.2.1);
   // they are never removed on finalize — a restart empties the registry, giving the 404 (crit 2).
-  const cleanup = (): void => clearTimeout(timer);
+  const cleanup = (): void => { clearTimeout(timer); void discardRunAttachments(attachmentsDir); };
   const settleCancelled = (): void => { cleanup(); settleChatRun(runId, { status: 'cancelled' }); };
   // Abort checkpoint resolution (§5.3.6): a timeout must surface a terminal ERROR even when the
   // timer fires during an early await (billing gate, context assembly) — only a user Stop is
   // silent. Without the timedOut check a timeout landing before the stream was misreported as a
   // silent cancel (machine-load dependent; found by the G7B fresh-context review).
   const settleAborted = (): void => {
-    if (entry.timedOut && !entry.cancelled) finishError('TIMEOUT', 'A execução excedeu o tempo limite.');
+    if (entry.timedOut && !entry.cancelled) finishError('TIMEOUT');
     else settleCancelled();
   };
-  const finishError = (code: string, message: string): void => {
+  /**
+   * Terminal failure. Takes a CODE (+ structured params) and NEVER a message: the user-facing
+   * text is derived from the one shared vocabulary at the sink. `detail` is the honest internal
+   * cause — logged with the run id for operators, never put on the wire (finding
+   * `run-error-text-leak`: this call site used to pass `err.message` straight through, and a
+   * credential-refresh diagnostic was rendered to a user as the agent's reply).
+   */
+  const finishError = (code: RunErrorCode, params?: Record<string, string>, detail?: unknown): void => {
     cleanup();
-    if (finalizeOnce(runId)) sink.error(code, message);
+    if (detail !== undefined) {
+      console.error(`[chat][run ${runId}] terminal ${code}:`, detail instanceof Error ? (detail.stack ?? detail.message) : detail);
+    }
+    const message = runErrorText(code, 'pt', params);
+    if (finalizeOnce(runId)) sink.error(code, params);
     settleChatRun(runId, { status: 'error', error: { code, message } });
   };
   const finishComplete = (result: unknown, delegate?: { kind: 'build' | 'integration'; request: Record<string, unknown> }): void => {
@@ -126,9 +149,10 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const allow = await checkAllowance(input.actor.userId);
     if (entry.abort.signal.aborted) { settleAborted(); return; } // abort checkpoint (§5.2 step 4)
     if (!allow.ok) {
-      // The wire error event is {code, message}; the billing URL rides the message text (§5.2.3).
-      const url = allow.billingUrl ?? BILLING_PAGE_URL;
-      finishError('BILLING_BLOCKED', `${allow.message ?? 'Faturação bloqueada.'} ${url}`);
+      // The billing URL is STRUCTURED now (`params.billingUrl`) rather than concatenated into
+      // the message text (§5.2.3 as amended): dynamic content stays typed, and the sentence
+      // around it is localized client-side like every other terminal error.
+      finishError('BILLING_BLOCKED', { billingUrl: allow.billingUrl ?? BILLING_PAGE_URL });
       return;
     }
 
@@ -164,11 +188,28 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
           delegateToolSpec(input.actor, input.sessionId, (r) => delegations.push(r)),
         ];
 
+    // WS4a: resolve this turn's UploadRefs into real bytes, copied into a FRESH run-scoped temp
+    // dir (never the user's whole upload history) so the ATTACHMENT_TOOLS (Read/Glob/Grep) have
+    // something to find. A ref that fails to resolve (stale, foreign, already reclaimed) is
+    // dropped rather than failing the turn - an honest degraded reply beats a hard error over a
+    // composer chip the user can no longer see. `attachmentsDir` (closed over by `cleanup`) is
+    // set here so every terminal path discards it exactly once.
+    let attachmentContextLine = '';
+    if (hasAttachments) {
+      const staged = await stageRunAttachments(input.actor.userId, input.attachments!);
+      if (entry.abort.signal.aborted) { settleAborted(); return; }
+      if (staged) {
+        attachmentsDir = staged.dir;
+        const names = staged.files.map((f) => f.displayName).join(', ');
+        attachmentContextLine = `O utilizador anexou ${staged.files.length === 1 ? 'o seguinte ficheiro' : 'os seguintes ficheiros'} a esta mensagem, disponíve${staged.files.length === 1 ? 'l' : 'is'} no diretório de trabalho: ${names}. Usa a ferramenta Read para o(s) consultar antes de responder.`;
+      }
+    }
+
     // FC-400/D4 (run s6): reference tokens become ONE system-prompt line with real grantRefs.
     // Only when the delegation tool is actually mounted (the attachments variant mounts no
     // tools — a line instructing an absent tool would be a lie to the model).
     const refLine = hasAttachments ? '' : referencesContextLine(input.references);
-    const systemPrompt = [assembled.systemPrompt, refLine].filter(Boolean).join('\n\n');
+    const systemPrompt = [assembled.systemPrompt, refLine, attachmentContextLine].filter(Boolean).join('\n\n');
 
     let liveMarkers = new MarkerProcessor(); // replaced on `text_reset` (B7 retraction)
     const handle = runAgent(
@@ -180,6 +221,11 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
         disallowedTools: policy.disallowedTools,
         maxTurns: policy.maxTurns,
         ...(sdkTools ? { sdkTools } : {}),
+        // WS4a: point the subprocess's cwd/HOME at the run's staged-attachments dir (same
+        // pairing build runs use for projectDir, llm/client.ts's F25 convention) so the
+        // ATTACHMENT_TOOLS can Read them. Unset when there is nothing staged - the run falls
+        // back to the ordinary empty per-run sandbox, unchanged from before this slice.
+        ...(attachmentsDir ? { cwd: attachmentsDir, homeDir: attachmentsDir } : {}),
         steerable: true, // Conduzir: mid-run user messages join this run (POST /chat/runs/:id/steer)
         signal: entry.abort.signal,
         callbacks: {
@@ -258,7 +304,7 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     // ("o erro HTTP 429 significa...") as a fake provider outage.
     const provErr = streamedAny ? undefined : scanProviderError(result.text);
     if (provErr) {
-      finishError(provErr === 'auth' ? 'AUTH_ERROR' : 'PROVIDER_UNAVAILABLE', 'O fornecedor de modelo está indisponível.');
+      finishError(provErr === 'auth' ? 'AUTH_ERROR' : 'PROVIDER_UNAVAILABLE', undefined, `provider-error-as-result (${provErr})`);
       return;
     }
 
@@ -277,10 +323,15 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       await persistSessionContext(input.sessionId, contextBlocks[contextBlocks.length - 1]!);
     }
 
-    // Delegation as typed events (§5.7.2): build/integration handoffs.
+    // Delegation as typed events (§5.7.2): build/integration handoffs. WS6 incident fix:
+    // `findings.build.description` is the model's own <=15-word build paraphrase (streamed after
+    // the [[EKOA_BUILD]] marker) - good for naming the artifact, not for classifying or briefing
+    // it. `input.message` is this turn's actual user text, carried alongside it as
+    // `originalMessage` so the build pipeline can classify AND brief the build agent on what the
+    // user actually asked for, not the paraphrase.
     if (findings.build) {
-      emitBuildIntent(input.actor.userId, { sessionId: input.sessionId, sourceRunId: runId, request: { description: findings.build.description } });
-      finishComplete('', { kind: 'build', request: { description: findings.build.description } });
+      emitBuildIntent(input.actor.userId, { sessionId: input.sessionId, sourceRunId: runId, request: { description: findings.build.description, originalMessage: input.message } });
+      finishComplete('', { kind: 'build', request: { description: findings.build.description, originalMessage: input.message } });
       void scheduleExtraction(input, runId, `${input.message}`);
       return;
     }
@@ -389,7 +440,11 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
       });
     }
   } catch (err) {
-    finishError('ADAPTER_ERROR', err instanceof Error ? err.message : 'Erro na execução.');
+    // Classify, never echo. A CredentialError is TERMINAL and operator-actionable (the platform
+    // credential is missing, expired, or unrefreshable) — distinct from a transient adapter
+    // failure the user can retry, and the distinction is what the retry affordance keys on.
+    // The raw cause goes to the log; the user gets the vocabulary's text for the code.
+    finishError(classifyRunFailure(err), undefined, err);
   }
 }
 

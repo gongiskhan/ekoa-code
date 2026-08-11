@@ -68,6 +68,7 @@ export function jobsRouter(deps: { now: () => number; genId: () => string }): Ro
       sessionId: body.sessionId,
       description: body.description,
       language: body.language,
+      ...(body.originalMessage?.trim() ? { originalMessage: body.originalMessage } : {}),
       ...(body.templateId ? { templateId: body.templateId } : {}),
       ...(body.integrationKeys ? { integrationKeys: body.integrationKeys } : {}),
       ...(body.artifactId ? { artifactId: body.artifactId } : {}),

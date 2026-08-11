@@ -481,6 +481,8 @@ export const en: Translations = {
       pedidos: 'Requests',
       users: 'Users',
       offices: 'Offices',
+      privacy: 'Privacy',
+      apiKeys: 'API keys',
     },
     knowledge: {
       description:
@@ -491,7 +493,19 @@ export const en: Translations = {
         'The assistant, the coding agent and (soon) automations consult this knowledge base ',
       agentsBannerBodyEmphasis: 'before the web',
       agentsBannerBodyAfter:
-        ' — they cite the source or stay silent, never inventing. There is no search box here: the base is queried by the agents; here you only manage what it contains.',
+        ' - they cite the source or stay silent, never inventing. You can also search directly below.',
+      scopeOrgLabel: 'My organization',
+      scopeSharedLabel: 'Public base',
+      scopeSharedHint:
+        'Portuguese case law, legislation and labour legislation, available to every organization.',
+      sharedBadge: 'Public base',
+      collectionJurisprudencia: 'Case law',
+      collectionLegislacao: 'Legislation',
+      collectionLegislacaoLaboral: 'Labour legislation',
+      searchPlaceholder: 'Search the knowledge base…',
+      searchHint: 'Searches your organization and the public base.',
+      searchEmpty: 'No results for this search.',
+      sourcesCrawlSuperAdminOnly: 'Only super-admins can refresh sources.',
     },
     resources: {
       title: 'Resources',

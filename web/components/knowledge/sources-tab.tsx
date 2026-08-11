@@ -32,7 +32,21 @@ import {
   type CrawlProgress,
   type CrawlStats,
 } from "@/stores/knowledge";
+import { useAuthStore } from "@/stores/auth";
+import { useTranslation } from "@/stores/i18n";
 import { Spinner } from "@/components/ui/spinner";
+
+/**
+ * Defensive type guard on `crawlStatus`'s stats (WS8c: the crawler is real now, but a source
+ * that has never run yields an all-zero - still numeric - `CrawlLedgerStats`, and a `kind: 'api'`
+ * source, whose execution is a declared-but-not-yet-implemented OPEN item, could still answer
+ * something malformed). Rendering `.withDoc.toLocaleString(...)` off a non-numeric value was a
+ * genuine crash pre-WS8c (the stub's `{ reason }` shape passed a bare truthiness check); this
+ * guard keeps that failure mode impossible regardless of what a future source kind answers.
+ */
+function hasIndexedStats(s: CrawlStats | null | undefined): s is CrawlStats {
+  return !!s && typeof s.withDoc === "number" && typeof s.pending === "number";
+}
 
 function formatDate(iso?: string | null): string {
   if (!iso) return "";
@@ -47,12 +61,19 @@ const EMPTY_FORM: SourceInput = {
   collection: "",
   levels: 1,
   maxPages: 2000,
-  scope: "same-domain",
+  crawlScope: "same-domain",
   enabled: true,
   render: false,
 };
 
 export function SourcesTab() {
+  const { pages } = useTranslation();
+  const tk = pages.knowledge;
+  // WS8c: triggering a crawl writes into the reserved `_shared` corpus, so the API gates it to
+  // `super-admin` (shared/src/knowledge.ts `crawlSource` descriptor) - unlike browsing, which
+  // stays open to any authenticated org actor because search already grants that read for free.
+  // Mirrored here so a non-super-admin sees an honest disabled control instead of a 403 surprise.
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "super-admin");
   const sources = useKnowledgeStore((s) => s.sources);
   const sourcesLoading = useKnowledgeStore((s) => s.sourcesLoading);
   const fetchSources = useKnowledgeStore((s) => s.fetchSources);
@@ -179,7 +200,7 @@ export function SourcesTab() {
       collection: src.collection,
       levels: src.levels,
       maxPages: src.maxPages,
-      scope: src.scope,
+      crawlScope: src.crawlScope,
       enabled: src.enabled,
       render: src.render ?? false,
       userAgent: src.userAgent ?? "",
@@ -239,7 +260,7 @@ export function SourcesTab() {
         collection: src.collection,
         levels: src.levels,
         maxPages: src.maxPages,
-        scope: src.scope,
+        crawlScope: src.crawlScope,
         enabled: !src.enabled,
       });
       setTogglingId(null);
@@ -373,8 +394,8 @@ export function SourcesTab() {
             <select
               id="src-scope"
               data-testid="src-scope"
-              value={form.scope}
-              onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value }))}
+              value={form.crawlScope}
+              onChange={(e) => setForm((f) => ({ ...f, crawlScope: e.target.value }))}
               className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/30"
             >
               <option value="same-domain">Mesmo domínio</option>
@@ -584,6 +605,11 @@ export function SourcesTab() {
                         desativada
                       </span>
                     )}
+                    {src.kind === "domino" && (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-teal-50 text-teal-700">
+                        domino
+                      </span>
+                    )}
                   </div>
                   <a
                     href={src.url}
@@ -594,14 +620,22 @@ export function SourcesTab() {
                     <ExternalLink size={11} />
                     <span className="truncate max-w-[340px]">{src.url}</span>
                   </a>
+                  {/* WS8c: an honest, stated reason a seeded source ships disabled - never a
+                      silent gap the operator has to guess at (e.g. a wholesale live-run failure
+                      this build could not diagnose offline). */}
+                  {!src.enabled && src.disabledReason && (
+                    <p className="mt-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5" data-testid="src-disabled-reason">
+                      {src.disabledReason}
+                    </p>
+                  )}
                   <div className="flex items-center gap-3 mt-2 text-xs text-neutral-400 flex-wrap">
                     <span className="inline-flex items-center gap-1">
                       <Layers size={11} />
                       {src.levels} {src.levels === 1 ? "nível" : "níveis"}
                     </span>
-                    <span>{src.scope === "any" ? "qualquer ligação" : "mesmo domínio"}</span>
+                    <span>{src.crawlScope === "any" ? "qualquer ligação" : "mesmo domínio"}</span>
                     <span>{src.maxPages.toLocaleString("pt-PT")} págs./atualização</span>
-                    {statsById[src.id] && (
+                    {hasIndexedStats(statsById[src.id]) && (
                       <span className="text-neutral-500">
                         {statsById[src.id]!.withDoc.toLocaleString("pt-PT")} indexadas
                         {statsById[src.id]!.pending > 0
@@ -616,9 +650,14 @@ export function SourcesTab() {
                   <button
                     data-testid="src-refresh"
                     onClick={() => handleUpdate(src.id)}
-                    disabled={progressById[src.id]?.state === "running"}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                    title="Atualizar: procura páginas novas e re-indexa só o que mudou (resumível — clique novamente para ir mais fundo)"
+                    disabled={!isSuperAdmin || progressById[src.id]?.state === "running"}
+                    aria-disabled={!isSuperAdmin || progressById[src.id]?.state === "running"}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-600"
+                    title={
+                      isSuperAdmin
+                        ? "Atualizar: procura páginas novas e re-indexa só o que mudou (resumível - clique novamente para ir mais fundo)"
+                        : tk.sourcesCrawlSuperAdminOnly
+                    }
                   >
                     {progressById[src.id]?.state === "running" ? (
                       <Spinner size="xs" />
