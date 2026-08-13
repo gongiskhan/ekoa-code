@@ -12,6 +12,7 @@
  * This module is the builder's half: the chat turn (ch03 §3.8.14) the dashboard route calls. The
  * builder's SESSION STORE stays in `integration-builder.ts` (persistence is per-caller, not core).
  */
+import { runErrorText } from '@ekoa/shared';
 import type { Actor, ErrorCode } from '@ekoa/shared';
 import { decideForTask } from '../llm/index.js';
 import { authorWithRepair } from './authoring-core.js';
@@ -120,7 +121,12 @@ export async function handleBuilderChat(input: BuilderChatInput): Promise<Builde
   });
 
   if (outcome.status === 'unavailable') {
-    return { ok: false, code: 'INTERNAL', message: outcome.cause instanceof Error ? outcome.cause.message : 'A geração falhou.' };
+    // The cause is a transport/credential failure from the chokepoint; its message can name the
+    // provider, an env var, or a host. `routes/integration-builder.ts` puts this straight into the
+    // error envelope the builder UI renders, so it must be curated text — the same rule the run
+    // streams follow (finding `run-error-text-leak`). Honest detail goes to the log.
+    console.error('[integration-agent] generation unavailable:', outcome.cause instanceof Error ? (outcome.cause.stack ?? outcome.cause.message) : outcome.cause);
+    return { ok: false, code: 'INTERNAL', message: runErrorText('PROVIDER_UNAVAILABLE', 'pt') };
   }
   const parsed = outcome.draft!; // the parse seam above always returns a draft
 

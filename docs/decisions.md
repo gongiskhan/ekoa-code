@@ -362,3 +362,43 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   reads, `app-auth-persistent` producing an unbuildable project if ever selected explicitly,
   `app-integration-heavy` being a base with no files at all, and `manifest.extends` never being
   validated against `BASE_IDS` on the import path.
+
+- 2026-08-11 - WHAT A FAILED RUN SAYS TO A USER IS DERIVED FROM A CODE, NEVER FROM SERVER PROSE
+  (owner-directed, escalated from a live sighting: "we really have to sort this out before it gets to
+  production... a user gets this once its game over"). **The sighting.** A user asked for a website
+  and the agent's own message bubble answered `credential expired and refresh failed: OAuth refresh
+  not configured (LLM_OAUTH_REFRESH_URL + stored refresh token required)` - an internal diagnostic,
+  styled as an ordinary remark. **What.** The terminal `error` event's `message` stops being a channel
+  for prose. `shared/src/run-errors.ts` becomes the one vocabulary - `RunErrorCode`, pt/en text,
+  `RUN_ERROR_RETRYABLE` - and lives in `shared/` so `api/` and `web/` share one definition without
+  importing each other (FIXED-1). The streaming sinks accept a `RunErrorCode` and NEVER a message,
+  deriving the wire text from that table, so a producer cannot pass an exception string even by
+  accident: it is a type error. Catch-alls classify structurally (`agents/run-failure.ts`:
+  `CredentialError` -> `AUTH_ERROR`, `LlmRateCapError` -> `RATE_LIMITED`, transport status -> auth /
+  rate / unavailable) and log the honest cause against the run id. `web/` renders
+  `runErrorMessage(code, locale, params)` and never the server's `message`; an unknown code degrades
+  to `UNKNOWN`. The billing URL becomes a structured `params.billingUrl` instead of text concatenated
+  into a sentence (an additive event field, Rule 7). `jobView` drops its private `SAFE_ERROR_MESSAGE`
+  map for the shared table, so the polled view and the live stream cannot drift.
+  **Why not just extend the denylist.** `web/lib/sanitize-error.ts` was a substring denylist; the
+  leaked string matched none of its markers. A denylist is open by construction - it can only ever
+  catch the internal strings someone already thought of, and the next incident is by definition one
+  they did not. Fail-closed means the client cannot render server text at all. The denylist survives
+  only as defence in depth for the paths that genuinely have no code.
+  **Two same-class leaks closed with it**, both in `build.ts`: `BUILD_UNFULFILLED` streamed the
+  progress gate's internal reasons, and `VERIFY_FAILED` streamed the verifier's MODEL-DERIVED note -
+  the exact app-data-PII vector `jobView` had already been hardened against on the polled path but
+  not on the stream. Also: a failed turn now renders as an ERROR rather than a subtle status aside,
+  and offers Retry when the shared table says retrying can help, re-sending the user's preserved
+  message - a failure stops being a dead end.
+  **Paired fix - OAuth refresh, which had never worked in any environment.** `defaultRefresh`
+  demanded `LLM_OAUTH_REFRESH_URL` (never set anywhere) and no provisioner sent the
+  `refreshToken`/`expiresAt` the contract already accepted, so every oauth credential was a time bomb
+  that killed all chat and build runs at expiry. The endpoint and client id are now DEFAULTED to the
+  public subscription values `scripts/dev-credential.mjs` has been refreshing against successfully all
+  along (`LLM_OAUTH_TOKEN_URL` / `LLM_OAUTH_CLIENT_ID` override); all three provisioners carry the
+  renewal material; rotated refresh tokens persist; and an unrefreshable oauth credential is warned
+  about at load and provision time instead of surfacing hours later as a user-visible outage. The
+  original "fail closed until an operator configures it" instinct is right for authorisation and wrong
+  for a self-heal path whose absence takes the product down. Full write-up: `docs/findings.md`
+  `run-error-text-leak`.

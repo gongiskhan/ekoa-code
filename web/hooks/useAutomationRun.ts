@@ -4,6 +4,8 @@ import { useEffect } from 'react';
 import { api, tryCall, openAutomationRunStream, type EventStream, type Unsubscribe } from '@/lib/api';
 import type { AutomationRunEvent } from '@ekoa/shared';
 import { useAutomationsStore } from '@/stores/automations';
+import { useI18nStore } from '@/stores/i18n';
+import { runErrorMessage } from '@/lib/sanitize-error';
 import type {
   AutomationLiveEvent,
   AutomationRunStepEvent,
@@ -169,7 +171,9 @@ function toErrorEvent(runId: string, e: RunEvt<'error'>): AutomationRunErrorEven
     type: 'automation_run_error',
     trace_id: runId,
     runId,
-    error: e.message,
+    // From the CODE, not `e.message` — same fail-closed rule as the chat and job streams
+    // (finding `run-error-text-leak`). An unknown code renders UNKNOWN's generic text.
+    error: runErrorMessage(e.code, useI18nStore.getState().language, raw.params as Record<string, string> | undefined),
     partialResults: typeof raw.partialResults === 'number' ? raw.partialResults : 0,
   };
 }

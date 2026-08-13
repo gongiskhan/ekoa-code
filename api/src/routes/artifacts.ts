@@ -371,7 +371,10 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
     try {
       res.json(await new AppDataBackups(appDeps).previewAsOf(art._id, body));
     } catch (err) {
-      return sendError(res, 'NOT_FOUND', err instanceof Error ? err.message : 'Ponto de restauro não encontrado.');
+      // Fixed copy: the thrown message here is internal (a backup-store path, a driver error),
+      // and this envelope is rendered to the user (finding `run-error-text-leak`).
+      console.error('[artifacts] backup preview failed:', err instanceof Error ? (err.stack ?? err.message) : err);
+      return sendError(res, 'NOT_FOUND', 'Ponto de restauro não encontrado.');
     }
   });
 

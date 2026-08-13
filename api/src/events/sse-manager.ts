@@ -1,8 +1,16 @@
 /**
  * SSE client manager (ch03 §3.6, ch02 §2.6). Per-user connections, 30s keepalive, a bounded
  * Last-Event-ID replay ring (200 events, swept after 300s idle). Serves the four sanctioned
- * SSE endpoints. In-memory (FIXED-8, single process). The egress error sanitizer is applied
- * at the event serializer (ch09 invariant 2).
+ * SSE endpoints. In-memory (FIXED-8, single process).
+ *
+ * THIS LAYER DOES NOT SANITIZE. The header used to claim "the egress error sanitizer is applied
+ * at the event serializer (ch09 invariant 2)"; it never was - `emit`/`writeFrame` do a bare
+ * JSON.stringify. That claim was actively harmful: it read like a safety net, and reviewers
+ * downstream of it approved producers that put raw exception text on the wire (finding
+ * `run-error-text-leak`). Safety is enforced AT THE PRODUCER instead, which is where the type
+ * system can help: the `agents/streaming.ts` sinks accept a `RunErrorCode`, never a message, and
+ * derive user-facing text from `shared/run-errors.ts`. Do not add a sanitizer here - a
+ * regex-scrubbing serializer is the same fail-open denylist thinking, one layer lower.
  */
 import type { Response } from 'express';
 

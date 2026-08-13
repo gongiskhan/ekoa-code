@@ -180,8 +180,15 @@ Env names the API reads, with dev defaults:
   inside `api/src/llm/` (the host literal is kept out of config to satisfy the chokepoint grep).
 - `LLM_GATEWAY_API_KEY` - static key for the ekoa-local gateway; unset means JWT-only gateway auth.
 - `LLM_GATEWAY_ENABLED` - gateway mount toggle, default on (set `false` to disable).
-- `LLM_OAUTH_REFRESH_URL` - OAuth token-refresh endpoint; unset means oauth refresh fails closed
-  (latches the `claudeAuth` alert), the correct posture until configured.
+- `LLM_OAUTH_TOKEN_URL` - OAuth token endpoint used to renew a subscription credential. **Defaulted**
+  since 2026-08-11 to the public subscription endpoint, so refresh works out of the box; set only to
+  point at a different tenancy. (`LLM_OAUTH_REFRESH_URL` is the legacy name and is still read.)
+  It previously had NO default and refresh "failed closed" - which in practice meant refresh was dead
+  in every environment and every oauth credential was a time bomb: on expiry it took down all chat and
+  build runs, and the failure text named this env var to the end user (`docs/findings.md`
+  `run-error-text-leak`). Fail-closed is right for authorisation, not for a self-heal path.
+- `LLM_OAUTH_CLIENT_ID` - OAuth client presented on refresh; defaulted to the public subscription
+  client. Override alongside `LLM_OAUTH_TOKEN_URL`.
 - `LLM_MODEL_FAST` / `LLM_MODEL_WORKHORSE` / `LLM_MODEL_EXPERT` - per-tier model id overrides.
 - `GITHUB_PUSH_ENABLED` - auto-commit/push kill switch, default off (`true` to enable).
 - `GITHUB_DEV_TOKEN` - dev PAT; refused in a production-like environment.
@@ -254,6 +261,14 @@ export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or an ANTHROPIC_API_KEY
 node .claude/skills/run-ekoa-code/provision-credential.mjs
 # or, no browser and no shell secret handling: node scripts/dev-credential.mjs --no-browser --provision
 ```
+
+**Prefer the `dev-credential.mjs` form for oauth.** It carries the `refreshToken` + `expiresAt` from
+the drop-file into the POST body; the bare `CLAUDE_CODE_OAUTH_TOKEN` form provisions an access token
+with no renewal material. Until 2026-08-11 BOTH forms dropped them, so every provisioned oauth
+credential was unrefreshable and died at expiry, taking all chat and build runs with it
+(`docs/findings.md` `run-error-text-leak`). The API now warns at load and at provision time -
+`[llm][claudeAuth] WARNING: oauth credential stored WITHOUT a refresh token` - so grep the boot log
+for that line if runs start failing after a period of working.
 
 This posts to the super-admin `POST /api/v1/credentials` route, which writes through the in-process
 `setCredential` seam - no env var or boot-time path seeds it (invariant 4). Confirm with `GET /health`:

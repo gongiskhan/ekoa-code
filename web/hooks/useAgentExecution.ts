@@ -13,7 +13,7 @@ import type { Job } from '@ekoa/shared';
 import { useOrchestrationStore } from '@/stores/orchestration';
 import { useI18nStore } from '@/stores/i18n';
 import { useJobStream } from './useJobStream';
-import { sanitizeUserFacingError } from '@/lib/sanitize-error';
+import { sanitizeUserFacingError, runErrorMessage } from '@/lib/sanitize-error';
 
 /** Resolve the user's language preference, preferring an explicit per-call value.
  *  Falls back to the i18n store (the header/agent language), NOT the settings
@@ -291,10 +291,14 @@ export function useAgentExecution(sessionId: string | null) {
         if (!jobIdRef.current) {
           store.getState().setSessionJob(sessionId, { status: 'idle' });
         }
+        // An unexpected throw (network, JS error) has no code, so name one: `Error: ${message}`
+        // put a raw exception string - stack-adjacent, sometimes a URL or host - straight into
+        // the transcript (finding `run-error-text-leak`). The real error goes to the console.
+        console.error('[useAgentExecution] job start threw:', error);
         store.getState().addMessage(sessionId, {
           role: 'system',
-          content: `Error: ${error.message}`,
-          metadata: { isEssential: true, type: 'error' },
+          content: runErrorMessage('ADAPTER_ERROR', useI18nStore.getState().language),
+          metadata: { isEssential: true, type: 'error', errorCode: 'ADAPTER_ERROR', retryable: true },
         });
       }
     },

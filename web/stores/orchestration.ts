@@ -46,6 +46,14 @@ export interface ChatMessage {
      *  pre-drafted request to the org-admin queue - a refusal is never a dead end.
      *  `text` is the user's original request; `appId` the refused follow-up's artifact. */
     refusal?: { text: string; appId?: string };
+    /** Terminal run-error metadata (finding `run-error-text-leak`). `errorCode` is the
+     *  `RunErrorCode` the message text was DERIVED from — kept so the bubble can render the
+     *  right affordance (and so a support conversation has the code without the user having
+     *  to describe the wording). `retryable` comes from the shared `RUN_ERROR_RETRYABLE`
+     *  table, and gates the Retry button: `retryActive` re-sends the user's own preserved turn,
+     *  so a recoverable failure costs no retyping. */
+    errorCode?: string;
+    retryable?: boolean;
     /** B5 (decision B.B back-reference): set on an assistant turn that REVISED an existing
      *  sheet - the revised sheet's ids, written server-side on persist. Presence = the reply
      *  is a revision (renders the revision card framing and focuses the SAME sheet). */

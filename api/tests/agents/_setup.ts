@@ -19,13 +19,21 @@ import { makeFakeTransport, type FakeTransport, type FakeTransportScript } from 
 let mem: MongoMemoryServer;
 
 export async function bootAgentTestDb(dbName: string): Promise<void> {
-  process.env.ENCRYPTION_KEY = 'k';
-  process.env.JWT_SECRET = 's';
+  // `??=`, not `=`: vitest workers share `process.env` ACROSS test files, so an unconditional
+  // assignment here can change the signing secret out from under a concurrently-scheduled
+  // contract test between its mint and its verify — the cross-file clobber root-caused on
+  // 2026-07-27 (docs/known-flakes.md), whose documented remedy is exactly this. The agents suite
+  // does not care WHICH secret is in play, only that it is stable.
+  process.env.ENCRYPTION_KEY ??= 'k';
+  process.env.JWT_SECRET ??= 's';
   __resetConfigForTests();
   loadConfig();
   mem = await createMem();
   await connectMongo(mem.getUri(), dbName);
-  await setCredential({ mode: 'oauth', secret: 'oauth-tok-123' });
+  // Carries a refreshToken: the shape the provisioners produce since 2026-08-11. Without it the
+  // credential is the unrefreshable time bomb that caused finding `run-error-text-leak`, and
+  // `warnIfUnrefreshable` would (correctly) shout on every suite boot.
+  await setCredential({ mode: 'oauth', secret: 'oauth-tok-123', refreshToken: 'oauth-refresh-123' });
 }
 
 export async function shutdownAgentTestDb(): Promise<void> {

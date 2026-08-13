@@ -644,6 +644,18 @@ export default function ChatPanel({
   );
   const canRetry = !isExecuting && !!onResend && lastAssistantIdx >= 0;
 
+  // A terminal run FAILURE is the other place Retry belongs, and the more important one: the
+  // turn produced no assistant message at all, so the rule above left the user staring at an
+  // error with no way forward (finding `run-error-text-leak` — the failure was the dead end,
+  // not just the wording). Offered only when the shared vocabulary says the code is retryable:
+  // a button that re-fails on an exhausted allowance or a revoked permission is worse than none.
+  const lastRetryableErrorIdx = essentialMessages.reduce(
+    (last, msg, idx) =>
+      msg.metadata?.type === 'error' && msg.metadata?.retryable ? idx : last,
+    -1
+  );
+  const canRetryError = !isExecuting && !!onResend && lastRetryableErrorIdx >= 0;
+
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-white border-r border-neutral-200 relative min-w-0">
       {/* Messages area. The inner max-w-3xl keeps the transcript a readable
@@ -673,7 +685,11 @@ export default function ChatPanel({
                 message={msg}
                 isPulsing={idx === lastStatusIdx}
                 onEdit={canEdit && idx === lastUserIdx ? onEdit : undefined}
-                onRetry={canRetry && idx === lastAssistantIdx ? onResend : undefined}
+                onRetry={
+                  (canRetry && idx === lastAssistantIdx) || (canRetryError && idx === lastRetryableErrorIdx)
+                    ? onResend
+                    : undefined
+                }
                 summary={sheetCardsActive ? replySummaries?.[msg.id] : undefined}
                 onOpenSheet={
                   sheetCardsActive && msg.role === "assistant" ? () => openSheetFor(msg) : undefined

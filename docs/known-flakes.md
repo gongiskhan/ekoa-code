@@ -96,3 +96,20 @@ Worth knowing for the next one: `claimNext` is the production dispatcher path an
 full-scan-and-sort per claim. It is not a defect at current queue depths and is deliberately simple,
 but any test that drains a large queue through it will be slow for the same reason, and a deep
 production queue would pay it too.
+
+## api vitest cross-file state bleed: a DIFFERENT contract file fails each combined run (2026-08-11)
+Observed across four combined runs during the `run-error-text-leak` work. Each run failed a
+different file, and every one of them passed in isolation immediately afterwards:
+- `tests/contract/chat.test.ts` — "GET events with no token → 401" got 404, plus empty-body JSON
+  parse errors (a server not up when the assertion ran).
+- `tests/contract/f5-ui-endpoints.test.ts` — crawl status returned `progress` defined with
+  `state: 'error'` and a `startedAt` from an EARLIER file's run: a module-level crawl singleton
+  surviving across test files.
+Same family as the RESOLVED 2026-07-27 `verify-runner` clobber: vitest workers share module state
+and `process.env` across FILES. One contributor was closed here — `api/tests/agents/_setup.ts`
+assigned `JWT_SECRET`/`ENCRYPTION_KEY` unconditionally (the exact hazard the 2026-07-27 entry warns
+about); it now uses `??=`. The crawl-singleton bleed is NOT fixed: the real remedy is a
+`__resetCrawlStateForTests()` in the knowledge crawl module called from the affected suites'
+`beforeEach`, the way every other in-memory seam already does.
+NOTE when triaging: a red contract file in a combined run is not evidence of a regression until it
+has been re-run ALONE. Two of the three "failures" chased during that work were this.

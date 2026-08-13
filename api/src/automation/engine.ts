@@ -653,7 +653,8 @@ async function runOrRehearse(
         const integrationConsent = extractAwaitingIntegrationConsent(record);
         if (integrationConsent) {
           await finalize(runId, automationId, 'awaiting_consent', stepRecords, startedAt);
-          emit?.runError(runId, record.error?.message ?? 'a write on this integration needs approval', stepRecords);
+          // Fixed copy, not `record.error?.message` (see the step-failure emit below).
+          emit?.runError(runId, 'Esta integração precisa de aprovação para escrever.', stepRecords);
           if (isRehearsal) {
             await persistRefinedSteps(automation, workingSteps, isRehearsal);
           }
@@ -1159,7 +1160,11 @@ async function runOrRehearse(
             reason: record.error?.message,
           }),
         } : undefined);
-        emit?.runError(runId, record.error?.message ?? 'step failed', stepRecords);
+        // The RUN-level terminal message is user-facing copy, so it stays fixed: `record.error
+        // .message` is a raw step failure (an integration's HTTP body, a stack, an internal
+        // path) and belongs in the step record the run UI already renders per step, not in the
+        // run's headline (finding `run-error-text-leak`).
+        emit?.runError(runId, 'A automação não foi concluída.', stepRecords);
         return finalizeReturn({
           runId,
           status: 'failed',

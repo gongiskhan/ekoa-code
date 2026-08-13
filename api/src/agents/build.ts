@@ -862,7 +862,13 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // agent's user-facing summary, never a replacement for it — pre-fix, any note clobbered the
     // whole summary, so the user's "done" message was just "verification did not run: ..."
     // (operator report 2026-07-11).
-    const notes = [bundle.ok ? '' : (bundle.error ?? 'A compilação final falhou.'), verifyNote ?? ''].filter(Boolean).join(' ');
+    // `bundle.error` is `result.errors.join('; ')` from esbuild - raw compiler diagnostics
+    // carrying SANDBOX FILE PATHS and internal module names. The 2026-07-11 operator fix was
+    // about notes not CLOBBERING the summary; it never asked for the diagnostic itself to be
+    // user copy. The user gets a fixed sentence, operators get the diagnostic in the log and on
+    // the persisted job record (finding `run-error-text-leak`).
+    if (!bundle.ok) console.error(`[build][job ${jobId}] final bundle failed:`, bundle.error ?? '(no detail)');
+    const notes = [bundle.ok ? '' : 'A compilação final da aplicação falhou.', verifyNote ?? ''].filter(Boolean).join(' ');
     const completionText = [result.text, notes].filter(Boolean).join('\n\n') || notes;
     if (finalizeOnce(jobId)) {
       sink.complete({ result: completionText, artifactId, slug, appUrl }, input.deps.now() - start);

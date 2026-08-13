@@ -229,9 +229,27 @@ async function browserAuthorize() {
  * Returns { mode: 'oauth', token } | { mode: 'api-key' } | null (nothing available).
  * Precedence: explicit env > drop-file (refreshed as needed) > browser authorize.
  */
+/**
+ * Shape a drop-file credential for provisioning. The refreshToken + expiresAt travel WITH the
+ * access token: the API can only renew a token it was given the means to renew, and dropping
+ * them here is what made every provisioned oauth credential unrefreshable (the API then threw
+ * "OAuth refresh not configured", which a user was shown as the agent's reply on 2026-08-10).
+ */
+const asOauth = (cred) => ({
+  mode: 'oauth',
+  token: cred.accessToken,
+  refreshToken: cred.refreshToken,
+  expiresAt: cred.expiresAt,
+});
+
 export async function ensureCredential({ reauth = false, allowBrowser = true } = {}) {
   if (!reauth) {
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return { mode: 'oauth', token: process.env.CLAUDE_CODE_OAUTH_TOKEN };
+    // An env-supplied token is a bare access token with no refresh material — usable, but it
+    // will expire with no way back, so say so rather than provisioning a silent time bomb.
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+      log('using CLAUDE_CODE_OAUTH_TOKEN from the environment (no refresh token available - it cannot be renewed when it expires)');
+      return { mode: 'oauth', token: process.env.CLAUDE_CODE_OAUTH_TOKEN };
+    }
     if (process.env.ANTHROPIC_API_KEY) return { mode: 'api-key' };
   }
 
@@ -239,11 +257,11 @@ export async function ensureCredential({ reauth = false, allowBrowser = true } =
   if (!reauth && stored) {
     if (!isExpired(stored)) {
       if (typeof stored.expiresAt !== 'number') log(`using stored token from ${CRED_PATH} (no expiry recorded - if model calls fail, run: npm run dev:auth)`);
-      return { mode: 'oauth', token: stored.accessToken };
+      return asOauth(stored);
     }
     if (stored.refreshToken) {
       try {
-        return { mode: 'oauth', token: (await refreshCred(stored)).accessToken };
+        return asOauth(await refreshCred(stored));
       } catch (err) {
         log(`refresh failed (${err.message}) - falling back to a fresh authorize`);
       }
@@ -252,15 +270,15 @@ export async function ensureCredential({ reauth = false, allowBrowser = true } =
 
   const interactive = process.stdout.isTTY || process.env.EKOA_FORCE_BROWSER === '1';
   if (!allowBrowser || !interactive) {
-    if (stored) { log('non-interactive: using the stored token as-is'); return { mode: 'oauth', token: stored.accessToken }; }
+    if (stored) { log('non-interactive: using the stored token as-is'); return asOauth(stored); }
     log('non-interactive and no stored credential - cannot mint one (run `npm run dev:auth` in a terminal)');
     return null;
   }
   try {
-    return { mode: 'oauth', token: (await browserAuthorize()).accessToken };
+    return asOauth(await browserAuthorize());
   } catch (err) {
     log(`browser authorize failed: ${err.message}`);
-    if (stored) { log('falling back to the stored token'); return { mode: 'oauth', token: stored.accessToken }; }
+    if (stored) { log('falling back to the stored token'); return asOauth(stored); }
     return null;
   }
 }
@@ -271,6 +289,10 @@ export function provisionCredential(cred) {
     const env = { ...process.env };
     if (cred.mode === 'oauth') {
       env.CLAUDE_CODE_OAUTH_TOKEN = cred.token;
+      // Carry the renewal material through to the API (env, never argv). Without these the
+      // stored credential cannot be refreshed and dies at expiry.
+      if (cred.refreshToken) env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = cred.refreshToken;
+      if (typeof cred.expiresAt === 'number') env.CLAUDE_CODE_OAUTH_EXPIRES_AT = String(cred.expiresAt);
       delete env.ANTHROPIC_API_KEY; // provision script prefers oauth; keep the env unambiguous
     }
     const child = spawn('node', [join(ROOT, '.claude', 'skills', 'run-ekoa-code', 'provision-credential.mjs')], {

@@ -29,7 +29,7 @@ import { useApi } from '@/components/providers/api-provider';
 import { getFriendlyToolActivityBrief } from '@/lib/friendly-messages';
 import type { LocalFileActivity } from '@/lib/privacy-claims';
 import { createDaemonGrant, type PendingReference } from '@/lib/bridge-local';
-import { sanitizeUserFacingError, redactProviderIdentity } from '@/lib/sanitize-error';
+import { runErrorMessage, runErrorIsRetryable, redactProviderIdentity } from '@/lib/sanitize-error';
 import { useTranslation, useI18nStore } from '@/stores/i18n';
 
 // A wedged backend worker (no more events on an otherwise-open SSE connection)
@@ -741,21 +741,32 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
         void resolveMirrorSheetLink(sessionId!, mirrorId, runId);
       };
 
-      const handleError = (event: { message?: string }) => {
+      const handleError = (event: { code?: string; message?: string; params?: Record<string, string> }) => {
         if (settled) return;
         settled = true;
         finishStream();
         clearStreamingChat(sessionId!);
-        // Strip any provider/engine leak; fall back to a generic branded message.
-        const errorText = event.message
-          ? sanitizeUserFacingError(event.message, language)
-          : language === 'pt'
-            ? 'Algo correu mal. Por favor tente novamente.'
-            : 'Something went wrong. Please try again.';
+        // Render from the CODE and never from `event.message`: this is the exact bubble that,
+        // on 2026-08-10, showed a user "credential expired and refresh failed: OAuth refresh not
+        // configured (LLM_OAUTH_REFRESH_URL + stored refresh token required)" as the agent's
+        // reply. An absent/unknown code resolves to UNKNOWN's generic branded text.
+        const code = event.code || 'STREAM_ERROR';
+        const errorText = runErrorMessage(code, language, event.params);
         addMessage(sessionId!, {
           role: 'system',
+          // `type: 'error'` (was 'status'): a failed turn is an ERROR, not an aside. 'status'
+          // rendered it as subtle grey italic — which is exactly how the leaked credential
+          // diagnostic appeared, reading like something the agent chose to say. The error
+          // treatment also unlocks the retry affordance in the bubble.
           content: errorText,
-          metadata: { isEssential: true, type: 'status' },
+          metadata: {
+            isEssential: true,
+            type: 'error',
+            errorCode: code,
+            // Drives the retry affordance. `retryActive` -> `retryChat` pops the user's own turn
+            // out of the transcript and re-sends it, so a retry costs no retyping.
+            retryable: runErrorIsRetryable(code),
+          },
         });
       };
 
@@ -765,11 +776,9 @@ export function ChatRuntimeProvider({ children }: { children: React.ReactNode })
       // settle it as a retryable error (cleared in finishStream on any real
       // settlement, and on manual Stop below).
       const stuckTimer = setTimeout(() => {
-        handleError({
-          message: language === 'pt'
-            ? 'A resposta demorou demasiado tempo. Tente novamente.'
-            : 'The response took too long. Please try again.',
-        });
+        // Client-originated: no server event, so name the code ourselves and let the same
+        // code->text path render it (TIMEOUT is retryable, so this also gets the retry button).
+        handleError({ code: 'TIMEOUT' });
       }, CHAT_RUN_STUCK_TIMEOUT_MS);
 
       stream.on('text_chunk', (event) => {

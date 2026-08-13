@@ -108,7 +108,7 @@ export const RUN_ERROR_TEXT = {
   pt: {
     BILLING_BLOCKED: 'Não há saldo disponível para continuar. Consulte a faturação em {billingUrl}.',
     AUTH_ERROR:
-      'O Agente EKOA está indisponível de momento por um problema de configuração do serviço. A equipa já foi alertada — tente novamente mais tarde.',
+      'O Agente EKOA está indisponível de momento por um problema de configuração do serviço. A equipa já foi alertada. Tente novamente mais tarde.',
     PROVIDER_UNAVAILABLE: 'O Agente EKOA está temporariamente indisponível. Tente novamente dentro de momentos.',
     RATE_LIMITED: 'Foram feitos demasiados pedidos em pouco tempo. Aguarde um momento e tente novamente.',
     TIMEOUT: 'O pedido demorou mais do que o esperado e foi interrompido. Tente novamente.',
@@ -125,7 +125,7 @@ export const RUN_ERROR_TEXT = {
   en: {
     BILLING_BLOCKED: 'There is no available balance to continue. Check billing at {billingUrl}.',
     AUTH_ERROR:
-      'The EKOA Agent is unavailable right now due to a service configuration problem. The team has been alerted — please try again later.',
+      'The EKOA Agent is unavailable right now due to a service configuration problem. The team has been alerted. Please try again later.',
     PROVIDER_UNAVAILABLE: 'The EKOA Agent is temporarily unavailable. Please try again in a moment.',
     RATE_LIMITED: 'Too many requests in a short time. Please wait a moment and try again.',
     TIMEOUT: 'The request took longer than expected and was interrupted. Please try again.',

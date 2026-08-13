@@ -15,7 +15,7 @@ import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
 import { __resetAppHealthDedupeForTests } from '../../src/apps/serving.js';
-import { Job } from '@ekoa/shared';
+import { Job, RUN_ERROR_TEXT } from '@ekoa/shared';
 
 /**
  * F7 (batch-final s5): a FAILED build must serve an honest failed-state page — not a scaffold
@@ -69,8 +69,12 @@ describe('F7: failed build serves an honest failed-state page + jobView.error on
     expect(Job.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect((body.error as { code?: string })?.code).toBe('BUILD_UNFULFILLED'); // honest cause via the code
     // the wire message is a SAFE generic (never the raw persisted message, which can carry a
-    // model-derived note with PII — Codex checkpoint finding)
-    expect((body.error as { message?: string })?.message).toBe('A construção não produziu a aplicação pedida.');
+    // model-derived note with PII — Codex checkpoint finding). Asserted against the SHARED
+    // vocabulary rather than a copied literal: since `run-error-text-leak` (2026-08-11) jobView
+    // and the run streams read the same `RUN_ERROR_TEXT` table, so this pins the invariant
+    // ("what the wire says is the vocabulary's text") instead of one revision of the wording.
+    expect((body.error as { message?: string })?.message).toBe(RUN_ERROR_TEXT.pt.BUILD_UNFULFILLED);
+    expect((body.error as { message?: string })?.message).not.toBe('A construção falhou.'); // not the persisted one
   });
 
   it('a VERIFY_FAILED job never leaks the verifier note (which can carry PII) on the wire', async () => {
@@ -79,7 +83,7 @@ describe('F7: failed build serves an honest failed-state page + jobView.error on
     const t = await tokenFor('owner1');
     const body = (await (await api('/api/v1/jobs/jobV', { headers: { authorization: `Bearer ${t}` } })).json()) as Record<string, unknown>;
     expect((body.error as { code?: string })?.code).toBe('VERIFY_FAILED');
-    expect((body.error as { message?: string })?.message).toBe('A verificação da aplicação falhou.');
+    expect((body.error as { message?: string })?.message).toBe(RUN_ERROR_TEXT.pt.VERIFY_FAILED);
     expect(JSON.stringify(body)).not.toContain('PT50000201231234567895417'); // the IBAN never reaches the wire
   });
 

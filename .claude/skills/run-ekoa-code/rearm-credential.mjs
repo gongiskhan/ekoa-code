@@ -102,7 +102,15 @@ if (!token) {
 const res = await fetch(`${API}/api/v1/credentials`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-  body: JSON.stringify({ mode: cred.mode, secret: cred.secret }),
+  // refreshToken/expiresAt travel WITH the secret when the drop-file has them: a credential
+  // provisioned without them cannot be renewed and dies at expiry, failing every model run
+  // (docs/findings.md `run-error-text-leak`).
+  body: JSON.stringify({
+    mode: cred.mode,
+    secret: cred.secret,
+    ...(cred.mode === 'oauth' && cred.refreshToken ? { refreshToken: cred.refreshToken } : {}),
+    ...(cred.mode === 'oauth' && typeof cred.expiresAt === 'number' ? { expiresAt: cred.expiresAt } : {}),
+  }),
 });
 const body = await res.json().catch(() => ({}));
 if (!res.ok) die(`credential rejected (${res.status}): ${JSON.stringify(body)}`);

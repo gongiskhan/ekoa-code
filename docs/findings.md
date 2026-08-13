@@ -6,6 +6,109 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`knowledge-fts-heal-scan-unscoped`** (2026-08-11, OPEN, found by a full api-suite run during
+  the `run-error-text-leak` work; NOT caused by it). `api/tests/security/knowledge-scoping.test.ts`
+  ("grep gate: every CONTENT-bearing knowledge_fts query filters on orgId") fails
+  **deterministically, in isolation** on `main` at 922749c. The hit is
+  `api/src/knowledge/index-store.ts:170`, in `healDocMap`:
+  `SELECT rowid, orgId, collection, docId, title, createdAt, sourceUrl, sourceType, language FROM
+  knowledge_fts` - a whole-table scan selecting `title`, with no orgId predicate. The gate's own
+  comment still asserts the only org-agnostic statements are `COUNT(*)` counters "neither of which
+  reads text"; the doc-map heal now denormalizes `title`, so that stated assumption no longer holds.
+
+  **Assessment: a false positive on the letter of the rule, not a tenancy hole - but the gate is
+  right to be red.** `healDocMap` is derived-data self-heal: it reads every fts row and writes each
+  one back into `knowledge_doc_map` **under that row's own `orgId`** (`ins.run(r.orgId, ...)`). It
+  serves nothing to a caller and mixes no orgs, so no content crosses a tenant boundary. What is
+  broken is the invariant's *statement*: "content-bearing query" no longer distinguishes a
+  maintenance scan from a serve path.
+
+  **Not fixed here, deliberately.** It sits in another session's in-flight area (the knowledge/crawl
+  work in 922749c) and it is a SECURITY gate - loosening one on someone else's behalf, mid-change,
+  is worse than leaving it red and visible. Two clean resolutions, owner's call: (a) narrow the
+  gate to SERVE paths with an explicit, justified exemption for the heal scan (the
+  `chokepoint-gate-allow` line-marker pattern this repo already uses), or (b) rebuild the doc-map
+  per-org (`WHERE orgId = ?` over distinct orgs), which satisfies the gate literally and bounds the
+  scan's memory as a bonus. Do NOT simply widen the regex - the non-tautology assertion at the
+  bottom of that test is what keeps the gate honest.
+
+- **`run-error-text-leak`** (2026-08-10, **CRITICAL**, found live by the owner on the dev stack;
+  FIXED 2026-08-11). A user asked the agent, in Portuguese, `faz um site a falar das apps
+  juridicas do ekoa`. The reply rendered in the agent's own message bubble was:
+
+  > *credential expired and refresh failed: OAuth refresh not configured (LLM_OAUTH_REFRESH_URL +
+  > stored refresh token required)*
+
+  Two independent defects, both production-blocking. Owner's framing: "a user gets this once its
+  game over".
+
+  **Defect 1 - internal error text reached the user.** `getSecret()` threw a `CredentialError`
+  naming the missing env var; it propagated out of `runAgent`; `agents/chat.ts`'s catch-all did
+  `finishError('ADAPTER_ERROR', err.message)`, putting the exception text on the wire; the web's
+  guard (`web/lib/sanitize-error.ts`) was a DENYLIST of provider-leak substrings that the string
+  matched none of, so it rendered verbatim - styled `type: 'status'`, i.e. as a considered remark
+  by the agent rather than a failure. Two more sites of the same class were found by audit:
+  `build.ts` streamed `progress.reasons` (gate diagnostics) on `BUILD_UNFULFILLED`, and streamed
+  the verifier's MODEL-DERIVED `verdict.note` on `VERIFY_FAILED` - the very PII vector `jobView`'s
+  `SAFE_ERROR_MESSAGE` map was written to block on the polled view, left open on the live stream.
+
+  **Root cause is structural, not a missing denylist entry.** The wire's `message` was a free
+  string, so "don't leak" depended on every producer remembering. A denylist fails OPEN for every
+  internal string nobody enumerated - which is every future one. It was also believed to be
+  someone else's job: `events/sse-manager.ts`'s header claimed "the egress error sanitizer is
+  applied at the event serializer (ch09 invariant 2)" and it never was - `emit`/`writeFrame` do a
+  bare `JSON.stringify`. That comment read as a safety net that did not exist; corrected in place.
+
+  **A 58-agent audit sweep found six more sites of the same class**, all fixed here:
+  `build.ts`'s COMPLETE event embedded raw esbuild diagnostics (`bundle.error` =
+  `result.errors.join('; ')`, carrying sandbox file paths) in the user's completion summary;
+  `automation/engine.ts` put a raw step failure (`record.error?.message`) into the run's terminal
+  headline at two call sites; `routes/artifacts.ts` passed a thrown backup-store message into a
+  `NOT_FOUND` envelope; `agents/integration-agent.ts` returned `outcome.cause.message` into the
+  envelope the builder UI renders; and `web/hooks/useAgentExecution.ts` rendered
+  `` `Error: ${error.message}` `` from a client-side throw straight into the transcript.
+
+  **Fix.** User-facing text is now DERIVED FROM A CODE and never carried as prose.
+  `shared/src/run-errors.ts` holds the terminal vocabulary (`RunErrorCode`), the pt/en text, and
+  `RUN_ERROR_RETRYABLE`; it is the one definition both sides use (FIXED-1 safe - `shared/` imports
+  nothing). The sinks (`agents/streaming.ts`) take a CODE, never a message, and fill the wire text
+  from that table, so a producer *cannot* pass prose - the type system refuses it. Catch-alls
+  classify structurally via `agents/run-failure.ts` (`CredentialError` -> `AUTH_ERROR`, rate cap ->
+  `RATE_LIMITED`, ...) instead of echoing, and log the honest cause with the run id. The web
+  renders `runErrorMessage(code, locale, params)` and never `event.message`; an unknown code
+  degrades to `UNKNOWN`'s branded text. The billing URL moved from concatenated prose to a
+  structured `params.billingUrl` on the event. `jobView` now reads the same shared table instead of
+  its own private map, so the polled view and the live stream cannot disagree. The failed turn also
+  renders as an ERROR (was `status`) and offers Retry when `RUN_ERROR_RETRYABLE` says retrying can
+  help - the user's message is preserved and re-sent, so a failure is no longer a dead end.
+  Deliberately kept: `sanitizeUserFacingError`, as defence in depth for the paths that genuinely
+  have only a string, hardened with credential/plumbing needles.
+
+  **Defect 2 - OAuth refresh never worked anywhere.** `defaultRefresh` required
+  `LLM_OAUTH_REFRESH_URL`, which no environment ever set, and *no* provisioning path
+  (`provision-credential.mjs`, `rearm-credential.mjs`, `dev-credential.mjs`) sent the
+  `refreshToken`/`expiresAt` the contract already accepted - `scripts/dev-credential.mjs` held a
+  working refresh pair on disk and dropped both at the POST boundary. So every oauth credential was
+  a time bomb: fine until expiry, then every chat and build run failed until a human re-armed by
+  hand. The original comment called the unset default "the correct fail-closed posture"; fail-closed
+  is right for authorisation, not for a self-heal path whose absence takes the product down.
+  **Fix.** The token endpoint and client id are defaulted to the public subscription values (the
+  same ones `dev-credential.mjs` has been refreshing against successfully all along), overridable
+  via `LLM_OAUTH_TOKEN_URL` / `LLM_OAUTH_CLIENT_ID`; the JSON-then-form request shape mirrors that
+  script so the two cannot drift. All three provisioners now carry `refreshToken` + `expiresAt`, and
+  rotated refresh tokens are persisted. An unrefreshable oauth credential is warned about at load
+  and at provision time (`[llm][claudeAuth] WARNING: oauth credential stored WITHOUT a refresh
+  token`) rather than discovered hours later by a user.
+
+  **Tests.** `shared/src/run-errors.test.ts` (vocabulary exhaustiveness; a forbidden-substring sweep
+  proving no code's copy in either locale can mention the engine, credentials, tokens or env vars;
+  fail-closed normalization). `api/tests/agents/run-error-leak.test.ts` reproduces the exact
+  production state through the REAL credential machinery - an expired credential plus a failing
+  refresh seam, not a mocked throw - and pins `AUTH_ERROR` + zero internal substrings on any event,
+  on the settled run record a reconnecting client polls, and no assistant message persisted;
+  verified to FAIL against the pre-fix line. `web/__tests__/sanitize-error.test.ts` pins
+  render-from-code and unknown-code fail-closed.
+
 - **`base-template-consumption-gaps`** (2026-08-09, LOW-MEDIUM, found by a consumption-map audit
   during the impeccable-bases template pass; none are regressions - all predate the pass). Four
   distinct gaps in how `api/assets/bases/*` content is (not) consumed:

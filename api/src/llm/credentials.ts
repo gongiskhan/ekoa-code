@@ -103,29 +103,64 @@ export function providerErrorClassOf(status: number): ProviderErrorClass | undef
 
 /**
  * The token-refresh seam. Given the current credential, returns a fresh secret + expiry.
- * Overridable for tests; the default performs the OAuth refresh against a configured token
- * endpoint (`LLM_OAUTH_REFRESH_URL`). When unset it fails closed — which latches the alert,
- * the correct fail-closed posture until an operator configures refresh.
+ * Overridable for tests; the default performs the OAuth refresh against the subscription
+ * token endpoint.
+ *
+ * WHY THIS HAS DEFAULTS NOW. It used to require `LLM_OAUTH_REFRESH_URL` and fail closed when
+ * unset — described in the original comment as "the correct fail-closed posture until an
+ * operator configures refresh". In practice no environment ever configured it, so refresh was
+ * dead everywhere and every oauth credential was a time bomb: on expiry, `getSecret` threw and
+ * EVERY chat and build run failed until someone re-armed by hand. Worse, the throw's message
+ * named the missing env var, and that string was rendered to a user as the agent's reply
+ * (finding `run-error-text-leak`).
+ *
+ * "Fail closed" is the right instinct for AUTHORISATION, not for a self-heal path whose absence
+ * takes the whole product down. The endpoint and client id are not secrets — they are the same
+ * public values the Claude Code CLI uses for its own subscription login, and the ones
+ * `scripts/dev-credential.mjs` has been refreshing against successfully all along. Defaulting
+ * to them makes refresh work out of the box; both stay overridable for a different tenancy.
  */
 export type RefreshFn = (cred: DecryptedCredential) => Promise<{ secret: string; expiresAt?: number; refreshToken?: string }>;
 
+/** Subscription OAuth token endpoint. `LLM_OAUTH_REFRESH_URL` is the legacy name, still honoured. */
+const OAUTH_TOKEN_URL = (): string =>
+  process.env.LLM_OAUTH_TOKEN_URL ?? process.env.LLM_OAUTH_REFRESH_URL ?? 'https://platform.claude.com/v1/oauth/token';
+
+/** The public OAuth client for subscription login (same value the CLI presents). */
+const OAUTH_CLIENT_ID = (): string =>
+  process.env.LLM_OAUTH_CLIENT_ID ?? '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+
 async function defaultRefresh(cred: DecryptedCredential): Promise<{ secret: string; expiresAt?: number; refreshToken?: string }> {
-  const url = process.env.LLM_OAUTH_REFRESH_URL;
-  if (!url || !cred.refreshToken) {
-    throw new Error('OAuth refresh not configured (LLM_OAUTH_REFRESH_URL + stored refresh token required)');
+  if (!cred.refreshToken) {
+    // The one genuinely unconfigurable case: nothing to refresh WITH. This is now prevented at
+    // provisioning time (the provisioners send the refresh token) and warned about at boot.
+    throw new Error('no refresh token stored for this oauth credential');
   }
-  const res = await fetch(url, {
+  const body = { grant_type: 'refresh_token', refresh_token: cred.refreshToken, client_id: OAUTH_CLIENT_ID() };
+  const url = OAUTH_TOKEN_URL();
+  // JSON first (what the endpoint takes today); one form-encoded retry on a 4xx, mirroring the
+  // known-working flow in scripts/dev-credential.mjs so the two cannot drift apart.
+  let res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: cred.refreshToken }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`OAuth refresh failed: HTTP ${res.status}`);
-  const body = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string };
-  if (!body.access_token) throw new Error('OAuth refresh response missing access_token');
+  if (!res.ok && res.status >= 400 && res.status < 500) {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+    });
+  }
+  if (!res.ok) throw new Error(`oauth refresh rejected: HTTP ${res.status}`);
+  const json = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string };
+  if (!json.access_token) throw new Error('oauth refresh response carried no access token');
   return {
-    secret: body.access_token,
-    expiresAt: body.expires_in ? now() + body.expires_in * 1000 : undefined,
-    refreshToken: body.refresh_token ?? cred.refreshToken,
+    secret: json.access_token,
+    expiresAt: json.expires_in ? now() + json.expires_in * 1000 : undefined,
+    // Refresh tokens ROTATE: keep the new one, falling back to the current only if omitted.
+    // `doRefresh` persists whatever comes back, so a rotation survives a restart.
+    refreshToken: json.refresh_token ?? cred.refreshToken,
   };
 }
 
@@ -172,10 +207,32 @@ export async function loadCredential(): Promise<void> {
   try {
     cached = JSON.parse(decrypt(row.credentialCiphertext)) as DecryptedCredential;
     if (cached.mode !== row.mode) cached.mode = row.mode; // the doc's mode is authoritative
+    warnIfUnrefreshable(cached);
   } catch (err) {
     cached = null;
     latchAlert(`credential decrypt failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * An oauth credential with no refresh token is a TIME BOMB: it works until the access token
+ * expires and then takes every chat and build run down until an operator re-arms it by hand.
+ * That is precisely what happened on 2026-08-10, and the first anyone knew of it was a user
+ * being shown the refresh failure as the agent's reply.
+ *
+ * Say so the moment it is loaded or set — at boot and at provision time — rather than at the
+ * first failure hours later. `claudeAuth.ok` stays true (the credential is valid RIGHT NOW, and
+ * flipping it would cry wolf to the external watchdog); this is the early warning that precedes
+ * the latched alert.
+ */
+function warnIfUnrefreshable(cred: DecryptedCredential): void {
+  if (cred.mode !== 'oauth' || cred.refreshToken) return;
+  console.warn(
+    '[llm][claudeAuth] WARNING: oauth credential stored WITHOUT a refresh token. It cannot be ' +
+      'renewed, so every model run will fail once it expires' +
+      (cred.expiresAt ? ` (at ${new Date(cred.expiresAt).toISOString()})` : ' (no expiry recorded)') +
+      '. Re-provision with `refreshToken` (POST /api/v1/credentials).',
+  );
 }
 
 /**
@@ -212,6 +269,7 @@ export async function setCredential(cred: DecryptedCredential): Promise<void> {
   loaded = true;
   lastRefreshError = null;
   alertLatched = false;
+  warnIfUnrefreshable(cred);
 }
 
 /**

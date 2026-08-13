@@ -3,9 +3,9 @@
  *
  * HISTORY, because the posture changed and the reason matters. This module used to be a
  * DENYLIST: `sanitizeUserFacingError(text)` scanned a server-supplied string for provider-leak
- * markers ('claude', 'anthropic', 'oauth token', ...) and replaced it only on a hit. On
- * 2026-08-10 a user who asked the agent to build a website was answered, in the agent's own
- * message bubble, with:
+ * markers (the engine's name, the vendor's name, 'oauth token', ...) and replaced it only on a
+ * hit. On 2026-08-10 a user who asked the agent to build a website was answered, in the agent's
+ * own message bubble, with:
  *
  *   "credential expired and refresh failed: OAuth refresh not configured
  *    (LLM_OAUTH_REFRESH_URL + stored refresh token required)"
@@ -51,7 +51,6 @@ const PROVIDER_LEAK_MARKERS: readonly string[] = [
   'refresh token',
   'refresh failed',
   'llm_',
-  'anthropic_',
   'process.env',
   'econnrefused',
   'enotfound',
