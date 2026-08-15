@@ -402,3 +402,211 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   original "fail closed until an operator configures it" instinct is right for authorisation and wrong
   for a self-heal path whose absence takes the product down. Full write-up: `docs/findings.md`
   `run-error-text-leak`.
+
+- 2026-08-13 - THE ASSISTANT-OVERHAUL BATCH (owner-directed, from a live session on the dev stack:
+  a todo-app build that took "20 minutes", an assistant with no loading state and no way back, five
+  Jurisprudência citations under a todo list, a tour highlighting content hidden behind the panel,
+  and a generic logo-less app under a fully-researched brand). Six standing changes, each with the
+  test that pins it:
+  **1. Grounding earns its shared corpus.** The reserved `_shared` legal corpus joins a grounding
+  search ONLY when the deterministic legal-context detector matches the query - for chat as well as
+  build. The org's own vault is always searched. Mechanism: `index-store.search()` gains
+  `includeShared` (default true, so browse/portal surfaces are unchanged);
+  `grounding.buildGroundingBlock` passes `isLegalContext(query)`. Also fixed underneath: the
+  stopword check now folds accents first ("Dê"/"dê" is the stopword "de" - unfolded it matched
+  every "de" in a 198k-doc corpus via the index's remove_diacritics tokenizer), and the pronoun/
+  filler list grew ("me", "este"...). Pinned: tests/knowledge/grounding.test.ts (non-legal chat
+  never pulls shared; org vault still searched), index-store.test.ts (fold-before-stopword,
+  includeShared).
+  **2. Citations are what the answer USED, not what retrieval returned.** The CONHECIMENTO block's
+  excerpts stay numbered; the model is instructed to reference `[n]` for any excerpt it uses; the
+  endpoint returns only the referenced hits as citations (`usedCitations`). A reply that used no
+  excerpt cites nothing - retrieval hits are model INPUT, not answer sources. Wire shape unchanged
+  (additive, Rule 7). Pinned: tests/apps/app-assistant.test.ts.
+  **3. One transparent in-job retry for overload-killed builds + a first-event deadline.** A main
+  agent run that dies to provider overload BEFORE anything user-visible streamed (thrown
+  ADAPTER_ERROR/PROVIDER_UNAVAILABLE, transient error-as-result, or zero events within
+  `buildFirstEventDeadlineMs` = 90s - the Agent SDK retries 529s internally and invisibly for
+  minutes) narrates `retrying` and re-runs ONCE with the same routing decision. This also repairs
+  the directive drift the manual path caused: a human retry of a failed first build routed as a
+  FOLLOW-UP at EXPERT, silently dropping the 2026-08-07 GENIUS first-build directive. Auth-classed
+  failures never retry; anything streamed forfeits the retry; job-level abort/cancel semantics
+  unchanged. Measured basis: the "20-minute" todo app was 4m20s of overload + 8m13s of human gap +
+  a 6m55s EXPERT rebuild. Pinned: tests/agents/build.test.ts "overload resilience". DEFERRED with
+  reasons: moving tours/ui_actions/capability authoring to a WORKHORSE post-pass (real ~1-3 min
+  saving on GENIUS runs, but resequences activation inputs - needs its own slice), and an
+  EXPERT-fallback when the retry also dies to overload (an explicit tier degradation is an operator
+  call - flagged, not taken).
+  **4. The open panel reserves layout; the spotlight respects the panel.** The assistant panel
+  stamps `<html data-ekoa-assistant-open>` while open; the injected panel CSS gives body a matching
+  right margin (>900px viewports; overlay below), so the app REFLOWS instead of sitting covered -
+  the tour was highlighting elements hidden behind the panel. The C3 ring overlay moves BELOW the
+  panel in the z-contract (ring 2147481999 < panel 2147482000 < badge/confirm >= 2147483001 - the
+  ring's dim no longer greys the tour's own Seguinte/Sair controls), clamps its tooltip to the
+  width the panel leaves visible, and re-positions via ResizeObserver on body (a margin change
+  fires neither scroll nor resize). Pinned: tests/apps/assistant-panel.test.ts,
+  tests/apps/tour-player.test.ts.
+  **5. Panel UX: visible thinking + a way back.** A pending bubble (role=status, PT-PT label)
+  renders while a turn is in flight, and "Nova conversa" returns to the first-open suggestions
+  state - generation-guarded and abort-safe, so a superseded turn's response can never land in the
+  fresh conversation. Pinned: tests/apps/assistant-panel.test.ts.
+  **6. Brand actually reaches built apps** (both routes were dead; full mechanism in
+  `docs/findings.md` `brand-chain-dead-end-to-end`): the tokens link carries `?app=<id>` (the
+  Referer route was structurally dead under `Referrer-Policy: no-referrer`); the /apps DOCUMENT
+  surface relaxes to `Referrer-Policy: same-origin` as belt-and-braces for already-built apps
+  (documents only - the JSON api keeps no-referrer; nothing is sent cross-origin either way); the
+  logo double-prefix 404 is fixed; researched `fonts[]` feed the font tokens; `--logo-icon-url`
+  falls back to the main logo; the neutral layer derives from the org's extracted palette when it
+  names a real canvas (a dark brand serves a DARK app, all neutrals moving together, WCAG-derived
+  hover/on-primary); and the FIRST-BUILD prompt gains a compact org-brand section
+  (apps/brand-prompt.ts via prepareFirstBuild) stating the palette, fonts, tone, vibe and the two
+  rules the agent cannot infer: use the real logo through the token contract (never invent one),
+  and a dark canvas means the app is BUILT dark - the light house default yields to the brand.
+  Pinned: tests/legal/design-tokens.test.ts, tests/apps/builder.test.ts,
+  tests/apps/build-mechanics.test.ts, tests/apps/brand-prompt.test.ts,
+  tests/security-headers.test.ts.
+
+- 2026-08-14 - AMBITION-ROUTED FIRST BUILDS + GENIUS EFFORT max→high (operator decision, option
+  "route by complexity"; trigger: a basic HR time-tracking first build took 20.5 minutes live and
+  the operator called it "very wrong"). MEASURED BASIS, from the run's own Agent SDK transcript
+  (sandbox f7e16a31, 2026-08-13 20:44-21:05Z): 11 API calls, ~96K output tokens at a normal ~78
+  tok/s stream - the wall clock WAS the output volume - and ~68K of those tokens (~70%, ~14 min)
+  were extended THINKING from the blanket GENIUS floor (claude-fable-5 at effort max) that
+  2026-08-07 set for every first build. DECIDED, three ways. (1) The first-build floor is now
+  AMBITION-ROUTED: a FAST-tier classifier (`agents/guided-build.ts classifyBuildAmbition`,
+  same fastClassify rail as the §5.6 classifiers, language-agnostic so PT briefs route
+  correctly) labels the brief 'basic' (standard internal tool: CRUD/lists/forms) or 'ambitious'
+  (design-led, public-facing, or multi-domain); basic floors at EXPERT (opus-5, high), ambitious
+  keeps the GENIUS frontier floor. Committed fallback is 'basic' - a wrong 'ambitious' costs ~3x
+  wall clock on a first impression, a wrong 'basic' still runs opus at high effort - and an
+  abort rethrows per §5.3.2 (never classify-then-build after Stop; build.ts settles aborted).
+  Follow-ups keep the EXPERT floor unchanged. (2) GENIUS default effort max→high
+  (`LLM_EFFORT_GENIUS=max` restores): "high or max" was the 2026-08-07 directive's own range,
+  and max's marginal rigor was measured as minutes of deliberation, not visible quality. Build
+  timers stay at the 2026-08-07 sizes (backstops). (3) The 2026-08-07 quality trigger (a
+  visually basic page off EXPERT/opus-4-8) is judged closed by later work: EXPERT is opus-5
+  since 2026-08-07(2), and the design plugin + craft-floor templates (28f4551) ride every build
+  regardless of tier. Suites: build.test.ts first-build cases split basic/ambitious (EXPERT
+  opus-5 high + reason "first build (basic)" / GENIUS fable high + reason "first build
+  (ambitious)"); router.test.ts GENIUS effort high. Diagrams 04 + 06 amended (AS-BUILT
+  2026-08-14). Live-verified the same day: basic-brief build routed EXPERT/"first build
+  (basic)" on the running stack.
+
+- 2026-08-14 - SALOMAO MIGRATION S1: THE ARTIFACT-BACKEND RUNTIME IS WIRED, DELIBERATELY, AS ITS
+  OWN SLICE (closes findings `artifact-backend-runtime-never-wired`, which had explicitly deferred
+  the wiring out of a red-fixing pass because it is an execution-boundary change). `buildApp`
+  (`api/src/server.ts`) constructs `WorkerThreadRuntime` and calls `setArtifactBackendRuntime`;
+  `disposeArtifactBackendRuntime` runs on the boot shutdown path AND on factory re-composition,
+  resetting fail-closed to the Null runtime. Seam choices, each the narrowest available: app-data
+  via `AppDataAccess` on the injected deps; model calls via the `llm/` public entry only
+  (`completeFast` - the seam cannot express a higher tier), tagged `user_work` /
+  `artifact-backend:<entrypoint>` and billed to the artifact OWNER with the artifact stamped;
+  `notify.email` via the SAME consent-gated app-email plane a served page uses (owner as actor - a
+  backend cannot out-privilege its own app; no connected sender = honest failure); `notify.inApp`
+  on the notifications SSE rail, best-effort after the row is persisted. `resolveOwner` /
+  `resolveBundlePath` stay on the runtime's production defaults (one implementation, Rule 1). NO
+  integration seam is granted - the capability surface matches exactly what
+  `tests/apps/backend-runtime.test.ts` pins. Composition pinned by
+  `tests/apps/backend-runtime-wiring.test.ts`; the file-level skip on
+  `web/e2e/artifact-backend-panel.spec.ts` is removed. This is a security-relevant execution
+  boundary: flagged for adversarial cross-model review under the standing review policy.
+
+- 2026-08-14 - SALOMAO MIGRATION S2: PLATFORM TRIGGERS INFER kind:'listener' SERVER-SIDE AT
+  CREATION. The listener supervisor polls only rows stored `kind:'listener'`, but the public
+  create path stamped that kind only when the caller sent it - and `TriggerCreateRequest`
+  deliberately exposes no kind/pollConfig - so the web Ligacoes card created webhook-kind rows for
+  M365/Google mailbox watches that NOTHING polled: 201, success toast, silently dead watch.
+  DECIDED: infer at CREATE inside `events/service.ts` (`listenerStamp`): an integrationKey that
+  resolves in `platformListenerConfig` ALWAYS stamps `kind:'listener'` + pollConfig
+  { actionName: the platform config's pollAction, intervalMs: request `pollIntervalMs` ?? 60000 } -
+  ekoa-dev's `isPlatformProvider` branch, ported. The poll action always comes from platform
+  config, never the caller; an explicit `kind:'webhook'` on a platform provider is OVERRIDDEN
+  (a platform mailbox has no webhook ingress - honouring it persists a dead row). Why server-side:
+  the kind is a property of the PROVIDER, not caller intent (letting clients choose recreates the
+  bug in every future consumer); Capability Contract Rules 3/4 (consumers need no platform
+  topology); Rule 7 (additive only: optional `pollIntervalMs`, int min 1000, on both request
+  variants; the view now emits `entrypoint` omit-when-absent so the card can recognise an existing
+  connection). Old-shape requests proven byte-compatible. Suites:
+  `tests/events/trigger-create-inference.test.ts`,
+  `tests/contract/triggers-listener-create.test.ts`.
+
+- 2026-08-14 - SALOMAO MIGRATION S3: IMPORT IDENTITY IS PRESERVED ONLY BY EXPLICIT OPT-IN, AND
+  APP-DATA SEEDING IS REPORTED, NEVER SILENT. (1) `importArtifact` honours a well-formed free
+  `bundle.slug` (atomic reservation insert; fallback to `generateSlug` reported as `fellBack`).
+  (2) Canonical id: `bundle.id` (converter fills it from the prod envelope's `sourceArtifactId`)
+  is adopted ONLY when the import request sets `preserveId: true`, refused 409 (`SLUG_TAKEN`
+  envelope, `requestedId` in details) on collision and 400 on a malformed/absent id - never a
+  silent remap. Rationale: prod rows embed `/api/app-files/<appId>/<uuid>` URLs and the Zoho
+  webhook reverse index keys on the prod appId; preserving the id at import dissolves a whole
+  class of reference rewrites, but minting fresh ids stays the default because id adoption is a
+  migration posture, not an import default. (3) App-data seeding goes through
+  `AppDataAccess.importDumpReport`: per-collection fault isolation, reserved (`__*`) and
+  shared-scope (`usr.*`) names SKIPPED by name in the report (a real prod dump carries `__files`,
+  which used to abort the WHOLE seed into one console.warn), per-row failures counted with first
+  error; the engine's `importCreate` preserves supplied valid `createdAt`/`updatedAt` (verbatim,
+  never re-serialized) - the strict `importDump` stays untouched because the backups-restore path
+  depends on its throw-to-rollback. The PUBLIC collections create API re-stamps timestamps exactly
+  as before; `importCreate` is not route-reachable. The import response carries the additive
+  `importReport` (slug/id applied + per-collection outcomes). Suites:
+  `tests/apps/import-app-data-fidelity.test.ts`, `tests/contract/artifact-family.test.ts`,
+  `tests/migration/convert-dev-bundle.test.ts`.
+
+- 2026-08-14 - SALOMAO MIGRATION S4: CREDENTIALS CROSS BY TRANSCRYPTION, NOT RE-AUTH.
+  `api/scripts/migrate/convert-dev-state.mjs` (operator tool, read-only inputs, no DB/network)
+  decrypts each old-stack credential bundle under `EKOA_OLD_ENCRYPTION_KEY` (old wire: AES-256-GCM
+  colon-joined iv:tag:ct, key = utf8 truncate/pad-32) and re-encrypts under `ENCRYPTION_KEY` (new
+  v1 wire: dot-joined iv.tag.ct, key = sha256), re-shaping rows to what the new readers REQUIRE:
+  platform rows re-keyed `_id: platform-<orgId>-<provider>` + stored orgId (anything else is
+  invisible to `getValidPlatformTokens`), zoho-sign org-scoped for `findConfigForOwner`, carried
+  rows land `enabled: true` with reauth state cleared, `dc` preserved. The Zoho webhook reverse
+  index converts `id`->`_id` with the underscore filename; appId carries verbatim under the S3
+  preserveId import (optional `--rewrite-app-id` otherwise). ADOBE IS REFUSED BY DESIGN (V13
+  replaced Adobe with Zoho; the Adobe backend here is fail-closed) - reported loudly, never
+  dropped. Also fixed: the ch10 import-tool decrypt-sampled the field `credentialCiphertext`
+  (singular) while every runtime consumer reads `credentialsCiphertext` - rows imported under the
+  singular name were credential-less at runtime and plural-named rows were never sampled at all
+  (vacuous "ok"); the sample now reads the runtime name and the fixtures carry realistic synthetic
+  platform-microsoft + zoho-sign rows. Secrets never printed/logged; errors name row id + field
+  only. Suites: `tests/migration/convert-dev-state.test.ts` (old-scheme encrypt implemented
+  IN-TEST, round-trip pinned against the REAL `api/src/data/crypto.ts`),
+  `tests/migration/import-tool.test.ts`.
+
+- 2026-08-14 - SALOMAO MIGRATION S5 (migrate-app-files): the synthesized `{uuid}.json` sidecar's
+  `size` is the ACTUAL blob byte length, never the old `__files` row's `size`. Both stacks serve
+  Content-Length straight from meta.size, so a row disagreeing with the pulled blob means the blob
+  is truncated/corrupt relative to what prod served - the tool refuses this as an integrity error
+  (ids listed, exit 1) and only under `--force` proceeds, writing the actual size so
+  Content-Length always matches the bytes on disk. All other sidecar fields map from the row: name
+  re-sanitized with the identical rule both stacks share, type/createdAt with the old `toMeta`
+  defaults, updatedAt and every other row field dropped (not part of `AppFileMeta`). Suite:
+  `tests/migration/migrate-app-files.test.ts` (drives the real CLI over temp dirs; all-or-nothing
+  plan-before-write; `--dry-run` touches nothing).
+
+- 2026-08-15 - SALOMAO VISION-PASS FIX WAVE: APP DEFECTS FIXED THROUGH THE PLATFORM, DRIVERS
+  ADAPTED TO THE FORK, EVERYTHING RE-PROVEN LIVE. The 8-lane vision pass (findings
+  `salomao-vision-pass-2026-08-15`) yielded four same-day fixes to the customer ERP's own
+  source, applied exclusively through the platform API (PUT /artifacts/:id/file, git-committed
+  per write; rebuild via the versions-restore path onto the same HEAD - the cleanest API-driven
+  rebuild trigger) and mirrored byte-identical into the upstream `../erp-juridico` working tree
+  (uncommitted - the operator owns that repo's history) plus the dev-seed fixture: (1) an
+  in-app pt-PT confirm dialog in the shared DocChip before ANY document delete (the vision
+  pass destroyed a real document through the old one-click trash; restored byte-identical from
+  the pre-incident staging copy via the idempotent `migrate-app-files.mjs` re-run - the
+  incident is the restore path's live proof), preview/delete affordances separated; (2) one
+  shared `parseMoneyPt` + `fmtMoneyPt` used by every money aggregate (Relatorios pipeline KPI
+  fell from a false EUR 10 041 350 to the true 141 350; Funil totals sane; stored data never
+  rewritten); (3) duplicate-key classes fixed by keying lists on record id (real data holds
+  duplicated business codes); (4) the login screen reflows at 390px. DETERMINISTIC PINS in the
+  operator-run salomao drivers: `erp-crm-persistence` T1b recomputes the pipeline from live
+  rows with the pt-PT rules and requires the rendered KPI to match EXACTLY while refusing the
+  digit-strip figure; `erp-kyc` 5b proves Cancelar preserves / Eliminar deletes on a
+  driver-owned upload. Driver adjudication (grounded in the decoded live bundle, never
+  weakened): the ops driver's real breakage was fork retitles ('As Minhas Atividades', 'Por
+  item', 'Sign with Zoho Sign'), and the m365/adobe console allowlists moved from 403-only to
+  (403|409|502) on those paths only - the m365Proxy opt-in changed the not-connected probe's
+  shape. `web/e2e/artifact-backend-panel.spec.ts` navigation updated to the WS3 item-menu
+  'Ver detalhes' path and is GREEN against the wired runtime (dry-run executes) - the last
+  open edge of the `artifact-backend-runtime-never-wired` closure. ALL SIX salomao drivers
+  exit 0 against the imported instance. Auditoria dup-key and mobile-login fixes are verified
+  in-browser but carry no committed pin (no driver visits those surfaces) - stated here
+  rather than implied.

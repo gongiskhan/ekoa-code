@@ -110,15 +110,20 @@ function watchConsole(page: Page): string[] {
 
 async function openArtifact(page: Page, name: string) {
   await page.goto('/artifacts');
-  await expect(page.getByText(name).first()).toBeVisible({ timeout: 15_000 });
-  await page.getByText(name).first().click();
+  const card = page.getByText(name).first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  // WS3 unified click semantics: clicking a RUNNABLE card opens the preview overlay, not the
+  // in-page detail pane where ArtifactBackendPanel mounts. The detail pane survives as the
+  // item menu's "Ver detalhes" action (artifact-actions.ts view-details; menu opens on "...",
+  // right-click, or long-press) - same navigation sibling specs use since the unification.
+  await card.click({ button: 'right' });
+  await page.getByText('Ver detalhes').first().click();
 }
 
-// Every test here needs a LIVE artifact backend, and the runtime is not wired (see beforeAll).
-// Skipped at file level so the estate stays honest: a red nobody can act on teaches people to
-// ignore reds, and this one is a product gap with its own finding, not a broken test.
+// Every test here needs a LIVE artifact backend. The file-level skip that used to sit here
+// (docs/findings.md artifact-backend-runtime-never-wired) is gone: the composition root now
+// registers the WorkerThreadRuntime (api/src/server.ts buildApp, S1), so dry-runs execute.
 test.describe.configure({ mode: 'serial' });
-test.skip(true, 'artifact backend runtime is never wired at the composition root — docs/findings.md artifact-backend-runtime-never-wired');
 
 test.beforeAll(async ({ request }) => {
   // Importing two bundles + a cold esbuild build (frontend fetches React from a
@@ -137,18 +142,9 @@ test.beforeAll(async ({ request }) => {
 
   // The post-import backend build is fire-and-forget; poll a dry-run until the
   // bundle is built and the handler invokes cleanly (no writes — pure dry-run).
-  //
-  // THIS CANNOT PASS TODAY, and the reason is a gap in the product rather than in the fixture:
-  // `setArtifactBackendRuntime()` is never called anywhere in `api/src`, so the module singleton
-  // stays `NullArtifactBackendRuntime` and EVERY invoke answers "artifact backend runtime is not
-  // initialised". `WorkerThreadRuntime` — the real implementation — exists and is simply not wired
-  // at the composition root. See `docs/findings.md`
-  // `artifact-backend-runtime-never-wired`. Wiring it is a security-relevant composition-root
-  // change (it runs user code in worker threads with capability tokens), not something to slip
-  // into a test repair.
-  //
-  // The poll is kept, not deleted: when the runtime is wired this file starts working again with
-  // no edit, and until then the skip below names exactly what is missing.
+  // The runtime behind the dry-run is the WorkerThreadRuntime registered at the composition
+  // root (api/src/server.ts, S1 closure of artifact-backend-runtime-never-wired); its
+  // composition is pinned by api/tests/apps/backend-runtime-wiring.test.ts.
   await expect
     .poll(async () => {
       const r = await runBackendSample(request, token, backendAppId, { entrypoint: 'onEmail', input: { subject: 'poll' } });

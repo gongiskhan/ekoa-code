@@ -17,7 +17,9 @@
  *   4. provision the credential once /health answers
  *
  * Flags:  --built (serve api/dist instead of ts-node)   --reauth (force browser authorize)
- *         --no-credential (skip provisioning)
+ *         --no-credential (skip provisioning)   --no-seed (skip dev seed data)
+ *         --tailnet (expose the stack on this machine's tailscale name + IP, so any tailnet
+ *                    device can drive it; equivalent to EKOA_TAILNET=1)
  * Plus every EKOA_* env override the driver honors.
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -26,6 +28,8 @@ import net from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureCredential, provisionCredential } from './dev-credential.mjs';
+import { seedBranding } from './dev-seed.mjs';
+import { ensureTailnetServe, resolveTailnetHosts } from './tailnet.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -45,6 +49,36 @@ const PROXY_PORT = readBackendPort();
 
 const log = (m) => process.stdout.write(`[dev] ${m}\n`);
 const fail = (m) => { process.stderr.write(`[dev] ${m}\n`); process.exit(2); };
+
+// --tailnet: resolve this machine's tailscale addresses into EKOA_PUBLIC_WEB_HOST before the
+// driver boots anything - the driver, next.config.ts, and the api all key off that ONE
+// variable (allowedDevOrigins, dev CSP widening, frame-ancestors). An explicit
+// EKOA_PUBLIC_WEB_HOST wins; the resolution failing is fatal because the operator asked for
+// tailnet access and silently coming up loopback-only would look identical until a phone tries.
+// The driver owns the actual setup (including TLS via `tailscale serve` - browsers that have
+// seen https on a ts.net host force-upgrade and need it); EKOA_TAILNET=1 hands it the baton.
+// The serve probe here is only for the ready-line scheme, and is idempotent with the driver's.
+const TAILNET = args.includes('--tailnet') || /^(1|true|yes)$/i.test(process.env.EKOA_TAILNET || '');
+let publicWebHosts = (process.env.EKOA_PUBLIC_WEB_HOST || '').split(',').map((s) => s.trim()).filter(Boolean);
+let tailnetHttpsHost = null;
+if (TAILNET) {
+  const tailnet = resolveTailnetHosts();
+  if (!tailnet) fail('--tailnet: no tailscale address resolved - is tailscaled up? (`tailscale status`)');
+  process.env.EKOA_TAILNET = '1';
+  if (!publicWebHosts.length) {
+    publicWebHosts = tailnet.hosts;
+    process.env.EKOA_PUBLIC_WEB_HOST = publicWebHosts.join(',');
+  }
+  if (tailnet.dnsName) {
+    const serveResult = ensureTailnetServe([
+      { port: WEB_PORT, target: `http://127.0.0.1:${WEB_PORT}` },
+      { port: PROXY_PORT, target: `http://127.0.0.1:${PROXY_PORT}` },
+    ]);
+    if (serveResult === 'on') tailnetHttpsHost = tailnet.dnsName;
+    else log(`tailnet https unavailable (${serveResult}) - falling back to plain http URLs`);
+  }
+  log(`tailnet mode: ${tailnetHttpsHost ? `https://${tailnetHttpsHost}:${WEB_PORT}` : `http on ${publicWebHosts.join(', ')}`}`);
+}
 
 const portInUse = (port) =>
   new Promise((resolve) => {
@@ -131,8 +165,32 @@ if (wantCredential) {
   log('credential provisioning skipped (--no-credential)');
 }
 
+// ---- 5. dev seed data -----------------------------------------------------------
+// The dev Mongo is ephemeral, so operator-created state dies on every restart. Committed
+// fixtures under scripts/seed/ are re-applied here (today: the admin org's branding - the
+// ekoa.io brand research). Idempotent: a stack that already carries a brand is left alone.
+if (!args.includes('--no-seed')) {
+  try {
+    const result = await seedBranding({ base: `http://localhost:${PROXY_PORT}` });
+    if (result === 'seeded') log('dev seed: branding restored (scripts/seed/branding.json)');
+    else if (result === 'kept') log('dev seed: stack already branded - left as-is');
+  } catch (err) {
+    log(`WARNING: dev seed failed (${err.message}) - the stack is up but unbranded.`);
+    log('WARNING: re-run by hand: node scripts/dev-seed.mjs');
+  }
+} else {
+  log('dev seed skipped (--no-seed)');
+}
+
 // The driver prints its own READY once next dev answers /login; sequence our summary after it.
 if (!(await waitForHealth(`http://localhost:${WEB_PORT}/login`, 240_000))) {
   log('web has not answered /login yet (cold next dev compiles are slow) - it may still come up');
 }
 log(`ready - web=http://localhost:${WEB_PORT}  api=http://localhost:${PROXY_PORT}  (Ctrl-C stops everything)`);
+if (tailnetHttpsHost) {
+  log(`ready - tailnet: web=https://${tailnetHttpsHost}:${WEB_PORT}  api=https://${tailnetHttpsHost}:${PROXY_PORT}`);
+} else {
+  for (const h of publicWebHosts) {
+    log(`ready - tailnet: web=http://${h}:${WEB_PORT}  api=http://${h}:${PROXY_PORT}`);
+  }
+}

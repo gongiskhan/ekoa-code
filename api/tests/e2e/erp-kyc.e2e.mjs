@@ -137,7 +137,9 @@ async function main() {
       const t = m.text();
       const url = (m.location && m.location() && m.location().url) || '';
       if (/\b401\b/.test(t)) return; // pre-login whoami
-      if (/\b403\b/.test(t) && /\/api\/(m365|adobe)/.test(url)) return; // integration probes
+      // Integration probes: 403 (closed proxy gate), 502 (m365Proxy opted in but not
+      // connected), 409 (reconnect required) - benign only on these paths.
+      if (/\b(403|409|502)\b/.test(t) && /\/api\/(m365|adobe)/.test(url)) return;
       errors.push(`${t} @ ${url}`);
     });
     page.on('pageerror', (e) => errors.push('pageerror: ' + ((e && e.message) || e)));
@@ -229,6 +231,28 @@ async function main() {
         Array.from(document.querySelectorAll('textarea')).some((t) => t.value === txt), NOTA, { timeout: 15000 })
         .catch(() => fail('5: nota did not survive reload'));
       console.log('  PASS: upload + nota survive a full reload');
+
+      // 5b. Document delete asks first (vision-pass fix, 2026-08-15): the trash icon used to
+      // destroy the blob in ONE unconfirmed click (a real customer document was lost to a QA
+      // misclick that way). The shared DocChip now opens an in-app confirm dialog naming the
+      // file; Cancelar preserves, Eliminar deletes exactly that row. Pinned on the SAME
+      // driver-owned upload from step 5 - never a customer document.
+      const docRow = await until('documentos',
+        (rs) => rs.find((r) => r.owner === `${CODE}::documento de identificação` && r.ownerType === 'kyc-interno'),
+        '5b: driver-owned documento row present');
+      await page.locator('button[title^="Eliminar"], button[aria-label^="Eliminar"]').first().click();
+      await seesText('Eliminar documento');
+      await page.getByRole('button', { name: 'Cancelar' }).click();
+      await new Promise((r) => setTimeout(r, 400));
+      assert((await list('documentos')).some((r) => r.id === docRow.id), '5b: Cancelar deleted the document');
+      console.log('  PASS: delete confirm - Cancelar preserves the document');
+      await page.locator('button[title^="Eliminar"], button[aria-label^="Eliminar"]').first().click();
+      await seesText('Eliminar documento');
+      await page.getByRole('button', { name: 'Eliminar' }).last().click();
+      await until('documentos',
+        (rs) => !rs.some((r) => r.id === docRow.id) && rs,
+        '5b: Eliminar removed the document row');
+      console.log('  PASS: delete confirm - Eliminar deletes exactly the confirmed document');
     } finally {
       try { unlinkSync(pdfPath); } catch { /* best-effort */ }
     }

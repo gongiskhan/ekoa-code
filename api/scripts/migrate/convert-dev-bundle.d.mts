@@ -18,6 +18,8 @@ export interface ConvertedBundle {
   manifestId: string;
   name?: string;
   slug?: string;
+  /** Prod canonical id (envelope.sourceArtifactId) for preserveId migrations (S3). */
+  id?: string;
   files?: Array<{ path: string; content: string }>;
   data?: ConvertedAppDataDump;
   version?: string;
@@ -26,7 +28,12 @@ export interface ConvertedBundle {
 export function decodeUtf8Strict(buf: Uint8Array, label: string): string;
 export function readUtf8Strict(path: string): string;
 export function normalizeAppData(source: unknown, fallbackAt?: string): ConvertedAppDataDump | undefined;
+export function slugFromName(name: unknown): string;
+export function screenAppData(
+  data: ConvertedAppDataDump | undefined,
+  warn: (msg: string) => void,
+): ConvertedAppDataDump | undefined;
 export function convertDevBundle(
   envelope: unknown,
-  opts?: { appData?: unknown; slug?: string },
+  opts?: { appData?: unknown; slug?: string; warn?: (msg: string) => void },
 ): ConvertedBundle;

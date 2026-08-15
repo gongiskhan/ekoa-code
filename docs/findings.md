@@ -23,14 +23,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   broken is the invariant's *statement*: "content-bearing query" no longer distinguishes a
   maintenance scan from a serve path.
 
-  **Not fixed here, deliberately.** It sits in another session's in-flight area (the knowledge/crawl
-  work in 922749c) and it is a SECURITY gate - loosening one on someone else's behalf, mid-change,
-  is worse than leaving it red and visible. Two clean resolutions, owner's call: (a) narrow the
-  gate to SERVE paths with an explicit, justified exemption for the heal scan (the
-  `chokepoint-gate-allow` line-marker pattern this repo already uses), or (b) rebuild the doc-map
-  per-org (`WHERE orgId = ?` over distinct orgs), which satisfies the gate literally and bounds the
-  scan's memory as a bonus. Do NOT simply widen the regex - the non-tautology assertion at the
-  bottom of that test is what keeps the gate honest.
+  **FIXED 2026-08-13** (this ledger entry kept in place for the history of the deferral): the
+  2026-08-11 deferral cited another session's in-flight knowledge/crawl work, which has since
+  landed (922749c is on `main`), so resolution **(b)** was taken during the assistant-overhaul
+  batch that was already editing `index-store.ts`: `healDocMap` now rebuilds the doc-map PER-ORG
+  (`SELECT DISTINCT orgId` - ids only, no content - then `WHERE orgId = ?` per partition), so
+  every content-bearing fts read carries an orgId predicate with no gate carve-out, and the heal's
+  working set is bounded to one partition at a time instead of the whole 200k+-row shared corpus.
+  The gate (`api/tests/security/knowledge-scoping.test.ts`) and the heal-behavior tests
+  (`api/tests/knowledge/index-store.test.ts`) are both green; the regex was not touched.
 
 - **`run-error-text-leak`** (2026-08-10, **CRITICAL**, found live by the owner on the dev stack;
   FIXED 2026-08-11). A user asked the agent, in Portuguese, `faz um site a falar das apps
@@ -766,7 +767,9 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   shared by the ADOBE callback, so both providers are affected. Fix is the four-line escape above,
   in `cortex/src/server.ts buildOAuthResultPage`.
 
-- **`import-ignores-the-bundle-slug`** (OPEN 2026-08-06, LOW, contract inconsistency). The shared
+- **`import-ignores-the-bundle-slug`** (FIXED 2026-08-14, LOW as filed — re-rated in practice: for
+  the salomao migration the slug is the public URL living in emails already sent to the customer's
+  clients, so the S3 slice closed it). The shared
   `ArtifactBundle` declares an optional `slug`, and `convert-dev-bundle.mjs` sets it from `--slug`,
   but `importArtifact` calls `generateSlug(name, deps)` and never reads `bundle.slug`. Importing
   `legal-case-manager-3` therefore produced `erp-juridico-brasil-salomao` (derived from the app's
@@ -774,6 +777,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   the canonical id, not the slug - but a field the schema advertises and the importer silently drops
   is the same class of defect as the two manifest bugs fixed this week. FIX WHEN TOUCHED: honour
   `bundle.slug` when it is free, fall back to the generated one when taken, and say which happened.
+  FIXED (2026-08-14, S3) exactly per that prescription: `importArtifact` honours a well-formed
+  `bundle.slug` via an atomic reservation insert (duplicate `_id` = taken), falls back to
+  `generateSlug` otherwise, and the import response now carries an additive `importReport` saying
+  which happened (`slug.requested/applied/fellBack`). Landed together with the explicit
+  `preserveId` migration mode (canonical id adopted from `bundle.id` only when the request opts in,
+  409-refused on collision — `docs/decisions.md` 2026-08-14) and per-collection app-data seeding
+  reports. Suites: `api/tests/apps/import-app-data-fidelity.test.ts`,
+  `api/tests/contract/artifact-family.test.ts` (import block), `api/tests/migration/convert-dev-bundle.test.ts`.
 
 - **`artifact-import-could-not-accept-a-real-app`** (FIXED 2026-08-06, HIGH, the import endpoint
   did not work for its own purpose). `POST /api/v1/artifacts/import` sat behind the app-wide 1 MB
@@ -1402,8 +1413,9 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   This was the second half of the demos cluster: on the wrong web port their bridge handshake also
   failed, so BOTH causes were real and each alone was enough to keep 28 tours red.
 
-- **`artifact-backend-runtime-never-wired`** (OPEN 2026-08-01, HIGH, feature inert — found by
-  repairing `artifact-backend-panel.spec.ts`). **Artifact backends (Layer 2) cannot run at all.**
+- **`artifact-backend-runtime-never-wired`** (FIXED 2026-08-14, HIGH, feature inert — found by
+  repairing `artifact-backend-panel.spec.ts`; closed by the salomao-migration S1 slice, where a
+  working `onEmail` plane became a headline customer requirement). **Artifact backends (Layer 2) cannot run at all.**
   `setArtifactBackendRuntime()` is defined in `api/src/apps/backend-runtime/runtime.ts` and is
   called from **nowhere** in `api/src`, so the module singleton stays `NullArtifactBackendRuntime`
   for the process's whole life and every `invoke` returns
@@ -1428,6 +1440,22 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   This is the SAME SHAPE as the daemon seam that sat on its "honest default" until it was wired —
   see `docs/decisions.md` 2026-07-31 and the `LocalCommandSpec` docblock. Worth noting as a pattern:
   a seam with a null default reads as finished from every angle except running it.
+  FIXED (2026-08-14, S1): `buildApp` (`api/src/server.ts`) now constructs `WorkerThreadRuntime`
+  and calls `setArtifactBackendRuntime` — the deliberate composition-root change the paragraph
+  above deferred, done as its own slice rather than inside a red-fixing pass. Seams bound: app-data
+  through `AppDataAccess` on the injected deps; the model capability through the `llm/` public
+  entry (`completeFast`, `user_work` / `artifact-backend:<entrypoint>`, billed to the artifact
+  OWNER with the artifact stamped); `notify.email` through the SAME consent-gated app-email plane a
+  served page uses (`sendAppEmail` with the owner as actor — a backend cannot out-privilege its
+  app); `notify.inApp` on the notifications SSE rail. `resolveOwner`/`resolveBundlePath` stay on
+  the runtime's own production defaults (one implementation, Rule 1). No integration seam is
+  granted. Disposal runs on the boot shutdown path and on factory re-composition
+  (`disposeArtifactBackendRuntime`, fail-closed back to the Null runtime). Suites:
+  `api/tests/apps/backend-runtime-wiring.test.ts` (composition: a built app registers a non-Null
+  runtime; teardown restores the fail-closed Null; capability grants match the pinned set) plus the
+  pre-existing runtime/delivery suites now exercising the real path; the file-level skip on
+  `web/e2e/artifact-backend-panel.spec.ts` is REMOVED — the spec's polling precondition, left
+  intact for exactly this moment, now gates on real invokes.
 
 - **`artifact-import-posts-a-shape-the-contract-rejects`** (FIXED 2026-07-31, HIGH, correctness —
   a live user-facing break, found by repairing the specs that existed to catch it). **Artifact
@@ -2680,6 +2708,87 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-13 "Usar" opened an unshared artifact's dead 410 link
+
+**`usar-opens-revoked-link`** (found during the live verification of the assistant-overhaul batch:
+the artifacts page's primary "Usar" action on a freshly built app opened
+`/apps/<slug>/` bare, which answers 410 "Link já não disponível - O autor revogou a partilha").
+`getArtifactAppUrl` (web/components/artifacts/artifacts-surface.tsx) never attached the owner
+preview token, so the dashboard's own primary action was dead for every artifact the owner had
+not explicitly shared - which is every fresh build. **Fixed**: an unshared artifact routes
+through `api.withPreviewToken` (Q-05: owner-checked, non-shareable previews only); a SHAREABLE
+artifact keeps the bare link, because a copied share URL must never carry the owner's JWT.
+Closed by: `web/__tests__/lib/artifact-app-url.test.ts` (ledgered same change). Also fixed in
+passing, both pre-existing red on clean `main`: `tests/automation/engine.test.ts` pinned the
+English word "approval" on a terminal frame that now carries PT-PT product copy (the pin moved to
+the PT copy; the internal-record assertion already covered the English form), and
+`docs/CONVERGENCE_AUDIT.md` cited `garrison:compositions/dogfood-orch/apm.yml`, which no longer
+exists (the composition ships no apm.yml; the sentence now states current reality and the citation
+gate is green).
+
+## Recently fixed - 2026-08-13 assistant citations were retrieval hits, not citations
+
+**`assistant-citations-not-citations`** (found live by the owner: a plain todo-list app's
+"Dê-me uma visão geral da aplicação" answered with 5 "Fontes" under the label "jurisprudencia",
+none of them used by the answer). Three stacked defects: (1) `app-assistant.ts` mapped EVERY
+retrieval hit to a citation BEFORE the model ran and returned them unconditionally; (2) retrieval
+always searched the `_shared` legal corpus (198k docs here) with no relevance threshold and a
+1.25x authority boost for legal collections; (3) `toMatchQuery` checked stopwords BEFORE accent
+folding, so "dê" sailed past the list and the index's `remove_diacritics 2` tokenizer matched it
+against every "de" in the corpus - virtually the whole corpus matched and BM25 picked 5.
+**Fixed** by three layers: fold-before-stopword (+ pronoun/filler stopwords), the shared corpus
+joins grounding only on a legal-context query (org vault always searched;
+`search(..., { includeShared })`), and citations are now USED-ONLY (numbered excerpts; the reply's
+`[n]` references select which hits are cited; no reference = no Fontes). Closed by:
+`tests/knowledge/index-store.test.ts`, `tests/knowledge/grounding.test.ts`,
+`tests/apps/app-assistant.test.ts`. Decision entry: 2026-08-13 batch, items 1-2.
+
+## Recently fixed - 2026-08-13 the brand chain to built apps was dead end-to-end
+
+**`brand-chain-dead-end-to-end`** (found while investigating "the app looks generic and has no
+logo" - the org had a COMPLETE researched brand two minutes before the build). Four breaks, each
+alone fatal: (1) the served app document linked `/api/design-tokens.css` bare, and the api stamps
+`Referrer-Policy: no-referrer` on every response, so `appIdFromRequest` could never resolve an org
+in a REAL browser - every app always received the platform-default teal (live-verified by curl);
+(2) even resolved, the logo token emitted `url("/brand-assets//brand-assets/x.png")` (double
+prefix, 404); (3) researched `fonts[]` were never mapped to the font tokens, and nothing populates
+`logoIcon` - the FIRST token the app shell checks; (4) the first-build prompt carried zero brand,
+and the house style defaults to a light background, so a dark-brand org got a light generic app by
+construction. **Fixed**: `?app={{APP_ID}}` on the tokens link (+ injection into agent-authored
+plain-HTML heads), `Referrer-Policy: same-origin` on the /apps DOCUMENT surface only, the
+already-rooted asset path taken as-is, fonts[] mapped, `--logo-icon-url` falls back to the logo,
+the neutral layer derives from the org's extracted canvas (WCAG-derived hover/on-primary; dark
+brand = dark app), and `prepareFirstBuild` appends a compact org-brand prompt section
+(`apps/brand-prompt.ts`). Closed by: `tests/legal/design-tokens.test.ts`,
+`tests/apps/builder.test.ts`, `tests/apps/build-mechanics.test.ts`,
+`tests/apps/brand-prompt.test.ts`, `tests/security-headers.test.ts`. Decision entry: 2026-08-13
+batch, item 6. The gate-class lesson (a resolution path only exercisable with a hand-set header is
+a green gate proving nothing) is why the new design-tokens test fetches exactly as a browser does.
+
+## Recently fixed - 2026-08-13 an overload-killed first build was terminal and lost its tier
+
+**`first-build-overload-terminal`** (the "20-minute todo app", measured from the dev Mongo: 4m20s
+GENIUS attempt killed by API 529 after 4m10s of INVISIBLE Agent SDK internal retries + 8m13s of
+human reaction time + a 6m55s successful manual retry that - because the failed build had already
+created the artifact - routed as a FOLLOW-UP at EXPERT, silently dropping the GENIUS first-build
+directive). ADAPTER_ERROR was "retryable" in name only: nothing in the pipeline retried. **Fixed**
+by the in-job overload retry + first-event deadline (decision entry 2026-08-13 item 3). Closed by:
+`tests/agents/build.test.ts` "overload resilience" (5 cases incl. the never-retry guards).
+
+## Recently fixed - 2026-08-13 the guided tour highlighted content hidden behind the panel
+
+**`panel-overlay-occludes-app`** (found live: Tutorial guiado step 5 pointed at the history list
+while the fixed 380px panel covered it; the ring overlay also out-z-indexed the panel, greying the
+tour's own Seguinte/Sair controls). The panel was a pure overlay - nothing reserved layout space -
+and the C3 ring overlay knew nothing about it. **Fixed**: the open panel stamps
+`<html data-ekoa-assistant-open>` and the injected CSS reserves a matching body margin on >900px
+viewports (overlay below; full-width at <=480px), so the app reflows; the ring overlay moved BELOW
+the panel in the z-contract, clamps its tooltip to the visible width, and follows reflows via a
+body ResizeObserver. Plus the two missing panel affordances: a visible pending bubble while a turn
+is in flight, and "Nova conversa" back to the suggestions state (generation-guarded abort-safe
+reset). Closed by: `tests/apps/assistant-panel.test.ts`, `tests/apps/tour-player.test.ts`.
+Decision entry: 2026-08-13 batch, items 4-5.
+
 ## Recently fixed - 2026-08-07 brand research stored the og:image banner as the logo
 
 - **`brand-logo-og-banner`** (medium, product). Brand research on `https://ekoa.io/info`
@@ -3622,3 +3731,95 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   the socket. Re-delivery on reconnect is the larger version and is NOT proposed here: a ceremony
   needs a human at the machine now, so replaying one minutes later asks at a moment nobody is
   standing there (`bridge/attended.ts` already refuses queueing for that reason).
+
+- **`artifact-card-link-carries-the-platform-jwt`** (OPEN 2026-08-15, HIGH, security - found by
+  the 2026-08-15 model code review of the uncommitted working tree; belongs to the artifact-URL
+  session, recorded here so the migration does not land on top of it silently). The artifacts
+  surface (`web/components/artifacts/artifacts-surface.tsx` `getArtifactAppUrl`) appends the
+  owner's FULL platform JWT as `?token=` to every non-shareable artifact's card link - a visible,
+  copyable anchor, no longer confined to the sandboxed preview iframe (whose own comment
+  explicitly avoided this: "skip the ?token= append so we don't leak the JWT into browser
+  history / referrers"). "Copy link address" or forwarding the URL hands the recipient a reusable
+  platform JWT valid against any API endpoint. COMPOUNDED BY the same tree's Referrer-Policy
+  relaxation on `/apps` documents (`api/src/security-headers.ts` no-referrer -> same-origin):
+  with the JWT in the document URL, every same-origin subresource and `/api/*` call carries
+  `Referer: ...?token=<JWT>` - and `design-tokens.ts` reads `req.headers.referer`, so the JWT
+  lands verbatim in logs. The `serving.ts` 302 token-strip covers only purpose-scoped preview
+  tokens, so the JWT stays in the document URL. FIX DIRECTION (needs the feature author's
+  intent): mint the existing purpose-scoped, server-stripped preview token for the card link
+  instead of the raw JWT, and restore `no-referrer` (the design-tokens Referer dependency then
+  needs its app identity from a query/header instead). NOT fixed in the migration run: it is the
+  in-flight feature of another session; reworking its auth model blind risks breaking intent.
+  The salomao ERP will serve on this exact surface, so this blocks the customer cutover.
+
+- **`review-findings-2026-08-15-carryover`** (OPEN 2026-08-15, MEDIUM, ledgered so the review's
+  remaining confirmed findings are closed deliberately, never silently). From the same
+  code review of the uncommitted tree, all in the previous session's work: (a)
+  `resolveBrandCanvas` (`api/src/services/design-tokens.ts`) picks the canvas by raw swatch
+  count among luminance extremes, so a dark brand whose white TEXT swatches dominate is
+  classified LIGHT - it fails on the committed `scripts/seed/branding.json` fixture itself
+  (#ffffff count=162 from text/buttons vs #080c14 count=7, instructions say "Ambiente escuro");
+  weight by source class (background-ish sources over text-ish) or honour the instructions
+  field. (b) `usedCitations` (`api/src/apps/app-assistant.ts`) filters citations by `[n]`
+  markers in the prose but the panel renders an UNNUMBERED Fontes list: markers dangle,
+  `[1, 2]` multi-ref form does not match, a paraphrased unmarked reply silently loses ALL
+  citations, and bracketed indexes in code snippets false-match. (c) chat-kind grounding
+  (`api/src/knowledge/grounding.ts`) gates the shared legal corpus on a finite keyword list -
+  legal questions without a listed keyword ("divórcio", "herança" are absent) silently lose
+  the corpus with no few-hits fallback. (d) `listenerStamp` (`api/src/events/service.ts`,
+  migration S2): platform triggers created in an org with NO platform connection poll forever
+  on a 300s-capped backoff (no auto-disable), and any platform-provider trigger row created
+  BEFORE the inference stays webhook-kind and silently dead - acceptable pre-cutover (no such
+  fleet exists), but a boot-time reconcile or a create-time connection check should land before
+  triggers are exposed to customers. Each item ends FIXED or NOT-NEEDED with a reason; none
+  may be dropped by inertia.
+
+- **`salomao-vision-pass-2026-08-15`** (LEDGERED 2026-08-15, discovery layer - the fine-comb
+  vision pass over the freshly imported `legal-case-manager-3` instance on the dev stack: 8
+  browser lanes, every module + public surfaces + mobile spot-check, screenshots read and
+  judged; evidence under the session scratchpad `vision/` dirs, full per-lane reports in the
+  `salomao-erp-vision-pass` workflow output). Per the QA process every item below ends in a
+  deterministic test or a written dismissal - dispositions stated now, none silently dropped.
+  The migration itself came out CLEAN: all 1,627 rows render with real content and zero
+  mojibake, the 91 migrated documents open (blob+sidecar plane proven end-user-visible), the
+  M365-degrade is mostly graceful (Captacao shows an honest retry card), and dashboard numbers
+  reconcile with the REST plane. The pass found APP-level defects (present on prod today, not
+  migration regressions) plus data-hygiene items:
+  FIX-IN-FLIGHT (same-day fix wave, each verified in-browser + spec'd): (1) BLOCKER - client
+  Documentos delete is one unconfirmed click, irreversibly destroying the blob (a real
+  document was destroyed by the QA lane's misclick and fully restored - row re-created, blob
+  re-copied via the idempotent `migrate-app-files.mjs` re-run, serving 200 again; the incident
+  is itself the proof of the restore path). In-app confirm dialog + separated affordances.
+  (2) HIGH - pt-PT money misparse in aggregates: digit-stripping turns '100.000,00' into 10
+  million; Relatorios VALOR EM PIPELINE showed EUR 10 041 350 where the true sum is ~141k,
+  Funil column totals inflated ~100x. One shared parser + one pt-PT formatter. (3) HIGH -
+  React duplicate-key errors: Clientes/Auditoria lists keyed by non-unique business codes
+  (real data holds duplicate client codes and a millisecond-collision LOG code); key by
+  record id. (4) HIGH - login screen does not reflow at 390px (form clipped past the
+  viewport, container overflow:hidden).
+  OPEN-APP (recorded for the app's next iteration with the customer; each needs a fix + spec
+  or a customer sign-off dismissal): Revisao de KYC renders the same hardcoded checklist for
+  every dossier, ignoring per-submission state (HIGH - compliance screen); 'Enviar ao
+  cliente' under a missing M365 credential top-level-navigates the SPA into a bare error page
+  (HIGH - degrade UX); proposal Estado vocabulary drift ('Proposta enviada'/'Aprovada'
+  invisible to filter + Relatorios counts); list VALOR never recomputed from items (18x off
+  on a real signed-in-progress proposal); Clientes list badges contradict detail pages
+  (denormalized counts); Projetos progress ignores atividade_status overrides; client
+  'Atividade' tab shows a canned identical timeline; Distribuicao chart renders 0px tall on
+  Dashboard de Atividades; Auditoria renders raw user tokens/UUIDs for ~30% of rows; unknown
+  hash routes silently render the Dashboard; funnel 'Ganho' column permanently 0; KYC tab
+  state contradictions; risk band never surfaced in review; Master approve/nao-aprova
+  inconsistency; internal build-slice jargon (S12/S13/S14) visible in customer-facing UI;
+  date/CSV/locale nits; sticky Zoho bar overlap; a11y names on Construtor buttons.
+  OPEN-DATA-HYGIENE (operator + customer decisions at cutover; the prod dump carries all of
+  it - verified pre-existing upstream, NOT introduced by the import, row counts match the
+  dump exactly): duplicated client codes (BSM-2026-0001 x3 + 5 exact duplicate pairs), junk
+  row 'dfdffddggdhd' in atividades, test/probe accounts holding Master role (Probe, Teste
+  Ekoa, Bazinga Da Costa, CRM Master), SharePoint integration pointed at the throwaway
+  bazingadas.sharepoint.com tenant instead of the customer's, platform-e2e residue rows,
+  LOG-code generator collisions, PT-BR/PT-PT spelling drift in template content. These go on
+  the cutover runbook's pre-flight checklist as a customer-blessed cleanup, never a silent
+  edit.
+  ENV-NOTED (no action): PWA manifest absent (tracked parity row - installed-PWA users lose
+  their entry until ported); Zoho not connected on dev (send refusal correct); model
+  credential works (AI features live).

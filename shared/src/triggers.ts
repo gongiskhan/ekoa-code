@@ -38,16 +38,24 @@ export type Trigger = z.infer<typeof Trigger>;
 // `target` vs a flat `automationId`) without inventing a top-level discriminator the
 // client never sends. Artifact-backend is tried first (its required nested `target`
 // makes it the more specific match).
+// Poll-cadence override for a platform-provider trigger (M365 / Google Workspace), whose kind is
+// inferred server-side as 'listener' (2A-S2). ADDITIVE (Rule 7): absent ⇒ the 60s server default;
+// existing clients that never send it are untouched. Floor of 1s guards the provider from a
+// misconfigured hammer. Ignored for webhook-kind triggers.
+const PollIntervalMs = z.number().int().min(1000).optional();
+
 const AutomationTargetTrigger = z.object({
   automationId: Id,
   integrationKey: z.string(),
   eventName: z.string(),
   artifactId: Id.optional(),
+  pollIntervalMs: PollIntervalMs,
 });
 
 const ArtifactBackendTargetTrigger = z.object({
   integrationKey: z.string(),
   eventName: z.string(),
+  pollIntervalMs: PollIntervalMs,
   target: z.object({
     kind: z.literal('artifact-backend'),
     artifactId: Id,

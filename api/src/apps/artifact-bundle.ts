@@ -26,9 +26,9 @@ import { readFile, writeFile, readdir, mkdir, rm, stat } from 'node:fs/promises'
 import { join, resolve, sep, dirname } from 'node:path';
 import { artifacts, slugs } from '../data/stores.js';
 import type { Actor } from '../data/scoped.js';
-import type { ArtifactBundle } from '@ekoa/shared';
+import type { ArtifactBundle, ImportAppDataReport, ImportReport } from '@ekoa/shared';
 import { generateSlug, type ArtifactDoc, type Deps } from './artifacts-service.js';
-import { indexSlug } from './slug-index.js';
+import { indexSlug, unindexSlug } from './slug-index.js';
 import { projectDirFor, newProjectDir } from './app-paths.js';
 import { readManifest, createDefaultManifest, writeManifest, type AppManifest } from './manifest.js';
 import { appBuilder } from './builder.js';
@@ -48,6 +48,27 @@ export class ManifestIdMismatchError extends Error {
     this.name = 'ManifestIdMismatchError';
   }
 }
+
+/** preserveId refused: the requested canonical id already names an artifact (409-class, never silent). */
+export class ImportIdCollisionError extends Error {
+  constructor(public requestedId: string) {
+    super(`preserveId: artifact id "${requestedId}" already exists`);
+    this.name = 'ImportIdCollisionError';
+  }
+}
+
+/** preserveId refused: the bundle carries no id, or an id that cannot be an app id (400-class). */
+export class ImportIdInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImportIdInvalidError';
+  }
+}
+
+/** Mirror of the collections engine's app-id charset (`appScope`): what a canonical id may be. */
+const APP_ID_CHARSET = /^[a-zA-Z0-9._-]{1,100}$/;
+/** What a bundle-requested slug may look like to be honoured (the served-URL alphabet). */
+const SLUG_CHARSET = /^[a-z0-9][a-z0-9-]{0,99}$/;
 
 /** Per-artifact serialization lane for bundle updates (independent of the git lock). */
 const appLocks = new Map<string, Promise<unknown>>();
@@ -144,21 +165,26 @@ function collectionsFromBundleData(data: ArtifactBundle['data']): Record<string,
 }
 
 /**
- * Seed a freshly-imported app's app-data from `bundle.data` (2B-S5). Best-effort
- * and isolated: a seeding failure is logged and swallowed exactly like the
- * post-import build, never breaking the import (the operator-run salomao-import
- * driver verifies the data actually landed). Items keep their ids
- * (CollectionsEngine.create preserves `item.id`).
+ * Seed a freshly-imported app's app-data from `bundle.data` (2B-S5, hardened in S3).
+ * Isolated from the import itself (a seeding failure never breaks the import) but no
+ * longer invisible: the outcome comes back as a per-collection report the import
+ * response surfaces - reserved (`__*`) / shared-scope (`usr.*`) collections skipped
+ * by name, per-row failures counted with their first error, and a wholesale failure
+ * (e.g. store unavailable) reported instead of vanishing into a console.warn. Items
+ * keep their ids AND their own createdAt/updatedAt (engine importCreate).
  */
-async function applyImportedAppData(appId: string, bundle: ArtifactBundle, deps: Deps): Promise<void> {
+async function applyImportedAppData(appId: string, bundle: ArtifactBundle, deps: Deps): Promise<ImportAppDataReport | undefined> {
   const collections = collectionsFromBundleData(bundle.data);
-  if (!collections) return; // no app-data in the bundle → current behavior unchanged.
+  if (!collections) return undefined; // no app-data in the bundle → current behavior unchanged.
   try {
     const dump: AppDataDump = { collections, counts: {}, totalItems: 0, at: new Date(deps.now()).toISOString() };
-    const written = await new AppDataAccess(deps).importDump(appId, dump);
-    console.info(`[import-artifact] seeded ${written} app-data item(s) for ${appId} from bundle.data`);
+    const report = await new AppDataAccess(deps).importDumpReport(appId, dump);
+    console.info(`[import-artifact] seeded ${report.imported} app-data item(s) for ${appId} from bundle.data (${report.skipped} skipped)`);
+    return report;
   } catch (err) {
-    console.warn(`[import-artifact] app-data seeding failed for ${appId}:`, err instanceof Error ? err.message : err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[import-artifact] app-data seeding failed for ${appId}:`, message);
+    return { collections: [], imported: 0, skipped: 0, error: message };
   }
 }
 
@@ -186,15 +212,52 @@ async function ensureManifest(projectDir: string, id: string, name: string): Pro
   await writeManifest(projectDir, manifest);
 }
 
+export interface ImportArtifactResult {
+  artifact: ArtifactDoc;
+  report: ImportReport;
+}
+
 export async function importArtifact(
   bundle: ArtifactBundle,
   owner: Actor,
   deps: Deps,
-): Promise<ArtifactDoc> {
-  const newId = deps.genId();
+  opts: { preserveId?: boolean } = {},
+): Promise<ImportArtifactResult> {
+  // ---- Canonical id (S3): explicit migration mode, refused loudly, never silent. ----
+  // Checked BEFORE any side effect (slug reservation, project dir) so a refusal leaves nothing behind.
+  let newId: string;
+  let idPreserved = false;
+  if (opts.preserveId) {
+    const requested = bundle.id;
+    if (typeof requested !== 'string' || requested.length === 0) {
+      throw new ImportIdInvalidError('preserveId was requested but the bundle carries no id');
+    }
+    if (!APP_ID_CHARSET.test(requested) || requested.startsWith('usr.') || requested.startsWith('__')) {
+      throw new ImportIdInvalidError(`preserveId: bundle id "${requested}" is not a valid app id`);
+    }
+    if (await artifacts.get(requested)) throw new ImportIdCollisionError(requested);
+    newId = requested;
+    idPreserved = true;
+  } else {
+    newId = deps.genId();
+  }
+
   const name = bundle.name ?? bundle.manifestId ?? 'App';
-  const slug = await generateSlug(name, deps);
-  await slugs.put({ _id: slug, artifactId: newId });
+
+  // ---- Slug (S3, findings `import-ignores-the-bundle-slug`): honour bundle.slug when free. ----
+  // The reservation insert is the atomic taken-check (duplicate _id = taken); an unusable
+  // requested slug (taken or outside the served-URL alphabet) falls back to the generated one,
+  // and the report says which happened.
+  const requestedSlug = typeof bundle.slug === 'string' && bundle.slug ? bundle.slug : undefined;
+  let slug: string | undefined;
+  if (requestedSlug && SLUG_CHARSET.test(requestedSlug)) {
+    if (await slugs.insert({ _id: requestedSlug, artifactId: newId })) slug = requestedSlug;
+  }
+  const slugFellBack = requestedSlug !== undefined && slug === undefined;
+  if (!slug) {
+    slug = await generateSlug(name, deps);
+    await slugs.put({ _id: slug, artifactId: newId });
+  }
   indexSlug(slug, newId);
 
   const projectDir = newProjectDir(owner.userId, newId);
@@ -217,11 +280,27 @@ export async function importArtifact(
     createdAt: now,
     updatedAt: now,
   } as ArtifactDoc;
-  await artifacts.insert(doc as never);
+  if (!(await artifacts.insert(doc as never))) {
+    // Lost a race for the id since the pre-check (only reachable in preserveId mode, or on a
+    // genId collision). Undo the side effects this import created, then refuse - never silent.
+    // The in-memory slug index MUST roll back too: serving consults it before the store, so a
+    // leftover mapping would serve the RACE WINNER's artifact under this import's slug until
+    // the next boot (code-review finding, 2026-08-15).
+    unindexSlug(slug);
+    await slugs.delete(slug).catch(() => undefined);
+    await rm(projectDir, { recursive: true, force: true }).catch(() => undefined);
+    throw new ImportIdCollisionError(newId);
+  }
+
+  const report: ImportReport = {
+    slug: { ...(requestedSlug ? { requested: requestedSlug } : {}), applied: slug, fellBack: slugFellBack },
+    id: { ...(typeof bundle.id === 'string' && bundle.id ? { requested: bundle.id } : {}), applied: newId, preserved: idPreserved },
+  };
 
   // Seed app-data from bundle.data BEFORE the build so the served instance boots
   // with its data (2B-S5, additive: no-op when the bundle carries no data).
-  await applyImportedAppData(newId, bundle, deps);
+  const appDataReport = await applyImportedAppData(newId, bundle, deps);
+  if (appDataReport) report.appData = appDataReport;
 
   // Build + register so the imported app is immediately viewable.
   try {
@@ -234,7 +313,7 @@ export async function importArtifact(
   } catch (err) {
     console.warn(`[import-artifact] post-import build failed for ${newId}:`, err instanceof Error ? err.message : err);
   }
-  return doc;
+  return { artifact: doc, report };
 }
 
 export interface UpdateFromBundleResult {

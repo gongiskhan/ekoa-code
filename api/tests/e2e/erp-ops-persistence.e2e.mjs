@@ -121,10 +121,15 @@ async function cleanup() {
   for (const r of await list('auditoria')) if (r && (starts(r.detalhe, P) || (typeof r.detalhe === 'string' && r.detalhe.includes(P)))) await del('auditoria', r.id);
 }
 
-// Benign console noise: pre-login whoami 401 and M365/Adobe workspace probes 403.
+// Benign console noise: pre-login whoami 401 and M365/Adobe workspace probes.
+// The probe status depends on the integration state: 403 while the workspace proxy
+// gate was closed; since the m365Proxy manifest opt-in landed, the same not-connected
+// probe answers 502, and a reconnect-required state answers 409. All three are the
+// one benign "integration not usable" signal, and ONLY on these integration paths;
+// any other console error stays fatal.
 function realError(text, url = '') {
   if (/\b401\b/.test(text)) return false;
-  if (/\b403\b/.test(text) && /\/api\/(m365|adobe)/.test(url)) return false;
+  if (/\b(403|409|502)\b/.test(text) && /\/api\/(m365|adobe)/.test(url)) return false;
   if (/app-sso\/me/.test(text) || /app-sso\/me/.test(url)) return false;
   return true;
 }
@@ -269,7 +274,8 @@ async function main() {
     const lateBefore = await readAtrasadas();
     assert(lateBefore > 0, `T1 precondition: Atrasadas=${lateBefore}`);
     await goto('/tarefas');
-    await seesText('As Minhas Tarefas');
+    // The imported fork retitled the page "As Minhas Atividades" (was "As Minhas Tarefas").
+    await seesText('As Minhas Atividades');
     await seesText(`${P} Tarefa atrasada`);
     await seesText(`${P} Tarefa no prazo`);
     const stats = await page.evaluate(() =>
@@ -287,7 +293,7 @@ async function main() {
     assert(at2 && at2.estado === 'Por fazer', 'T1: untouched control task changed state');
     ok('completion persisted onto the atividades row (estado=Concluída, slaState=done); control row untouched');
     await page.reload({ waitUntil: 'load' });
-    await seesText('As Minhas Tarefas');
+    await seesText('As Minhas Atividades');
     await seesText(`${P} Tarefa no prazo`);
     const statsAfter = await page.evaluate(() =>
       Array.from(document.querySelectorAll('.display.tnum')).map((t) => t.textContent.trim()));
@@ -375,9 +381,12 @@ async function main() {
     const prop = await until('propostas', (rs) => rs.find((x) => x.prospectId === prStage.id), 'T3 proposal auto-created');
     assert(prop.stage === 'Rascunho' && prop.resp === 'luan', `T3: draft stage/resp ${prop.stage}/${prop.resp}`);
     assert(itemIds(prop).includes(13), `T3: default catalogue item 13 missing (items=${JSON.stringify(prop.items)})`);
-    const pagePrefill = await page.evaluate(() => /875/.test(document.body.innerText) && /Obra \(valor fixo\)/.test(document.body.innerText));
-    assert(pagePrefill, 'T3: editor does not show the pre-filled price/model (875 / Obra)');
-    ok('A05: proposal auto-created as Rascunho with the dept default item pre-filled (€ 875, Obra)');
+    // The imported fork's editor fee model is "Por item" (the selected model chip); the
+    // old "Obra (valor fixo)" label no longer exists. Same check strength: the dept
+    // default item's price is hydrated AND the fee model renders.
+    const pagePrefill = await page.evaluate(() => /875/.test(document.body.innerText) && /Por item/.test(document.body.innerText));
+    assert(pagePrefill, 'T3: editor does not show the pre-filled price/model (875 / Por item)');
+    ok('A05: proposal auto-created as Rascunho with the dept default item pre-filled (€ 875, Por item)');
     await page.getByRole('button', { name: 'Adicionar do catálogo' }).click();
     await page.getByPlaceholder(/Procurar serviço/).fill('NIF');
     await page.getByRole('button', { name: /Pedido de NIF/ }).first().click();
@@ -532,7 +541,8 @@ async function main() {
     await page.getByRole('button', { name: 'EN', exact: true }).click();
     await seesText('Block 1 — Service proposal');
     const en = await page.evaluate(() => document.body.innerText);
-    assert(/Sign with Adobe Acrobat Sign/.test(en), 'T8: EN toggle did not translate the signing footer');
+    // The imported fork signs with Zoho Sign (Adobe swapped out - see salomao-erp-zoho-swap).
+    assert(/Sign with Zoho Sign/.test(en), 'T8: EN toggle did not translate the signing footer');
     ok('EN toggle translates the portal body (Block 1 heading + signing footer)');
 
     // ---- T9: role switcher reverts on reload + Relatórios CSV export ----------------

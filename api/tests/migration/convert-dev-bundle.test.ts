@@ -8,6 +8,8 @@ import {
   normalizeAppData,
   decodeUtf8Strict,
   readUtf8Strict,
+  screenAppData,
+  slugFromName,
 } from '../../scripts/migrate/convert-dev-bundle.mjs';
 import { validateManifest } from '../../src/apps/manifest.js';
 
@@ -213,6 +215,115 @@ describe('convert-dev-bundle: refuses non-UTF-8 LOUDLY (no silent corruption)', 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * MIGRATION IDENTITY + DATA HYGIENE (S3). The real salomao migration needs the prod
+ * identity carried INTO the bundle (canonical id for preserveId, slug for the served URL)
+ * and the prod app-data dump cleaned of what the importer must refuse: the reserved
+ * `__files` engine bookkeeping (91 rows in the real dump) and any `usr.*` shared-scope
+ * spill. Oversized rows are announced up front with collection + index so the operator
+ * knows before the import, not after.
+ */
+describe('convert-dev-bundle: migration identity (id + slug) on the emitted bundle (S3)', () => {
+  it('fills bundle.id from envelope.sourceArtifactId, and omits it when the envelope has none', () => {
+    expect(convertDevBundle(devEnvelope()).id).toBe('prod-app-08dd');
+    const env = devEnvelope();
+    delete (env as Record<string, unknown>).sourceArtifactId;
+    expect(convertDevBundle(env).id).toBeUndefined();
+  });
+
+  it('defaults bundle.slug to the envelope-derived slug when the operator gives none', () => {
+    // No explicit slug anywhere: derived from the display name, importer-compatible.
+    expect(convertDevBundle(devEnvelope()).slug).toBe('salomao-erp');
+    expect(slugFromName('ERP Jurídico - Brasil Salomão')).toBe('erp-juridico-brasil-salomao');
+    // An explicit envelope-level slug wins over the derived one.
+    expect(convertDevBundle(devEnvelope({ slug: 'legal-case-manager-3' })).slug).toBe('legal-case-manager-3');
+  });
+
+  it('--slug still wins over every envelope-derived default', () => {
+    const bundle = convertDevBundle(devEnvelope({ slug: 'envelope-slug' }), { slug: 'legal-case-manager-3' });
+    expect(bundle.slug).toBe('legal-case-manager-3');
+    expect(ArtifactBundle.safeParse(bundle).success).toBe(true);
+  });
+
+  it('--id wins over sourceArtifactId, and fills bundle.id on an envelope that predates it', () => {
+    // The real V13 salomao envelope carries NO sourceArtifactId; the canonical id is known
+    // out-of-band (the app-data dir name / the 91 embedded /api/app-files/<id>/ URLs).
+    const canonical = '7bd8bb58-4e25-4a93-a127-d4f903d79f51';
+    expect(convertDevBundle(devEnvelope(), { id: canonical }).id).toBe(canonical);
+    const env = devEnvelope();
+    delete (env as Record<string, unknown>).sourceArtifactId;
+    const bundle = convertDevBundle(env, { id: canonical });
+    expect(bundle.id).toBe(canonical);
+    expect(ArtifactBundle.safeParse(bundle).success).toBe(true);
+  });
+
+  it('--m365-proxy injects a strict-boolean opt-in into the reconstructed manifest, surviving the validator', () => {
+    // A prod manifest can never carry the ekoa-code-only Graph opt-in; without it every
+    // /api/m365/* call from the imported ERP answers 403 (audit gap: the raw export 403s).
+    const bundle = convertDevBundle(devEnvelope(), { m365Proxy: true });
+    const manifest = JSON.parse(bundle.files!.find((f) => f.path === 'manifest.json')!.content) as Record<string, unknown>;
+    expect(manifest.m365Proxy).toBe(true);
+    expect((validateManifest(manifest) as { m365Proxy?: boolean }).m365Proxy).toBe(true);
+    // Absent flag: nothing injected - the plain conversion stays byte-identical on this key.
+    const plain = convertDevBundle(devEnvelope());
+    const plainManifest = JSON.parse(plain.files!.find((f) => f.path === 'manifest.json')!.content) as Record<string, unknown>;
+    expect('m365Proxy' in plainManifest).toBe(false);
+  });
+});
+
+describe('convert-dev-bundle: reserved-collection filtering + oversized pre-flight (S3)', () => {
+  const collect = () => {
+    const messages: string[] = [];
+    return { messages, warn: (m: string) => { messages.push(m); } };
+  };
+
+  it('filters __* and usr.* collections out of the emitted dump with a loud note, recomputing totals', () => {
+    const { messages, warn } = collect();
+    const env = devEnvelope({
+      seedData: {
+        __files: [{ id: 'f1', name: 'a.pdf' }, { id: 'f2', name: 'b.pdf' }],
+        'usr.owner-1': [{ id: 's1' }],
+        clientes: [{ id: 'c1' }, { id: 'c2' }],
+      },
+    });
+    const bundle = convertDevBundle(env, { warn });
+    const data = bundle.data!;
+    expect(Object.keys(data.collections)).toEqual(['clientes']);
+    expect(data.counts).toEqual({ clientes: 2 });
+    expect(data.totalItems).toBe(2);
+    expect(messages.some((m) => m.includes('__files') && m.includes('2 item(s)'))).toBe(true);
+    expect(messages.some((m) => m.includes('usr.owner-1'))).toBe(true);
+    expect(ArtifactBundle.safeParse(bundle).success).toBe(true);
+  });
+
+  it('emits NO data at all when every collection is reserved', () => {
+    const { warn } = collect();
+    const env = devEnvelope({ seedData: { __files: [{ id: 'f1' }] } });
+    expect(convertDevBundle(env, { warn }).data).toBeUndefined();
+  });
+
+  it('pre-flight reports an item over 256KB with its collection and index, without dropping it', () => {
+    const { messages, warn } = collect();
+    const big = { id: 'big-1', blob: 'x'.repeat(270_000) };
+    const env = devEnvelope({ seedData: { documentos: [{ id: 'd0' }, big] } });
+    const bundle = convertDevBundle(env, { warn });
+    // The row stays in the dump (the importer reports it as a per-row skip; the converter only warns).
+    expect(bundle.data!.collections.documentos).toHaveLength(2);
+    const note = messages.find((m) => m.includes('OVERSIZED'));
+    expect(note).toBeDefined();
+    expect(note).toContain('"documentos"');
+    expect(note).toContain('index 1');
+  });
+
+  it('screenAppData is a no-op for a clean dump and undefined for an absent one', () => {
+    const { messages, warn } = collect();
+    const dump = { collections: { a: [{ id: '1' }] }, counts: { a: 1 }, totalItems: 1, at: '2026-01-01T00:00:00.000Z' };
+    expect(screenAppData(dump, warn)).toEqual(dump);
+    expect(screenAppData(undefined, warn)).toBeUndefined();
+    expect(messages).toEqual([]);
   });
 });
 

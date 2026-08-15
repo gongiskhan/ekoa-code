@@ -12,7 +12,7 @@ import {
   BackupStatus, BackupRestorePoint, AppDataDump, BackupRestoreResponse, BackendStatus,
   BackendLogListResponse, BackendInvocationListResponse, BackendSetEnabledResponse,
   BackendSampleRunResponse, CompanySpaceListResponse, CompanySpaceGetResponse,
-  CompanySpaceStartResponse, ErrorEnvelope, OkResponse, Artifact,
+  CompanySpaceStartResponse, ErrorEnvelope, OkResponse, Artifact, ImportArtifactResponse,
 } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo, getDb } from '../../src/data/mongo.js';
@@ -21,11 +21,12 @@ import { projectDirFor } from '../../src/apps/app-paths.js';
 import type { ArtifactDoc } from '../../src/apps/artifacts-service.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
-import { __resetSlugIndexForTests } from '../../src/apps/slug-index.js';
+import { __resetSlugIndexForTests, getAppIdBySlug } from '../../src/apps/slug-index.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { artifactsRouter } from '../../src/routes/artifacts.js';
+import { importArtifact, ImportIdCollisionError } from '../../src/apps/artifact-bundle.js';
 import { getArtifactScreenshotDir } from '../../src/services/artifact-screenshot.js';
 import { companySpaceRouter } from '../../src/routes/company-space.js';
 import { appRegistry } from '../../src/apps/app-registry.js';
@@ -229,6 +230,205 @@ describe('export / import / bundle-update (ch07 §7.10)', () => {
     const newId = ((await imp.json()) as { id: string }).id;
     const access = new AppDataAccess(deps);
     expect(await access.listCollections(newId)).toEqual([]);
+  });
+
+  /**
+   * MIGRATION IDENTITY + REPORTING (S3). For the salomao migration identity is not cosmetic:
+   * client-facing links already sent by email embed /apps/legal-case-manager-3/, app-data rows
+   * embed /api/app-files/<oldAppId>/<uuid> URLs, and webhook-routing rows key on the prod appId.
+   * These tests pin the import contract: bundle.slug honoured when free (fallback reported),
+   * bundle.id adopted ONLY under explicit preserveId (409 on collision, never silent), and the
+   * app-data seeding outcome visible in the response instead of a console.warn.
+   */
+  it('import honours a free bundle.slug and reports it applied without fallback', async () => {
+    const t = await tokenFor('owner1');
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const bundle = convertDevBundle({
+      schemaVersion: 1,
+      manifest: { id: 'prod-slug-1', name: 'Slug Honour App', version: '1.0.0' },
+      scaffold: [{ path: 'index.html', contentB64: b64('<!doctype html><html><body>s</body></html>') }],
+      exportedAt: '2026-07-24T10:00:00.000Z',
+    }, { slug: 'legal-case-manager-3' });
+    expectValid(ArtifactBundle, bundle);
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const created = (await imp.json()) as { slug: string; importReport?: { slug: { requested?: string; applied: string; fellBack: boolean } } };
+    expectValid(ImportArtifactResponse, created);
+    expect(created.slug).toBe('legal-case-manager-3');
+    expect(created.importReport!.slug).toEqual({ requested: 'legal-case-manager-3', applied: 'legal-case-manager-3', fellBack: false });
+  });
+
+  it('import falls back to a generated slug when the requested one is taken - and says so', async () => {
+    const t = await tokenFor('owner1');
+    await slugs.put({ _id: 'legal-case-manager-3', artifactId: 'someone-else' });
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const bundle = convertDevBundle({
+      schemaVersion: 1,
+      manifest: { id: 'prod-slug-2', name: 'Fallback App', version: '1.0.0' },
+      scaffold: [{ path: 'index.html', contentB64: b64('<!doctype html><html><body>f</body></html>') }],
+      exportedAt: '2026-07-24T10:00:00.000Z',
+    }, { slug: 'legal-case-manager-3' });
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const created = (await imp.json()) as { slug: string; importReport: { slug: { requested?: string; applied: string; fellBack: boolean } } };
+    expectValid(ImportArtifactResponse, created);
+    expect(created.importReport.slug.requested).toBe('legal-case-manager-3');
+    expect(created.importReport.slug.fellBack).toBe(true);
+    expect(created.importReport.slug.applied).not.toBe('legal-case-manager-3');
+    expect(created.slug).toBe(created.importReport.slug.applied);
+    // The taken reservation still points at its original owner.
+    expect((await slugs.get('legal-case-manager-3'))!.artifactId).toBe('someone-else');
+  });
+
+  it('preserveId adopts the bundle id (converter-filled from sourceArtifactId) and reports it', async () => {
+    const t = await tokenFor('sa'); // preserveId is super-admin-only (operator migration posture)
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const bundle = convertDevBundle({
+      schemaVersion: 1,
+      manifest: { id: 'prod-keep-1', name: 'Preserve Id App', version: '1.0.0' },
+      scaffold: [{ path: 'index.html', contentB64: b64('<!doctype html><html><body>p</body></html>') }],
+      exportedAt: '2026-07-24T10:00:00.000Z',
+      sourceArtifactId: 'prod-keep-1',
+    });
+    expect(bundle.id).toBe('prod-keep-1');
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle, preserveId: true }) });
+    expect(imp.status).toBe(201);
+    const created = (await imp.json()) as { id: string; importReport: { id: { requested?: string; applied: string; preserved: boolean } } };
+    expectValid(ImportArtifactResponse, created);
+    expect(created.id).toBe('prod-keep-1');
+    expect(created.importReport.id).toEqual({ requested: 'prod-keep-1', applied: 'prod-keep-1', preserved: true });
+    // The row really carries the canonical id (what keeps /api/app-files/<id>/ URLs valid).
+    expect(await artifacts.get('prod-keep-1')).not.toBeNull();
+  });
+
+  it('WITHOUT preserveId a bundle id is echoed but never adopted (fresh id, preserved: false)', async () => {
+    const t = await tokenFor('owner1');
+    const b64 = (s: string) => Buffer.from(s, 'utf-8').toString('base64');
+    const bundle = convertDevBundle({
+      schemaVersion: 1,
+      manifest: { id: 'prod-keep-2', name: 'No Opt In App', version: '1.0.0' },
+      scaffold: [{ path: 'index.html', contentB64: b64('<!doctype html><html><body>n</body></html>') }],
+      exportedAt: '2026-07-24T10:00:00.000Z',
+      sourceArtifactId: 'prod-keep-2',
+    });
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const created = (await imp.json()) as { id: string; importReport: { id: { requested?: string; applied: string; preserved: boolean } } };
+    expectValid(ImportArtifactResponse, created);
+    expect(created.id).not.toBe('prod-keep-2');
+    expect(created.importReport.id).toEqual({ requested: 'prod-keep-2', applied: created.id, preserved: false });
+  });
+
+  it('preserveId collision is refused 409 with the shared error envelope - never a silent remap', async () => {
+    await mkApp('prod-col-1', { userId: 'owner1', orgId: 'orgA' });
+    const t = await tokenFor('sa');
+    const bundle = { manifestId: 'prod-col-1', name: 'Collides', id: 'prod-col-1', files: [{ path: 'index.html', content: '<!doctype html><html><body>c</body></html>' }] };
+    expectValid(ArtifactBundle, bundle);
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle, preserveId: true }) });
+    expect(imp.status).toBe(409);
+    const body = (await imp.json()) as { error: { code: string; details?: { requestedId?: string } } };
+    expectValid(ErrorEnvelope, body);
+    expect(body.error.code).toBe('SLUG_TAKEN');
+    expect(body.error.details!.requestedId).toBe('prod-col-1');
+    // The existing artifact is untouched.
+    expect((await artifacts.get('prod-col-1'))!.name).toBe('prod-col-1');
+  });
+
+  it('preserveId from a non-super-admin is refused 403 - the global id namespace is operator-only', async () => {
+    // The collision pre-check is necessarily global, so for an ordinary user its 409-vs-201
+    // answer would be a cross-tenant id-existence oracle, and a 201 would squat an id another
+    // org's migration depends on (code-review finding, 2026-08-15). org-admin is not enough.
+    const t = await tokenFor('owner1');
+    const bundle = { manifestId: 'prod-gate-1', name: 'Gate', id: 'prod-gate-1', files: [{ path: 'index.html', content: '<!doctype html><html><body>g</body></html>' }] };
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle, preserveId: true }) });
+    expect(imp.status).toBe(403);
+    const body = (await imp.json()) as { error: { code: string } };
+    expectValid(ErrorEnvelope, body);
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(await artifacts.get('prod-gate-1')).toBeNull();
+    // Without preserveId the same body imports fine for the same user (fresh id).
+    const plain = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(plain.status).toBe(201);
+  });
+
+  it('an id-collision refusal rolls back the slug reservation AND the in-memory index', async () => {
+    // The race the route pre-check cannot see: insert fails at the store. Reached
+    // deterministically via a genId collision (module-level, custom deps). Before the fix the
+    // in-memory index kept serving the RACE WINNER's artifact under the loser's slug until
+    // reboot (code-review finding, 2026-08-15).
+    await mkApp('race-winner', { userId: 'owner1', orgId: 'orgA' });
+    const bundle = {
+      manifestId: 'race-loser', name: 'Race Loser', slug: 'race-loser-slug',
+      files: [{ path: 'index.html', content: '<!doctype html><html><body>r</body></html>' }],
+    };
+    await expect(
+      importArtifact(bundle as never, { userId: 'owner1', orgId: 'orgA' } as never, { ...deps, genId: () => 'race-winner' }),
+    ).rejects.toThrow(ImportIdCollisionError);
+    expect(await slugs.get('race-loser-slug')).toBeNull();
+    expect(getAppIdBySlug('race-loser-slug')).toBeUndefined();
+  });
+
+  it('preserveId with no bundle id is refused 400 (explicit mode, never guessed)', async () => {
+    const t = await tokenFor('sa');
+    const bundle = { manifestId: 'prod-noid', name: 'No Id', files: [{ path: 'index.html', content: '<!doctype html><html><body>x</body></html>' }] };
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle, preserveId: true }) });
+    expect(imp.status).toBe(400);
+    const body = (await imp.json()) as { error: { code: string } };
+    expectValid(ErrorEnvelope, body);
+    expect(body.error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it("a real-shaped dump with '__files' seeds the rest, preserves timestamps, and reports per collection", async () => {
+    const t = await tokenFor('owner1');
+    // Hand-crafted data (NOT via the converter, which filters reserved names itself): the
+    // importer must defend against a raw dump regardless of which tool produced the bundle.
+    const bundle = {
+      manifestId: 'prod-data-1',
+      name: 'Data Report App',
+      files: [{ path: 'index.html', content: '<!doctype html><html><body>d</body></html>' }],
+      data: {
+        collections: {
+          __files: [{ id: 'f1', name: 'a.pdf' }, { id: 'f2', name: 'b.pdf' }],
+          clientes: [
+            { id: 'c1', nome: 'Um', createdAt: '2024-03-15T09:30:00.000Z', updatedAt: '2025-11-02T18:45:12.345Z' },
+            { id: 'c2', nome: 'Dois' },
+          ],
+        },
+      },
+    };
+    expectValid(ArtifactBundle, bundle);
+
+    const imp = await jwtApi('/api/v1/artifacts/import', t, { method: 'POST', body: JSON.stringify({ bundle }) });
+    expect(imp.status).toBe(201);
+    const created = (await imp.json()) as {
+      id: string;
+      importReport: { appData?: { collections: Array<{ name: string; imported: number; skipped: number; error?: string }>; imported: number; skipped: number } };
+    };
+    expectValid(ImportArtifactResponse, created);
+
+    const appData = created.importReport.appData!;
+    expect(appData.imported).toBe(2);
+    expect(appData.skipped).toBe(2);
+    const byName = Object.fromEntries(appData.collections.map((c) => [c.name, c]));
+    expect(byName.__files).toMatchObject({ imported: 0, skipped: 2 });
+    expect(byName.__files!.error).toMatch(/RESERVED_COLLECTION/);
+    expect(byName.clientes).toMatchObject({ imported: 2, skipped: 0 });
+
+    // Timestamps preserved on the import path (server-stamped only where the dump had none).
+    const access = new AppDataAccess(deps);
+    const rows = await access.list(created.id, 'clientes');
+    const c1 = rows.find((r) => r.id === 'c1')!;
+    expect(c1.createdAt).toBe('2024-03-15T09:30:00.000Z');
+    expect(c1.updatedAt).toBe('2025-11-02T18:45:12.345Z');
+    const c2 = rows.find((r) => r.id === 'c2')!;
+    expect(typeof c2.createdAt).toBe('string');
+    expect(c2.createdAt).not.toBe('2024-03-15T09:30:00.000Z');
+    // The reserved collection never landed under the imported id.
+    expect(await getDb().collection('app_data').countDocuments({ appId: created.id, collection: '__files' })).toBe(0);
   });
 
   it('bundle-update refuses a mismatched manifest 409, then applies with force + returns the snapshot pair', async () => {

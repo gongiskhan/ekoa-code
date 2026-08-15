@@ -41,6 +41,10 @@ vi.mock('../../src/apps/artifact-bundle.js', () => ({
   importArtifact: importMock,
   updateArtifactFromBundle: updateMock,
   ManifestIdMismatchError: class extends Error {},
+  // The import route's catch does `instanceof` on these two; they must be real constructors
+  // even in this factory-only mock, or any thrown error becomes a TypeError instead.
+  ImportIdCollisionError: class extends Error {},
+  ImportIdInvalidError: class extends Error {},
 }));
 vi.mock('../../src/apps/artifact-fork.js', () => ({ forkArtifact: forkMock }));
 
@@ -81,7 +85,12 @@ beforeAll(async () => {
 afterAll(async () => { server.close(); await closeMongo(); await mem.stop(); delete process.env.EKOA_SCREENSHOTS_DISABLED; });
 
 beforeEach(() => {
-  importMock.mockReset().mockResolvedValue({ _id: 'imported1', name: 'Imported', slug: 'imported1', userId: 'adminA', orgId: 'orgA', visibility: 'private', status: 'active' });
+  // importArtifact returns { artifact, report } since the S3 importReport change (the route
+  // destructures both); a flat artifact here made the 201 path 500 on artifactView(undefined).
+  importMock.mockReset().mockResolvedValue({
+    artifact: { _id: 'imported1', name: 'Imported', slug: 'imported1', userId: 'adminA', orgId: 'orgA', visibility: 'private', status: 'active' },
+    report: { slug: { applied: 'imported1', fellBack: false }, id: { applied: 'imported1', preserved: false } },
+  });
   updateMock.mockReset().mockImplementation(async (art: { _id: string; name: string }) => ({ artifact: { _id: art._id, name: art.name, slug: 'app', userId: 'adminA', orgId: 'orgA', visibility: 'private', status: 'active' }, safetyNetSnapshotId: 'snap1', preUpdateVersionId: 'v1' }));
   forkMock.mockReset().mockResolvedValue({ artifact: { _id: 'fork1', slug: 'fork-1' } });
 });

@@ -40,14 +40,33 @@
  * lossy conversion. (ekoa-code's own exporter simply skips binary; for a one-shot
  * prod import a missing asset must surface, not vanish.)
  *
+ * MIGRATION IDENTITY + DATA HYGIENE (S3):
+ *   - `bundle.id` is filled from the envelope's `sourceArtifactId` so an import run with
+ *     `preserveId: true` can keep the prod canonical id (embedded /api/app-files/<id>/ URLs,
+ *     webhook rows keyed on the prod appId).
+ *   - `bundle.slug` defaults to the envelope-derived slug (envelope.slug / manifest.slug /
+ *     slugified name) when the operator gives no --slug; the importer honours it when free.
+ *   - Reserved (`__*`) and shared-scope (`usr.*`) collections are FILTERED OUT of the emitted
+ *     dump with a loud stderr note (belt and braces with the importer's own skip - a real prod
+ *     dump carries the engine's `__files` bookkeeping).
+ *   - A pre-flight scan reports any item over the engine's 262144-byte cap with its collection
+ *     and index, so an oversized row is known before the import instead of discovered in it.
+ *
  * Usage:
  *   node api/scripts/migrate/convert-dev-bundle.mjs <envelope.json> \
- *     [--data <appdata-dump.json>] [--out <bundle.json>] [--slug <slug>]
+ *     [--data <appdata-dump.json>] [--out <bundle.json>] [--slug <slug>] \
+ *     [--id <canonical-id>] [--m365-proxy]
  *
  *   <envelope.json>  prod cortex export envelope (schemaVersion 1)
  *   --data           optional separate prod app-data dump ({collections,...} or seedData)
  *   --out            write the shared bundle here (default: stdout)
- *   --slug           set bundle.slug (imports mint a fresh slug regardless; advisory)
+ *   --slug           set bundle.slug (the importer honours a free slug; falls back when taken)
+ *   --id             set bundle.id explicitly (wins over envelope.sourceArtifactId) - for
+ *                    envelopes that predate sourceArtifactId, when the prod canonical id is
+ *                    known out-of-band (e.g. read off the app-data dir / embedded file URLs)
+ *   --m365-proxy     inject `m365Proxy: true` into the reconstructed manifest.json - the
+ *                    ekoa-code-only opt-in the workspace Graph gate reads; a prod manifest
+ *                    never carries it, and without it every /api/m365/* call answers 403
  *
  * Read-only on its inputs. No DB, no network, no product imports (build-tooling).
  */
@@ -108,6 +127,57 @@ export function normalizeAppData(source, fallbackAt) {
   return { collections, counts, totalItems, at };
 }
 
+/** The collections engine's default per-item byte cap (collections-engine.ts maxItemBytes). */
+const MAX_ITEM_BYTES = 262_144;
+
+/** Slugify a display name the way the importer's generateSlug builds its base (lowercase,
+ *  accents stripped, stop-words dropped, first 4 words hyphenated) - with punctuation and
+ *  existing hyphens treated as separators so a name like "ERP - X" never yields "--". */
+const SLUG_STOPWORDS = new Set(['a', 'o', 'de', 'da', 'do', 'the', 'and', 'e']);
+export function slugFromName(name) {
+  const words = String(name)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !SLUG_STOPWORDS.has(w))
+    .slice(0, 4);
+  return words.join('-') || 'app';
+}
+
+/**
+ * Data hygiene for the emitted dump (S3): drop reserved (`__*`) and shared-scope (`usr.*`)
+ * collections LOUDLY (the importer skips them anyway - belt and braces), and pre-flight-scan
+ * the surviving items for rows over the engine's byte cap, naming collection + index. Returns
+ * the filtered dump (undefined when nothing survives) with counts/totalItems recomputed.
+ */
+export function screenAppData(data, warn) {
+  if (!data) return undefined;
+  const collections = {};
+  for (const [name, items] of Object.entries(data.collections)) {
+    if (name.startsWith('__') || name.startsWith('usr.')) {
+      warn(`convert-dev-bundle: DROPPING reserved collection "${name}" (${items.length} item(s)) from the emitted dump - '__*'/'usr.*' names belong to the engine/shared scope and are refused on import.`);
+      continue;
+    }
+    collections[name] = items;
+    items.forEach((item, index) => {
+      const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+      if (bytes > MAX_ITEM_BYTES) {
+        warn(`convert-dev-bundle: OVERSIZED item in collection "${name}" at index ${index}: ${bytes} bytes > ${MAX_ITEM_BYTES} - the importer will report it as a skipped row.`);
+      }
+    });
+  }
+  if (Object.keys(collections).length === 0) return undefined;
+  const counts = {};
+  let totalItems = 0;
+  for (const [name, items] of Object.entries(collections)) {
+    counts[name] = items.length;
+    totalItems += items.length;
+  }
+  return { collections, counts, totalItems, at: data.at };
+}
+
 /** Reject traversal/absolute scaffold paths (no side-doors into the import target). */
 function assertSafeRelPath(path) {
   const parts = String(path).split(/[/\\]/).filter(Boolean);
@@ -121,9 +191,11 @@ function assertSafeRelPath(path) {
 /**
  * Pure conversion: prod envelope -> shared ArtifactBundle. `opts.appData` is a
  * separately-loaded app-data source (from --data); it takes priority over the
- * envelope's inline `appData`/`seedData`.
+ * envelope's inline `appData`/`seedData`. `opts.warn` receives the loud notes
+ * (dropped reserved collections, oversized rows); defaults to stderr.
  */
 export function convertDevBundle(envelope, opts = {}) {
+  const warn = opts.warn ?? ((msg) => process.stderr.write(msg + '\n'));
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
     throw new Error('convert-dev-bundle: envelope must be a JSON object.');
   }
@@ -175,15 +247,37 @@ export function convertDevBundle(envelope, opts = {}) {
     type: 'jsx-app',
     ...manifest,
     version: typeof manifest.version === 'string' ? manifest.version : '1.0.0',
+    // --m365-proxy: the workspace-Graph opt-in is an ekoa-code manifest key a prod export can
+    // never carry; injected here (strict boolean - validateManifest refuses truthy strings) so
+    // the operator states the app's Graph dependency at conversion, not by hand-editing output.
+    ...(opts.m365Proxy ? { m365Proxy: true } : {}),
   };
   const withoutManifest = files.filter((f) => f.path !== 'manifest.json');
   withoutManifest.push({ path: 'manifest.json', content: JSON.stringify(manifestFile, null, 2) + '\n' });
 
   const fallbackAt = typeof envelope.exportedAt === 'string' ? envelope.exportedAt : undefined;
-  const data = normalizeAppData(opts.appData ?? envelope.appData ?? envelope.seedData, fallbackAt);
+  const data = screenAppData(
+    normalizeAppData(opts.appData ?? envelope.appData ?? envelope.seedData, fallbackAt),
+    warn,
+  );
 
   const bundle = { manifestId: manifest.id, name: manifest.name };
-  if (typeof opts.slug === 'string' && opts.slug) bundle.slug = opts.slug;
+  // Slug: --slug wins; otherwise derive one from the envelope (an explicit envelope/manifest
+  // slug when prod carried one, else the slugified display name) so the importer has a stable
+  // identity to honour instead of always minting.
+  const envelopeSlug =
+    typeof envelope.slug === 'string' && envelope.slug ? envelope.slug
+    : typeof manifest.slug === 'string' && manifest.slug ? manifest.slug
+    : slugFromName(manifest.name);
+  bundle.slug = typeof opts.slug === 'string' && opts.slug ? opts.slug : envelopeSlug;
+  // Canonical id for preserveId migrations (S3): the prod instance's own id. An explicit
+  // --id wins - older prod envelopes carry no sourceArtifactId at all, and the operator may
+  // know the canonical id from the prod data dir / the embedded /api/app-files/<id>/ URLs.
+  if (typeof opts.id === 'string' && opts.id) {
+    bundle.id = opts.id;
+  } else if (typeof envelope.sourceArtifactId === 'string' && envelope.sourceArtifactId) {
+    bundle.id = envelope.sourceArtifactId;
+  }
   bundle.files = withoutManifest;
   if (data) bundle.data = data;
   bundle.version = typeof manifest.version === 'string' ? manifest.version : '1.0.0';
@@ -200,18 +294,20 @@ function parseArgs(argv) {
     data: get('--data'),
     out: get('--out'),
     slug: get('--slug'),
+    id: get('--id'),
+    m365Proxy: argv.includes('--m365-proxy'),
   };
 }
 
 function main(argv) {
   const args = parseArgs(argv);
   if (!args.envelope) {
-    process.stderr.write('usage: convert-dev-bundle.mjs <envelope.json> [--data <appdata.json>] [--out <bundle.json>] [--slug <slug>]\n');
+    process.stderr.write('usage: convert-dev-bundle.mjs <envelope.json> [--data <appdata.json>] [--out <bundle.json>] [--slug <slug>] [--id <canonical-id>] [--m365-proxy]\n');
     process.exit(2);
   }
   const envelope = JSON.parse(readUtf8Strict(args.envelope));
   const appData = args.data ? JSON.parse(readUtf8Strict(args.data)) : undefined;
-  const bundle = convertDevBundle(envelope, { appData, slug: args.slug });
+  const bundle = convertDevBundle(envelope, { appData, slug: args.slug, id: args.id, m365Proxy: args.m365Proxy });
   const json = JSON.stringify(bundle, null, 2) + '\n';
   if (args.out) {
     writeFileSync(args.out, json);

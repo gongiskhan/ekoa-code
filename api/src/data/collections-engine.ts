@@ -111,6 +111,12 @@ function nowIso(atMs: number): string {
   return new Date(atMs).toISOString();
 }
 
+/** A supplied timestamp survives an import only when it is a non-empty parseable date string
+ *  (kept VERBATIM - never re-serialized); anything else falls back to the server stamp. */
+function importedTimestamp(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 && Number.isFinite(Date.parse(v)) ? v : undefined;
+}
+
 export interface EngineDeps {
   now: () => number;
   genId: () => string;
@@ -152,6 +158,44 @@ export class CollectionsEngine {
     } catch (e) {
       if ((e as { code?: number }).code === 11000) {
         // id collision → treat as update-through-create is not allowed; surface conflict
+        throw new EngineError('SLUG_TAKEN', 409, `Item id already exists: ${id}`);
+      }
+      throw e;
+    }
+    return item;
+  }
+
+  /**
+   * Import-only create variant (S3 migration fidelity). Identical to `create` in every other
+   * respect - name guard, size cap, field rules, id-collision refusal - but preserves the row's
+   * own `createdAt`/`updatedAt` when they arrive as parseable date strings, server-stamping only
+   * the absent/invalid ones. Without this every migrated record shows import day as its history.
+   * NOT route-reachable: the served-app data plane and the backend-runtime `appData.*` capability
+   * call `create` (which keeps re-stamping, unweakened); the only caller is the artifact-import
+   * path (AppDataAccess.importDumpReport <- applyImportedAppData).
+   */
+  async importCreate(
+    scope: Scope,
+    collection: string,
+    body: Record<string, unknown>,
+    rule?: z.infer<typeof collectionRule>,
+  ): Promise<Record<string, unknown>> {
+    guardCollectionName(collection);
+    const id = typeof body.id === 'string' && body.id ? body.id : this.deps.genId();
+    const now = nowIso(this.deps.now());
+    const { id: _drop, createdAt: suppliedCreatedAt, updatedAt: suppliedUpdatedAt, ...fields } = body;
+    const item = {
+      id,
+      createdAt: importedTimestamp(suppliedCreatedAt) ?? now,
+      updatedAt: importedTimestamp(suppliedUpdatedAt) ?? now,
+      ...fields,
+    };
+    this.checkSize(rule, item);
+    validateItem(rule, item);
+    try {
+      await col().insertOne({ _id: docId(scope, collection, id), appId: scope.scopeKey, collection, item, _rev: 0 });
+    } catch (e) {
+      if ((e as { code?: number }).code === 11000) {
         throw new EngineError('SLUG_TAKEN', 409, `Item id already exists: ${id}`);
       }
       throw e;

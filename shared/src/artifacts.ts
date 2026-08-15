@@ -115,6 +115,12 @@ export const ArtifactBundle = z
     manifestId: z.string(),
     name: z.string().optional(),
     slug: z.string().optional(),
+    /**
+     * Canonical artifact id carried for MIGRATION (S3): the converter fills it from the prod
+     * envelope's `sourceArtifactId`. Honoured only when the import request opts in with
+     * `preserveId: true` — a plain import always mints a fresh id, exactly as before.
+     */
+    id: z.string().optional(),
     files: z.array(z.object({ path: z.string(), content: z.string() })).optional(),
     data: z.record(z.unknown()).optional(),
     version: z.string().optional(),
@@ -122,8 +128,64 @@ export const ArtifactBundle = z
   .passthrough();
 export type ArtifactBundle = z.infer<typeof ArtifactBundle>;
 
-export const ImportArtifactRequest = z.object({ bundle: ArtifactBundle });
+export const ImportArtifactRequest = z.object({
+  bundle: ArtifactBundle,
+  /**
+   * Explicit migration mode (S3, additive per Rule 7): adopt `bundle.id` as the new artifact's
+   * canonical id, so embedded `/api/app-files/<id>/...` URLs and external rows keyed on the prod
+   * appId (e.g. webhook routing) stay valid without rewrites. Refused with a 409-class error on
+   * collision — never silently remapped. Absent/false keeps today's fresh-id behavior.
+   */
+  preserveId: z.boolean().optional(),
+});
 export type ImportArtifactRequest = z.infer<typeof ImportArtifactRequest>;
+
+/** Per-collection outcome of an app-data seed on import (S3): `error` carries the reason for
+ *  skipped rows (reserved name, oversized row, id collision, ...) — a skip is never silent. */
+export const ImportCollectionReport = z.object({
+  name: z.string(),
+  imported: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  error: z.string().optional(),
+});
+export type ImportCollectionReport = z.infer<typeof ImportCollectionReport>;
+
+/** App-data seeding outcome for one import. A top-level `error` reports a wholesale failure
+ *  (e.g. store unavailable) that previously vanished into a console.warn. */
+export const ImportAppDataReport = z.object({
+  collections: z.array(ImportCollectionReport),
+  imported: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  error: z.string().optional(),
+});
+export type ImportAppDataReport = z.infer<typeof ImportAppDataReport>;
+
+/**
+ * What the import actually did with the bundle's identity + data (S3). `slug.fellBack` is true
+ * when the bundle asked for a slug the importer could not honour (taken/invalid) and a generated
+ * one was applied instead; `id.preserved` is true only in explicit preserveId mode. `appData` is
+ * absent when the bundle carried no app-data (the pre-S3 data-less import, unchanged).
+ */
+export const ImportReport = z.object({
+  slug: z.object({
+    requested: z.string().optional(),
+    applied: z.string(),
+    fellBack: z.boolean(),
+  }),
+  id: z.object({
+    requested: z.string().optional(),
+    applied: Id,
+    preserved: z.boolean(),
+  }),
+  appData: ImportAppDataReport.optional(),
+});
+export type ImportReport = z.infer<typeof ImportReport>;
+
+/** Import response = the created Artifact plus the report (additive: `Artifact` still parses it). */
+export const ImportArtifactResponse = Artifact.extend({
+  importReport: ImportReport.optional(),
+});
+export type ImportArtifactResponse = z.infer<typeof ImportArtifactResponse>;
 
 export const BundleUpdateRequest = z.object({
   bundle: ArtifactBundle,
@@ -331,7 +393,7 @@ export const artifactsEndpoints = {
     path: '/api/v1/artifacts/import',
     auth: 'user',
     request: ImportArtifactRequest,
-    response: Artifact,
+    response: ImportArtifactResponse,
   },
   bundleUpdate: {
     method: 'POST',

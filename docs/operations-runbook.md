@@ -313,6 +313,285 @@ panel), which snapshots a single app's data plane to `~/.ekoa/data/app-data-snap
 Mongo instance or the disk as a whole. A production operator must provide Mongo + `~/.ekoa` disk
 backups out-of-band.
 
+## Salomao ERP cutover (ekoa-dev -> ekoa-code)
+
+Moving the paying customer salomao's legal ERP - artifact `legal-case-manager-3`, served at
+`https://api.ekoa.io/apps/legal-case-manager-3` by the OLD platform (`../ekoa-dev`, "cortex") -
+onto this stack. Ordered; each step names its tool and its check. Env entries are KEY NAMES only -
+values live in the old deployment's secret store and are never written down here. The migrate
+tooling lives in `api/scripts/migrate/` (`convert-dev-bundle.mjs`, `convert-dev-state.mjs`,
+`migrate-app-files.mjs`, `cli.ts` - each script's header comment is its authoritative CLI doc).
+
+What you need before starting: a super-admin JWT on the old platform; shell access to the prod
+box's data dir (`~/.ekoa/data` on that box); the old deployment's `ENCRYPTION_KEY` value (passed
+to the converter as `EKOA_OLD_ENCRYPTION_KEY`); the target stack up with its own `JWT_SECRET` /
+`ENCRYPTION_KEY` / `MONGODB_URI`; and the target env carrying `MICROSOFT_CLIENT_ID` /
+`MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID` / `MICROSOFT_SSO_CLIENT_ID` /
+`ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` plus the two RENAMED keys called out in step 5.
+
+### 0. Data-hygiene pre-flight (with the customer, before the export)
+
+The 2026-08-15 vision pass (`docs/findings.md` `salomao-vision-pass-2026-08-15`) verified the
+prod data carries items that should not cross as-is - all pre-existing upstream, none
+introduced by the migration tooling. Walk them with the customer and clean ON PROD before the
+export, so the cutover snapshot is the blessed one (a silent cleanup during conversion is not
+an option - it is their data):
+
+- Test/probe accounts holding the Master role in `utilizadores` (Probe, Teste Ekoa,
+  Bazinga Da Costa, CRM Master) - remove or downgrade.
+- The SharePoint integration URL in Definicoes points at the throwaway
+  `bazingadas.sharepoint.com` test tenant; set the customer's real site BEFORE the M365
+  credential is armed on the new stack, or client-folder provisioning writes into the wrong
+  tenant.
+- Duplicated client codes (`BSM-2026-0001` x3 plus five exact duplicate pairs) and the junk
+  `atividades` row 'dfdffddggdhd' - merge/delete with the customer's sign-off.
+- Platform-e2e residue rows (E2E-* prefixes) in several collections - delete.
+
+### 1. Pre-cutover export on prod (api.ekoa.io / ekoa-dev)
+
+Export everything the same day you cut over - a stale envelope resurrects deleted rows. The old
+platform speaks the action protocol: `POST /api/v1/action` with
+`{ app, intent, params, request_id }`, Bearer JWT; the result arrives under `.data`.
+
+1. **Resolve the canonical app id.** `legal-case-manager-3` is the SLUG; app-data, files and the
+   Zoho reverse index are keyed on the canonical id. Read it off the artifact list in the old
+   dashboard or the instance store; every later step uses `<prodAppId>`.
+2. **Artifact export envelope** - super-admin `export-instance` intent
+   (ekoa-dev `cortex/src/services/artifact-bundle.ts` `exportInstance`):
+
+   ```
+   curl -sS https://api.ekoa.io/api/v1/action \
+     -H "Authorization: Bearer $OLD_JWT" -H 'Content-Type: application/json' \
+     -d '{"app":"ekoa.templates","intent":"export-instance","params":{"id":"<prodAppId>"},"request_id":"exp-1"}' \
+     | jq '.data' > envelope.json
+   ```
+
+   The envelope carries `seedData` only for FEATURED artifacts and this one is not featured, so
+   the envelope has NO data in it - the separate dump below is mandatory, not belt-and-braces.
+3. **App-data dump** - `AppDataBackups.exportAll` via the backups handler
+   (shape `{ appId, exportedAt, collections, counts, totalItems }`):
+
+   ```
+   curl -sS https://api.ekoa.io/api/v1/action \
+     -H "Authorization: Bearer $OLD_JWT" -H 'Content-Type: application/json' \
+     -d '{"app":"ekoa.app-data-backups","intent":"download","params":{"appId":"<prodAppId>"},"request_id":"exp-2"}' \
+     | jq '.data' > appdata.json
+   ```
+
+   Record `jq '.counts' appdata.json` - it is the post-import reconciliation target.
+4. **Files tree copy.** rsync `<oldDataDir>/app-data/<prodAppId>/` (the `files/` blob dir AND the
+   sibling `__files.json` metadata collection - the migrator needs both) to the operator machine.
+5. **Disk state pulls** from `<oldDataDir>`: `integration-configs.json` (encrypted per-user
+   integration credentials - the M365 workspace connection and Zoho Sign), `zoho-agreements.json`
+   (Zoho requestId -> app/proposta reverse index), `triggers.json` (the email listener rows, kept
+   as the reference for step 3.3).
+6. **In-flight counts to verify after cutover.**
+   - Zoho: count the rows in `zoho-agreements.json`, and separately the IN-FLIGHT subset - rows
+     whose `propostas` record (in `appdata.json`) has not reached stage `Assinada`. Write both
+     numbers down.
+   - Adobe: MUST be zero pending. Adobe was replaced by Zoho in ERP V13 and ekoa-code's Adobe
+     backend is a fail-closed facade - an in-flight Adobe agreement will NEVER complete
+     server-side on the new stack, and `convert-dev-state.mjs` refuses Adobe state by design.
+     If any Adobe agreement is still pending, drain or re-send it via Zoho before cutover.
+
+### 2. Convert (operator machine - read-only on inputs, no DB, no network)
+
+1. **Manifest opt-in first.** The old platform's Graph proxy had no per-app flag; ekoa-code's
+   `/api/m365/*` plane refuses any app whose manifest does not declare `"m365Proxy": true` (see
+   the WORKSPACE planes section above), and the flag is deliberately NOT inferred on import. Edit
+   `envelope.json` and add `"m365Proxy": true` to its top-level `manifest` object; the converter
+   carries it through into the reconstructed `manifest.json`
+   (`api/tests/migration/convert-dev-bundle.test.ts` pins exactly this pattern).
+2. **Bundle + app-data:**
+
+   ```
+   node api/scripts/migrate/convert-dev-bundle.mjs envelope.json \
+     --data appdata.json --slug legal-case-manager-3 --out bundle.json
+   ```
+
+   The converter reconstructs `manifest.json` from the envelope's manifest (that is where
+   `backend.handlers: ["onEmail"]`, `extends` and the `m365Proxy` flag live), normalizes the dump
+   under `bundle.data`, and fills `bundle.id` from the envelope's `sourceArtifactId` - confirm
+   `jq -r '.id' bundle.json` equals `<prodAppId>`, because step 3.1 imports with `preserveId`.
+   It refuses non-UTF-8 scaffold entries loudly; a refusal names the binary asset, which then
+   travels via the files migration instead, never silently corrupted.
+3. **Credential transcryption + Zoho index** (the two stacks cannot exchange ciphertext even
+   under the same key value - wire formats differ):
+
+   ```
+   EKOA_OLD_ENCRYPTION_KEY=<old stack's ENCRYPTION_KEY value> ENCRYPTION_KEY=<target's> \
+     node api/scripts/migrate/convert-dev-state.mjs <old-data-dir-copy> \
+     --user <ownerUserId> --out state-out/
+   ```
+
+   `--user` derives the target orgId via the import-tool convention (`org-<userId>`); pass
+   `--org <orgId>` instead when the owner's org on the target differs. Output:
+   import-tool-ready `integration_configs.json` + `zoho_agreements.json` in `state-out/`,
+   re-encrypted under the target key, `enabled:true`, `needsReauth` cleared. `--rewrite-app-id`
+   stays unused - the canonical-id-preserving import keeps prod appIds valid. Neither key is
+   ever printed; keep both out of shell history.
+4. **File blobs + metadata sidecars.** The blob layout is identical across stacks but the
+   metadata plane is not (old: `__files.json` collection; new: per-blob `<uuid>.json` sidecars -
+   a raw blob copy without sidecars serves 404):
+
+   ```
+   node api/scripts/migrate/migrate-app-files.mjs \
+     --src <copy-of old app-data/<prodAppId>> --app-id <prodAppId> --dry-run
+   node api/scripts/migrate/migrate-app-files.mjs \
+     --src <copy-of old app-data/<prodAppId>> --app-id <prodAppId>
+   ```
+
+   Target defaults to `EKOA_DATA_DIR` (or `~/.ekoa/data`) - pass `--data-dir` to override. The
+   plan is computed in full before the first write (all-or-nothing); re-running is a no-op. Run
+   the `--dry-run` first and read its report.
+
+### 3. Import + arm (target stack)
+
+1. **Import the bundle, preserving the canonical id.** Import AS THE OWNER ACCOUNT the salomao
+   workspace will run under (the importer becomes the owner; the email plane and the consent gate
+   both act as the OWNER) - the account needs `canBuildApps`:
+
+   ```
+   jq -n --slurpfile b bundle.json '{bundle: $b[0], preserveId: true}' \
+     | curl -sS "$API/api/v1/artifacts/import" \
+         -H "Authorization: Bearer $OWNER_JWT" -H 'Content-Type: application/json' -d @-
+   ```
+
+   Read the response's `importReport`: `id.preserved` true with `id.applied` = `<prodAppId>`
+   (embedded `/api/app-files/<prodAppId>/...` URLs and the Zoho reverse index stay valid without
+   rewrites); `slug.applied` = `legal-case-manager-3` with `fellBack` false; `appData.collections`
+   per-collection `imported` matching the step-1.3 counts with `skipped` 0 (any skip carries its
+   reason - chase every non-zero). An id collision is refused with a 409-class error, never
+   silently remapped.
+2. **Load the credential rows.** Point the import-tool at S4's output (missing family files read
+   as empty, so the two-file source dir is fine); execute needs `MONGODB_URI` + `ENCRYPTION_KEY`,
+   and `--content-data-dir` is required on every execute (the blob/prose family plans always
+   exist, even when empty) - point it at the target data root:
+
+   ```
+   node --loader ts-node/esm api/scripts/migrate/cli.ts \
+     --source state-out/ --execute --content-data-dir ~/.ekoa/data
+   ```
+
+   The run decrypt-samples every credential ciphertext under the target key - `0 failure(s)` or
+   stop. (A direct Mongo upsert of the two `_id`-keyed files is the fallback; the import-tool
+   path is preferred for its journal + checksum verification.) Then confirm the workspace reads
+   as connected WITHOUT any re-auth: the dashboard's Integrações panel shows Microsoft and Zoho
+   connected (the served app's `/api/app-cloud-files/status` reporting `connected:true` proves
+   the same thing from inside the app plane).
+3. **Create the email listener trigger.** Platform providers are ALWAYS inferred as polled
+   listeners at create time (`kind: 'listener'` + `pollConfig` stamped server-side; the poll
+   action comes from the platform config - `list_emails` - never the caller; cadence defaults
+   to 60s, override with `pollIntervalMs`):
+
+   ```
+   curl -sS "$API/api/v1/triggers" \
+     -H "Authorization: Bearer $OWNER_JWT" -H 'Content-Type: application/json' \
+     -d '{"integrationKey":"microsoft-365","eventName":"email.received","target":{"kind":"artifact-backend","artifactId":"<prodAppId>","entrypoint":"onEmail"}}'
+   ```
+
+   Verify `GET /api/v1/triggers` shows the row with `kind: "listener"` and
+   `pollConfig.actionName: "list_emails"`. The supervisor reconciles every 30s - no restart
+   needed. ARM THIS BEFORE ANNOUNCING THE SWITCH (see the email-loss window, step 5).
+4. **Pre-bank the owner consent approvals.** Deliberate divergence from upstream (dev-parity row
+   `1d4eaf64`): the old platform dispatched sends with a synthesised admin actor and no write
+   gate; here every app-plane send goes through `callPlatformIntegration` with the OWNER as
+   `actingUserId`, so the C2 consent gate binds and an unapproved send is refused with
+   `awaiting_consent` and zero provider traffic. Without this step the ERP's first
+   post-migration email send stops dead. As the OWNER (the approval routes are `auth: 'user'` -
+   deliberately not key-reachable), either approve the send actions in the dashboard's
+   Integrações panel, or via API: read
+   `GET /api/v1/integrations/microsoft-365/action-approvals`, then for each send action the ERP
+   exercises (`send_email` at minimum; `create_draft` + `send_draft` if the draft flow is used)
+   POST the approval echoing the `shape` from the read:
+
+   ```
+   curl -sS "$API/api/v1/integrations/microsoft-365/actions/send_email/approval" \
+     -H "Authorization: Bearer $OWNER_JWT" -H 'Content-Type: application/json' \
+     -d '{"decision":"always","shape":"<shape from the action-approvals read>"}'
+   ```
+
+   `decision` MUST be `always` - a `once` approval is claimed by the first send and the gate
+   closes again. Diary note: `always` approvals expire after 90 days
+   (`ACTION_APPROVAL_TTL_DAYS`); calendar the re-approval or sends start refusing again.
+
+### 4. External re-pointing
+
+- **Zoho Sign webhook = manual console state.** The advance-on-sign webhook only fires if the
+  salomao workspace's Zoho account has a webhook configured - account-level state in the Zoho
+  console, not in any repo or env (ekoa-dev `cortex/src/services/zoho-sign.ts`, the
+  `handleZohoWebhook` NOTE). ekoa-code mounts the SAME paths (`/api/zoho-sign/webhook`,
+  `/api/zoho-sign/return`), so if the serving origin stays `api.ekoa.io` nothing changes. If the
+  origin moves: update the console webhook URL AND keep the old origin 302-ing
+  `/api/zoho-sign/return` to the new one until every in-flight agreement drains -
+  `redirect_pages` are FROZEN into each request at send time (`sign_success` / `sign_completed` /
+  `sign_later` all point at the send-time origin's `/api/zoho-sign/return?to=...`), so an
+  agreement sent before the move bounces signers through the OLD origin forever.
+- **Adobe.** Nothing to re-point: replaced by Zoho in ERP V13, refused by the state converter,
+  fail-closed facade here. Re-confirm the step-1.6 zero-pending check at the moment of cutover.
+
+### 5. Caveats - state these plainly in the cutover notice
+
+- **Email-loss window.** The listener cursor initialises to NOW on the first poll - no backfill
+  (first-poll semantics in `events/listener-state.ts`). Mail arriving between the old platform's
+  last poll and the new trigger's first tick is processed by NEITHER stack. Arm the trigger
+  (step 3.3) and verify a first tick BEFORE announcing the switch; the residual window is then at
+  most one poll interval (default 60s) plus the DNS/origin switch gap. Say the window exists.
+- **M365 scope drift - expected, not a blocker.** ekoa-code requests `User.Read` (needed for
+  Graph `/me`, the connected-check probe); the prod consent never included it. A carried refresh
+  token can therefore 403 on `/me` (`Authorization_RequestDenied`) - the integration READS as
+  broken - while mail, files and SharePoint all work. Fix is one interactive re-consent (re-run
+  the managed Microsoft connect) at any convenient moment.
+- **Env renames.** Old `EKOA_OAUTH_REDIRECT_BASE_URL` -> new `OAUTH_REDIRECT_BASE_URL`; old
+  `ZOHO_OAUTH_DC` -> new `ZOHO_DC`. A prod `.env` carried verbatim silently loses both (the old
+  names are never read here). `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` keep their names - and the
+  carried Zoho credential bundles deliberately omit the client pair, so the target env's pair
+  backs their refreshes.
+- **ERP end-user sessions do not carry.** App SSO tokens expire in 8h and are not migrated;
+  users simply SSO again against the same `MICROSOFT_SSO_CLIENT_ID` app. Expectation-setting
+  only, no action.
+- **Shared-scope app-data (`usr.<ownerUserId>`).** Only relevant if the manifest declares
+  `sharedData: true` - check with
+  `jq -r '.files[] | select(.path=="manifest.json").content' bundle.json | jq '.sharedData'`.
+  The ERP historically does NOT opt in (expect `null`/absent). If it ever reads `true`, the
+  shared dataset is a SEPARATE appId in the app-data plane: export it as its own dump
+  (step 1.3 with `"appId": "usr.<ownerUserId>"`) and import it as its own step - the artifact
+  import only carries the per-app dataset.
+
+### 6. Post-cutover verification checklist
+
+Run through in order; every line must pass before retiring the old origin.
+
+1. **App serves.** `GET <origin>/apps/legal-case-manager-3` returns the ERP shell (slug
+   preserved), and the same app resolves by canonical id.
+2. **File blobs load.** Pick a file id referenced from an imported record (a `documentos`-style
+   collection row): `GET <origin>/api/app-files/<prodAppId>/<fileId>` serves the bytes with the
+   right `Content-Length` - proving blobs, sidecars AND the preserved-id URL keying.
+3. **Listener polls.** Boot log shows `[listener-supervisor] started N listener(s)`; the
+   `listener_state` row for the trigger (`_id` = triggerId) shows `lastPollAt` advancing and
+   `consecutiveFailures: 0`, with no `cursor did not advance` warnings. Send a test mail to the
+   watched mailbox from an operator-owned account and watch the ERP's `onEmail` flow process it.
+4. **Signature round-trip.** Send a test proposta for signature to an operator-owned signer
+   (never a real client), sign it, and confirm the stage advances to `Assinada` via the webhook
+   WITHOUT the portal being open - that proves the console webhook points at the serving origin.
+5. **In-flight count matches.** The imported `zoho_agreements` rows equal the step-1.6 total, and
+   the in-flight subset still resolves against the imported `propostas`.
+6. **Approvals banked.** `GET /api/v1/integrations/microsoft-365/action-approvals` shows
+   `decision: "always"` with a future `expiresAt` for every send action, and the first real
+   email send completes with no `awaiting_consent` refusal.
+
+### 7. Standing operator security note - the old origin is exploitable until patched
+
+`docs/findings.md` `zoho-callback-page-script-injection`: the OLD platform has a live reflected
+XSS on `https://api.ekoa.io/api/v1/oauth/zoho/callback?error=...` - an unauthenticated route that
+embeds the Zoho-reflected error string via `JSON.stringify` inside an inline `<script>`, which
+does not escape `</script>`. The same page builder serves the Adobe callback, so both providers
+are affected. ekoa-code refused to inherit it (`jsonForScript()` escapes; pinned by
+`api/tests/integrations/zoho-oauth.test.ts`). Every day the migration window keeps api.ekoa.io
+serving the old stack keeps this exposed: either apply the four-line escape upstream
+(`cortex/src/server.ts` `buildOAuthResultPage`) at the START of the window, or keep the window
+short and retire the old origin fast. Do not let the cutover linger.
+
 ## Known flakes
 
 - **colima/mongodb-memory-server hang** (`docs/known-flakes.md`, 2026-07-08): the api

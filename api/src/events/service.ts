@@ -13,6 +13,7 @@ import { wakeDelivery } from './delivery.js';
 import { deleteListenerCursor } from './listener-state.js';
 import { verifyHmac, hubChallenge, safeEqual, type WebhookAlgorithm } from './webhook-verifiers.js';
 import { isWhatsAppSource, whatsAppDedupKey } from '../integrations/event-sources/whatsapp-hydrate.js';
+import { platformListenerConfig } from '../integrations/event-sources/platform-poll.js';
 import type { Actor } from '@ekoa/shared';
 import type { Doc } from '../data/store.js';
 
@@ -61,6 +62,9 @@ export function triggerView(t: TriggerDoc, publicUrlBase: string) {
     // `sessionView` in services/platform-crud.ts.
     ...(t.automationId != null ? { automationId: t.automationId } : {}),
     ...(t.artifactId != null ? { artifactId: t.artifactId } : {}),
+    // The artifact-detail "Ligações" card matches an existing connection by the backend handler
+    // (`entrypoint`); omitting it left every existing listener invisible to the card (2A-S2).
+    ...(t.entrypoint != null ? { entrypoint: t.entrypoint } : {}),
     disabled: t.disabled,
     // `kind` absent on a legacy row surfaces as 'webhook' (migration-free semantic, 2A-S1);
     // pollConfig only appears for listeners. The publicUrl is meaningful for webhook triggers.
@@ -74,11 +78,44 @@ export async function listTriggers(actor: Actor): Promise<TriggerDoc[]> {
   return triggers.find({ orgId: actor.orgId }) as Promise<TriggerDoc[]>;
 }
 
-export async function createTrigger(actor: Actor, input: {
+/** Default poll cadence for an inferred platform listener (dev parity: triggers-handler 60s). */
+const DEFAULT_POLL_INTERVAL_MS = 60_000;
+
+export interface TriggerCreateInput {
   targetKind: 'automation' | 'artifact-backend'; integrationKey: string; eventName: string;
   automationId?: string; artifactId?: string; entrypoint?: string; secret?: string; algorithm?: WebhookAlgorithm;
   kind?: 'webhook' | 'listener'; pollConfig?: TriggerPollConfig;
-}, deps: Deps): Promise<{ trigger: TriggerDoc; secret?: string }> {
+  /** Poll-cadence override for an inferred platform listener; absent = 60s (Rule 7 additive). */
+  pollIntervalMs?: number;
+}
+
+/**
+ * The `kind`/`pollConfig` stamp for a new trigger row, or {} for an implicit webhook (2A-S2).
+ *
+ * A platform provider (M365 / Google Workspace) has no webhook ingress - the listener supervisor
+ * polls it - so `kind: 'listener'` + pollConfig are INFERRED at create time (dev parity:
+ * triggers-handler's isPlatformProvider branch). Without the inference a product client that only
+ * names the provider gets a webhook-kind row NOTHING polls: a silently dead mailbox watch that
+ * reports success. The poll action always comes from the platform config, never the caller; the
+ * cadence honours an explicit override, else 60s. Non-platform providers keep the migration-free
+ * webhook-implicit semantics (field left off unless the caller explicitly asks for a listener).
+ */
+function listenerStamp(input: TriggerCreateInput): Partial<Pick<TriggerDoc, 'kind' | 'pollConfig'>> {
+  const platform = platformListenerConfig(input.integrationKey);
+  if (platform) {
+    return {
+      kind: 'listener',
+      pollConfig: {
+        actionName: platform.pollAction,
+        intervalMs: input.pollIntervalMs ?? input.pollConfig?.intervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      },
+    };
+  }
+  if (input.kind === 'listener') return { kind: 'listener', pollConfig: input.pollConfig };
+  return {};
+}
+
+export async function createTrigger(actor: Actor, input: TriggerCreateInput, deps: Deps): Promise<{ trigger: TriggerDoc; secret?: string }> {
   const id = deps.genId();
   const secret = input.secret ?? deps.genId();
   const doc: TriggerDoc = {
@@ -94,9 +131,9 @@ export async function createTrigger(actor: Actor, input: {
     secretCiphertext: encrypt(secret), // encrypted at rest, decrypted only at verify time
     algorithm: input.algorithm ?? 'hmac-sha256-hex',
     disabled: false,
-    // `kind` absent ⇒ persist as webhook implicitly (leave the field off for migration-free parity
-    // with legacy rows); only stamp it for an explicit listener. 2A-S1.
-    ...(input.kind === 'listener' ? { kind: 'listener' as const, pollConfig: input.pollConfig } : {}),
+    // `kind` absent ⇒ persist as webhook implicitly (migration-free parity with legacy rows,
+    // 2A-S1); platform providers are ALWAYS inferred as polled listeners (2A-S2, see listenerStamp).
+    ...listenerStamp(input),
   };
   await triggers.insert(doc as never);
   return { trigger: doc, secret }; // secret returned exactly once (landmine 2)

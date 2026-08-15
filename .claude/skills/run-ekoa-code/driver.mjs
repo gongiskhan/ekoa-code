@@ -43,6 +43,12 @@
  *   EKOA_API_PORT (4211) EKOA_WEB_PORT (3000) EKOA_ADMIN_USERNAME (admin)
  *   EKOA_ADMIN_PASSWORD (tmp12345) EKOA_SHOT_DIR (.ekoa-run)
  *   EKOA_API_MODE (built|dev, default built — --built needs api/dist, run `npm run build` first)
+ *   EKOA_TAILNET=1          expose the stack on this machine's tailscale name + IP (auto-resolved)
+ *   EKOA_PUBLIC_WEB_HOST    comma-separated extra hosts the stack is reached on (what
+ *                           EKOA_TAILNET resolves into; drives next allowedDevOrigins,
+ *                           the dev CSP widening, and the api frame-ancestors allowlist)
+ *   EKOA_PUBLIC_API_URL     full API origin baked into the web bundle verbatim (rarely
+ *                           needed — without it the browser adopts the page host at runtime)
  */
 import { spawn } from 'node:child_process';
 import http from 'node:http';
@@ -50,6 +56,7 @@ import net from 'node:net';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { ensureTailnetServe, resolveTailnetHosts } from '../../../scripts/tailnet.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..', '..'); // .claude/skills/run-ekoa-code -> repo root
@@ -70,6 +77,37 @@ const PASS = process.env.EKOA_ADMIN_PASSWORD || 'tmp12345';
 const API_MODE = process.env.EKOA_API_MODE || 'built';
 const SHOT_DIR = process.env.EKOA_SHOT_DIR || join(ROOT, '.ekoa-run');
 const WEB_BASE = `http://localhost:${WEB_PORT}`;
+
+// EKOA_TAILNET=1: expose the stack on this machine's tailscale address(es). Resolved once
+// here into EKOA_PUBLIC_WEB_HOST so tailnet mode and a hand-set public host stay ONE
+// mechanism - everything downstream (next allowedDevOrigins + dev CSP widening in
+// next.config.ts, the api frame-ancestors allowlist below) reads the same variable. An
+// explicit EKOA_PUBLIC_WEB_HOST always wins.
+//
+// When the tailnet has HTTPS certs, TLS is additionally terminated on the SAME port numbers
+// via `tailscale serve` (ensureTailnetServe explains why plain http on a ts.net host a
+// browser has seen HTTPS on is a dead end). TAILNET_HTTPS_HOST non-null = https URLs work.
+let TAILNET_HTTPS_HOST = null;
+if (/^(1|true|yes)$/i.test(process.env.EKOA_TAILNET || '')) {
+  const tailnet = resolveTailnetHosts();
+  if (!tailnet) {
+    throw new Error('EKOA_TAILNET is set but no tailscale address resolved - is tailscaled up? (`tailscale status`)');
+  }
+  if (!process.env.EKOA_PUBLIC_WEB_HOST) process.env.EKOA_PUBLIC_WEB_HOST = tailnet.hosts.join(',');
+  const serveResult = ensureTailnetServe([
+    { port: WEB_PORT, target: `http://127.0.0.1:${WEB_PORT}` },
+    { port: PROXY_PORT, target: `http://127.0.0.1:${PROXY_PORT}` },
+  ]);
+  if (serveResult === 'on') {
+    TAILNET_HTTPS_HOST = tailnet.dnsName;
+  } else {
+    log(`tailnet https unavailable (${serveResult}) - http URLs only; a browser that has seen`);
+    log(`https on this host (HSTS) will refuse them with ERR_SSL_PROTOCOL_ERROR`);
+  }
+}
+// Hosts (no scheme/port) the stack is additionally reached on, e.g. a tailnet name + IP.
+const PUBLIC_WEB_HOSTS = (process.env.EKOA_PUBLIC_WEB_HOST || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 const children = [];
 let proxyServer = null;
@@ -99,15 +137,19 @@ function bootApi() {
     args.push('--built');
   }
   log(`booting API on :${API_PORT} (mode=${API_MODE})`);
-  // A stack bound to a public host (EKOA_PUBLIC_WEB_HOST, e.g. a tailnet name) serves the
-  // dashboard from that origin — the api's /apps/* frame-ancestors allowlist must name it or
-  // the artifact preview iframe is CSP-blocked with only a browser console line to show for
-  // it (found live 2026-08-07 driving the stack from a phone over tailscale). An explicit
-  // EKOA_DASHBOARD_ORIGINS always wins; localhost stays so a local browser keeps working.
+  // A stack bound to public host(s) (EKOA_PUBLIC_WEB_HOST, e.g. a tailnet name + IP) serves
+  // the dashboard from those origins — the api's /apps/* frame-ancestors allowlist must name
+  // them or the artifact preview iframe is CSP-blocked with only a browser console line to
+  // show for it (found live 2026-08-07 driving the stack from a phone over tailscale). An
+  // explicit EKOA_DASHBOARD_ORIGINS always wins; localhost stays so a local browser keeps working.
   const env = { ...process.env, PORT: API_PORT };
-  const publicWebHost = process.env.EKOA_PUBLIC_WEB_HOST?.trim();
-  if (publicWebHost && !process.env.EKOA_DASHBOARD_ORIGINS) {
-    env.EKOA_DASHBOARD_ORIGINS = `http://localhost:${WEB_PORT},http://${publicWebHost}:${WEB_PORT}`;
+  if (PUBLIC_WEB_HOSTS.length && !process.env.EKOA_DASHBOARD_ORIGINS) {
+    // Both schemes per host: tailscale serve terminates TLS on the same port, so the
+    // dashboard origin the browser carries can be http OR https depending on how it arrived.
+    env.EKOA_DASHBOARD_ORIGINS = [
+      `http://localhost:${WEB_PORT}`,
+      ...PUBLIC_WEB_HOSTS.flatMap((h) => [`http://${h}:${WEB_PORT}`, `https://${h}:${WEB_PORT}`]),
+    ].join(',');
     log(`api frame-ancestors allowlist: ${env.EKOA_DASHBOARD_ORIGINS}`);
   }
   const child = spawn('node', args, {
@@ -225,7 +267,24 @@ function startProxy() {
       upstream.on('error', () => socket.destroy());
       socket.on('error', () => upstream.destroy());
     });
-    proxyServer.on('error', reject);
+    // Wildcard first; loopback fallback. A persistently-armed `tailscale serve` mount holds
+    // <tailscale-ip>:PORT inside tailscaled (survives stack restarts, needs root to remove),
+    // which makes the wildcard bind EADDRINUSE on every boot AFTER the one that armed it.
+    // The mount proxies to http://127.0.0.1:PORT, so loopback is exactly what it needs -
+    // tailnet traffic still arrives; only direct plain-http LAN access is lost, which the
+    // HSTS note above already declares a dead end on this host.
+    proxyServer.once('error', (err) => {
+      if (err && err.code === 'EADDRINUSE') {
+        log(`:${PROXY_PORT} wildcard bind taken (tailscale serve TLS mount?) - rebinding on 127.0.0.1 only`);
+        proxyServer.once('error', reject);
+        proxyServer.listen(Number(PROXY_PORT), '127.0.0.1', () => {
+          log(`CORS proxy listening on 127.0.0.1:${PROXY_PORT} -> :${API_PORT}`);
+          resolve();
+        });
+        return;
+      }
+      reject(err);
+    });
     proxyServer.listen(Number(PROXY_PORT), () => {
       log(`CORS proxy listening on :${PROXY_PORT} -> :${API_PORT}`);
       resolve();
@@ -234,14 +293,31 @@ function startProxy() {
 }
 
 // ---- Web (Next.js dev) -----------------------------------------------------
-function bootWeb() {
+
+/** True when the WILDCARD bind of `port` is free. A persistently-armed `tailscale serve`
+ *  mount holds <tailscale-ip>:port inside tailscaled across stack restarts, making the
+ *  wildcard EADDRINUSE while loopback stays free - the same collision the proxy handles. */
+function wildcardPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(Number(port), () => probe.close(() => resolve(true)));
+  });
+}
+
+async function bootWeb() {
   // EKOA_PUBLIC_API_URL, when the operator set it, is the origin the BROWSER must use and
   // therefore the one the bundle and its CSP are built against (next.config.ts resolves it).
   // Leave it alone here: overwriting it with a loopback URL is exactly what makes a stack
   // driven from another machine fail with a blocked fetch and no server-side trace.
   const apiUrl = process.env.EKOA_PUBLIC_API_URL?.trim() || `http://localhost:${PROXY_PORT}`;
+  const args = ['run', 'dev', '--workspace', 'web'];
+  if (!(await wildcardPortFree(WEB_PORT))) {
+    log(`:${WEB_PORT} wildcard bind taken (tailscale serve TLS mount?) - next dev binds 127.0.0.1 only`);
+    args.push('--', '-H', '127.0.0.1');
+  }
   log(`booting web (next dev) on :${WEB_PORT} with NEXT_PUBLIC_API_URL=${apiUrl}`);
-  const child = spawn('npm', ['run', 'dev', '--workspace', 'web'], {
+  const child = spawn('npm', args, {
     cwd: ROOT,
     env: { ...process.env, PORT: WEB_PORT, NEXT_PUBLIC_API_URL: apiUrl },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -263,7 +339,7 @@ async function bootStack() {
     throw new Error(`proxy did not forward /health on :${PROXY_PORT}`);
   }
   log('proxy healthy');
-  bootWeb();
+  await bootWeb();
   if (!(await waitForHttp(`${WEB_BASE}/login`, { timeoutMs: 180_000 }))) {
     throw new Error(`web /login never became reachable on ${WEB_BASE} (next dev cold compile can be slow)`);
   }
@@ -310,6 +386,15 @@ async function cmdUp() {
   await bootStack();
   log('');
   log(`READY  web=${WEB_BASE}  api(proxy)=http://localhost:${PROXY_PORT}  login=${USER}/${PASS}`);
+  if (TAILNET_HTTPS_HOST) {
+    // TLS termination claims these ports for tailnet-inbound traffic, so https is THE
+    // tailnet URL (plain http from a peer now reaches the TLS listener, not the app).
+    log(`TAILNET  web=https://${TAILNET_HTTPS_HOST}:${WEB_PORT}  api(proxy)=https://${TAILNET_HTTPS_HOST}:${PROXY_PORT}`);
+  } else {
+    for (const h of PUBLIC_WEB_HOSTS) {
+      log(`TAILNET  web=http://${h}:${WEB_PORT}  api(proxy)=http://${h}:${PROXY_PORT}`);
+    }
+  }
   log('Drive it: playwright-cli -s=ekoa open ' + WEB_BASE + '/login   (Ctrl-C here to stop the stack)');
   // Stay alive.
   await new Promise(() => {});

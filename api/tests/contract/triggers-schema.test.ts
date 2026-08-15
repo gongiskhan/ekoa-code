@@ -77,6 +77,22 @@ describe('Trigger schema — listener kind + pollConfig (2A-S1)', () => {
     expect(Trigger.safeParse(view).success).toBe(true);
   });
 
+  it('the view exposes entrypoint (2A-S2) — the field the Ligações card matches a connection on', () => {
+    const view = triggerView(doc({ kind: 'listener', pollConfig: { actionName: 'list_emails', intervalMs: 60_000 } }), BASE);
+    expect(view.entrypoint).toBe('onEmail');
+    const parsed = Trigger.safeParse(view);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.entrypoint).toBe('onEmail');
+  });
+
+  it('an absent entrypoint is OMITTED, never null (automation-target trigger)', () => {
+    const legacy = doc({ targetKind: 'automation', automationId: 'auto-1' }) as unknown as Record<string, unknown>;
+    legacy.entrypoint = null; // the shape a row created against an automation actually stores
+    const view = triggerView(legacy as unknown as Parameters<typeof triggerView>[0], BASE);
+    expect('entrypoint' in view).toBe(false);
+    expect(Trigger.safeParse(view).success).toBe(true);
+  });
+
   it('a mixed list of listener + webhook views validates against TriggerListResponse', () => {
     const items = [
       triggerView(doc({ kind: 'listener', pollConfig: { actionName: 'list_emails', intervalMs: 30_000 } }), BASE),

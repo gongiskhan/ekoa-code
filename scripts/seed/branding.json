@@ -1,0 +1,305 @@
+{
+  "branding": {
+    "primaryColor": "#0f766e",
+    "accentColor": "#0d9488",
+    "secondaryColor": "#5eead4",
+    "websiteUrl": "https://ekoa.io/info/",
+    "fonts": [
+      "Inter",
+      "Arial",
+      "JetBrains Mono"
+    ],
+    "toneOfVoice": "Direto, técnico e rigoroso, com confiança sóbria e ênfase constante na fonte e na verificabilidade em vez de promessas vagas.",
+    "instructions": "Usa uma linguagem de forma predominantemente arredondada, com botões e badges em pill (raio 9999px) e cartões com raios 8-16px. Ambiente escuro (fundo próximo de #080c14), sombras profundas em preto e em teal (#0d9488 a 25% opacidade) para dar profundidade sem ruído. Densidade média-baixa, com muito texto neutro (#a3a3a3, #737373) sobre fundo escuro e acentos teal-cyan (#0f766e, #5eead4, #0d9488) reservados a eyebrows, pills e destaques. Botão principal: fundo quase preto translúcido (rgba(7,17,28,0.76)), texto branco, raio total (9999px), padding compacto (9px 14px). Textura discreta tipo terminal/código (JetBrains Mono para snippets) contrastando com Inter para o corpo, reforçando uma sensação técnica e confiável.",
+    "logo": "/brand-assets/e9742309379d.png",
+    "designSystem": {
+      "logo": null,
+      "palette": [
+        {
+          "hex": "#080c14",
+          "count": 7,
+          "confidence": "high",
+          "sources": [
+            "hero",
+            "section",
+            "cta"
+          ]
+        },
+        {
+          "hex": "#ffffff",
+          "count": 162,
+          "confidence": "high",
+          "sources": [
+            "nav-brand",
+            "btn",
+            "hero"
+          ]
+        },
+        {
+          "hex": "#a3a3a3",
+          "count": 87,
+          "confidence": "high",
+          "sources": [
+            "hint",
+            "label",
+            "demo-foot"
+          ]
+        },
+        {
+          "hex": "#737373",
+          "count": 85,
+          "confidence": "high",
+          "sources": [
+            "lead",
+            "l",
+            "story-copy"
+          ]
+        },
+        {
+          "hex": "#0f766e",
+          "count": 84,
+          "confidence": "high",
+          "sources": [
+            "eyebrow",
+            "story-replay",
+            "pill"
+          ]
+        },
+        {
+          "hex": "#404040",
+          "count": 62,
+          "confidence": "high",
+          "sources": [
+            "t",
+            "btn"
+          ]
+        },
+        {
+          "hex": "#5eead4",
+          "count": 24,
+          "confidence": "high",
+          "sources": [
+            "nav-badge",
+            "hero-eyebrow",
+            "hero-invite"
+          ]
+        },
+        {
+          "hex": "#cbd5e1",
+          "count": 18,
+          "confidence": "high",
+          "sources": [
+            "v",
+            "bench-method"
+          ]
+        },
+        {
+          "hex": "#f87171",
+          "count": 12,
+          "confidence": "high",
+          "sources": [
+            "tag",
+            "w",
+            "mk"
+          ]
+        },
+        {
+          "hex": "#6d5f46",
+          "count": 8,
+          "confidence": "medium",
+          "sources": [
+            "pill"
+          ]
+        }
+      ],
+      "cssVariables": [],
+      "typography": {
+        "families": [
+          "Inter",
+          "Arial",
+          "JetBrains Mono"
+        ],
+        "styles": [
+          {
+            "role": "heading-1",
+            "fontFamily": "Inter",
+            "fontSize": "42px (2.63rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.12"
+          },
+          {
+            "role": "body",
+            "fontFamily": "Inter",
+            "fontSize": "40px (2.50rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.50"
+          },
+          {
+            "role": "heading-2",
+            "fontFamily": "Inter",
+            "fontSize": "38px (2.38rem)",
+            "fontWeight": "700",
+            "lineHeight": "1.50"
+          },
+          {
+            "role": "heading-2",
+            "fontFamily": "Inter",
+            "fontSize": "36px (2.25rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.15"
+          },
+          {
+            "role": "body",
+            "fontFamily": "Inter",
+            "fontSize": "26px (1.63rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.50"
+          },
+          {
+            "role": "heading-3",
+            "fontFamily": "Inter",
+            "fontSize": "21px (1.31rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.25"
+          },
+          {
+            "role": "body",
+            "fontFamily": "Inter",
+            "fontSize": "21px (1.31rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.25"
+          },
+          {
+            "role": "body",
+            "fontFamily": "Inter",
+            "fontSize": "17px (1.06rem)",
+            "fontWeight": "400",
+            "lineHeight": "1.65"
+          },
+          {
+            "role": "heading-3",
+            "fontFamily": "Inter",
+            "fontSize": "17px (1.06rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.50"
+          },
+          {
+            "role": "link",
+            "fontFamily": "Inter",
+            "fontSize": "16px (1.00rem)",
+            "fontWeight": "600",
+            "lineHeight": "1.50"
+          }
+        ]
+      },
+      "spacing": {
+        "scaleType": "8px",
+        "values": [
+          {
+            "px": "1px",
+            "count": 18
+          },
+          {
+            "px": "2px",
+            "count": 29
+          },
+          {
+            "px": "3px",
+            "count": 22
+          },
+          {
+            "px": "4px",
+            "count": 17
+          },
+          {
+            "px": "6px",
+            "count": 59
+          },
+          {
+            "px": "8px",
+            "count": 21
+          },
+          {
+            "px": "9px",
+            "count": 6
+          },
+          {
+            "px": "10px",
+            "count": 30
+          },
+          {
+            "px": "11px",
+            "count": 28
+          },
+          {
+            "px": "12px",
+            "count": 65
+          }
+        ]
+      },
+      "borderRadius": {
+        "values": [
+          {
+            "value": "0px 6px 6px 0px",
+            "count": 5
+          },
+          {
+            "value": "8px",
+            "count": 46
+          },
+          {
+            "value": "12px",
+            "count": 36
+          },
+          {
+            "value": "16px",
+            "count": 6
+          },
+          {
+            "value": "999px",
+            "count": 7
+          },
+          {
+            "value": "9999px",
+            "count": 48
+          }
+        ],
+        "shapeLanguage": "arredondada"
+      },
+      "shadows": [
+        {
+          "shadow": "rgba(13, 148, 136, 0.25) 0px 8px 24px 0px",
+          "count": 2
+        },
+        {
+          "shadow": "rgba(0, 0, 0, 0.5) 0px 20px 60px 0px",
+          "count": 2
+        },
+        {
+          "shadow": "rgba(15, 23, 42, 0.18) 0px 28px 70px 0px, rgba(15, 23, 42, 0.1) 0px 2px 7px 0px",
+          "count": 1
+        },
+        {
+          "shadow": "rgba(0, 0, 0, 0.32) 0px 12px 34px 0px",
+          "count": 1
+        },
+        {
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 8px 24px 0px",
+          "count": 1
+        }
+      ],
+      "primaryButton": {
+        "backgroundColor": "rgba(7, 17, 28, 0.76)",
+        "color": "rgb(255, 255, 255)",
+        "padding": "9px 14px",
+        "borderRadius": "9999px",
+        "border": "1px solid rgba(255, 255, 255, 0.28)",
+        "boxShadow": "rgba(0, 0, 0, 0.2) 0px 8px 24px 0px",
+        "fontSize": "12.5px",
+        "fontWeight": "600"
+      },
+      "frameworks": []
+    }
+  },
+  "displayName": "Ekoa"
+}

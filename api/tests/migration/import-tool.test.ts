@@ -8,6 +8,7 @@ import { users, orgs, slugs, artifacts, credentials } from '../../src/data/store
 import { listPackages } from '../../src/content/index.js';
 import { loadSource, buildPlan, runImport, NON_IMPORTS } from '../../scripts/migrate/import-tool.js';
 import { storeChecksum, type PlainDoc } from '../../scripts/migrate/checksum.js';
+import { decrypt } from '../../src/data/crypto.js';
 
 /**
  * ch10 §10.2/§10.3 import tool. The synthetic source fixture + committed manifest are the
@@ -103,6 +104,35 @@ describe('dry-run vs the committed manifest (§10.3)', () => {
     const samples = plan.flatMap((p) => p.decryptSamples);
     expect(samples.length).toBeGreaterThanOrEqual(3);
     expect(samples.every((s) => s.ok)).toBe(true);
+    // Row 3 samples the field the RUNTIME reads: `credentialsCiphertext` (plural - service.ts
+    // IntegrationConfigDoc / platform-oauth.ts / zoho-sign.ts). The singular name belongs only
+    // to the credentials singleton (row 8, CredentialsDoc.credentialCiphertext).
+    const intcfg = plan.find((p) => p.family === 'integration_configs')!;
+    expect(intcfg.decryptSamples.length).toBeGreaterThan(0);
+    expect(intcfg.decryptSamples.every((s) => s.field === 'credentialsCiphertext')).toBe(true);
+  });
+
+  it('the carried platform + zoho-sign fixture rows decrypt and satisfy the runtime reader shapes', () => {
+    const rows = JSON.parse(readFileSync(join(SOURCE, 'integration_configs.json'), 'utf8')) as PlainDoc[];
+
+    // platform-oauth.ts getOrgRow (rowId + stored-field re-check): _id must be EXACTLY
+    // `platform-<orgId>-<provider>` AND the row must carry that orgId + platformProvider.
+    const m365 = rows.find((r) => r.platformProvider === 'microsoft')!;
+    expect(m365._id).toBe(`platform-${String(m365.orgId)}-microsoft`);
+    expect(m365.integrationKey).toBe('platform-microsoft');
+    expect(m365.enabled).toBe(true);
+    const m365Bundle = JSON.parse(decrypt(String(m365.credentialsCiphertext))) as Record<string, unknown>;
+    expect(m365Bundle.refresh_token).toBe('test-m365-refresh-token-not-real');
+    expect(m365Bundle.provider).toBe('microsoft');
+
+    // service.ts findConfigForOwner queries { orgId, integrationKey } - the zoho row must be
+    // org-scoped under the exact key, and its bundle must keep `dc`.
+    const zoho = rows.find((r) => r.integrationKey === 'zoho-sign')!;
+    expect(typeof zoho.orgId).toBe('string');
+    expect(zoho.enabled).toBe(true);
+    const zohoBundle = JSON.parse(decrypt(String(zoho.credentialsCiphertext))) as Record<string, unknown>;
+    expect(zohoBundle.refresh_token).toBe('test-zoho-refresh-token-not-real');
+    expect(zohoBundle.dc).toBe('eu');
   });
 });
 
@@ -201,7 +231,10 @@ describe('journaling (§10.3 rule 5)', () => {
     expect(log).toContain('ekoa migration run');
     expect(log).toContain('[orgs] -> orgs');
     expect(log).toContain('reserved "contract-2"');
-    expect(log).toContain('decrypt-sample credentialCiphertext');
+    // Row 3 (integration_configs) samples the runtime's plural field; row 8 (the credentials
+    // singleton) keeps the singular CredentialsDoc field. Both must appear.
+    expect(log).toContain('decrypt-sample credentialsCiphertext');
+    expect(log).toContain('decrypt-sample credentialCiphertext default');
     expect(log).toContain('result: OK');
   });
 
@@ -220,13 +253,29 @@ describe('the zero-tolerance checks bite', () => {
     cpSync(SOURCE, badRoot, { recursive: true });
     const cfgPath = join(badRoot, 'integration_configs.json');
     const cfgs = JSON.parse(readFileSync(cfgPath, 'utf8')) as PlainDoc[];
-    cfgs[0]!.credentialCiphertext = 'not.valid.ciphertext';
+    cfgs[0]!.credentialsCiphertext = 'not.valid.ciphertext';
     writeFileSync(cfgPath, JSON.stringify(cfgs));
 
     const result = await runImport({ sourceDir: badRoot, execute: false, journalPath: join(tmpRoot, 'corrupt.log') });
     expect(result.ok).toBe(false);
     const intcfg = result.families.find((f) => f.family === 'integration_configs')!;
     expect(intcfg.decryptSamples.some((s) => !s.ok)).toBe(true);
+  });
+
+  it('an OLD-scheme (colon-joined ekoa-dev) ciphertext fails the decrypt-sample loudly - the run reports anomalies, never a clean import', async () => {
+    const badRoot = join(tmpRoot, 'oldscheme-source');
+    cpSync(SOURCE, badRoot, { recursive: true });
+    const cfgPath = join(badRoot, 'integration_configs.json');
+    const cfgs = JSON.parse(readFileSync(cfgPath, 'utf8')) as PlainDoc[];
+    // Shape of cortex tools/crypto.ts output: base64(iv):base64(tag):base64(ct). Undecryptable
+    // by the new stack's dot-splitting v1 decrypt regardless of key value.
+    cfgs[0]!.credentialsCiphertext = 'FhGm2QU3mNo5Vm2aaaaaaa==:15R7caUb6/WsVQfJK1GdbQ==:trnGp06muLlukqMpXgq+';
+    writeFileSync(cfgPath, JSON.stringify(cfgs));
+
+    const result = await runImport({ sourceDir: badRoot, execute: false, journalPath: join(tmpRoot, 'oldscheme.log') });
+    expect(result.ok).toBe(false);
+    const intcfg = result.families.find((f) => f.family === 'integration_configs')!;
+    expect(intcfg.decryptSamples.some((s) => !s.ok && s.id === 'cfg-1')).toBe(true);
   });
 
   it('the 1% sampling path is deterministic for a large store (§10.3 rule 4)', () => {
@@ -303,6 +352,45 @@ describe('hostile-source hardening (G12 security phase)', () => {
     await expect(
       runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
     ).rejects.toThrow(/plan collision/);
+  });
+
+  it("refuses a dev-shaped source LOUDLY: a hyphenated old-stack file (integration-configs.json) must never import as zero rows", async () => {
+    const dir = hostileCopy('devshape', (d) => {
+      // The raw ekoa-dev data dir carries hyphenated JsonStore files with rows keyed 'id' and
+      // old colon-joined ciphertext. The underscore reader would silently see nothing.
+      writeFileSync(
+        join(d, 'integration-configs.json'),
+        JSON.stringify([{ id: 'old-uuid-1', type: 'platform-microsoft', platformProvider: 'microsoft', credentials: 'aXY=:dGFn:Y3Q=' }]),
+      );
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/dev-shaped source.*convert-dev-state\.mjs/s);
+  });
+
+  it("refuses a dev-shaped zoho-agreements.json (the webhook reverse index) the same way", async () => {
+    const dir = hostileCopy('devshape-zoho', (d) => {
+      writeFileSync(
+        join(d, 'zoho-agreements.json'),
+        JSON.stringify([{ id: 'zoho-req-old', appId: 'prod-app-1', propostaId: 'p1', ownerUserId: 'u1', clientEmail: 'c@example.test', createdAt: '2026-07-01T00:00:00.000Z' }]),
+      );
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/dev-shaped source/);
+  });
+
+  it("rejects rows keyed 'id' instead of '_id' in an underscore-named file (dev-shaped rows, not silently zero)", async () => {
+    const dir = hostileCopy('idkey', (d) => {
+      const p = join(d, 'integration_configs.json');
+      writeFileSync(
+        p,
+        JSON.stringify([{ id: 'old-uuid-2', type: 'zoho-sign', credentials: 'aXY=:dGFn:Y3Q=' }]),
+      );
+    });
+    await expect(
+      runImport({ sourceDir: dir, execute: false, journalPath: journalOutside() }),
+    ).rejects.toThrow(/_id is not a plain non-empty string/);
   });
 
   it('rejects an artifact _id that is not a safe path segment (screenshotPath rewrite containment)', async () => {

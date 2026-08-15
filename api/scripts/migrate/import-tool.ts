@@ -349,11 +349,15 @@ function decryptSample(rows: PlainDoc[], field: string): DecryptSample[] {
 }
 
 /** Row 3: integration_configs carry credential ciphertext (moved verbatim; excluded from the
- *  checksum, decrypt-sampled). */
+ *  checksum, decrypt-sampled). The field is `credentialsCiphertext` (plural) - the name EVERY
+ *  runtime consumer of this collection reads (integrations/service.ts IntegrationConfigDoc,
+ *  platform-oauth.ts getValidPlatformTokens, zoho-sign.ts ZohoSignConfigRow); ch10 row 3 says
+ *  "same fields in target collections". The singular `credentialCiphertext` belongs ONLY to the
+ *  `credentials` singleton (data/stores.ts CredentialsDoc; buildCredentials below). */
 function buildIntegrationConfigs(rows: PlainDoc[]): FamilyPlan {
-  const excludeFields = ['credentialCiphertext'];
+  const excludeFields = ['credentialsCiphertext'];
   const plan = buildPassthrough('integration_configs', 'integration_configs', rows, excludeFields);
-  plan.decryptSamples = decryptSample(rows, 'credentialCiphertext');
+  plan.decryptSamples = decryptSample(rows, 'credentialsCiphertext');
   const failed = plan.decryptSamples.filter((s) => !s.ok).length;
   plan.notes.push(`decrypt-sampled ${plan.decryptSamples.length} credential ciphertext(s); ${failed} failure(s)`);
   return plan;
@@ -500,11 +504,29 @@ function buildIntegrationDefinitions(source: LoadedSource): { typed: FamilyPlan;
   return { typed, prose };
 }
 
+/** Old-stack (ekoa-dev) JsonStore trees use HYPHENATED filenames whose rows are keyed `id`
+ *  and whose ciphertext is the OLD colon-joined scheme. This tool reads underscore names with
+ *  `_id` keys, so pointing it at a raw dev data dir would SILENTLY import zero rows for those
+ *  families - refuse loudly instead and name the normalize step (S4 carry-over tooling). */
+const DEV_SHAPED_FILES = ['integration-configs.json', 'zoho-agreements.json', 'adobe-agreements.json'];
+
+export function assertNotDevShapedSource(root: string): void {
+  const found = DEV_SHAPED_FILES.filter((f) => existsSync(join(root, f)));
+  if (found.length === 0) return;
+  throw new Error(
+    `dev-shaped source: found ${found.join(', ')} - old-stack (ekoa-dev) JsonStore file(s) ` +
+    `(hyphenated names, rows keyed 'id', old-scheme ciphertext) this tool would silently import ` +
+    `as zero rows; run api/scripts/migrate/convert-dev-state.mjs first and place its ` +
+    `underscore-named output in the export instead`,
+  );
+}
+
 /**
  * Build the full ordered plan (§10.2 import order). Pure over the loaded source: reads files,
  * computes canonical checksums, and runs the read-only decrypt-samples. No DB access, no writes.
  */
 export function buildPlan(source: LoadedSource): FamilyPlan[] {
+  assertNotDevShapedSource(source.root);
   const roster = source.readArray('users.json');
   const founderId = resolveFounderId(roster);
   const artifactRows = source.readArray('artifacts.json');

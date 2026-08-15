@@ -73,7 +73,12 @@ async function main() {
     page.on('console', (m) => {
       if (m.type() !== 'error') return;
       const t = m.text();
+      const url = (m.location && m.location() && m.location().url) || '';
       if (/Failed to load resource.*\b401\b/.test(t)) return;
+      // M365/Adobe integration probes fired after login: 403 (closed proxy gate),
+      // 502 (m365Proxy opted in but not connected), 409 (reconnect required) -
+      // benign only on these integration paths; anything else stays fatal.
+      if (/\b(403|409|502)\b/.test(t) && /\/api\/(m365|adobe)/.test(url)) return;
       errors.push(t);
     });
     page.on('pageerror', (e) => errors.push('pageerror: ' + ((e && e.message) || e)));

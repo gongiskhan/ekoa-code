@@ -4,13 +4,31 @@
     "orgId": "org-u-alice",
     "integrationKey": "github",
     "enabled": true,
-    "credentialCiphertext": "TtfKmYTF/eZEJ6/W.O6hjpX7d3BbKvFk8/U0ctA==.WD4st033Iag35kiJbD/Evxrck0bc98e6YX9SDntj1kPmRGfbMwEgfawV1/KxJoDkVFM1iWSQrWHeByhtaEsaLdjCx3w="
+    "credentialsCiphertext": "TtfKmYTF/eZEJ6/W.O6hjpX7d3BbKvFk8/U0ctA==.WD4st033Iag35kiJbD/Evxrck0bc98e6YX9SDntj1kPmRGfbMwEgfawV1/KxJoDkVFM1iWSQrWHeByhtaEsaLdjCx3w="
   },
   {
     "_id": "cfg-2",
     "orgId": "org-u-bob",
     "integrationKey": "acme",
     "enabled": false,
-    "credentialCiphertext": "E7Chm2QU3mNo5Vm2.15R7caUb6/WsVQfJK1GdbQ==.trnGp06muLlukqMpXgq+KvrtRCz0cRLERLnlKWq0exPyJ0XB7mHmqae5U3RxMg=="
+    "credentialsCiphertext": "E7Chm2QU3mNo5Vm2.15R7caUb6/WsVQfJK1GdbQ==.trnGp06muLlukqMpXgq+KvrtRCz0cRLERLnlKWq0exPyJ0XB7mHmqae5U3RxMg=="
+  },
+  {
+    "_id": "platform-org-u-alice-microsoft",
+    "orgId": "org-u-alice",
+    "integrationKey": "platform-microsoft",
+    "name": "Microsoft 365",
+    "platformProvider": "microsoft",
+    "enabled": true,
+    "email": "escritorio@example.test",
+    "credentialsCiphertext": "bHfAih3lKu8PbVAT.kLVkG6ccWGSa+LaVCWwWrQ==.OdI3m0mHHTowGyxV2wlmz1K8gkKgZwBc/DXsNeGH1vTmj5s/YwDC/u1lgtfzAnGBza2gJkcAHmbhrU7pKomoVdNMB+g0t00C2Lw9iYyt2UrRjtFtm6qO9PZLYiPtOfk0w6kjt+hOjphod997/4ymEdG+QnsV69fl4rz78rJtxXJWkxfvrNtCmJoVHisnInIuVpJcMr19AVkr5PBCl9DNNzqLvsGQbEwvB7FYfIT/L6oxtMuuaE+sSpxRJLijUQ7UH+BAHghu3DKqB3uz+V6Bdp77pdzILaEogKak/qkyrHJXSpcXLbZ1sdABp19LuSHdBjUR2icm7F/cHcesvzh8DJMEGiKbRJGbxIUfhTNcgeXYuqxuPge/fd+lkbE2AbPQYcNKY/aLMw8OA5729sbfAfROHVENcA=="
+  },
+  {
+    "_id": "zoho-cfg-1",
+    "orgId": "org-u-alice",
+    "integrationKey": "zoho-sign",
+    "name": "Zoho Sign",
+    "enabled": true,
+    "credentialsCiphertext": "NF9ExV4bIC/Vq8+2.GSni6MNAnCU95GpOQKqNVw==.80OBoRsFk3lncOwb13oJfVi3/da7Gwa+yU5WomgROlqhDDilVdafvgD1YeFZfejpNN2SLnQ64pTh764EVJWexdEsl3BFeTJzWyjeqDcswjZg3t4="
   }
 ]

@@ -11,9 +11,12 @@ import { loadReadable } from '../apps/app-paths.js';
 import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 
 // The wire shape is a union on target.kind (automation flat vs artifact-backend nested).
+// `pollIntervalMs` is the additive (Rule 7) cadence override for platform-provider triggers whose
+// kind the service infers as 'listener' (2A-S2); floor mirrors shared/ TriggerCreateRequest.
+const PollIntervalMs = z.number().int().min(1000).optional();
 const CreateTrigger = z.union([
-  z.object({ automationId: z.string(), integrationKey: z.string(), eventName: z.string(), artifactId: z.string().optional() }),
-  z.object({ integrationKey: z.string(), eventName: z.string(), target: z.object({ kind: z.literal('artifact-backend'), artifactId: z.string(), entrypoint: z.string() }) }),
+  z.object({ automationId: z.string(), integrationKey: z.string(), eventName: z.string(), artifactId: z.string().optional(), pollIntervalMs: PollIntervalMs }),
+  z.object({ integrationKey: z.string(), eventName: z.string(), pollIntervalMs: PollIntervalMs, target: z.object({ kind: z.literal('artifact-backend'), artifactId: z.string(), entrypoint: z.string() }) }),
 ]);
 
 export function triggersRouter(deps: { now: () => number; genId: () => string }): Router {
@@ -45,9 +48,10 @@ export function triggersRouter(deps: { now: () => number; genId: () => string })
       const artifactId = (body.target as { artifactId: string }).artifactId;
       if (!(await loadReadable(actor, artifactId))) return sendError(res, 'NOT_FOUND', 'Artefacto não encontrado.');
     }
+    const pollIntervalMs = body.pollIntervalMs as number | undefined;
     const input = hasBackend
-      ? { targetKind: 'artifact-backend' as const, integrationKey: body.integrationKey as string, eventName: body.eventName as string, artifactId: (body.target as { artifactId: string }).artifactId, entrypoint: (body.target as { entrypoint: string }).entrypoint }
-      : { targetKind: 'automation' as const, integrationKey: body.integrationKey as string, eventName: body.eventName as string, automationId: body.automationId as string, artifactId: body.artifactId as string | undefined };
+      ? { targetKind: 'artifact-backend' as const, integrationKey: body.integrationKey as string, eventName: body.eventName as string, artifactId: (body.target as { artifactId: string }).artifactId, entrypoint: (body.target as { entrypoint: string }).entrypoint, pollIntervalMs }
+      : { targetKind: 'automation' as const, integrationKey: body.integrationKey as string, eventName: body.eventName as string, automationId: body.automationId as string, artifactId: body.artifactId as string | undefined, pollIntervalMs };
     const { trigger, secret } = await createTrigger(actor, input, deps);
     res.status(201).json({ trigger: triggerView(trigger, base), publicUrl: `${base}/hooks/${trigger._id}`, secret });
   });

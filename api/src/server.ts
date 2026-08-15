@@ -35,7 +35,7 @@ import { registoRouter } from './routes/registo.js';
 import { changeRequestsRouter } from './routes/change-requests.js';
 import { billingRouter } from './routes/billing.js';
 import { credentialsRouter } from './routes/credentials.js';
-import { llmHealth, registerGateway, loadCredential, setRulesetResolver } from './llm/index.js';
+import { llmHealth, registerGateway, loadCredential, setRulesetResolver, completeFast, type UserWorkAgentType } from './llm/index.js';
 import { setUsageNotifier } from './billing/index.js';
 import { integrationsRouter } from './routes/integrations.js';
 import { integrationBuilderRouter } from './routes/integration-builder.js';
@@ -183,7 +183,14 @@ import {
 // platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
 // barrel means no route module can pick it up by accident (pinned by a barrel-surface test).
 import { importLegacyRuntimePackages, LEGACY_IMPORT_OPT_IN_ENV } from './integrations/legacy-runtime-import.js';
-import { invokeArtifactBackend } from './apps/backend-runtime/index.js';
+import {
+  invokeArtifactBackend,
+  WorkerThreadRuntime,
+  NullArtifactBackendRuntime,
+  setArtifactBackendRuntime,
+} from './apps/backend-runtime/index.js';
+import { AppDataAccess } from './apps/app-data-access.js';
+import { listEmailIntegrations, sendAppEmail, type AppEmailDeps, type AppEmailContext } from './integrations/app-email.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
@@ -289,6 +296,35 @@ export function usageUpdatedNotifier(userId: string): void {
   } catch (err) {
     console.warn('[billing] usage_updated push failed:', err instanceof Error ? err.message : err);
   }
+}
+
+/**
+ * S1 (findings.md `artifact-backend-runtime-never-wired`): the process-wide artifact-backend
+ * runtime the app factory registers. Tracked here so a re-composed factory (tests build the app
+ * repeatedly in one process) and the boot shutdown both retire the SAME instance instead of
+ * orphaning worker threads behind a replaced singleton.
+ */
+let artifactBackendRuntime: WorkerThreadRuntime | null = null;
+
+/** Dispose the registered artifact-backend runtime and reset the singleton to the Null runtime
+ *  (fail-closed: post-teardown invokes answer "not initialised", never a dead worker). Called on
+ *  the boot shutdown path beside the other teardown; exported so the composition test can drive
+ *  the same teardown the process runs. */
+export async function disposeArtifactBackendRuntime(): Promise<void> {
+  const rt = artifactBackendRuntime;
+  artifactBackendRuntime = null;
+  if (!rt) return;
+  setArtifactBackendRuntime(new NullArtifactBackendRuntime());
+  await rt.dispose();
+}
+
+/** FIXED-4: the one line of prompt prose the artifact-backend model seam owns, as a TS constant.
+ *  Carried behavior from the old adapter's language pin - the backend `llm.*` capability forwards
+ *  the app's language preference, and a PT app must not drift into English replies. */
+function backendModelLanguageLine(language?: string): string {
+  if (!language || language === 'en') return '';
+  const label = language === 'pt' ? 'European Portuguese (português de Portugal, PT-PT)' : language;
+  return `Respond ONLY in ${label}. Code identifiers may remain in English.`;
 }
 
 export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Express {
@@ -848,13 +884,89 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // OWNER's connection (and the owner's standing approval — a send is a write, so it goes through
   // the same consent gate every other platform write does). Carries its own JSON parser, so it
   // mounts here with the other raw-body served-app planes.
-  app.use('/api/app-email', appEmailRouter({
+  const appEmailDeps: AppEmailDeps = {
     resolveAppScope,
     resolveOwnerOrgId: async (ownerUserId: string) =>
       ((await users.get(ownerUserId)) as { orgId?: string } | null)?.orgId ?? null,
     workspaceStatus: workspaceCredentials.status,
     oauth: { now: deps.now, genId: deps.genId },
-  }));
+  };
+  app.use('/api/app-email', appEmailRouter(appEmailDeps));
+
+  // S1 (findings.md `artifact-backend-runtime-never-wired`) - register the artifact-backend
+  // WorkerThreadRuntime. Until this block existed no setArtifactBackendRuntime caller existed in
+  // api/src, so the singleton stayed NullArtifactBackendRuntime and every delivery-pipeline
+  // invoke (server.ts setDeliveryTargets above) answered "artifact backend runtime is not
+  // initialised". Only the seams the runtime's production defaults leave inert are bound here -
+  // the model capability through the llm/ public entry and the two notify deliveries - plus
+  // app-data on the injected clock/id deps. resolveOwner/resolveBundlePath deliberately stay on
+  // the runtime's own defaults (backend-runtime/runtime.ts defaultRuntimeDeps: artifacts store +
+  // manifest sharedData + backendBundlePath), one implementation rather than a copy here (Rule 1).
+  // Capability grants match exactly what tests/apps/backend-runtime.test.ts pins: appData CRUD,
+  // llm.classify/llm.complete, notify.inApp, notify.email. No integration seam (runIntegration)
+  // is granted.
+  void disposeArtifactBackendRuntime(); // a re-composed factory retires the previous instance
+  const backendAppData = new AppDataAccess(deps);
+  artifactBackendRuntime = new WorkerThreadRuntime({
+    now: deps.now,
+    // App-data CRUD via the existing AppDataAccess seam - the same rows the served UI reads
+    // (per-app scope = appId; shared scope = usr.<owner>), scoping fixed core-side by the
+    // capability token (handle-rpc.ts).
+    appData: backendAppData,
+    // MODEL seam: the llm/ public entry, FAST by construction (completeFast cannot express a
+    // higher tier). Attribution is ch06 §6.4.1 site 14 - `artifact-backend:<entrypoint>`, billed
+    // to the artifact OWNER with the artifact stamped. The seam hands agentType pre-tagged
+    // (handle-rpc.ts); any other value is re-tagged rather than letting a worker choose its own
+    // billing vocabulary.
+    callModel: async (opts) => {
+      const agentType: UserWorkAgentType = opts.agentType.startsWith('artifact-backend:')
+        ? (opts.agentType as `artifact-backend:${string}`)
+        : `artifact-backend:${opts.agentType}`;
+      const system = [opts.system, backendModelLanguageLine(opts.language)].filter(Boolean).join('\n\n');
+      const res = await completeFast(
+        { messages: [{ role: 'user', content: opts.message }], ...(system ? { system } : {}) },
+        { kind: 'user_work', agentType, billeeUserId: opts.ownerUserId, artifactId: opts.billingArtifactId },
+      );
+      return res.text;
+    },
+    // NOTIFY in-app: the per-user notifications channel (ch03 §3.6.4) - the same rail as
+    // usage_updated. Best-effort: a push failure never fails the capability (handle-rpc already
+    // persisted the row in the app's _notifications collection).
+    sendToUser: (userId, event) => {
+      try {
+        sseManager.emit('notifications', userId, event.type, event);
+      } catch (err) {
+        console.warn('[artifact-backend] notify push failed:', err instanceof Error ? err.message : err);
+      }
+    },
+    // NOTIFY email: the SAME plane a served page uses (integrations/app-email.ts). sendAppEmail
+    // re-resolves an email-send-capable action from the OWNER's own definitions and runs it with
+    // the owner as actingUserId, so the platform write gate (consent) binds exactly as it does on
+    // /api/app-email/send. The backend capability names no integration, so the first CONNECTED
+    // sender is picked (preferring one not needing reauth); none connected is an honest failure.
+    sendEmail: async (ownerUserId, a) => {
+      const orgId = await appEmailDeps.resolveOwnerOrgId(ownerUserId);
+      if (!orgId) return { success: false, error: 'app owner has no organisation' };
+      const ctx: AppEmailContext = { appId: 'artifact-backend', ownerUserId, orgId };
+      const senders = await listEmailIntegrations(ctx, appEmailDeps);
+      const sender = senders.find((s) => s.connected && !s.needsReauth) ?? senders.find((s) => s.connected);
+      if (!sender) return { success: false, error: 'no connected email integration for the app owner' };
+      const res = await sendAppEmail(
+        {
+          integrationKey: sender.integrationKey,
+          actionName: sender.actionName,
+          to: a.to,
+          subject: a.subject,
+          body: a.body,
+          ...(a.bodyContentType === 'HTML' || a.bodyContentType === 'Text' ? { bodyContentType: a.bodyContentType } : {}),
+        },
+        ctx,
+        appEmailDeps,
+      );
+      return res.success ? { success: true } : { success: false, error: res.error };
+    },
+  });
+  setArtifactBackendRuntime(artifactBackendRuntime);
 
   // The LLM gateway sub-app carries its own 50 MB body limit (stock Claude Code clients
   // routinely send >1 MB bodies - long transcripts, base64 screenshots). The global 1 MB parser
@@ -1457,9 +1569,16 @@ export function boot(): void {
     });
 
   // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers;
-  // the delivery pipeline drains in-flight dispatches (the rest recovers next boot, §12.3).
+  // the delivery pipeline drains in-flight dispatches (the rest recovers next boot, §12.3);
+  // the artifact-backend runtime terminates its worker threads (S1).
   const shutdown = () => {
-    void Promise.allSettled([stopListenerSupervisor(), stopDelivery(), appBuilder.dispose(), appRegistry.stop()]).then(() => process.exit(0));
+    void Promise.allSettled([
+      stopListenerSupervisor(),
+      stopDelivery(),
+      appBuilder.dispose(),
+      appRegistry.stop(),
+      disposeArtifactBackendRuntime(),
+    ]).then(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

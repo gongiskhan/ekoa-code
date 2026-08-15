@@ -33,7 +33,7 @@ import type { AppDataDeps } from '../apps/app-data-access.js';
 import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag, isAppArtifact } from '../apps/app-paths.js';
 import { ensureArtifactScreenshot } from '../services/artifact-screenshot.js';
 import { forkArtifact } from '../apps/artifact-fork.js';
-import { exportArtifact, importArtifact, updateArtifactFromBundle, ManifestIdMismatchError } from '../apps/artifact-bundle.js';
+import { exportArtifact, importArtifact, updateArtifactFromBundle, ManifestIdMismatchError, ImportIdCollisionError, ImportIdInvalidError } from '../apps/artifact-bundle.js';
 import { applyFeaturedUpdate, ignoreFeaturedUpdate } from '../apps/artifact-featured-update.js';
 import { listVersions, restoreAndRebuild } from '../apps/versions.js';
 import { listArtifactFiles, readArtifactFile, writeArtifactFile, FilePathError } from '../apps/artifact-files.js';
@@ -128,15 +128,37 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
 
   // ---- import must precede GET/:id-style matches (distinct verb+path) ----
   r.post('/import', bundleJson, async (req: AuthedRequest, res: Response) => {
-    const body = parseBody(res, ImportArtifactRequest, req.body) as { bundle: import('@ekoa/shared').ArtifactBundle } | undefined;
+    const body = parseBody(res, ImportArtifactRequest, req.body) as { bundle: import('@ekoa/shared').ArtifactBundle; preserveId?: boolean } | undefined;
     if (!body) return;
     // H1 HIGH-2: a bundle is always an app export; importing it CREATES and BUILDS a new app →
     // canBuildApps (a plain user cannot import an app the same way they cannot first-build one).
     if (!can(actorOf(req), 'canBuildApps')) {
       return sendError(res, 'FORBIDDEN', 'Não tem permissão para criar aplicações; pode pedir ao administrador da organização.', { capability: 'canBuildApps' });
     }
-    const created = await importArtifact(body.bundle, actorOf(req), deps);
-    res.status(201).json(artifactView(created));
+    // preserveId is a MIGRATION posture, super-admin only (code-review finding, 2026-08-15):
+    // the collision pre-check is necessarily global (canonical ids are one namespace), so for
+    // an ordinary org user its 409-vs-201 answer would be a cross-tenant id-existence oracle,
+    // and a 201 would let anyone squat an id another org's migration depends on. The operator
+    // running a migration is the one caller with a legitimate claim to a specific id.
+    if (body.preserveId && req.user?.role !== 'super-admin') {
+      return sendError(res, 'FORBIDDEN', 'preserveId é reservado à migração de operador (super-admin).', { capability: 'preserveId' });
+    }
+    try {
+      const { artifact, report } = await importArtifact(body.bundle, actorOf(req), deps, { preserveId: body.preserveId });
+      // `importReport` is the S3 additive field: identity actually applied (slug/id, with
+      // fallback flags) + the per-collection app-data seeding outcome.
+      res.status(201).json({ ...artifactView(artifact), importReport: report });
+    } catch (err) {
+      // SLUG_TAKEN is this contract's canonical "identifier already taken" 409 (the collections
+      // engine uses it for item-id collisions); details carry the refused canonical id.
+      if (err instanceof ImportIdCollisionError) {
+        return sendError(res, 'SLUG_TAKEN', 'O id canónico pedido já existe; importação com preserveId recusada.', { requestedId: err.requestedId });
+      }
+      if (err instanceof ImportIdInvalidError) {
+        return sendError(res, 'VALIDATION_FAILED', 'Pedido preserveId inválido.', { reason: err.message });
+      }
+      throw err;
+    }
   });
 
   r.get('/:id', async (req: AuthedRequest, res: Response) => {

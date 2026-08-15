@@ -54,9 +54,9 @@
       "family": "integration_configs",
       "targetCollection": "integration_configs",
       "kind": "collection",
-      "sourceCount": 2,
-      "plannedCount": 2,
-      "checksum": "ecc4a1712f0e11d260e203d89f3ab1d118e1c109d7f8668744713cf7532539c6",
+      "sourceCount": 4,
+      "plannedCount": 4,
+      "checksum": "82c4503eab84c2c3041091a185146c4dec19b13d7946ac387e6386c4a413b4b9",
       "sampled": false
     },
     {

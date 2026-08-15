@@ -31,6 +31,21 @@ export interface AppDataDump {
   at: string;
 }
 
+/** Per-collection outcome of a migration-grade import (S3); mirrors the shared
+ *  `ImportCollectionReport` wire shape so the import response carries it verbatim. */
+export interface ImportCollectionResult {
+  name: string;
+  imported: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface ImportDumpReport {
+  collections: ImportCollectionResult[];
+  imported: number;
+  skipped: number;
+}
+
 /** Build the engine scope for a raw scope key (per-app id OR `usr.<owner>`). */
 function scopeFor(scopeKey: string): Scope {
   return { scopeKey, appId: scopeKey };
@@ -96,7 +111,10 @@ export class AppDataAccess {
     return removed;
   }
 
-  /** Write a dump's items back through create() (ids preserved). Returns items written. */
+  /** Write a dump's items back through create() (ids preserved). Returns items written.
+   *  STRICT on purpose: the backups restore path depends on a throw to trigger its rollback,
+   *  and an engine-produced dump can never carry reserved names. Migration imports of FOREIGN
+   *  dumps go through `importDumpReport` below instead. */
   async importDump(scopeKey: string, dump: AppDataDump): Promise<number> {
     let written = 0;
     for (const [name, items] of Object.entries(dump.collections)) {
@@ -106,5 +124,40 @@ export class AppDataAccess {
       }
     }
     return written;
+  }
+
+  /**
+   * Migration-grade dump import (S3) with per-collection fault isolation: one bad collection or
+   * row never kills the rest. Reserved (`__*`) and shared-scope (`usr.*`) collections are SKIPPED
+   * with an explicit per-collection report - a real prod dump carries the engine's own `__files`
+   * bookkeeping, which `guardCollectionName` would refuse row by row; skipping it here names the
+   * decision instead of drowning the whole seed. Rows go through the engine's `importCreate` so a
+   * valid supplied createdAt/updatedAt survives; a data-shaped failure (oversized row, id
+   * collision, invalid name) becomes a reported skip, never a wholesale abort.
+   */
+  async importDumpReport(scopeKey: string, dump: AppDataDump): Promise<ImportDumpReport> {
+    const collections: ImportCollectionResult[] = [];
+    for (const [name, items] of Object.entries(dump.collections)) {
+      if (name.startsWith('__') || name.startsWith('usr.')) {
+        collections.push({ name, imported: 0, skipped: items.length, error: 'RESERVED_COLLECTION: skipped on import' });
+        continue;
+      }
+      const result: ImportCollectionResult = { name, imported: 0, skipped: 0 };
+      for (const item of items) {
+        try {
+          await this.engine.importCreate(scopeFor(scopeKey), name, item as Record<string, unknown>);
+          result.imported++;
+        } catch (err) {
+          result.skipped++;
+          if (!result.error) result.error = err instanceof Error ? err.message : String(err);
+        }
+      }
+      collections.push(result);
+    }
+    return {
+      collections,
+      imported: collections.reduce((n, c) => n + c.imported, 0),
+      skipped: collections.reduce((n, c) => n + c.skipped, 0),
+    };
   }
 }

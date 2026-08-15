@@ -141,11 +141,16 @@ async function cleanup() {
 }
 
 // Ignore the benign, integration-dependent console noise: the pre-login whoami 401
-// and the M365/Adobe workspace probes 403 (integrations not connected in CI/dev).
+// and the M365/Adobe workspace probes (integrations not connected in CI/dev).
+// The probe status depends on the integration state: 403 while the workspace proxy
+// gate was closed; since the m365Proxy manifest opt-in landed, the same not-connected
+// probe answers 502, and a reconnect-required state answers 409. All three are the
+// one benign "integration not usable" signal, and ONLY on these integration paths;
+// any other console error stays fatal.
 // "Failed to load resource" messages omit the URL from text() — it's in location().
 function realError(text, url = '') {
   if (/\b401\b/.test(text)) return false;                                   // whoami / pre-login
-  if (/\b403\b/.test(text) && /\/api\/(m365|adobe)/.test(url)) return false; // M365/Adobe probe
+  if (/\b(403|409|502)\b/.test(text) && /\/api\/(m365|adobe)/.test(url)) return false; // M365/Adobe probe
   if (/app-sso\/me/.test(text) || /app-sso\/me/.test(url)) return false;
   return true;
 }
@@ -252,6 +257,37 @@ async function main() {
     const prospectTotal = (await list('prospects')).length;
     assert(report.max >= prospectTotal, `T1: Relatórios does not reflect all prospects (max shown ${report.max} < ${prospectTotal})`);
     ok(`Relatórios funnel breakdown is live and reflects the created prospect (total ${prospectTotal})`);
+
+    // ---- T1b: pipeline KPI parses pt-PT money (vision-pass fix, 2026-08-15) ----------
+    // Prospect `value` is free text ('100.000,00', 'EUR 3.200', '600', '-'). The old
+    // aggregator stripped every non-digit, so '100.000,00' counted as TEN MILLION and the
+    // customer's headline KPI ran ~70x hot. Data-independent check: recompute the expected
+    // pipeline from the live rows with the app's own parse rules ('.' = thousands separator
+    // when grouping 3 digits, ',' = decimal, bare int = euros, dash/empty = 0; active stages
+    // only, Ganho/Perdido excluded) and require the rendered KPI digits to match EXACTLY -
+    // and, when the formats diverge, to NOT match the digit-strip figure.
+    const parsePt = (v) => {
+      const s = String(v ?? '').replace(/[€\s]/gi, '').replace(/EUR/gi, '').trim();
+      if (!s || s === '-' || s === '—') return 0;
+      const m = /^(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{1,2}))?$/.exec(s);
+      if (!m) return 0;
+      return Math.round(Number(m[1].replace(/\./g, '')) + Number(`0.${m[2] || 0}`));
+    };
+    const active = (await list('prospects')).filter((r) => r && !/^(ganho|perdido)$/i.test(String(r.stage || '')));
+    const expected = active.reduce((n, r) => n + parsePt(r.value), 0);
+    const stripped = active.reduce((n, r) => n + Number(String(r.value ?? '').replace(/\D/g, '') || 0), 0);
+    const kpiDigits = await page.evaluate(() => {
+      const t = document.body.innerText;
+      const m = /valor em pipeline[\s\S]{0,80}?([\d.,  ]+)\s*€|€\s*([\d.,  ]+)[\s\S]{0,80}?valor em pipeline/i.exec(t.toLowerCase().includes('valor em pipeline') ? t : '');
+      const raw = m ? (m[1] || m[2]) : '';
+      return raw.replace(/\D/g, '');
+    });
+    assert(kpiDigits, 'T1b: VALOR EM PIPELINE KPI not found on Relatórios');
+    assert(kpiDigits === String(expected), `T1b: pipeline KPI ${kpiDigits} != pt-PT-parsed expectation ${expected}`);
+    if (stripped !== expected) {
+      assert(kpiDigits !== String(stripped), 'T1b: KPI equals the digit-strip figure - the pt-PT misparse regressed');
+    }
+    ok(`pipeline KPI parses pt-PT money (rendered ${kpiDigits} = expected ${expected}${stripped !== expected ? `, digit-strip figure ${stripped} correctly NOT used` : ''})`);
 
     // ---- T2: Notificações mark-all-read → unread 0 + bell badge clears ----------
     console.log('T2: notifications mark-all-read + bell badge');
